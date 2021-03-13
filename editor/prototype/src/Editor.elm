@@ -1,25 +1,6 @@
 module Editor exposing (main)
 
 import Browser
-import Elm.Parser
-import Elm.Processing
-import Elm.Syntax.Comments as EComments
-import Elm.Syntax.Declaration as EDeclaration
-import Elm.Syntax.Documentation as EDocumentation
-import Elm.Syntax.Exposing as EExposing
-import Elm.Syntax.Expression as EExpression
-import Elm.Syntax.File as EFile
-import Elm.Syntax.Import as EImport
-import Elm.Syntax.Infix as EInfix
-import Elm.Syntax.Module as EModule
-import Elm.Syntax.ModuleName as EModuleName
-import Elm.Syntax.Node as ENode
-import Elm.Syntax.Pattern as EPattern
-import Elm.Syntax.Range as ERange
-import Elm.Syntax.Signature as ESignature
-import Elm.Syntax.Type as EType
-import Elm.Syntax.TypeAlias as ETypeAlias
-import Elm.Syntax.TypeAnnotation as ETypeAnnotation
 import Html as H exposing (Attribute, Html, text)
 import Html.Attributes as A
 import Html.Events as Ev
@@ -109,12 +90,17 @@ type Expression
     | Str String
     | When Expression (List ( List String, Expression ))
     | Assignment String Expression Expression
+    | BuildRecord (List RecordField)
+    | ModifyRecord
+
+
+type RecordField
+    = Var String
+    | Assign String Expression
 
 
 type alias ModuleTest =
     { name : String
-    , test : Expression
-    , result : TestResult
     }
 
 
@@ -134,7 +120,7 @@ type alias Windows =
 
 
 type Window
-    = Browsing Windows
+    = Browsing Windows Cursor
     | Expressing String WindowModule Cursor Hints Windows
 
 
@@ -144,7 +130,6 @@ type alias Hints =
 
 type Hint
     = Hint String -- meh
-    | SelectedHint String
 
 
 type Cursor
@@ -202,15 +187,37 @@ init _ =
       , window =
             Expressing "str"
                 { orig = m
-                , now = m
+                , now =
+                    { m
+                        | imports =
+                            [ { moduleName = "Api", asName = Nothing, expose = [] }
+                            , { moduleName = "Session", asName = Nothing, expose = [] }
+                            ]
+                        , types =
+                            [ Record "State"
+                                [ Field "session" (Union "Session" [] Sealed)
+                                , Field "form" (Record "Form" [] Sealed)
+                                , Field "problems" (Union "Problems" [] Sealed)
+                                ]
+                                Sealed
+                            , Union "Problems" [] Sealed
+                            , Record "Form" [] Sealed
+                            ]
+                        , functions =
+                            [ Function "init" [] <|
+                                Assignment "page" (Str "Foobar") <|
+                                    Assignment "bar" (LitNum 32) <|
+                                        BuildRecord [ Var "page", Assign "problems" (FnCall "Api.qualified" []) ]
+                            ]
+                    }
                 , size = { width = 500, height = 800 }
                 }
                 This
                 []
                 { pinned =
-                    []
+                    [ { orig = m, now = m, size = { width = 200, height = 200 } } ]
                 , viewing =
-                    [ { orig = m, now = m, size = { width = 800, height = 200 } } ]
+                    [ { orig = m, now = m, size = { width = 400, height = 200 } } ]
                 }
       }
     , Cmd.none
@@ -282,7 +289,7 @@ editor model =
 
         viewingModules xs =
             node "div"
-                [ "grid", "grid-cols-2", "gap-4", "overflow-auto", "flex-1", "h-full" ]
+                [ "overflow-auto", "h-full", "flex flex-row" ]
                 []
                 (xs
                     |> List.map
@@ -294,32 +301,8 @@ editor model =
                                 ]
                                 [ node "h2" [] [] [ text p.now.name ]
                                 , toggles p
-                                , node "import-list"
-                                    []
-                                    []
-                                    (button []
-                                        { onPress = Just (PressedAddImport p)
-                                        , label = text "+ add import"
-                                        }
-                                        :: List.map
-                                            (\import_ ->
-                                                node "module-import"
-                                                    []
-                                                    []
-                                                    [ node "module-name" [] [] [ text import_.moduleName ]
-                                                    ]
-                                            )
-                                            p.now.imports
-                                    )
-                                , node "types"
-                                    []
-                                    []
-                                    (button []
-                                        { onPress = Just (PressedAddImport p)
-                                        , label = text "+ add Type"
-                                        }
-                                        :: List.map viewType p.now.types
-                                    )
+                                , importList p
+                                , typesList p
                                 , node "functions"
                                     []
                                     []
@@ -340,14 +323,21 @@ editor model =
 
         pinnedModules xs =
             node "aside"
-                [ "flex", "flex-col", "overflow-auto", "h-full", "items-end" ]
+                [ "flex"
+                , "flex-col"
+                , "overflow-auto"
+                , "h-full"
+                , "items-end"
+                , "z-30"
+                , "flex-shrink-0"
+                ]
                 []
                 (List.map
                     (\p ->
                         node "div"
                             [ "bg-red-300" ]
                             [ A.style "height" (px p.size.height)
-                            , A.style "width" (px p.size.width)
+                            , A.style "width" (px 200)
                             ]
                         <|
                             node "h2" [] [] [ text p.orig.name ]
@@ -359,17 +349,73 @@ editor model =
 
         editingModule str edm cur =
             node "editing-module"
-                [ "flex", "flex-col", "h-full", "bg-white" ]
+                [ "flex"
+                , "flex-col"
+                , "h-full"
+                , "bg-blue-500"
+                , "flex-shrink-0"
+                , "mx-auto"
+                ]
                 [ A.style "height" (px edm.size.height)
                 , A.style "width" (px edm.size.width)
                 ]
                 [ node "h2" [] [] [ text edm.now.name ]
                 , toggles edm
+                , importList edm
+                , node "types"
+                    []
+                    []
+                    (button []
+                        { onPress = Just (PressedAddImport edm)
+                        , label = text "+ add Type"
+                        }
+                        :: List.map viewType edm.now.types
+                    )
+                , node "functions"
+                    []
+                    []
+                    (button []
+                        { onPress = Just (PressedAddImport edm)
+                        , label = text "+ add Function"
+                        }
+                        :: List.map viewFn edm.now.functions
+                    )
                 ]
+
+        importList m_ =
+            node "import-list"
+                []
+                []
+                (button []
+                    { onPress = Just (PressedAddImport m_)
+                    , label = text "+ add import"
+                    }
+                    :: List.map
+                        (\import_ ->
+                            node "module-import"
+                                []
+                                []
+                                [ node "module-name" [] [] [ text import_.moduleName ]
+                                ]
+                        )
+                        m_.now.imports
+                )
+
+        typesList m_  =
+            node "types"
+                []
+                []
+                (button []
+                    { onPress = Just (PressedAddImport m_)
+                    , label = text "+ add Type"
+                    }
+                    :: List.map viewType m_.now.types
+                )
     in
     [ node "main"
         [ "flex", "flex-row", "overflow-auto", "w-full" ]
         [ A.style "height" "calc(100vh - 40px)" ]
+      <|
         [ col
             [ "overflow-y-auto"
             , "bg-pink-100"
@@ -378,6 +424,8 @@ editor model =
 
               else
                 "hidden"
+            , "w-48"
+            , "flex-shrink-0"
             ]
             [ A.id "program" ]
             [ node "h1" [] [] [ H.text model.project.name ]
@@ -414,6 +462,8 @@ editor model =
         , col
             [ "overflow-y-auto"
             , "bg-gray-50"
+            , "flex-shrink-0"
+            , "w-48"
             , if model.openModules then
                 ""
 
@@ -430,21 +480,19 @@ editor model =
                 :: List.map
                     viewNavModule
                     model.project.modules
-        , row [ "flex-1", "height-full", "bg-green-200", "relative", "w-full" ]
-            []
-          <|
-            case model.window of
-                Expressing string edModule cursor _ windows ->
-                    [ viewingModules windows.viewing
-                    , editingModule string edModule cursor
-                    , pinnedModules windows.pinned
-                    ]
-
-                Browsing b ->
-                    [ viewingModules b.viewing
-                    , pinnedModules b.pinned
-                    ]
         ]
+            ++ (case model.window of
+                    Expressing string edModule cursor _ windows ->
+                        [ viewingModules windows.viewing
+                        , editingModule string edModule cursor
+                        , pinnedModules windows.pinned
+                        ]
+
+                    Browsing b c ->
+                        [ viewingModules b.viewing
+                        , pinnedModules b.pinned
+                        ]
+               )
     , node "nav"
         [ "flex", "flex-row", "items-center" ]
         [ A.style "height" "40px" ]
@@ -455,7 +503,7 @@ editor model =
             []
             { onPress = Just UserToggleModules, label = text "Modules" }
         , case model.window of
-            Browsing _ ->
+            Browsing _ _ ->
                 button
                     [ "mx-16", "flex-1", "px-4", "bg-gray-400" ]
                     { onPress = Nothing, label = text "Search Anything" }
@@ -593,17 +641,19 @@ update msg model =
             ( { model
                 | window =
                     case model.window of
-                        Browsing ws ->
+                        Browsing ws cursor ->
                             Browsing
                                 { viewing = newWindow navModule :: ws.viewing
                                 , pinned = ws.pinned
                                 }
+                                cursor
 
-                        Expressing _ _ _ _ wins ->
+                        Expressing _ _ c _ wins ->
                             Browsing
                                 { viewing = newWindow navModule :: wins.viewing
                                 , pinned = wins.pinned
                                 }
+                                c
                 , project = { prj | modules = navModule :: prj.modules }
               }
             , Cmd.none
@@ -631,17 +681,19 @@ update msg model =
             ( { model
                 | window =
                     case model.window of
-                        Browsing ws ->
+                        Browsing ws cursor ->
                             Browsing
                                 { viewing = newWindow navModule :: ws.viewing
                                 , pinned = ws.pinned
                                 }
+                                cursor
 
-                        Expressing _ _ _ _ ws ->
+                        Expressing _ _ c _ ws ->
                             Browsing
                                 { viewing = newWindow navModule :: ws.viewing
                                 , pinned = ws.pinned
                                 }
+                                c
               }
             , Cmd.none
             )
@@ -667,34 +719,4 @@ newWindow fromModule =
     { orig = fromModule
     , now = fromModule
     , size = { width = 420, height = 420 }
-    }
-
-
-ev =
-    ENode.value
-
-
-modName emodule =
-    emodule.moduleName
-        |> ev
-        |> String.join "."
-
-
-elmToRoc : EFile.File -> Module
-elmToRoc efile_ =
-    { name =
-        case ev efile_.moduleDefinition of
-            EModule.NormalModule nm ->
-                modName nm
-
-            EModule.PortModule pm ->
-                modName pm
-
-            EModule.EffectModule em ->
-                modName em
-    , imports = []
-    , types = []
-    , functions = []
-    , docs = ""
-    , tests = []
     }
