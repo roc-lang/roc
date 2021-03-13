@@ -1,4 +1,3 @@
-
 #![allow(dead_code)]
 
 use super::ed_model::EdModel;

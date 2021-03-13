@@ -1,23 +1,23 @@
 use super::keyboard_input;
+use super::style::CODE_TXT_XY;
+use super::util::slice_get;
+use crate::editor::resources::strings::NOTHING_OPENED;
 use crate::editor::{
     config::Config,
-    ed_error::{print_err},
+    ed_error::print_err,
     mvc::{app_model::AppModel, app_update, ed_model},
     theme::EdTheme,
 };
 use crate::graphics::{
     colors::to_wgpu_color,
+    lowlevel::buffer::create_rect_buffers,
     lowlevel::ortho::update_ortho_buffer,
     lowlevel::pipelines,
-    lowlevel::buffer::create_rect_buffers,
-    primitives::text::{build_glyph_brush, example_code_glyph_rect, queue_text_draw, Text},
     primitives::rect::Rect,
+    primitives::text::{build_glyph_brush, example_code_glyph_rect, queue_text_draw, Text},
 };
-use super::style::CODE_TXT_XY;
-use crate::editor::resources::strings::NOTHING_OPENED;
-use super::util::slice_get;
-use crate::lang::{pool::Pool};
-use crate::lang::expr::{Env};
+use crate::lang::expr::Env;
+use crate::lang::pool::Pool;
 use bumpalo::Bump;
 use cgmath::Vector2;
 use pipelines::RectResources;
@@ -131,7 +131,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
     let mut var_store = VarStore::default();
     let dep_idents = IdentIds::exposed_builtins(8);
-    
+
     let exposed_ident_ids = IdentIds::default();
     let mut module_ids = ModuleIds::default();
     let mod_id = module_ids.get_or_insert(&"ModId123".into());
@@ -145,7 +145,6 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
         &module_ids,
         exposed_ident_ids,
     );
-    
 
     let ed_model_opt = if let Some(file_path) = file_path_opt {
         let ed_model_res = ed_model::init_model(file_path, env, &ast_arena);
@@ -169,9 +168,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
     let mut keyboard_modifiers = ModifiersState::empty();
 
-    let render_ast_arena = Bump::new();
-
-    let config: Config = Config::default();//confy::load("roc_editor", None)?;
+    let config: Config = Config::default(); //confy::load("roc_editor", None)?;
     let ed_theme = EdTheme::default();
 
     // Render loop
@@ -271,19 +268,16 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     .output;
 
                 if let Some(ref mut ed_model) = app_model.ed_model_opt {
-
-                    let text_and_rects_res = 
-                        super::render_ast::expr2_to_wgpu(
-                            ed_model,
-                            &render_ast_arena,
-                            &size,
-                            CODE_TXT_XY.into(),
-                            &config,
-                        );
+                    // TODO only calculate if markup_root has changed
+                    let text_and_rects_res = super::mvc::ed_view::model_to_wgpu(
+                        ed_model,
+                        &size,
+                        CODE_TXT_XY.into(),
+                        &config,
+                    );
 
                     match text_and_rects_res {
                         Ok((text_section, rects)) => {
-                            
                             glyph_brush.queue(text_section);
 
                             draw_all_rects(
@@ -294,11 +288,17 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                                 &rect_resources,
                                 &ed_theme,
                             )
-                        },
-                        Err(e) => print_err(&e)
+                        }
+                        Err(e) => print_err(&e),
                     }
                 } else {
-                    queue_no_file_text(&size, NOTHING_OPENED, CODE_TXT_XY.into(), &config, &mut glyph_brush);
+                    queue_no_file_text(
+                        &size,
+                        NOTHING_OPENED,
+                        CODE_TXT_XY.into(),
+                        &config,
+                        &mut glyph_brush,
+                    );
                 }
 
                 // draw all text
@@ -343,7 +343,7 @@ fn draw_all_rects(
     ed_theme: &EdTheme,
 ) {
     let rect_buffers = create_rect_buffers(gpu_device, encoder, all_rects);
-    
+
     let mut render_pass = begin_render_pass(encoder, texture_view, ed_theme);
 
     render_pass.set_pipeline(&rect_resources.pipeline);
@@ -354,7 +354,6 @@ fn draw_all_rects(
         wgpu::IndexFormat::Uint32,
     );
     render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
-    
 }
 
 fn begin_render_pass<'a>(
