@@ -4,7 +4,7 @@
 use super::rect::Rect;
 use crate::graphics::colors;
 use crate::graphics::colors::RgbaTup;
-use crate::graphics::style::{CODE_TXT_XY, DEFAULT_FONT_SIZE};
+use crate::graphics::style::{DEFAULT_FONT_SIZE};
 use ab_glyph::{FontArc, Glyph, InvalidFont};
 use cgmath::{Vector2, Vector4};
 use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, GlyphCruncher, Section};
@@ -37,7 +37,7 @@ impl<'a> Default for Text<'a> {
 // necessary to get dimensions for caret
 pub fn example_code_glyph_rect(glyph_brush: &mut GlyphBrush<()>) -> Rect {
     let code_text = Text {
-        position: CODE_TXT_XY.into(),
+        position: (0.0, 0.0).into(),
         area_bounds: (std::f32::INFINITY, std::f32::INFINITY).into(),
         color: colors::WHITE,
         text: "a",

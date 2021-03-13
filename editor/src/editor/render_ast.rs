@@ -24,20 +24,20 @@ pub fn expr2_to_wgpu<'a>(
     ed_model: &'a mut EdModel,
     arena: &'a Bump,
     size: &PhysicalSize<u32>,
-    position: Vector2<f32>,
+    txt_coords: Vector2<f32>,
     config: &Config,
 ) -> EdResult<(wgpu_glyph::Section<'a>, Vec<Rect>)> {
     ed_model.markup_root =  expr2_to_markup(arena, &mut ed_model.module.env, &ed_model.module.ast_root);
     
     let glyph_dim_rect = ed_model.glyph_dim_rect_opt.context(MissingGlyphDims {})?;
 
-    build_code_graphics(&ed_model.markup_root, size, position, config, glyph_dim_rect)
+    build_code_graphics(&ed_model.markup_root, size, txt_coords, config, glyph_dim_rect)
 }
 
 pub fn build_code_graphics<'a>(
     markup_node: &'a MarkupNode,
     size: &PhysicalSize<u32>,
-    position: Vector2<f32>,
+    txt_coords: Vector2<f32>,
     config: &Config,
     glyph_dim_rect: Rect,
 ) -> EdResult<(wgpu_glyph::Section<'a>, Vec<Rect>)> {
@@ -48,11 +48,12 @@ pub fn build_code_graphics<'a>(
         markup_node,
         &config.ed_theme.syntax_high_map,
         config.code_font_size,
+        txt_coords,
         glyph_dim_rect,
     )?;
 
     let section =
-        gr_text::section_from_glyph_text(glyph_text_vec, position.into(), area_bounds, layout);
+        gr_text::section_from_glyph_text(glyph_text_vec, txt_coords.into(), area_bounds, layout);
 
     Ok((section, rects))
 }
@@ -62,6 +63,7 @@ fn markup_to_wgpu<'a>(
     markup_node: &'a MarkupNode,
     syntax_theme: &HashMap<HighlightStyle, RgbaTup>,
     font_size: f32,
+    txt_coords: Vector2<f32>,
     glyph_dim_rect: Rect,
 ) -> EdResult<(Vec<wgpu_glyph::Text<'a>>, Vec<Rect>)> {
     let mut wgpu_texts: Vec<wgpu_glyph::Text<'a>> = Vec::new();
@@ -70,18 +72,19 @@ fn markup_to_wgpu<'a>(
     let mut text_row = 0;
     let mut text_col = 0;
 
-    markup_to_wgpu_helper(markup_node, &mut wgpu_texts, &mut rects, syntax_theme, font_size, &mut text_row, &mut text_col, glyph_dim_rect)?;
+    markup_to_wgpu_helper(markup_node, &mut wgpu_texts, &mut rects, syntax_theme, font_size, txt_coords, &mut text_row, &mut text_col, glyph_dim_rect)?;
 
     Ok((wgpu_texts, rects))
 }
 
-// TODO use text_row
+// TODO use text_row and attributes to render caret
 fn markup_to_wgpu_helper<'a>(
     markup_node: &'a MarkupNode,
     wgpu_texts: &mut Vec<wgpu_glyph::Text<'a>>,
     rects: &mut Vec<Rect>,
     syntax_theme: &HashMap<HighlightStyle, RgbaTup>,
     font_size: f32,
+    txt_coords: Vector2<f32>,
     text_row: &mut usize,
     text_col: &mut usize,
     glyph_dim_rect: Rect,
@@ -89,7 +92,7 @@ fn markup_to_wgpu_helper<'a>(
     match markup_node {
         MarkupNode::Nested {ast_node_id: _, children} => 
             for child in children.iter() {
-                markup_to_wgpu_helper(child, wgpu_texts, rects, syntax_theme, font_size, text_row, text_col, glyph_dim_rect)?;
+                markup_to_wgpu_helper(child, wgpu_texts, rects, syntax_theme, font_size, txt_coords, text_row, text_col, glyph_dim_rect)?;
             },
         MarkupNode::Text {content, ast_node_id: _, syn_high_style, attributes:_} => {
                 let highlight_color = map_get(&syntax_theme, &syn_high_style)?;
@@ -101,18 +104,20 @@ fn markup_to_wgpu_helper<'a>(
                 *text_col += content.len();
                 wgpu_texts.push(glyph_text);
             },
-        MarkupNode::Hole { ast_node_id: _, attributes: _} => 
+        MarkupNode::Hole { ast_node_id: _, attributes: _, syn_high_style} => 
             {
                 let hole_placeholder = " ";
                 let glyph_text = wgpu_glyph::Text::new(hole_placeholder)
                         .with_color(colors::to_slice(colors::WHITE))
                         .with_scale(font_size);
 
+                let highlight_color = map_get(&syntax_theme, &syn_high_style)?;
+
                 let hole_rect = Rect {
-                    top_left_coords: ((*text_row as f32) * glyph_dim_rect.height, (*text_col as f32) * glyph_dim_rect.width).into(),
-                    width: glyph_dim_rect.width * 10.0,
-                    height: glyph_dim_rect.height * 10.0,
-                    color: colors::WHITE,
+                    top_left_coords: (txt_coords.x + (*text_row as f32) * glyph_dim_rect.height, txt_coords.y + (*text_col as f32) * glyph_dim_rect.width).into(),
+                    width: glyph_dim_rect.width,
+                    height: glyph_dim_rect.height,
+                    color: *highlight_color,
                 };
                 rects.push(hole_rect);
                 

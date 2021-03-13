@@ -12,8 +12,8 @@ use crate::graphics::{
     lowlevel::buffer::create_rect_buffers,
     primitives::text::{build_glyph_brush, example_code_glyph_rect, queue_text_draw, Text},
     primitives::rect::Rect,
-    style::CODE_TXT_XY,
 };
+use super::style::CODE_TXT_XY;
 use crate::editor::resources::strings::NOTHING_OPENED;
 use super::util::slice_get;
 use crate::lang::{pool::Pool};
@@ -171,7 +171,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
     let render_ast_arena = Bump::new();
 
-    let config: Config = confy::load("roc_editor", None)?;
+    let config: Config = Config::default();//confy::load("roc_editor", None)?;
     let ed_theme = EdTheme::default();
 
     // Render loop
@@ -343,22 +343,18 @@ fn draw_all_rects(
     ed_theme: &EdTheme,
 ) {
     let rect_buffers = create_rect_buffers(gpu_device, encoder, all_rects);
+    
+    let mut render_pass = begin_render_pass(encoder, texture_view, ed_theme);
 
-    // block necessary for borrowing encoder
-    {
-        let mut render_pass = begin_render_pass(encoder, texture_view, ed_theme);
-
-        render_pass.set_pipeline(&rect_resources.pipeline);
-        render_pass.set_bind_group(0, &rect_resources.ortho.bind_group, &[]);
-        render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(
-            rect_buffers.index_buffer.slice(..),
-            wgpu::IndexFormat::Uint32,
-        );
-        render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
-    }
-
-    begin_render_pass(encoder, texture_view, ed_theme);
+    render_pass.set_pipeline(&rect_resources.pipeline);
+    render_pass.set_bind_group(0, &rect_resources.ortho.bind_group, &[]);
+    render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
+    render_pass.set_index_buffer(
+        rect_buffers.index_buffer.slice(..),
+        wgpu::IndexFormat::Uint32,
+    );
+    render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
+    
 }
 
 fn begin_render_pass<'a>(

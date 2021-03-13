@@ -1,6 +1,7 @@
 use crate::{graphics::primitives::rect::Rect};
 use crate::editor::ed_error::{EdResult};
 use crate::editor::ed_error::EdError::ParseError;
+use crate::editor::syntax_highlight::HighlightStyle;
 use std::path::Path;
 use crate::lang::expr::{Env, str_to_expr2};
 use crate::lang::{
@@ -27,6 +28,7 @@ pub fn init_model<'a>(_file_path: &Path, env: Env<'a>, ast_arena: &'a Bump) -> E
         MarkupNode::Hole{
             ast_node_id: ast_root_id,
             attributes: Vec::new(),
+            syn_high_style: HighlightStyle::Hole,
         };
 
     Ok(EdModel {

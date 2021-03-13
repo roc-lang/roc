@@ -22,6 +22,7 @@ pub enum MarkupNode {
     Hole {
         ast_node_id: NodeId<Expr2>,
         attributes: Vec<Attribute>,
+        syn_high_style: HighlightStyle,
     }
 }
 
@@ -153,7 +154,8 @@ pub fn expr2_to_markup<'a, 'b>(
         Expr2::Hole => {
             MarkupNode::Hole {
                 ast_node_id: node_id,
-                attributes: Vec::new()
+                attributes: Vec::new(),
+                syn_high_style: HighlightStyle::Hole,
             }
         }
         rest => todo!("implement expr2_to_markup for {:?}", rest),
