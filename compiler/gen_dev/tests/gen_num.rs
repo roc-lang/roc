@@ -229,7 +229,7 @@ mod gen_num {
     }
 
     #[test]
-    fn maxI128() {
+    fn max_i128() {
         assert_evals_to!("Num.maxI128", i128::MAX, i128);
     }
 
