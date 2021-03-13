@@ -377,7 +377,10 @@ fn loc_possibly_negative_or_negated_term<'a>(
                 )
             }
         )),
-        |arena, state| parse_loc_term(min_indent, arena, state)
+        |arena, state| {
+            // TODO use parse_loc_term_better
+            parse_loc_term(min_indent, arena, state)
+        }
     ]
 }
 
@@ -666,7 +669,7 @@ fn parse_expr_operator<'a>(
         }
         BinOp::Assignment => {
             if !expr_state.operators.is_empty() {
-                // this `:` likely occured inline; treat it as an invalid operator
+                // this `=` likely occured inline; treat it as an invalid operator
                 let fail = EExpr::BadOperator(
                     arena.alloc([b'=']),
                     loc_op.region.start_line,
@@ -693,9 +696,23 @@ fn parse_expr_operator<'a>(
 
             let expr_region = expr_state.expr.region;
 
-            match &expr_state.expr.value {
+            let indented_more = min_indent + 1;
+
+            expr_state.consume_spaces(arena);
+
+            let (loc_def, state) = match &expr_state.expr.value {
                 Expr::GlobalTag(name) => {
-                    let indented_more = min_indent + 1;
+                    let mut type_arguments =
+                        Vec::with_capacity_in(expr_state.arguments.len(), arena);
+
+                    for argument in expr_state.arguments {
+                        match expr_to_pattern_help(arena, &argument.value) {
+                            Ok(good) => {
+                                type_arguments.push(Located::at(argument.region, good));
+                            }
+                            Err(_) => panic!(),
+                        }
+                    }
 
                     let (_, ann_type, state) = specialize(
                         EExpr::Type,
@@ -711,43 +728,16 @@ fn parse_expr_operator<'a>(
                     let alias_region =
                         Region::span_across(&expr_state.expr.region, &ann_type.region);
 
-                    let mut type_arguments =
-                        Vec::with_capacity_in(expr_state.arguments.len(), arena);
-
-                    for argument in expr_state.arguments {
-                        match expr_to_pattern_help(arena, &argument.value) {
-                            Ok(good) => {
-                                type_arguments.push(Located::at(argument.region, good));
-                            }
-                            Err(_) => panic!(),
-                        }
-                    }
-
                     let alias = Def::Alias {
                         name: Located::at(expr_state.expr.region, name),
                         vars: type_arguments.into_bump_slice(),
                         ann: ann_type,
                     };
 
-                    let loc_def = &*arena.alloc(Located::at(alias_region, alias));
-
-                    let parse_final_expr = space0_before_e(
-                        move |a, s| parse_expr_help(min_indent, a, s),
-                        min_indent,
-                        EExpr::Space,
-                        EExpr::IndentEnd,
-                    );
-
-                    let (_, loc_ret, state) = parse_final_expr.parse(arena, state)?;
-
-                    return Ok((
-                        MadeProgress,
-                        Expr::Defs(&*arena.alloc([loc_def]), arena.alloc(loc_ret)),
-                        state,
-                    ));
+                    (&*arena.alloc(Located::at(alias_region, alias)), state)
                 }
+
                 _ => {
-                    expr_state.consume_spaces(arena);
                     let call = to_call(
                         arena,
                         expr_state.arguments,
@@ -759,8 +749,6 @@ fn parse_expr_operator<'a>(
 
                     match expr_to_pattern_help(arena, &call.value) {
                         Ok(good) => {
-                            let indented_more = min_indent + 1;
-
                             let (_, ann_type, state) = specialize(
                                 EExpr::Type,
                                 space0_before_e(
@@ -772,26 +760,11 @@ fn parse_expr_operator<'a>(
                             )
                             .parse(arena, state)?;
 
-                            let alias_region = Region::span_across(&expr_region, &ann_type.region);
+                            let alias_region = Region::span_across(&call.region, &ann_type.region);
 
                             let alias = Def::Annotation(Located::at(expr_region, good), ann_type);
 
-                            let loc_def = &*arena.alloc(Located::at(alias_region, alias));
-
-                            let parse_final_expr = space0_before_e(
-                                move |a, s| parse_expr_help(min_indent, a, s),
-                                min_indent,
-                                EExpr::Space,
-                                EExpr::IndentEnd,
-                            );
-
-                            let (_, loc_ret, state) = parse_final_expr.parse(arena, state)?;
-
-                            return Ok((
-                                MadeProgress,
-                                Expr::Defs(&*arena.alloc([loc_def]), arena.alloc(loc_ret)),
-                                state,
-                            ));
+                            (&*arena.alloc(Located::at(alias_region, alias)), state)
                         }
                         Err(_) => {
                             // this `:` likely occured inline; treat it as an invalid operator
@@ -801,11 +774,26 @@ fn parse_expr_operator<'a>(
                                 loc_op.region.start_col,
                             );
 
-                            Err((MadeProgress, fail, state))
+                            return Err((MadeProgress, fail, state));
                         }
                     }
                 }
-            }
+            };
+
+            let parse_final_expr = space0_before_e(
+                move |a, s| parse_expr_help(min_indent, a, s),
+                min_indent,
+                EExpr::Space,
+                EExpr::IndentEnd,
+            );
+
+            let (_, loc_ret, state) = parse_final_expr.parse(arena, state)?;
+
+            return Ok((
+                MadeProgress,
+                Expr::Defs(&*arena.alloc([loc_def]), arena.alloc(loc_ret)),
+                state,
+            ));
         }
         _ => match loc_possibly_negative_or_negated_term(min_indent).parse(arena, state) {
             Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
@@ -1218,6 +1206,7 @@ pub fn def_help<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, EExpr<'a>> {
 
                 // see if there is a definition (assuming the preceding characters were a type
                 // annotation
+                // TODO parse all the spaces, and check if we moved more than >= 1 line down
                 let (_, opt_rest, state) = optional(and!(
                     spaces_till_end_of_line(),
                     body_at_indent_help(min_indent)
