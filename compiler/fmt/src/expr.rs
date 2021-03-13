@@ -390,6 +390,9 @@ fn fmt_bin_op<'a>(
         operator::BinOp::And => buf.push_str("&&"),
         operator::BinOp::Or => buf.push_str("||"),
         operator::BinOp::Pizza => buf.push_str("|>"),
+        operator::BinOp::Assignment => unreachable!(),
+        operator::BinOp::HasType => unreachable!(),
+        operator::BinOp::Backpassing => unreachable!(),
     }
 
     buf.push(' ');

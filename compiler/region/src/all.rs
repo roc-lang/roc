@@ -146,7 +146,7 @@ impl fmt::Debug for Region {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
 pub struct Position {
     pub row: u32,
     pub col: u16,
