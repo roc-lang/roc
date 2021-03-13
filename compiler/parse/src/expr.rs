@@ -576,8 +576,6 @@ fn foobar<'a>(
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
     let (_, expr, state) = loc_possibly_negative_or_negated_term(min_indent).parse(arena, state)?;
 
-    dbg!(&expr);
-
     let initial = state;
     let end = state.get_position();
 
@@ -651,6 +649,62 @@ fn to_call<'a>(
     }
 }
 
+fn numeric_negate_expression<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+    loc_op: Located<BinOp>,
+    expr: Located<Expr<'a>>,
+    spaces: &'a [CommentOrNewline<'a>],
+) -> Located<Expr<'a>> {
+    debug_assert_eq!(state.bytes.get(0), Some(&b'-'));
+    // for overflow reasons, we must make the unary minus part of the number literal.
+    let mut region = expr.region;
+    region.start_col -= 1;
+
+    let new_expr = match &expr.value {
+        Expr::Num(string) => {
+            let new_string =
+                unsafe { std::str::from_utf8_unchecked(&state.bytes[..string.len() + 1]) };
+
+            Expr::Num(new_string)
+        }
+        Expr::Float(string) => {
+            let new_string =
+                unsafe { std::str::from_utf8_unchecked(&state.bytes[..string.len() + 1]) };
+
+            Expr::Float(new_string)
+        }
+        Expr::NonBase10Int {
+            string,
+            base,
+            is_negative,
+        } => {
+            let new_string =
+                unsafe { std::str::from_utf8_unchecked(&state.bytes[..string.len() + 1]) };
+
+            Expr::NonBase10Int {
+                is_negative: !is_negative,
+                string: new_string,
+                base: *base,
+            }
+        }
+        _ => Expr::UnaryOp(
+            arena.alloc(expr),
+            Located::at(loc_op.region, UnaryOp::Negate),
+        ),
+    };
+
+    let new_loc_expr = Located::at(region, new_expr);
+
+    if spaces.is_empty() {
+        new_loc_expr
+    } else {
+        arena
+            .alloc(new_loc_expr.value)
+            .with_spaces_before(spaces, new_loc_expr.region)
+    }
+}
+
 fn parse_expr_operator<'a>(
     min_indent: u16,
     mut expr_state: ExprState<'a>,
@@ -685,13 +739,13 @@ fn parse_expr_operator<'a>(
             let (_, negated_expr, state) = parse_loc_term(min_indent, arena, state)?;
             let new_end = state.get_position();
 
-            let negated_expr = if expr_state.spaces_after.is_empty() {
-                negated_expr
-            } else {
-                arena
-                    .alloc(negated_expr.value)
-                    .with_spaces_before(expr_state.spaces_after, negated_expr.region)
-            };
+            let arg = numeric_negate_expression(
+                arena,
+                expr_state.initial,
+                loc_op,
+                negated_expr,
+                expr_state.spaces_after,
+            );
 
             expr_state.initial = state;
 
@@ -701,15 +755,7 @@ fn parse_expr_operator<'a>(
                     Ok((_, spaces, state)) => (spaces, state),
                 };
 
-            let region = Region::span_across(&loc_op.region, &negated_expr.region);
-            let arg = Expr::UnaryOp(
-                arena.alloc(negated_expr),
-                Located::at(loc_op.region, UnaryOp::Negate),
-            );
-
-            expr_state
-                .arguments
-                .push(arena.alloc(Located::at(region, arg)));
+            expr_state.arguments.push(arena.alloc(arg));
             expr_state.spaces_after = spaces;
             expr_state.end = new_end;
 
@@ -848,12 +894,9 @@ fn parse_expr_end2<'a>(
         move |a, s| parse_loc_term_better(min_indent, a, s)
     );
 
-    dbg!(&state);
-
-    match dbg!(parser.parse(arena, state)) {
+    match parser.parse(arena, state) {
         Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
         Ok((_, arg, state)) => {
-            dbg!(&arg);
             let new_end = state.get_position();
 
             expr_state.initial = state;
@@ -895,10 +938,12 @@ fn parse_expr_end2<'a>(
             }
         }
         Err((NoProgress, _, _)) => {
+            let before_op = state;
             // try an operator
             match loc!(operator()).parse(arena, state) {
                 Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
                 Ok((_, loc_op, state)) => {
+                    expr_state.initial = before_op;
                     parse_expr_operator(min_indent, expr_state, loc_op, arena, state)
                 }
                 Err((NoProgress, _, _)) => {
