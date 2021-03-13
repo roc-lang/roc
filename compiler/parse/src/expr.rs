@@ -1,6 +1,6 @@
 use crate::ast::{AssignedField, CommentOrNewline, Def, Expr, Pattern, Spaceable, TypeAnnotation};
 use crate::blankspace::{
-    space0_after_e, space0_around_ee, space0_before_e, space0_e, space1_e, spaces_exactly_e,
+    space0_after_e, space0_around_ee, space0_before_e, space0_e, spaces_exactly_e,
 };
 use crate::ident::{lowercase_ident, parse_ident_help, Ident};
 use crate::keyword;
@@ -88,32 +88,6 @@ fn loc_expr_in_parens_help_help<'a>(
             EInParens::IndentEnd,
         ),
         word1(b')', EInParens::End)
-    )
-}
-
-fn loc_function_arg_in_parens_etc_help<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
-    then(
-        loc!(and!(
-            specialize(EExpr::InParens, loc_expr_in_parens_help(min_indent)),
-            optional(record_field_access_chain())
-        )),
-        move |arena, state, _progress, loc_parsed| {
-            let Located {
-                region: _,
-                value: (loc_expr, opt_accesses),
-            } = loc_parsed;
-
-            match opt_accesses {
-                None => Ok((MadeProgress, loc_expr, state)),
-                Some(fields) => Ok((
-                    MadeProgress,
-                    expr_in_parens_then_access(arena, loc_expr, fields),
-                    state,
-                )),
-            }
-        },
     )
 }
 
@@ -322,26 +296,6 @@ fn expr_in_parens_then_arguments<'a>(
     }
 }
 
-fn expr_in_parens_then_access<'a>(
-    arena: &'a Bump,
-    loc_expr: Located<Expr<'a>>,
-    fields: Vec<'a, &'a str>,
-) -> Located<Expr<'a>> {
-    let mut value = loc_expr.value;
-
-    for field in fields {
-        // Wrap the previous answer in the new one, so we end up
-        // with a nested Expr. That way, `foo.bar.baz` gets represented
-        // in the AST as if it had been written (foo.bar).baz all along.
-        value = Expr::Access(arena.alloc(value), field);
-    }
-
-    Located {
-        region: loc_expr.region,
-        value,
-    }
-}
-
 fn in_parens_region_fix<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
     // we get the region of the expression inside the parens, but current tests want us to
     // include the parentheses in the region
@@ -434,26 +388,6 @@ where
     |_arena, state: State<'a>| Err((NoProgress, EExpr::Start(state.line, state.column), state))
 }
 
-fn unary_not<'a>() -> impl Parser<'a, (), EExpr<'a>> {
-    move |_arena: &'a Bump, state: State<'a>| {
-        if state.bytes.starts_with(b"!") && state.bytes.get(1) != Some(&b'=') {
-            // don't parse the `!` if it's followed by a `=`
-            Ok((
-                MadeProgress,
-                (),
-                State {
-                    bytes: &state.bytes[1..],
-                    column: state.column + 1,
-                    ..state
-                },
-            ))
-        } else {
-            // this is not a negated expression
-            Err((NoProgress, EExpr::UnaryNot(state.line, state.column), state))
-        }
-    }
-}
-
 fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
     move |_arena: &'a Bump, state: State<'a>| {
         // a minus is unary iff
@@ -494,66 +428,6 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
             Err((NoProgress, EExpr::UnaryNot(state.line, state.column), state))
         }
     }
-}
-
-fn unary_negate_better<'a>() -> impl Parser<'a, (), EExpr<'a>> {
-    move |_arena: &'a Bump, state: State<'a>| {
-        // a minus is unary iff
-        //
-        // - it is preceded by whitespace (spaces, newlines, comments)
-        // - it is not followed by whitespace
-        let followed_by_whitespace = state
-            .bytes
-            .get(1)
-            .map(
-                |c| c.is_ascii_whitespace() || *c == b'#', /*|| c.is_ascii_digit()*/
-            )
-            .unwrap_or(false);
-
-        if state.bytes.starts_with(b"-") && !followed_by_whitespace {
-            // the negate is only unary if it is not followed by whitespace
-            Ok((
-                MadeProgress,
-                (),
-                State {
-                    bytes: &state.bytes[1..],
-                    column: state.column + 1,
-                    ..state
-                },
-            ))
-        } else {
-            // this is not a negated expression
-            Err((NoProgress, EExpr::UnaryNot(state.line, state.column), state))
-        }
-    }
-}
-
-/// Unary (!) or (-)
-///
-/// e.g. `!x` or `-x`
-fn unary_op_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
-    one_of!(
-        specialize(EExpr::Number, number_literal_help()),
-        map_with_arena!(
-            // must backtrack to distinguish `!x` from `!= y`
-            and!(loc!(unary_not()), move |arena, state| parse_expr_help(
-                min_indent, arena, state
-            )),
-            |arena: &'a Bump, (loc_op, loc_expr): (Located<()>, Located<Expr<'a>>)| {
-                Expr::UnaryOp(arena.alloc(loc_expr), loc_op.map(|_| UnaryOp::Not))
-            }
-        ),
-        map_with_arena!(
-            and!(
-                // must backtrack to distinguish `x - 1` from `-1`
-                loc!(unary_negate_better()),
-                move |arena, state| parse_expr_help(min_indent, arena, state)
-            ),
-            |arena: &'a Bump, (loc_op, loc_expr): (Located<()>, Located<Expr<'a>>)| {
-                Expr::UnaryOp(arena.alloc(loc_expr), loc_op.map(|_| UnaryOp::Negate))
-            }
-        )
-    )
 }
 
 fn parse_expr_start<'a>(
@@ -645,7 +519,7 @@ impl<'a> ExprState<'a> {
 }
 
 fn parse_expr_final<'a>(
-    min_indent: u16,
+    _min_indent: u16,
     expr_state: ExprState<'a>,
     arena: &'a Bump,
     state: State<'a>,
@@ -670,7 +544,7 @@ fn to_call<'a>(
     arena: &'a Bump,
     arguments: Vec<'a, &'a Located<Expr<'a>>>,
     loc_expr1: Located<Expr<'a>>,
-    spaces_before: &'a [CommentOrNewline<'a>],
+    _spaces_before: &'a [CommentOrNewline<'a>],
 ) -> Located<Expr<'a>> {
     if arguments.is_empty() {
         loc_expr1
@@ -1070,7 +944,7 @@ fn parse_expr_end2<'a>(
 
 fn parse_expr_end<'a>(
     min_indent: u16,
-    mut expr_state: ExprState<'a>,
+    expr_state: ExprState<'a>,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
@@ -1798,26 +1672,6 @@ fn parse_def_signature_help<'a>(
     )
 }
 
-fn loc_parse_function_arg_help<'a>(
-    min_indent: u16,
-    arena: &'a Bump,
-    state: State<'a>,
-) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
-    one_of!(
-        loc_function_arg_in_parens_etc_help(min_indent),
-        loc!(specialize(EExpr::Str, string_literal_help())),
-        loc!(specialize(EExpr::Number, number_literal_help())),
-        loc!(specialize(EExpr::Lambda, closure_help(min_indent))),
-        loc!(record_literal_help(min_indent)),
-        loc!(specialize(EExpr::List, list_literal_help(min_indent))),
-        loc!(unary_op_help(min_indent)),
-        loc!(specialize(EExpr::When, when::expr_help(min_indent))),
-        loc!(specialize(EExpr::If, if_expr_help(min_indent))),
-        loc!(ident_without_apply_help())
-    )
-    .parse(arena, state)
-}
-
 fn closure_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, ELambda<'a>> {
     map_with_arena!(
         skip_first!(
@@ -2178,82 +2032,6 @@ fn if_expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, If<'a>> {
 /// Since operators have higher precedence than function application,
 /// any time we encounter a '-' it is unary iff it is both preceded by spaces
 /// and is *not* followed by a whitespace character.
-#[inline(always)]
-fn unary_negate_function_arg_help<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
-    move |arena, state: State<'a>| {
-        let (_, Located { region, .. }, state) = loc!(unary_negate()).parse(arena, state)?;
-
-        let loc_op = Located {
-            region,
-            value: UnaryOp::Negate,
-        };
-
-        // Continue parsing the function arg as normal.
-        let (_, loc_expr, state) = loc_parse_function_arg_help(min_indent, arena, state)?;
-        let region = Region {
-            start_col: loc_op.region.start_col,
-            start_line: loc_op.region.start_line,
-            end_col: loc_expr.region.end_col,
-            end_line: loc_expr.region.end_line,
-        };
-        let value = Expr::UnaryOp(arena.alloc(loc_expr), loc_op);
-        let loc_expr = Located {
-            // Start from where the unary op started,
-            // and end where its argument expr ended.
-            // This is relevant in case (for example)
-            // we have an expression involving parens,
-            // for example `-(foo bar)`
-            region,
-            value,
-        };
-
-        let value = loc_expr.value;
-
-        Ok((
-            MadeProgress,
-            Located {
-                region: loc_expr.region,
-                value,
-            },
-            state,
-        ))
-    }
-}
-
-fn loc_function_args_help<'a>(
-    min_indent: u16,
-) -> impl Parser<'a, Vec<'a, Located<Expr<'a>>>, EExpr<'a>> {
-    one_or_more!(
-        move |arena: &'a Bump, s| {
-            map!(
-                and!(
-                    backtrackable(space1_e(
-                        min_indent,
-                        EExpr::Space,
-                        EExpr::IndentStart,
-                        EExpr::Start
-                    )),
-                    one_of![unary_negate_function_arg_help(min_indent), |a, s| {
-                        loc_parse_function_arg_help(min_indent, a, s)
-                    }]
-                ),
-                |(spaces, loc_expr): (&'a [_], Located<Expr<'a>>)| {
-                    if spaces.is_empty() {
-                        loc_expr
-                    } else {
-                        arena
-                            .alloc(loc_expr.value)
-                            .with_spaces_before(spaces, loc_expr.region)
-                    }
-                }
-            )
-            .parse(arena, s)
-        },
-        EExpr::Start
-    )
-}
 
 /// When we parse an ident like `foo ` it could be any of these:
 ///
@@ -2476,15 +2254,6 @@ fn ident_then_args<'a>(
             ))
         }
     }
-}
-
-fn ident_without_apply_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
-    then(
-        loc!(parse_ident_help),
-        move |arena, state, progress, loc_ident| {
-            Ok((progress, ident_to_expr(arena, loc_ident.value), state))
-        },
-    )
 }
 
 #[allow(dead_code)]
