@@ -41,7 +41,7 @@ mod test_can {
         }
     }
 
-    fn assert_can_int(input: &str, expected: i64) {
+    fn assert_can_int(input: &str, expected: i128) {
         let arena = Bump::new();
         let actual_out = can_expr_with(&arena, test_home(), input);
 
