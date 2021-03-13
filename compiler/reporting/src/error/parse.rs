@@ -2702,7 +2702,7 @@ fn to_provides_report<'a>(
                     .reflow(r"I am partway through parsing a provides list, but I got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![alloc.reflow(
-                    "I was expecting a type name, value name or function name next, like ",
+                    "I was expecting a type name, value name or function name next, like",
                 )]),
                 alloc
                     .parser_suggestion("provides [ Animal, default, tame ]")
@@ -2764,7 +2764,7 @@ fn to_exposes_report<'a>(
                 alloc.reflow(r"I am partway through parsing a exposes list, but I got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![alloc.reflow(
-                    "I was expecting a type name, value name or function name next, like ",
+                    "I was expecting a type name, value name or function name next, like",
                 )]),
                 alloc
                     .parser_suggestion("exposes [ Animal, default, tame ]")
