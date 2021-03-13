@@ -442,13 +442,13 @@ fn parse_expr_start<'a>(
         loc!(specialize(EExpr::If, if_expr_help(min_indent))),
         loc!(specialize(EExpr::When, when::expr_help(min_indent))),
         loc!(specialize(EExpr::Lambda, closure_help(min_indent))),
-        loc!(|a, s| foobar(min_indent, a, s)),
+        loc!(|a, s| parse_expr_operator_chain(min_indent, a, s)),
         fail_expr_start_e()
     ]
     .parse(arena, state)
 }
 
-fn foobar<'a>(
+fn parse_expr_operator_chain<'a>(
     min_indent: u16,
     arena: &'a Bump,
     state: State<'a>,
@@ -483,20 +483,6 @@ struct ExprState<'a> {
     initial: State<'a>,
     end: Position,
 }
-
-//    expr_state.expr = if spaces.is_empty() {
-//        expr_state.expr
-//    } else {
-//        arena
-//            .alloc(expr_state.expr.value)
-//            .with_spaces_after(spaces, expr_state.expr.region)
-//    };
-
-// fn attach_spaces<'a>(&'a Bump, expr: &mut Located<Expr<'a>>, spaces: &'a [CommentOrNewline<'a>] ) {
-//
-//
-//
-// }
 
 impl<'a> ExprState<'a> {
     fn consume_spaces(&mut self, arena: &'a Bump) {
