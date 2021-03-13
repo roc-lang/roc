@@ -366,6 +366,7 @@ fn parse_loc_term<'a>(
         in_parens_region_fix(min_indent),
         loc!(specialize(EExpr::Str, string_literal_help())),
         loc!(specialize(EExpr::Number, number_literal_help())),
+        loc!(specialize(EExpr::Lambda, closure_help(min_indent))),
         loc!(record_literal_help(min_indent)),
         loc!(specialize(EExpr::List, list_literal_help(min_indent))),
         loc!(ident_etc_help(min_indent))
@@ -382,6 +383,7 @@ fn parse_loc_term_better<'a>(
         in_parens_region_fix(min_indent),
         loc!(specialize(EExpr::Str, string_literal_help())),
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
+        loc!(specialize(EExpr::Lambda, closure_help(min_indent))),
         loc!(record_literal_help(min_indent)),
         loc!(specialize(EExpr::List, list_literal_help(min_indent))),
         // loc!(ident_etc_help(min_indent))
@@ -579,7 +581,7 @@ fn foobar<'a>(
     let initial = state;
     let end = state.get_position();
 
-    match dbg!(space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state)) {
+    match space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state) {
         Err((_, _, state)) => Ok((MadeProgress, expr.value, state)),
         Ok((_, spaces_before_op, state)) => {
             let expr_state = ExprState {
@@ -603,6 +605,43 @@ struct ExprState<'a> {
     spaces_after: &'a [CommentOrNewline<'a>],
     initial: State<'a>,
     end: Position,
+}
+
+//    expr_state.expr = if spaces.is_empty() {
+//        expr_state.expr
+//    } else {
+//        arena
+//            .alloc(expr_state.expr.value)
+//            .with_spaces_after(spaces, expr_state.expr.region)
+//    };
+
+// fn attach_spaces<'a>(&'a Bump, expr: &mut Located<Expr<'a>>, spaces: &'a [CommentOrNewline<'a>] ) {
+//
+//
+//
+// }
+
+impl<'a> ExprState<'a> {
+    fn consume_spaces(&mut self, arena: &'a Bump) {
+        if !self.spaces_after.is_empty() {
+            if let Some(last) = self.arguments.pop() {
+                let new = last.value.with_spaces_after(self.spaces_after, last.region);
+
+                self.arguments.push(arena.alloc(new));
+            } else {
+                let region = self.expr.region;
+
+                let mut value = Expr::Num("");
+                std::mem::swap(&mut self.expr.value, &mut value);
+
+                self.expr = arena
+                    .alloc(value)
+                    .with_spaces_after(self.spaces_after, region);
+            };
+
+            self.spaces_after = &[];
+        }
+    }
 }
 
 fn parse_expr_final<'a>(
@@ -631,7 +670,7 @@ fn to_call<'a>(
     arena: &'a Bump,
     arguments: Vec<'a, &'a Located<Expr<'a>>>,
     loc_expr1: Located<Expr<'a>>,
-    _spaces_before: &'a [CommentOrNewline<'a>],
+    spaces_before: &'a [CommentOrNewline<'a>],
 ) -> Located<Expr<'a>> {
     if arguments.is_empty() {
         loc_expr1
@@ -712,19 +751,8 @@ fn parse_expr_operator<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    let (space_progress, mut spaces, state) =
+    let (_, spaces_after_operator, state) =
         space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state)?;
-
-    // add previous spaces to the expr
-    std::mem::swap(&mut spaces, &mut expr_state.spaces_after);
-
-    expr_state.expr = if spaces.is_empty() {
-        expr_state.expr
-    } else {
-        arena
-            .alloc(expr_state.expr.value)
-            .with_spaces_after(spaces, expr_state.expr.region)
-    };
 
     // a `-` is unary if it is preceded by a space and not followed by a space
 
@@ -761,15 +789,38 @@ fn parse_expr_operator<'a>(
 
             parse_expr_end2(min_indent, expr_state, arena, state)
         }
+        BinOp::Assignment => {
+            if !expr_state.operators.is_empty() {
+                // this `:` likely occured inline; treat it as an invalid operator
+                let fail = EExpr::BadOperator(
+                    arena.alloc([b'=']),
+                    loc_op.region.start_line,
+                    loc_op.region.start_col,
+                );
+
+                Err((MadeProgress, fail, state))
+            } else if !expr_state.arguments.is_empty() {
+                let region = Region::across_all(expr_state.arguments.iter().map(|v| &v.region));
+
+                let fail = EExpr::ElmStyleFunction(
+                    region,
+                    loc_op.region.start_line,
+                    loc_op.region.start_col,
+                );
+
+                Err((MadeProgress, fail, state))
+            } else {
+                todo!()
+            }
+        }
         BinOp::HasType => {
             debug_assert!(expr_state.operators.is_empty());
-            dbg!(&expr_state.expr, &expr_state.arguments);
+
+            let expr_region = expr_state.expr.region;
 
             match &expr_state.expr.value {
                 Expr::GlobalTag(name) => {
                     let indented_more = min_indent + 1;
-
-                    let region = expr_state.expr.region;
 
                     let (_, ann_type, state) = specialize(
                         EExpr::Type,
@@ -820,31 +871,86 @@ fn parse_expr_operator<'a>(
                         state,
                     ));
                 }
-                _ => panic!(),
+                _ => {
+                    expr_state.consume_spaces(arena);
+                    let call = to_call(
+                        arena,
+                        expr_state.arguments,
+                        expr_state.expr,
+                        spaces_after_operator,
+                    );
+
+                    // let aligned_like_a_def = expr_state.expr.region.start_col == state.indent_col;
+
+                    match expr_to_pattern_help(arena, &call.value) {
+                        Ok(good) => {
+                            let indented_more = min_indent + 1;
+
+                            let (_, ann_type, state) = specialize(
+                                EExpr::Type,
+                                space0_before_e(
+                                    type_annotation::located_help(indented_more),
+                                    min_indent,
+                                    Type::TSpace,
+                                    Type::TIndentStart,
+                                ),
+                            )
+                            .parse(arena, state)?;
+
+                            let alias_region = Region::span_across(&expr_region, &ann_type.region);
+
+                            let alias = Def::Annotation(Located::at(expr_region, good), ann_type);
+
+                            let loc_def = &*arena.alloc(Located::at(alias_region, alias));
+
+                            let foo = space0_before_e(
+                                move |a, s| parse_expr_help(min_indent, a, s),
+                                min_indent,
+                                EExpr::Space,
+                                EExpr::IndentEnd,
+                            );
+
+                            let (_, loc_ret, state) = foo.parse(arena, state)?;
+
+                            return Ok((
+                                MadeProgress,
+                                Expr::Defs(&*arena.alloc([loc_def]), arena.alloc(loc_ret)),
+                                state,
+                            ));
+                        }
+                        Err(_) => {
+                            // this `:` likely occured inline; treat it as an invalid operator
+                            let fail = EExpr::BadOperator(
+                                arena.alloc([b':']),
+                                loc_op.region.start_line,
+                                loc_op.region.start_col,
+                            );
+
+                            Err((MadeProgress, fail, state))
+                        }
+                    }
+                }
             }
         }
         _ => match loc_possibly_negative_or_negated_term(min_indent).parse(arena, state) {
             Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
-            Ok((_, new_expr, state)) => {
+            Ok((_, mut new_expr, state)) => {
                 let new_end = state.get_position();
 
                 expr_state.initial = state;
 
+                // put the spaces from after the operator in front of the new_expr
+                if !spaces_after_operator.is_empty() {
+                    new_expr = arena
+                        .alloc(new_expr.value)
+                        .with_spaces_before(spaces_after_operator, new_expr.region);
+                }
+
                 match space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state) {
                     Err((_, _, state)) => {
-                        let spaces = expr_state.spaces_after;
-
-                        let new_expr = if spaces.is_empty() {
-                            new_expr
-                        } else {
-                            arena
-                                .alloc(new_expr.value)
-                                .with_spaces_before(spaces, new_expr.region)
-                        };
-
                         let args = std::mem::replace(&mut expr_state.arguments, Vec::new_in(arena));
 
-                        let call = to_call(arena, args, expr_state.expr, spaces);
+                        let call = to_call(arena, args, expr_state.expr, &[]);
 
                         expr_state.operators.push((call, loc_op));
                         expr_state.expr = new_expr;
@@ -853,17 +959,7 @@ fn parse_expr_operator<'a>(
 
                         parse_expr_final(min_indent, expr_state, arena, state)
                     }
-                    Ok((_, mut spaces, state)) => {
-                        std::mem::swap(&mut spaces, &mut expr_state.spaces_after);
-
-                        let new_expr = if spaces.is_empty() {
-                            new_expr
-                        } else {
-                            arena
-                                .alloc(new_expr.value)
-                                .with_spaces_before(spaces, new_expr.region)
-                        };
-
+                    Ok((_, spaces, state)) => {
                         let args = std::mem::replace(&mut expr_state.arguments, Vec::new_in(arena));
 
                         let call = to_call(arena, args, expr_state.expr, spaces);
@@ -871,6 +967,7 @@ fn parse_expr_operator<'a>(
                         expr_state.operators.push((call, loc_op));
                         expr_state.expr = new_expr;
                         expr_state.end = new_end;
+                        expr_state.spaces_after = spaces;
 
                         parse_expr_end(min_indent, expr_state, arena, state)
                     }
@@ -896,42 +993,31 @@ fn parse_expr_end2<'a>(
 
     match parser.parse(arena, state) {
         Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
-        Ok((_, arg, state)) => {
+        Ok((_, mut arg, state)) => {
             let new_end = state.get_position();
 
+            // now that we have `function arg1 ... <spaces> argn`, attach the spaces to the `argn`
+            if !expr_state.spaces_after.is_empty() {
+                arg = arena
+                    .alloc(arg.value)
+                    .with_spaces_before(expr_state.spaces_after, arg.region);
+
+                expr_state.spaces_after = &[];
+            }
             expr_state.initial = state;
 
             match space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state) {
                 Err((_, _, state)) => {
-                    let spaces = expr_state.spaces_after;
-
-                    let arg = if spaces.is_empty() {
-                        arg
-                    } else {
-                        arena
-                            .alloc(arg.value)
-                            .with_spaces_before(spaces, arg.region)
-                    };
-
                     expr_state.arguments.push(arena.alloc(arg));
                     expr_state.end = new_end;
                     expr_state.spaces_after = &[];
 
                     parse_expr_final(min_indent, expr_state, arena, state)
                 }
-                Ok((_, mut spaces, state)) => {
-                    std::mem::swap(&mut spaces, &mut expr_state.spaces_after);
-
-                    let arg = if spaces.is_empty() {
-                        arg
-                    } else {
-                        arena
-                            .alloc(arg.value)
-                            .with_spaces_before(spaces, arg.region)
-                    };
-
+                Ok((_, new_spaces, state)) => {
                     expr_state.arguments.push(arena.alloc(arg));
                     expr_state.end = new_end;
+                    expr_state.spaces_after = new_spaces;
 
                     parse_expr_end(min_indent, expr_state, arena, state)
                 }
@@ -943,6 +1029,7 @@ fn parse_expr_end2<'a>(
             match loc!(operator()).parse(arena, state) {
                 Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
                 Ok((_, loc_op, state)) => {
+                    expr_state.consume_spaces(arena);
                     expr_state.initial = before_op;
                     parse_expr_operator(min_indent, expr_state, loc_op, arena, state)
                 }
@@ -988,41 +1075,6 @@ fn parse_expr_end<'a>(
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
     return parse_expr_end2(min_indent, expr_state, arena, state);
-    let parser = and!(
-        loc!(operator()),
-        // The spaces *after* the operator can be attached directly to
-        // the expression following the operator.
-        space0_before_e(
-            move |arena, state| parse_expr_help(min_indent, arena, state),
-            min_indent,
-            EExpr::Space,
-            EExpr::IndentEnd,
-        )
-    );
-
-    match parser.parse(arena, state) {
-        Ok((_, (loc_op, loc_expr2), state)) => {
-            let ExprState {
-                expr: loc_expr1,
-                spaces_after: spaces_before,
-                ..
-            } = expr_state;
-
-            let loc_expr1 = if spaces_before.is_empty() {
-                loc_expr1
-            } else {
-                // Attach the spaces retroactively to the expression preceding the operator.
-                arena
-                    .alloc(loc_expr1.value)
-                    .with_spaces_after(spaces_before, loc_expr1.region)
-            };
-            let tuple = arena.alloc((loc_expr1, loc_op, loc_expr2));
-
-            Ok((MadeProgress, Expr::BinOp(tuple), state))
-        }
-        Err((NoProgress, _, _)) => Ok((MadeProgress, expr_state.expr.value, expr_state.initial)),
-        Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
-    }
 }
 
 fn parse_expr_help<'a>(

@@ -65,6 +65,7 @@ mod test_reporting {
             problems: can_problems,
             ..
         } = can_expr(arena, expr_src)?;
+        dbg!(&loc_expr);
         let mut subs = Subs::new(var_store.into());
 
         for (var, name) in output.introduced_variables.name_by_var {
@@ -4205,12 +4206,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
-
-                The `add` function expects 2 arguments, but it got 3 instead:
-
-                4│      Num.add 1 2
-                        ^^^^^^^
-
+                
+                This value is not a function, but it was given 3 arguments:
+                
+                3│      x == 5
+                             ^
+                
                 Are there any missing commas? Or missing parentheses?
             "#
             ),
@@ -5727,22 +5728,24 @@ mod test_reporting {
             indoc!(
                 r#"
                 main =
-                    5 : I64
+                    (\x -> x) : I64
+
+                    3
                 "#
             ),
             indoc!(
                 r#"
                 ── UNKNOWN OPERATOR ────────────────────────────────────────────────────────────
-
+                
                 This looks like an operator, but it's not one I recognize!
-
+                
                 1│  main =
-                2│      5 : I64
-                          ^
-
+                2│      (\x -> x) : I64
+                                  ^
+                
                 The has-type operator : can only occur in a definition's type
                 signature, like
-
+                
                     increment : I64 -> I64
                     increment = \x -> x + 1
             "#

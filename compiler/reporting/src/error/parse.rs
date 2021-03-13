@@ -125,6 +125,22 @@ fn to_syntax_report<'a>(
 
             report(doc)
         }
+        NotEndOfFile(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I expected to reach the end of the file, but got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![alloc.reflow("no hints")]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "NOT END OF FILE".to_string(),
+            }
+        }
         SyntaxError::Eof(region) => {
             let doc = alloc.stack(vec![alloc.reflow("End of Field"), alloc.region(*region)]);
 

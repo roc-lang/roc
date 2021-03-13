@@ -254,7 +254,12 @@ fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
         if state.has_reached_end() {
             Ok((NoProgress, (), state))
         } else {
-            Err((NoProgress, SyntaxError::ConditionFailed, state))
+            dbg!(state);
+            Err((
+                NoProgress,
+                SyntaxError::NotEndOfFile(state.line, state.column),
+                state,
+            ))
         }
     }
 }

@@ -191,6 +191,7 @@ pub enum SyntaxError<'a> {
     Expr(EExpr<'a>),
     Header(EHeader<'a>),
     Space(BadInputError),
+    NotEndOfFile(Row, Col),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
