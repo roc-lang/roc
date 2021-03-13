@@ -2507,13 +2507,13 @@ pub fn with_hole<'a>(
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, precision, false) {
                 IntOrFloat::SignedIntType(precision) => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Int(num.into())),
+                    Expr::Literal(Literal::Int(num)),
                     Layout::Builtin(int_precision_to_builtin(precision)),
                     hole,
                 ),
                 IntOrFloat::UnsignedIntType(precision) => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Int(num.into())),
+                    Expr::Literal(Literal::Int(num)),
                     Layout::Builtin(int_precision_to_builtin(precision)),
                     hole,
                 ),
