@@ -275,6 +275,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
                     let text_and_rects_res = 
                         super::render_ast::expr2_to_wgpu(
+                            &mut ed_model.markup_root,
                             &render_ast_arena,
                             &mut ed_model.module.env,
                             &ed_model.module.ast_root,
@@ -286,6 +287,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
                     match text_and_rects_res {
                         Ok((text_section, rects)) => {
+
                             glyph_brush.queue(text_section);
 
                             match draw_all_rects(

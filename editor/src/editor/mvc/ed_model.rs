@@ -4,23 +4,16 @@ use crate::editor::ed_error::EdError::ParseError;
 use std::path::Path;
 use crate::lang::expr::{Env, str_to_expr2};
 use crate::lang::{
-    pool::{Pool, NodeId},
-    scope::Scope,
     ast::Expr2,
-    expr::Output,
 };
 use bumpalo::Bump;
-use roc_module::symbol::{IdentIds, ModuleIds};
-use roc_region::all::Region;
-use roc_types::subs::VarStore;
-use std::collections::HashSet;
 use crate::editor::markup::MarkupNode;
 
 
 #[derive(Debug)]
 pub struct EdModel<'a> {
     pub module: EdModule<'a>,
-    markup_root: MarkupNode,
+    pub markup_root: MarkupNode,
     pub glyph_dim_rect_opt: Option<Rect>,
     pub has_focus: bool,
     carets: Vec<&'a MarkupNode>,

@@ -19,6 +19,7 @@ use crate::{
 };
 
 pub fn expr2_to_wgpu<'a>(
+    markup_root: &'a mut MarkupNode,
     arena: &'a Bump,
     env: &mut Env<'a>,
     expr2: &Expr2,
@@ -27,9 +28,9 @@ pub fn expr2_to_wgpu<'a>(
     config: &Config,
     glyph_dim_rect: Rect,
 ) -> EdResult<(wgpu_glyph::Section<'a>, Vec<Rect>)> {
-    let markup = expr2_to_markup(arena, env, expr2);
+    *markup_root = expr2_to_markup(arena, env, expr2);
 
-    build_code_graphics(&markup, size, position, config, glyph_dim_rect)
+    build_code_graphics(markup_root, size, position, config, glyph_dim_rect)
 }
 
 pub fn build_code_graphics<'a>(
@@ -102,7 +103,7 @@ fn markup_to_wgpu_helper<'a>(
         MarkupNode::Hole { ast_node_id: _, attributes: _} => 
             {
                 let hole_placeholder = " ";
-                let glyph_text = wgpu_glyph::Text::new(" ")
+                let glyph_text = wgpu_glyph::Text::new(hole_placeholder)
                         .with_color(colors::to_slice(colors::WHITE))
                         .with_scale(font_size);
 
