@@ -579,6 +579,7 @@ fn foobar<'a>(
     dbg!(&expr);
 
     let initial = state;
+    let end = state.get_position();
 
     match dbg!(space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state)) {
         Err((_, _, state)) => Ok((MadeProgress, expr.value, state)),
@@ -589,7 +590,7 @@ fn foobar<'a>(
                 expr,
                 spaces_after: spaces_before_op,
                 initial,
-                end: state.get_position(),
+                end,
             };
 
             parse_expr_end(min_indent, expr_state, arena, state)
