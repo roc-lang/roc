@@ -3218,7 +3218,7 @@ mod solve_expr {
     }
 
     #[test]
-    fn maxI128() {
+    fn max_i128() {
         infer_eq_without_problem(
             indoc!(
                 r#"
