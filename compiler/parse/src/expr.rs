@@ -518,6 +518,7 @@ impl<'a> ExprState<'a> {
     }
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn parse_expr_final<'a>(
     _min_indent: u16,
     expr_state: ExprState<'a>,
@@ -661,7 +662,7 @@ fn parse_expr_operator<'a>(
             expr_state.spaces_after = spaces;
             expr_state.end = new_end;
 
-            parse_expr_end2(min_indent, expr_state, arena, state)
+            parse_expr_end(min_indent, expr_state, arena, state)
         }
         BinOp::Assignment => {
             if !expr_state.operators.is_empty() {
@@ -730,14 +731,14 @@ fn parse_expr_operator<'a>(
 
                     let loc_def = &*arena.alloc(Located::at(alias_region, alias));
 
-                    let foo = space0_before_e(
+                    let parse_final_expr = space0_before_e(
                         move |a, s| parse_expr_help(min_indent, a, s),
                         min_indent,
                         EExpr::Space,
                         EExpr::IndentEnd,
                     );
 
-                    let (_, loc_ret, state) = foo.parse(arena, state)?;
+                    let (_, loc_ret, state) = parse_final_expr.parse(arena, state)?;
 
                     return Ok((
                         MadeProgress,
@@ -777,14 +778,14 @@ fn parse_expr_operator<'a>(
 
                             let loc_def = &*arena.alloc(Located::at(alias_region, alias));
 
-                            let foo = space0_before_e(
+                            let parse_final_expr = space0_before_e(
                                 move |a, s| parse_expr_help(min_indent, a, s),
                                 min_indent,
                                 EExpr::Space,
                                 EExpr::IndentEnd,
                             );
 
-                            let (_, loc_ret, state) = foo.parse(arena, state)?;
+                            let (_, loc_ret, state) = parse_final_expr.parse(arena, state)?;
 
                             return Ok((
                                 MadeProgress,
@@ -854,7 +855,7 @@ fn parse_expr_operator<'a>(
     }
 }
 
-fn parse_expr_end2<'a>(
+fn parse_expr_end<'a>(
     min_indent: u16,
     mut expr_state: ExprState<'a>,
     arena: &'a Bump,
@@ -940,15 +941,6 @@ fn parse_expr_end2<'a>(
             }
         }
     }
-}
-
-fn parse_expr_end<'a>(
-    min_indent: u16,
-    expr_state: ExprState<'a>,
-    arena: &'a Bump,
-    state: State<'a>,
-) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    return parse_expr_end2(min_indent, expr_state, arena, state);
 }
 
 fn parse_expr_help<'a>(
