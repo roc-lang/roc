@@ -10,7 +10,7 @@ use roc_load::file::LoadingProblem;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
-use tempfile::tempdir;
+use tempfile::Builder;
 
 fn report_timing(buf: &mut String, label: &str, duration: Duration) {
     buf.push_str(&format!(
@@ -52,13 +52,14 @@ pub fn build_file<'a>(
     )?;
 
     let path_to_platform = loaded.platform_path.clone();
-    let app_o_dir = tempdir().map_err(|tmpdir_err| {
-        todo!(
-            "TODO Gracefully handle tmpdir creation error {:?}",
-            tmpdir_err
-        );
-    })?;
-    let app_o_file = app_o_dir.path().with_file_name("roc_app.o");
+    let app_o_file = Builder::new()
+        .prefix("roc_app")
+        .suffix(".o")
+        .tempfile()
+        .map_err(|err| {
+            todo!("TODO Gracefully handle tempfile creation error {:?}", err);
+        })?;
+    let app_o_file = app_o_file.path();
     let buf = &mut String::with_capacity(1024);
 
     let mut it = loaded.timings.iter().peekable();
@@ -173,7 +174,7 @@ pub fn build_file<'a>(
         link(
             target,
             binary_path,
-            &[host_input_path.as_path().to_str().unwrap(), app_o_file.as_path().to_str().unwrap()],
+            &[host_input_path.as_path().to_str().unwrap(), app_o_file.to_str().unwrap()],
             link_type
         )
         .map_err(|_| {
