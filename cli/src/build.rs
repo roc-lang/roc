@@ -138,11 +138,9 @@ pub fn build_file<'a>(
 
     if emit_debug_info {
         println!(
-            "\n\nCompilation finished! Here's how long each module took to compile:\n\n{}",
+            "\n\n🎉 Compilation finished!\n\nHere's how long each module took to compile:\n\n{}",
             buf
         );
-
-        println!("\nSuccess! 🎉\n\n\t➡ {}\n", app_o_file.display());
 
         println!(
             "Finished compilation and code gen in {} ms\n\nProduced a app.o file of size {:?}\n",
