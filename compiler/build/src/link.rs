@@ -79,6 +79,8 @@ pub fn rebuild_host(host_input_path: &Path) {
             &zig_str_path
         );
 
+        let zig_env = "/usr/local/Cellar/zig/HEAD-6ab5beb/lib/zig/std/special/compiler_rt.zig";
+
         let output = Command::new("zig")
             .env_clear()
             .env("PATH", &env_path)
@@ -92,7 +94,12 @@ pub fn rebuild_host(host_input_path: &Path) {
                 zig_str_path.to_str().unwrap(),
                 "--pkg-end",
                 // include the zig runtime
-                "-fcompiler-rt",
+
+                // "-fcompiler-rt",
+                "--pkg-begin",
+                "compiler_rt",
+                zig_env,
+                "--pkg-end",
                 // include libc
                 "--library",
                 "c",
