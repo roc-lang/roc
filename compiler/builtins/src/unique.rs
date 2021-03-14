@@ -270,6 +270,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         int_type(star, int)
     });
 
+    // maxI128 : Int
+    add_type(Symbol::NUM_MAX_I128, {
+        let_tvars! { star, int };
+        int_type(star, int)
+    });
+
     // minInt : Int
     add_type(Symbol::NUM_MIN_INT, {
         let_tvars! { star, int };

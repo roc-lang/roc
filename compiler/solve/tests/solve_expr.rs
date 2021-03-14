@@ -3218,6 +3218,18 @@ mod solve_expr {
     }
 
     #[test]
+    fn max_i128() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.maxI128
+                "#
+            ),
+            "I128",
+        );
+    }
+
+    #[test]
     fn reconstruct_path() {
         infer_eq_without_problem(
             indoc!(
