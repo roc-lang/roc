@@ -80,6 +80,7 @@ libloading = "0.6"
 # This way, GitHub Actions works and nobody's builds get broken.
 inkwell = { git = "https://github.com/rtfeldman/inkwell", tag = "llvm10-0.release3" }
 target-lexicon = "0.10"
+tempfile = "3.1.0"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"

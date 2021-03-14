@@ -7,10 +7,10 @@ use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
 use roc_gen::llvm::build::OptLevel;
 use roc_load::file::LoadingProblem;
-use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
+use tempfile::tempdir;
 
 fn report_timing(buf: &mut String, label: &str, duration: Duration) {
     buf.push_str(&format!(
@@ -52,8 +52,13 @@ pub fn build_file<'a>(
     )?;
 
     let path_to_platform = loaded.platform_path.clone();
-
-    let app_o_file = roc_file_path.with_file_name("roc_app.o");
+    let app_o_dir = tempdir().map_err(|tmpdir_err| {
+        todo!(
+            "TODO Gracefully handle tmpdir creation error {:?}",
+            tmpdir_err
+        );
+    })?;
+    let app_o_file = app_o_dir.path().with_file_name("roc_app.o");
     let buf = &mut String::with_capacity(1024);
 
     let mut it = loaded.timings.iter().peekable();
@@ -98,6 +103,9 @@ pub fn build_file<'a>(
 
     let cwd = app_o_file.parent().unwrap();
     let binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
+    let mut host_input_path = PathBuf::new();
+
+    host_input_path.push(roc_file_path.parent().unwrap());
 
     let code_gen_timing = program::gen_from_mono_module(
         &arena,
@@ -119,7 +127,14 @@ pub fn build_file<'a>(
 
     let compilation_end = compilation_start.elapsed().unwrap();
 
-    let size = std::fs::metadata(&app_o_file).unwrap().len();
+    let size = std::fs::metadata(&app_o_file)
+        .unwrap_or_else(|err| {
+            panic!(
+                "Could not open {:?} - which was supposed to have been generated. Error: {:?}",
+                app_o_file, err
+            );
+        })
+        .len();
 
     if emit_debug_info {
         println!(
@@ -137,7 +152,6 @@ pub fn build_file<'a>(
     }
 
     // Step 2: link the precompiled host and compiled app
-    let mut host_input_path = PathBuf::from(cwd);
     host_input_path.push(&*path_to_platform);
     host_input_path.push("host.o");
 
@@ -176,11 +190,6 @@ pub fn build_file<'a>(
     if emit_debug_info {
         println!("Finished linking in {} ms\n", link_end.as_millis());
     }
-
-    // Clean up the leftover .o file from the Roc, if possible.
-    // (If cleaning it up fails, that's fine. No need to take action.)
-    // TODO compile the app_o_file to a tmpdir, as an extra precaution.
-    let _ = fs::remove_file(app_o_file);
 
     // If the cmd errored out, return the Err.
     cmd_result?;
