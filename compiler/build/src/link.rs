@@ -79,7 +79,7 @@ pub fn rebuild_host(host_input_path: &Path) {
             &zig_str_path
         );
 
-        let zig_env = "/usr/local/Cellar/zig/HEAD-6ab5beb/lib/zig/std/special/compiler_rt.zig";
+        let zig_env = "/usr/local/Cellar/zig/0.7.1/lib/zig/std/special/compiler_rt.zig";
 
         let output = Command::new("zig")
             .env_clear()

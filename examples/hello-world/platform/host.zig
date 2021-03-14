@@ -5,6 +5,8 @@ const testing = std.testing;
 const expectEqual = testing.expectEqual;
 const expect = testing.expect;
 
+comptime {    _ = @import("compiler_rt"); }
+
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
