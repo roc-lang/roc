@@ -6,6 +6,9 @@ const expectEqual = testing.expectEqual;
 const expect = testing.expect;
 const maxInt = std.math.maxInt;
 
+comptime {    _ = @import("compiler_rt"); }
+
+
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
