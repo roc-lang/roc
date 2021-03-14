@@ -1377,4 +1377,17 @@ mod gen_num {
             i128
         );
     }
+
+    #[test]
+    fn is_multiple_of() {
+        // true
+        assert_evals_to!("Num.isMultipleOf 5 1", true, bool);
+        assert_evals_to!("Num.isMultipleOf 5 -1", true, bool);
+        assert_evals_to!("Num.isMultipleOf 0 0", true, bool);
+        assert_evals_to!("Num.isMultipleOf 0 1", true, bool);
+        assert_evals_to!("Num.isMultipleOf 0 -1", true, bool);
+        // false
+        assert_evals_to!("Num.isMultipleOf 5 2", false, bool);
+        assert_evals_to!("Num.isMultipleOf 5 0", false, bool);
+    }
 }
