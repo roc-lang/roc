@@ -3,8 +3,8 @@ use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::builtin_aliases::{
-    bool_type, dict_type, float_type, int_type, list_type, nat_type, num_type, ordering_type,
-    result_type, set_type, str_type, str_utf8_byte_problem_type, u64_type, u8_type,
+    bool_type, dict_type, float_type, i128_type, int_type, list_type, nat_type, num_type,
+    ordering_type, result_type, set_type, str_type, str_utf8_byte_problem_type, u64_type, u8_type,
 };
 use roc_types::solved_types::SolvedType;
 use roc_types::subs::VarId;
@@ -383,6 +383,9 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
             Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
         ),
     );
+
+    // maxI128 : I128
+    add_type(Symbol::NUM_MAX_I128, i128_type());
 
     // Float module
 

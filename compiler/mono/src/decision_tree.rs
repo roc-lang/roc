@@ -1153,7 +1153,7 @@ fn test_to_equality<'a>(
             // (e.g. record pattern guard matches)
             debug_assert!(union.alternatives.len() > 1);
 
-            let lhs = Expr::Literal(Literal::Int(tag_id as i64));
+            let lhs = Expr::Literal(Literal::Int(tag_id as i128));
 
             let mut field_layouts =
                 bumpalo::collections::Vec::with_capacity_in(arguments.len(), env.arena);
@@ -1189,7 +1189,7 @@ fn test_to_equality<'a>(
         Test::IsInt(test_int) => {
             // TODO don't downcast i128 here
             debug_assert!(test_int <= i64::MAX as i128);
-            let lhs = Expr::Literal(Literal::Int(test_int as i64));
+            let lhs = Expr::Literal(Literal::Int(test_int as i128));
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
 

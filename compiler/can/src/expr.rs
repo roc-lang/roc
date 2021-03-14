@@ -56,7 +56,7 @@ pub enum Expr {
     Num(Variable, i64),
 
     // Int and Float store a variable to generate better error messages
-    Int(Variable, Variable, i64),
+    Int(Variable, Variable, i128),
     Float(Variable, Variable, f64),
     Str(InlinableString),
     List {

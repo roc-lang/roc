@@ -105,7 +105,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: int_alias_content(signed128_type()),
+            typ: i128_alias_content(),
         },
     );
 
@@ -408,6 +408,18 @@ pub fn u64_type() -> SolvedType {
 #[inline(always)]
 fn u64_alias_content() -> SolvedType {
     int_alias_content(unsigned64_type())
+}
+
+// I128
+
+#[inline(always)]
+pub fn i128_type() -> SolvedType {
+    SolvedType::Alias(Symbol::NUM_I128, vec![], Box::new(i128_alias_content()))
+}
+
+#[inline(always)]
+fn i128_alias_content() -> SolvedType {
+    int_alias_content(signed128_type())
 }
 
 // INT

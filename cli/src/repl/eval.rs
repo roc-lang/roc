@@ -82,6 +82,14 @@ fn jit_to_ast_help<'a>(
                 content
             )))
         }
+        Layout::Builtin(Builtin::Int128) => {
+            Ok(run_jit_function!(
+                lib,
+                main_fn_name,
+                i128,
+                |num| num_to_ast(env, i128_to_ast(env.arena, num), content)
+            ))
+        }
         Layout::Builtin(Builtin::Float64) => {
             Ok(run_jit_function!(lib, main_fn_name, f64, |num| num_to_ast(
                 env,
@@ -849,6 +857,12 @@ fn nat_to_ast(arena: &Bump, num: usize) -> Expr<'_> {
 /// This is centralized in case we want to format it differently later,
 /// e.g. adding underscores for large numbers
 fn i64_to_ast(arena: &Bump, num: i64) -> Expr<'_> {
+    Expr::Num(arena.alloc(format!("{}", num)))
+}
+
+/// This is centralized in case we want to format it differently later,
+/// e.g. adding underscores for large numbers
+fn i128_to_ast(arena: &Bump, num: i128) -> Expr<'_> {
     Expr::Num(arena.alloc(format!("{}", num)))
 }
 

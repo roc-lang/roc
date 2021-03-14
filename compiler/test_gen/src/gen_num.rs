@@ -1364,4 +1364,17 @@ mod gen_num {
         assert_evals_to!("Num.shiftRightBy 2 0b0000_0010u8", 0b0000_0001, i64);
         assert_evals_to!("Num.shiftRightBy 3 0b0000_1100u8", 0b0000_0011, i64);
     }
+
+    #[test]
+    fn max_i128() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.maxI128
+                "#
+            ),
+            i128::MAX,
+            i128
+        );
+    }
 }

@@ -41,7 +41,7 @@ mod test_can {
         }
     }
 
-    fn assert_can_int(input: &str, expected: i64) {
+    fn assert_can_int(input: &str, expected: i128) {
         let arena = Bump::new();
         let actual_out = can_expr_with(&arena, test_home(), input);
 
@@ -196,32 +196,32 @@ mod test_can {
 
     #[test]
     fn hex_max() {
-        assert_can_int(&format!("0x{:x}", i64::MAX), i64::MAX);
+        assert_can_int(&format!("0x{:x}", i64::MAX), i64::MAX.into());
     }
 
     #[test]
     fn hex_min() {
-        assert_can_int(&format!("-0x{:x}", i64::MAX as i128 + 1), i64::MIN);
+        assert_can_int(&format!("-0x{:x}", i64::MAX as i128 + 1), i64::MIN.into());
     }
 
     #[test]
     fn oct_max() {
-        assert_can_int(&format!("0o{:o}", i64::MAX), i64::MAX);
+        assert_can_int(&format!("0o{:o}", i64::MAX), i64::MAX.into());
     }
 
     #[test]
     fn oct_min() {
-        assert_can_int(&format!("-0o{:o}", i64::MAX as i128 + 1), i64::MIN);
+        assert_can_int(&format!("-0o{:o}", i64::MAX as i128 + 1), i64::MIN.into());
     }
 
     #[test]
     fn bin_max() {
-        assert_can_int(&format!("0b{:b}", i64::MAX), i64::MAX);
+        assert_can_int(&format!("0b{:b}", i64::MAX), i64::MAX.into());
     }
 
     #[test]
     fn bin_min() {
-        assert_can_int(&format!("-0b{:b}", i64::MAX as i128 + 1), i64::MIN);
+        assert_can_int(&format!("-0b{:b}", i64::MAX as i128 + 1), i64::MIN.into());
     }
 
     #[test]

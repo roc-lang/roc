@@ -91,6 +91,13 @@ pub fn gen_from_mono_module(
     use inkwell::attributes::{Attribute, AttributeLoc};
     use inkwell::module::Linkage;
 
+    let app_ll_file = {
+        let mut temp = std::path::PathBuf::from(app_o_file);
+        temp.set_extension("ll");
+
+        temp
+    };
+
     let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
     debug_assert!(kind_id > 0);
     let attr = context.create_enum_attribute(kind_id, 1);
@@ -165,11 +172,16 @@ pub fn gen_from_mono_module(
             fpm.run_on(&fn_val);
         } else {
             fn_val.print_to_stderr();
+
+            // write the ll code to a file, so we can modify it
+            env.module.print_to_file(&app_ll_file).unwrap();
+
             // env.module.print_to_stderr();
             // NOTE: If this fails, uncomment the above println to debug.
             panic!(
-                r"Non-main function {:?} failed LLVM verification. Uncomment the above println to debug!",
+                r"Non-main function {:?} failed LLVM verification. I wrote the full LLVM IR to {:?}",
                 fn_val.get_name(),
+                app_ll_file,
             );
         }
     }
@@ -183,7 +195,13 @@ pub fn gen_from_mono_module(
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
-        panic!("😱 LLVM errors when defining module: {:?}", errors);
+        // write the ll code to a file, so we can modify it
+        env.module.print_to_file(&app_ll_file).unwrap();
+
+        panic!(
+            "😱 LLVM errors when defining module; I wrote the full LLVM IR to {:?}\n\n {:?}",
+            app_ll_file, errors,
+        );
     }
 
     // Uncomment this to see the module's optimized LLVM instruction output:
@@ -196,9 +214,6 @@ pub fn gen_from_mono_module(
     // so errors are reported with the line number of the LLVM source
     if emit_debug_info {
         module.strip_debug_info();
-
-        let mut app_ll_file = std::path::PathBuf::from(app_o_file);
-        app_ll_file.set_extension("ll");
 
         let mut app_ll_dbg_file = std::path::PathBuf::from(app_o_file);
         app_ll_dbg_file.set_extension("dbg.ll");
