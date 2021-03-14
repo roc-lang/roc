@@ -379,7 +379,7 @@ fn loc_possibly_negative_or_negated_term<'a>(
         )),
         |arena, state| {
             // TODO use parse_loc_term_better
-            parse_loc_term(min_indent, arena, state)
+            parse_loc_term_better(min_indent, arena, state)
         }
     ]
 }
@@ -735,7 +735,7 @@ fn parse_expr_operator<'a>(
 
                     match expr_to_pattern_help(arena, &call.value) {
                         Ok(good) => {
-                            let (_, ann_type, state) = specialize(
+                            let (_, mut ann_type, state) = specialize(
                                 EExpr::Type,
                                 space0_before_e(
                                     type_annotation::located_help(indented_more),
@@ -745,6 +745,13 @@ fn parse_expr_operator<'a>(
                                 ),
                             )
                             .parse(arena, state)?;
+
+                            // put the spaces from after the operator in front of the call
+                            if !spaces_after_operator.is_empty() {
+                                ann_type = arena
+                                    .alloc(ann_type.value)
+                                    .with_spaces_before(spaces_after_operator, ann_type.region);
+                            }
 
                             let alias_region = Region::span_across(&call.region, &ann_type.region);
 

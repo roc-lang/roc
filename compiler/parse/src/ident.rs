@@ -18,7 +18,7 @@ pub enum Ident<'a> {
         module_name: &'a str,
         parts: &'a [&'a str],
     },
-    /// .foo
+    /// .foo { foo: 42 }
     AccessorFunction(&'a str),
     /// .Foo or foo. or something like foo.Bar
     Malformed(&'a str, BadIdent),
