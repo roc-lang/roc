@@ -366,6 +366,8 @@ fn loc_possibly_negative_or_negated_term<'a>(
                 )
             }
         )),
+        // this will parse negative numbers, which the unary negate thing up top doesn't (for now)
+        loc!(specialize(EExpr::Number, number_literal_help())),
         loc!(map_with_arena!(
             and!(loc!(word1(b'!', EExpr::Start)), |a, s| parse_loc_term(
                 min_indent, a, s
