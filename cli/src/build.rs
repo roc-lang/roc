@@ -111,7 +111,7 @@ pub fn build_file<'a>(
     let code_gen_timing = program::gen_from_mono_module(
         &arena,
         loaded,
-        roc_file_path,
+        &roc_file_path,
         Triple::host(),
         &app_o_file,
         opt_level,
