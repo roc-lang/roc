@@ -23,7 +23,7 @@ pub struct CodeGenTiming {
 pub fn gen_from_mono_module(
     arena: &Bump,
     mut loaded: MonomorphizedModule,
-    _file_path: PathBuf,
+    roc_file_path: &Path,
     target: Triple,
     app_o_file: &Path,
     opt_level: OptLevel,
@@ -92,7 +92,7 @@ pub fn gen_from_mono_module(
     use inkwell::module::Linkage;
 
     let app_ll_file = {
-        let mut temp = std::path::PathBuf::from(app_o_file);
+        let mut temp = PathBuf::from(roc_file_path);
         temp.set_extension("ll");
 
         temp
@@ -215,10 +215,10 @@ pub fn gen_from_mono_module(
     if emit_debug_info {
         module.strip_debug_info();
 
-        let mut app_ll_dbg_file = std::path::PathBuf::from(app_o_file);
+        let mut app_ll_dbg_file = PathBuf::from(roc_file_path);
         app_ll_dbg_file.set_extension("dbg.ll");
 
-        let mut app_bc_file = std::path::PathBuf::from(app_o_file);
+        let mut app_bc_file = PathBuf::from(roc_file_path);
         app_bc_file.set_extension("bc");
 
         use std::process::Command;
