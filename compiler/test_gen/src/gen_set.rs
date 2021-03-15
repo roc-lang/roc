@@ -196,6 +196,8 @@ fn contains() {
 
 #[test]
 fn from_list() {
+    let empty_list: &'static [i64] = &[];
+
     assert_evals_to!(
         indoc!(
             r#"
@@ -216,7 +218,7 @@ fn from_list() {
                 |> Set.toList
             "#
         ),
-        &[],
+        empty_list,
         &[i64]
     );
 
@@ -231,7 +233,7 @@ fn from_list() {
                 |> Set.toList
             "#
         ),
-        &[],
+        empty_list,
         &[i64]
     );
 }
