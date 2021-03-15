@@ -569,6 +569,36 @@ fn list_map_closure() {
 }
 
 #[test]
+fn list_map3_group() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.map3 [1,2,3] [3,2,1] [2,1,3] (\a, b, c -> Group a b c)
+            "#
+        ),
+        RocList::from_slice(&[(1, 3, 2), (2, 2, 1), (3, 1, 3)]),
+        RocList<(i64, i64, i64)>
+    );
+}
+
+#[test]
+fn list_map3_different_length() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.map3
+                ["a", "b", "d"]
+                ["b", "x"]
+                ["c"]
+                (\a, b, c -> Str.concat a (Str.concat b c))
+            "#
+        ),
+        RocList::from_slice(&[RocStr::from_slice("abc".as_bytes()),]),
+        RocList<RocStr>
+    );
+}
+
+#[test]
 fn list_map2_pair() {
     assert_evals_to!(
         indoc!(
@@ -708,7 +738,9 @@ fn list_repeat() {
         RocList<i64>
     );
 
-    assert_evals_to!("List.repeat 2 []", &[&[], &[]], &'static [&'static [i64]]);
+    let empty_lists: &'static [&'static [i64]] = &[&[], &[]];
+
+    assert_evals_to!("List.repeat 2 []", empty_lists, &'static [&'static [i64]]);
     assert_evals_to!(
         indoc!(
             r#"
@@ -719,7 +751,7 @@ fn list_repeat() {
                 List.repeat 2 noStrs
             "#
         ),
-        &[&[], &[]],
+        empty_lists,
         &'static [&'static [i64]]
     );
 

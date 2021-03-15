@@ -589,33 +589,6 @@ impl<'a> Spaceable<'a> for Def<'a> {
     }
 }
 
-/// What we're currently attempting to parse, e.g.
-/// "currently attempting to parse a list." This helps error messages!
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Attempting {
-    LineComment,
-    List,
-    Keyword,
-    StrLiteral,
-    RecordLiteral,
-    RecordFieldLabel,
-    InterpolatedString,
-    NumberLiteral,
-    UnicodeEscape,
-    ClosureParams,
-    ClosureBody,
-    Def,
-    Module,
-    Record,
-    Identifier,
-    HexDigit,
-    ConcreteType,
-    TypeVariable,
-    WhenCondition,
-    WhenBranch,
-    TODO,
-}
-
 impl<'a> Expr<'a> {
     pub fn loc_ref(&'a self, region: Region) -> Loc<&'a Self> {
         Loc {

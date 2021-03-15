@@ -178,7 +178,9 @@ pub fn set_caret_at_start(markup_node: &mut MarkupNode) {
             ast_node_id: _,
             children,
         } => {
-            if let Some(child) = children.first_mut() { set_caret_at_start(child) }
+            if let Some(child) = children.first_mut() {
+                set_caret_at_start(child)
+            }
         }
         MarkupNode::Text {
             content: _,

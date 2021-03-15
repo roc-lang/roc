@@ -1305,6 +1305,114 @@ pub fn list_map2<'a, 'ctx, 'env>(
     )
 }
 
+pub fn list_map3<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    transform: BasicValueEnum<'ctx>,
+    transform_layout: &Layout<'a>,
+    list1: BasicValueEnum<'ctx>,
+    list2: BasicValueEnum<'ctx>,
+    list3: BasicValueEnum<'ctx>,
+    element1_layout: &Layout<'a>,
+    element2_layout: &Layout<'a>,
+    element3_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+
+    let return_layout = match transform_layout {
+        Layout::FunctionPointer(_, ret) => ret,
+        Layout::Closure(_, _, ret) => ret,
+        _ => unreachable!("not a callable layout"),
+    };
+
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let list1_i128 = complex_bitcast(
+        env.builder,
+        list1,
+        env.context.i128_type().into(),
+        "to_i128",
+    );
+
+    let list2_i128 = complex_bitcast(
+        env.builder,
+        list2,
+        env.context.i128_type().into(),
+        "to_i128",
+    );
+
+    let list3_i128 = complex_bitcast(
+        env.builder,
+        list3,
+        env.context.i128_type().into(),
+        "to_i128",
+    );
+
+    let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
+    env.builder.build_store(transform_ptr, transform);
+
+    let argument_layouts = [
+        element1_layout.clone(),
+        element2_layout.clone(),
+        element3_layout.clone(),
+    ];
+    let stepper_caller =
+        build_transform_caller(env, layout_ids, transform_layout, &argument_layouts)
+            .as_global_value()
+            .as_pointer_value();
+
+    let a_width = env
+        .ptr_int()
+        .const_int(element1_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let b_width = env
+        .ptr_int()
+        .const_int(element2_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let c_width = env
+        .ptr_int()
+        .const_int(element3_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let d_width = env
+        .ptr_int()
+        .const_int(return_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let alignment = return_layout.alignment_bytes(env.ptr_bytes);
+    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
+
+    let dec_a = build_dec_wrapper(env, layout_ids, element1_layout);
+    let dec_b = build_dec_wrapper(env, layout_ids, element2_layout);
+    let dec_c = build_dec_wrapper(env, layout_ids, element3_layout);
+
+    let output = call_bitcode_fn(
+        env,
+        &[
+            list1_i128,
+            list2_i128,
+            list3_i128,
+            env.builder
+                .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+            stepper_caller.into(),
+            alignment_iv.into(),
+            a_width.into(),
+            b_width.into(),
+            c_width.into(),
+            d_width.into(),
+            dec_a.as_global_value().as_pointer_value().into(),
+            dec_b.as_global_value().as_pointer_value().into(),
+            dec_c.as_global_value().as_pointer_value().into(),
+        ],
+        bitcode::LIST_MAP3,
+    );
+
+    complex_bitcast(
+        env.builder,
+        output,
+        collection(env.context, env.ptr_bytes).into(),
+        "from_i128",
+    )
+}
+
 /// List.concat : List elem, List elem -> List elem
 pub fn list_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

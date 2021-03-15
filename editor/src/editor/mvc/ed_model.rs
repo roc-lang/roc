@@ -5,8 +5,10 @@ use crate::editor::syntax_highlight::HighlightStyle;
 use crate::graphics::primitives::rect::Rect;
 use crate::lang::ast::Expr2;
 use crate::lang::expr::{str_to_expr2, Env};
+use crate::lang::scope::Scope;
 use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
+use roc_region::all::Region;
 
 #[derive(Debug)]
 pub struct EdModel<'a> {
@@ -58,7 +60,11 @@ pub struct EdModule<'a> {
 impl<'a> EdModule<'a> {
     pub fn new(code_str: &'a str, mut env: Env<'a>, ast_arena: &'a Bump) -> EdResult<EdModule<'a>> {
         if !code_str.is_empty() {
-            let expr2_result = str_to_expr2(&ast_arena, &code_str, &mut env);
+            let mut scope = Scope::new(env.home, env.pool, env.var_store);
+
+            let region = Region::new(0, 0, 0, 0);
+
+            let expr2_result = str_to_expr2(&ast_arena, &code_str, &mut env, &mut scope, region);
 
             match expr2_result {
                 Ok((expr2, _output)) => Ok(EdModule {

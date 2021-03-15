@@ -8,4 +8,8 @@ benchmarks/nqueens
 benchmarks/deriv
 benchmarks/cfold
 benchmarks/rbtree-insert
+benchmarks/rbtree-del
+benchmarks/closure
+benchmarks/test-astar
+benchmarks/test-base64
 effect-example

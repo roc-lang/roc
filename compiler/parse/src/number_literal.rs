@@ -1,7 +1,5 @@
 use crate::ast::Base;
-use crate::parser::{parse_utf8, Number, ParseResult, Parser, Progress, State, SyntaxError};
-use std::char;
-use std::str::from_utf8_unchecked;
+use crate::parser::{Number, ParseResult, Parser, Progress, State};
 
 pub enum NumLiteral<'a> {
     Float(&'a str),
@@ -11,6 +9,20 @@ pub enum NumLiteral<'a> {
         base: Base,
         is_negative: bool,
     },
+}
+
+pub fn positive_number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, Number> {
+    move |_arena, state: State<'a>| {
+        match state.bytes.get(0) {
+            Some(first_byte) if (*first_byte as char).is_ascii_digit() => {
+                parse_number_base(false, &state.bytes, state)
+            }
+            _ => {
+                // this is not a number at all
+                Err((Progress::NoProgress, Number::End, state))
+            }
+        }
+    }
 }
 
 pub fn number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, Number> {
@@ -52,29 +64,21 @@ fn chomp_number_base<'a>(
 ) -> ParseResult<'a, NumLiteral<'a>, Number> {
     let (_is_float, chomped) = chomp_number(bytes);
 
-    match parse_utf8(&bytes[0..chomped]) {
-        Ok(string) => match state.advance_without_indenting(chomped + 2 + is_negative as usize) {
-            Ok(new) => {
-                // all is well
-                Ok((
-                    Progress::MadeProgress,
-                    NumLiteral::NonBase10Int {
-                        is_negative,
-                        string,
-                        base,
-                    },
-                    new,
-                ))
-            }
-            Err((_, SyntaxError::LineTooLong(_), new)) => {
-                // the only error we care about in this context
-                Err((Progress::MadeProgress, Number::LineTooLong, new))
-            }
-            Err(_) => unreachable!("we know advancing will succeed if there is space on the line"),
-        },
+    let string = unsafe { std::str::from_utf8_unchecked(&bytes[..chomped]) };
 
-        Err(_) => unreachable!("no invalid utf8 could have been chomped"),
-    }
+    let new = state.advance_without_indenting_ee(chomped + 2 + is_negative as usize, |_, _| {
+        Number::LineTooLong
+    })?;
+
+    Ok((
+        Progress::MadeProgress,
+        NumLiteral::NonBase10Int {
+            is_negative,
+            string,
+            base,
+        },
+        new,
+    ))
 }
 
 fn chomp_number_dec<'a>(
@@ -94,27 +98,21 @@ fn chomp_number_dec<'a>(
         return Err((Progress::NoProgress, Number::End, state));
     }
 
-    let string = unsafe { from_utf8_unchecked(&state.bytes[0..chomped + is_negative as usize]) };
+    let string =
+        unsafe { std::str::from_utf8_unchecked(&state.bytes[0..chomped + is_negative as usize]) };
 
-    match state.advance_without_indenting(chomped + is_negative as usize) {
-        Ok(new) => {
-            // all is well
-            Ok((
-                Progress::MadeProgress,
-                if is_float {
-                    NumLiteral::Float(string)
-                } else {
-                    NumLiteral::Num(string)
-                },
-                new,
-            ))
-        }
-        Err((_, SyntaxError::LineTooLong(_), new)) => {
-            // the only error we care about in this context
-            Err((Progress::MadeProgress, Number::LineTooLong, new))
-        }
-        Err(_) => unreachable!("we know advancing will succeed if there is space on the line"),
-    }
+    let new = state
+        .advance_without_indenting_ee(chomped + is_negative as usize, |_, _| Number::LineTooLong)?;
+
+    Ok((
+        Progress::MadeProgress,
+        if is_float {
+            NumLiteral::Float(string)
+        } else {
+            NumLiteral::Num(string)
+        },
+        new,
+    ))
 }
 
 fn chomp_number(mut bytes: &[u8]) -> (bool, usize) {

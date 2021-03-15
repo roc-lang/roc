@@ -65,6 +65,7 @@ mod test_reporting {
             problems: can_problems,
             ..
         } = can_expr(arena, expr_src)?;
+        dbg!(&loc_expr);
         let mut subs = Subs::new(var_store.into());
 
         for (var, name) in output.introduced_variables.name_by_var {
@@ -169,6 +170,37 @@ mod test_reporting {
         }
     }
 
+    fn list_header_reports<F>(arena: &Bump, src: &str, buf: &mut String, callback: F)
+    where
+        F: FnOnce(RocDocBuilder<'_>, &mut String),
+    {
+        use ven_pretty::DocAllocator;
+
+        use roc_parse::parser::State;
+
+        let state = State::new(src.as_bytes());
+
+        let filename = filename_from_string(r"\code\proj\Main.roc");
+        let src_lines: Vec<&str> = src.split('\n').collect();
+
+        match roc_parse::module::parse_header(arena, state) {
+            Err(fail) => {
+                let interns = Interns::default();
+                let home = crate::helpers::test_home();
+
+                let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+
+                use roc_parse::parser::SyntaxError;
+                let problem =
+                    SyntaxError::Header(fail).into_parse_problem(filename.clone(), src.as_bytes());
+                let doc = parse_problem(&alloc, filename, 0, problem);
+
+                callback(doc.pretty(&alloc).append(alloc.line()), buf)
+            }
+            Ok(_) => todo!(),
+        }
+    }
+
     fn report_problem_as(src: &str, expected_rendering: &str) {
         let mut buf: String = String::new();
         let arena = Bump::new();
@@ -180,6 +212,30 @@ mod test_reporting {
         };
 
         list_reports(&arena, src, &mut buf, callback);
+
+        // convenient to copy-paste the generated message
+        if true {
+            if buf != expected_rendering {
+                for line in buf.split("\n") {
+                    println!("                {}", line);
+                }
+            }
+        }
+
+        assert_eq!(buf, expected_rendering);
+    }
+
+    fn report_header_problem_as(src: &str, expected_rendering: &str) {
+        let mut buf: String = String::new();
+        let arena = Bump::new();
+
+        let callback = |doc: RocDocBuilder<'_>, buf: &mut String| {
+            doc.1
+                .render_raw(70, &mut roc_reporting::report::CiWrite::new(buf))
+                .expect("list_reports")
+        };
+
+        list_header_reports(&arena, src, &mut buf, callback);
 
         // convenient to copy-paste the generated message
         if true {
@@ -3160,7 +3216,7 @@ mod test_reporting {
                 r#"
                 ── ARGUMENTS BEFORE EQUALS ─────────────────────────────────────────────────────
 
-                I am in the middle of parsing a definition, but I got stuck here:
+                I am partway through parsing a definition, but I got stuck here:
 
                 1│  f x y = x
                       ^^^
@@ -4070,12 +4126,12 @@ mod test_reporting {
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
-                I trying to parse a record field accessor here:
+                I trying to parse a record field access here:
 
                 1│  foo.bar.
                             ^
 
-                Something like .name or .height that accesses a value from a record.
+                So I expect to see a lowercase letter next, like .name or .height.
             "#
             ),
         )
@@ -4093,14 +4149,13 @@ mod test_reporting {
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
-                I am trying to parse a qualified name here:
+                I am very confused by this expression:
 
                 1│  @Foo.Bar
-                            ^
+                        ^^^^
 
-                This looks like a qualified tag name to me, but tags cannot be
-                qualified! Maybe you wanted a qualified name, something like
-                Json.Decode.string?
+                Looks like a private tag is treated like a module name. Maybe you
+                wanted a qualified name, like Json.Decode.string?
             "#
             ),
         )
@@ -4145,18 +4200,18 @@ mod test_reporting {
                     x == 5
                     Num.add 1 2
 
-                x y
+                { x,  y }
                 "#
             ),
             indoc!(
                 r#"
                 ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
-
-                The `add` function expects 2 arguments, but it got 4 instead:
-
-                4│      Num.add 1 2
-                        ^^^^^^^
-
+                
+                This value is not a function, but it was given 3 arguments:
+                
+                3│      x == 5
+                             ^
+                
                 Are there any missing commas? Or missing parentheses?
             "#
             ),
@@ -4508,21 +4563,21 @@ mod test_reporting {
             indoc!(
                 r#"
                 f : Foo..Bar
+
+                f
                 "#
             ),
-            indoc!(
-                r#"
-                ── DOUBLE DOT ──────────────────────────────────────────────────────────────────
-
-                I encountered two dots in a row:
-
-                1│  f : Foo..Bar
-                            ^
-
-                Try removing one of them.
-            "#
-            ),
+            indoc!(r#""#),
         )
+
+        //                ── DOUBLE DOT ──────────────────────────────────────────────────────────────────
+        //
+        //                I encountered two dots in a row:
+        //
+        //                1│  f : Foo..Bar
+        //                            ^
+        //
+        //                Try removing one of them.
     }
 
     #[test]
@@ -4531,22 +4586,22 @@ mod test_reporting {
             indoc!(
                 r#"
                 f : Foo.Bar.
+
+                f
                 "#
             ),
-            indoc!(
-                r#"
-                ── TRAILING DOT ────────────────────────────────────────────────────────────────
-
-                I encountered a dot with nothing after it:
-
-                1│  f : Foo.Bar.
-                                ^
-
-                Dots are used to refer to a type in a qualified way, like
-                Num.I64 or List.List a. Try adding a type name next.
-            "#
-            ),
+            indoc!(r#""#),
         )
+
+        //                ── TRAILING DOT ────────────────────────────────────────────────────────────────
+        //
+        //                I encountered a dot with nothing after it:
+        //
+        //                1│  f : Foo.Bar.
+        //                                ^
+        //
+        //                Dots are used to refer to a type in a qualified way, like
+        //                Num.I64 or List.List a. Try adding a type name next.
     }
 
     #[test]
@@ -4582,22 +4637,22 @@ mod test_reporting {
             indoc!(
                 r#"
                 f : Foo.1
+
+                f
                 "#
             ),
-            indoc!(
-                r#"
-                ── WEIRD QUALIFIED NAME ────────────────────────────────────────────────────────
-
-                I encountered a number at the start of a qualified name segment:
-
-                1│  f : Foo.1
-                            ^
-
-                All parts of a qualified type name must start with an uppercase
-                letter, like Num.I64 or List.List a.
-            "#
-            ),
+            indoc!(r#""#),
         )
+
+        //                ── WEIRD QUALIFIED NAME ────────────────────────────────────────────────────────
+        //
+        //                I encountered a number at the start of a qualified name segment:
+        //
+        //                1│  f : Foo.1
+        //                            ^
+        //
+        //                All parts of a qualified type name must start with an uppercase
+        //                letter, like Num.I64 or List.List a.
     }
 
     #[test]
@@ -4606,20 +4661,38 @@ mod test_reporting {
             indoc!(
                 r#"
                 f : Foo.foo
+
+                f
+                "#
+            ),
+            indoc!(r#""#),
+        )
+    }
+
+    #[test]
+    fn def_missing_final_expression() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : Foo.foo
                 "#
             ),
             indoc!(
                 r#"
-                ── WEIRD QUALIFIED NAME ────────────────────────────────────────────────────────
+                ── MISSING FINAL EXPRESSION ────────────────────────────────────────────────────
 
-                I encountered a lowercase letter at the start of a qualified name
-                segment:
+                I am partway through parsing a definition, but I got stuck here:
 
                 1│  f : Foo.foo
-                            ^
+                               ^
 
-                All parts of a qualified type name must start with an uppercase
-                letter, like Num.I64 or List.List a.
+                This definition is missing a final expression. A nested definition
+                must be followed by either another definition, or an expression
+
+                    x = 4
+                    y = 2
+
+                    x + y
             "#
             ),
         )
@@ -4984,8 +5057,8 @@ mod test_reporting {
                 r#"
                 ── UNFINISHED ARGUMENT LIST ────────────────────────────────────────────────────
 
-                I am in the middle of parsing a function argument list, but I got
-                stuck at this comma:
+                I am partway through parsing a function argument list, but I got stuck
+                at this comma:
 
                 1│  \a,,b -> 1
                        ^
@@ -5009,8 +5082,8 @@ mod test_reporting {
                 r#"
                 ── UNFINISHED ARGUMENT LIST ────────────────────────────────────────────────────
 
-                I am in the middle of parsing a function argument list, but I got
-                stuck at this comma:
+                I am partway through parsing a function argument list, but I got stuck
+                at this comma:
 
                 1│  \,b -> 1
                      ^
@@ -5417,12 +5490,12 @@ mod test_reporting {
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
-                I trying to parse a record field accessor here:
+                I trying to parse a record field access here:
 
                 1│  Num.add . 23
                              ^
 
-                Something like .name or .height that accesses a value from a record.
+                So I expect to see a lowercase letter next, like .name or .height.
             "#
             ),
         )
@@ -5468,7 +5541,7 @@ mod test_reporting {
                 I am very confused by this field access:
 
                 1│  @UUID.bar
-                    ^^^^^^^^^
+                         ^^^^
 
                 It looks like a record field access on a private tag.
             "#
@@ -5655,22 +5728,24 @@ mod test_reporting {
             indoc!(
                 r#"
                 main =
-                    5 : I64
+                    (\x -> x) : I64
+
+                    3
                 "#
             ),
             indoc!(
                 r#"
                 ── UNKNOWN OPERATOR ────────────────────────────────────────────────────────────
-
+                
                 This looks like an operator, but it's not one I recognize!
-
+                
                 1│  main =
-                2│      5 : I64
-                          ^
-
+                2│      (\x -> x) : I64
+                                  ^
+                
                 The has-type operator : can only occur in a definition's type
                 signature, like
-
+                
                     increment : I64 -> I64
                     increment = \x -> x + 1
             "#
@@ -5698,6 +5773,165 @@ mod test_reporting {
                               ^
 
                 I was expecting to see an expression like 42 or "hello".
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn provides_to_identifier() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                app "test-base64"
+                    packages { base: "platform" }
+                    imports [base.Task, Base64 ]
+                    provides [ main, @Foo ] to base
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD PROVIDES ──────────────────────────────────────────────────────────────
+
+                I am partway through parsing a provides list, but I got stuck here:
+
+                3│      imports [base.Task, Base64 ]
+                4│      provides [ main, @Foo ] to base
+                                         ^
+
+                I was expecting a type name, value name or function name next, like
+
+                    provides [ Animal, default, tame ]
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn exposes_identifier() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                interface Foobar
+                    exposes [ main, @Foo ]
+                    imports [base.Task, Base64 ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD EXPOSES ───────────────────────────────────────────────────────────────
+
+                I am partway through parsing a exposes list, but I got stuck here:
+
+                1│  interface Foobar
+                2│      exposes [ main, @Foo ]
+                                        ^
+
+                I was expecting a type name, value name or function name next, like
+
+                    exposes [ Animal, default, tame ]
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn invalid_module_name() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                interface foobar
+                    exposes [ main, @Foo ]
+                    imports [base.Task, Base64 ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD MODULE NAME ───────────────────────────────────────────────────────────
+
+                I am partway through parsing a header, but got stuck here:
+
+                1│  interface foobar
+                              ^
+
+                I am expecting a module name next, like BigNum or Main. Module names
+                must start with an uppercase letter.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn invalid_app_name() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                app foobar
+                    exposes [ main, @Foo ]
+                    imports [base.Task, Base64 ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD APP NAME ──────────────────────────────────────────────────────────────
+
+                I am partway through parsing a header, but got stuck here:
+
+                1│  app foobar
+                        ^
+
+                I am expecting an application name next, like app "main" or
+                app "editor". App names are surrounded by quotation marks.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn apply_unary_negative() {
+        report_problem_as(
+            indoc!(
+                r#"
+                foo = 3
+
+                -foo 1 2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
+
+                This value is not a function, but it was given 2 arguments:
+
+                3│  -foo 1 2
+                    ^^^^
+
+                Are there any missing commas? Or missing parentheses?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn apply_unary_not() {
+        report_problem_as(
+            indoc!(
+                r#"
+                foo = True
+
+                !foo 1 2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
+
+                This value is not a function, but it was given 2 arguments:
+
+                3│  !foo 1 2
+                    ^^^^
+
+                Are there any missing commas? Or missing parentheses?
             "#
             ),
         )

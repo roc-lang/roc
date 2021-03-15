@@ -45,7 +45,7 @@ pub fn int_expr_from_result(
 ) -> Expr {
     // Int stores a variable to generate better error messages
     match result {
-        Ok(int) => Expr::Int(var_store.fresh(), var_store.fresh(), int),
+        Ok(int) => Expr::Int(var_store.fresh(), var_store.fresh(), int.into()),
         Err((raw, error)) => {
             let runtime_error = InvalidInt(error, base, region, raw.into());
 

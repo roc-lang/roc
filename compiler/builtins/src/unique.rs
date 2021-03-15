@@ -270,6 +270,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         int_type(star, int)
     });
 
+    // maxI128 : Int
+    add_type(Symbol::NUM_MAX_I128, {
+        let_tvars! { star, int };
+        int_type(star, int)
+    });
+
     // minInt : Int
     add_type(Symbol::NUM_MIN_INT, {
         let_tvars! { star, int };
@@ -919,8 +925,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         dict_type(star, k, v)
     });
 
-    // singleton : k, v -> Attr * (Dict k v)
-    add_type(Symbol::DICT_SINGLETON, {
+    // single : k, v -> Attr * (Dict k v)
+    add_type(Symbol::DICT_SINGLE, {
         let_tvars! { star, k , v };
         unique_function(vec![flex(k), flex(v)], dict_type(star, k, v))
     });
@@ -1006,8 +1012,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         set_type(star, a)
     });
 
-    // singleton : a -> Set a
-    add_type(Symbol::SET_SINGLETON, {
+    // single : a -> Set a
+    add_type(Symbol::SET_SINGLE, {
         let_tvars! { star, a };
         unique_function(vec![flex(a)], set_type(star, a))
     });

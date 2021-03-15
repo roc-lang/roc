@@ -652,6 +652,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListJoin => arena.alloc_slice_copy(&[irrelevant]),
         ListMap | ListMapWithIndex => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListMap2 => arena.alloc_slice_copy(&[owned, owned, irrelevant]),
+        ListMap3 => arena.alloc_slice_copy(&[owned, owned, owned, irrelevant]),
         ListKeepIf | ListKeepOks | ListKeepErrs => arena.alloc_slice_copy(&[owned, borrowed]),
         ListContains => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         ListWalk => arena.alloc_slice_copy(&[owned, irrelevant, owned]),
@@ -666,10 +667,9 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
 
         And | Or | NumAdd | NumAddWrap | NumAddChecked | NumSub | NumSubWrap | NumSubChecked
         | NumMul | NumMulWrap | NumMulChecked | NumGt | NumGte | NumLt | NumLte | NumCompare
-        | NumDivUnchecked | NumRemUnchecked | NumPow | NumPowInt | NumBitwiseAnd
-        | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy | NumShiftRightBy | NumShiftRightZfBy => {
-            arena.alloc_slice_copy(&[irrelevant, irrelevant])
-        }
+        | NumDivUnchecked | NumRemUnchecked | NumIsMultipleOf | NumPow | NumPowInt
+        | NumBitwiseAnd | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy | NumShiftRightBy
+        | NumShiftRightZfBy => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
 
         NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumRound | NumCeiling | NumFloor
         | NumToFloat | Not | NumIsFinite | NumAtan | NumAcos | NumAsin | NumIntCast => {

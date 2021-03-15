@@ -81,6 +81,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_JOIN => list_join,
         LIST_MAP => list_map,
         LIST_MAP2 => list_map2,
+        LIST_MAP3 => list_map3,
         LIST_MAP_WITH_INDEX => list_map_with_index,
         LIST_KEEP_IF => list_keep_if,
         LIST_KEEP_OKS => list_keep_oks,
@@ -90,7 +91,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         DICT_TEST_HASH => dict_hash_test_only,
         DICT_LEN => dict_len,
         DICT_EMPTY => dict_empty,
-        DICT_SINGLETON => dict_singleton,
+        DICT_SINGLE => dict_single,
         DICT_INSERT => dict_insert,
         DICT_REMOVE => dict_remove,
         DICT_GET => dict_get,
@@ -103,7 +104,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         DICT_WALK=> dict_walk,
         SET_EMPTY => set_empty,
         SET_LEN => set_len,
-        SET_SINGLETON => set_singleton,
+        SET_SINGLE => set_single,
         SET_UNION=> set_union,
         SET_INTERSECTION => set_intersection,
         SET_DIFFERENCE => set_difference,
@@ -135,6 +136,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_ABS => num_abs,
         NUM_NEG => num_neg,
         NUM_REM => num_rem,
+        NUM_IS_MULTIPLE_OF => num_is_multiple_of,
         NUM_SQRT => num_sqrt,
         NUM_ROUND => num_round,
         NUM_IS_ODD => num_is_odd,
@@ -159,6 +161,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_SHIFT_RIGHT => num_shift_right_by,
         NUM_SHIFT_RIGHT_ZERO_FILL => num_shift_right_zf_by,
         NUM_INT_CAST=> num_int_cast,
+        NUM_MAX_I128=> num_max_i128,
         RESULT_MAP => result_map,
         RESULT_MAP_ERR => result_map_err,
         RESULT_AFTER => result_after,
@@ -218,6 +221,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_JOIN => list_join,
         Symbol::LIST_MAP => list_map,
         Symbol::LIST_MAP2 => list_map2,
+        Symbol::LIST_MAP3 => list_map3,
         Symbol::LIST_MAP_WITH_INDEX => list_map_with_index,
         Symbol::LIST_KEEP_IF => list_keep_if,
         Symbol::LIST_KEEP_OKS => list_keep_oks,
@@ -227,7 +231,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::DICT_TEST_HASH => dict_hash_test_only,
         Symbol::DICT_LEN => dict_len,
         Symbol::DICT_EMPTY => dict_empty,
-        Symbol::DICT_SINGLETON => dict_singleton,
+        Symbol::DICT_SINGLE => dict_single,
         Symbol::DICT_INSERT => dict_insert,
         Symbol::DICT_REMOVE => dict_remove,
         Symbol::DICT_GET => dict_get,
@@ -240,7 +244,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::DICT_WALK=> dict_walk,
         Symbol::SET_EMPTY => set_empty,
         Symbol::SET_LEN => set_len,
-        Symbol::SET_SINGLETON => set_singleton,
+        Symbol::SET_SINGLE => set_single,
         Symbol::SET_UNION=> set_union,
         Symbol::SET_INTERSECTION=> set_intersection,
         Symbol::SET_DIFFERENCE=> set_difference,
@@ -268,6 +272,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_ABS => num_abs,
         Symbol::NUM_NEG => num_neg,
         Symbol::NUM_REM => num_rem,
+        Symbol::NUM_IS_MULTIPLE_OF => num_is_multiple_of,
         Symbol::NUM_SQRT => num_sqrt,
         Symbol::NUM_ROUND => num_round,
         Symbol::NUM_IS_ODD => num_is_odd,
@@ -292,6 +297,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_SHIFT_RIGHT => num_shift_right_by,
         Symbol::NUM_SHIFT_RIGHT_ZERO_FILL => num_shift_right_zf_by,
         Symbol::NUM_INT_CAST=> num_int_cast,
+        Symbol::NUM_MAX_I128=> num_max_i128,
         Symbol::RESULT_MAP => result_map,
         Symbol::RESULT_MAP_ERR => result_map_err,
         Symbol::RESULT_AFTER => result_after,
@@ -370,11 +376,43 @@ fn lowlevel_3(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
     )
 }
 
+fn lowlevel_4(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
+    let arg1_var = var_store.fresh();
+    let arg2_var = var_store.fresh();
+    let arg3_var = var_store.fresh();
+    let arg4_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op,
+        args: vec![
+            (arg1_var, Var(Symbol::ARG_1)),
+            (arg2_var, Var(Symbol::ARG_2)),
+            (arg3_var, Var(Symbol::ARG_3)),
+            (arg4_var, Var(Symbol::ARG_4)),
+        ],
+        ret_var,
+    };
+
+    defn(
+        symbol,
+        vec![
+            (arg1_var, Symbol::ARG_1),
+            (arg2_var, Symbol::ARG_2),
+            (arg3_var, Symbol::ARG_3),
+            (arg4_var, Symbol::ARG_4),
+        ],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
 /// Num.maxInt : Int
 fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
     let int_percision_var = var_store.fresh();
-    let body = Int(int_var, int_percision_var, i64::MAX);
+    let body = Int(int_var, int_percision_var, i64::MAX.into());
 
     Def {
         annotation: None,
@@ -389,7 +427,7 @@ fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
 fn num_min_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
     let int_percision_var = var_store.fresh();
-    let body = Int(int_var, int_percision_var, i64::MIN);
+    let body = Int(int_var, int_percision_var, i64::MIN.into());
 
     Def {
         annotation: None,
@@ -1344,6 +1382,33 @@ fn num_int_cast(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
 }
 
+/// Num.maxI128: I128
+fn num_max_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let int_percision_var = var_store.fresh();
+    let body = Int(int_var, int_percision_var, i128::MAX);
+
+    let std = roc_builtins::std::types();
+    let solved = std.get(&symbol).unwrap();
+    let mut free_vars = roc_types::solved_types::FreeVars::default();
+    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
+
+    let annotation = crate::def::Annotation {
+        signature,
+        introduced_variables: Default::default(),
+        region: Region::zero(),
+        aliases: Default::default(),
+    };
+
+    Def {
+        annotation: Some(annotation),
+        expr_var: int_var,
+        loc_expr: Located::at_zero(body),
+        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
+}
+
 /// List.isEmpty : List * -> Bool
 fn list_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
@@ -2122,6 +2187,11 @@ fn list_map2(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListMap2, var_store)
 }
 
+/// List.map3 : List a, List b, (a, b -> c) -> List c
+fn list_map3(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_4(symbol, LowLevel::ListMap3, var_store)
+}
+
 /// Dict.hashTestOnly : k, v -> Nat
 pub fn dict_hash_test_only(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::Hash, var_store)
@@ -2150,8 +2220,8 @@ fn dict_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     }
 }
 
-/// Dict.singleton : k, v -> Dict k v
-fn dict_singleton(symbol: Symbol, var_store: &mut VarStore) -> Def {
+/// Dict.single : k, v -> Dict k v
+fn dict_single(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let key_var = var_store.fresh();
     let value_var = var_store.fresh();
     let dict_var = var_store.fresh();
@@ -2325,8 +2395,8 @@ fn set_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     }
 }
 
-/// Set.singleton : k -> Set k
-fn set_singleton(symbol: Symbol, var_store: &mut VarStore) -> Def {
+/// Set.single : k -> Set k
+fn set_single(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let key_var = var_store.fresh();
     let set_var = var_store.fresh();
     let value_var = Variable::EMPTY_RECORD;
@@ -2541,6 +2611,11 @@ fn num_rem(symbol: Symbol, var_store: &mut VarStore) -> Def {
         body,
         ret_var,
     )
+}
+
+/// Num.isMultipleOf : Int, Int -> Bool
+fn num_is_multiple_of(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::NumIsMultipleOf, var_store)
 }
 
 /// Num.neg : Num a -> Num a

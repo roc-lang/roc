@@ -1,4 +1,5 @@
 use roc_collections::all::MutSet;
+use roc_parse::parser::{Col, Row};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{FloatErrorKind, IntErrorKind, Problem, RuntimeError};
 use roc_region::all::Region;
@@ -357,23 +358,7 @@ fn to_bad_ident_expr_report<'b>(
             let region = Region::from_row_col(row, col);
 
             alloc.stack(vec![
-                alloc.reflow(r"I trying to parse a record field accessor here:"),
-                alloc.region_with_subregion(surroundings, region),
-                alloc.concat(vec![
-                    alloc.reflow("Something like "),
-                    alloc.parser_suggestion(".name"),
-                    alloc.reflow(" or "),
-                    alloc.parser_suggestion(".height"),
-                    alloc.reflow(" that accesses a value from a record."),
-                ]),
-            ])
-        }
-
-        PartStartsWithNumber(row, col) => {
-            let region = Region::from_row_col(row, col);
-
-            alloc.stack(vec![
-                alloc.reflow("I trying to parse a record field access here:"),
+                alloc.reflow(r"I trying to parse a record field access here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![
                     alloc.reflow("So I expect to see a lowercase letter next, like "),
@@ -430,34 +415,73 @@ fn to_bad_ident_expr_report<'b>(
                 ]),
             ])
         }
-        PrivateTagNotUppercase(row, col) => {
-            let region = Region::from_row_col(row, col);
 
+        Underscore(row, col) => {
+            let region =
+                Region::from_rows_cols(surroundings.start_line, surroundings.start_col, row, col);
             alloc.stack(vec![
-                alloc.reflow("I am trying to parse a private tag here:"),
+                alloc.reflow("Underscores are not allowed in identifier names:"),
                 alloc.region_with_subregion(surroundings, region),
-                alloc.concat(vec![
-                    alloc.reflow(r"But after the "),
-                    alloc.keyword("@"),
-                    alloc.reflow(r" symbol I found a lowercase letter. "),
-                    alloc.reflow(r"All tag names (global and private)"),
-                    alloc.reflow(r" must start with an uppercase letter, like "),
-                    alloc.parser_suggestion("@UUID"),
-                    alloc.reflow(" or "),
-                    alloc.parser_suggestion("@Secrets"),
-                    alloc.reflow("."),
-                ]),
+                alloc.concat(vec![alloc.reflow(
+                    r"I recommend using camelCase, it is the standard in the Roc ecosystem.",
+                )]),
             ])
         }
 
-        PrivateTagFieldAccess(_row, _col) => alloc.stack(vec![
-            alloc.reflow("I am very confused by this field access:"),
-            alloc.region(surroundings),
-            alloc.concat(vec![
-                alloc.reflow(r"It looks like a record field access on a private tag.")
-            ]),
-        ]),
-        _ => todo!(),
+        BadPrivateTag(row, col) => {
+            use BadIdentNext::*;
+            match what_is_next(alloc.src_lines, row, col) {
+                LowercaseAccess(width) => {
+                    let region = Region::from_rows_cols(row, col, row, col + width);
+                    alloc.stack(vec![
+                        alloc.reflow("I am very confused by this field access:"),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow(r"It looks like a record field access on a private tag.")
+                        ]),
+                    ])
+                }
+                UppercaseAccess(width) => {
+                    let region = Region::from_rows_cols(row, col, row, col + width);
+                    alloc.stack(vec![
+                        alloc.reflow("I am very confused by this expression:"),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow(
+                                r"Looks like a private tag is treated like a module name. ",
+                            ),
+                            alloc.reflow(r"Maybe you wanted a qualified name, like "),
+                            alloc.parser_suggestion("Json.Decode.string"),
+                            alloc.text("?"),
+                        ]),
+                    ])
+                }
+                Other(Some(c)) if c.is_lowercase() => {
+                    let region = Region::from_rows_cols(
+                        surroundings.start_line,
+                        surroundings.start_col + 1,
+                        row,
+                        col + 1,
+                    );
+                    alloc.stack(vec![
+                        alloc.reflow("I am trying to parse a private tag here:"),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow(r"But after the "),
+                            alloc.keyword("@"),
+                            alloc.reflow(r" symbol I found a lowercase letter. "),
+                            alloc.reflow(r"All tag names (global and private)"),
+                            alloc.reflow(r" must start with an uppercase letter, like "),
+                            alloc.parser_suggestion("@UUID"),
+                            alloc.reflow(" or "),
+                            alloc.parser_suggestion("@Secrets"),
+                            alloc.reflow("."),
+                        ]),
+                    ])
+                }
+                other => todo!("{:?}", other),
+            }
+        }
     }
 }
 
@@ -486,22 +510,6 @@ fn to_bad_ident_pattern_report<'b>(
             ])
         }
 
-        PartStartsWithNumber(row, col) => {
-            let region = Region::from_row_col(row, col);
-
-            alloc.stack(vec![
-                alloc.reflow("I trying to parse a record field access here:"),
-                alloc.region_with_subregion(surroundings, region),
-                alloc.concat(vec![
-                    alloc.reflow("So I expect to see a lowercase letter next, like "),
-                    alloc.parser_suggestion(".name"),
-                    alloc.reflow(" or "),
-                    alloc.parser_suggestion(".height"),
-                    alloc.reflow("."),
-                ]),
-            ])
-        }
-
         WeirdAccessor(_row, _col) => alloc.stack(vec![
             alloc.reflow("I am very confused by this field access"),
             alloc.region(surroundings),
@@ -547,33 +555,6 @@ fn to_bad_ident_pattern_report<'b>(
                 ]),
             ])
         }
-        PrivateTagNotUppercase(row, col) => {
-            let region = Region::from_row_col(row, col);
-
-            alloc.stack(vec![
-                alloc.reflow("I am trying to parse a private tag here:"),
-                alloc.region_with_subregion(surroundings, region),
-                alloc.concat(vec![
-                    alloc.reflow(r"But after the "),
-                    alloc.keyword("@"),
-                    alloc.reflow(r" symbol I found a lowercase letter. "),
-                    alloc.reflow(r"All tag names (global and private)"),
-                    alloc.reflow(r" must start with an uppercase letter, like "),
-                    alloc.parser_suggestion("@UUID"),
-                    alloc.reflow(" or "),
-                    alloc.parser_suggestion("@Secrets"),
-                    alloc.reflow("."),
-                ]),
-            ])
-        }
-
-        PrivateTagFieldAccess(_row, _col) => alloc.stack(vec![
-            alloc.reflow("I am very confused by this field access:"),
-            alloc.region(surroundings),
-            alloc.concat(vec![
-                alloc.reflow(r"It looks like a record field access on a private tag.")
-            ]),
-        ]),
 
         Underscore(row, col) => {
             let region = Region::from_row_col(row, col - 1);
@@ -589,6 +570,69 @@ fn to_bad_ident_pattern_report<'b>(
 
         _ => todo!(),
     }
+}
+
+#[derive(Debug)]
+enum BadIdentNext<'a> {
+    LowercaseAccess(u16),
+    UppercaseAccess(u16),
+    NumberAccess(u16),
+    Keyword(&'a str),
+    DanglingDot,
+    Other(Option<char>),
+}
+
+fn what_is_next<'a>(source_lines: &'a [&'a str], row: Row, col: Col) -> BadIdentNext<'a> {
+    let row_index = row as usize;
+    let col_index = col as usize;
+    match source_lines.get(row_index) {
+        None => BadIdentNext::Other(None),
+        Some(line) => {
+            let chars = &line[col_index..];
+            let mut it = chars.chars();
+
+            match roc_parse::keyword::KEYWORDS
+                .iter()
+                .find(|keyword| crate::error::parse::starts_with_keyword(chars, keyword))
+            {
+                Some(keyword) => BadIdentNext::Keyword(keyword),
+                None => match it.next() {
+                    None => BadIdentNext::Other(None),
+                    Some('.') => match it.next() {
+                        Some(c) if c.is_lowercase() => {
+                            BadIdentNext::LowercaseAccess(2 + till_whitespace(it) as u16)
+                        }
+                        Some(c) if c.is_uppercase() => {
+                            BadIdentNext::UppercaseAccess(2 + till_whitespace(it) as u16)
+                        }
+                        Some(c) if c.is_ascii_digit() => {
+                            BadIdentNext::NumberAccess(2 + till_whitespace(it) as u16)
+                        }
+                        _ => BadIdentNext::DanglingDot,
+                    },
+                    Some(c) => BadIdentNext::Other(Some(c)),
+                },
+            }
+        }
+    }
+}
+
+fn till_whitespace<I>(it: I) -> usize
+where
+    I: Iterator<Item = char>,
+{
+    let mut chomped = 0;
+
+    for c in it {
+        if c.is_ascii_whitespace() || c == '#' {
+            break;
+        } else {
+            chomped += 1;
+            continue;
+        }
+    }
+
+    chomped
 }
 
 fn pretty_runtime_error<'b>(
