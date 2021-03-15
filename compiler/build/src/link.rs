@@ -55,6 +55,109 @@ fn find_zig_str_path() -> PathBuf {
     panic!("cannot find `str.zig`")
 }
 
+#[cfg(not(target_os = "macos"))]
+fn build_zig_host(
+    env_path: &str,
+    env_home: &str,
+    emit_bin: &str,
+    zig_host_src: &str,
+    zig_str_path: &str,
+) -> Output {
+    Command::new("zig")
+        .env_clear()
+        .env("PATH", env_path)
+        .env("HOME", env_home)
+        .args(&[
+            "build-obj",
+            zig_host_src,
+            emit_bin,
+            "--pkg-begin",
+            "str",
+            zig_str_path,
+            "--pkg-end",
+            // include the zig runtime
+            "-fcompiler-rt",
+            // include libc
+            "--library",
+            "c",
+        ])
+        .output()
+        .unwrap()
+}
+
+#[cfg(target_os = "macos")]
+fn build_zig_host(
+    env_path: &str,
+    env_home: &str,
+    emit_bin: &str,
+    zig_host_src: &str,
+    zig_str_path: &str,
+) -> Output {
+    use serde_json::Value;
+
+    // Run `zig env` to find the location of zig's std/ directory
+    let zig_env_output = Command::new("zig").args(&["env"]).output().unwrap();
+
+    let zig_env_json = if zig_env_output.status.success() {
+        std::str::from_utf8(&zig_env_output.stdout).unwrap_or_else(|utf8_err| {
+            panic!(
+                "`zig env` failed; its stderr output was invalid utf8 ({:?})",
+                utf8_err
+            );
+        })
+    } else {
+        match std::str::from_utf8(&zig_env_output.stderr) {
+            Ok(stderr) => panic!("`zig env` failed - stderr output was: {:?}", stderr),
+            Err(utf8_err) => panic!(
+                "`zig env` failed; its stderr output was invalid utf8 ({:?})",
+                utf8_err
+            ),
+        }
+    };
+
+    let mut zig_compiler_rt_path = match serde_json::from_str(zig_env_json) {
+        Ok(Value::Object(map)) => match map.get("std_dir") {
+            Some(Value::String(std_dir)) => PathBuf::from(Path::new(std_dir)),
+            _ => {
+                panic!("Expected JSON containing a `std_dir` String field from `zig env`, but got: {:?}", zig_env_json);
+            }
+        },
+        _ => {
+            panic!(
+                "Expected JSON containing a `std_dir` field from `zig env`, but got: {:?}",
+                zig_env_json
+            );
+        }
+    };
+
+    zig_compiler_rt_path.push("special");
+    zig_compiler_rt_path.push("compiler_rt.zig");
+
+    Command::new("zig")
+        .env_clear()
+        .env("PATH", &env_path)
+        .env("HOME", &env_home)
+        .args(&[
+            "build-obj",
+            zig_host_src,
+            &emit_bin,
+            "--pkg-begin",
+            "str",
+            zig_str_path,
+            "--pkg-end",
+            // include the zig runtime
+            "--pkg-begin",
+            "compiler_rt",
+            zig_compiler_rt_path.to_str().unwrap(),
+            "--pkg-end",
+            // include libc
+            "--library",
+            "c",
+        ])
+        .output()
+        .unwrap()
+}
+
 pub fn rebuild_host(host_input_path: &Path) {
     let c_host_src = host_input_path.with_file_name("host.c");
     let c_host_dest = host_input_path.with_file_name("c_host.o");
@@ -79,35 +182,17 @@ pub fn rebuild_host(host_input_path: &Path) {
             &zig_str_path
         );
 
-        let zig_env = "/usr/local/Cellar/zig/0.7.1/lib/zig/std/special/compiler_rt.zig";
-
-        let output = Command::new("zig")
-            .env_clear()
-            .env("PATH", &env_path)
-            .env("HOME", &env_home)
-            .args(&[
-                "build-obj",
-                zig_host_src.to_str().unwrap(),
+        validate_output(
+            "host.zig",
+            "zig",
+            build_zig_host(
+                &env_path,
+                &env_home,
                 &emit_bin,
-                "--pkg-begin",
-                "str",
+                zig_host_src.to_str().unwrap(),
                 zig_str_path.to_str().unwrap(),
-                "--pkg-end",
-                // include the zig runtime
-
-                // "-fcompiler-rt",
-                "--pkg-begin",
-                "compiler_rt",
-                zig_env,
-                "--pkg-end",
-                // include libc
-                "--library",
-                "c",
-            ])
-            .output()
-            .unwrap();
-
-        validate_output("host.zig", "zig", output);
+            ),
+        );
     } else {
         // Compile host.c
         let output = Command::new("clang")
