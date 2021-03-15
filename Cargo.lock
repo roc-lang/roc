@@ -2895,6 +2895,7 @@ dependencies = [
  "roc_solve",
  "roc_types",
  "roc_unify",
+ "serde_json",
  "target-lexicon",
  "tempfile",
 ]

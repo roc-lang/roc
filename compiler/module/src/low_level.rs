@@ -65,6 +65,7 @@ pub enum LowLevel {
     NumCompare,
     NumDivUnchecked,
     NumRemUnchecked,
+    NumIsMultipleOf,
     NumAbs,
     NumNeg,
     NumSin,

@@ -384,6 +384,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // isMultipleOf : Int a, Int a -> Bool
+    add_type(
+        Symbol::NUM_IS_MULTIPLE_OF,
+        top_level_function(
+            vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+            Box::new(bool_type()),
+        ),
+    );
+
     // maxI128 : I128
     add_type(Symbol::NUM_MAX_I128, i128_type());
 
@@ -918,9 +927,9 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // empty : Dict * *
     add_type(Symbol::DICT_EMPTY, dict_type(flex(TVAR1), flex(TVAR2)));
 
-    // singleton : k, v -> Dict k v
+    // single : k, v -> Dict k v
     add_type(
-        Symbol::DICT_SINGLETON,
+        Symbol::DICT_SINGLE,
         top_level_function(
             vec![flex(TVAR1), flex(TVAR2)],
             Box::new(dict_type(flex(TVAR1), flex(TVAR2))),
@@ -1048,9 +1057,9 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // empty : Set a
     add_type(Symbol::SET_EMPTY, set_type(flex(TVAR1)));
 
-    // singleton : a -> Set a
+    // single : a -> Set a
     add_type(
-        Symbol::SET_SINGLETON,
+        Symbol::SET_SINGLE,
         top_level_function(vec![flex(TVAR1)], Box::new(set_type(flex(TVAR1)))),
     );
 

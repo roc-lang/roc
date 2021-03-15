@@ -18,6 +18,15 @@ mod cli_run {
     use serial_test::serial;
     use std::path::Path;
 
+    #[cfg(not(target_os = "macos"))]
+    const ALLOW_VALGRIND: bool = true;
+
+    // Disallow valgrind on macOS by default, because it reports a ton
+    // of false positives. For local development on macOS, feel free to
+    // change this to true!
+    #[cfg(target_os = "macos")]
+    const ALLOW_VALGRIND: bool = false;
+
     fn check_output(
         file: &Path,
         executable_filename: &str,
@@ -49,7 +58,7 @@ mod cli_run {
         }
         assert!(compile_out.status.success());
 
-        let out = if use_valgrind {
+        let out = if use_valgrind && ALLOW_VALGRIND {
             let (valgrind_out, raw_xml) = run_with_valgrind(
                 stdin_str,
                 &[file.with_file_name(executable_filename).to_str().unwrap()],
