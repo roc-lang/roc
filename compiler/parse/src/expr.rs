@@ -676,7 +676,69 @@ fn parse_expr_operator<'a>(
 
                 Err((MadeProgress, fail, state))
             } else {
-                todo!()
+                expr_state.consume_spaces(arena);
+                let expr_region = expr_state.expr.region;
+
+                let call = to_call(
+                    arena,
+                    expr_state.arguments,
+                    expr_state.expr,
+                    spaces_after_operator,
+                );
+
+                let indented_more = min_indent + 1;
+
+                // let aligned_like_a_def = expr_state.expr.region.start_col == state.indent_col;
+
+                let (loc_def, state) = {
+                    match expr_to_pattern_help(arena, &call.value) {
+                        Ok(good) => {
+                            let (_, mut ann_type, state) =
+                                parse_expr_start(indented_more, arena, state)?;
+
+                            // put the spaces from after the operator in front of the call
+                            if !spaces_after_operator.is_empty() {
+                                ann_type = arena
+                                    .alloc(ann_type.value)
+                                    .with_spaces_before(spaces_after_operator, ann_type.region);
+                            }
+
+                            let alias_region = Region::span_across(&call.region, &ann_type.region);
+
+                            let alias = Def::Body(
+                                arena.alloc(Located::at(expr_region, good)),
+                                arena.alloc(ann_type),
+                            );
+
+                            (&*arena.alloc(Located::at(alias_region, alias)), state)
+                        }
+                        Err(_) => {
+                            // this `=` likely occured inline; treat it as an invalid operator
+                            let fail = EExpr::BadOperator(
+                                arena.alloc([b'=']),
+                                loc_op.region.start_line,
+                                loc_op.region.start_col,
+                            );
+
+                            return Err((MadeProgress, fail, state));
+                        }
+                    }
+                };
+
+                let parse_final_expr = space0_before_e(
+                    move |a, s| parse_expr_help(min_indent, a, s),
+                    min_indent,
+                    EExpr::Space,
+                    EExpr::IndentEnd,
+                );
+
+                let (_, loc_ret, state) = dbg!(parse_final_expr.parse(arena, state))?;
+
+                return Ok((
+                    MadeProgress,
+                    Expr::Defs(&*arena.alloc([loc_def]), arena.alloc(loc_ret)),
+                    state,
+                ));
             }
         }
         BinOp::HasType => {
