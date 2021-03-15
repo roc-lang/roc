@@ -91,7 +91,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         DICT_TEST_HASH => dict_hash_test_only,
         DICT_LEN => dict_len,
         DICT_EMPTY => dict_empty,
-        DICT_SINGLETON => dict_singleton,
+        DICT_SINGLE => dict_single,
         DICT_INSERT => dict_insert,
         DICT_REMOVE => dict_remove,
         DICT_GET => dict_get,
@@ -104,7 +104,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         DICT_WALK=> dict_walk,
         SET_EMPTY => set_empty,
         SET_LEN => set_len,
-        SET_SINGLETON => set_singleton,
+        SET_SINGLE => set_single,
         SET_UNION=> set_union,
         SET_INTERSECTION => set_intersection,
         SET_DIFFERENCE => set_difference,
@@ -231,7 +231,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::DICT_TEST_HASH => dict_hash_test_only,
         Symbol::DICT_LEN => dict_len,
         Symbol::DICT_EMPTY => dict_empty,
-        Symbol::DICT_SINGLETON => dict_singleton,
+        Symbol::DICT_SINGLE => dict_single,
         Symbol::DICT_INSERT => dict_insert,
         Symbol::DICT_REMOVE => dict_remove,
         Symbol::DICT_GET => dict_get,
@@ -244,7 +244,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::DICT_WALK=> dict_walk,
         Symbol::SET_EMPTY => set_empty,
         Symbol::SET_LEN => set_len,
-        Symbol::SET_SINGLETON => set_singleton,
+        Symbol::SET_SINGLE => set_single,
         Symbol::SET_UNION=> set_union,
         Symbol::SET_INTERSECTION=> set_intersection,
         Symbol::SET_DIFFERENCE=> set_difference,
@@ -2220,8 +2220,8 @@ fn dict_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     }
 }
 
-/// Dict.singleton : k, v -> Dict k v
-fn dict_singleton(symbol: Symbol, var_store: &mut VarStore) -> Def {
+/// Dict.single : k, v -> Dict k v
+fn dict_single(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let key_var = var_store.fresh();
     let value_var = var_store.fresh();
     let dict_var = var_store.fresh();
@@ -2395,8 +2395,8 @@ fn set_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     }
 }
 
-/// Set.singleton : k -> Set k
-fn set_singleton(symbol: Symbol, var_store: &mut VarStore) -> Def {
+/// Set.single : k -> Set k
+fn set_single(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let key_var = var_store.fresh();
     let set_var = var_store.fresh();
     let value_var = Variable::EMPTY_RECORD;
