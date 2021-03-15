@@ -860,7 +860,7 @@ fn parse_defs_end<'a>(
                     return parse_defs_end(start, def_state, arena, state);
                 }
                 Ok((_, BinOp::HasType, state)) => {
-                    let (_, mut ann_type, state) = specialize(
+                    let (_, ann_type, state) = specialize(
                         EExpr::Type,
                         space0_before_e(
                             type_annotation::located_help(min_indent + 1),
@@ -880,6 +880,34 @@ fn parse_defs_end<'a>(
                     );
 
                     return parse_defs_end(start, def_state, arena, state);
+                }
+                Ok((_, BinOp::Backpassing, state)) => {
+                    let parse_body = space0_before_e(
+                        move |a, s| parse_expr_help(min_indent + 1, a, s),
+                        min_indent,
+                        EExpr::Space,
+                        EExpr::IndentEnd,
+                    );
+
+                    let (_, loc_body, state) = parse_body.parse(arena, state)?;
+
+                    let (_, loc_cont, state) = parse_body.parse(arena, state)?;
+
+                    let region = Region::span_across(&loc_pattern.region, &loc_cont.region);
+
+                    let ret = Expr::Backpassing(
+                        arena.alloc([loc_pattern]),
+                        arena.alloc(loc_body),
+                        arena.alloc(loc_cont),
+                    );
+
+                    let loc_ret = Located::at(region, ret);
+
+                    return Ok((
+                        MadeProgress,
+                        Expr::Defs(def_state.defs.into_bump_slice(), arena.alloc(loc_ret)),
+                        state,
+                    ));
                 }
                 _ => {
                     // this is no def, because there is no `=`, `:` or `<-`; parse as an expr
@@ -1024,6 +1052,85 @@ fn parse_expr_operator<'a>(
                 };
 
                 parse_defs_end(start, def_state, arena, state)
+            }
+        }
+        BinOp::Backpassing => {
+            if !expr_state.operators.is_empty() {
+                // this `=` likely occured inline; treat it as an invalid operator
+                let fail = EExpr::BadOperator(
+                    arena.alloc([b'=']),
+                    loc_op.region.start_line,
+                    loc_op.region.start_col,
+                );
+
+                Err((MadeProgress, fail, state))
+            } else if !expr_state.arguments.is_empty() {
+                let region = Region::across_all(expr_state.arguments.iter().map(|v| &v.region));
+
+                let fail = EExpr::ElmStyleFunction(
+                    region,
+                    loc_op.region.start_line,
+                    loc_op.region.start_col,
+                );
+
+                Err((MadeProgress, fail, state))
+            } else {
+                expr_state.consume_spaces(arena);
+                let expr_region = expr_state.expr.region;
+
+                let indented_more = start.col + 1;
+
+                let call = to_call(
+                    arena,
+                    expr_state.arguments,
+                    expr_state.expr,
+                    spaces_after_operator,
+                );
+
+                let (loc_pattern, loc_body, state) = {
+                    match expr_to_pattern_help(arena, &call.value) {
+                        Ok(good) => {
+                            let (_, mut ann_type, state) =
+                                parse_expr_help(indented_more, arena, state)?;
+
+                            // put the spaces from after the operator in front of the call
+                            if !spaces_after_operator.is_empty() {
+                                ann_type = arena
+                                    .alloc(ann_type.value)
+                                    .with_spaces_before(spaces_after_operator, ann_type.region);
+                            }
+
+                            (Located::at(expr_region, good), ann_type, state)
+                        }
+                        Err(_) => {
+                            // this `=` likely occured inline; treat it as an invalid operator
+                            let fail = EExpr::BadOperator(
+                                arena.alloc([b'=']),
+                                loc_op.region.start_line,
+                                loc_op.region.start_col,
+                            );
+
+                            return Err((MadeProgress, fail, state));
+                        }
+                    }
+                };
+
+                let parse_cont = space0_before_e(
+                    move |a, s| parse_expr_help(min_indent + 1, a, s),
+                    min_indent,
+                    EExpr::Space,
+                    EExpr::IndentEnd,
+                );
+
+                let (_, loc_cont, state) = parse_cont.parse(arena, state)?;
+
+                let ret = Expr::Backpassing(
+                    arena.alloc([loc_pattern]),
+                    arena.alloc(loc_body),
+                    arena.alloc(loc_cont),
+                );
+
+                Ok((MadeProgress, ret, state))
             }
         }
         BinOp::HasType => {

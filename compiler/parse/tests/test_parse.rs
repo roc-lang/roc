@@ -1770,6 +1770,52 @@ mod test_parse {
         );
     }
 
+    #[test]
+    fn one_backpassing() {
+        let arena = Bump::new();
+        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let identifier_x = Located::new(1, 1, 0, 1, Identifier("x"));
+        let identifier_y = Located::new(1, 1, 7, 8, Identifier("y"));
+
+        let var_x = Var {
+            module_name: "",
+            ident: "x",
+        };
+
+        let var_y = Var {
+            module_name: "",
+            ident: "y",
+        };
+        let loc_var_y = arena.alloc(Located::new(1, 1, 12, 13, var_y));
+
+        let closure = ParensAround(arena.alloc(Closure(arena.alloc([identifier_y]), loc_var_y)));
+        let loc_closure = Located::new(1, 1, 5, 14, closure);
+
+        let ret = Expr::SpaceBefore(arena.alloc(var_x), newlines.into_bump_slice());
+        let loc_ret = Located::new(3, 3, 0, 1, ret);
+
+        let reset_indentation = bumpalo::vec![in &arena; LineComment(" leading comment")];
+        let expected = Expr::SpaceBefore(
+            arena.alloc(Expr::Backpassing(
+                arena.alloc([identifier_x]),
+                arena.alloc(loc_closure),
+                arena.alloc(loc_ret),
+            )),
+            reset_indentation.into_bump_slice(),
+        );
+
+        assert_parses_to(
+            indoc!(
+                r#"# leading comment
+                x <- (\y -> y)
+
+                x
+                "#
+            ),
+            expected,
+        );
+    }
+
     // #[test]
     // fn type_signature_def() {
     //     let arena = Bump::new();
