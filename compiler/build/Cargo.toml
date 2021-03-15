@@ -27,6 +27,7 @@ bumpalo = { version = "3.2", features = ["collections"] }
 inlinable_string = "0.1.0"
 libloading = "0.6"
 tempfile = "3.1.0"
+serde_json = "1.0"
 # NOTE: rtfeldman/inkwell is a fork of TheDan64/inkwell which does not change anything.
 #
 # The reason for this fork is that the way Inkwell is designed, you have to use
