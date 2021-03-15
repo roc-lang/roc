@@ -102,12 +102,8 @@ pub fn build_file<'a>(
         }
     }
 
-    let cwd = app_o_file.parent().unwrap();
+    let cwd = roc_file_path.parent().unwrap();
     let binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
-    let mut host_input_path = PathBuf::new();
-
-    host_input_path.push(roc_file_path.parent().unwrap());
-
     let code_gen_timing = program::gen_from_mono_module(
         &arena,
         loaded,
@@ -151,6 +147,8 @@ pub fn build_file<'a>(
     }
 
     // Step 2: link the precompiled host and compiled app
+    let mut host_input_path = PathBuf::from(cwd);
+
     host_input_path.push(&*path_to_platform);
     host_input_path.push("host.o");
 
