@@ -7,6 +7,7 @@ use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
 use roc_gen::llvm::build::OptLevel;
 use roc_load::file::LoadingProblem;
+use std::env;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
@@ -135,7 +136,7 @@ pub fn build_file<'a>(
 
     if emit_debug_info {
         println!(
-            "\n\n🎉 Compilation finished!\n\nHere's how long each module took to compile:\n\n{}",
+            "\n\nCompilation finished!\n\nHere's how long each module took to compile:\n\n{}",
             buf
         );
 
@@ -191,8 +192,18 @@ pub fn build_file<'a>(
     // If the cmd errored out, return the Err.
     cmd_result?;
 
+    // If possible, report the generated executable name relative to the current dir.
+    let generated_filename = binary_path
+        .strip_prefix(env::current_dir().unwrap())
+        .unwrap_or(&binary_path);
+
     let total_end = compilation_start.elapsed().unwrap();
-    println!("Finished entire process in {} ms\n", total_end.as_millis());
+
+    println!(
+        "🎉 Built {} in {} ms",
+        generated_filename.to_str().unwrap(),
+        total_end.as_millis()
+    );
 
     Ok(binary_path)
 }
