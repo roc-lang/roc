@@ -673,7 +673,7 @@ fn append_body_definition_help<'a>(
     loc_pattern_ann: &'a Located<Pattern<'a>>,
     loc_ann: &'a Located<TypeAnnotation<'a>>,
 ) {
-    let comment = match before_ann_spaces.get(0) {
+    let comment = match before_body_spaces.get(0) {
         Some(CommentOrNewline::LineComment(s)) => Some(*s),
         Some(CommentOrNewline::DocComment(s)) => Some(*s),
         _ => None,
@@ -881,34 +881,6 @@ fn parse_defs_end<'a>(
 
                     return parse_defs_end(start, def_state, arena, state);
                 }
-                Ok((_, BinOp::Backpassing, state)) => {
-                    let parse_body = space0_before_e(
-                        move |a, s| parse_expr_help(min_indent + 1, a, s),
-                        min_indent,
-                        EExpr::Space,
-                        EExpr::IndentEnd,
-                    );
-
-                    let (_, loc_body, state) = parse_body.parse(arena, state)?;
-
-                    let (_, loc_cont, state) = parse_body.parse(arena, state)?;
-
-                    let region = Region::span_across(&loc_pattern.region, &loc_cont.region);
-
-                    let ret = Expr::Backpassing(
-                        arena.alloc([loc_pattern]),
-                        arena.alloc(loc_body),
-                        arena.alloc(loc_cont),
-                    );
-
-                    let loc_ret = Located::at(region, ret);
-
-                    return Ok((
-                        MadeProgress,
-                        Expr::Defs(def_state.defs.into_bump_slice(), arena.alloc(loc_ret)),
-                        state,
-                    ));
-                }
                 _ => {
                     // this is no def, because there is no `=`, `:` or `<-`; parse as an expr
                     let state = initial;
@@ -1092,8 +1064,6 @@ fn parse_expr_operator<'a>(
                         Ok(good) => {
                             let (_, mut ann_type, state) =
                                 parse_expr_help(indented_more, arena, state)?;
-
-                            dbg!(&ann_type);
 
                             // put the spaces from after the operator in front of the call
                             if !spaces_after_operator.is_empty() {
