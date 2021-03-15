@@ -6,6 +6,10 @@ roc_app.ll
 roc_app.bc
 benchmarks/nqueens
 benchmarks/deriv
+benchmarks/closure
 benchmarks/cfold
 benchmarks/rbtree-insert
+benchmarks/rbtree-del
+benchmarks/test-astar
+benchmarks/test-base64
 effect-example
