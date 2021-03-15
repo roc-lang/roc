@@ -738,7 +738,9 @@ fn list_repeat() {
         RocList<i64>
     );
 
-    assert_evals_to!("List.repeat 2 []", &[&[], &[]], &'static [&'static [i64]]);
+    let empty_lists: &'static [&'static [i64]] = &[&[], &[]];
+
+    assert_evals_to!("List.repeat 2 []", empty_lists, &'static [&'static [i64]]);
     assert_evals_to!(
         indoc!(
             r#"
@@ -749,7 +751,7 @@ fn list_repeat() {
                 List.repeat 2 noStrs
             "#
         ),
-        &[&[], &[]],
+        empty_lists,
         &'static [&'static [i64]]
     );
 
