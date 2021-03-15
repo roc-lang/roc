@@ -384,6 +384,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // isMultipleOf : Int a, Int a -> Bool
+    add_type(
+        Symbol::NUM_IS_MULTIPLE_OF,
+        top_level_function(
+            vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+            Box::new(bool_type()),
+        ),
+    );
+
     // maxI128 : I128
     add_type(Symbol::NUM_MAX_I128, i128_type());
 

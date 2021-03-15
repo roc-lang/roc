@@ -136,6 +136,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_ABS => num_abs,
         NUM_NEG => num_neg,
         NUM_REM => num_rem,
+        NUM_IS_MULTIPLE_OF => num_is_multiple_of,
         NUM_SQRT => num_sqrt,
         NUM_ROUND => num_round,
         NUM_IS_ODD => num_is_odd,
@@ -271,6 +272,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_ABS => num_abs,
         Symbol::NUM_NEG => num_neg,
         Symbol::NUM_REM => num_rem,
+        Symbol::NUM_IS_MULTIPLE_OF => num_is_multiple_of,
         Symbol::NUM_SQRT => num_sqrt,
         Symbol::NUM_ROUND => num_round,
         Symbol::NUM_IS_ODD => num_is_odd,
@@ -2609,6 +2611,11 @@ fn num_rem(symbol: Symbol, var_store: &mut VarStore) -> Def {
         body,
         ret_var,
     )
+}
+
+/// Num.isMultipleOf : Int, Int -> Bool
+fn num_is_multiple_of(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::NumIsMultipleOf, var_store)
 }
 
 /// Num.neg : Num a -> Num a
