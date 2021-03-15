@@ -1,16 +1,17 @@
 use crate::editor::ed_error::EdError::ParseError;
 use crate::editor::ed_error::EdResult;
-use crate::editor::markup::{Attribute, MarkupNode};
+use crate::editor::markup::{expr2_to_markup, set_caret_at_start, Attribute, MarkupNode};
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::graphics::primitives::rect::Rect;
 use crate::lang::ast::Expr2;
 use crate::lang::expr::{str_to_expr2, Env};
+use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
-use std::path::Path;
 
 #[derive(Debug)]
 pub struct EdModel<'a> {
     pub module: EdModule<'a>,
+    pub code_as_str: &'a str,
     pub markup_root: MarkupNode,
     pub glyph_dim_rect_opt: Option<Rect>,
     pub has_focus: bool,
@@ -18,21 +19,29 @@ pub struct EdModel<'a> {
 }
 
 pub fn init_model<'a>(
-    _file_path: &Path,
+    code_str: &'a BumpString,
     env: Env<'a>,
-    ast_arena: &'a Bump,
+    code_arena: &'a Bump,
 ) -> EdResult<EdModel<'a>> {
-    let module = EdModule::new(None, env, ast_arena)?;
+    let mut module = EdModule::new(&code_str, env, code_arena)?;
     // TODO fix moving issue and insert module.ast_root into pool
     let ast_root_id = module.env.pool.add(Expr2::Hole);
-    let markup_root = MarkupNode::Hole {
-        ast_node_id: ast_root_id,
-        attributes: vec![Attribute::Caret { offset_col: 0 }],
-        syn_high_style: HighlightStyle::Hole,
+
+    let markup_root = if code_str.is_empty() {
+        MarkupNode::Hole {
+            ast_node_id: ast_root_id,
+            attributes: vec![Attribute::Caret { offset_col: 0 }],
+            syn_high_style: HighlightStyle::Hole,
+        }
+    } else {
+        let mut temp_markup_root = expr2_to_markup(code_arena, &mut module.env, &module.ast_root);
+        set_caret_at_start(&mut temp_markup_root);
+        temp_markup_root
     };
 
     Ok(EdModel {
         module,
+        code_as_str: code_str,
         markup_root,
         glyph_dim_rect_opt: None,
         has_focus: true,
@@ -47,13 +56,9 @@ pub struct EdModule<'a> {
 }
 
 impl<'a> EdModule<'a> {
-    pub fn new(
-        code_str_opt: Option<&'a str>,
-        mut env: Env<'a>,
-        ast_arena: &'a Bump,
-    ) -> EdResult<EdModule<'a>> {
-        if let Some(code_str) = code_str_opt {
-            let expr2_result = str_to_expr2(&ast_arena, code_str, &mut env);
+    pub fn new(code_str: &'a str, mut env: Env<'a>, ast_arena: &'a Bump) -> EdResult<EdModule<'a>> {
+        if !code_str.is_empty() {
+            let expr2_result = str_to_expr2(&ast_arena, &code_str, &mut env);
 
             match expr2_result {
                 Ok((expr2, _output)) => Ok(EdModule {

@@ -46,7 +46,6 @@ fn get_string<'a>(env: &Env<'a>, pool_str: &PoolStr) -> String {
 }
 
 fn new_markup(text: String, node_id: NodeId<Expr2>, highlight_style: HighlightStyle) -> MarkupNode {
-    // TODO use real NodeId
     MarkupNode::Text {
         content: text,
         ast_node_id: node_id,
@@ -171,4 +170,26 @@ pub fn expr2_to_markup<'a, 'b>(arena: &'a Bump, env: &mut Env<'b>, expr2: &Expr2
         },
         rest => todo!("implement expr2_to_markup for {:?}", rest),
     }
+}
+
+pub fn set_caret_at_start(markup_node: &mut MarkupNode) {
+    match markup_node {
+        MarkupNode::Nested {
+            ast_node_id: _,
+            children,
+        } => {
+            if let Some(child) = children.first_mut() { set_caret_at_start(child) }
+        }
+        MarkupNode::Text {
+            content: _,
+            ast_node_id: _,
+            syn_high_style: _,
+            attributes,
+        } => attributes.push(Attribute::Caret { offset_col: 0 }),
+        MarkupNode::Hole {
+            ast_node_id: _,
+            attributes,
+            syn_high_style: _,
+        } => attributes.push(Attribute::Caret { offset_col: 0 }),
+    };
 }

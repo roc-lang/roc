@@ -57,13 +57,13 @@ pub fn print_err(err: &EdError) {
     }
 }
 
-// pub fn print_ui_err(err: &UIError) {
-//     eprintln!("{}", format!("{}", err).truecolor(255, 0, 0));
+pub fn print_ui_err(err: &UIError) {
+    eprintln!("{}", format!("{}", err).truecolor(255, 0, 0));
 
-//     if let Some(backtrace) = ErrorCompat::backtrace(err) {
-//         eprintln!("{}", color_backtrace(backtrace));
-//     }
-// }
+    if let Some(backtrace) = ErrorCompat::backtrace(err) {
+        eprintln!("{}", color_backtrace(backtrace));
+    }
+}
 
 fn color_backtrace(backtrace: &snafu::Backtrace) -> String {
     let backtrace_str = format!("{}", backtrace);

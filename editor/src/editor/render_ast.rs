@@ -41,7 +41,6 @@ struct CodeStyle<'a> {
     glyph_dim_rect: Rect,
 }
 
-// TODO return Rectangles for Box, caret, selection here as well
 fn markup_to_wgpu<'a>(
     markup_node: &'a MarkupNode,
     code_style: &CodeStyle,
@@ -94,7 +93,6 @@ fn draw_attributes(
 }
 
 // TODO use text_row
-// TODO use attributes to render caret
 fn markup_to_wgpu_helper<'a>(
     markup_node: &'a MarkupNode,
     wgpu_texts: &mut Vec<wgpu_glyph::Text<'a>>,

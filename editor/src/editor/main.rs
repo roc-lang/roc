@@ -1,6 +1,7 @@
 use super::keyboard_input;
 use super::style::CODE_TXT_XY;
 use super::util::slice_get;
+use crate::editor::ed_error::print_ui_err;
 use crate::editor::resources::strings::NOTHING_OPENED;
 use crate::editor::{
     config::Config,
@@ -18,6 +19,8 @@ use crate::graphics::{
 };
 use crate::lang::expr::Env;
 use crate::lang::pool::Pool;
+use crate::ui::ui_error::UIError::FileOpenFailed;
+use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
 use cgmath::Vector2;
 use pipelines::RectResources;
@@ -127,7 +130,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
     let mut env_pool = Pool::with_capacity(1024);
     let env_arena = Bump::new();
-    let ast_arena = Bump::new();
+    let code_arena = Bump::new();
 
     let mut var_store = VarStore::default();
     let dep_idents = IdentIds::exposed_builtins(8);
@@ -146,8 +149,23 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
         exposed_ident_ids,
     );
 
-    let ed_model_opt = if let Some(file_path) = file_path_opt {
-        let ed_model_res = ed_model::init_model(file_path, env, &ast_arena);
+    let mut code_str = BumpString::from_str_in("", &code_arena);
+
+    if let Some(file_path) = file_path_opt {
+        match std::fs::read_to_string(file_path) {
+            Ok(file_as_str) => {
+                code_str = BumpString::from_str_in(&file_as_str, &code_arena);
+            }
+
+            Err(e) => print_ui_err(&FileOpenFailed {
+                path_str: file_path.to_string_lossy().to_string(),
+                err_msg: e.to_string(),
+            }),
+        }
+    }
+
+    let ed_model_opt = {
+        let ed_model_res = ed_model::init_model(&code_str, env, &code_arena);
 
         match ed_model_res {
             Ok(mut ed_model) => {
@@ -160,8 +178,6 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 None
             }
         }
-    } else {
-        None
     };
 
     let mut app_model = AppModel::init(ed_model_opt);

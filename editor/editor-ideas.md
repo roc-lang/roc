@@ -39,6 +39,8 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 * [godbolt.org Compiler Explorer](https://godbolt.org/)
 * Say you have a failing test that used to work, it would be very valuable to see all code that was changed that was used only by that test.
 e.g. you have a test `calculate_sum_test` that only uses the function `add`, when the test fails you should be able to see a diff showing only what changed for the function `add`. It would also be great to have a diff of [expression values](https://homepages.cwi.nl/~storm/livelit/images/bret.png) Bret Victor style. An ambitious project would be to suggest or automatically try fixes based on these diffs.
++ [whitebox debug visualization](https://vimeo.com/483795097)
+
 
 ### Structured Editing
 
