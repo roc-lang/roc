@@ -42,6 +42,9 @@ pub enum BinOp {
     And,
     Or,
     Pizza, // lowest precedence
+    Assignment,
+    HasType,
+    Backpassing,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,6 +86,7 @@ impl BinOp {
             Equals | NotEquals | LessThan | GreaterThan | LessThanOrEq | GreaterThanOrEq => {
                 NonAssociative
             }
+            Assignment | HasType | Backpassing => unreachable!(),
         }
     }
 
@@ -95,6 +99,7 @@ impl BinOp {
             And => 3,
             Or => 2,
             Pizza => 1,
+            Assignment | HasType | Backpassing => unreachable!(),
         }
     }
 }
@@ -131,6 +136,9 @@ impl std::fmt::Display for BinOp {
             And => "&&",
             Or => "||",
             Pizza => "|>",
+            Assignment => "=",
+            HasType => ":",
+            Backpassing => "<-",
         };
 
         write!(f, "{}", as_str)
