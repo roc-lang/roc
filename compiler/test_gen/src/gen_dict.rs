@@ -318,13 +318,13 @@ fn unit_values() {
 }
 
 #[test]
-fn singleton() {
+fn single() {
     assert_evals_to!(
         indoc!(
             r#"
             myDict : Dict I64 {}
             myDict =
-                Dict.singleton 0 {}
+                Dict.single 0 {}
 
             Dict.len myDict
             "#
@@ -341,7 +341,7 @@ fn union() {
             r#"
             myDict : Dict I64 {}
             myDict =
-                Dict.union (Dict.singleton 0 {}) (Dict.singleton 1 {})
+                Dict.union (Dict.single 0 {}) (Dict.single 1 {})
 
             Dict.len myDict
             "#
@@ -358,7 +358,7 @@ fn union_prefer_first() {
             r#"
             myDict : Dict I64 I64
             myDict =
-                Dict.union (Dict.singleton 0 100) (Dict.singleton 0 200)
+                Dict.union (Dict.single 0 100) (Dict.single 0 200)
 
             Dict.values myDict
             "#

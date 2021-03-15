@@ -924,7 +924,7 @@ define_builtins! {
         0 DICT_DICT: "Dict" imported // the Dict.Dict type alias
         1 DICT_AT_DICT: "@Dict" // the Dict.@Dict private tag
         2 DICT_EMPTY: "empty"
-        3 DICT_SINGLETON: "singleton"
+        3 DICT_SINGLE: "single"
         4 DICT_GET: "get"
         5 DICT_GET_RESULT: "#get_result" // symbol used in the definition of Dict.get
         6 DICT_WALK: "walk"
@@ -950,7 +950,7 @@ define_builtins! {
         0 SET_SET: "Set" imported // the Set.Set type alias
         1 SET_AT_SET: "@Set" // the Set.@Set private tag
         2 SET_EMPTY: "empty"
-        3 SET_SINGLETON: "singleton"
+        3 SET_SINGLE: "single"
         4 SET_LEN: "len"
         5 SET_INSERT: "insert"
         6 SET_REMOVE: "remove"

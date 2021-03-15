@@ -15,8 +15,8 @@ initialModel : position -> Model position
 initialModel = \start ->
     {
         evaluated : Set.empty,
-        openSet : Set.singleton start,
-        costs : Dict.singleton start 0,
+        openSet : Set.single start,
+        costs : Dict.single start 0,
         cameFrom : Dict.empty
     }
 

@@ -18,11 +18,11 @@ fn empty_len() {
 }
 
 #[test]
-fn singleton_len() {
+fn single_len() {
     assert_evals_to!(
         indoc!(
             r#"
-            Set.len (Set.singleton 42)
+            Set.len (Set.single 42)
             "#
         ),
         1,
@@ -31,11 +31,11 @@ fn singleton_len() {
 }
 
 #[test]
-fn singleton_to_list() {
+fn single_to_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            Set.toList (Set.singleton 42)
+            Set.toList (Set.single 42)
             "#
         ),
         &[42],
@@ -45,7 +45,7 @@ fn singleton_to_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            Set.toList (Set.singleton 1)
+            Set.toList (Set.single 1)
             "#
         ),
         &[1],
@@ -55,7 +55,7 @@ fn singleton_to_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            Set.toList (Set.singleton 1.0)
+            Set.toList (Set.single 1.0)
             "#
         ),
         &[1.0],
