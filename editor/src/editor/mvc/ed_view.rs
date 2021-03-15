@@ -8,14 +8,13 @@ use cgmath::Vector2;
 use snafu::OptionExt;
 use winit::dpi::PhysicalSize;
 
+// create text and rectangles based on EdModel's markup_root
 pub fn model_to_wgpu<'a>(
     ed_model: &'a mut EdModel,
     size: &PhysicalSize<u32>,
     txt_coords: Vector2<f32>,
     config: &Config,
 ) -> EdResult<(wgpu_glyph::Section<'a>, Vec<Rect>)> {
-    //ed_model.markup_root =  expr2_to_markup(arena, &mut ed_model.module.env, &ed_model.module.ast_root);
-
     let glyph_dim_rect = ed_model.glyph_dim_rect_opt.context(MissingGlyphDims {})?;
 
     build_code_graphics(

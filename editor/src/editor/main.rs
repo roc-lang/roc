@@ -393,41 +393,6 @@ fn begin_render_pass<'a>(
     })
 }
 
-// fn queue_editor_text(
-//     size: &PhysicalSize<u32>,
-//     editor_lines: &str,
-//     caret_pos: TextPos,
-//     config: &Config,
-//     glyph_brush: &mut GlyphBrush<()>,
-// ) {
-//     let area_bounds = (size.width as f32, size.height as f32).into();
-
-//     let code_text = Text {
-//         position: CODE_TXT_XY.into(),
-//         area_bounds,
-//         text: editor_lines,
-//         size: config.code_font_size,
-//         ..Default::default()
-//     };
-
-//     let s = format!("Ln {}, Col {}", caret_pos.line, caret_pos.column);
-//     let text = s.as_str();
-
-//     let caret_pos_label = Text {
-//         position: ((size.width as f32) - 150.0, (size.height as f32) - 40.0).into(),
-//         area_bounds,
-//         color: config.ed_theme.ui_theme.text,
-//         text,
-//         size: 25.0,
-//         ..Default::default()
-//     };
-
-//     queue_text_draw(&caret_pos_label, glyph_brush);
-
-//     // TODO convert to ast and render with render_ast::render_expr2
-//     queue_text_draw(&code_text, glyph_brush);
-// }
-
 fn queue_no_file_text(
     size: &PhysicalSize<u32>,
     text: &str,
