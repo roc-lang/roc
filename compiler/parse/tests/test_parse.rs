@@ -1816,6 +1816,74 @@ mod test_parse {
         );
     }
 
+    #[test]
+    fn two_backpassing() {
+        let arena = Bump::new();
+
+        let inner_backpassing = {
+            let identifier_z = Located::new(2, 2, 0, 1, Identifier("z"));
+
+            let empty_record = Record {
+                update: None,
+                fields: &[],
+                final_comments: &[],
+            };
+            let loc_empty_record = Located::new(2, 2, 5, 7, empty_record);
+
+            let var_x = Var {
+                module_name: "",
+                ident: "x",
+            };
+
+            let newlines = bumpalo::vec![in &arena; Newline, Newline];
+            let ret = Expr::SpaceBefore(arena.alloc(var_x), newlines.into_bump_slice());
+            let loc_ret = Located::new(4, 4, 0, 1, ret);
+
+            Expr::SpaceBefore(
+                arena.alloc(Expr::Backpassing(
+                    arena.alloc([identifier_z]),
+                    arena.alloc(loc_empty_record),
+                    arena.alloc(loc_ret),
+                )),
+                arena.alloc([Newline]),
+            )
+        };
+
+        let identifier_x = Located::new(1, 1, 0, 1, Identifier("x"));
+        let identifier_y = Located::new(1, 1, 7, 8, Identifier("y"));
+
+        let var_y = Var {
+            module_name: "",
+            ident: "y",
+        };
+        let loc_var_y = arena.alloc(Located::new(1, 1, 12, 13, var_y));
+
+        let closure = ParensAround(arena.alloc(Closure(arena.alloc([identifier_y]), loc_var_y)));
+        let loc_closure = Located::new(1, 1, 5, 14, closure);
+
+        let reset_indentation = bumpalo::vec![in &arena; LineComment(" leading comment")];
+        let expected = Expr::SpaceBefore(
+            arena.alloc(Expr::Backpassing(
+                arena.alloc([identifier_x]),
+                arena.alloc(loc_closure),
+                arena.alloc(Located::new(2, 4, 0, 1, inner_backpassing)),
+            )),
+            reset_indentation.into_bump_slice(),
+        );
+
+        assert_parses_to(
+            indoc!(
+                r#"# leading comment
+                x <- (\y -> y)
+                z <- {} 
+
+                x
+                "#
+            ),
+            expected,
+        );
+    }
+
     // #[test]
     // fn type_signature_def() {
     //     let arena = Bump::new();

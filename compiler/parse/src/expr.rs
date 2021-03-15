@@ -1058,7 +1058,7 @@ fn parse_expr_operator<'a>(
             if !expr_state.operators.is_empty() {
                 // this `=` likely occured inline; treat it as an invalid operator
                 let fail = EExpr::BadOperator(
-                    arena.alloc([b'=']),
+                    arena.alloc([b'<', b'-']),
                     loc_op.region.start_line,
                     loc_op.region.start_col,
                 );
@@ -1093,6 +1093,8 @@ fn parse_expr_operator<'a>(
                             let (_, mut ann_type, state) =
                                 parse_expr_help(indented_more, arena, state)?;
 
+                            dbg!(&ann_type);
+
                             // put the spaces from after the operator in front of the call
                             if !spaces_after_operator.is_empty() {
                                 ann_type = arena
@@ -1116,7 +1118,7 @@ fn parse_expr_operator<'a>(
                 };
 
                 let parse_cont = space0_before_e(
-                    move |a, s| parse_expr_help(min_indent + 1, a, s),
+                    move |a, s| parse_expr_help(min_indent, a, s),
                     min_indent,
                     EExpr::Space,
                     EExpr::IndentEnd,
