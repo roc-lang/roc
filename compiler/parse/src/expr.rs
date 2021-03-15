@@ -595,6 +595,175 @@ fn numeric_negate_expression<'a>(
     }
 }
 
+fn append_body_definition<'a>(
+    arena: &'a Bump,
+    defs: &mut Vec<'a, &'a Located<Def<'a>>>,
+    spaces: &'a [CommentOrNewline<'a>],
+    loc_pattern: Located<Pattern<'a>>,
+    loc_def_body: Located<Expr<'a>>,
+) {
+    let region = Region::span_across(&loc_pattern.region, &loc_def_body.region);
+
+    if spaces.len() <= 1 {
+        let last = defs.pop();
+        if let Some(Located {
+            value: Def::Annotation(ann_pattern, ann_type),
+            ..
+        }) = last
+        {
+            let ann_type = arena.alloc(ann_type);
+            let ann_pattern = arena.alloc(ann_pattern);
+
+            let comment = match spaces.get(0) {
+                Some(CommentOrNewline::LineComment(s)) => Some(*s),
+                Some(CommentOrNewline::DocComment(s)) => Some(*s),
+                _ => None,
+            };
+
+            let loc_def = Located::at(
+                region,
+                Def::AnnotatedBody {
+                    ann_pattern,
+                    ann_type,
+                    comment,
+                    body_pattern: arena.alloc(loc_pattern),
+                    body_expr: &*arena.alloc(loc_def_body),
+                },
+            );
+
+            defs.push(arena.alloc(loc_def));
+            return;
+        } else {
+            defs.extend(last);
+        }
+    }
+
+    // the previous and current def can't be joined up
+    let mut loc_def = Located::at(
+        region,
+        Def::Body(arena.alloc(loc_pattern), &*arena.alloc(loc_def_body)),
+    );
+
+    if !spaces.is_empty() {
+        loc_def = arena
+            .alloc(loc_def.value)
+            .with_spaces_before(spaces, loc_def.region);
+    }
+
+    defs.push(arena.alloc(loc_def));
+}
+
+struct DefState<'a> {
+    defs: Vec<'a, &'a Located<Def<'a>>>,
+    spaces_after: &'a [CommentOrNewline<'a>],
+}
+
+fn parse_defs_end<'a>(
+    min_indent: u16,
+    mut def_state: DefState<'a>,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
+    let initial = state;
+
+    let state = match space0_e(min_indent, EExpr::Space, EExpr::IndentStart).parse(arena, state) {
+        Err((MadeProgress, _, s)) => {
+            dbg!("invalid whitespace?", s, min_indent);
+            return Err((
+                MadeProgress,
+                EExpr::DefMissingFinalExpr(s.line, s.column),
+                s,
+            ));
+        }
+        Ok((_, spaces, state)) => {
+            def_state.spaces_after = spaces;
+            state
+        }
+        Err((NoProgress, _, state)) => state,
+    };
+
+    match space0_after_e(
+        crate::pattern::loc_pattern_help(min_indent),
+        min_indent,
+        EPattern::Space,
+        EPattern::IndentEnd,
+    )
+    .parse(arena, state)
+    {
+        Err((_, _, _)) => {
+            // a hacky way to get expression-based error messages. TODO fix this
+            let state = initial;
+
+            let parse_final_expr = space0_before_e(
+                debug!(move |a, s| parse_expr_help(min_indent, a, s)),
+                min_indent,
+                EExpr::Space,
+                EExpr::IndentStart,
+            );
+
+            match parse_final_expr.parse(arena, state) {
+                Err((_, fail, state)) => {
+                    dbg!(state, &def_state.defs);
+                    return Err((
+                        MadeProgress,
+                        EExpr::DefMissingFinalExpr2(arena.alloc(fail), state.line, state.column),
+                        state,
+                    ));
+                }
+                Ok((_, loc_ret, state)) => {
+                    return Ok((
+                        MadeProgress,
+                        Expr::Defs(def_state.defs.into_bump_slice(), arena.alloc(loc_ret)),
+                        state,
+                    ));
+                }
+            }
+        }
+        Ok((_, loc_pattern, state)) => {
+            match operator().parse(arena, state) {
+                Ok((_, BinOp::Assignment, state)) => {
+                    let parse_def_expr = space0_before_e(
+                        move |a, s| parse_expr_help(min_indent + 1, a, s),
+                        min_indent,
+                        EExpr::Space,
+                        EExpr::IndentEnd,
+                    );
+
+                    let (_, loc_def_expr, state) = parse_def_expr.parse(arena, state)?;
+
+                    append_body_definition(
+                        arena,
+                        &mut def_state.defs,
+                        def_state.spaces_after,
+                        loc_pattern,
+                        loc_def_expr,
+                    );
+
+                    return parse_defs_end(min_indent, def_state, arena, state);
+                }
+                _ => {
+                    // this is no def, because there is no `=`, `:` or `<-`; parse as an expr
+                    let state = initial;
+                    let parse_final_expr = space0_before_e(
+                        move |a, s| parse_expr_help(min_indent, a, s),
+                        min_indent,
+                        EExpr::Space,
+                        EExpr::IndentEnd,
+                    );
+
+                    let (_, loc_ret, state) = parse_final_expr.parse(arena, state)?;
+
+                    return Ok((
+                        MadeProgress,
+                        Expr::Defs(def_state.defs.into_bump_slice(), arena.alloc(loc_ret)),
+                        state,
+                    ));
+                }
+            }
+        }
+    }
+}
+
 fn parse_expr_operator<'a>(
     min_indent: u16,
     mut expr_state: ExprState<'a>,
@@ -664,16 +833,14 @@ fn parse_expr_operator<'a>(
                 expr_state.consume_spaces(arena);
                 let expr_region = expr_state.expr.region;
 
+                let indented_more = expr_state.expr.region.start_col + 1;
+
                 let call = to_call(
                     arena,
                     expr_state.arguments,
                     expr_state.expr,
                     spaces_after_operator,
                 );
-
-                let indented_more = min_indent + 1;
-
-                // let aligned_like_a_def = expr_state.expr.region.start_col == state.indent_col;
 
                 let (loc_def, state) = {
                     match expr_to_pattern_help(arena, &call.value) {
@@ -710,20 +877,14 @@ fn parse_expr_operator<'a>(
                     }
                 };
 
-                let parse_final_expr = space0_before_e(
-                    move |a, s| parse_expr_help(min_indent, a, s),
-                    min_indent,
-                    EExpr::Space,
-                    EExpr::IndentEnd,
-                );
+                let def_state = DefState {
+                    defs: bumpalo::vec![in arena; loc_def],
+                    spaces_after: &[],
+                };
 
-                let (_, loc_ret, state) = dbg!(parse_final_expr.parse(arena, state))?;
+                dbg!(expr_state.spaces_after);
 
-                return Ok((
-                    MadeProgress,
-                    Expr::Defs(&*arena.alloc([loc_def]), arena.alloc(loc_ret)),
-                    state,
-                ));
+                parse_defs_end(indented_more - 1, def_state, arena, state)
             }
         }
         BinOp::HasType => {
@@ -731,7 +892,7 @@ fn parse_expr_operator<'a>(
 
             let expr_region = expr_state.expr.region;
 
-            let indented_more = min_indent + 1;
+            let indented_more = expr_state.expr.region.start_col + 1;
 
             expr_state.consume_spaces(arena);
 
@@ -821,21 +982,14 @@ fn parse_expr_operator<'a>(
                     }
                 }
             };
+            dbg!(expr_state.spaces_after);
 
-            let parse_final_expr = space0_before_e(
-                move |a, s| parse_expr_help(min_indent, a, s),
-                min_indent,
-                EExpr::Space,
-                EExpr::IndentEnd,
-            );
+            let def_state = DefState {
+                defs: bumpalo::vec![in arena; loc_def],
+                spaces_after: &[],
+            };
 
-            let (_, loc_ret, state) = parse_final_expr.parse(arena, state)?;
-
-            return Ok((
-                MadeProgress,
-                Expr::Defs(&*arena.alloc([loc_def]), arena.alloc(loc_ret)),
-                state,
-            ));
+            parse_defs_end(indented_more - 1, def_state, arena, state)
         }
         _ => match loc_possibly_negative_or_negated_term(min_indent).parse(arena, state) {
             Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),

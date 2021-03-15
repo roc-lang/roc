@@ -177,6 +177,7 @@ fn to_syntax_report<'a>(
 enum Context {
     InNode(Node, Row, Col, Box<Context>),
     InDef(Row, Col),
+    InDefFinalExpr(Row, Col),
 }
 
 enum Node {
@@ -340,6 +341,35 @@ fn to_expr_report<'a>(
         }
 
         EExpr::Start(row, col) | EExpr::IndentStart(row, col) => {
+            let (title, expecting) = match &context {
+                Context::InNode { .. } | Context::InDef { .. } => (
+                    "MISSING EXPRESSION",
+                    alloc.concat(vec![
+                        alloc.reflow("I was expecting to see an expression like "),
+                        alloc.parser_suggestion("42"),
+                        alloc.reflow(" or "),
+                        alloc.parser_suggestion("\"hello\""),
+                        alloc.text("."),
+                    ]),
+                ),
+                Context::InDefFinalExpr { .. } => (
+                    "MISSING FINAL EXPRESSION",
+                    alloc.stack(vec![
+                        alloc.concat(vec![
+                            alloc.reflow("This definition is missing a final expression."),
+                            alloc.reflow(" A nested definition must be followed by"),
+                            alloc.reflow(" either another definition, or an expression"),
+                        ]),
+                        alloc.vcat(vec![
+                            alloc.text("x = 4").indent(4),
+                            alloc.text("y = 2").indent(4),
+                            alloc.text(""),
+                            alloc.text("x + y").indent(4),
+                        ]),
+                    ]),
+                ),
+            };
+
             let (context_row, context_col, a_thing) = match context {
                 Context::InNode(node, r, c, _) => match node {
                     Node::WhenCondition | Node::WhenBranch | Node::WhenIfGuard => (
@@ -366,6 +396,9 @@ fn to_expr_report<'a>(
                     Node::InsideParens => (r, c, alloc.text("some parentheses")),
                 },
                 Context::InDef(r, c) => (r, c, alloc.text("a definition")),
+                Context::InDefFinalExpr(r, c) => {
+                    (r, c, alloc.text("a definition's final expression"))
+                }
             };
 
             let surroundings = Region::from_rows_cols(context_row, context_col, *row, *col);
@@ -378,19 +411,13 @@ fn to_expr_report<'a>(
                     alloc.reflow(", but I got stuck here:"),
                 ]),
                 alloc.region_with_subregion(surroundings, region),
-                alloc.concat(vec![
-                    alloc.reflow("I was expecting to see an expression like "),
-                    alloc.parser_suggestion("42"),
-                    alloc.reflow(" or "),
-                    alloc.parser_suggestion("\"hello\""),
-                    alloc.text("."),
-                ]),
+                expecting,
             ]);
 
             Report {
                 filename,
                 doc,
-                title: "MISSING EXPRESSION".to_string(),
+                title: title.to_string(),
             }
         }
 
@@ -420,6 +447,15 @@ fn to_expr_report<'a>(
                 title: "MISSING FINAL EXPRESSION".to_string(),
             }
         }
+
+        EExpr::DefMissingFinalExpr2(expr, row, col) => to_expr_report(
+            alloc,
+            filename,
+            Context::InDefFinalExpr(start_row, start_col),
+            expr,
+            *row,
+            *col,
+        ),
 
         EExpr::Colon(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);

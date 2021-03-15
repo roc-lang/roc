@@ -4680,18 +4680,19 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── MISSING FINAL EXPRESSION ────────────────────────────────────────────────────
-
-                I am partway through parsing a definition, but I got stuck here:
-
+                
+                I am partway through parsing a definition's final expression, but I
+                got stuck here:
+                
                 1│  f : Foo.foo
                                ^
-
+                
                 This definition is missing a final expression. A nested definition
                 must be followed by either another definition, or an expression
-
+                
                     x = 4
                     y = 2
-
+                
                     x + y
             "#
             ),
@@ -5765,14 +5766,21 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── MISSING EXPRESSION ──────────────────────────────────────────────────────────
-
-                I am partway through parsing a definition, but I got stuck here:
-
+                ── MISSING FINAL EXPRESSION ────────────────────────────────────────────────────
+                
+                I am partway through parsing a definition's final expression, but I
+                got stuck here:
+                
                 1│  main = 5 -> 3
                               ^
-
-                I was expecting to see an expression like 42 or "hello".
+                
+                This definition is missing a final expression. A nested definition
+                must be followed by either another definition, or an expression
+                
+                    x = 4
+                    y = 2
+                
+                    x + y
             "#
             ),
         )
@@ -5920,6 +5928,49 @@ mod test_reporting {
                 foo = True
 
                 !foo 1 2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
+
+                This value is not a function, but it was given 2 arguments:
+
+                3│  !foo 1 2
+                    ^^^^
+
+                Are there any missing commas? Or missing parentheses?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn foobar() {
+        report_problem_as(
+            indoc!(
+                r#"
+                g = \x ->
+                    when x is
+                        0 -> 0
+                        _ -> g (x - 1)
+
+                # use parens to force the ordering!
+                (h = \x ->
+                    when x is
+                        0 -> 0
+                        _ -> g (x - 1)
+
+                (p = \x ->
+                    when x is
+                        0 -> 0
+                        1 -> g (x - 1)
+                        _ -> p (x - 1)
+
+
+                # variables must be (indirectly) referenced in the body for analysis to work
+                { x: p, y: h }
+                ))
                 "#
             ),
             indoc!(

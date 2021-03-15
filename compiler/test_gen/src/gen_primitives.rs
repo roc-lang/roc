@@ -2228,6 +2228,7 @@ fn build_then_apply_closure() {
 }
 
 #[test]
+#[ignore]
 fn backpassing_result() {
     assert_evals_to!(
         indoc!(
