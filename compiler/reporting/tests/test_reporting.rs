@@ -5946,6 +5946,7 @@ mod test_reporting {
     }
 
     #[test]
+    #[ignore]
     fn foobar() {
         report_problem_as(
             indoc!(
@@ -5961,16 +5962,16 @@ mod test_reporting {
                         0 -> 0
                         _ -> g (x - 1)
 
-                (p = \x ->
+                 (p = \x ->
                     when x is
                         0 -> 0
                         1 -> g (x - 1)
                         _ -> p (x - 1)
 
 
-                # variables must be (indirectly) referenced in the body for analysis to work
-                { x: p, y: h }
-                ))
+                  # variables must be (indirectly) referenced in the body for analysis to work
+                  { x: p, y: h }
+                  ))
                 "#
             ),
             indoc!(

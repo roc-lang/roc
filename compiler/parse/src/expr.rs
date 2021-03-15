@@ -422,6 +422,7 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
 
 fn parse_expr_start<'a>(
     min_indent: u16,
+    start: Position,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
@@ -429,7 +430,7 @@ fn parse_expr_start<'a>(
         loc!(specialize(EExpr::If, if_expr_help(min_indent))),
         loc!(specialize(EExpr::When, when::expr_help(min_indent))),
         loc!(specialize(EExpr::Lambda, closure_help(min_indent))),
-        loc!(|a, s| parse_expr_operator_chain(min_indent, a, s)),
+        loc!(|a, s| parse_expr_operator_chain(min_indent, start, a, s)),
         fail_expr_start_e()
     ]
     .parse(arena, state)
@@ -437,6 +438,7 @@ fn parse_expr_start<'a>(
 
 fn parse_expr_operator_chain<'a>(
     min_indent: u16,
+    start: Position,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
@@ -457,7 +459,7 @@ fn parse_expr_operator_chain<'a>(
                 end,
             };
 
-            parse_expr_end(min_indent, expr_state, arena, state)
+            parse_expr_end(min_indent, start, expr_state, arena, state)
         }
     }
 }
@@ -606,35 +608,42 @@ fn append_body_definition<'a>(
 
     if spaces.len() <= 1 {
         let last = defs.pop();
-        if let Some(Located {
-            value: Def::Annotation(ann_pattern, ann_type),
-            ..
-        }) = last
-        {
-            let ann_type = arena.alloc(ann_type);
-            let ann_pattern = arena.alloc(ann_pattern);
-
-            let comment = match spaces.get(0) {
-                Some(CommentOrNewline::LineComment(s)) => Some(*s),
-                Some(CommentOrNewline::DocComment(s)) => Some(*s),
-                _ => None,
-            };
-
-            let loc_def = Located::at(
-                region,
-                Def::AnnotatedBody {
+        match last {
+            Some(Located {
+                value: Def::Annotation(ann_pattern, ann_type),
+                ..
+            }) => {
+                return append_body_definition_help(
+                    arena,
+                    defs,
+                    region,
+                    &[],
+                    spaces,
+                    loc_pattern,
+                    loc_def_body,
                     ann_pattern,
                     ann_type,
-                    comment,
-                    body_pattern: arena.alloc(loc_pattern),
-                    body_expr: &*arena.alloc(loc_def_body),
-                },
-            );
-
-            defs.push(arena.alloc(loc_def));
-            return;
-        } else {
-            defs.extend(last);
+                );
+            }
+            Some(Located {
+                value: Def::SpaceBefore(Def::Annotation(ann_pattern, ann_type), before_ann_spaces),
+                ..
+            }) => {
+                return append_body_definition_help(
+                    arena,
+                    defs,
+                    region,
+                    before_ann_spaces,
+                    spaces,
+                    loc_pattern,
+                    loc_def_body,
+                    ann_pattern,
+                    ann_type,
+                );
+            }
+            _ => {
+                defs.extend(last);
+            }
         }
     }
 
@@ -653,22 +662,132 @@ fn append_body_definition<'a>(
     defs.push(arena.alloc(loc_def));
 }
 
+fn append_body_definition_help<'a>(
+    arena: &'a Bump,
+    defs: &mut Vec<'a, &'a Located<Def<'a>>>,
+    region: Region,
+    before_ann_spaces: &'a [CommentOrNewline<'a>],
+    before_body_spaces: &'a [CommentOrNewline<'a>],
+    loc_pattern_body: Located<Pattern<'a>>,
+    loc_def_body: Located<Expr<'a>>,
+    loc_pattern_ann: &'a Located<Pattern<'a>>,
+    loc_ann: &'a Located<TypeAnnotation<'a>>,
+) {
+    let comment = match before_ann_spaces.get(0) {
+        Some(CommentOrNewline::LineComment(s)) => Some(*s),
+        Some(CommentOrNewline::DocComment(s)) => Some(*s),
+        _ => None,
+    };
+
+    let mut loc_def = Located::at(
+        region,
+        Def::AnnotatedBody {
+            ann_pattern: loc_pattern_ann,
+            ann_type: loc_ann,
+            comment,
+            body_pattern: arena.alloc(loc_pattern_body),
+            body_expr: &*arena.alloc(loc_def_body),
+        },
+    );
+
+    if !before_ann_spaces.is_empty() {
+        loc_def = arena
+            .alloc(loc_def.value)
+            .with_spaces_before(before_ann_spaces, loc_def.region);
+    }
+
+    defs.push(arena.alloc(loc_def));
+}
+
+fn append_annotation_definition<'a>(
+    arena: &'a Bump,
+    defs: &mut Vec<'a, &'a Located<Def<'a>>>,
+    spaces: &'a [CommentOrNewline<'a>],
+    loc_pattern: Located<Pattern<'a>>,
+    loc_ann: Located<TypeAnnotation<'a>>,
+) {
+    let region = Region::span_across(&loc_pattern.region, &loc_ann.region);
+
+    // the previous and current def can't be joined up
+    match &loc_pattern.value {
+        Pattern::Apply(
+            Located {
+                value: Pattern::GlobalTag(name),
+                ..
+            },
+            alias_arguments,
+        ) => append_alias_definition(
+            arena,
+            defs,
+            region,
+            spaces,
+            Located::at(loc_pattern.region, name),
+            alias_arguments,
+            loc_ann,
+        ),
+        Pattern::GlobalTag(name) => append_alias_definition(
+            arena,
+            defs,
+            region,
+            spaces,
+            Located::at(loc_pattern.region, name),
+            &[],
+            loc_ann,
+        ),
+        _ => {
+            let mut loc_def = Located::at(region, Def::Annotation(loc_pattern, loc_ann));
+            if !spaces.is_empty() {
+                loc_def = arena
+                    .alloc(loc_def.value)
+                    .with_spaces_before(spaces, loc_def.region);
+            }
+
+            defs.push(arena.alloc(loc_def));
+        }
+    }
+}
+
+fn append_alias_definition<'a>(
+    arena: &'a Bump,
+    defs: &mut Vec<'a, &'a Located<Def<'a>>>,
+    region: Region,
+    spaces: &'a [CommentOrNewline<'a>],
+    name: Located<&'a str>,
+    pattern_arguments: &'a [Located<Pattern<'a>>],
+    loc_ann: Located<TypeAnnotation<'a>>,
+) {
+    let def = Def::Alias {
+        name,
+        vars: pattern_arguments,
+        ann: loc_ann,
+    };
+    let mut loc_def = Located::at(region, def);
+
+    if !spaces.is_empty() {
+        loc_def = arena
+            .alloc(loc_def.value)
+            .with_spaces_before(spaces, loc_def.region);
+    }
+
+    defs.push(arena.alloc(loc_def));
+}
+
 struct DefState<'a> {
     defs: Vec<'a, &'a Located<Def<'a>>>,
     spaces_after: &'a [CommentOrNewline<'a>],
 }
 
 fn parse_defs_end<'a>(
-    min_indent: u16,
+    start: Position,
     mut def_state: DefState<'a>,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
+    let min_indent = start.col;
     let initial = state;
 
     let state = match space0_e(min_indent, EExpr::Space, EExpr::IndentStart).parse(arena, state) {
         Err((MadeProgress, _, s)) => {
-            dbg!("invalid whitespace?", s, min_indent);
             return Err((
                 MadeProgress,
                 EExpr::DefMissingFinalExpr(s.line, s.column),
@@ -695,7 +814,7 @@ fn parse_defs_end<'a>(
             let state = initial;
 
             let parse_final_expr = space0_before_e(
-                debug!(move |a, s| parse_expr_help(min_indent, a, s)),
+                move |a, s| parse_expr_start(min_indent, start, a, s),
                 min_indent,
                 EExpr::Space,
                 EExpr::IndentStart,
@@ -703,7 +822,6 @@ fn parse_defs_end<'a>(
 
             match parse_final_expr.parse(arena, state) {
                 Err((_, fail, state)) => {
-                    dbg!(state, &def_state.defs);
                     return Err((
                         MadeProgress,
                         EExpr::DefMissingFinalExpr2(arena.alloc(fail), state.line, state.column),
@@ -739,7 +857,29 @@ fn parse_defs_end<'a>(
                         loc_def_expr,
                     );
 
-                    return parse_defs_end(min_indent, def_state, arena, state);
+                    return parse_defs_end(start, def_state, arena, state);
+                }
+                Ok((_, BinOp::HasType, state)) => {
+                    let (_, mut ann_type, state) = specialize(
+                        EExpr::Type,
+                        space0_before_e(
+                            type_annotation::located_help(min_indent + 1),
+                            min_indent + 1,
+                            Type::TSpace,
+                            Type::TIndentStart,
+                        ),
+                    )
+                    .parse(arena, state)?;
+
+                    append_annotation_definition(
+                        arena,
+                        &mut def_state.defs,
+                        def_state.spaces_after,
+                        loc_pattern,
+                        ann_type,
+                    );
+
+                    return parse_defs_end(start, def_state, arena, state);
                 }
                 _ => {
                     // this is no def, because there is no `=`, `:` or `<-`; parse as an expr
@@ -766,6 +906,7 @@ fn parse_defs_end<'a>(
 
 fn parse_expr_operator<'a>(
     min_indent: u16,
+    start: Position,
     mut expr_state: ExprState<'a>,
     loc_op: Located<BinOp>,
     arena: &'a Bump,
@@ -807,7 +948,7 @@ fn parse_expr_operator<'a>(
             expr_state.spaces_after = spaces;
             expr_state.end = new_end;
 
-            parse_expr_end(min_indent, expr_state, arena, state)
+            parse_expr_end(min_indent, start, expr_state, arena, state)
         }
         BinOp::Assignment => {
             if !expr_state.operators.is_empty() {
@@ -833,7 +974,7 @@ fn parse_expr_operator<'a>(
                 expr_state.consume_spaces(arena);
                 let expr_region = expr_state.expr.region;
 
-                let indented_more = expr_state.expr.region.start_col + 1;
+                let indented_more = start.col + 1;
 
                 let call = to_call(
                     arena,
@@ -846,7 +987,7 @@ fn parse_expr_operator<'a>(
                     match expr_to_pattern_help(arena, &call.value) {
                         Ok(good) => {
                             let (_, mut ann_type, state) =
-                                parse_expr_start(indented_more, arena, state)?;
+                                parse_expr_help(indented_more, arena, state)?;
 
                             // put the spaces from after the operator in front of the call
                             if !spaces_after_operator.is_empty() {
@@ -882,9 +1023,7 @@ fn parse_expr_operator<'a>(
                     spaces_after: &[],
                 };
 
-                dbg!(expr_state.spaces_after);
-
-                parse_defs_end(indented_more - 1, def_state, arena, state)
+                parse_defs_end(start, def_state, arena, state)
             }
         }
         BinOp::HasType => {
@@ -892,7 +1031,7 @@ fn parse_expr_operator<'a>(
 
             let expr_region = expr_state.expr.region;
 
-            let indented_more = expr_state.expr.region.start_col + 1;
+            let indented_more = start.col + 1;
 
             expr_state.consume_spaces(arena);
 
@@ -982,14 +1121,13 @@ fn parse_expr_operator<'a>(
                     }
                 }
             };
-            dbg!(expr_state.spaces_after);
 
             let def_state = DefState {
                 defs: bumpalo::vec![in arena; loc_def],
                 spaces_after: &[],
             };
 
-            parse_defs_end(indented_more - 1, def_state, arena, state)
+            parse_defs_end(start, def_state, arena, state)
         }
         _ => match loc_possibly_negative_or_negated_term(min_indent).parse(arena, state) {
             Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
@@ -1028,7 +1166,8 @@ fn parse_expr_operator<'a>(
                         expr_state.end = new_end;
                         expr_state.spaces_after = spaces;
 
-                        parse_expr_end(min_indent, expr_state, arena, state)
+                        // TODO new start?
+                        parse_expr_end(min_indent, start, expr_state, arena, state)
                     }
                 }
             }
@@ -1041,6 +1180,7 @@ fn parse_expr_operator<'a>(
 
 fn parse_expr_end<'a>(
     min_indent: u16,
+    start: Position,
     mut expr_state: ExprState<'a>,
     arena: &'a Bump,
     state: State<'a>,
@@ -1078,7 +1218,7 @@ fn parse_expr_end<'a>(
                     expr_state.end = new_end;
                     expr_state.spaces_after = new_spaces;
 
-                    parse_expr_end(min_indent, expr_state, arena, state)
+                    parse_expr_end(min_indent, start, expr_state, arena, state)
                 }
             }
         }
@@ -1090,7 +1230,7 @@ fn parse_expr_end<'a>(
                 Ok((_, loc_op, state)) => {
                     expr_state.consume_spaces(arena);
                     expr_state.initial = before_op;
-                    parse_expr_operator(min_indent, expr_state, loc_op, arena, state)
+                    parse_expr_operator(min_indent, start, expr_state, loc_op, arena, state)
                 }
                 Err((NoProgress, _, _)) => {
                     // roll back space parsing
@@ -1132,7 +1272,8 @@ fn parse_expr_help<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
-    parse_expr_start(min_indent, arena, state)
+    let start = state.get_position();
+    parse_expr_start(min_indent, start, arena, state)
 }
 
 /// If the given Expr would parse the same way as a valid Pattern, convert it.
