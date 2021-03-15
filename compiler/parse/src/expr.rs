@@ -296,28 +296,13 @@ fn expr_in_parens_then_arguments<'a>(
     }
 }
 
-fn in_parens_region_fix<'a>(min_indent: u16) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
-    // we get the region of the expression inside the parens, but current tests want us to
-    // include the parentheses in the region
-    //    map!(
-    //        loc!(loc_expr_in_parens_etc_help(min_indent)),
-    //        |loc_loc_expr: Located<Located<Expr<'a>>>| {
-    //            let value = loc_loc_expr.value.value;
-    //            let region = loc_loc_expr.region;
-    //
-    //            Located::at(region, value)
-    //        }
-    //    )
-    loc_expr_in_parens_etc_help(min_indent)
-}
-
 fn parse_loc_term<'a>(
     min_indent: u16,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
     one_of!(
-        in_parens_region_fix(min_indent),
+        loc_expr_in_parens_etc_help(min_indent),
         loc!(specialize(EExpr::Str, string_literal_help())),
         loc!(specialize(EExpr::Number, number_literal_help())),
         loc!(specialize(EExpr::Lambda, closure_help(min_indent))),
@@ -334,7 +319,7 @@ fn parse_loc_term_better<'a>(
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
     one_of!(
-        in_parens_region_fix(min_indent),
+        loc_expr_in_parens_etc_help(min_indent),
         loc!(specialize(EExpr::Str, string_literal_help())),
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
         loc!(specialize(EExpr::Lambda, closure_help(min_indent))),
