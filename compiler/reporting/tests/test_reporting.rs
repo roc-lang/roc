@@ -65,6 +65,7 @@ mod test_reporting {
             problems: can_problems,
             ..
         } = can_expr(arena, expr_src)?;
+        dbg!(&loc_expr);
         let mut subs = Subs::new(var_store.into());
 
         for (var, name) in output.introduced_variables.name_by_var {
@@ -4124,12 +4125,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-                
+
                 I trying to parse a record field access here:
-                
+
                 1│  foo.bar.
                             ^
-                
+
                 So I expect to see a lowercase letter next, like .name or .height.
             "#
             ),
@@ -4147,12 +4148,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-                
+
                 I am very confused by this expression:
-                
+
                 1│  @Foo.Bar
                         ^^^^
-                
+
                 Looks like a private tag is treated like a module name. Maybe you
                 wanted a qualified name, like Json.Decode.string?
             "#
@@ -4199,18 +4200,18 @@ mod test_reporting {
                     x == 5
                     Num.add 1 2
 
-                x y
+                { x,  y }
                 "#
             ),
             indoc!(
                 r#"
                 ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
-
-                The `add` function expects 2 arguments, but it got 4 instead:
-
-                4│      Num.add 1 2
-                        ^^^^^^^
-
+                
+                This value is not a function, but it was given 3 arguments:
+                
+                3│      x == 5
+                             ^
+                
                 Are there any missing commas? Or missing parentheses?
             "#
             ),
@@ -4679,18 +4680,18 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── MISSING FINAL EXPRESSION ────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a definition, but I got stuck here:
-                
+
                 1│  f : Foo.foo
                                ^
-                
+
                 This definition is missing a final expression. A nested definition
                 must be followed by either another definition, or an expression
-                
+
                     x = 4
                     y = 2
-                    
+
                     x + y
             "#
             ),
@@ -5055,13 +5056,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED ARGUMENT LIST ────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a function argument list, but I got stuck
                 at this comma:
-                
+
                 1│  \a,,b -> 1
                        ^
-                
+
                 I was expecting an argument pattern before this, so try adding an
                 argument before the comma and see if that helps?
             "#
@@ -5080,13 +5081,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED ARGUMENT LIST ────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a function argument list, but I got stuck
                 at this comma:
-                
+
                 1│  \,b -> 1
                      ^
-                
+
                 I was expecting an argument pattern before this, so try adding an
                 argument before the comma and see if that helps?
             "#
@@ -5488,12 +5489,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-                
+
                 I trying to parse a record field access here:
-                
+
                 1│  Num.add . 23
                              ^
-                
+
                 So I expect to see a lowercase letter next, like .name or .height.
             "#
             ),
@@ -5727,22 +5728,24 @@ mod test_reporting {
             indoc!(
                 r#"
                 main =
-                    5 : I64
+                    (\x -> x) : I64
+
+                    3
                 "#
             ),
             indoc!(
                 r#"
                 ── UNKNOWN OPERATOR ────────────────────────────────────────────────────────────
-
+                
                 This looks like an operator, but it's not one I recognize!
-
+                
                 1│  main =
-                2│      5 : I64
-                          ^
-
+                2│      (\x -> x) : I64
+                                  ^
+                
                 The has-type operator : can only occur in a definition's type
                 signature, like
-
+                
                     increment : I64 -> I64
                     increment = \x -> x + 1
             "#
@@ -5789,15 +5792,15 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── WEIRD PROVIDES ──────────────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a provides list, but I got stuck here:
-                
+
                 3│      imports [base.Task, Base64 ]
                 4│      provides [ main, @Foo ] to base
                                          ^
-                
-                I was expecting a type name, value name or function name next, like 
-                
+
+                I was expecting a type name, value name or function name next, like
+
                     provides [ Animal, default, tame ]
             "#
             ),
@@ -5809,7 +5812,7 @@ mod test_reporting {
         report_header_problem_as(
             indoc!(
                 r#"
-                interface Foobar 
+                interface Foobar
                     exposes [ main, @Foo ]
                     imports [base.Task, Base64 ]
                 "#
@@ -5817,15 +5820,15 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── WEIRD EXPOSES ───────────────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a exposes list, but I got stuck here:
-                
-                1│  interface Foobar 
+
+                1│  interface Foobar
                 2│      exposes [ main, @Foo ]
                                         ^
-                
-                I was expecting a type name, value name or function name next, like 
-                
+
+                I was expecting a type name, value name or function name next, like
+
                     exposes [ Animal, default, tame ]
             "#
             ),
@@ -5837,7 +5840,7 @@ mod test_reporting {
         report_header_problem_as(
             indoc!(
                 r#"
-                interface foobar 
+                interface foobar
                     exposes [ main, @Foo ]
                     imports [base.Task, Base64 ]
                 "#
@@ -5845,12 +5848,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── WEIRD MODULE NAME ───────────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a header, but got stuck here:
-                
-                1│  interface foobar 
+
+                1│  interface foobar
                               ^
-                
+
                 I am expecting a module name next, like BigNum or Main. Module names
                 must start with an uppercase letter.
             "#
@@ -5863,7 +5866,7 @@ mod test_reporting {
         report_header_problem_as(
             indoc!(
                 r#"
-                app foobar 
+                app foobar
                     exposes [ main, @Foo ]
                     imports [base.Task, Base64 ]
                 "#
@@ -5871,14 +5874,64 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── WEIRD APP NAME ──────────────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a header, but got stuck here:
-                
-                1│  app foobar 
+
+                1│  app foobar
                         ^
-                
+
                 I am expecting an application name next, like app "main" or
                 app "editor". App names are surrounded by quotation marks.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn apply_unary_negative() {
+        report_problem_as(
+            indoc!(
+                r#"
+                foo = 3
+
+                -foo 1 2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
+
+                This value is not a function, but it was given 2 arguments:
+
+                3│  -foo 1 2
+                    ^^^^
+
+                Are there any missing commas? Or missing parentheses?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn apply_unary_not() {
+        report_problem_as(
+            indoc!(
+                r#"
+                foo = True
+
+                !foo 1 2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
+
+                This value is not a function, but it was given 2 arguments:
+
+                3│  !foo 1 2
+                    ^^^^
+
+                Are there any missing commas? Or missing parentheses?
             "#
             ),
         )

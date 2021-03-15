@@ -117,6 +117,22 @@ where
     )
 }
 
+pub fn check_indent<'a, E>(
+    min_indent: u16,
+    indent_problem: fn(Row, Col) -> E,
+) -> impl Parser<'a, (), E>
+where
+    E: 'a,
+{
+    move |_, state: State<'a>| {
+        if state.column > min_indent {
+            Ok((NoProgress, (), state))
+        } else {
+            Err((NoProgress, indent_problem(state.line, state.column), state))
+        }
+    }
+}
+
 pub fn space0_e<'a, E>(
     min_indent: u16,
     space_problem: fn(BadInputError, Row, Col) -> E,
@@ -126,28 +142,6 @@ where
     E: 'a,
 {
     spaces_help_help(min_indent, space_problem, indent_problem)
-}
-
-pub fn space1_e<'a, E>(
-    min_indent: u16,
-    space_problem: fn(BadInputError, Row, Col) -> E,
-    indent_problem: fn(Row, Col) -> E,
-    no_parse_problem: fn(Row, Col) -> E,
-) -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
-where
-    E: 'a,
-{
-    move |arena, state| match space0_e(min_indent, space_problem, indent_problem)
-        .parse(arena, state)
-    {
-        Ok((NoProgress, _, state)) => Err((
-            NoProgress,
-            no_parse_problem(state.line, state.column),
-            state,
-        )),
-        Ok((MadeProgress, spaces, state)) => Ok((MadeProgress, spaces, state)),
-        Err(bad) => Err(bad),
-    }
 }
 
 pub fn spaces_till_end_of_line<'a, E: 'a>(

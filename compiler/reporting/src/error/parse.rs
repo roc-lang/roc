@@ -125,6 +125,22 @@ fn to_syntax_report<'a>(
 
             report(doc)
         }
+        NotEndOfFile(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I expected to reach the end of the file, but got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![alloc.reflow("no hints")]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "NOT END OF FILE".to_string(),
+            }
+        }
         SyntaxError::Eof(region) => {
             let doc = alloc.stack(vec![alloc.reflow("End of Field"), alloc.region(*region)]);
 
@@ -393,7 +409,7 @@ fn to_expr_report<'a>(
                 alloc.vcat(vec![
                     alloc.text("x = 4").indent(4),
                     alloc.text("y = 2").indent(4),
-                    alloc.text("").indent(4),
+                    alloc.text(""),
                     alloc.text("x + y").indent(4),
                 ]),
             ]);
@@ -2702,7 +2718,7 @@ fn to_provides_report<'a>(
                     .reflow(r"I am partway through parsing a provides list, but I got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![alloc.reflow(
-                    "I was expecting a type name, value name or function name next, like ",
+                    "I was expecting a type name, value name or function name next, like",
                 )]),
                 alloc
                     .parser_suggestion("provides [ Animal, default, tame ]")
@@ -2764,7 +2780,7 @@ fn to_exposes_report<'a>(
                 alloc.reflow(r"I am partway through parsing a exposes list, but I got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![alloc.reflow(
-                    "I was expecting a type name, value name or function name next, like ",
+                    "I was expecting a type name, value name or function name next, like",
                 )]),
                 alloc
                     .parser_suggestion("exposes [ Animal, default, tame ]")

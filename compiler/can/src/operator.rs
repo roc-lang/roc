@@ -420,6 +420,9 @@ fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
         And => (ModuleName::BOOL, "and"),
         Or => (ModuleName::BOOL, "or"),
         Pizza => unreachable!("Cannot desugar the |> operator"),
+        Assignment => unreachable!("Cannot desugar the = operator"),
+        HasType => unreachable!("Cannot desugar the : operator"),
+        Backpassing => unreachable!("Cannot desugar the <- operator"),
     }
 }
 

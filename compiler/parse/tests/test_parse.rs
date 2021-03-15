@@ -641,6 +641,33 @@ mod test_parse {
     }
 
     #[test]
+    fn newline_and_spaces_before_less_than() {
+        let arena = Bump::new();
+        let spaced_int = arena.alloc(Num("1")).after(&[Newline]);
+        let tuple = arena.alloc((
+            Located::new(0, 0, 4, 5, spaced_int),
+            Located::new(1, 1, 4, 5, LessThan),
+            Located::new(1, 1, 6, 7, Num("2")),
+        ));
+
+        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let def = Def::Body(
+            arena.alloc(Located::new(0, 0, 0, 1, Identifier("x"))),
+            arena.alloc(Located::new(0, 1, 4, 7, BinOp(tuple))),
+        );
+        let loc_def = &*arena.alloc(Located::new(0, 1, 0, 7, def));
+        let defs = &[loc_def];
+        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
+        let loc_ret = Located::new(3, 3, 0, 2, ret);
+        let expected = Defs(defs, arena.alloc(loc_ret));
+
+        // let expected = BinOp(tuple);
+        let actual = parse_expr_with(&arena, "x = 1\n    < 2\n\n42");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn comment_with_non_ascii() {
         let arena = Bump::new();
         let spaced_int = arena.alloc(Num("3")).after(&[LineComment(" 2 × 2")]);
@@ -1314,21 +1341,18 @@ mod test_parse {
             },
         ));
         let args = &[&*arg1, &*arg2];
-        let apply_expr = Expr::Apply(
-            arena.alloc(Located::new(
-                0,
-                0,
-                1,
-                5,
-                Var {
-                    module_name: "",
-                    ident: "whee",
-                },
-            )),
-            args,
-            CalledVia::Space,
+        let function = Located::new(
+            0,
+            0,
+            1,
+            5,
+            Var {
+                module_name: "",
+                ident: "whee",
+            },
         );
-        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 13, apply_expr)), loc_op);
+        let unary = Located::new(0, 0, 0, 5, UnaryOp(arena.alloc(function), loc_op));
+        let expected = Expr::Apply(arena.alloc(unary), args, CalledVia::Space);
         let actual = parse_expr_with(&arena, "-whee  12 foo");
 
         assert_eq!(Ok(expected), actual);
@@ -1350,21 +1374,19 @@ mod test_parse {
             },
         ));
         let args = &[&*arg1, &*arg2];
-        let apply_expr = Expr::Apply(
-            arena.alloc(Located::new(
-                0,
-                0,
-                1,
-                5,
-                Var {
-                    module_name: "",
-                    ident: "whee",
-                },
-            )),
-            args,
-            CalledVia::Space,
+
+        let function = Located::new(
+            0,
+            0,
+            1,
+            5,
+            Var {
+                module_name: "",
+                ident: "whee",
+            },
         );
-        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 13, apply_expr)), loc_op);
+        let unary = Located::new(0, 0, 0, 5, UnaryOp(arena.alloc(function), loc_op));
+        let expected = Expr::Apply(arena.alloc(unary), args, CalledVia::Space);
         let actual = parse_expr_with(&arena, "!whee  12 foo");
 
         assert_eq!(Ok(expected), actual);
@@ -1400,7 +1422,7 @@ mod test_parse {
             args,
             CalledVia::Space,
         )));
-        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 15, apply_expr)), loc_op);
+        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 2, 14, apply_expr)), loc_op);
         let actual = parse_expr_with(&arena, "-(whee  12 foo)");
 
         assert_eq!(Ok(expected), actual);
@@ -1436,7 +1458,7 @@ mod test_parse {
             args,
             CalledVia::Space,
         )));
-        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 15, apply_expr)), loc_op);
+        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 2, 14, apply_expr)), loc_op);
         let actual = parse_expr_with(&arena, "!(whee  12 foo)");
 
         assert_eq!(Ok(expected), actual);
