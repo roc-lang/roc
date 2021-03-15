@@ -136,6 +136,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_ABS => num_abs,
         NUM_NEG => num_neg,
         NUM_REM => num_rem,
+        NUM_IS_MULTIPLE_OF => num_is_multiple_of,
         NUM_SQRT => num_sqrt,
         NUM_ROUND => num_round,
         NUM_IS_ODD => num_is_odd,
@@ -160,6 +161,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_SHIFT_RIGHT => num_shift_right_by,
         NUM_SHIFT_RIGHT_ZERO_FILL => num_shift_right_zf_by,
         NUM_INT_CAST=> num_int_cast,
+        NUM_MAX_I128=> num_max_i128,
         RESULT_MAP => result_map,
         RESULT_MAP_ERR => result_map_err,
         RESULT_AFTER => result_after,
@@ -270,6 +272,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_ABS => num_abs,
         Symbol::NUM_NEG => num_neg,
         Symbol::NUM_REM => num_rem,
+        Symbol::NUM_IS_MULTIPLE_OF => num_is_multiple_of,
         Symbol::NUM_SQRT => num_sqrt,
         Symbol::NUM_ROUND => num_round,
         Symbol::NUM_IS_ODD => num_is_odd,
@@ -294,6 +297,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_SHIFT_RIGHT => num_shift_right_by,
         Symbol::NUM_SHIFT_RIGHT_ZERO_FILL => num_shift_right_zf_by,
         Symbol::NUM_INT_CAST=> num_int_cast,
+        Symbol::NUM_MAX_I128=> num_max_i128,
         Symbol::RESULT_MAP => result_map,
         Symbol::RESULT_MAP_ERR => result_map_err,
         Symbol::RESULT_AFTER => result_after,
@@ -408,7 +412,7 @@ fn lowlevel_4(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
 fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
     let int_percision_var = var_store.fresh();
-    let body = Int(int_var, int_percision_var, i64::MAX);
+    let body = Int(int_var, int_percision_var, i64::MAX.into());
 
     Def {
         annotation: None,
@@ -423,7 +427,7 @@ fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
 fn num_min_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
     let int_percision_var = var_store.fresh();
-    let body = Int(int_var, int_percision_var, i64::MIN);
+    let body = Int(int_var, int_percision_var, i64::MIN.into());
 
     Def {
         annotation: None,
@@ -1376,6 +1380,33 @@ fn num_shift_right_zf_by(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.intCast: Int a -> Int b
 fn num_int_cast(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+/// Num.maxI128: I128
+fn num_max_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let int_percision_var = var_store.fresh();
+    let body = Int(int_var, int_percision_var, i128::MAX);
+
+    let std = roc_builtins::std::types();
+    let solved = std.get(&symbol).unwrap();
+    let mut free_vars = roc_types::solved_types::FreeVars::default();
+    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
+
+    let annotation = crate::def::Annotation {
+        signature,
+        introduced_variables: Default::default(),
+        region: Region::zero(),
+        aliases: Default::default(),
+    };
+
+    Def {
+        annotation: Some(annotation),
+        expr_var: int_var,
+        loc_expr: Located::at_zero(body),
+        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
 }
 
 /// List.isEmpty : List * -> Bool
@@ -2580,6 +2611,11 @@ fn num_rem(symbol: Symbol, var_store: &mut VarStore) -> Def {
         body,
         ret_var,
     )
+}
+
+/// Num.isMultipleOf : Int, Int -> Bool
+fn num_is_multiple_of(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::NumIsMultipleOf, var_store)
 }
 
 /// Num.neg : Num a -> Num a

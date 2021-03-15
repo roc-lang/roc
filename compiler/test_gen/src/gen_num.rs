@@ -1364,4 +1364,30 @@ mod gen_num {
         assert_evals_to!("Num.shiftRightBy 2 0b0000_0010u8", 0b0000_0001, i64);
         assert_evals_to!("Num.shiftRightBy 3 0b0000_1100u8", 0b0000_0011, i64);
     }
+
+    #[test]
+    fn max_i128() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.maxI128
+                "#
+            ),
+            i128::MAX,
+            i128
+        );
+    }
+
+    #[test]
+    fn is_multiple_of() {
+        // true
+        assert_evals_to!("Num.isMultipleOf 5 1", true, bool);
+        assert_evals_to!("Num.isMultipleOf 5 -1", true, bool);
+        assert_evals_to!("Num.isMultipleOf 0 0", true, bool);
+        assert_evals_to!("Num.isMultipleOf 0 1", true, bool);
+        assert_evals_to!("Num.isMultipleOf 0 -1", true, bool);
+        // false
+        assert_evals_to!("Num.isMultipleOf 5 2", false, bool);
+        assert_evals_to!("Num.isMultipleOf 5 0", false, bool);
+    }
 }
