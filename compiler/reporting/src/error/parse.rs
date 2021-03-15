@@ -174,6 +174,7 @@ fn to_syntax_report<'a>(
     }
 }
 
+#[allow(clippy::enum_variant_names)]
 enum Context {
     InNode(Node, Row, Col, Box<Context>),
     InDef(Row, Col),

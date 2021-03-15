@@ -662,6 +662,7 @@ fn append_body_definition<'a>(
     defs.push(arena.alloc(loc_def));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_body_definition_help<'a>(
     arena: &'a Bump,
     defs: &mut Vec<'a, &'a Located<Def<'a>>>,
@@ -857,7 +858,7 @@ fn parse_defs_end<'a>(
                         loc_def_expr,
                     );
 
-                    return parse_defs_end(start, def_state, arena, state);
+                    parse_defs_end(start, def_state, arena, state)
                 }
                 Ok((_, BinOp::HasType, state)) => {
                     let (_, ann_type, state) = specialize(
@@ -879,7 +880,7 @@ fn parse_defs_end<'a>(
                         ann_type,
                     );
 
-                    return parse_defs_end(start, def_state, arena, state);
+                    parse_defs_end(start, def_state, arena, state)
                 }
                 _ => {
                     // this is no def, because there is no `=`, `:` or `<-`; parse as an expr
