@@ -4795,7 +4795,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
 
             let current_block = bd.get_insert_block().unwrap(); //block that we are in right now;
             let then_block = env.context.append_basic_block(parent, "then");
-            let cont_block = env.context.append_basic_block(parent, "branchcont"); //
+            let cont_block = env.context.append_basic_block(parent, "branchcont");
 
             bd.build_conditional_branch(condition_rhs, then_block, cont_block);
 
