@@ -1,7 +1,8 @@
 use crate::editor::ed_error::EdError::ParseError;
 use crate::editor::ed_error::EdResult;
+use crate::editor::markup::Attributes;
 use crate::editor::markup::{
-    expr2_to_markup, set_caret_at_start, set_parent_for_all, Attribute, MarkupNode,
+    expr2_to_markup, move_carets_right, set_caret_at_start, set_parent_for_all, Caret, MarkupNode,
 };
 use crate::editor::slow_pool::{SlowNodeId, SlowPool};
 use crate::editor::syntax_highlight::HighlightStyle;
@@ -20,7 +21,7 @@ pub struct EdModel<'a> {
     pub markup_root_id: SlowNodeId,
     pub glyph_dim_rect_opt: Option<Rect>,
     pub has_focus: bool,
-    carets: Vec<&'a MarkupNode>,
+    carets: Vec<SlowNodeId>,
 }
 
 pub fn init_model<'a>(
@@ -33,15 +34,19 @@ pub fn init_model<'a>(
     // TODO fix moving issue and insert module.ast_root into pool
     let ast_root_id = module.env.pool.add(Expr2::Blank);
 
-    let markup_root_id = if code_str.is_empty() {
+    let (markup_root_id, node_with_caret_id) = if code_str.is_empty() {
         let blank_root = MarkupNode::Blank {
             ast_node_id: ast_root_id,
-            attributes: vec![Attribute::Caret { offset_col: 0 }],
+            attributes: Attributes {
+                all: vec![Caret::new_attr(0)],
+            },
             syn_high_style: HighlightStyle::Blank,
             parent_id_opt: None,
         };
 
-        markup_node_pool.add(blank_root)
+        let root_id = markup_node_pool.add(blank_root);
+
+        (root_id, root_id)
     } else {
         let temp_markup_root_id = expr2_to_markup(
             code_arena,
@@ -50,9 +55,11 @@ pub fn init_model<'a>(
             markup_node_pool,
         );
         set_parent_for_all(temp_markup_root_id, markup_node_pool);
-        set_caret_at_start(temp_markup_root_id, markup_node_pool);
+        let node_w_caret_id = set_caret_at_start(temp_markup_root_id, markup_node_pool);
+        //TODO remove me
+        move_carets_right(node_w_caret_id, markup_node_pool);
 
-        temp_markup_root_id
+        (temp_markup_root_id, node_w_caret_id)
     };
 
     Ok(EdModel {
@@ -61,7 +68,7 @@ pub fn init_model<'a>(
         markup_root_id,
         glyph_dim_rect_opt: None,
         has_focus: true,
-        carets: Vec::new(),
+        carets: vec![node_with_caret_id],
     })
 }
 

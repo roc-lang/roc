@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use super::syntax_highlight::HighlightStyle;
+use crate::editor::ed_error::{CaretNotFound, EdResult};
 use crate::editor::slow_pool::{SlowNodeId, SlowPool};
 use crate::lang::{
     ast::Expr2,
@@ -8,6 +9,7 @@ use crate::lang::{
     pool::{NodeId, PoolStr},
 };
 use bumpalo::Bump;
+use snafu::ensure;
 
 #[derive(Debug)]
 pub enum MarkupNode {
@@ -21,28 +23,124 @@ pub enum MarkupNode {
         content: String,
         ast_node_id: NodeId<Expr2>,
         syn_high_style: HighlightStyle,
-        attributes: Vec<Attribute>,
+        attributes: Attributes,
         parent_id_opt: Option<SlowNodeId>,
     },
     Blank {
         ast_node_id: NodeId<Expr2>,
-        attributes: Vec<Attribute>,
+        attributes: Attributes,
         syn_high_style: HighlightStyle,
         parent_id_opt: Option<SlowNodeId>,
     },
 }
 
 #[derive(Debug)]
+pub struct Caret {
+    pub offset_col: usize,
+}
+
+impl Caret {
+    pub fn new_attr(offset_col: usize) -> Attribute {
+        Attribute::Caret {
+            caret: Caret { offset_col },
+        }
+    }
+}
+#[derive(Debug)]
+struct SelectionStart {
+    offset_col: usize,
+}
+#[derive(Debug)]
+struct SelectionEnd {
+    offset_col: usize,
+}
+
+// Highlight is used for example when searching for a specific string to highlight all search results in the module
+#[derive(Debug)]
+struct HighlightStart {
+    offset_col: usize,
+}
+#[derive(Debug)]
+struct HighlightEnd {
+    offset_col: usize,
+}
+
+// Underline is used for warnings and errors
+#[derive(Debug)]
+struct UnderlineStart {
+    offset_col: usize,
+}
+#[derive(Debug)]
+struct UnderlineEnd {
+    offset_col: usize,
+}
+
+#[derive(Debug)]
 pub enum Attribute {
-    Caret { offset_col: usize },
-    SelectionStart { offset_col: usize },
-    SelectionEnd { offset_col: usize },
-    // Highlight is used for example when searching for a specific string to highlight all search results in the module
-    HighlightStart { offset_col: usize },
-    HighlightEnd { offset_col: usize },
-    // Underline is used for warnings and errors
-    UnderlineStart { offset_col: usize },
-    UnderlineEnd { offset_col: usize },
+    // Rust does not yet support types for enum variants so we have to do it like this
+    Caret { caret: Caret },
+
+    SelectionStart { selection_start: SelectionStart },
+    SelectionEnd { selection_end: SelectionEnd },
+
+    HighlightStart { highlight_start: HighlightStart },
+    HighlightEnd { highlight_end: HighlightEnd },
+
+    UnderlineStart { underline_start: UnderlineStart },
+    UnderlineEnd { underline_end: UnderlineEnd },
+}
+
+#[derive(Debug)]
+pub struct Attributes {
+    pub all: Vec<Attribute>,
+}
+
+impl Attributes {
+    pub fn new() -> Attributes {
+        Attributes { all: Vec::new() }
+    }
+
+    pub fn add(&mut self, attr: Attribute) {
+        self.all.push(attr);
+    }
+
+    pub fn get_carets(&self) -> Vec<&Caret> {
+        let mut carets = Vec::new();
+
+        for attr in self.all.iter() {
+            if let Attribute::Caret { caret } = attr {
+                carets.push(caret)
+            }
+        }
+
+        carets
+    }
+
+    pub fn move_caret(&mut self, old_offset_col: usize, new_offset_col: usize) -> EdResult<()> {
+        let mut caret_changed = false;
+
+        for attr in self.all.iter_mut() {
+            if let Attribute::Caret { ref mut caret } = attr {
+                if caret.offset_col == old_offset_col {
+                    caret.offset_col = new_offset_col;
+                    caret_changed = true;
+                    break;
+                }
+            }
+        }
+
+        ensure!(
+            caret_changed,
+            CaretNotFound {
+                offset_col: old_offset_col,
+                str_attrs: format!("{:?}", self)
+            }
+        );
+
+        Ok(())
+    }
+
+    // TODO add move_carets function
 }
 
 fn get_string<'a>(env: &Env<'a>, pool_str: &PoolStr) -> String {
@@ -59,7 +157,7 @@ fn new_markup_node(
         content: text,
         ast_node_id: node_id,
         syn_high_style: highlight_style,
-        attributes: Vec::new(),
+        attributes: Attributes::new(),
         parent_id_opt: None,
     };
 
@@ -206,7 +304,7 @@ pub fn expr2_to_markup<'a, 'b>(
         }
         Expr2::Blank => markup_node_pool.add(MarkupNode::Blank {
             ast_node_id: node_id,
-            attributes: Vec::new(),
+            attributes: Attributes::new(),
             syn_high_style: HighlightStyle::Blank,
             parent_id_opt: None,
         }),
@@ -264,7 +362,11 @@ pub fn set_parent_for_all_helper(
     }
 }
 
-pub fn set_caret_at_start(markup_node_id: SlowNodeId, markup_node_pool: &mut SlowPool) {
+// Returns id of node that has Caret attribute
+pub fn set_caret_at_start(
+    markup_node_id: SlowNodeId,
+    markup_node_pool: &mut SlowPool,
+) -> SlowNodeId {
     let markup_node = markup_node_pool.get_mut(markup_node_id);
 
     match markup_node {
@@ -274,7 +376,10 @@ pub fn set_caret_at_start(markup_node_id: SlowNodeId, markup_node_pool: &mut Slo
             parent_id_opt: _,
         } => {
             if let Some(child_id) = children_ids.first() {
-                set_caret_at_start(*child_id, markup_node_pool);
+                set_caret_at_start(*child_id, markup_node_pool)
+            } else {
+                //TODO use result instead
+                unreachable!()
             }
         }
         MarkupNode::Text {
@@ -283,12 +388,67 @@ pub fn set_caret_at_start(markup_node_id: SlowNodeId, markup_node_pool: &mut Slo
             syn_high_style: _,
             attributes,
             parent_id_opt: _,
-        } => attributes.push(Attribute::Caret { offset_col: 0 }),
+        } => {
+            attributes.add(Caret::new_attr(0));
+            markup_node_id
+        }
         MarkupNode::Blank {
             ast_node_id: _,
             attributes,
             syn_high_style: _,
             parent_id_opt: _,
-        } => attributes.push(Attribute::Caret { offset_col: 0 }),
+        } => {
+            attributes.add(Caret::new_attr(0));
+            markup_node_id
+        }
+    }
+}
+
+// returns node containing the caret after the move
+pub fn move_carets_right(
+    node_with_caret_id: SlowNodeId,
+    markup_node_pool: &mut SlowPool,
+) -> Vec<SlowNodeId> {
+    let current_caret_node = markup_node_pool.get_mut(node_with_caret_id);
+
+    match current_caret_node {
+        MarkupNode::Nested { .. } => unreachable!(), // TODO use result instead
+        MarkupNode::Text {
+            content,
+            ast_node_id: _,
+            syn_high_style: _,
+            attributes,
+            parent_id_opt: _,
+        } => {
+            let carets = attributes.get_carets();
+            for caret in carets {
+                if caret.offset_col + 1 < content.len() {
+                    // TODO return Result
+                    attributes.move_caret(caret.offset_col, caret.offset_col + 1);
+                } else {
+                    // TODO move caret to next node
+                }
+            }
+        }
+        MarkupNode::Blank {
+            ast_node_id: _,
+            attributes,
+            syn_high_style: _,
+            parent_id_opt: _,
+        } => {
+            //TODO DRY
+            let carets = attributes.get_carets();
+            for caret in carets {
+                if caret.offset_col < 1 {
+                    // TODO return Result
+                    attributes.move_caret(caret.offset_col, caret.offset_col + 1);
+                } else {
+                    // TODO move caret to next node
+                }
+            }
+        }
     };
+
+    //TODO return correct node
+    vec![node_with_caret_id]
 }

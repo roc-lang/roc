@@ -9,6 +9,17 @@ use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub))]
 pub enum EdError {
+    #[snafu(display(
+        "CaretNotFound: caret with offset_col {} was not found in Attributes: {}",
+        offset_col,
+        str_attrs
+    ))]
+    CaretNotFound {
+        offset_col: usize,
+        str_attrs: String,
+        backtrace: Backtrace,
+    },
+
     #[snafu(display("ClipboardReadFailed: could not get clipboard contents: {}", err_msg))]
     ClipboardReadFailed { err_msg: String },
 

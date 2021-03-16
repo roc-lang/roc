@@ -1,4 +1,4 @@
-use super::markup::{Attribute, MarkupNode};
+use super::markup::{Attribute, Attributes, MarkupNode};
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::{ed_error::EdResult, theme::EdTheme, util::map_get};
 use crate::graphics::primitives::rect::Rect;
@@ -67,23 +67,26 @@ fn markup_to_wgpu<'a>(
 }
 
 fn draw_attributes(
-    attributes: &[Attribute],
+    attributes: &Attributes,
     txt_row_col: &(usize, usize),
     code_style: &CodeStyle,
 ) -> Vec<Rect> {
     let char_width = code_style.glyph_dim_rect.width;
 
     attributes
+        .all
         .iter()
         .map(|attr| match attr {
-            Attribute::Caret { offset_col } => {
+            Attribute::Caret { caret } => {
+                let caret_col = caret.offset_col as f32;
+
                 let top_left_x = code_style.txt_coords.x
                     + (txt_row_col.1 as f32) * char_width
-                    + (*offset_col as f32) * char_width;
+                    + caret_col * char_width;
 
                 let top_left_y = code_style.txt_coords.y
                     + (txt_row_col.0 as f32) * char_width
-                    + (*offset_col as f32) * char_width;
+                    + caret_col * char_width;
 
                 make_caret_rect(
                     top_left_x,
