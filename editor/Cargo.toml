@@ -43,6 +43,7 @@ ropey = "1.2.0"
 copypasta = "0.7.1"
 indoc = "1.0"
 palette = "0.5"
+# confy is currently unused but should not be removed
 confy = { git = 'https://github.com/rust-cli/confy', features = [
   "yaml_conf"
 ], default-features = false }

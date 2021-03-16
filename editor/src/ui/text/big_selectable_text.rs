@@ -1,5 +1,7 @@
 // Adapted from https://github.com/cessen/ropey by Nathan Vegdahl, licensed under the MIT license
 
+#![allow(dead_code)]
+
 use crate::ui::text::{
     caret_w_select::CaretWSelect,
     lines::{Lines, MutSelectableLines, SelectableLines},

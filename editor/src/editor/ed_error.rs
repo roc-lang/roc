@@ -40,6 +40,9 @@ pub enum EdError {
         backtrace: Backtrace,
     },
 
+    #[snafu(display("ParseError: Failed to parse AST: SyntaxError: {}.", syntax_err))]
+    ParseError { syntax_err: String },
+
     #[snafu(display("UIError: {}", msg))]
     UIErrorBacktrace { msg: String, backtrace: Backtrace },
 }

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::ed_model::EdModel;
 use crate::editor::ed_error::{
     print_err,
@@ -8,13 +10,13 @@ use copypasta::{ClipboardContext, ClipboardProvider};
 use std::fmt;
 
 #[derive(Debug)]
-pub struct AppModel {
-    pub ed_model_opt: Option<EdModel>,
+pub struct AppModel<'a> {
+    pub ed_model_opt: Option<EdModel<'a>>,
     pub clipboard_opt: Option<Clipboard>,
 }
 
-impl AppModel {
-    pub fn init(ed_model_opt: Option<EdModel>) -> AppModel {
+impl<'a> AppModel<'a> {
+    pub fn init(ed_model_opt: Option<EdModel<'a>>) -> AppModel {
         AppModel {
             ed_model_opt,
             clipboard_opt: AppModel::init_clipboard_opt(),
