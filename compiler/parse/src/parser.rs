@@ -388,6 +388,7 @@ pub enum EExpr<'a> {
     BadOperator(&'a [u8], Row, Col),
 
     DefMissingFinalExpr(Row, Col),
+    DefMissingFinalExpr2(&'a EExpr<'a>, Row, Col),
     Type(Type<'a>, Row, Col),
     Pattern(&'a EPattern<'a>, Row, Col),
     IndentDefBody(Row, Col),

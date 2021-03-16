@@ -704,21 +704,24 @@ mod test_can {
                         _ -> g (x - 1)
 
                 # use parens to force the ordering!
-                (h = \x ->
-                    when x is
-                        0 -> 0
-                        _ -> g (x - 1)
+                (
+                    h = \x ->
+                        when x is
+                            0 -> 0
+                            _ -> g (x - 1)
 
-                (p = \x ->
-                    when x is
-                        0 -> 0
-                        1 -> g (x - 1)
-                        _ -> p (x - 1)
+                    (
+                        p = \x ->
+                            when x is
+                                0 -> 0
+                                1 -> g (x - 1)
+                                _ -> p (x - 1)
 
 
-                # variables must be (indirectly) referenced in the body for analysis to work
-                { x: p, y: h }
-                ))
+                        # variables must be (indirectly) referenced in the body for analysis to work
+                        { x: p, y: h }
+                    )
+                )
             "#
         );
         let arena = Bump::new();
