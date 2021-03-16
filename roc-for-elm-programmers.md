@@ -117,7 +117,7 @@ to destructure variants inline in function declarations, like in these two examp
 Without the parentheses, it wouldn't be clear where one argument ended and the next one began.
 
 In Roc, the commas make argument boundaries unambiguous, so no parens are needed.
-You can rewrite the above like so:
+You can write the above like so in Roc:
 
 ```
 \UserId id1, UserId id2 ->
@@ -193,20 +193,18 @@ web server, and I want to:
 * Write some data to a file containing some of the data from the HTTP response
 
 Assuming I'm writing this on a Roc platform which has a `Task`-based API,
-here's how that code might look:
+and that `Task.await` is like Elm's `Task.andThen` but with the arguments
+flipped, here's one way I might write this:
 
 ```elm
 doStuff = \filename ->
-    Task.after (File.read filename) \fileData ->
-    Task.after (Http.get (urlFromData fileData)) \response ->
-        File.write filename (responseToData response)
+    Task.await (File.read filename) \fileData ->
+        Task.await (Http.get (urlFromData fileData)) \response ->
+            File.write filename (responseToData response)
 ```
 
-A few things to note before getting into how this relates to custom types:
-
-1. This is written in a style designed for chained effects. It resembles [`do` notation](https://en.wikibooks.org/wiki/Haskell/do_notation), but it's implemented as a formatting convention instead of special syntax.
-2. In Elm you'd need to add a `<|` before the anonymous functions (e.g. `<| \response ->`) but in Roc you don't. (That parsing design decision was partly motivated by supporting this style of chained effects.)
-3. `Task.after` is `Task.andThen` with its arguments flipped.
+Note that in Elm you'd need to add a `<|` before the anonymous functions
+(e.g. `<| \response ->`) but in Roc you don't.
 
 What would the type of the above expression be? Let's say these function calls
 have the following types:
@@ -216,11 +214,11 @@ File.read : Filename -> Task File.Data File.ReadErr
 File.write : Filename, File.Data -> Task File.Data File.WriteErr
 Http.get : Url -> Task Http.Response Http.Err
 
-Task.after : Task a err, (a -> Task b err) -> Task b err
+Task.await : Task a err, (a -> Task b err) -> Task b err
 ```
 
 If these are the types, the result would be a type mismatch. Those `Task` values
-have incompatible error types, so `after` won't be able to chain them together.
+have incompatible error types, so `await` won't be able to chain them together.
 
 This situation is one of the motivations behind Roc's *tags* feature. Using tags,
 not only will this type-check, but at the end we get a combined error type which
@@ -246,14 +244,14 @@ when error is
 ```
 
 Here is the set of slightly different types that will make the original chained
-expression compile. (`after` is unchanged.)
+expression compile. (`await` is unchanged.)
 
 ```elm
 File.read : Filename -> Task File.Data (File.ReadErr *)
 File.write : Filename, File.Data -> Task File.Data (File.WriteErr *)
 Http.get : Url -> Task Http.Response (Http.Err *)
 
-after : Task a err, (a -> Task b err) -> Task b err
+await : Task a err, (a -> Task b err) -> Task b err
 ```
 
 The key is that each of the error types is a type alias for a Roc *tag union*.
@@ -471,7 +469,7 @@ module MyApp exposing (main)
 
 import Parser
 import Http exposing (Request)
-import Task exposing (Task, after)
+import Task exposing (Task, await)
 ```
 
 Roc application modules (where the equivalent of `main` lives) begin with the
@@ -479,7 +477,7 @@ Roc application modules (where the equivalent of `main` lives) begin with the
 Here's how the above module header imports section would look in Roc:
 
 ```elm
-app imports [ Parser, Http.{ Request }, Task.{ Task, after } ]
+app imports [ Parser, Http.{ Request }, Task.{ Task, await } ]
 ```
 
 `app` modules are application entrypoints, and they don't formally expose anything.
@@ -765,38 +763,6 @@ for symmetry with unary `!`.
 There's an Operator Desugaring Table at the end of this guide, so you can see exactly
 what each Roc operator desugars to.
 
-## The `<|` operator
-
-Roc has no `<|` operator. (It does have `|>` though.)
-
-In Elm, `<|` is used as a minor convenience for when you want to avoid some parens
-in a single-line expression (e.g. `foo <| bar baz` over `foo (bar baz)`) and as
-a major convenience when you want to pass an anonymous function, `if`, or `case` as an argument.
-
-For example, `elm-test` relies on it:
-
-```elm
-test "it works" <|
-    \_ -> ...
-```
-
-In Roc, this does not require a `<|`. This Roc code does the same thing as the preceding Elm code:
-
-```elm
-test "it works"
-    \_ -> ...
-```
-
-You don't need parens or an operator to pass an anonymous function, `when`, or `if` as arguments. Here's another example:
-
-```elixir
-foo 1 2 if something then 3 else 4
-
-# Same as `foo 1 2 (if something then 3 else 4)`
-```
-
-[CoffeeScript](http://coffeescript.org/) also does this the way Roc does.
-
 ## Currying and `|>`
 
 Roc functions aren't curried. Calling `(List.append foo)` is a type mismatch
@@ -876,6 +842,252 @@ Set.add : Set 'elem, 'elem -> Set 'elem
 
 Roc has no `<<` or `>>` operators, and there are no functions in the standard library
 for general-purpose pointfree function composition.
+
+## The `<|` operator
+
+Roc has no `<|` operator. (It does have `|>` though.)
+
+In Elm, `<|` is used as a minor convenience for when you want to avoid some parens
+in a single-line expression (e.g. `foo <| bar baz` over `foo (bar baz)`) and as
+a major convenience when you want to pass an anonymous function, `if`, or `case` as an argument.
+
+For example, `elm-test` relies on it:
+
+```elm
+test "it works" <|
+    \_ -> verify stuff
+```
+
+In Roc, this does not require a `<|`. This Roc code does the same thing as the preceding Elm code:
+
+```elm
+test "it works"
+    \_ -> verify stuff
+```
+
+This is convenient with higher-order functions which take a function as their
+final argument. Since many Roc functions have the same type as Elm functions
+except with their arguments flipped, this means it's possible to end a lot
+of expessions with anonymous functions - e.g.
+
+```elm
+modifiedNums =
+    List.map nums \num ->
+        doubled = num * 2
+
+        modified = modify doubled
+
+        modified / 2
+```
+
+Separately, you don't need parens or an operator to pass `when` or `if` as
+arguments. Here's another example:
+
+```elixir
+foo 1 2 if something then 3 else 4
+
+# Same as `foo 1 2 (if something then 3 else 4)`
+```
+
+[CoffeeScript](http://coffeescript.org/) also does this the way Roc does.
+
+## Backpassing
+
+Suppose I'm using a platform for making a CLI, and I want to run several
+`Task`s in a row which read some files from the disk. Here's one way I could do
+that, assuming `Task.await` is like Elm's `Task.andThen` with arguments flipped:
+
+```elm
+readLicense : Filename -> Task License File.ReadErr
+readLicense = \filename ->
+    Task.await (File.readUtf8 settingsFilename) \settingsYaml ->
+        when Yaml.decode settingsDecoder settingsYaml is
+            Ok settings ->
+                Task.await (File.readUtf8 settings.projectFilename) \csv ->
+                    when Csv.decode projectDecoder csv is
+                        Ok project ->
+                            Task.await (File.readUf8 project.licenseFilename) \licenseStr ->
+                                when License.fromStr licenseStr is
+                                    Ok license -> Task.succeed license
+                                    Err err -> Task.fail (InvalidFormat err)
+
+                        Err err -> Task.fail (InvalidFormat err)
+
+            Err err ->
+                Task.fail (InvalidFormat err)
+```
+
+We can write this with `|>` instead of `when` like so:
+
+```elm
+readLicense : Filename -> Task License File.ReadErr
+readLicense = \filename ->
+    Task.await (File.readUtf8 settingsFilename) \settingsYaml ->
+        settingsYaml
+            |> Yaml.decode settingsDecoder
+            |> Task.fromResult
+            |> Task.mapFail InvalidFormat
+            |> Task.await \settings ->
+                Task.await (File.readUtf8 settings.projectFilename) \projectCsv ->
+                    projectCsv
+                        |> Csv.decode projectDecoder
+                        |> Task.fromResult
+                        |> Task.mapFail InvalidFormat
+                        |> Task.await \project ->
+                            Task.await (File.readUf8 project.licenseFilename) \licenseStr ->
+                                License.fromStr licenseStr
+                                    |> Task.fromResult
+                                    |> Task.mapFail InvalidFormat
+```
+
+We can also write it this way, which is equivalent to the previous two ways:
+
+```elm
+readLicense : Filename -> Task License File.ReadErr
+readLicense = \filename ->
+    settingsYaml <- Task.await (File.readUtf8 settingsFilename)
+
+    settings <-
+        settingsYaml
+            |> Yaml.decode settingsDecoder
+            |> Task.fromResult
+            |> Task.mapFail InvalidFormat
+
+    projectCsv <- Task.await (File.readUtf8 settings.projectFilename)
+
+    project <-
+        projectCsv
+            |> Csv.decode projectDecoder
+            |> Task.fromResult
+            |> Task.mapFail InvalidFormat
+
+    licenseStr <-
+        Task.await (File.readUf8 project.licenseFilename)
+
+    License.fromStr licenseStr
+        |> Task.fromResult
+        |> Task.mapFail InvalidFormat
+```
+
+This uses *backpassing* syntax to nest anonymous functions without indenting them.
+Here's a smaller demonstration of backpassing; the second snippet is sugar for the first.
+
+```elm
+list =
+    List.map numbers \num -> num + 1
+```
+
+```elm
+list =
+    num <- List.map numbers
+
+    num + 1
+```
+Both snippets are calling `List.map` passing `numbers` as the first argument,
+and a `\num -> num + 1` function for the other argument.
+
+The difference is that in the second snippet, the `\num -> num + 1` function is
+written backwards, like this:
+
+```elm
+    num <-
+
+    num + 1
+```
+
+This is called *backpassing* because you write the function *backwards* and then
+immediately *pass* it as an argument to another function.
+
+The other function - the one you're passing this one to - goes right after
+the `<-` symbol. That function should be called with one argument missing at
+the end, such as with `List.map numbers` (which is missing its final argument).
+
+Here's another pair of snippets, this time using two backpassing calls:
+
+```elm
+incrementedNumbers =
+    List.map lists \numbers ->
+        List.map numbers \num -> num + 1
+```
+
+```elm
+incrementedNumbers =
+    numbers <- List.map lists
+    num <- List.map numbers
+
+    num + 1
+```
+
+In the second snippet, we have two functions defined in the backpassing style. The first function is:
+
+```elm
+numbers <-
+    num <- List.map numbers
+
+    num + 1
+```
+
+This function desugars to `\numbers -> …` and is being passed as the final argument
+to `List.map lists`.
+
+The second function defined in backpassing style is:
+
+```elm
+    num <-
+
+    num + 1
+```
+
+This function desugars to `\numbers -> …` and is being passed as the final argument
+to `List.map numbers`. That `List.map numbers` call is the body of
+the `numbers <-` function we defined in backpassing style a moment ago - so
+in a normal function definition, it would be `\numbers -> List.map numbers …`
+
+Note that backpassing can be combined with the `|>` operator, which lets you
+call a function with two arguments missing from the end - one provided by
+the `|>` and the other provided by the `<-`, like so:
+
+```elm
+incrementedNumbers =
+    num <-
+        [ 1, 2, 3 ]
+            |> List.reverse
+            |> List.map
+
+    num + 1
+```
+
+Here, the first argument to `List.map` is provided by the `|>`
+(namely the reversed `[ 1, 2, 3 ]` list), and the second argument is provided by +the `<-` (namely the `\num -> …` function).
+
+Backpassing can also be used with functions that take multiple arguments; for
+example, you could write `key, value <- Dict.map dictionary` similarly to how
+we used `List.map` here. That would desugar into a
+`Dict.map dictionary \key, value -> …` function.
+
+> To be clear, backpassing is designed to be used with chaining functions
+> like `Task.await` which are prone to lots of nesting. It isn't designed to be
+> used with functions like `List.map`; this is just a simplified example to show
+> that `<-` can be used with any function...even those where it doesn't improve
+> code clarity!
+
+Finally, here's an example combining backpassing with ordinary `=` definitions:
+
+```elm
+task =
+    user <- Task.await fetchUser
+
+    url = user.baseUrl
+
+    settings, bio, posts <- Task.map3 (getSettings url) (getBio url) (getPosts url)
+
+    profile = makeProfile settings bio
+
+    Task.succeed { profile, posts }
+```
+
+Here, every new name that's introduced to scope is aligned on the left-hand edge
+of the expression - regardless of whether it's coming from `=` or from `<-`.
 
 ## Numbers
 
