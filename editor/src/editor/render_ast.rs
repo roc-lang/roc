@@ -1,4 +1,5 @@
 use super::markup::{Attribute, MarkupNode};
+use crate::editor::slow_pool::SlowPool;
 use crate::editor::{ed_error::EdResult, theme::EdTheme, util::map_get};
 use crate::graphics::primitives::rect::Rect;
 use crate::graphics::primitives::text as gr_text;
@@ -14,6 +15,7 @@ pub fn build_code_graphics<'a>(
     txt_coords: Vector2<f32>,
     config: &Config,
     glyph_dim_rect: Rect,
+    markup_node_pool: &'a SlowPool,
 ) -> EdResult<(wgpu_glyph::Section<'a>, Vec<Rect>)> {
     let area_bounds = (size.width as f32, size.height as f32);
     let layout = wgpu_glyph::Layout::default().h_align(wgpu_glyph::HorizontalAlign::Left);
@@ -26,6 +28,7 @@ pub fn build_code_graphics<'a>(
             txt_coords,
             glyph_dim_rect,
         },
+        markup_node_pool,
     )?;
 
     let section =
@@ -44,6 +47,7 @@ struct CodeStyle<'a> {
 fn markup_to_wgpu<'a>(
     markup_node: &'a MarkupNode,
     code_style: &CodeStyle,
+    markup_node_pool: &'a SlowPool,
 ) -> EdResult<(Vec<wgpu_glyph::Text<'a>>, Vec<Rect>)> {
     let mut wgpu_texts: Vec<wgpu_glyph::Text<'a>> = Vec::new();
     let mut rects: Vec<Rect> = Vec::new();
@@ -56,6 +60,7 @@ fn markup_to_wgpu<'a>(
         &mut rects,
         code_style,
         &mut txt_row_col,
+        markup_node_pool,
     )?;
 
     Ok((wgpu_texts, rects))
@@ -99,14 +104,24 @@ fn markup_to_wgpu_helper<'a>(
     rects: &mut Vec<Rect>,
     code_style: &CodeStyle,
     txt_row_col: &mut (usize, usize),
+    markup_node_pool: &'a SlowPool,
 ) -> EdResult<()> {
     match markup_node {
         MarkupNode::Nested {
             ast_node_id: _,
-            children,
+            children_ids,
+            parent_id_opt: _,
         } => {
-            for child in children.iter() {
-                markup_to_wgpu_helper(child, wgpu_texts, rects, code_style, txt_row_col)?;
+            for child_id in children_ids.iter() {
+                let child = markup_node_pool.get(*child_id);
+                markup_to_wgpu_helper(
+                    child,
+                    wgpu_texts,
+                    rects,
+                    code_style,
+                    txt_row_col,
+                    markup_node_pool,
+                )?;
             }
         }
         MarkupNode::Text {
@@ -114,6 +129,7 @@ fn markup_to_wgpu_helper<'a>(
             ast_node_id: _,
             syn_high_style,
             attributes,
+            parent_id_opt: _,
         } => {
             let highlight_color = map_get(&code_style.ed_theme.syntax_high_map, &syn_high_style)?;
 
@@ -125,10 +141,11 @@ fn markup_to_wgpu_helper<'a>(
             txt_row_col.1 += content.len();
             wgpu_texts.push(glyph_text);
         }
-        MarkupNode::Hole {
+        MarkupNode::Blank {
             ast_node_id: _,
             attributes,
             syn_high_style,
+            parent_id_opt: _,
         } => {
             let hole_placeholder = " ";
             let glyph_text = wgpu_glyph::Text::new(hole_placeholder)

@@ -198,7 +198,7 @@ pub enum Expr2 {
         ext_var: Variable,                             // 4B
         arguments: PoolVec<(Variable, NodeId<Expr2>)>, // 8B
     },
-    Hole, // Rendered as empty box in editor
+    Blank, // Rendered as empty box in editor
 
     // Compiles, but will crash if reached
     RuntimeError(/* TODO make a version of RuntimeError that fits in 15B */),

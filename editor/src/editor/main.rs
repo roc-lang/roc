@@ -3,6 +3,7 @@ use super::style::CODE_TXT_XY;
 use super::util::slice_get;
 use crate::editor::ed_error::print_ui_err;
 use crate::editor::resources::strings::NOTHING_OPENED;
+use crate::editor::slow_pool::SlowPool;
 use crate::editor::{
     config::Config,
     ed_error::print_err,
@@ -131,6 +132,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let mut env_pool = Pool::with_capacity(1024);
     let env_arena = Bump::new();
     let code_arena = Bump::new();
+    let mut markup_node_pool = SlowPool::new();
 
     let mut var_store = VarStore::default();
     let dep_idents = IdentIds::exposed_builtins(8);
@@ -165,7 +167,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     }
 
     let ed_model_opt = {
-        let ed_model_res = ed_model::init_model(&code_str, env, &code_arena);
+        let ed_model_res = ed_model::init_model(&code_str, env, &code_arena, &mut markup_node_pool);
 
         match ed_model_res {
             Ok(mut ed_model) => {
@@ -290,6 +292,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                         &size,
                         CODE_TXT_XY.into(),
                         &config,
+                        &markup_node_pool,
                     );
 
                     match text_and_rects_res {
