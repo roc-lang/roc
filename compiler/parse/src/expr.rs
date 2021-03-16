@@ -537,8 +537,8 @@ impl<'a> ExprState<'a> {
     ) -> Result<(Located<Expr<'a>>, Vec<'a, &'a Located<Expr<'a>>>), EExpr<'a>> {
         debug_assert_eq!(loc_op.value, BinOp::HasType);
 
-        if !self.operators.is_empty() || !self.arguments.is_empty() {
-            // this `:`; treat it as an invalid operator
+        if !self.operators.is_empty() {
+            // this `:` likely occured inline; treat it as an invalid operator
             let opchar = arena.alloc([b':']) as &[_];
 
             let fail =
