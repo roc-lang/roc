@@ -839,7 +839,7 @@ fn parse_defs_end<'a>(
     mut def_state: DefState<'a>,
     arena: &'a Bump,
     state: State<'a>,
-) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
+) -> ParseResult<'a, DefState<'a>, EExpr<'a>> {
     let min_indent = start.col;
     let initial = state;
 
@@ -868,13 +868,73 @@ fn parse_defs_end<'a>(
     {
         Err((_, _, _)) => {
             // a hacky way to get expression-based error messages. TODO fix this
-            let state = initial;
+            Ok((NoProgress, def_state, initial))
+        }
+        Ok((_, loc_pattern, state)) => match operator().parse(arena, state) {
+            Ok((_, BinOp::Assignment, state)) => {
+                let parse_def_expr = space0_before_e(
+                    move |a, s| parse_expr_help(min_indent + 1, a, s),
+                    min_indent,
+                    EExpr::Space,
+                    EExpr::IndentEnd,
+                );
 
+                let (_, loc_def_expr, state) = parse_def_expr.parse(arena, state)?;
+
+                append_body_definition(
+                    arena,
+                    &mut def_state.defs,
+                    def_state.spaces_after,
+                    loc_pattern,
+                    loc_def_expr,
+                );
+
+                parse_defs_end(start, def_state, arena, state)
+            }
+            Ok((_, BinOp::HasType, state)) => {
+                let (_, ann_type, state) = specialize(
+                    EExpr::Type,
+                    space0_before_e(
+                        type_annotation::located_help(min_indent + 1),
+                        min_indent + 1,
+                        Type::TSpace,
+                        Type::TIndentStart,
+                    ),
+                )
+                .parse(arena, state)?;
+
+                append_annotation_definition(
+                    arena,
+                    &mut def_state.defs,
+                    def_state.spaces_after,
+                    loc_pattern,
+                    ann_type,
+                );
+
+                parse_defs_end(start, def_state, arena, state)
+            }
+            _ => Ok((MadeProgress, def_state, initial)),
+        },
+    }
+}
+
+fn parse_defs_expr<'a>(
+    start: Position,
+    def_state: DefState<'a>,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
+    let min_indent = start.col;
+
+    match parse_defs_end(start, def_state, arena, state) {
+        Err(bad) => Err(bad),
+        Ok((_, def_state, state)) => {
+            // this is no def, because there is no `=` or `:`; parse as an expr
             let parse_final_expr = space0_before_e(
-                move |a, s| parse_expr_start(min_indent, start, a, s),
+                move |a, s| parse_expr_help(min_indent, a, s),
                 min_indent,
                 EExpr::Space,
-                EExpr::IndentStart,
+                EExpr::IndentEnd,
             );
 
             match parse_final_expr.parse(arena, state) {
@@ -886,70 +946,6 @@ fn parse_defs_end<'a>(
                     ));
                 }
                 Ok((_, loc_ret, state)) => {
-                    return Ok((
-                        MadeProgress,
-                        Expr::Defs(def_state.defs.into_bump_slice(), arena.alloc(loc_ret)),
-                        state,
-                    ));
-                }
-            }
-        }
-        Ok((_, loc_pattern, state)) => {
-            match operator().parse(arena, state) {
-                Ok((_, BinOp::Assignment, state)) => {
-                    let parse_def_expr = space0_before_e(
-                        move |a, s| parse_expr_help(min_indent + 1, a, s),
-                        min_indent,
-                        EExpr::Space,
-                        EExpr::IndentEnd,
-                    );
-
-                    let (_, loc_def_expr, state) = parse_def_expr.parse(arena, state)?;
-
-                    append_body_definition(
-                        arena,
-                        &mut def_state.defs,
-                        def_state.spaces_after,
-                        loc_pattern,
-                        loc_def_expr,
-                    );
-
-                    parse_defs_end(start, def_state, arena, state)
-                }
-                Ok((_, BinOp::HasType, state)) => {
-                    let (_, ann_type, state) = specialize(
-                        EExpr::Type,
-                        space0_before_e(
-                            type_annotation::located_help(min_indent + 1),
-                            min_indent + 1,
-                            Type::TSpace,
-                            Type::TIndentStart,
-                        ),
-                    )
-                    .parse(arena, state)?;
-
-                    append_annotation_definition(
-                        arena,
-                        &mut def_state.defs,
-                        def_state.spaces_after,
-                        loc_pattern,
-                        ann_type,
-                    );
-
-                    parse_defs_end(start, def_state, arena, state)
-                }
-                _ => {
-                    // this is no def, because there is no `=` or `:`; parse as an expr
-                    let state = initial;
-                    let parse_final_expr = space0_before_e(
-                        move |a, s| parse_expr_help(min_indent, a, s),
-                        min_indent,
-                        EExpr::Space,
-                        EExpr::IndentEnd,
-                    );
-
-                    let (_, loc_ret, state) = parse_final_expr.parse(arena, state)?;
-
                     return Ok((
                         MadeProgress,
                         Expr::Defs(def_state.defs.into_bump_slice(), arena.alloc(loc_ret)),
@@ -1055,7 +1051,7 @@ fn parse_expr_operator<'a>(
                 spaces_after: &[],
             };
 
-            parse_defs_end(start, def_state, arena, state)
+            parse_defs_expr(start, def_state, arena, state)
         }
         BinOp::Backpassing => {
             let expr_region = expr_state.expr.region;
@@ -1203,7 +1199,7 @@ fn parse_expr_operator<'a>(
                 spaces_after: &[],
             };
 
-            parse_defs_end(start, def_state, arena, state)
+            parse_defs_expr(start, def_state, arena, state)
         }
         _ => match loc_possibly_negative_or_negated_term(min_indent).parse(arena, state) {
             Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
