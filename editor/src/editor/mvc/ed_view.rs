@@ -1,54 +1,27 @@
 use super::ed_model::EdModel;
+use crate::editor::config::Config;
+use crate::editor::ed_error::EdResult;
+use crate::editor::render_ast::build_code_graphics;
 use crate::graphics::primitives::rect::Rect;
-use crate::ui::{
-    text::{selection::create_selection_rects, text_pos::TextPos},
-    theme::UITheme,
-    ui_error::{MissingGlyphDims, UIResult},
-};
+use crate::ui::ui_error::MissingGlyphDims;
+use cgmath::Vector2;
+use snafu::OptionExt;
+use winit::dpi::PhysicalSize;
 
-use bumpalo::collections::Vec as BumpVec;
-use bumpalo::Bump;
-use snafu::ensure;
+// create text and rectangles based on EdModel's markup_root
+pub fn model_to_wgpu<'a>(
+    ed_model: &'a mut EdModel,
+    size: &PhysicalSize<u32>,
+    txt_coords: Vector2<f32>,
+    config: &Config,
+) -> EdResult<(wgpu_glyph::Section<'a>, Vec<Rect>)> {
+    let glyph_dim_rect = ed_model.glyph_dim_rect_opt.context(MissingGlyphDims {})?;
 
-//TODO add editor text here as well
-
-pub fn create_ed_rects<'a>(
-    ed_model: &EdModel,
-    ui_theme: &UITheme,
-    arena: &'a Bump,
-) -> UIResult<BumpVec<'a, Rect>> {
-    ensure!(ed_model.glyph_dim_rect_opt.is_some(), MissingGlyphDims {});
-
-    let glyph_rect = ed_model.glyph_dim_rect_opt.unwrap();
-
-    let mut all_rects: BumpVec<Rect> = BumpVec::new_in(arena);
-
-    let selection_opt = ed_model.text.caret_w_select.selection_opt;
-
-    if let Some(selection) = selection_opt {
-        let mut selection_rects =
-            create_selection_rects(selection, &ed_model.text, &glyph_rect, ui_theme, &arena)?;
-
-        all_rects.append(&mut selection_rects);
-    }
-
-    let caret_pos = ed_model.text.caret_w_select.caret_pos;
-    all_rects.push(make_caret_rect(caret_pos, &glyph_rect, ui_theme));
-
-    Ok(all_rects)
-}
-
-fn make_caret_rect(caret_pos: TextPos, glyph_dim_rect: &Rect, ui_theme: &UITheme) -> Rect {
-    let caret_y =
-        glyph_dim_rect.top_left_coords.y + (caret_pos.line as f32) * glyph_dim_rect.height;
-
-    let caret_x =
-        glyph_dim_rect.top_left_coords.x + glyph_dim_rect.width * (caret_pos.column as f32);
-
-    Rect {
-        top_left_coords: (caret_x, caret_y).into(),
-        height: glyph_dim_rect.height,
-        width: 2.0,
-        color: ui_theme.caret,
-    }
+    build_code_graphics(
+        &ed_model.markup_root,
+        size,
+        txt_coords,
+        config,
+        glyph_dim_rect,
+    )
 }

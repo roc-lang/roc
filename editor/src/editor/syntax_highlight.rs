@@ -1,8 +1,7 @@
+use crate::graphics::colors as gr_colors;
 use gr_colors::{from_hsb, RgbaTup};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-
-use crate::graphics::colors as gr_colors;
 
 #[derive(Hash, Eq, PartialEq, Copy, Clone, Debug, Deserialize, Serialize)]
 pub enum HighlightStyle {
@@ -15,6 +14,7 @@ pub enum HighlightStyle {
     PackageRelated, // app, packages, imports, exposes, provides...
     Variable,
     RecordField,
+    Hole,
 }
 
 pub fn default_highlight_map() -> HashMap<HighlightStyle, RgbaTup> {
@@ -31,6 +31,7 @@ pub fn default_highlight_map() -> HashMap<HighlightStyle, RgbaTup> {
         (PackageRelated, gr_colors::WHITE),
         (Variable, gr_colors::WHITE),
         (RecordField, from_hsb(258, 50, 90)),
+        (Hole, from_hsb(258, 50, 90)),
         // comment from_hsb(285, 6, 47) or 186, 35, 40
     ]
     .iter()

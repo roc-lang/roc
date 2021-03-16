@@ -1,10 +1,5 @@
-use super::app_model;
 use super::app_model::AppModel;
 use crate::editor::ed_error::EdResult;
-use crate::ui::text::{
-    lines::{MutSelectableLines, SelectableLines},
-    text_pos::TextPos,
-};
 use crate::ui::ui_error::UIResult;
 use crate::window::keyboard_input::from_winit;
 use winit::event::{ModifiersState, VirtualKeyCode};
@@ -12,11 +7,7 @@ use winit::event::{ModifiersState, VirtualKeyCode};
 pub fn handle_copy(app_model: &mut AppModel) -> EdResult<()> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            let selected_str_opt = ed_model.text.get_selected_str()?;
-
-            if let Some(selected_str) = selected_str_opt {
-                app_model::set_clipboard_txt(&mut app_model.clipboard_opt, selected_str)?;
-            }
+            unimplemented!("TODO");
         }
     }
 
@@ -26,50 +17,7 @@ pub fn handle_copy(app_model: &mut AppModel) -> EdResult<()> {
 pub fn handle_paste(app_model: &mut AppModel) -> EdResult<()> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            let clipboard_content = app_model::get_clipboard_txt(&mut app_model.clipboard_opt)?;
-
-            if !clipboard_content.is_empty() {
-                let mut rsplit_iter = clipboard_content.rsplit('\n');
-                // safe unwrap because we checked if empty
-                let last_line_nr_chars = rsplit_iter.next().unwrap().len();
-                let clipboard_nr_lines = rsplit_iter.count();
-
-                let old_caret_pos = ed_model.text.caret_w_select.caret_pos;
-                let selection_opt = ed_model.text.get_selection();
-
-                if let Some(selection) = selection_opt {
-                    let start_caret_pos = selection.start_pos;
-                    ed_model.text.del_selection()?;
-
-                    ed_model.text.insert_str(&clipboard_content)?;
-
-                    if clipboard_nr_lines > 0 {
-                        ed_model.text.set_caret(TextPos {
-                            line: start_caret_pos.line + clipboard_nr_lines,
-                            column: last_line_nr_chars,
-                        })
-                    } else {
-                        ed_model.text.set_caret(TextPos {
-                            line: start_caret_pos.line,
-                            column: start_caret_pos.column + last_line_nr_chars,
-                        })
-                    }
-                } else {
-                    ed_model.text.insert_str(&clipboard_content)?;
-
-                    if clipboard_nr_lines > 0 {
-                        ed_model.text.set_caret(TextPos {
-                            line: old_caret_pos.line + clipboard_nr_lines,
-                            column: last_line_nr_chars,
-                        })
-                    } else {
-                        ed_model.text.set_caret(TextPos {
-                            line: old_caret_pos.line,
-                            column: old_caret_pos.column + last_line_nr_chars,
-                        })
-                    }
-                }
-            }
+            unimplemented!("TODO");
         }
     }
 
@@ -79,13 +27,7 @@ pub fn handle_paste(app_model: &mut AppModel) -> EdResult<()> {
 pub fn handle_cut(app_model: &mut AppModel) -> EdResult<()> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            let selected_str_opt = ed_model.text.get_selected_str()?;
-
-            if let Some(selected_str) = selected_str_opt {
-                app_model::set_clipboard_txt(&mut app_model.clipboard_opt, selected_str)?;
-
-                ed_model.text.del_selection()?;
-            }
+            unimplemented!("TODO");
         }
     }
 
@@ -94,30 +36,31 @@ pub fn handle_cut(app_model: &mut AppModel) -> EdResult<()> {
 
 pub fn pass_keydown_to_focused(
     modifiers_winit: &ModifiersState,
-    virtual_keycode: VirtualKeyCode,
+    _virtual_keycode: VirtualKeyCode,
     app_model: &mut AppModel,
 ) -> UIResult<()> {
-    let modifiers = from_winit(modifiers_winit);
+    let _modifiers = from_winit(modifiers_winit);
 
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            ed_model.text.handle_key_down(&modifiers, virtual_keycode)?;
+            unimplemented!("TODO");
         }
     }
 
     Ok(())
 }
 
-pub fn handle_new_char(received_char: &char, app_model: &mut AppModel) -> EdResult<()> {
+pub fn handle_new_char(_received_char: &char, app_model: &mut AppModel) -> EdResult<()> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            ed_model.text.handle_new_char(received_char)?;
+            unimplemented!("TODO");
         }
     }
 
     Ok(())
 }
 
+/*
 #[cfg(test)]
 pub mod test_app_update {
     use crate::editor::mvc::app_model;
@@ -265,4 +208,4 @@ pub mod test_app_update {
 
         Ok(())
     }
-}
+}*/

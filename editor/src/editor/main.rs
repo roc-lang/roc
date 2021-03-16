@@ -1,8 +1,12 @@
 use super::keyboard_input;
+use super::style::CODE_TXT_XY;
+use super::util::slice_get;
+use crate::editor::ed_error::print_ui_err;
+use crate::editor::resources::strings::NOTHING_OPENED;
 use crate::editor::{
     config::Config,
-    ed_error::{print_err, print_ui_err},
-    mvc::{app_model::AppModel, app_update, ed_model, ed_model::EdModel, ed_view},
+    ed_error::print_err,
+    mvc::{app_model::AppModel, app_update, ed_model},
     theme::EdTheme,
 };
 use crate::graphics::{
@@ -10,18 +14,17 @@ use crate::graphics::{
     lowlevel::buffer::create_rect_buffers,
     lowlevel::ortho::update_ortho_buffer,
     lowlevel::pipelines,
+    primitives::rect::Rect,
     primitives::text::{build_glyph_brush, example_code_glyph_rect, queue_text_draw, Text},
-    style::CODE_TXT_XY,
 };
-use crate::ui::{text::lines::Lines, text::text_pos::TextPos, ui_error::UIResult};
-//use crate::resources::strings::NOTHING_OPENED;
-use super::util::slice_get;
-use crate::lang::{pool::Pool, scope::Scope};
+use crate::lang::expr::Env;
+use crate::lang::pool::Pool;
+use crate::ui::ui_error::UIError::FileOpenFailed;
+use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
 use cgmath::Vector2;
 use pipelines::RectResources;
 use roc_module::symbol::{IdentIds, ModuleIds};
-use roc_region::all::Region;
 use roc_types::subs::VarStore;
 use std::{error::Error, io, path::Path};
 use wgpu::{CommandEncoder, RenderPass, TextureView};
@@ -31,6 +34,7 @@ use winit::{
     event,
     event::{Event, ModifiersState},
     event_loop::ControlFlow,
+    platform::run_return::EventLoopExtRunReturn,
 };
 
 // Inspired by:
@@ -64,7 +68,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
     // Open window and create a surface
-    let event_loop = winit::event_loop::EventLoop::new();
+    let mut event_loop = winit::event_loop::EventLoop::new();
 
     let window = winit::window::WindowBuilder::new()
         .with_inner_size(PhysicalSize::new(1200.0, 1000.0))
@@ -123,8 +127,45 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let mut glyph_brush = build_glyph_brush(&gpu_device, render_format)?;
 
     let is_animating = true;
-    let ed_model_opt = if let Some(file_path) = file_path_opt {
-        let ed_model_res = ed_model::init_model(file_path);
+
+    let mut env_pool = Pool::with_capacity(1024);
+    let env_arena = Bump::new();
+    let code_arena = Bump::new();
+
+    let mut var_store = VarStore::default();
+    let dep_idents = IdentIds::exposed_builtins(8);
+
+    let exposed_ident_ids = IdentIds::default();
+    let mut module_ids = ModuleIds::default();
+    let mod_id = module_ids.get_or_insert(&"ModId123".into());
+
+    let env = Env::new(
+        mod_id,
+        &env_arena,
+        &mut env_pool,
+        &mut var_store,
+        dep_idents,
+        &module_ids,
+        exposed_ident_ids,
+    );
+
+    let mut code_str = BumpString::from_str_in("", &code_arena);
+
+    if let Some(file_path) = file_path_opt {
+        match std::fs::read_to_string(file_path) {
+            Ok(file_as_str) => {
+                code_str = BumpString::from_str_in(&file_as_str, &code_arena);
+            }
+
+            Err(e) => print_ui_err(&FileOpenFailed {
+                path_str: file_path.to_string_lossy().to_string(),
+                err_msg: e.to_string(),
+            }),
+        }
+    }
+
+    let ed_model_opt = {
+        let ed_model_res = ed_model::init_model(&code_str, env, &code_arena);
 
         match ed_model_res {
             Ok(mut ed_model) => {
@@ -133,31 +174,23 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 Some(ed_model)
             }
             Err(e) => {
-                print_ui_err(&e);
+                print_err(&e);
                 None
             }
         }
-    } else {
-        None
     };
 
     let mut app_model = AppModel::init(ed_model_opt);
 
     let mut keyboard_modifiers = ModifiersState::empty();
 
-    // This arena is never cleared and should only be used for allocations that occur rarely
-    let arena = Bump::new();
-
-    let mut rects_arena = Bump::new();
-    let mut ast_arena = Bump::new();
-
-    let config: Config = confy::load("roc_editor", None)?;
+    let config: Config = Config::default(); //confy::load("roc_editor", None)?;
     let ed_theme = EdTheme::default();
 
     // Render loop
     window.request_redraw();
 
-    event_loop.run(move |event, _, control_flow| {
+    event_loop.run_return(|event, _, control_flow| {
         // TODO dynamically switch this on/off depending on whether any
         // animations are running. Should conserve CPU usage and battery life!
         if is_animating {
@@ -250,80 +283,38 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     .expect("Failed to acquire next SwapChainFrame")
                     .output;
 
-                if let Some(ed_model) = &app_model.ed_model_opt {
-                    //TODO don't pass invisible lines
-                    queue_editor_text(
+                if let Some(ref mut ed_model) = app_model.ed_model_opt {
+                    // TODO only calculate if markup_root has changed
+                    let text_and_rects_res = super::mvc::ed_view::model_to_wgpu(
+                        ed_model,
                         &size,
-                        &ed_model.text.all_lines(&arena),
-                        ed_model.text.caret_w_select.caret_pos,
+                        CODE_TXT_XY.into(),
                         &config,
-                        &mut glyph_brush,
                     );
+
+                    match text_and_rects_res {
+                        Ok((text_section, rects)) => {
+                            glyph_brush.queue(text_section);
+
+                            draw_all_rects(
+                                &rects,
+                                &mut encoder,
+                                &frame.view,
+                                &gpu_device,
+                                &rect_resources,
+                                &ed_theme,
+                            )
+                        }
+                        Err(e) => print_err(&e),
+                    }
                 } else {
-                    // queue_no_file_text(&size, NOTHING_OPENED, CODE_TXT_XY.into(), &mut glyph_brush);
-                    ast_arena.reset();
-                    let mut pool = Pool::with_capacity(1024);
-                    let mut var_store = VarStore::default();
-                    let dep_idents = IdentIds::exposed_builtins(8);
-                    let mut module_ids = ModuleIds::default();
-                    let exposed_ident_ids = IdentIds::default();
-
-                    let home = module_ids.get_or_insert(&"Home".into());
-
-                    let mut env = crate::lang::expr::Env::new(
-                        home,
-                        &arena,
-                        &mut pool,
-                        &mut var_store,
-                        dep_idents,
-                        &module_ids,
-                        exposed_ident_ids,
-                    );
-
-                    let mut scope = Scope::new(home, env.pool, env.var_store);
-
-                    let region = Region::new(0, 0, 0, 0);
-
-                    let (expr2, _) = crate::lang::expr::str_to_expr2(
-                        &arena,
-                        "{ population: 5437, coords: {x: 3.637, y: 4}, style: \"Functional\" }",
-                        &mut env,
-                        &mut scope,
-                        region,
-                    )
-                    .unwrap();
-
-                    let ast_render_res = super::render_ast::render_expr2(
-                        &ast_arena,
-                        &mut env,
-                        &expr2,
+                    queue_no_file_text(
                         &size,
+                        NOTHING_OPENED,
                         CODE_TXT_XY.into(),
                         &config,
                         &mut glyph_brush,
                     );
-
-                    if let Err(e) = ast_render_res {
-                        print_err(&e)
-                    }
-                }
-
-                rects_arena.reset();
-
-                match draw_all_rects(
-                    &app_model.ed_model_opt,
-                    &rects_arena,
-                    &mut encoder,
-                    &frame.view,
-                    &gpu_device,
-                    &rect_resources,
-                    &ed_theme,
-                ) {
-                    Ok(()) => (),
-                    Err(e) => {
-                        print_ui_err(&e);
-                        begin_render_pass(&mut encoder, &frame.view, &ed_theme);
-                    }
                 }
 
                 // draw all text
@@ -354,39 +345,31 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 *control_flow = winit::event_loop::ControlFlow::Wait;
             }
         }
-    })
+    });
+
+    Ok(())
 }
 
 fn draw_all_rects(
-    ed_model_opt: &Option<EdModel>,
-    arena: &Bump,
+    all_rects: &[Rect],
     encoder: &mut CommandEncoder,
     texture_view: &TextureView,
     gpu_device: &wgpu::Device,
     rect_resources: &RectResources,
     ed_theme: &EdTheme,
-) -> UIResult<()> {
-    if let Some(ed_model) = ed_model_opt {
-        let all_rects = ed_view::create_ed_rects(ed_model, &ed_theme.ui_theme, arena)?;
+) {
+    let rect_buffers = create_rect_buffers(gpu_device, encoder, all_rects);
 
-        let rect_buffers = create_rect_buffers(gpu_device, encoder, &all_rects);
+    let mut render_pass = begin_render_pass(encoder, texture_view, ed_theme);
 
-        let mut render_pass = begin_render_pass(encoder, texture_view, ed_theme);
-
-        render_pass.set_pipeline(&rect_resources.pipeline);
-        render_pass.set_bind_group(0, &rect_resources.ortho.bind_group, &[]);
-        render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(
-            rect_buffers.index_buffer.slice(..),
-            wgpu::IndexFormat::Uint32,
-        );
-        render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
-    } else {
-        // need to begin render pass to clear screen
-        begin_render_pass(encoder, texture_view, ed_theme);
-    }
-
-    Ok(())
+    render_pass.set_pipeline(&rect_resources.pipeline);
+    render_pass.set_bind_group(0, &rect_resources.ortho.bind_group, &[]);
+    render_pass.set_vertex_buffer(0, rect_buffers.vertex_buffer.slice(..));
+    render_pass.set_index_buffer(
+        rect_buffers.index_buffer.slice(..),
+        wgpu::IndexFormat::Uint32,
+    );
+    render_pass.draw_indexed(0..rect_buffers.num_rects, 0, 0..1);
 }
 
 fn begin_render_pass<'a>(
@@ -410,42 +393,7 @@ fn begin_render_pass<'a>(
     })
 }
 
-fn queue_editor_text(
-    size: &PhysicalSize<u32>,
-    editor_lines: &str,
-    caret_pos: TextPos,
-    config: &Config,
-    glyph_brush: &mut GlyphBrush<()>,
-) {
-    let area_bounds = (size.width as f32, size.height as f32).into();
-
-    let code_text = Text {
-        position: CODE_TXT_XY.into(),
-        area_bounds,
-        text: editor_lines,
-        size: config.code_font_size,
-        ..Default::default()
-    };
-
-    let s = format!("Ln {}, Col {}", caret_pos.line, caret_pos.column);
-    let text = s.as_str();
-
-    let caret_pos_label = Text {
-        position: ((size.width as f32) - 150.0, (size.height as f32) - 40.0).into(),
-        area_bounds,
-        color: config.ed_theme.ui_theme.text,
-        text,
-        size: 25.0,
-        ..Default::default()
-    };
-
-    queue_text_draw(&caret_pos_label, glyph_brush);
-
-    // TODO convert to ast and render with render_ast::render_expr2
-    queue_text_draw(&code_text, glyph_brush);
-}
-
-fn _queue_no_file_text(
+fn queue_no_file_text(
     size: &PhysicalSize<u32>,
     text: &str,
     text_coords: Vector2<f32>,
