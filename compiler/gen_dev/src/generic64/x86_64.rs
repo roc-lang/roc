@@ -705,6 +705,7 @@ fn x86_64_generic_setup_stack<'a>(
 }
 
 #[inline(always)]
+#[allow(clippy::unnecessary_wraps)]
 fn x86_64_generic_cleanup_stack<'a>(
     buf: &mut Vec<'a, u8>,
     saved_regs: &[X86_64GeneralReg],
@@ -845,39 +846,37 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
-    fn mov_freg64_base32(_buf: &mut Vec<'_, u8>, _dst: X86_64FloatReg, _offset: i32) {
-        unimplemented!(
-            "loading floating point reg from base offset not yet implemented for X86_64"
-        );
+    fn mov_freg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset: i32) {
+        movsd_freg64_base64_offset32(buf, dst, X86_64GeneralReg::RBP, offset)
     }
     #[inline(always)]
     fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32) {
-        mov_reg64_base32(buf, dst, offset);
+        mov_reg64_base64_offset32(buf, dst, X86_64GeneralReg::RBP, offset)
     }
     #[inline(always)]
-    fn mov_base32_freg64(_buf: &mut Vec<'_, u8>, _offset: i32, _src: X86_64FloatReg) {
-        unimplemented!("saving floating point reg to base offset not yet implemented for X86_64");
+    fn mov_base32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64FloatReg) {
+        movsd_base64_offset32_freg64(buf, X86_64GeneralReg::RBP, offset, src)
     }
     #[inline(always)]
     fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GeneralReg) {
-        mov_base32_reg64(buf, offset, src);
+        mov_base64_offset32_reg64(buf, X86_64GeneralReg::RBP, offset, src)
     }
 
     #[inline(always)]
-    fn mov_freg64_stack32(_buf: &mut Vec<'_, u8>, _dst: X86_64FloatReg, _offset: i32) {
-        unimplemented!("loading floating point reg from stack not yet implemented for X86_64");
+    fn mov_freg64_stack32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset: i32) {
+        movsd_freg64_base64_offset32(buf, dst, X86_64GeneralReg::RSP, offset)
     }
     #[inline(always)]
     fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32) {
-        mov_reg64_stack32(buf, dst, offset);
+        mov_reg64_base64_offset32(buf, dst, X86_64GeneralReg::RSP, offset)
     }
     #[inline(always)]
-    fn mov_stack32_freg64(_buf: &mut Vec<'_, u8>, _offset: i32, _src: X86_64FloatReg) {
-        unimplemented!("saving floating point reg to stack not yet implemented for X86_64");
+    fn mov_stack32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64FloatReg) {
+        movsd_base64_offset32_freg64(buf, X86_64GeneralReg::RSP, offset, src)
     }
     #[inline(always)]
     fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GeneralReg) {
-        mov_stack32_reg64(buf, offset, src);
+        mov_base64_offset32_reg64(buf, X86_64GeneralReg::RSP, offset, src)
     }
 
     #[inline(always)]
@@ -1102,55 +1101,47 @@ fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64Gene
     }
 }
 
-/// `MOV r64,r/m64` -> Move r/m64 to r64. where m64 references the base pionter.
-#[inline(always)]
-fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32) {
-    // This can be optimized based on how many bytes the offset actually is.
-    // This function can probably be made to take any memory offset, I didn't feel like figuring it out rn.
-    // Also, this may technically be faster genration since stack operations should be so common.
-    let rex = add_reg_extension(dst, REX_W);
-    let dst_mod = (dst as u8 % 8) << 3;
-    buf.reserve(8);
-    buf.extend(&[rex, 0x8B, 0x85 + dst_mod]);
-    buf.extend(&offset.to_le_bytes());
-}
+// The following base and stack based operations could be optimized based on how many bytes the offset actually is.
 
-/// `MOV r/m64,r64` -> Move r64 to r/m64. where m64 references the base pionter.
+/// `MOV r/m64,r64` -> Move r64 to r/m64, where m64 references a base + offset.
 #[inline(always)]
-fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GeneralReg) {
-    // This can be optimized based on how many bytes the offset actually is.
-    // This function can probably be made to take any memory offset, I didn't feel like figuring it out rn.
-    // Also, this may technically be faster genration since stack operations should be so common.
-    let rex = add_reg_extension(src, REX_W);
+fn mov_base64_offset32_reg64(
+    buf: &mut Vec<'_, u8>,
+    base: X86_64GeneralReg,
+    offset: i32,
+    src: X86_64GeneralReg,
+) {
+    let rex = add_rm_extension(base, REX_W);
+    let rex = add_reg_extension(src, rex);
     let src_mod = (src as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
     buf.reserve(8);
-    buf.extend(&[rex, 0x89, 0x85 + src_mod]);
+    buf.extend(&[rex, 0x89, 0x80 + src_mod + base_mod]);
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
     buf.extend(&offset.to_le_bytes());
 }
 
-/// `MOV r64,r/m64` -> Move r/m64 to r64. where m64 references the stack pionter.
+/// `MOV r64,r/m64` -> Move r/m64 to r64, where m64 references a base + offset.
 #[inline(always)]
-fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32) {
-    // This can be optimized based on how many bytes the offset actually is.
-    // This function can probably be made to take any memory offset, I didn't feel like figuring it out rn.
-    // Also, this may technically be faster genration since stack operations should be so common.
-    let rex = add_reg_extension(dst, REX_W);
+fn mov_reg64_base64_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    let rex = add_rm_extension(base, REX_W);
+    let rex = add_reg_extension(dst, rex);
     let dst_mod = (dst as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
     buf.reserve(8);
-    buf.extend(&[rex, 0x8B, 0x84 + dst_mod, 0x24]);
-    buf.extend(&offset.to_le_bytes());
-}
-
-/// `MOV r/m64,r64` -> Move r64 to r/m64. where m64 references the stack pionter.
-#[inline(always)]
-fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GeneralReg) {
-    // This can be optimized based on how many bytes the offset actually is.
-    // This function can probably be made to take any memory offset, I didn't feel like figuring it out rn.
-    // Also, this may technically be faster genration since stack operations should be so common.
-    let rex = add_reg_extension(src, REX_W);
-    let src_mod = (src as u8 % 8) << 3;
-    buf.reserve(8);
-    buf.extend(&[rex, 0x89, 0x84 + src_mod, 0x24]);
+    buf.extend(&[rex, 0x8B, 0x80 + dst_mod + base_mod]);
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
     buf.extend(&offset.to_le_bytes());
 }
 
@@ -1184,6 +1175,52 @@ fn movsd_freg64_rip_offset32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset:
     } else {
         buf.reserve(8);
         buf.extend(&[0xF2, 0x0F, 0x10, 0x05 + (dst_mod << 3)]);
+    }
+    buf.extend(&offset.to_le_bytes());
+}
+
+/// `MOVSD r/m64,xmm1` -> Move xmm1 to r/m64. where m64 references the base pionter.
+#[inline(always)]
+fn movsd_base64_offset32_freg64(
+    buf: &mut Vec<'_, u8>,
+    base: X86_64GeneralReg,
+    offset: i32,
+    src: X86_64FloatReg,
+) {
+    let src_mod = (src as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    buf.reserve(10);
+    buf.push(0xF2);
+    if src as u8 > 7 || base as u8 > 7 {
+        buf.push(0x44);
+    }
+    buf.extend(&[0x0F, 0x11, 0x80 + src_mod + base_mod]);
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+    buf.extend(&offset.to_le_bytes());
+}
+
+/// `MOVSD xmm1,r/m64` -> Move r/m64 to xmm1. where m64 references the base pionter.
+#[inline(always)]
+fn movsd_freg64_base64_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64FloatReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    let dst_mod = (dst as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    buf.reserve(10);
+    buf.push(0xF2);
+    if dst as u8 > 7 || base as u8 > 7 {
+        buf.push(0x44);
+    }
+    buf.extend(&[0x0F, 0x10, 0x80 + dst_mod + base_mod]);
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
     }
     buf.extend(&offset.to_le_bytes());
 }
@@ -1510,6 +1547,90 @@ mod tests {
     }
 
     #[test]
+    fn test_movsd_freg64_base32() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((dst, offset), expected) in &[
+            (
+                (X86_64FloatReg::XMM0, TEST_I32),
+                vec![0xF2, 0x0F, 0x10, 0x85],
+            ),
+            (
+                (X86_64FloatReg::XMM15, TEST_I32),
+                vec![0xF2, 0x44, 0x0F, 0x10, 0xBD],
+            ),
+        ] {
+            buf.clear();
+            movsd_freg64_base64_offset32(&mut buf, *dst, X86_64GeneralReg::RBP, *offset);
+            assert_eq!(expected, &buf[..buf.len() - 4]);
+            assert_eq!(TEST_I32.to_le_bytes(), &buf[buf.len() - 4..]);
+        }
+    }
+
+    #[test]
+    fn test_movsd_base32_freg64() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((offset, src), expected) in &[
+            (
+                (TEST_I32, X86_64FloatReg::XMM0),
+                vec![0xF2, 0x0F, 0x11, 0x85],
+            ),
+            (
+                (TEST_I32, X86_64FloatReg::XMM15),
+                vec![0xF2, 0x44, 0x0F, 0x11, 0xBD],
+            ),
+        ] {
+            buf.clear();
+            movsd_base64_offset32_freg64(&mut buf, X86_64GeneralReg::RBP, *offset, *src);
+            assert_eq!(expected, &buf[..buf.len() - 4]);
+            assert_eq!(TEST_I32.to_le_bytes(), &buf[buf.len() - 4..]);
+        }
+    }
+
+    #[test]
+    fn test_movsd_freg64_stack32() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((dst, offset), expected) in &[
+            (
+                (X86_64FloatReg::XMM0, TEST_I32),
+                vec![0xF2, 0x0F, 0x10, 0x84, 0x24],
+            ),
+            (
+                (X86_64FloatReg::XMM15, TEST_I32),
+                vec![0xF2, 0x44, 0x0F, 0x10, 0xBC, 0x24],
+            ),
+        ] {
+            buf.clear();
+            movsd_freg64_base64_offset32(&mut buf, *dst, X86_64GeneralReg::RSP, *offset);
+            assert_eq!(expected, &buf[..buf.len() - 4]);
+            assert_eq!(TEST_I32.to_le_bytes(), &buf[buf.len() - 4..]);
+        }
+    }
+
+    #[test]
+    fn test_movsd_stack32_freg64() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((offset, src), expected) in &[
+            (
+                (TEST_I32, X86_64FloatReg::XMM0),
+                vec![0xF2, 0x0F, 0x11, 0x84, 0x24],
+            ),
+            (
+                (TEST_I32, X86_64FloatReg::XMM15),
+                vec![0xF2, 0x44, 0x0F, 0x11, 0xBC, 0x24],
+            ),
+        ] {
+            buf.clear();
+            movsd_base64_offset32_freg64(&mut buf, X86_64GeneralReg::RSP, *offset, *src);
+            assert_eq!(expected, &buf[..buf.len() - 4]);
+            assert_eq!(TEST_I32.to_le_bytes(), &buf[buf.len() - 4..]);
+        }
+    }
+
+    #[test]
     fn test_mov_reg64_base32() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
@@ -1518,7 +1639,7 @@ mod tests {
             ((X86_64GeneralReg::R15, TEST_I32), [0x4C, 0x8B, 0xBD]),
         ] {
             buf.clear();
-            mov_reg64_base32(&mut buf, *dst, *offset);
+            mov_reg64_base64_offset32(&mut buf, *dst, X86_64GeneralReg::RBP, *offset);
             assert_eq!(expected, &buf[..3]);
             assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
         }
@@ -1533,7 +1654,7 @@ mod tests {
             ((TEST_I32, X86_64GeneralReg::R15), [0x4C, 0x89, 0xBD]),
         ] {
             buf.clear();
-            mov_base32_reg64(&mut buf, *offset, *src);
+            mov_base64_offset32_reg64(&mut buf, X86_64GeneralReg::RBP, *offset, *src);
             assert_eq!(expected, &buf[..3]);
             assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
         }
@@ -1548,7 +1669,7 @@ mod tests {
             ((X86_64GeneralReg::R15, TEST_I32), [0x4C, 0x8B, 0xBC, 0x24]),
         ] {
             buf.clear();
-            mov_reg64_stack32(&mut buf, *dst, *offset);
+            mov_reg64_base64_offset32(&mut buf, *dst, X86_64GeneralReg::RSP, *offset);
             assert_eq!(expected, &buf[..4]);
             assert_eq!(TEST_I32.to_le_bytes(), &buf[4..]);
         }
@@ -1563,7 +1684,7 @@ mod tests {
             ((TEST_I32, X86_64GeneralReg::R15), [0x4C, 0x89, 0xBC, 0x24]),
         ] {
             buf.clear();
-            mov_stack32_reg64(&mut buf, *offset, *src);
+            mov_base64_offset32_reg64(&mut buf, X86_64GeneralReg::RSP, *offset, *src);
             assert_eq!(expected, &buf[..4]);
             assert_eq!(TEST_I32.to_le_bytes(), &buf[4..]);
         }

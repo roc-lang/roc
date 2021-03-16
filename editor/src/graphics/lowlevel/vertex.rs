@@ -4,7 +4,6 @@ use cgmath::Vector2;
 
 #[derive(Copy, Clone)]
 pub struct Vertex {
-    #[allow(dead_code)]
     pub position: Vector2<f32>,
     pub color: [f32; 4],
 }
@@ -14,18 +13,18 @@ unsafe impl bytemuck::Zeroable for Vertex {}
 
 impl Vertex {
     pub const SIZE: wgpu::BufferAddress = std::mem::size_of::<Self>() as wgpu::BufferAddress;
-    pub const DESC: wgpu::VertexBufferDescriptor<'static> = wgpu::VertexBufferDescriptor {
-        stride: Self::SIZE,
+    pub const DESC: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+        array_stride: Self::SIZE,
         step_mode: wgpu::InputStepMode::Vertex,
         attributes: &[
             // position
-            wgpu::VertexAttributeDescriptor {
+            wgpu::VertexAttribute {
                 offset: 0,
                 shader_location: 0,
                 format: wgpu::VertexFormat::Float2,
             },
             // color
-            wgpu::VertexAttributeDescriptor {
+            wgpu::VertexAttribute {
                 offset: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
                 shader_location: 1,
                 format: wgpu::VertexFormat::Float4,

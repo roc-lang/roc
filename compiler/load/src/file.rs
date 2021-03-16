@@ -22,7 +22,7 @@ use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
-use roc_parse::ast::{self, Attempting, StrLiteral, TypeAnnotation};
+use roc_parse::ast::{self, StrLiteral, TypeAnnotation};
 use roc_parse::header::{
     ExposesEntry, ImportsEntry, PackageEntry, PackageOrPath, PlatformHeader, To, TypedIdent,
 };
@@ -358,12 +358,15 @@ struct ModuleCache<'a> {
     external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
 
     /// Various information
+    imports: MutMap<ModuleId, MutSet<ModuleId>>,
+    top_level_thunks: MutMap<ModuleId, MutSet<Symbol>>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
     can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
 
     sources: MutMap<ModuleId, (PathBuf, &'a str)>,
+    header_sources: MutMap<ModuleId, (PathBuf, &'a str)>,
 }
 
 fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> Vec<BuildTask<'a>> {
@@ -544,11 +547,24 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                     ident_ids,
                 } = typechecked;
 
+                let mut imported_module_thunks = MutSet::default();
+
+                if let Some(imports) = state.module_cache.imports.get(&module_id) {
+                    for imported in imports.iter() {
+                        imported_module_thunks.extend(
+                            state.module_cache.top_level_thunks[imported]
+                                .iter()
+                                .copied(),
+                        );
+                    }
+                }
+
                 BuildTask::BuildPendingSpecializations {
                     layout_cache,
                     module_id,
                     module_timing,
                     solved_subs,
+                    imported_module_thunks,
                     decls,
                     ident_ids,
                     exposed_to_host: state.exposed_to_host.clone(),
@@ -601,6 +617,7 @@ pub struct LoadedModule {
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
+    pub header_sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
     pub documentation: MutMap<ModuleId, ModuleDocumentation>,
@@ -616,6 +633,7 @@ struct ModuleHeader<'a> {
     module_id: ModuleId,
     module_name: ModuleNameEnum<'a>,
     module_path: PathBuf,
+    is_root_module: bool,
     exposed_ident_ids: IdentIds,
     deps_by_name: MutMap<PQModuleName<'a>, ModuleId>,
     packages: MutMap<&'a str, PackageOrPath<'a>>,
@@ -623,7 +641,8 @@ struct ModuleHeader<'a> {
     package_qualified_imported_modules: MutSet<PackageQualified<'a, ModuleId>>,
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
-    src: &'a [u8],
+    header_src: &'a str,
+    parse_state: roc_parse::parser::State<'a>,
     module_timing: ModuleTiming,
 }
 
@@ -682,6 +701,7 @@ pub struct MonomorphizedModule<'a> {
     pub mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
     pub procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
+    pub header_sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
 }
@@ -767,6 +787,14 @@ enum Msg<'a> {
 }
 
 #[derive(Debug)]
+enum PlatformPath<'a> {
+    NotSpecified,
+    Valid(To<'a>),
+    RootIsInterface,
+    RootIsPkgConfig,
+}
+
+#[derive(Debug)]
 struct State<'a> {
     pub root_id: ModuleId,
     pub platform_id: Option<ModuleId>,
@@ -774,7 +802,7 @@ struct State<'a> {
     pub stdlib: &'a StdLib,
     pub exposed_types: SubsByModule,
     pub output_path: Option<&'a str>,
-    pub platform_path: Option<To<'a>>,
+    pub platform_path: PlatformPath<'a>,
 
     pub headers_parsed: MutSet<ModuleId>,
 
@@ -890,26 +918,19 @@ impl ModuleTiming {
             end_time,
         } = self;
 
-        end_time
-            .duration_since(*start_time)
-            .ok()
-            .and_then(|t| {
-                t.checked_sub(*make_specializations).and_then(|t| {
-                    t.checked_sub(*find_specializations).and_then(|t| {
-                        t.checked_sub(*solve).and_then(|t| {
-                            t.checked_sub(*constrain).and_then(|t| {
-                                t.checked_sub(*canonicalize).and_then(|t| {
-                                    t.checked_sub(*parse_body).and_then(|t| {
-                                        t.checked_sub(*parse_header)
-                                            .and_then(|t| t.checked_sub(*read_roc_file))
-                                    })
-                                })
-                            })
-                        })
-                    })
-                })
-            })
-            .unwrap_or_else(Duration::default)
+        let calculate = |t: Result<Duration, std::time::SystemTimeError>| -> Option<Duration> {
+            t.ok()?
+                .checked_sub(*make_specializations)?
+                .checked_sub(*find_specializations)?
+                .checked_sub(*solve)?
+                .checked_sub(*constrain)?
+                .checked_sub(*canonicalize)?
+                .checked_sub(*parse_body)?
+                .checked_sub(*parse_header)?
+                .checked_sub(*read_roc_file)
+        };
+
+        calculate(end_time.duration_since(*start_time)).unwrap_or_else(Duration::default)
     }
 }
 
@@ -948,6 +969,7 @@ enum BuildTask<'a> {
         module_timing: ModuleTiming,
         layout_cache: LayoutCache<'a>,
         solved_subs: Solved<Subs>,
+        imported_module_thunks: MutSet<Symbol>,
         module_id: ModuleId,
         ident_ids: IdentIds,
         decls: Vec<Declaration>,
@@ -978,6 +1000,8 @@ pub enum LoadingProblem<'a> {
     },
     ParsingFailed(ParseProblem<'a, SyntaxError<'a>>),
     UnexpectedHeader(String),
+    /// there is no platform (likely running an Interface module)
+    NoPlatform(String),
 
     MsgChannelDied,
     ErrJoiningWorkerThreads,
@@ -1131,6 +1155,7 @@ impl<'a> LoadStart<'a> {
             load_filename(
                 arena,
                 filename,
+                true,
                 None,
                 Arc::clone(&arc_modules),
                 Arc::clone(&ident_ids_by_module),
@@ -1399,7 +1424,7 @@ where
                 goal_phase,
                 stdlib,
                 output_path: None,
-                platform_path: None,
+                platform_path: PlatformPath::NotSpecified,
                 module_cache: ModuleCache::default(),
                 dependencies: Dependencies::default(),
                 procedures: MutMap::default(),
@@ -1476,7 +1501,7 @@ where
                             state,
                             subs,
                             exposed_to_host,
-                        )));
+                        )?));
                     }
                     Msg::FailedToParse(problem) => {
                         // Shut down all the worker threads.
@@ -1607,16 +1632,25 @@ fn update<'a>(
 
             match header_extra {
                 App { to_platform } => {
-                    debug_assert_eq!(state.platform_path, None);
-
-                    state.platform_path = Some(to_platform.clone());
+                    debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
+                    state.platform_path = PlatformPath::Valid(to_platform.clone());
                 }
                 PkgConfig { .. } => {
                     debug_assert_eq!(state.platform_id, None);
 
                     state.platform_id = Some(header.module_id);
+
+                    if header.is_root_module {
+                        debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
+                        state.platform_path = PlatformPath::RootIsPkgConfig;
+                    }
                 }
-                Interface => {}
+                Interface => {
+                    if header.is_root_module {
+                        debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
+                        state.platform_path = PlatformPath::RootIsInterface;
+                    }
+                }
             }
 
             // store an ID to name mapping, so we know the file to read when fetching dependencies' headers
@@ -1640,6 +1674,23 @@ fn update<'a>(
             state
                 .exposed_symbols_by_module
                 .insert(home, exposed_symbols);
+
+            state
+                .module_cache
+                .header_sources
+                .insert(home, (header.module_path.clone(), header.header_src));
+
+            state
+                .module_cache
+                .imports
+                .entry(header.module_id)
+                .or_default()
+                .extend(
+                    header
+                        .package_qualified_imported_modules
+                        .iter()
+                        .map(|x| *x.as_inner()),
+                );
 
             work.extend(state.dependencies.add_module(
                 header.module_id,
@@ -1904,6 +1955,13 @@ fn update<'a>(
                 }
             }
 
+            state
+                .module_cache
+                .top_level_thunks
+                .entry(module_id)
+                .or_default()
+                .extend(procs.module_thunks.iter().copied());
+
             let found_specializations_module = FoundSpecializationsModule {
                 layout_cache,
                 module_id,
@@ -2035,7 +2093,7 @@ fn finish_specialization(
     state: State,
     subs: Subs,
     exposed_to_host: MutMap<Symbol, Variable>,
-) -> MonomorphizedModule {
+) -> Result<MonomorphizedModule, LoadingProblem> {
     let module_ids = Arc::try_unwrap(state.arc_modules)
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
         .into_inner()
@@ -2059,24 +2117,98 @@ fn finish_specialization(
         type_problems,
         can_problems,
         sources,
+        header_sources,
         ..
     } = module_cache;
 
-    let sources = sources
+    let sources: MutMap<ModuleId, (PathBuf, Box<str>)> = sources
+        .into_iter()
+        .map(|(id, (path, src))| (id, (path, src.into())))
+        .collect();
+
+    let header_sources: MutMap<ModuleId, (PathBuf, Box<str>)> = header_sources
         .into_iter()
         .map(|(id, (path, src))| (id, (path, src.into())))
         .collect();
 
     let path_to_platform = {
+        use PlatformPath::*;
         let package_or_path = match platform_path {
-            Some(To::ExistingPackage(shorthand)) => {
+            Valid(To::ExistingPackage(shorthand)) => {
                 match (*state.arc_shorthands).lock().get(shorthand) {
                     Some(p_or_p) => p_or_p.clone(),
                     None => unreachable!(),
                 }
             }
-            Some(To::NewPackage(p_or_p)) => p_or_p,
-            None => panic!("no platform!"),
+            Valid(To::NewPackage(p_or_p)) => p_or_p,
+            other => {
+                use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
+                use ven_pretty::DocAllocator;
+
+                let module_id = state.root_id;
+
+                let palette = DEFAULT_PALETTE;
+
+                // Report parsing and canonicalization problems
+                let alloc = RocDocAllocator::new(&[], module_id, &interns);
+
+                let report = {
+                    match other {
+                        Valid(_) => unreachable!(),
+                        NotSpecified => {
+                            let doc = alloc.stack(vec![
+                                alloc.reflow("I could not find a platform based on your input file."),
+                                alloc.reflow(r"Does the module header contain an entry that looks like this:"),
+                                alloc
+                                    .parser_suggestion(" packages { base: \"platform\" }")
+                                    .indent(4),
+                                alloc.reflow("See also TODO."),
+                            ]);
+
+                            Report {
+                                filename: "UNKNOWN.roc".into(),
+                                doc,
+                                title: "NO PLATFORM".to_string(),
+                            }
+                        }
+                        RootIsInterface => {
+                            let doc = alloc.stack(vec![
+                                alloc.reflow(r"The input file is a interface file, but only app modules can be ran."),
+                                alloc.concat(vec![
+                                alloc.reflow(r"I will still parse and typecheck the input file and its dependencies,"),
+                                alloc.reflow(r"but won't output any executable."),
+                                ])
+                            ]);
+
+                            Report {
+                                filename: "UNKNOWN.roc".into(),
+                                doc,
+                                title: "NO PLATFORM".to_string(),
+                            }
+                        }
+                        RootIsPkgConfig => {
+                            let doc = alloc.stack(vec![
+                                alloc.reflow(r"The input file is a package config file, but only app modules can be ran."),
+                                alloc.concat(vec![
+                                alloc.reflow(r"I will still parse and typecheck the input file and its dependencies,"),
+                                alloc.reflow(r"but won't output any executable."),
+                                ])
+                            ]);
+
+                            Report {
+                                filename: "UNKNOWN.roc".into(),
+                                doc,
+                                title: "NO PLATFORM".to_string(),
+                            }
+                        }
+                    }
+                };
+                let mut buf = String::new();
+
+                report.render_color_terminal(&mut buf, &alloc, &palette);
+
+                return Err(LoadingProblem::NoPlatform(buf));
+            }
         };
 
         match package_or_path {
@@ -2088,7 +2220,7 @@ fn finish_specialization(
 
     let platform_path = path_to_platform.into();
 
-    MonomorphizedModule {
+    Ok(MonomorphizedModule {
         can_problems,
         mono_problems,
         type_problems,
@@ -2100,8 +2232,9 @@ fn finish_specialization(
         interns,
         procedures,
         sources,
+        header_sources,
         timings: state.timings,
-    }
+    })
 }
 
 fn finish(
@@ -2127,6 +2260,13 @@ fn finish(
         .map(|(id, (path, src))| (id, (path, src.into())))
         .collect();
 
+    let header_sources = state
+        .module_cache
+        .header_sources
+        .into_iter()
+        .map(|(id, (path, src))| (id, (path, src.into())))
+        .collect();
+
     LoadedModule {
         module_id: state.root_id,
         interns,
@@ -2135,6 +2275,7 @@ fn finish(
         type_problems: state.module_cache.type_problems,
         declarations_by_id: state.declarations_by_id,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
+        header_sources,
         sources,
         timings: state.timings,
         documentation,
@@ -2163,8 +2304,8 @@ fn load_pkg_config<'a>(
         Ok(bytes_vec) => {
             let parse_start = SystemTime::now();
             let bytes = arena.alloc(bytes_vec);
-            let parse_state = parser::State::new_in(arena, bytes, Attempting::Module);
-            let parsed = roc_parse::module::header().parse(&arena, parse_state);
+            let parse_state = parser::State::new(bytes);
+            let parsed = roc_parse::module::parse_header(&arena, parse_state);
             let parse_header_duration = parse_start.elapsed().unwrap();
 
             // Insert the first entries for this module's timings
@@ -2178,19 +2319,19 @@ fn load_pkg_config<'a>(
             effect_module_timing.parse_header = parse_header_duration;
 
             match parsed {
-                Ok((_, ast::Module::Interface { header }, _parse_state)) => {
+                Ok((ast::Module::Interface { header }, _parse_state)) => {
                     Err(LoadingProblem::UnexpectedHeader(format!(
                         "expected platform/package module, got Interface with header\n{:?}",
                         header
                     )))
                 }
-                Ok((_, ast::Module::App { header }, _parse_state)) => {
+                Ok((ast::Module::App { header }, _parse_state)) => {
                     Err(LoadingProblem::UnexpectedHeader(format!(
                         "expected platform/package module, got App with header\n{:?}",
                         header
                     )))
                 }
-                Ok((_, ast::Module::Platform { header }, parser_state)) => {
+                Ok((ast::Module::Platform { header }, parser_state)) => {
                     // make a Pkg-Config module that ultimately exposes `main` to the host
                     let pkg_config_module_msg = fabricate_pkg_config_module(
                         arena,
@@ -2203,7 +2344,7 @@ fn load_pkg_config<'a>(
                         &header,
                         pkg_module_timing,
                     )
-                    .map(|x| x.1)?;
+                    .1;
 
                     let effects_module_msg = fabricate_effects_module(
                         arena,
@@ -2214,12 +2355,12 @@ fn load_pkg_config<'a>(
                         header,
                         effect_module_timing,
                     )
-                    .map(|x| x.1)?;
+                    .1;
 
                     Ok(Msg::Many(vec![effects_module_msg, pkg_config_module_msg]))
                 }
-                Err((_, fail, _)) => Err(LoadingProblem::ParsingFailed(
-                    fail.into_parse_problem(filename, bytes),
+                Err(fail) => Err(LoadingProblem::ParsingFailed(
+                    SyntaxError::Header(fail).into_parse_problem(filename, bytes),
                 )),
             }
         }
@@ -2284,6 +2425,7 @@ fn load_module<'a>(
     load_filename(
         arena,
         filename,
+        false,
         opt_shorthand,
         module_ids,
         ident_ids_by_module,
@@ -2323,6 +2465,7 @@ fn parse_header<'a>(
     arena: &'a Bump,
     read_file_duration: Duration,
     filename: PathBuf,
+    is_root_module: bool,
     opt_shorthand: Option<&'a str>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
@@ -2331,8 +2474,8 @@ fn parse_header<'a>(
     start_time: SystemTime,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let parse_start = SystemTime::now();
-    let parse_state = parser::State::new_in(arena, src_bytes, Attempting::Module);
-    let parsed = roc_parse::module::header().parse(&arena, parse_state);
+    let parse_state = parser::State::new(src_bytes);
+    let parsed = roc_parse::module::parse_header(&arena, parse_state);
     let parse_header_duration = parse_start.elapsed().unwrap();
 
     // Insert the first entries for this module's timings
@@ -2342,39 +2485,63 @@ fn parse_header<'a>(
     module_timing.parse_header = parse_header_duration;
 
     match parsed {
-        Ok((_, ast::Module::Interface { header }, parse_state)) => Ok(send_header(
-            Located {
-                region: header.name.region,
-                value: ModuleNameEnum::Interface(header.name.value),
-            },
-            filename,
-            opt_shorthand,
-            &[],
-            header.exposes.into_bump_slice(),
-            header.imports.into_bump_slice(),
-            None,
-            parse_state,
-            module_ids,
-            ident_ids_by_module,
-            module_timing,
-        )),
-        Ok((_, ast::Module::App { header }, parse_state)) => {
+        Ok((ast::Module::Interface { header }, parse_state)) => {
+            let header_src = unsafe {
+                let chomped = src_bytes.len() - parse_state.bytes.len();
+                std::str::from_utf8_unchecked(&src_bytes[..chomped])
+            };
+
+            let info = HeaderInfo {
+                loc_name: Located {
+                    region: header.name.region,
+                    value: ModuleNameEnum::Interface(header.name.value),
+                },
+                filename,
+                is_root_module,
+                opt_shorthand,
+                header_src,
+                packages: &[],
+                exposes: header.exposes.into_bump_slice(),
+                imports: header.imports.into_bump_slice(),
+                to_platform: None,
+            };
+
+            Ok(send_header(
+                info,
+                parse_state,
+                module_ids,
+                ident_ids_by_module,
+                module_timing,
+            ))
+        }
+        Ok((ast::Module::App { header }, parse_state)) => {
             let mut pkg_config_dir = filename.clone();
             pkg_config_dir.pop();
 
+            let header_src = unsafe {
+                let chomped = src_bytes.len() - parse_state.bytes.len();
+                std::str::from_utf8_unchecked(&src_bytes[..chomped])
+            };
+
             let packages = header.packages.into_bump_slice();
 
-            let (module_id, app_module_header_msg) = send_header(
-                Located {
+            let info = HeaderInfo {
+                loc_name: Located {
                     region: header.name.region,
                     value: ModuleNameEnum::App(header.name.value),
                 },
                 filename,
+                is_root_module,
                 opt_shorthand,
+                header_src,
                 packages,
-                header.provides.into_bump_slice(),
-                header.imports.into_bump_slice(),
-                Some(header.to.value.clone()),
+                exposes: header.provides.into_bump_slice(),
+                imports: header.imports.into_bump_slice(),
+                to_platform: Some(header.to.value.clone()),
+            };
+
+            let (module_id, app_module_header_msg) = send_header(
+                info,
                 parse_state,
                 module_ids.clone(),
                 ident_ids_by_module.clone(),
@@ -2456,7 +2623,7 @@ fn parse_header<'a>(
                 },
             }
         }
-        Ok((_, ast::Module::Platform { header }, _parse_state)) => fabricate_effects_module(
+        Ok((ast::Module::Platform { header }, _parse_state)) => Ok(fabricate_effects_module(
             arena,
             &"",
             module_ids,
@@ -2464,17 +2631,19 @@ fn parse_header<'a>(
             mode,
             header,
             module_timing,
-        ),
-        Err((_, fail, _)) => Err(LoadingProblem::ParsingFailed(
-            fail.into_parse_problem(filename, src_bytes),
+        )),
+        Err(fail) => Err(LoadingProblem::ParsingFailed(
+            SyntaxError::Header(fail).into_parse_problem(filename, src_bytes),
         )),
     }
 }
 
 /// Load a module by its filename
+#[allow(clippy::too_many_arguments)]
 fn load_filename<'a>(
     arena: &'a Bump,
     filename: PathBuf,
+    is_root_module: bool,
     opt_shorthand: Option<&'a str>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
@@ -2490,6 +2659,7 @@ fn load_filename<'a>(
             arena,
             file_io_duration,
             filename,
+            is_root_module,
             opt_shorthand,
             module_ids,
             ident_ids_by_module,
@@ -2524,6 +2694,7 @@ fn load_from_str<'a>(
         arena,
         file_io_duration,
         filename,
+        false,
         None,
         module_ids,
         ident_ids_by_module,
@@ -2541,21 +2712,40 @@ enum ModuleNameEnum<'a> {
     PkgConfig,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn send_header<'a>(
+#[derive(Debug)]
+struct HeaderInfo<'a> {
     loc_name: Located<ModuleNameEnum<'a>>,
     filename: PathBuf,
+    is_root_module: bool,
     opt_shorthand: Option<&'a str>,
+    header_src: &'a str,
     packages: &'a [Located<PackageEntry<'a>>],
     exposes: &'a [Located<ExposesEntry<'a, &'a str>>],
     imports: &'a [Located<ImportsEntry<'a>>],
     to_platform: Option<To<'a>>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_header<'a>(
+    info: HeaderInfo<'a>,
     parse_state: parser::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
     use ModuleNameEnum::*;
+
+    let HeaderInfo {
+        loc_name,
+        filename,
+        is_root_module,
+        opt_shorthand,
+        packages,
+        exposes,
+        imports,
+        to_platform,
+        header_src,
+    } = info;
 
     let declared_name: ModuleName = match &loc_name.value {
         PkgConfig => unreachable!(),
@@ -2731,6 +2921,7 @@ fn send_header<'a>(
             ModuleHeader {
                 module_id: home,
                 module_path: filename,
+                is_root_module,
                 exposed_ident_ids: ident_ids,
                 module_name: loc_name.value,
                 packages: package_entries,
@@ -2738,7 +2929,8 @@ fn send_header<'a>(
                 package_qualified_imported_modules,
                 deps_by_name,
                 exposes: exposed,
-                src: parse_state.bytes,
+                header_src,
+                parse_state,
                 exposed_imports: scope,
                 module_timing,
             },
@@ -2752,6 +2944,7 @@ fn send_header<'a>(
 fn send_header_two<'a>(
     arena: &'a Bump,
     filename: PathBuf,
+    is_root_module: bool,
     shorthand: &'a str,
     app_module_id: ModuleId,
     packages: &'a [Located<PackageEntry<'a>>],
@@ -2948,6 +3141,7 @@ fn send_header_two<'a>(
             ModuleHeader {
                 module_id: home,
                 module_path: filename,
+                is_root_module,
                 exposed_ident_ids: ident_ids,
                 module_name,
                 packages: package_entries,
@@ -2955,7 +3149,8 @@ fn send_header_two<'a>(
                 package_qualified_imported_modules,
                 deps_by_name,
                 exposes: exposed,
-                src: parse_state.bytes,
+                header_src: "#builtin effect header",
+                parse_state,
                 exposed_imports: scope,
                 module_timing,
             },
@@ -3084,13 +3279,14 @@ fn fabricate_pkg_config_module<'a>(
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     header: &PlatformHeader<'a>,
     module_timing: ModuleTiming,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
+) -> (ModuleId, Msg<'a>) {
     let provides: &'a [Located<ExposesEntry<'a, &'a str>>] =
         header.provides.clone().into_bump_slice();
 
-    Ok(send_header_two(
+    send_header_two(
         arena,
         filename,
+        false,
         shorthand,
         app_module_id,
         &[],
@@ -3101,7 +3297,7 @@ fn fabricate_pkg_config_module<'a>(
         module_ids,
         ident_ids_by_module,
         module_timing,
-    ))
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3113,7 +3309,7 @@ fn fabricate_effects_module<'a>(
     mode: Mode,
     header: PlatformHeader<'a>,
     module_timing: ModuleTiming,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
+) -> (ModuleId, Msg<'a>) {
     let num_exposes = header.provides.len() + 1;
     let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
 
@@ -3341,7 +3537,7 @@ fn fabricate_effects_module<'a>(
         module_timing,
     };
 
-    Ok((
+    (
         module_id,
         Msg::MadeEffectModule {
             type_shortname: effects.effect_shortname,
@@ -3349,7 +3545,7 @@ fn fabricate_effects_module<'a>(
             canonicalization_problems: module_output.problems,
             module_docs,
         },
-    ))
+    )
 }
 
 fn unpack_exposes_entries<'a>(
@@ -3384,6 +3580,7 @@ fn unpack_exposes_entries<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::unnecessary_wraps)]
 fn canonicalize_and_constrain<'a, F>(
     arena: &'a Bump,
     module_ids: &ModuleIds,
@@ -3481,12 +3678,13 @@ where
 fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let mut module_timing = header.module_timing;
     let parse_start = SystemTime::now();
-    let parse_state = parser::State::new_in(arena, &header.src, Attempting::Module);
+    let source = header.parse_state.bytes;
+    let parse_state = header.parse_state;
     let parsed_defs = match module_defs().parse(&arena, parse_state) {
         Ok((_, success, _state)) => success,
         Err((_, fail, _)) => {
             return Err(LoadingProblem::ParsingFailed(
-                fail.into_parse_problem(header.module_path, header.src),
+                fail.into_parse_problem(header.module_path, source),
             ));
         }
     };
@@ -3504,7 +3702,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     // SAFETY: By this point we've already incrementally verified that there
     // are no UTF-8 errors in these bytes. If there had been any UTF-8 errors,
     // we'd have bailed out before now.
-    let src = unsafe { from_utf8_unchecked(header.src) };
+    let src = unsafe { from_utf8_unchecked(source) };
 
     let ModuleHeader {
         module_id,
@@ -3644,6 +3842,7 @@ fn make_specializations<'a>(
 fn build_pending_specializations<'a>(
     arena: &'a Bump,
     solved_subs: Solved<Subs>,
+    imported_module_thunks: MutSet<Symbol>,
     home: ModuleId,
     mut ident_ids: IdentIds,
     decls: Vec<Declaration>,
@@ -3655,6 +3854,9 @@ fn build_pending_specializations<'a>(
 ) -> Msg<'a> {
     let find_specializations_start = SystemTime::now();
     let mut procs = Procs::default();
+
+    debug_assert!(procs.imported_module_thunks.is_empty());
+    procs.imported_module_thunks = imported_module_thunks;
 
     let mut mono_problems = std::vec::Vec::new();
     let mut subs = solved_subs.into_inner();
@@ -3937,10 +4139,12 @@ where
             module_timing,
             layout_cache,
             solved_subs,
+            imported_module_thunks,
             exposed_to_host,
         } => Ok(build_pending_specializations(
             arena,
             solved_subs,
+            imported_module_thunks,
             module_id,
             ident_ids,
             decls,

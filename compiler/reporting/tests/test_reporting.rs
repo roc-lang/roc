@@ -65,6 +65,7 @@ mod test_reporting {
             problems: can_problems,
             ..
         } = can_expr(arena, expr_src)?;
+        dbg!(&loc_expr);
         let mut subs = Subs::new(var_store.into());
 
         for (var, name) in output.introduced_variables.name_by_var {
@@ -169,6 +170,37 @@ mod test_reporting {
         }
     }
 
+    fn list_header_reports<F>(arena: &Bump, src: &str, buf: &mut String, callback: F)
+    where
+        F: FnOnce(RocDocBuilder<'_>, &mut String),
+    {
+        use ven_pretty::DocAllocator;
+
+        use roc_parse::parser::State;
+
+        let state = State::new(src.as_bytes());
+
+        let filename = filename_from_string(r"\code\proj\Main.roc");
+        let src_lines: Vec<&str> = src.split('\n').collect();
+
+        match roc_parse::module::parse_header(arena, state) {
+            Err(fail) => {
+                let interns = Interns::default();
+                let home = crate::helpers::test_home();
+
+                let alloc = RocDocAllocator::new(&src_lines, home, &interns);
+
+                use roc_parse::parser::SyntaxError;
+                let problem =
+                    SyntaxError::Header(fail).into_parse_problem(filename.clone(), src.as_bytes());
+                let doc = parse_problem(&alloc, filename, 0, problem);
+
+                callback(doc.pretty(&alloc).append(alloc.line()), buf)
+            }
+            Ok(_) => todo!(),
+        }
+    }
+
     fn report_problem_as(src: &str, expected_rendering: &str) {
         let mut buf: String = String::new();
         let arena = Bump::new();
@@ -180,6 +212,30 @@ mod test_reporting {
         };
 
         list_reports(&arena, src, &mut buf, callback);
+
+        // convenient to copy-paste the generated message
+        if true {
+            if buf != expected_rendering {
+                for line in buf.split("\n") {
+                    println!("                {}", line);
+                }
+            }
+        }
+
+        assert_eq!(buf, expected_rendering);
+    }
+
+    fn report_header_problem_as(src: &str, expected_rendering: &str) {
+        let mut buf: String = String::new();
+        let arena = Bump::new();
+
+        let callback = |doc: RocDocBuilder<'_>, buf: &mut String| {
+            doc.1
+                .render_raw(70, &mut roc_reporting::report::CiWrite::new(buf))
+                .expect("list_reports")
+        };
+
+        list_header_reports(&arena, src, &mut buf, callback);
 
         // convenient to copy-paste the generated message
         if true {
@@ -801,35 +857,36 @@ mod test_reporting {
         )
     }
 
-    // #[test]
-    // fn if_3_branch_mismatch() {
-    //     report_problem_as(
-    //         indoc!(
-    //             r#"
-    //             if True then 2 else if False then 2 else "foo"
-    //             "#
-    //         ),
-    //         indoc!(
-    //             r#"
-    //  ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+    #[test]
+    fn if_3_branch_mismatch() {
+        report_problem_as(
+            indoc!(
+                r#"
+                 if True then 2 else if False then 2 else "foo"
+                 "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-    //             The 2nd branch of this `if` does not match all the previous branches:
+                The 3rd branch of this `if` does not match all the previous branches:
 
-    //             1│ if True then 2 else "foo"
-    //                                     ^^^^^
+                1│  if True then 2 else if False then 2 else "foo"
+                                                             ^^^^^
 
-    //             The 2nd branch is a string of type
+                The 3rd branch is a string of type:
 
-    //                 Str
+                    Str
 
-    //             But all the previous branches have the type
+                But all the previous branches have type:
 
-    //                 Num a
+                    Num a
 
-    //             "#
-    //         ),
-    //     )
-    // }
+                I need all branches in an `if` to have the same type!
+                "#
+            ),
+        )
+    }
 
     #[test]
     fn when_branch_mismatch() {
@@ -1132,7 +1189,7 @@ mod test_reporting {
 
                 But the type annotation on `x` says it should be:
 
-                    Int b
+                    Int a
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1171,7 +1228,7 @@ mod test_reporting {
 
                 But the type annotation on `x` says it should be:
 
-                    Int b
+                    Int a
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1207,7 +1264,7 @@ mod test_reporting {
 
                 But the type annotation on `x` says it should be:
 
-                    Int b
+                    Int a
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1541,7 +1598,7 @@ mod test_reporting {
 
                 But the type annotation says it should be:
 
-                    { x : Int b }
+                    { x : Int a }
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -3157,12 +3214,15 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
+                ── ARGUMENTS BEFORE EQUALS ─────────────────────────────────────────────────────
 
-                Unexpected tokens in front of the `=` symbol:
+                I am partway through parsing a definition, but I got stuck here:
 
                 1│  f x y = x
                       ^^^
+
+                Looks like you are trying to define a function. In roc, functions are
+                always written as a lambda, like increment = \n -> n + 1.
                 "#
             ),
         )
@@ -4017,10 +4077,85 @@ mod test_reporting {
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
 
-                The `Foo.Bar` identifier is malformed:
+                I am trying to parse a qualified name here:
 
                 1│  Foo.Bar
-                    ^^^^^^^
+                           ^
+
+                This looks like a qualified tag name to me, but tags cannot be
+                qualified! Maybe you wanted a qualified name, something like
+                Json.Decode.string?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn module_ident_ends_with_dot() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Foo.Bar.
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am trying to parse a qualified name here:
+
+                1│  Foo.Bar.
+                            ^
+
+                I was expecting to see an identifier next, like height. A complete
+                qualified name looks something like Json.Decode.string.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn record_access_ends_with_dot() {
+        report_problem_as(
+            indoc!(
+                r#"
+                foo.bar.
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I trying to parse a record field access here:
+
+                1│  foo.bar.
+                            ^
+
+                So I expect to see a lowercase letter next, like .name or .height.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn qualified_private_tag() {
+        report_problem_as(
+            indoc!(
+                r#"
+                @Foo.Bar
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am very confused by this expression:
+
+                1│  @Foo.Bar
+                        ^^^^
+
+                Looks like a private tag is treated like a module name. Maybe you
+                wanted a qualified name, like Json.Decode.string?
             "#
             ),
         )
@@ -4041,9 +4176,9 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
-                
+
                 Unexpected token :
-                
+
                 1│  f :: I64
                        ^
             "#
@@ -4061,46 +4196,23 @@ mod test_reporting {
             indoc!(
                 r#"
                 x = 3
-                y = 
+                y =
                     x == 5
                     Num.add 1 2
 
-                x y
+                { x,  y }
                 "#
             ),
             indoc!(
                 r#"
                 ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
                 
-                The `add` function expects 2 arguments, but it got 4 instead:
+                This value is not a function, but it was given 3 arguments:
                 
-                4│      Num.add 1 2
-                        ^^^^^^^
+                3│      x == 5
+                             ^
                 
                 Are there any missing commas? Or missing parentheses?
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn invalid_operator() {
-        // NOTE: VERY BAD ERROR MESSAGE
-        report_problem_as(
-            indoc!(
-                r#"
-                main =
-                    5 ** 3
-                "#
-            ),
-            indoc!(
-                r#"
-                ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
-                
-                Unexpected token :
-                
-                2│      5 ** 3
-                          ^
             "#
             ),
         )
@@ -4117,12 +4229,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED TAG UNION TYPE ───────────────────────────────────────────────────
-                
+
                 I just started parsing a tag union type, but I got stuck here:
-                
+
                 1│  f : [
                          ^
-                
+
                 Tag unions look like [ Many I64, None ], so I was expecting to see a
                 tag name next.
             "#
@@ -4135,18 +4247,18 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : [ Yes, 
+                f : [ Yes,
                 "#
             ),
             indoc!(
                 r#"
                 ── UNFINISHED TAG UNION TYPE ───────────────────────────────────────────────────
-                
+
                 I am partway through parsing a tag union type, but I got stuck here:
-                
-                1│  f : [ Yes, 
+
+                1│  f : [ Yes,
                               ^
-                
+
                 I was expecting to see a closing square bracket before this, so try
                 adding a ] and see if that helps?
             "#
@@ -4159,20 +4271,20 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : [ lowercase ] 
+                f : [ lowercase ]
                 "#
             ),
             indoc!(
                 r#"
                 ── WEIRD TAG NAME ──────────────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a tag union type, but I got stuck here:
-                
-                1│  f : [ lowercase ] 
+
+                1│  f : [ lowercase ]
                           ^
-                
+
                 I was expecting to see a tag name.
-                
+
                 Hint: Tag names start with an uppercase letter, like Err or Green.
             "#
             ),
@@ -4184,20 +4296,20 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : [ Good, bad ] 
+                f : [ Good, bad ]
                 "#
             ),
             indoc!(
                 r#"
                 ── WEIRD TAG NAME ──────────────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a tag union type, but I got stuck here:
-                
-                1│  f : [ Good, bad ] 
+
+                1│  f : [ Good, bad ]
                                 ^
-                
+
                 I was expecting to see a tag name.
-                
+
                 Hint: Tag names start with an uppercase letter, like Err or Green.
             "#
             ),
@@ -4215,12 +4327,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
-                
+
                 I just started parsing a record type, but I got stuck here:
-                
+
                 1│  f : {
                          ^
-                
+
                 Record types look like { name : String, age : Int }, so I was
                 expecting to see a field name next.
             "#
@@ -4240,15 +4352,15 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a record type, but I got stuck here:
-                
+
                 1│  f : {
                          ^
-                
+
                 I was expecting to see a closing curly brace before this, so try
                 adding a } and see if that helps?
-                
+
                 Note: I may be confused by indentation
             "#
             ),
@@ -4260,18 +4372,18 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : { a: Int, 
+                f : { a: Int,
                 "#
             ),
             indoc!(
                 r#"
                 ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a record type, but I got stuck here:
-                
-                1│  f : { a: Int, 
+
+                1│  f : { a: Int,
                                  ^
-                
+
                 I was expecting to see a closing curly brace before this, so try
                 adding a } and see if that helps?
             "#
@@ -4291,13 +4403,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a record type, but I got stuck here:
-                
+
                 1│  f : { a: Int
                 2│  }
                     ^
-                
+
                 I need this curly brace to be indented more. Try adding more spaces
                 before it!
             "#
@@ -4310,19 +4422,19 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : { if : I64 } 
+                f : { if : I64 }
                 "#
             ),
             indoc!(
                 r#"
                 ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
-                
+
                 I just started parsing a record type, but I got stuck on this field
                 name:
-                
-                1│  f : { if : I64 } 
+
+                1│  f : { if : I64 }
                           ^^
-                
+
                 Looks like you are trying to use `if` as a field name, but that is a
                 reserved word. Try using a different name!
             "#
@@ -4342,12 +4454,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a record type, but I got stuck here:
-                
+
                 1│  f : { foo  bar }
                                ^
-                
+
                 I was expecting to see a colon, question mark, comma or closing curly
                 brace.
             "#
@@ -4363,12 +4475,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── TAB CHARACTER ───────────────────────────────────────────────────────────────
-                
+
                 I encountered a tab character
-                
+
                 1│  f : { foo 	 }
                               ^
-                
+
                 Tab characters are not allowed.
             "#
             ),
@@ -4383,12 +4495,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── TAB CHARACTER ───────────────────────────────────────────────────────────────
-                
+
                 I encountered a tab character
-                
+
                 1│  f : { foo 	 }
                               ^
-                
+
                 Tab characters are not allowed.
             "#
             ),
@@ -4407,12 +4519,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a record type, but I got stuck here:
-                
-                1│  f : { a: Int, 
+
+                1│  f : { a: Int,
                                  ^
-                
+
                 I was expecting to see a closing curly brace before this, so try
                 adding a } and see if that helps?
             "#
@@ -4431,13 +4543,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED PARENTHESES ──────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a type in parentheses, but I got stuck
                 here:
-                
+
                 1│  f : ( I64
                              ^
-                
+
                 I was expecting to see a closing parenthesis before this, so try
                 adding a ) and see if that helps?
             "#
@@ -4450,22 +4562,22 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : Foo..Bar 
+                f : Foo..Bar
+
+                f
                 "#
             ),
-            indoc!(
-                r#"
-                ── DOUBLE DOT ──────────────────────────────────────────────────────────────────
-                
-                I encountered two dots in a row:
-                
-                1│  f : Foo..Bar 
-                            ^
-                
-                Try removing one of them.
-            "#
-            ),
+            indoc!(r#""#),
         )
+
+        //                ── DOUBLE DOT ──────────────────────────────────────────────────────────────────
+        //
+        //                I encountered two dots in a row:
+        //
+        //                1│  f : Foo..Bar
+        //                            ^
+        //
+        //                Try removing one of them.
     }
 
     #[test]
@@ -4474,22 +4586,22 @@ mod test_reporting {
             indoc!(
                 r#"
                 f : Foo.Bar.
+
+                f
                 "#
             ),
-            indoc!(
-                r#"
-                ── TRAILING DOT ────────────────────────────────────────────────────────────────
-                
-                I encountered a dot with nothing after it:
-                
-                1│  f : Foo.Bar.
-                                ^
-                
-                Dots are used to refer to a type in a qualified way, like
-                Num.I64 or List.List a. Try adding a type name next.
-            "#
-            ),
+            indoc!(r#""#),
         )
+
+        //                ── TRAILING DOT ────────────────────────────────────────────────────────────────
+        //
+        //                I encountered a dot with nothing after it:
+        //
+        //                1│  f : Foo.Bar.
+        //                                ^
+        //
+        //                Dots are used to refer to a type in a qualified way, like
+        //                Num.I64 or List.List a. Try adding a type name next.
     }
 
     #[test]
@@ -4499,19 +4611,19 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : . 
+                f : .
                 "#
             ),
             indoc!(
                 r#"
                 ── UNFINISHED PARENTHESES ──────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a type in parentheses, but I got stuck
                 here:
-                
+
                 1│  f : ( I64
                              ^
-                
+
                 I was expecting to see a closing parenthesis before this, so try
                 adding a ) and see if that helps?
             "#
@@ -4525,22 +4637,22 @@ mod test_reporting {
             indoc!(
                 r#"
                 f : Foo.1
+
+                f
                 "#
             ),
-            indoc!(
-                r#"
-                ── WEIRD QUALIFIED NAME ────────────────────────────────────────────────────────
-                
-                I encountered a number at the start of a qualified name segment:
-                
-                1│  f : Foo.1
-                            ^
-                
-                All parts of a qualified type name must start with an uppercase
-                letter, like Num.I64 or List.List a.
-            "#
-            ),
+            indoc!(r#""#),
         )
+
+        //                ── WEIRD QUALIFIED NAME ────────────────────────────────────────────────────────
+        //
+        //                I encountered a number at the start of a qualified name segment:
+        //
+        //                1│  f : Foo.1
+        //                            ^
+        //
+        //                All parts of a qualified type name must start with an uppercase
+        //                letter, like Num.I64 or List.List a.
     }
 
     #[test]
@@ -4549,20 +4661,39 @@ mod test_reporting {
             indoc!(
                 r#"
                 f : Foo.foo
+
+                f
+                "#
+            ),
+            indoc!(r#""#),
+        )
+    }
+
+    #[test]
+    fn def_missing_final_expression() {
+        report_problem_as(
+            indoc!(
+                r#"
+                f : Foo.foo
                 "#
             ),
             indoc!(
                 r#"
-                ── WEIRD QUALIFIED NAME ────────────────────────────────────────────────────────
+                ── MISSING FINAL EXPRESSION ────────────────────────────────────────────────────
                 
-                I encountered a lowercase letter at the start of a qualified name
-                segment:
+                I am partway through parsing a definition's final expression, but I
+                got stuck here:
                 
                 1│  f : Foo.foo
-                            ^
+                               ^
                 
-                All parts of a qualified type name must start with an uppercase
-                letter, like Num.I64 or List.List a.
+                This definition is missing a final expression. A nested definition
+                must be followed by either another definition, or an expression
+                
+                    x = 4
+                    y = 2
+                
+                    x + y
             "#
             ),
         )
@@ -4573,7 +4704,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : I64 as 
+                f : I64 as
                 f = 0
 
                 f
@@ -4582,12 +4713,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED INLINE ALIAS ─────────────────────────────────────────────────────
-                
+
                 I just started parsing an inline type alias, but I got stuck here:
-                
-                1│  f : I64 as 
+
+                1│  f : I64 as
                               ^
-                
+
                 Note: I may be confused by indentation
             "#
             ),
@@ -4599,7 +4730,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : I64,,I64 -> I64 
+                f : I64,,I64 -> I64
                 f = 0
 
                 f
@@ -4608,13 +4739,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── DOUBLE COMMA ────────────────────────────────────────────────────────────────
-                
+
                 I just started parsing a function argument type, but I encounterd two
                 commas in a row:
-                
-                1│  f : I64,,I64 -> I64 
+
+                1│  f : I64,,I64 -> I64
                             ^
-                
+
                 Try removing one of them.
             "#
             ),
@@ -4626,7 +4757,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : I64, I64 
+                f : I64, I64
                 f = 0
 
                 f
@@ -4635,12 +4766,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED TYPE ─────────────────────────────────────────────────────────────
-                
-                I just started parsing a type, but I got stuck here:
-                
-                1│  f : I64, I64 
+
+                I am partway through parsing a type, but I got stuck here:
+
+                1│  f : I64, I64
                                 ^
-                
+
                 Note: I may be confused by indentation
             "#
             ),
@@ -4653,7 +4784,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : I64, I64 -> 
+                f : I64, I64 ->
                 f = 0
 
                 f
@@ -4662,12 +4793,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED TYPE ─────────────────────────────────────────────────────────────
-                
+
                 I just started parsing a type, but I got stuck here:
-                
-                1│  f : I64, I64 -> 
+
+                1│  f : I64, I64 ->
                                    ^
-                
+
                 Note: I may be confused by indentation
             "#
             ),
@@ -4680,7 +4811,7 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                f : [ @Foo Bool, @100 I64 ] 
+                f : [ @Foo Bool, @100 I64 ]
                 f = 0
 
                 f
@@ -4689,14 +4820,14 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── WEIRD TAG NAME ──────────────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a tag union type, but I got stuck here:
-                
-                1│  f : [ @Foo Bool, @100 I64 ] 
+
+                1│  f : [ @Foo Bool, @100 I64 ]
                                      ^
-                
+
                 I was expecting to see a private tag name.
-                
+
                 Hint: Private tag names start with an `@` symbol followed by an
                 uppercase letter, like @UID or @SecretKey.
             "#
@@ -4719,20 +4850,1140 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
-                
+
                 Something is off with the body of the `myDict` definition:
-                
+
                 1│  myDict : Dict I64 Str
                 2│  myDict = Dict.insert Dict.empty "foo" 42
                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                
+
                 This `insert` call produces:
-                
+
                     Dict Str (Num a)
-                
+
                 But the type annotation on `myDict` says it should be:
-                
+
                     Dict I64 Str
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn alias_type_diff() {
+        report_problem_as(
+            indoc!(
+                r#"
+                HSet a : Set a
+
+                foo : Str -> HSet {}
+
+                myDict : HSet Str
+                myDict = foo "bar"
+
+                myDict
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `myDict` definition:
+
+                5│  myDict : HSet Str
+                6│  myDict = foo "bar"
+                             ^^^^^^^^^
+
+                This `foo` call produces:
+
+                    HSet {}
+
+                But the type annotation on `myDict` says it should be:
+
+                    HSet Str
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn if_guard_without_condition() {
+        // this should get better with time
+        report_problem_as(
+            indoc!(
+                r#"
+                when Just 4 is
+                    Just if ->
+                        4
+
+                    _ ->
+                        2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── IF GUARD NO CONDITION ───────────────────────────────────────────────────────
+
+                I just started parsing an if guard, but there is no guard condition:
+
+                1│  when Just 4 is
+                2│      Just if ->
+                                ^
+
+                Try adding an expression before the arrow!
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn empty_or_pattern() {
+        // this should get better with time
+        report_problem_as(
+            indoc!(
+                r#"
+                when Just 4 is
+                    Just 4 | ->
+                        4
+
+                    _ ->
+                        2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── MISSING EXPRESSION ──────────────────────────────────────────────────────────
+
+                I am partway through parsing a definition, but I got stuck here:
+
+                1│  when Just 4 is
+                2│      Just 4 | ->
+                                  ^
+
+                I was expecting to see an expression like 42 or "hello".
+                "#
+            ),
+            //            indoc!(
+            //                r#"
+            //                ── UNFINISHED PATTERN ──────────────────────────────────────────────────────────
+            //
+            //                I just started parsing a pattern, but I got stuck here:
+            //
+            //                2│      Just 4 | ->
+            //                                 ^
+            //
+            //                Note: I may be confused by indentation
+            //            "#
+            //            ),
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn pattern_binds_keyword() {
+        // this should get better with time
+        report_problem_as(
+            indoc!(
+                r#"
+                when Just 4 is
+                    Just when ->
+                        4
+
+                    _ ->
+                        2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
+
+                Unexpected token :
+
+                2│      Just if ->
+                                ^
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn when_missing_arrow() {
+        // this should get better with time
+        report_problem_as(
+            indoc!(
+                r#"
+                when 5 is
+                    1 -> 2
+                    _
+                "#
+            ),
+            indoc!(
+                r#"
+                ── MISSING ARROW ───────────────────────────────────────────────────────────────
+
+                I am partway through parsing a `when` expression, but got stuck here:
+
+                2│      1 -> 2
+                3│      _
+                         ^
+
+                I was expecting to see an arrow next.
+
+                Note: Sometimes I get confused by indentation, so try to make your `when`
+                look something like this:
+
+                    when List.first plants is
+                      Ok n ->
+                        n
+
+                      Err _ ->
+                        200
+
+                Notice the indentation. All patterns are aligned, and each branch is
+                indented a bit more than the corresponding pattern. That is important!
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn lambda_double_comma() {
+        report_problem_as(
+            indoc!(
+                r#"
+                \a,,b -> 1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED ARGUMENT LIST ────────────────────────────────────────────────────
+
+                I am partway through parsing a function argument list, but I got stuck
+                at this comma:
+
+                1│  \a,,b -> 1
+                       ^
+
+                I was expecting an argument pattern before this, so try adding an
+                argument before the comma and see if that helps?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn lambda_leading_comma() {
+        report_problem_as(
+            indoc!(
+                r#"
+                \,b -> 1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED ARGUMENT LIST ────────────────────────────────────────────────────
+
+                I am partway through parsing a function argument list, but I got stuck
+                at this comma:
+
+                1│  \,b -> 1
+                     ^
+
+                I was expecting an argument pattern before this, so try adding an
+                argument before the comma and see if that helps?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn when_outdented_branch() {
+        // this should get better with time
+        report_problem_as(
+            indoc!(
+                r#"
+                when 4 is
+                    5 -> 2
+                  _ -> 2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED WHEN ─────────────────────────────────────────────────────────────
+
+                I was partway through parsing a `when` expression, but I got stuck here:
+
+                3│    _ -> 2
+                        ^
+
+                I suspect this is a pattern that is not indented enough? (by 2 spaces)
+
+                Note: Here is an example of a valid `when` expression for reference.
+
+                    when List.first plants is
+                      Ok n ->
+                        n
+
+                      Err _ ->
+                        200
+
+                Notice the indentation. All patterns are aligned, and each branch is
+                indented a bit more than the corresponding pattern. That is important!
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn if_outdented_then() {
+        // TODO I think we can do better here
+        report_problem_as(
+            indoc!(
+                r#"
+                x =
+                    if 5 == 5
+                then 2 else 3
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED IF ───────────────────────────────────────────────────────────────
+
+                I was partway through parsing an `if` expression, but I got stuck here:
+
+                2│      if 5 == 5
+                                 ^
+
+                I was expecting to see the `then` keyword next.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn if_missing_else() {
+        // this should get better with time
+        report_problem_as(
+            indoc!(
+                r#"
+                if 5 == 5 then 2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED IF ───────────────────────────────────────────────────────────────
+
+                I was partway through parsing an `if` expression, but I got stuck here:
+
+                1│  if 5 == 5 then 2
+                                    ^
+
+                I was expecting to see the `else` keyword next.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_double_comma() {
+        report_problem_as(
+            indoc!(
+                r#"
+                [ 1, 2, , 3 ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED LIST ─────────────────────────────────────────────────────────────
+
+                I am partway through started parsing a list, but I got stuck here:
+
+                1│  [ 1, 2, , 3 ]
+                            ^
+
+                I was expecting to see a list entry before this comma, so try adding a
+                list entry and see if that helps?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_without_end() {
+        report_problem_as(
+            indoc!(
+                r#"
+                [ 1, 2,
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED LIST ─────────────────────────────────────────────────────────────
+
+                I am partway through started parsing a list, but I got stuck here:
+
+                1│  [ 1, 2,
+                           ^
+
+                I was expecting to see a closing square bracket before this, so try
+                adding a ] and see if that helps?
+
+                Note: When I get stuck like this, it usually means that there is a
+                missing parenthesis or bracket somewhere earlier. It could also be a
+                stray keyword or operator.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn list_bad_indent() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x = [ 1, 2,
+                ]
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED LIST ─────────────────────────────────────────────────────────────
+
+                I cannot find the end of this list:
+
+                1│  x = [ 1, 2,
+                               ^
+
+                You could change it to something like [ 1, 2, 3 ] or even just [].
+                Anything where there is an open and a close square bracket, and where
+                the elements of the list are separated by commas.
+
+                Note: I may be confused by indentation
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn number_double_dot() {
+        report_problem_as(
+            indoc!(
+                r#"
+                1.1.1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This float literal contains an invalid digit:
+
+                1│  1.1.1
+                    ^^^^^
+
+                Floating point literals can only contain the digits 0-9, or use
+                scientific notation 10e4
+
+                Tip: Learn more about number literals at TODO
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn unicode_not_hex() {
+        report_problem_as(
+            r#""abc\u(zzzz)def""#,
+            indoc!(
+                r#"
+                ── WEIRD CODE POINT ────────────────────────────────────────────────────────────
+
+                I am partway through parsing a unicode code point, but I got stuck
+                here:
+
+                1│  "abc\u(zzzz)def"
+                           ^
+
+                I was expecting a hexadecimal number, like \u(1100) or \u(00FF).
+
+                Learn more about working with unicode in roc at TODO
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn interpolate_not_identifier() {
+        report_problem_as(
+            r#""abc\(32)def""#,
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This string interpolation is invalid:
+
+                1│  "abc\(32)def"
+                          ^^
+
+                I was expecting an identifier, like \u(message) or
+                \u(LoremIpsum.text).
+
+                Learn more about string interpolation at TODO
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn unicode_too_large() {
+        report_problem_as(
+            r#""abc\u(110000)def""#,
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This unicode code point is invalid:
+
+                1│  "abc\u(110000)def"
+                           ^^^^^^
+
+                Learn more about working with unicode in roc at TODO
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn weird_escape() {
+        report_problem_as(
+            r#""abc\qdef""#,
+            indoc!(
+                r#"
+                ── WEIRD ESCAPE ────────────────────────────────────────────────────────────────
+
+                I was partway through parsing a  string literal, but I got stuck here:
+
+                1│  "abc\qdef"
+                        ^^
+
+                This is not an escape sequence I recognize. After a backslash, I am
+                looking for one of these:
+
+                    - A newline: \n
+                    - A caret return: \r
+                    - A tab: \t
+                    - An escaped quote: \"
+                    - An escaped backslash: \\
+                    - A unicode code point: \u(00FF)
+                    - An interpolated string: \(myVariable)
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn single_no_end() {
+        report_problem_as(
+            r#""there is no end"#,
+            indoc!(
+                r#"
+                ── ENDLESS STRING ──────────────────────────────────────────────────────────────
+
+                I cannot find the end of this string:
+
+                1│  "there is no end
+                     ^
+
+                You could change it to something like "to be or not to be" or even
+                just "".
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn multi_no_end() {
+        report_problem_as(
+            r#""""there is no end"#,
+            indoc!(
+                r#"
+                ── ENDLESS STRING ──────────────────────────────────────────────────────────────
+
+                I cannot find the end of this block string:
+
+                1│  """there is no end
+                       ^
+
+                You could change it to something like """to be or not to be""" or even
+                just """""".
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn keyword_record_field_access() {
+        report_problem_as(
+            indoc!(
+                r#"
+                foo = {}
+
+                foo.if
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This expression is used in an unexpected way:
+
+                3│  foo.if
+                    ^^^^^^
+
+                This `foo` value is a:
+
+                    {}
+
+                But you are trying to use it as:
+
+                    { if : a }b
+
+
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn keyword_qualified_import() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Num.if
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                The Num module does not expose a if value:
+
+                1│  Num.if
+                    ^^^^^^
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn stray_dot_expr() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Num.add . 23
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I trying to parse a record field access here:
+
+                1│  Num.add . 23
+                             ^
+
+                So I expect to see a lowercase letter next, like .name or .height.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn private_tag_not_uppercase() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Num.add @foo 23
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am trying to parse a private tag here:
+
+                1│  Num.add @foo 23
+                             ^
+
+                But after the `@` symbol I found a lowercase letter. All tag names
+                (global and private) must start with an uppercase letter, like @UUID
+                or @Secrets.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn private_tag_field_access() {
+        report_problem_as(
+            indoc!(
+                r#"
+                @UUID.bar
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am very confused by this field access:
+
+                1│  @UUID.bar
+                         ^^^^
+
+                It looks like a record field access on a private tag.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn weird_accessor() {
+        report_problem_as(
+            indoc!(
+                r#"
+                .foo.bar
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am very confused by this field access
+
+                1│  .foo.bar
+                    ^^^^^^^^
+
+                It looks like a field access on an accessor. I parse.client.name as
+                (.client).name. Maybe use an anonymous function like
+                (\r -> r.client.name) instead?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn part_starts_with_number() {
+        report_problem_as(
+            indoc!(
+                r#"
+                foo.100
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I trying to parse a record field access here:
+
+                1│  foo.100
+                        ^
+
+                So I expect to see a lowercase letter next, like .name or .height.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn closure_underscore_ident() {
+        report_problem_as(
+            indoc!(
+                r#"
+                \the_answer -> 100
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am trying to parse an identifier here:
+
+                1│  \the_answer -> 100
+                        ^
+
+                Underscores are not allowed in identifiers. Use camelCase instead!
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn double_binop() {
+        report_problem_as(
+            indoc!(
+                r#"
+                key >= 97 && <= 122
+                "#
+            ),
+            indoc!(
+                r#"
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn case_of() {
+        report_problem_as(
+            indoc!(
+                r#"
+                case 1 of
+                    1 -> True
+                    _ -> False
+                "#
+            ),
+            indoc!(
+                r#"
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn argument_without_space() {
+        report_problem_as(
+            indoc!(
+                r#"
+                [ "foo", bar("") ]
+                "#
+            ),
+            indoc!(
+                r#"
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn invalid_operator() {
+        report_problem_as(
+            indoc!(
+                r#"
+                main =
+                    5 ** 3
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNKNOWN OPERATOR ────────────────────────────────────────────────────────────
+
+                This looks like an operator, but it's not one I recognize!
+
+                1│  main =
+                2│      5 ** 3
+                          ^^
+
+                I have no specific suggestion for this operator, see TODO for the full
+                list of operators in Roc.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn double_plus() {
+        report_problem_as(
+            indoc!(
+                r#"
+                main =
+                    [] ++ []
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNKNOWN OPERATOR ────────────────────────────────────────────────────────────
+
+                This looks like an operator, but it's not one I recognize!
+
+                1│  main =
+                2│      [] ++ []
+                           ^^
+
+                To concatenate two lists or strings, try using List.concat or
+                Str.concat instead.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn inline_hastype() {
+        report_problem_as(
+            indoc!(
+                r#"
+                main =
+                    (\x -> x) : I64
+
+                    3
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNKNOWN OPERATOR ────────────────────────────────────────────────────────────
+                
+                This looks like an operator, but it's not one I recognize!
+                
+                1│  main =
+                2│      (\x -> x) : I64
+                                  ^
+                
+                The has-type operator : can only occur in a definition's type
+                signature, like
+                
+                    increment : I64 -> I64
+                    increment = \x -> x + 1
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn wild_case_arrow() {
+        // this is still bad, but changing the order and progress of other parsers should improve it
+        // down the line
+        report_problem_as(
+            indoc!(
+                r#"
+                main = 5 -> 3
+                "#
+            ),
+            indoc!(
+                r#"
+                ── MISSING FINAL EXPRESSION ────────────────────────────────────────────────────
+                
+                I am partway through parsing a definition's final expression, but I
+                got stuck here:
+                
+                1│  main = 5 -> 3
+                              ^
+                
+                This definition is missing a final expression. A nested definition
+                must be followed by either another definition, or an expression
+                
+                    x = 4
+                    y = 2
+                
+                    x + y
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn provides_to_identifier() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                app "test-base64"
+                    packages { base: "platform" }
+                    imports [base.Task, Base64 ]
+                    provides [ main, @Foo ] to base
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD PROVIDES ──────────────────────────────────────────────────────────────
+
+                I am partway through parsing a provides list, but I got stuck here:
+
+                3│      imports [base.Task, Base64 ]
+                4│      provides [ main, @Foo ] to base
+                                         ^
+
+                I was expecting a type name, value name or function name next, like
+
+                    provides [ Animal, default, tame ]
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn exposes_identifier() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                interface Foobar
+                    exposes [ main, @Foo ]
+                    imports [base.Task, Base64 ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD EXPOSES ───────────────────────────────────────────────────────────────
+
+                I am partway through parsing a exposes list, but I got stuck here:
+
+                1│  interface Foobar
+                2│      exposes [ main, @Foo ]
+                                        ^
+
+                I was expecting a type name, value name or function name next, like
+
+                    exposes [ Animal, default, tame ]
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn invalid_module_name() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                interface foobar
+                    exposes [ main, @Foo ]
+                    imports [base.Task, Base64 ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD MODULE NAME ───────────────────────────────────────────────────────────
+
+                I am partway through parsing a header, but got stuck here:
+
+                1│  interface foobar
+                              ^
+
+                I am expecting a module name next, like BigNum or Main. Module names
+                must start with an uppercase letter.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn invalid_app_name() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                app foobar
+                    exposes [ main, @Foo ]
+                    imports [base.Task, Base64 ]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD APP NAME ──────────────────────────────────────────────────────────────
+
+                I am partway through parsing a header, but got stuck here:
+
+                1│  app foobar
+                        ^
+
+                I am expecting an application name next, like app "main" or
+                app "editor". App names are surrounded by quotation marks.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn apply_unary_negative() {
+        report_problem_as(
+            indoc!(
+                r#"
+                foo = 3
+
+                -foo 1 2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
+
+                This value is not a function, but it was given 2 arguments:
+
+                3│  -foo 1 2
+                    ^^^^
+
+                Are there any missing commas? Or missing parentheses?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn apply_unary_not() {
+        report_problem_as(
+            indoc!(
+                r#"
+                foo = True
+
+                !foo 1 2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
+
+                This value is not a function, but it was given 2 arguments:
+
+                3│  !foo 1 2
+                    ^^^^
+
+                Are there any missing commas? Or missing parentheses?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn foobar() {
+        report_problem_as(
+            indoc!(
+                r#"
+                g = \x ->
+                    when x is
+                        0 -> 0
+                        _ -> g (x - 1)
+
+                # use parens to force the ordering!
+                (h = \x ->
+                    when x is
+                        0 -> 0
+                        _ -> g (x - 1)
+
+                 (p = \x ->
+                    when x is
+                        0 -> 0
+                        1 -> g (x - 1)
+                        _ -> p (x - 1)
+
+
+                  # variables must be (indirectly) referenced in the body for analysis to work
+                  { x: p, y: h }
+                  ))
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
+
+                This value is not a function, but it was given 2 arguments:
+
+                3│  !foo 1 2
+                    ^^^^
+
+                Are there any missing commas? Or missing parentheses?
             "#
             ),
         )

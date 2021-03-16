@@ -37,6 +37,10 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 * [VS code debug visualization](https://marketplace.visualstudio.com/items?itemName=hediet.debug-visualizer)
 * [Algorithm visualization for javascript](https://algorithm-visualizer.org)
 * [godbolt.org Compiler Explorer](https://godbolt.org/)
+* Say you have a failing test that used to work, it would be very valuable to see all code that was changed that was used only by that test.
+e.g. you have a test `calculate_sum_test` that only uses the function `add`, when the test fails you should be able to see a diff showing only what changed for the function `add`. It would also be great to have a diff of [expression values](https://homepages.cwi.nl/~storm/livelit/images/bret.png) Bret Victor style. An ambitious project would be to suggest or automatically try fixes based on these diffs.
++ [whitebox debug visualization](https://vimeo.com/483795097)
+
 
 ### Structured Editing
 
@@ -56,12 +60,16 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 * [Live Programing](https://www.microsoft.com/en-us/research/project/live-programming/?from=http%3A%2F%2Fresearch.microsoft.com%2Fen-us%2Fprojects%2Fliveprogramming%2Ftypography.aspx#!publications) by [Microsoft Research] it contains many interesting research papers.
 * [Math Inspector](https://mathinspector.com/), [github](https://github.com/MathInspector/MathInspector)
 * [Lamdu](http://www.lamdu.org/) live functional programming.
+* [Sourcetrail](https://www.sourcetrail.com/) nice tree-like source explorer.
+* [Unisonweb](https://www.unisonweb.org), definition based [editor](https://twitter.com/shojberg/status/1364666092598288385) as opposed to file based.
 
 ### Productivity features
 
 * When refactoring; 
     - Cutting and pasting code to a new file should automatically add imports to the new file and delete them from the old file.
-    - Ability to link e.g. variable name in comments to actual variable name. Comment is automatically updated when variable name is changed. 
+    - Ability to link e.g. variable name in comments to actual variable name. Comment is automatically updated when variable name is changed.
+    - When updating dependencies with breaking changes; show similar diffs from github projects that have succesfully updated that dependency.
+    - AST backed renaming, changing variable/function/type name should change it all over the codebase.  
 * Automatically create all "arms" when pattern matching after entering `when var is` based on the type.
     - All `when ... is` should be updated if the type is changed, e.g. adding Indigo to the Color type should add an arm everywhere where `when color is` is used. 
 * When a function is called like `foo(false)`, the name of the boolean argument should be shown automatically; `foo(`*is_active:*`false)`. This should be done for booleans and numbers.
@@ -83,6 +91,8 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 #### Productivity Inspiration
 
 * [Kite](https://www.kite.com/) AI autocomplete and doc viewer.
+* [Tabnine](https://www.tabnine.com/) AI autocomplete.
+* [Codota](https://www.codota.com) AI autocomplete and example searching.
 
 ### Non-Code Related Inspiration
 
@@ -102,6 +112,7 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
     * Users with large private code bases could (re)train a publicly available error recovery model to experience benefits without having to share their code.
     * It could be useful to a user who is creating a function to show them the most similar function (type signature, name, comment) in a public+their private database. Say I was using a web framework and I just created a function that has a multipart form as argument, it would be great to have an example instantly available.
         * A simpler start for this idea without user data gathering: how the user a code snippet that is most similar to what they are currently writing. Snippets can be aggregated from examples, tests, docstrings at zero cost to the package/platform authors.
+        * See [codata](https://www.codota.com/code/java/classes/okhttp3.OkHttpClient) for inspiration on a snippet/example finder.
 * Fuzzy natural language based setting adjustment in search bar or with voice input: increase font size, enable autosave, switch to light theme...
 * Voice input:
     * Good for accessibility.
@@ -113,6 +124,7 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
         * Show edit history for this function.
     * Mozilla DeepSpeech model runs fast, works pretty well for actions but would need additional training for code input.
     Possible to reuse [Mozilla common voice](https://github.com/common-voice/common-voice) for creating more "spoken code" data.
+* Detect deviation of best practices, example case: alert developer when they are defining a color inline (rgb(30,30,30)) while all colors have been previously imported from a single file. See also [Codota](https://www.codota.com).
 
 
 ## Testing

@@ -749,6 +749,13 @@ define_builtins! {
         17 GENERIC_RC_REF: "#generic_rc_by_ref" // refcount of arbitrary layouts, passed as an opaque pointer
 
         18 GENERIC_EQ: "#generic_eq" // internal function that checks generic equality
+
+        // a user-defined function that we need to capture in a closure
+        // see e.g. Set.walk
+        19 USER_FUNCTION: "#user_function"
+
+        // A caller (wrapper) that we pass to zig for it to be able to call Roc functions
+        20 ZIG_FUNCTION_CALLER: "#zig_function_caller"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -834,15 +841,23 @@ define_builtins! {
         80 NUM_BINARY32: "Binary32" imported
         81 NUM_BITWISE_AND: "bitwiseAnd"
         82 NUM_BITWISE_XOR: "bitwiseXor"
-        83 NUM_SUB_WRAP: "subWrap"
-        84 NUM_SUB_CHECKED: "subChecked"
-        85 NUM_MUL_WRAP: "mulWrap"
-        86 NUM_MUL_CHECKED: "mulChecked"
-        87 NUM_INT: "Int" imported
-        88 NUM_FLOAT: "Float" imported
-        89 NUM_AT_NATURAL: "@Natural"
-        90 NUM_NATURAL: "Natural" imported
-        91 NUM_NAT: "Nat" imported
+        83 NUM_BITWISE_OR: "bitwiseOr"
+        84 NUM_SHIFT_LEFT: "shiftLeftBy"
+        85 NUM_SHIFT_RIGHT: "shiftRightBy"
+        86 NUM_SHIFT_RIGHT_ZERO_FILL: "shiftRightZfBy"
+        87 NUM_SUB_WRAP: "subWrap"
+        88 NUM_SUB_CHECKED: "subChecked"
+        89 NUM_MUL_WRAP: "mulWrap"
+        90 NUM_MUL_CHECKED: "mulChecked"
+        91 NUM_INT: "Int" imported
+        92 NUM_FLOAT: "Float" imported
+        93 NUM_AT_NATURAL: "@Natural"
+        94 NUM_NATURAL: "Natural" imported
+        95 NUM_NAT: "Nat" imported
+        96 NUM_INT_CAST: "intCast"
+        97 NUM_MAX_I128: "maxI128"
+        98 NUM_IS_MULTIPLE_OF: "isMultipleOf"
+
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
@@ -865,6 +880,11 @@ define_builtins! {
         8 STR_STARTS_WITH: "startsWith"
         9 STR_ENDS_WITH: "endsWith"
         10 STR_FROM_INT: "fromInt"
+        11 STR_FROM_FLOAT: "fromFloat"
+        12 STR_FROM_UTF8: "fromUtf8"
+        13 STR_UT8_PROBLEM: "Utf8Problem" // the Utf8Problem type alias
+        14 STR_UT8_BYTE_PROBLEM: "Utf8ByteProblem" // the Utf8ByteProblem type alias
+        15 STR_TO_BYTES: "toBytes"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -888,39 +908,61 @@ define_builtins! {
         18 LIST_SUM: "sum"
         19 LIST_WALK: "walk"
         20 LIST_LAST: "last"
+        21 LIST_KEEP_OKS: "keepOks"
+        22 LIST_KEEP_ERRS: "keepErrs"
+        23 LIST_MAP_WITH_INDEX: "mapWithIndex"
+        24 LIST_MAP2: "map2"
+        25 LIST_MAP3: "map3"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias
         1 RESULT_MAP: "map"
+        2 RESULT_MAP_ERR: "mapErr"
+        3 RESULT_WITH_DEFAULT: "withDefault"
+        4 RESULT_AFTER: "after"
     }
     6 DICT: "Dict" => {
         0 DICT_DICT: "Dict" imported // the Dict.Dict type alias
         1 DICT_AT_DICT: "@Dict" // the Dict.@Dict private tag
         2 DICT_EMPTY: "empty"
-        3 DICT_SINGLETON: "singleton"
+        3 DICT_SINGLE: "single"
         4 DICT_GET: "get"
-        5 DICT_INSERT: "insert"
-        6 DICT_LEN: "len"
+        5 DICT_GET_RESULT: "#get_result" // symbol used in the definition of Dict.get
+        6 DICT_WALK: "walk"
+        7 DICT_INSERT: "insert"
+        8 DICT_LEN: "len"
 
         // This should not be exposed to users, its for testing the
         // hash function ONLY
-        7 DICT_TEST_HASH: "hashTestOnly"
+        9 DICT_TEST_HASH: "hashTestOnly"
 
-        8 DICT_REMOVE: "remove"
-        9 DICT_CONTAINS: "contains"
-        10 DICT_KEYS: "keys"
-        11 DICT_VALUES: "values"
+        10 DICT_REMOVE: "remove"
+        11 DICT_CONTAINS: "contains"
+        12 DICT_KEYS: "keys"
+        13 DICT_VALUES: "values"
+
+        14 DICT_UNION: "union"
+        15 DICT_INTERSECTION: "intersection"
+        16 DICT_DIFFERENCE: "difference"
+
+
     }
     7 SET: "Set" => {
         0 SET_SET: "Set" imported // the Set.Set type alias
         1 SET_AT_SET: "@Set" // the Set.@Set private tag
         2 SET_EMPTY: "empty"
-        3 SET_SINGLETON: "singleton"
-        4 SET_UNION: "union"
-        5 SET_FOLDL: "foldl"
-        6 SET_INSERT: "insert"
-        7 SET_REMOVE: "remove"
-        8 SET_DIFF: "diff"
+        3 SET_SINGLE: "single"
+        4 SET_LEN: "len"
+        5 SET_INSERT: "insert"
+        6 SET_REMOVE: "remove"
+        7 SET_UNION: "union"
+        8 SET_DIFFERENCE: "difference"
+        9 SET_INTERSECTION: "intersection"
+        10 SET_TO_LIST: "toList"
+        11 SET_FROM_LIST: "fromList"
+        12 SET_WALK: "walk"
+        13 SET_WALK_USER_FUNCTION: "#walk_user_function"
+        14 SET_CONTAINS: "contains"
     }
 
     num_modules: 8 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)

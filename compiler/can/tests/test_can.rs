@@ -41,7 +41,7 @@ mod test_can {
         }
     }
 
-    fn assert_can_int(input: &str, expected: i64) {
+    fn assert_can_int(input: &str, expected: i128) {
         let arena = Bump::new();
         let actual_out = can_expr_with(&arena, test_home(), input);
 
@@ -140,6 +140,21 @@ mod test_can {
     }
 
     #[test]
+    fn float_double_dot() {
+        let string = "1.1.1";
+        let region = Region::zero();
+
+        assert_can(
+            &string.clone(),
+            RuntimeError(RuntimeError::InvalidFloat(
+                FloatErrorKind::Error,
+                region,
+                string.into(),
+            )),
+        );
+    }
+
+    #[test]
     fn zero() {
         assert_can_num("0", 0);
     }
@@ -160,6 +175,16 @@ mod test_can {
     }
 
     #[test]
+    fn scientific_positive() {
+        assert_can_float("5e4", 50000.0);
+    }
+
+    #[test]
+    fn scientific_negative() {
+        assert_can_float("5e-4", 0.0005);
+    }
+
+    #[test]
     fn num_max() {
         assert_can_num(&(i64::MAX.to_string()), i64::MAX);
     }
@@ -171,32 +196,32 @@ mod test_can {
 
     #[test]
     fn hex_max() {
-        assert_can_int(&format!("0x{:x}", i64::MAX), i64::MAX);
+        assert_can_int(&format!("0x{:x}", i64::MAX), i64::MAX.into());
     }
 
     #[test]
     fn hex_min() {
-        assert_can_int(&format!("-0x{:x}", i64::MAX as i128 + 1), i64::MIN);
+        assert_can_int(&format!("-0x{:x}", i64::MAX as i128 + 1), i64::MIN.into());
     }
 
     #[test]
     fn oct_max() {
-        assert_can_int(&format!("0o{:o}", i64::MAX), i64::MAX);
+        assert_can_int(&format!("0o{:o}", i64::MAX), i64::MAX.into());
     }
 
     #[test]
     fn oct_min() {
-        assert_can_int(&format!("-0o{:o}", i64::MAX as i128 + 1), i64::MIN);
+        assert_can_int(&format!("-0o{:o}", i64::MAX as i128 + 1), i64::MIN.into());
     }
 
     #[test]
     fn bin_max() {
-        assert_can_int(&format!("0b{:b}", i64::MAX), i64::MAX);
+        assert_can_int(&format!("0b{:b}", i64::MAX), i64::MAX.into());
     }
 
     #[test]
     fn bin_min() {
-        assert_can_int(&format!("-0b{:b}", i64::MAX as i128 + 1), i64::MIN);
+        assert_can_int(&format!("-0b{:b}", i64::MAX as i128 + 1), i64::MIN.into());
     }
 
     #[test]
@@ -679,21 +704,24 @@ mod test_can {
                         _ -> g (x - 1)
 
                 # use parens to force the ordering!
-                (h = \x ->
-                    when x is
-                        0 -> 0
-                        _ -> g (x - 1)
+                (
+                    h = \x ->
+                        when x is
+                            0 -> 0
+                            _ -> g (x - 1)
 
-                (p = \x ->
-                    when x is
-                        0 -> 0
-                        1 -> g (x - 1)
-                        _ -> p (x - 1)
+                    (
+                        p = \x ->
+                            when x is
+                                0 -> 0
+                                1 -> g (x - 1)
+                                _ -> p (x - 1)
 
 
-                # variables must be (indirectly) referenced in the body for analysis to work
-                { x: p, y: h }
-                ))
+                        # variables must be (indirectly) referenced in the body for analysis to work
+                        { x: p, y: h }
+                    )
+                )
             "#
         );
         let arena = Bump::new();
@@ -1530,6 +1558,26 @@ mod test_can {
     fn string_with_valid_unicode_escapes() {
         assert_can(r#""x\u(00A0)x""#, expr_str("x\u{00A0}x"));
         assert_can(r#""x\u(101010)x""#, expr_str("x\u{101010}x"));
+    }
+
+    #[test]
+    fn block_string() {
+        assert_can(
+            r#"
+            """foobar"""
+            "#,
+            expr_str("foobar"),
+        );
+
+        assert_can(
+            indoc!(
+                r#"
+            """foo
+            bar"""
+            "#
+            ),
+            expr_str("foo\nbar"),
+        );
     }
 
     //     #[test]

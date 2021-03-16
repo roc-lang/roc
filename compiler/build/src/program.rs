@@ -23,7 +23,7 @@ pub struct CodeGenTiming {
 pub fn gen_from_mono_module(
     arena: &Bump,
     mut loaded: MonomorphizedModule,
-    _file_path: PathBuf,
+    roc_file_path: &Path,
     target: Triple,
     app_o_file: &Path,
     opt_level: OptLevel,
@@ -36,7 +36,14 @@ pub fn gen_from_mono_module(
     let code_gen_start = SystemTime::now();
 
     for (home, (module_path, src)) in loaded.sources {
-        let src_lines: Vec<&str> = src.split('\n').collect();
+        let mut src_lines: Vec<&str> = Vec::new();
+
+        if let Some((_, header_src)) = loaded.header_sources.get(&home) {
+            src_lines.extend(header_src.split('\n'));
+            src_lines.extend(src.split('\n').skip(1));
+        } else {
+            src_lines.extend(src.split('\n'));
+        }
         let palette = DEFAULT_PALETTE;
 
         // Report parsing and canonicalization problems
@@ -84,6 +91,13 @@ pub fn gen_from_mono_module(
     use inkwell::attributes::{Attribute, AttributeLoc};
     use inkwell::module::Linkage;
 
+    let app_ll_file = {
+        let mut temp = PathBuf::from(roc_file_path);
+        temp.set_extension("ll");
+
+        temp
+    };
+
     let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
     debug_assert!(kind_id > 0);
     let attr = context.create_enum_attribute(kind_id, 1);
@@ -95,6 +109,10 @@ pub fn gen_from_mono_module(
         }
 
         if name.starts_with("roc_builtins.dict") || name.starts_with("dict.RocDict") {
+            function.add_attribute(AttributeLoc::Function, attr);
+        }
+
+        if name.starts_with("roc_builtins.list") || name.starts_with("list.RocList") {
             function.add_attribute(AttributeLoc::Function, attr);
         }
     }
@@ -154,11 +172,16 @@ pub fn gen_from_mono_module(
             fpm.run_on(&fn_val);
         } else {
             fn_val.print_to_stderr();
+
+            // write the ll code to a file, so we can modify it
+            env.module.print_to_file(&app_ll_file).unwrap();
+
             // env.module.print_to_stderr();
             // NOTE: If this fails, uncomment the above println to debug.
             panic!(
-                r"Non-main function {:?} failed LLVM verification. Uncomment the above println to debug!",
+                r"Non-main function {:?} failed LLVM verification. I wrote the full LLVM IR to {:?}",
                 fn_val.get_name(),
+                app_ll_file,
             );
         }
     }
@@ -172,7 +195,13 @@ pub fn gen_from_mono_module(
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
-        panic!("😱 LLVM errors when defining module: {:?}", errors);
+        // write the ll code to a file, so we can modify it
+        env.module.print_to_file(&app_ll_file).unwrap();
+
+        panic!(
+            "😱 LLVM errors when defining module; I wrote the full LLVM IR to {:?}\n\n {:?}",
+            app_ll_file, errors,
+        );
     }
 
     // Uncomment this to see the module's optimized LLVM instruction output:
@@ -186,13 +215,10 @@ pub fn gen_from_mono_module(
     if emit_debug_info {
         module.strip_debug_info();
 
-        let mut app_ll_file = std::path::PathBuf::from(app_o_file);
-        app_ll_file.set_extension("ll");
-
-        let mut app_ll_dbg_file = std::path::PathBuf::from(app_o_file);
+        let mut app_ll_dbg_file = PathBuf::from(roc_file_path);
         app_ll_dbg_file.set_extension("dbg.ll");
 
-        let mut app_bc_file = std::path::PathBuf::from(app_o_file);
+        let mut app_bc_file = PathBuf::from(roc_file_path);
         app_bc_file.set_extension("bc");
 
         use std::process::Command;

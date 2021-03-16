@@ -270,6 +270,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         int_type(star, int)
     });
 
+    // maxI128 : Int
+    add_type(Symbol::NUM_MAX_I128, {
+        let_tvars! { star, int };
+        int_type(star, int)
+    });
+
     // minInt : Int
     add_type(Symbol::NUM_MIN_INT, {
         let_tvars! { star, int };
@@ -919,8 +925,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         dict_type(star, k, v)
     });
 
-    // singleton : k, v -> Attr * (Dict k v)
-    add_type(Symbol::DICT_SINGLETON, {
+    // single : k, v -> Attr * (Dict k v)
+    add_type(Symbol::DICT_SINGLE, {
         let_tvars! { star, k , v };
         unique_function(vec![flex(k), flex(v)], dict_type(star, k, v))
     });
@@ -1006,8 +1012,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         set_type(star, a)
     });
 
-    // singleton : a -> Set a
-    add_type(Symbol::SET_SINGLETON, {
+    // single : a -> Set a
+    add_type(Symbol::SET_SINGLE, {
         let_tvars! { star, a };
         unique_function(vec![flex(a)], set_type(star, a))
     });
@@ -1053,13 +1059,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // diff : Attr * (Set * a)
     //      , Attr * (Set * a)
     //     -> Attr * (Set * a)
-    add_type(Symbol::SET_DIFF, set_combine);
+    add_type(Symbol::SET_DIFFERENCE, set_combine);
 
     // foldl : Attr (* | u) (Set (Attr u a))
     //       , Attr Shared (Attr u a -> b -> b)
     //       , b
     //      -> b
-    add_type(Symbol::SET_FOLDL, {
+    add_type(Symbol::SET_WALK, {
         let_tvars! { star, u, a, b, closure };
 
         unique_function(
@@ -1194,6 +1200,27 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         unique_function(vec![int_type(star1, int)], str_type(star2))
     });
 
+    // fromUtf8 : Attr * (List U8) -> Attr * (Result Str [ BadUtf8 Utf8Problem ]*)
+    let bad_utf8 = SolvedType::TagUnion(
+        vec![(
+            TagName::Global("BadUtf8".into()),
+            // vec![builtin_aliases::str_utf8_problem_type()],
+            vec![
+                builtin_aliases::str_utf8_byte_problem_type(),
+                builtin_aliases::nat_type(),
+            ],
+        )],
+        Box::new(SolvedType::Wildcard),
+    );
+
+    add_type(Symbol::STR_FROM_UTF8, {
+        let_tvars! { star1, star2, star3, star4 };
+        unique_function(
+            vec![u8_type(star1)],
+            result_type(star2, str_type(star3), lift(star4, bad_utf8)),
+        )
+    });
+
     // Result module
 
     // map : Attr * (Result (Attr a e))
@@ -1300,6 +1327,11 @@ fn int_type(u: VarId, range: VarId) -> SolvedType {
             ),
         ],
     )
+}
+
+#[inline(always)]
+fn u8_type(u: VarId) -> SolvedType {
+    SolvedType::Apply(Symbol::ATTR_ATTR, vec![flex(u), builtin_aliases::u8_type()])
 }
 
 #[inline(always)]

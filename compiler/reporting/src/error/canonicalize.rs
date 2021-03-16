@@ -1,4 +1,5 @@
 use roc_collections::all::MutSet;
+use roc_parse::parser::{Col, Row};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{FloatErrorKind, IntErrorKind, Problem, RuntimeError};
 use roc_region::all::Region;
@@ -305,24 +306,35 @@ pub fn can_problem<'b>(
                 alloc.reflow(" can occur in this position."),
             ]),
         ]),
-        Problem::InvalidHexadecimal(region) => {
-            todo!(
-                "TODO report an invalid hexadecimal number in a \\u(...) code point at region {:?}",
-                region
-            );
-        }
-        Problem::InvalidUnicodeCodePoint(region) => {
-            todo!(
-                "TODO report an invalid \\u(...) code point at region {:?}",
-                region
-            );
-        }
-        Problem::InvalidInterpolation(region) => {
-            todo!(
-                "TODO report an invalid string interpolation at region {:?}",
-                region
-            );
-        }
+        Problem::InvalidHexadecimal(region) => alloc.stack(vec![
+            alloc.reflow("This unicode code point is invalid:"),
+            alloc.region(region),
+            alloc.concat(vec![
+                alloc.reflow(r"I was expecting a hexadecimal number, like "),
+                alloc.parser_suggestion("\\u(1100)"),
+                alloc.reflow(" or "),
+                alloc.parser_suggestion("\\u(00FF)"),
+                alloc.text("."),
+            ]),
+            alloc.reflow(r"Learn more about working with unicode in roc at TODO"),
+        ]),
+        Problem::InvalidUnicodeCodePoint(region) => alloc.stack(vec![
+            alloc.reflow("This unicode code point is invalid:"),
+            alloc.region(region),
+            alloc.reflow("Learn more about working with unicode in roc at TODO"),
+        ]),
+        Problem::InvalidInterpolation(region) => alloc.stack(vec![
+            alloc.reflow("This string interpolation is invalid:"),
+            alloc.region(region),
+            alloc.concat(vec![
+                alloc.reflow(r"I was expecting an identifier, like "),
+                alloc.parser_suggestion("\\u(message)"),
+                alloc.reflow(" or "),
+                alloc.parser_suggestion("\\u(LoremIpsum.text)"),
+                alloc.text("."),
+            ]),
+            alloc.reflow(r"Learn more about string interpolation at TODO"),
+        ]),
         Problem::RuntimeError(runtime_error) => pretty_runtime_error(alloc, runtime_error),
     };
 
@@ -331,6 +343,296 @@ pub fn can_problem<'b>(
         filename,
         doc,
     }
+}
+
+fn to_bad_ident_expr_report<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    bad_ident: roc_parse::ident::BadIdent,
+    surroundings: Region,
+) -> RocDocBuilder<'b> {
+    use roc_parse::ident::BadIdent::*;
+
+    match bad_ident {
+        Start(_, _) | Space(_, _, _) => unreachable!("these are handled in the parser"),
+        WeirdDotAccess(row, col) | StrayDot(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            alloc.stack(vec![
+                alloc.reflow(r"I trying to parse a record field access here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("So I expect to see a lowercase letter next, like "),
+                    alloc.parser_suggestion(".name"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion(".height"),
+                    alloc.reflow("."),
+                ]),
+            ])
+        }
+
+        WeirdAccessor(_row, _col) => alloc.stack(vec![
+            alloc.reflow("I am very confused by this field access"),
+            alloc.region(surroundings),
+            alloc.concat(vec![
+                alloc.reflow("It looks like a field access on an accessor. I parse"),
+                alloc.parser_suggestion(".client.name"),
+                alloc.reflow(" as "),
+                alloc.parser_suggestion("(.client).name"),
+                alloc.reflow(". Maybe use an anonymous function like "),
+                alloc.parser_suggestion("(\\r -> r.client.name)"),
+                alloc.reflow(" instead"),
+                alloc.reflow("?"),
+            ]),
+        ]),
+
+        WeirdDotQualified(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            alloc.stack(vec![
+                alloc.reflow("I am trying to parse a qualified name here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("I was expecting to see an identifier next, like "),
+                    alloc.parser_suggestion("height"),
+                    alloc.reflow(". A complete qualified name looks something like "),
+                    alloc.parser_suggestion("Json.Decode.string"),
+                    alloc.text("."),
+                ]),
+            ])
+        }
+        QualifiedTag(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            alloc.stack(vec![
+                alloc.reflow("I am trying to parse a qualified name here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"This looks like a qualified tag name to me, "),
+                    alloc.reflow(r"but tags cannot be qualified! "),
+                    alloc.reflow(r"Maybe you wanted a qualified name, something like "),
+                    alloc.parser_suggestion("Json.Decode.string"),
+                    alloc.text("?"),
+                ]),
+            ])
+        }
+
+        Underscore(row, col) => {
+            let region =
+                Region::from_rows_cols(surroundings.start_line, surroundings.start_col, row, col);
+            alloc.stack(vec![
+                alloc.reflow("Underscores are not allowed in identifier names:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![alloc.reflow(
+                    r"I recommend using camelCase, it is the standard in the Roc ecosystem.",
+                )]),
+            ])
+        }
+
+        BadPrivateTag(row, col) => {
+            use BadIdentNext::*;
+            match what_is_next(alloc.src_lines, row, col) {
+                LowercaseAccess(width) => {
+                    let region = Region::from_rows_cols(row, col, row, col + width);
+                    alloc.stack(vec![
+                        alloc.reflow("I am very confused by this field access:"),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow(r"It looks like a record field access on a private tag.")
+                        ]),
+                    ])
+                }
+                UppercaseAccess(width) => {
+                    let region = Region::from_rows_cols(row, col, row, col + width);
+                    alloc.stack(vec![
+                        alloc.reflow("I am very confused by this expression:"),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow(
+                                r"Looks like a private tag is treated like a module name. ",
+                            ),
+                            alloc.reflow(r"Maybe you wanted a qualified name, like "),
+                            alloc.parser_suggestion("Json.Decode.string"),
+                            alloc.text("?"),
+                        ]),
+                    ])
+                }
+                Other(Some(c)) if c.is_lowercase() => {
+                    let region = Region::from_rows_cols(
+                        surroundings.start_line,
+                        surroundings.start_col + 1,
+                        row,
+                        col + 1,
+                    );
+                    alloc.stack(vec![
+                        alloc.reflow("I am trying to parse a private tag here:"),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow(r"But after the "),
+                            alloc.keyword("@"),
+                            alloc.reflow(r" symbol I found a lowercase letter. "),
+                            alloc.reflow(r"All tag names (global and private)"),
+                            alloc.reflow(r" must start with an uppercase letter, like "),
+                            alloc.parser_suggestion("@UUID"),
+                            alloc.reflow(" or "),
+                            alloc.parser_suggestion("@Secrets"),
+                            alloc.reflow("."),
+                        ]),
+                    ])
+                }
+                other => todo!("{:?}", other),
+            }
+        }
+    }
+}
+
+fn to_bad_ident_pattern_report<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    bad_ident: roc_parse::ident::BadIdent,
+    surroundings: Region,
+) -> RocDocBuilder<'b> {
+    use roc_parse::ident::BadIdent::*;
+
+    match bad_ident {
+        Start(_, _) | Space(_, _, _) => unreachable!("these are handled in the parser"),
+        WeirdDotAccess(row, col) | StrayDot(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            alloc.stack(vec![
+                alloc.reflow(r"I trying to parse a record field accessor here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("Something like "),
+                    alloc.parser_suggestion(".name"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion(".height"),
+                    alloc.reflow(" that accesses a value from a record."),
+                ]),
+            ])
+        }
+
+        WeirdAccessor(_row, _col) => alloc.stack(vec![
+            alloc.reflow("I am very confused by this field access"),
+            alloc.region(surroundings),
+            alloc.concat(vec![
+                alloc.reflow("It looks like a field access on an accessor. I parse"),
+                alloc.parser_suggestion(".client.name"),
+                alloc.reflow(" as "),
+                alloc.parser_suggestion("(.client).name"),
+                alloc.reflow(". Maybe use an anonymous function like "),
+                alloc.parser_suggestion("(\\r -> r.client.name)"),
+                alloc.reflow(" instead"),
+                alloc.reflow("?"),
+            ]),
+        ]),
+
+        WeirdDotQualified(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            alloc.stack(vec![
+                alloc.reflow("I am trying to parse a qualified name here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("I was expecting to see an identifier next, like "),
+                    alloc.parser_suggestion("height"),
+                    alloc.reflow(". A complete qualified name looks something like "),
+                    alloc.parser_suggestion("Json.Decode.string"),
+                    alloc.text("."),
+                ]),
+            ])
+        }
+        QualifiedTag(row, col) => {
+            let region = Region::from_row_col(row, col);
+
+            alloc.stack(vec![
+                alloc.reflow("I am trying to parse a qualified name here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"This looks like a qualified tag name to me, "),
+                    alloc.reflow(r"but tags cannot be qualified! "),
+                    alloc.reflow(r"Maybe you wanted a qualified name, something like "),
+                    alloc.parser_suggestion("Json.Decode.string"),
+                    alloc.text("?"),
+                ]),
+            ])
+        }
+
+        Underscore(row, col) => {
+            let region = Region::from_row_col(row, col - 1);
+
+            alloc.stack(vec![
+                alloc.reflow("I am trying to parse an identifier here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![alloc.reflow(
+                    r"Underscores are not allowed in identifiers. Use camelCase instead!",
+                )]),
+            ])
+        }
+
+        _ => todo!(),
+    }
+}
+
+#[derive(Debug)]
+enum BadIdentNext<'a> {
+    LowercaseAccess(u16),
+    UppercaseAccess(u16),
+    NumberAccess(u16),
+    Keyword(&'a str),
+    DanglingDot,
+    Other(Option<char>),
+}
+
+fn what_is_next<'a>(source_lines: &'a [&'a str], row: Row, col: Col) -> BadIdentNext<'a> {
+    let row_index = row as usize;
+    let col_index = col as usize;
+    match source_lines.get(row_index) {
+        None => BadIdentNext::Other(None),
+        Some(line) => {
+            let chars = &line[col_index..];
+            let mut it = chars.chars();
+
+            match roc_parse::keyword::KEYWORDS
+                .iter()
+                .find(|keyword| crate::error::parse::starts_with_keyword(chars, keyword))
+            {
+                Some(keyword) => BadIdentNext::Keyword(keyword),
+                None => match it.next() {
+                    None => BadIdentNext::Other(None),
+                    Some('.') => match it.next() {
+                        Some(c) if c.is_lowercase() => {
+                            BadIdentNext::LowercaseAccess(2 + till_whitespace(it) as u16)
+                        }
+                        Some(c) if c.is_uppercase() => {
+                            BadIdentNext::UppercaseAccess(2 + till_whitespace(it) as u16)
+                        }
+                        Some(c) if c.is_ascii_digit() => {
+                            BadIdentNext::NumberAccess(2 + till_whitespace(it) as u16)
+                        }
+                        _ => BadIdentNext::DanglingDot,
+                    },
+                    Some(c) => BadIdentNext::Other(Some(c)),
+                },
+            }
+        }
+    }
+}
+
+fn till_whitespace<I>(it: I) -> usize
+where
+    I: Iterator<Item = char>,
+{
+    let mut chomped = 0;
+
+    for c in it {
+        if c.is_ascii_whitespace() || c == '#' {
+            break;
+        } else {
+            chomped += 1;
+            continue;
+        }
+    }
+
+    chomped
 }
 
 fn pretty_runtime_error<'b>(
@@ -421,6 +723,7 @@ fn pretty_runtime_error<'b>(
                 MalformedBase(Base::Binary) => " binary integer ",
                 MalformedBase(Base::Octal) => " octal integer ",
                 MalformedBase(Base::Decimal) => " integer ",
+                BadIdent(bad_ident) => return to_bad_ident_pattern_report(alloc, bad_ident, region),
                 Unknown => " ",
                 QualifiedIdentifier => " qualified ",
             };
@@ -429,7 +732,7 @@ fn pretty_runtime_error<'b>(
                 MalformedInt | MalformedFloat | MalformedBase(_) => alloc
                     .tip()
                     .append(alloc.reflow("Learn more about number literals at TODO")),
-                Unknown => alloc.nil(),
+                Unknown | BadIdent(_) => alloc.nil(),
                 QualifiedIdentifier => alloc.tip().append(
                     alloc.reflow("In patterns, only private and global tags can be qualified"),
                 ),
@@ -471,15 +774,10 @@ fn pretty_runtime_error<'b>(
             // do nothing, reported with PrecedenceProblem
             unreachable!()
         }
-        RuntimeError::MalformedIdentifier(box_str, region) => {
-            alloc.stack(vec![
-                alloc.concat(vec![
-                    alloc.reflow("The ")
-                    .append(format!("`{}`", box_str))
-                    .append(alloc.reflow(" identifier is malformed:")),
-                ]),
-                alloc.region(region),
-            ])
+        RuntimeError::MalformedIdentifier(_box_str, bad_ident, surroundings) => {
+            to_bad_ident_expr_report(alloc, bad_ident, surroundings)
+
+
         }
         RuntimeError::MalformedClosure(_) => todo!(""),
         RuntimeError::InvalidFloat(sign @ FloatErrorKind::PositiveInfinity, region, _raw_str)

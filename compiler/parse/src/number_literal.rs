@@ -1,189 +1,163 @@
-use crate::ast::{Attempting, Base, Expr};
-use crate::parser::{
-    parse_utf8, unexpected, unexpected_eof, ParseResult, Parser, Progress, State, SyntaxError,
-};
-use bumpalo::Bump;
-use std::char;
-use std::str::from_utf8_unchecked;
+use crate::ast::Base;
+use crate::parser::{Number, ParseResult, Parser, Progress, State};
 
-pub fn number_literal<'a>() -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
-    move |arena, state: State<'a>| {
-        let bytes = &mut state.bytes.iter();
+pub enum NumLiteral<'a> {
+    Float(&'a str),
+    Num(&'a str),
+    NonBase10Int {
+        string: &'a str,
+        base: Base,
+        is_negative: bool,
+    },
+}
 
-        match bytes.next() {
-            Some(&first_byte) => {
-                // Number literals must start with either an '-' or a digit.
-                if first_byte == b'-' || (first_byte as char).is_ascii_digit() {
-                    parse_number_literal(first_byte as char, bytes, arena, state)
-                } else {
-                    Err(unexpected(arena, 1, Attempting::NumberLiteral, state))
-                }
+pub fn positive_number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, Number> {
+    move |_arena, state: State<'a>| {
+        match state.bytes.get(0) {
+            Some(first_byte) if (*first_byte as char).is_ascii_digit() => {
+                parse_number_base(false, &state.bytes, state)
             }
-            None => Err(unexpected_eof(arena, state, 0)),
+            _ => {
+                // this is not a number at all
+                Err((Progress::NoProgress, Number::End, state))
+            }
         }
     }
 }
 
-#[inline(always)]
-fn parse_number_literal<'a, I>(
-    first_ch: char,
-    bytes: &mut I,
-    arena: &'a Bump,
+pub fn number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, Number> {
+    move |_arena, state: State<'a>| {
+        match state.bytes.get(0) {
+            Some(first_byte) if *first_byte == b'-' => {
+                // drop the minus
+                parse_number_base(true, &state.bytes[1..], state)
+            }
+            Some(first_byte) if (*first_byte as char).is_ascii_digit() => {
+                parse_number_base(false, &state.bytes, state)
+            }
+            _ => {
+                // this is not a number at all
+                Err((Progress::NoProgress, Number::End, state))
+            }
+        }
+    }
+}
+
+fn parse_number_base<'a>(
+    is_negated: bool,
+    bytes: &'a [u8],
     state: State<'a>,
-) -> ParseResult<'a, Expr<'a>, SyntaxError<'a>>
-where
-    I: Iterator<Item = &'a u8>,
-{
-    use self::LiteralType::*;
-
-    let mut typ = Num;
-
-    // We already parsed 1 character (which may have been a minus sign).
-    let mut bytes_parsed = 1;
-    let mut prev_byte = first_ch as u8;
-    let mut has_parsed_digits = first_ch.is_ascii_digit();
-
-    for &next_byte in bytes {
-        let err_unexpected = || {
-            Err(unexpected(
-                arena,
-                bytes_parsed,
-                Attempting::NumberLiteral,
-                state.clone(),
-            ))
-        };
-
-        let is_potentially_non_base10 = || {
-            (bytes_parsed == 1 && first_ch == '0')
-                || (bytes_parsed == 2 && first_ch == '-' && prev_byte == b'0')
-        };
-
-        match next_byte as char {
-            '.' => {
-                if typ == Float {
-                    // You only get one decimal point!
-                    return err_unexpected();
-                } else {
-                    typ = Float;
-                }
-            }
-            'x' => {
-                if is_potentially_non_base10() {
-                    typ = Hex;
-                } else {
-                    return err_unexpected();
-                }
-            }
-            'b' if typ == Num => {
-                // We have to check for typ == Num because otherwise we get a false
-                // positive here when parsing a hex literal that happens to have
-                // a 'b' in it, e.g. 0xbbbb
-                if is_potentially_non_base10() {
-                    typ = Binary;
-                } else {
-                    return err_unexpected();
-                }
-            }
-            'o' => {
-                if is_potentially_non_base10() {
-                    typ = Octal;
-                } else {
-                    return err_unexpected();
-                }
-            }
-            '_' => {
-                // Underscores are ignored.
-            }
-            next_ch => {
-                if next_ch.is_ascii_digit() {
-                    has_parsed_digits = true;
-                } else {
-                    if !has_parsed_digits {
-                        // No digits! We likely parsed a minus sign
-                        // that's actually a unary negation operator.
-                        return err_unexpected();
-                    }
-
-                    // ASCII alphabetic chars (like 'a' and 'f') are
-                    // allowed in Hex int literals. We verify them in
-                    // canonicalization, so if there's a problem, we can
-                    // give a more helpful error (e.g. "the character 'f'
-                    // is not allowed in Octal literals" or
-                    // "the character 'g' is outside the range of valid
-                    // Hex literals") while still allowing the formatter
-                    // to format them normally.
-                    if !next_ch.is_ascii_alphabetic() {
-                        // We hit an invalid number literal character; we're done!
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Since we only consume characters in the ASCII range for number literals,
-        // this will always be exactly 1. There's no need to call next_ch.utf8_len().
-        bytes_parsed += 1;
-        prev_byte = next_byte;
-    }
-
-    // At this point we have a number, and will definitely succeed.
-    // If the number is malformed (outside the supported range),
-    // we'll succeed with an appropriate Expr which records that.
-    match typ {
-        Num => Ok((
-            Progress::from_consumed(bytes_parsed),
-            // SAFETY: it's safe to use from_utf8_unchecked here, because we've
-            // already validated that this range contains only ASCII digits
-            Expr::Num(unsafe { from_utf8_unchecked(&state.bytes[0..bytes_parsed]) }),
-            state.advance_without_indenting(arena, bytes_parsed)?,
-        )),
-        Float => Ok((
-            Progress::from_consumed(bytes_parsed),
-            // SAFETY: it's safe to use from_utf8_unchecked here, because we've
-            // already validated that this range contains only ASCII digits
-            Expr::Float(unsafe { from_utf8_unchecked(&state.bytes[0..bytes_parsed]) }),
-            state.advance_without_indenting(arena, bytes_parsed)?,
-        )),
-        // For these we trim off the 0x/0o/0b part
-        Hex => from_base(Base::Hex, first_ch, bytes_parsed, arena, state),
-        Octal => from_base(Base::Octal, first_ch, bytes_parsed, arena, state),
-        Binary => from_base(Base::Binary, first_ch, bytes_parsed, arena, state),
+) -> ParseResult<'a, NumLiteral<'a>, Number> {
+    match bytes.get(0..2) {
+        Some(b"0b") => chomp_number_base(Base::Binary, is_negated, &bytes[2..], state),
+        Some(b"0o") => chomp_number_base(Base::Octal, is_negated, &bytes[2..], state),
+        Some(b"0x") => chomp_number_base(Base::Hex, is_negated, &bytes[2..], state),
+        _ => chomp_number_dec(is_negated, bytes, state),
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum LiteralType {
-    Num,
-    Float,
-    Hex,
-    Octal,
-    Binary,
-}
-
-fn from_base<'a>(
+fn chomp_number_base<'a>(
     base: Base,
-    first_ch: char,
-    bytes_parsed: usize,
-    arena: &'a Bump,
+    is_negative: bool,
+    bytes: &'a [u8],
     state: State<'a>,
-) -> ParseResult<'a, Expr<'a>, SyntaxError<'a>> {
-    let is_negative = first_ch == '-';
-    let bytes = if is_negative {
-        &state.bytes[3..bytes_parsed]
-    } else {
-        &state.bytes[2..bytes_parsed]
-    };
+) -> ParseResult<'a, NumLiteral<'a>, Number> {
+    let (_is_float, chomped) = chomp_number(bytes);
 
-    match parse_utf8(bytes) {
-        Ok(string) => Ok((
-            Progress::from_consumed(bytes_parsed),
-            Expr::NonBase10Int {
-                is_negative,
-                string,
-                base,
-            },
-            state.advance_without_indenting(arena, bytes_parsed)?,
-        )),
-        Err(reason) => state.fail(arena, Progress::from_consumed(bytes_parsed), reason),
+    let string = unsafe { std::str::from_utf8_unchecked(&bytes[..chomped]) };
+
+    let new = state.advance_without_indenting_ee(chomped + 2 + is_negative as usize, |_, _| {
+        Number::LineTooLong
+    })?;
+
+    Ok((
+        Progress::MadeProgress,
+        NumLiteral::NonBase10Int {
+            is_negative,
+            string,
+            base,
+        },
+        new,
+    ))
+}
+
+fn chomp_number_dec<'a>(
+    is_negative: bool,
+    bytes: &'a [u8],
+    state: State<'a>,
+) -> ParseResult<'a, NumLiteral<'a>, Number> {
+    let (is_float, chomped) = chomp_number(bytes);
+
+    if is_negative && chomped == 0 {
+        // we're probably actually looking at unary negation here
+        return Err((Progress::NoProgress, Number::End, state));
     }
+
+    if !bytes.get(0).copied().unwrap_or_default().is_ascii_digit() {
+        // we're probably actually looking at unary negation here
+        return Err((Progress::NoProgress, Number::End, state));
+    }
+
+    let string =
+        unsafe { std::str::from_utf8_unchecked(&state.bytes[0..chomped + is_negative as usize]) };
+
+    let new = state
+        .advance_without_indenting_ee(chomped + is_negative as usize, |_, _| Number::LineTooLong)?;
+
+    Ok((
+        Progress::MadeProgress,
+        if is_float {
+            NumLiteral::Float(string)
+        } else {
+            NumLiteral::Num(string)
+        },
+        new,
+    ))
+}
+
+fn chomp_number(mut bytes: &[u8]) -> (bool, usize) {
+    let start_bytes_len = bytes.len();
+    let mut is_float = false;
+
+    while let Some(byte) = bytes.get(0) {
+        match byte {
+            b'.' => {
+                // skip, fix multiple `.`s in canonicalization
+                is_float = true;
+                bytes = &bytes[1..];
+            }
+            b'e' => {
+                // maybe scientific notation?
+                match bytes.get(1) {
+                    Some(b'-') => {
+                        is_float = true;
+                        bytes = &bytes[2..];
+                    }
+                    Some(c) if (*c as char).is_ascii_digit() => {
+                        is_float = true;
+                        bytes = &bytes[2..];
+                    }
+                    _ => {
+                        bytes = &bytes[1..];
+                    }
+                }
+            }
+            b'_' => {
+                // skip
+                bytes = &bytes[1..];
+            }
+            _ if byte.is_ascii_digit() || byte.is_ascii_alphabetic() => {
+                // valid digits (alphabetic in hex digits, and the `e` in `12e26` scientific notation
+                bytes = &bytes[1..];
+            }
+            _ => {
+                // not a valid digit; we're done
+                return (is_float, start_bytes_len - bytes.len());
+            }
+        }
+    }
+
+    // if the above loop exits, we must be dealing with an empty slice
+    // therefore we parsed all of the bytes in the input
+    (is_float, start_bytes_len)
 }

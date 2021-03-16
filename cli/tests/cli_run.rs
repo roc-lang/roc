@@ -13,9 +13,19 @@ mod helpers;
 mod cli_run {
     use crate::helpers::{
         example_file, extract_valgrind_errors, fixture_file, run_cmd, run_roc, run_with_valgrind,
+        ValgrindError, ValgrindErrorXWhat,
     };
     use serial_test::serial;
     use std::path::Path;
+
+    #[cfg(not(target_os = "macos"))]
+    const ALLOW_VALGRIND: bool = true;
+
+    // Disallow valgrind on macOS by default, because it reports a ton
+    // of false positives. For local development on macOS, feel free to
+    // change this to true!
+    #[cfg(target_os = "macos")]
+    const ALLOW_VALGRIND: bool = false;
 
     fn check_output(
         file: &Path,
@@ -48,7 +58,7 @@ mod cli_run {
         }
         assert!(compile_out.status.success());
 
-        let out = if use_valgrind {
+        let out = if use_valgrind && ALLOW_VALGRIND {
             let (valgrind_out, raw_xml) = run_with_valgrind(
                 stdin_str,
                 &[file.with_file_name(executable_filename).to_str().unwrap()],
@@ -60,7 +70,24 @@ mod cli_run {
                 });
 
                 if !memory_errors.is_empty() {
-                    panic!("{:?}", memory_errors);
+                    for error in memory_errors {
+                        let ValgrindError {
+                            kind,
+                            what: _,
+                            xwhat,
+                        } = error;
+                        println!("Valgrind Error: {}\n", kind);
+
+                        if let Some(ValgrindErrorXWhat {
+                            text,
+                            leakedbytes: _,
+                            leakedblocks: _,
+                        }) = xwhat
+                        {
+                            println!("    {}", text);
+                        }
+                    }
+                    panic!("Valgrind reported memory errors");
                 }
             } else {
                 let exit_code = match valgrind_out.status.code() {
@@ -181,7 +208,7 @@ mod cli_run {
             "deriv",
             &[],
             "1 count: 6\n2 count: 22\n",
-            false,
+            true,
         );
     }
 
@@ -205,6 +232,42 @@ mod cli_run {
             "rbtree-del",
             &[],
             "30\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(astar)]
+    fn run_astar_optimized_1() {
+        check_output(
+            &example_file("benchmarks", "TestAStar.roc"),
+            "test-astar",
+            &[],
+            "True\n",
+            false,
+        );
+    }
+
+    #[test]
+    #[serial(base64)]
+    fn base64() {
+        check_output(
+            &example_file("benchmarks", "TestBase64.roc"),
+            "test-base64",
+            &[],
+            "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(closure)]
+    fn closure() {
+        check_output(
+            &example_file("benchmarks", "Closure.roc"),
+            "closure",
+            &[],
+            "",
             true,
         );
     }

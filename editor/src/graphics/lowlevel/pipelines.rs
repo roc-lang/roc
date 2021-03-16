@@ -21,9 +21,8 @@ pub fn make_rect_pipeline(
         &gpu_device,
         &pipeline_layout,
         swap_chain_descr.format,
-        &[Vertex::DESC],
-        wgpu::include_spirv!("../shaders/rect.vert.spv"),
-        wgpu::include_spirv!("../shaders/rect.frag.spv"),
+        &wgpu::include_spirv!("../shaders/rect.vert.spv"),
+        &wgpu::include_spirv!("../shaders/rect.frag.spv"),
     );
 
     RectResources { pipeline, ortho }
@@ -33,9 +32,8 @@ pub fn create_render_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     color_format: wgpu::TextureFormat,
-    vertex_descs: &[wgpu::VertexBufferDescriptor],
-    vs_src: wgpu::ShaderModuleSource,
-    fs_src: wgpu::ShaderModuleSource,
+    vs_src: &wgpu::ShaderModuleDescriptor,
+    fs_src: &wgpu::ShaderModuleDescriptor,
 ) -> wgpu::RenderPipeline {
     let vs_module = device.create_shader_module(vs_src);
     let fs_module = device.create_shader_module(fs_src);
@@ -43,29 +41,27 @@ pub fn create_render_pipeline(
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Render pipeline"),
         layout: Some(&layout),
-        vertex_stage: wgpu::ProgrammableStageDescriptor {
+        vertex: wgpu::VertexState {
             module: &vs_module,
             entry_point: "main",
+            buffers: &[Vertex::DESC],
         },
-        fragment_stage: Some(wgpu::ProgrammableStageDescriptor {
+        fragment: Some(wgpu::FragmentState {
             module: &fs_module,
             entry_point: "main",
+            targets: &[wgpu::ColorTargetState {
+                format: color_format,
+                color_blend: wgpu::BlendState::REPLACE,
+                alpha_blend: wgpu::BlendState::REPLACE,
+                write_mask: wgpu::ColorWrite::ALL,
+            }],
         }),
-        rasterization_state: None,
-        primitive_topology: wgpu::PrimitiveTopology::TriangleList,
-        color_states: &[wgpu::ColorStateDescriptor {
-            format: color_format,
-            color_blend: wgpu::BlendDescriptor::REPLACE,
-            alpha_blend: wgpu::BlendDescriptor::REPLACE,
-            write_mask: wgpu::ColorWrite::ALL,
-        }],
-        depth_stencil_state: None,
-        sample_count: 1,
-        sample_mask: !0,
-        alpha_to_coverage_enabled: false,
-        vertex_state: wgpu::VertexStateDescriptor {
-            index_format: wgpu::IndexFormat::Uint32,
-            vertex_buffers: vertex_descs,
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState {
+            count: 1,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
         },
     })
 }

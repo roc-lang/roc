@@ -19,6 +19,7 @@ roc_parse = { path = "../parse" }
 roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
 roc_reporting = { path = "../reporting" }
+ven_pretty = { path = "../../vendor/pretty" }
 bumpalo = { version = "3.2", features = ["collections"] }
 inlinable_string = "0.1"
 parking_lot = { version = "0.11", features = ["deadlock_detection"] }

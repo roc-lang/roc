@@ -1,10 +1,11 @@
 use crate::def::Def;
 use crate::expr::Expr::*;
-use crate::expr::{Expr, Recursive};
+use crate::expr::{Expr, Recursive, WhenBranch};
 use crate::pattern::Pattern;
 use roc_collections::all::{MutMap, SendMap};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
+use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
@@ -60,6 +61,9 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_ENDS_WITH => str_ends_with,
         STR_COUNT_GRAPHEMES => str_count_graphemes,
         STR_FROM_INT => str_from_int,
+        STR_FROM_UTF8 => str_from_utf8,
+        STR_TO_BYTES => str_to_bytes,
+        STR_FROM_FLOAT=> str_from_float,
         LIST_LEN => list_len,
         LIST_GET => list_get,
         LIST_SET => list_set,
@@ -76,18 +80,40 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_PREPEND => list_prepend,
         LIST_JOIN => list_join,
         LIST_MAP => list_map,
+        LIST_MAP2 => list_map2,
+        LIST_MAP3 => list_map3,
+        LIST_MAP_WITH_INDEX => list_map_with_index,
         LIST_KEEP_IF => list_keep_if,
+        LIST_KEEP_OKS => list_keep_oks,
+        LIST_KEEP_ERRS=> list_keep_errs,
         LIST_WALK => list_walk,
         LIST_WALK_BACKWARDS => list_walk_backwards,
         DICT_TEST_HASH => dict_hash_test_only,
         DICT_LEN => dict_len,
         DICT_EMPTY => dict_empty,
+        DICT_SINGLE => dict_single,
         DICT_INSERT => dict_insert,
         DICT_REMOVE => dict_remove,
         DICT_GET => dict_get,
         DICT_CONTAINS => dict_contains,
         DICT_KEYS => dict_keys,
         DICT_VALUES => dict_values,
+        DICT_UNION=> dict_union,
+        DICT_INTERSECTION=> dict_intersection,
+        DICT_DIFFERENCE=> dict_difference,
+        DICT_WALK=> dict_walk,
+        SET_EMPTY => set_empty,
+        SET_LEN => set_len,
+        SET_SINGLE => set_single,
+        SET_UNION=> set_union,
+        SET_INTERSECTION => set_intersection,
+        SET_DIFFERENCE => set_difference,
+        SET_TO_LIST => set_to_list,
+        SET_FROM_LIST => set_from_list,
+        SET_INSERT => set_insert,
+        SET_REMOVE => set_remove,
+        SET_CONTAINS => set_contains,
+        SET_WALK=> set_walk,
         NUM_ADD => num_add,
         NUM_ADD_CHECKED => num_add_checked,
         NUM_ADD_WRAP => num_add_wrap,
@@ -110,6 +136,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_ABS => num_abs,
         NUM_NEG => num_neg,
         NUM_REM => num_rem,
+        NUM_IS_MULTIPLE_OF => num_is_multiple_of,
         NUM_SQRT => num_sqrt,
         NUM_ROUND => num_round,
         NUM_IS_ODD => num_is_odd,
@@ -128,7 +155,17 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_MAX_INT => num_max_int,
         NUM_MIN_INT => num_min_int,
         NUM_BITWISE_AND => num_bitwise_and,
-        NUM_BITWISE_XOR => num_bitwise_xor
+        NUM_BITWISE_XOR => num_bitwise_xor,
+        NUM_BITWISE_OR => num_bitwise_or,
+        NUM_SHIFT_LEFT=> num_shift_left_by,
+        NUM_SHIFT_RIGHT => num_shift_right_by,
+        NUM_SHIFT_RIGHT_ZERO_FILL => num_shift_right_zf_by,
+        NUM_INT_CAST=> num_int_cast,
+        NUM_MAX_I128=> num_max_i128,
+        RESULT_MAP => result_map,
+        RESULT_MAP_ERR => result_map_err,
+        RESULT_AFTER => result_after,
+        RESULT_WITH_DEFAULT => result_with_default,
     }
 }
 
@@ -164,6 +201,9 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::STR_ENDS_WITH => str_ends_with,
         Symbol::STR_COUNT_GRAPHEMES => str_count_graphemes,
         Symbol::STR_FROM_INT => str_from_int,
+        Symbol::STR_FROM_UTF8 => str_from_utf8,
+        Symbol::STR_TO_BYTES => str_to_bytes,
+        Symbol::STR_FROM_FLOAT=> str_from_float,
         Symbol::LIST_LEN => list_len,
         Symbol::LIST_GET => list_get,
         Symbol::LIST_SET => list_set,
@@ -180,18 +220,40 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_PREPEND => list_prepend,
         Symbol::LIST_JOIN => list_join,
         Symbol::LIST_MAP => list_map,
+        Symbol::LIST_MAP2 => list_map2,
+        Symbol::LIST_MAP3 => list_map3,
+        Symbol::LIST_MAP_WITH_INDEX => list_map_with_index,
         Symbol::LIST_KEEP_IF => list_keep_if,
+        Symbol::LIST_KEEP_OKS => list_keep_oks,
+        Symbol::LIST_KEEP_ERRS=> list_keep_errs,
         Symbol::LIST_WALK => list_walk,
         Symbol::LIST_WALK_BACKWARDS => list_walk_backwards,
         Symbol::DICT_TEST_HASH => dict_hash_test_only,
         Symbol::DICT_LEN => dict_len,
         Symbol::DICT_EMPTY => dict_empty,
+        Symbol::DICT_SINGLE => dict_single,
         Symbol::DICT_INSERT => dict_insert,
         Symbol::DICT_REMOVE => dict_remove,
         Symbol::DICT_GET => dict_get,
         Symbol::DICT_CONTAINS => dict_contains,
         Symbol::DICT_KEYS => dict_keys,
         Symbol::DICT_VALUES => dict_values,
+        Symbol::DICT_UNION=> dict_union,
+        Symbol::DICT_INTERSECTION=> dict_intersection,
+        Symbol::DICT_DIFFERENCE=> dict_difference,
+        Symbol::DICT_WALK=> dict_walk,
+        Symbol::SET_EMPTY => set_empty,
+        Symbol::SET_LEN => set_len,
+        Symbol::SET_SINGLE => set_single,
+        Symbol::SET_UNION=> set_union,
+        Symbol::SET_INTERSECTION=> set_intersection,
+        Symbol::SET_DIFFERENCE=> set_difference,
+        Symbol::SET_TO_LIST => set_to_list,
+        Symbol::SET_FROM_LIST => set_from_list,
+        Symbol::SET_INSERT => set_insert,
+        Symbol::SET_REMOVE => set_remove,
+        Symbol::SET_CONTAINS => set_contains,
+        Symbol::SET_WALK => set_walk,
         Symbol::NUM_ADD => num_add,
         Symbol::NUM_ADD_CHECKED => num_add_checked,
         Symbol::NUM_ADD_WRAP => num_add_wrap,
@@ -210,6 +272,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_ABS => num_abs,
         Symbol::NUM_NEG => num_neg,
         Symbol::NUM_REM => num_rem,
+        Symbol::NUM_IS_MULTIPLE_OF => num_is_multiple_of,
         Symbol::NUM_SQRT => num_sqrt,
         Symbol::NUM_ROUND => num_round,
         Symbol::NUM_IS_ODD => num_is_odd,
@@ -227,14 +290,129 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_ASIN => num_asin,
         Symbol::NUM_MAX_INT => num_max_int,
         Symbol::NUM_MIN_INT => num_min_int,
+        Symbol::NUM_BITWISE_AND => num_bitwise_and,
+        Symbol::NUM_BITWISE_XOR => num_bitwise_xor,
+        Symbol::NUM_BITWISE_OR => num_bitwise_or,
+        Symbol::NUM_SHIFT_LEFT => num_shift_left_by,
+        Symbol::NUM_SHIFT_RIGHT => num_shift_right_by,
+        Symbol::NUM_SHIFT_RIGHT_ZERO_FILL => num_shift_right_zf_by,
+        Symbol::NUM_INT_CAST=> num_int_cast,
+        Symbol::NUM_MAX_I128=> num_max_i128,
+        Symbol::RESULT_MAP => result_map,
+        Symbol::RESULT_MAP_ERR => result_map_err,
+        Symbol::RESULT_AFTER => result_after,
+        Symbol::RESULT_WITH_DEFAULT => result_with_default,
     }
+}
+
+fn lowlevel_1(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
+    let arg1_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op,
+        args: vec![(arg1_var, Var(Symbol::ARG_1))],
+        ret_var,
+    };
+
+    defn(
+        symbol,
+        vec![(arg1_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+fn lowlevel_2(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
+    let arg1_var = var_store.fresh();
+    let arg2_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op,
+        args: vec![
+            (arg1_var, Var(Symbol::ARG_1)),
+            (arg2_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var,
+    };
+
+    defn(
+        symbol,
+        vec![(arg1_var, Symbol::ARG_1), (arg2_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+fn lowlevel_3(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
+    let arg1_var = var_store.fresh();
+    let arg2_var = var_store.fresh();
+    let arg3_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op,
+        args: vec![
+            (arg1_var, Var(Symbol::ARG_1)),
+            (arg2_var, Var(Symbol::ARG_2)),
+            (arg3_var, Var(Symbol::ARG_3)),
+        ],
+        ret_var,
+    };
+
+    defn(
+        symbol,
+        vec![
+            (arg1_var, Symbol::ARG_1),
+            (arg2_var, Symbol::ARG_2),
+            (arg3_var, Symbol::ARG_3),
+        ],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+fn lowlevel_4(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
+    let arg1_var = var_store.fresh();
+    let arg2_var = var_store.fresh();
+    let arg3_var = var_store.fresh();
+    let arg4_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op,
+        args: vec![
+            (arg1_var, Var(Symbol::ARG_1)),
+            (arg2_var, Var(Symbol::ARG_2)),
+            (arg3_var, Var(Symbol::ARG_3)),
+            (arg4_var, Var(Symbol::ARG_4)),
+        ],
+        ret_var,
+    };
+
+    defn(
+        symbol,
+        vec![
+            (arg1_var, Symbol::ARG_1),
+            (arg2_var, Symbol::ARG_2),
+            (arg3_var, Symbol::ARG_3),
+            (arg4_var, Symbol::ARG_4),
+        ],
+        var_store,
+        body,
+        ret_var,
+    )
 }
 
 /// Num.maxInt : Int
 fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
     let int_percision_var = var_store.fresh();
-    let body = Int(int_var, int_percision_var, i64::MAX);
+    let body = Int(int_var, int_percision_var, i64::MAX.into());
 
     Def {
         annotation: None,
@@ -249,7 +427,7 @@ fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
 fn num_min_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
     let int_percision_var = var_store.fresh();
-    let body = Int(int_var, int_percision_var, i64::MIN);
+    let body = Int(int_var, int_percision_var, i64::MIN.into());
 
     Def {
         annotation: None,
@@ -1179,6 +1357,58 @@ fn num_bitwise_xor(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumBitwiseXor)
 }
 
+/// Num.bitwiseOr: Int, Int -> Int
+fn num_bitwise_or(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumBitwiseOr)
+}
+
+/// Num.shiftLeftBy: Nat, Int a -> Int a
+fn num_shift_left_by(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::NumShiftLeftBy, var_store)
+}
+
+/// Num.shiftRightBy: Nat, Int a -> Int a
+fn num_shift_right_by(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::NumShiftRightBy, var_store)
+}
+
+/// Num.shiftRightZfBy: Nat, Int a -> Int a
+fn num_shift_right_zf_by(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::NumShiftRightZfBy, var_store)
+}
+
+/// Num.intCast: Int a -> Int b
+fn num_int_cast(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::NumIntCast, var_store)
+}
+
+/// Num.maxI128: I128
+fn num_max_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let int_var = var_store.fresh();
+    let int_percision_var = var_store.fresh();
+    let body = Int(int_var, int_percision_var, i128::MAX);
+
+    let std = roc_builtins::std::types();
+    let solved = std.get(&symbol).unwrap();
+    let mut free_vars = roc_types::solved_types::FreeVars::default();
+    let signature = roc_types::solved_types::to_type(&solved.0, &mut free_vars, var_store);
+
+    let annotation = crate::def::Annotation {
+        signature,
+        introduced_variables: Default::default(),
+        region: Region::zero(),
+        aliases: Default::default(),
+    };
+
+    Def {
+        annotation: Some(annotation),
+        expr_var: int_var,
+        loc_expr: Located::at_zero(body),
+        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
+}
+
 /// List.isEmpty : List * -> Bool
 fn list_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
@@ -1372,7 +1602,7 @@ fn str_count_graphemes(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Str.fromInt : Int -> Str
+/// Str.fromInt : Int * -> Str
 fn str_from_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
     let str_var = var_store.fresh();
@@ -1386,6 +1616,135 @@ fn str_from_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     defn(
         symbol,
         vec![(int_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        str_var,
+    )
+}
+
+/// Str.fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8Problem ]*
+fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let bytes_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+    let record_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+
+    // let arg_2 = RunLowLevel FromUtf8 arg_1
+    //
+    // arg_2 :
+    //   { a : Bool   -- isOk
+    //   , b : String -- result_str
+    //   , c : Nat    -- problem_byte_index
+    //   , d : I8     -- problem_code
+    //   }
+    //
+    // if arg_2.a then
+    //  # all is well
+    //  Ok arg_2.str
+    // else
+    //  # problem
+    //  Err (BadUtf8 { byteIndex: arg_2.byteIndex, problem : arg_2.problem })
+
+    let def = crate::def::Def {
+        loc_pattern: no_region(Pattern::Identifier(Symbol::ARG_2)),
+        loc_expr: no_region(RunLowLevel {
+            op: LowLevel::StrFromUtf8,
+            args: vec![(bytes_var, Var(Symbol::ARG_1))],
+            ret_var: record_var,
+        }),
+        expr_var: record_var,
+        pattern_vars: SendMap::default(),
+        annotation: None,
+    };
+
+    let cont = If {
+        branch_var: ret_var,
+        cond_var: bool_var,
+        branches: vec![(
+            // if-condition
+            no_region(
+                // arg_2.c -> Bool
+                Access {
+                    record_var,
+                    ext_var: var_store.fresh(),
+                    field: "c_isOk".into(),
+                    field_var: var_store.fresh(),
+                    loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                },
+            ),
+            // all is good
+            no_region(tag(
+                "Ok",
+                // arg_2.a -> Str
+                vec![Access {
+                    record_var,
+                    ext_var: var_store.fresh(),
+                    field: "b_str".into(),
+                    field_var: var_store.fresh(),
+                    loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                }],
+                var_store,
+            )),
+        )],
+        final_else: Box::new(
+            // bad!!
+            no_region(tag(
+                "Err",
+                vec![tag(
+                    "BadUtf8",
+                    vec![
+                        Access {
+                            record_var,
+                            ext_var: var_store.fresh(),
+                            field: "d_problem".into(),
+                            field_var: var_store.fresh(),
+                            loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                        },
+                        Access {
+                            record_var,
+                            ext_var: var_store.fresh(),
+                            field: "a_byteIndex".into(),
+                            field_var: var_store.fresh(),
+                            loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                        },
+                    ],
+                    var_store,
+                )],
+                var_store,
+            )),
+        ),
+    };
+
+    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+
+    defn(
+        symbol,
+        vec![(bytes_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+/// Str.toBytes : Str -> List U8
+fn str_to_bytes(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::StrToBytes, var_store)
+}
+
+/// Str.fromFloat : Float * -> Str
+fn str_from_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let float_var = var_store.fresh();
+    let str_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::StrFromFloat,
+        args: vec![(float_var, Var(Symbol::ARG_1))],
+        ret_var: str_var,
+    };
+
+    defn(
+        symbol,
+        vec![(float_var, Symbol::ARG_1)],
         var_store,
         body,
         str_var,
@@ -1800,94 +2159,47 @@ fn list_keep_if(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// List.contains : List elem, elem -> Bool
 fn list_contains(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_var = var_store.fresh();
-    let elem_var = var_store.fresh();
-    let bool_var = var_store.fresh();
+    lowlevel_2(symbol, LowLevel::ListContains, var_store)
+}
 
-    let body = RunLowLevel {
-        op: LowLevel::ListContains,
-        args: vec![
-            (list_var, Var(Symbol::ARG_1)),
-            (elem_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var: bool_var,
-    };
+/// List.keepOks : List before, (before -> Result after *) -> List after
+fn list_keep_oks(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::ListKeepOks, var_store)
+}
 
-    defn(
-        symbol,
-        vec![(list_var, Symbol::ARG_1), (elem_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        bool_var,
-    )
+/// List.keepErrs: List before, (before -> Result * after) -> List after
+fn list_keep_errs(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::ListKeepErrs, var_store)
 }
 
 /// List.map : List before, (before -> after) -> List after
 fn list_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_var = var_store.fresh();
-    let func_var = var_store.fresh();
-    let ret_list_var = var_store.fresh();
+    lowlevel_2(symbol, LowLevel::ListMap, var_store)
+}
 
-    let body = RunLowLevel {
-        op: LowLevel::ListMap,
-        args: vec![
-            (list_var, Var(Symbol::ARG_1)),
-            (func_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var: ret_list_var,
-    };
+/// List.mapWithIndex : List before, (Nat, before -> after) -> List after
+fn list_map_with_index(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::ListMapWithIndex, var_store)
+}
 
-    defn(
-        symbol,
-        vec![(list_var, Symbol::ARG_1), (func_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        ret_list_var,
-    )
+/// List.map2 : List a, List b, (a, b -> c) -> List c
+fn list_map2(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_3(symbol, LowLevel::ListMap2, var_store)
+}
+
+/// List.map3 : List a, List b, (a, b -> c) -> List c
+fn list_map3(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_4(symbol, LowLevel::ListMap3, var_store)
 }
 
 /// Dict.hashTestOnly : k, v -> Nat
 pub fn dict_hash_test_only(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let key_var = var_store.fresh();
-    let value_var = var_store.fresh();
-    let nat_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::Hash,
-        args: vec![
-            (key_var, Var(Symbol::ARG_1)),
-            (value_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var: nat_var,
-    };
-
-    defn(
-        symbol,
-        vec![(key_var, Symbol::ARG_1), (value_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        nat_var,
-    )
+    lowlevel_2(symbol, LowLevel::Hash, var_store)
 }
 
 /// Dict.len : Dict * * -> Nat
 fn dict_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let size_var = var_store.fresh();
-    let dict_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::DictSize,
-        args: vec![(dict_var, Var(Symbol::ARG_1))],
-        ret_var: size_var,
-    };
-
-    defn(
-        symbol,
-        vec![(dict_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        size_var,
-    )
+    lowlevel_1(symbol, LowLevel::DictSize, var_store)
 }
 
 /// Dict.empty : Dict * *
@@ -1908,80 +2220,50 @@ fn dict_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     }
 }
 
-/// Dict.insert : Dict k v, k, v -> Dict k v
-fn dict_insert(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let dict_var = var_store.fresh();
+/// Dict.single : k, v -> Dict k v
+fn dict_single(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let key_var = var_store.fresh();
-    let val_var = var_store.fresh();
+    let value_var = var_store.fresh();
+    let dict_var = var_store.fresh();
+
+    let empty = RunLowLevel {
+        op: LowLevel::DictEmpty,
+        args: vec![],
+        ret_var: dict_var,
+    };
 
     let body = RunLowLevel {
         op: LowLevel::DictInsert,
         args: vec![
-            (dict_var, Var(Symbol::ARG_1)),
-            (key_var, Var(Symbol::ARG_2)),
-            (val_var, Var(Symbol::ARG_3)),
+            (dict_var, empty),
+            (key_var, Var(Symbol::ARG_1)),
+            (value_var, Var(Symbol::ARG_2)),
         ],
         ret_var: dict_var,
     };
 
     defn(
         symbol,
-        vec![
-            (dict_var, Symbol::ARG_1),
-            (key_var, Symbol::ARG_2),
-            (val_var, Symbol::ARG_3),
-        ],
+        vec![(key_var, Symbol::ARG_1), (value_var, Symbol::ARG_2)],
         var_store,
         body,
         dict_var,
     )
+}
+
+/// Dict.insert : Dict k v, k, v -> Dict k v
+fn dict_insert(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_3(symbol, LowLevel::DictInsert, var_store)
 }
 
 /// Dict.remove : Dict k v, k -> Dict k v
 fn dict_remove(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let dict_var = var_store.fresh();
-    let key_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::DictRemove,
-        args: vec![
-            (dict_var, Var(Symbol::ARG_1)),
-            (key_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var: dict_var,
-    };
-
-    defn(
-        symbol,
-        vec![(dict_var, Symbol::ARG_1), (key_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        dict_var,
-    )
+    lowlevel_2(symbol, LowLevel::DictRemove, var_store)
 }
 
 /// Dict.contains : Dict k v, k -> Bool
 fn dict_contains(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let dict_var = var_store.fresh();
-    let key_var = var_store.fresh();
-    let bool_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::DictContains,
-        args: vec![
-            (dict_var, Var(Symbol::ARG_1)),
-            (key_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var: bool_var,
-    };
-
-    defn(
-        symbol,
-        vec![(dict_var, Symbol::ARG_1), (key_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        bool_var,
-    )
+    lowlevel_2(symbol, LowLevel::DictContains, var_store)
 }
 
 /// Dict.get : Dict k v, k -> Result v [ KeyNotFound ]*
@@ -1989,7 +2271,7 @@ fn dict_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_dict = Symbol::ARG_1;
     let arg_key = Symbol::ARG_2;
 
-    let temp_record = Symbol::ARG_3;
+    let temp_record = Symbol::DICT_GET_RESULT;
 
     let bool_var = var_store.fresh();
     let flag_var = var_store.fresh();
@@ -2067,41 +2349,208 @@ fn dict_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Dict.keys : Dict k v -> List k
 fn dict_keys(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let dict_var = var_store.fresh();
-    let list_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::DictKeys,
-        args: vec![(dict_var, Var(Symbol::ARG_1))],
-        ret_var: list_var,
-    };
-
-    defn(
-        symbol,
-        vec![(dict_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        list_var,
-    )
+    lowlevel_1(symbol, LowLevel::DictKeys, var_store)
 }
 
 /// Dict.values : Dict k v -> List v
 fn dict_values(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let dict_var = var_store.fresh();
-    let list_var = var_store.fresh();
+    lowlevel_1(symbol, LowLevel::DictValues, var_store)
+}
+
+/// Dict.union : Dict k v, Dict k v -> Dict k v
+fn dict_union(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::DictUnion, var_store)
+}
+
+/// Dict.difference : Dict k v, Dict k v -> Dict k v
+fn dict_difference(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::DictDifference, var_store)
+}
+
+/// Dict.intersection : Dict k v, Dict k v -> Dict k v
+fn dict_intersection(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::DictIntersection, var_store)
+}
+
+/// Dict.walk : Dict k v, (k, v, accum -> accum), accum -> accum
+fn dict_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_3(symbol, LowLevel::DictWalk, var_store)
+}
+
+/// Set.empty : Set *
+fn set_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let set_var = var_store.fresh();
+    let body = RunLowLevel {
+        op: LowLevel::DictEmpty,
+        args: vec![],
+        ret_var: set_var,
+    };
+
+    Def {
+        annotation: None,
+        expr_var: set_var,
+        loc_expr: Located::at_zero(body),
+        loc_pattern: Located::at_zero(Pattern::Identifier(symbol)),
+        pattern_vars: SendMap::default(),
+    }
+}
+
+/// Set.single : k -> Set k
+fn set_single(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let key_var = var_store.fresh();
+    let set_var = var_store.fresh();
+    let value_var = Variable::EMPTY_RECORD;
+
+    let empty = RunLowLevel {
+        op: LowLevel::DictEmpty,
+        args: vec![],
+        ret_var: set_var,
+    };
 
     let body = RunLowLevel {
-        op: LowLevel::DictValues,
-        args: vec![(dict_var, Var(Symbol::ARG_1))],
-        ret_var: list_var,
+        op: LowLevel::DictInsert,
+        args: vec![
+            (set_var, empty),
+            (key_var, Var(Symbol::ARG_1)),
+            (value_var, EmptyRecord),
+        ],
+        ret_var: set_var,
     };
 
     defn(
         symbol,
-        vec![(dict_var, Symbol::ARG_1)],
+        vec![(key_var, Symbol::ARG_1)],
         var_store,
         body,
-        list_var,
+        set_var,
+    )
+}
+
+/// Set.len : Set * -> Nat
+fn set_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::DictSize, var_store)
+}
+
+/// Dict.union : Dict k v, Dict k v -> Dict k v
+fn set_union(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::DictUnion, var_store)
+}
+
+/// Dict.difference : Dict k v, Dict k v -> Dict k v
+fn set_difference(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::DictDifference, var_store)
+}
+
+/// Dict.intersection : Dict k v, Dict k v -> Dict k v
+fn set_intersection(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::DictIntersection, var_store)
+}
+
+/// Set.toList : Set k -> List k
+fn set_to_list(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    dict_keys(symbol, var_store)
+}
+
+/// Set.fromList : List k -> Set k
+fn set_from_list(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::SetFromList, var_store)
+}
+
+/// Set.insert : Set k, k -> Set k
+fn set_insert(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let dict_var = var_store.fresh();
+    let key_var = var_store.fresh();
+    let val_var = Variable::EMPTY_RECORD;
+
+    let body = RunLowLevel {
+        op: LowLevel::DictInsert,
+        args: vec![
+            (dict_var, Var(Symbol::ARG_1)),
+            (key_var, Var(Symbol::ARG_2)),
+            (val_var, EmptyRecord),
+        ],
+        ret_var: dict_var,
+    };
+
+    defn(
+        symbol,
+        vec![(dict_var, Symbol::ARG_1), (key_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        dict_var,
+    )
+}
+
+/// Set.remove : Set k, k -> Set k
+fn set_remove(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    dict_remove(symbol, var_store)
+}
+
+/// Set.remove : Set k, k -> Set k
+fn set_contains(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    dict_contains(symbol, var_store)
+}
+
+/// Set.walk : Set k,  (k, accum -> accum), accum -> accum
+fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let dict_var = var_store.fresh();
+    let func_var = var_store.fresh();
+    let key_var = var_store.fresh();
+    let accum_var = var_store.fresh();
+    let wrapper_var = var_store.fresh();
+
+    let user_function = Box::new((
+        func_var,
+        no_region(Var(Symbol::ARG_2)),
+        var_store.fresh(),
+        accum_var,
+    ));
+
+    let call_func = Call(
+        user_function,
+        vec![
+            (key_var, no_region(Var(Symbol::ARG_5))),
+            (accum_var, no_region(Var(Symbol::ARG_6))),
+        ],
+        CalledVia::Space,
+    );
+
+    let wrapper = Closure {
+        function_type: wrapper_var,
+        closure_type: var_store.fresh(),
+        closure_ext_var: var_store.fresh(),
+        return_type: accum_var,
+        name: Symbol::SET_WALK_USER_FUNCTION,
+        recursive: Recursive::NotRecursive,
+        captured_symbols: vec![(Symbol::ARG_2, func_var)],
+        arguments: vec![
+            (key_var, no_region(Pattern::Identifier(Symbol::ARG_5))),
+            (Variable::EMPTY_RECORD, no_region(Pattern::Underscore)),
+            (accum_var, no_region(Pattern::Identifier(Symbol::ARG_6))),
+        ],
+        loc_body: Box::new(no_region(call_func)),
+    };
+
+    let body = RunLowLevel {
+        op: LowLevel::DictWalk,
+        args: vec![
+            (dict_var, Var(Symbol::ARG_1)),
+            (wrapper_var, wrapper),
+            (accum_var, Var(Symbol::ARG_3)),
+        ],
+        ret_var: accum_var,
+    };
+
+    defn(
+        symbol,
+        vec![
+            (dict_var, Symbol::ARG_1),
+            (func_var, Symbol::ARG_2),
+            (accum_var, Symbol::ARG_3),
+        ],
+        var_store,
+        body,
+        accum_var,
     )
 }
 
@@ -2162,6 +2611,11 @@ fn num_rem(symbol: Symbol, var_store: &mut VarStore) -> Def {
         body,
         ret_var,
     )
+}
+
+/// Num.isMultipleOf : Int, Int -> Bool
+fn num_is_multiple_of(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::NumIsMultipleOf, var_store)
 }
 
 /// Num.neg : Num a -> Num a
@@ -2511,6 +2965,355 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let ret_var = var_store.fresh();
+    let func_var = var_store.fresh();
+    let result_var = var_store.fresh();
+
+    let mut branches = vec![];
+
+    {
+        let user_function = Box::new((
+            func_var,
+            no_region(Var(Symbol::ARG_2)),
+            var_store.fresh(),
+            var_store.fresh(),
+        ));
+
+        let call_func = Call(
+            user_function,
+            vec![(var_store.fresh(), no_region(Var(Symbol::ARG_5)))],
+            CalledVia::Space,
+        );
+
+        let tag_name = TagName::Global("Ok".into());
+
+        // ok branch
+        let ok = Tag {
+            variant_var: var_store.fresh(),
+            ext_var: var_store.fresh(),
+            name: tag_name.clone(),
+            arguments: vec![(var_store.fresh(), no_region(call_func))],
+        };
+
+        let pattern = Pattern::AppliedTag {
+            whole_var: result_var,
+            ext_var: var_store.fresh(),
+            tag_name,
+            arguments: vec![(
+                var_store.fresh(),
+                no_region(Pattern::Identifier(Symbol::ARG_5)),
+            )],
+        };
+
+        let branch = WhenBranch {
+            patterns: vec![no_region(pattern)],
+            value: no_region(ok),
+            guard: None,
+        };
+
+        branches.push(branch);
+    }
+
+    {
+        // err branch
+        let tag_name = TagName::Global("Err".into());
+
+        let err = Tag {
+            variant_var: var_store.fresh(),
+            ext_var: var_store.fresh(),
+            name: tag_name.clone(),
+            arguments: vec![(var_store.fresh(), no_region(Var(Symbol::ARG_4)))],
+        };
+
+        let pattern = Pattern::AppliedTag {
+            whole_var: result_var,
+            ext_var: var_store.fresh(),
+            tag_name,
+            arguments: vec![(
+                var_store.fresh(),
+                no_region(Pattern::Identifier(Symbol::ARG_4)),
+            )],
+        };
+
+        let branch = WhenBranch {
+            patterns: vec![no_region(pattern)],
+            value: no_region(err),
+            guard: None,
+        };
+
+        branches.push(branch);
+    }
+
+    let body = When {
+        cond_var: result_var,
+        expr_var: ret_var,
+        region: Region::zero(),
+        loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
+        branches,
+    };
+
+    defn(
+        symbol,
+        vec![(result_var, Symbol::ARG_1), (func_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let ret_var = var_store.fresh();
+    let func_var = var_store.fresh();
+    let result_var = var_store.fresh();
+
+    let mut branches = vec![];
+
+    {
+        let user_function = Box::new((
+            func_var,
+            no_region(Var(Symbol::ARG_2)),
+            var_store.fresh(),
+            var_store.fresh(),
+        ));
+
+        let call_func = Call(
+            user_function,
+            vec![(var_store.fresh(), no_region(Var(Symbol::ARG_5)))],
+            CalledVia::Space,
+        );
+
+        let tag_name = TagName::Global("Err".into());
+
+        // ok branch
+        let ok = Tag {
+            variant_var: var_store.fresh(),
+            ext_var: var_store.fresh(),
+            name: tag_name.clone(),
+            arguments: vec![(var_store.fresh(), no_region(call_func))],
+        };
+
+        let pattern = Pattern::AppliedTag {
+            whole_var: result_var,
+            ext_var: var_store.fresh(),
+            tag_name,
+            arguments: vec![(
+                var_store.fresh(),
+                no_region(Pattern::Identifier(Symbol::ARG_5)),
+            )],
+        };
+
+        let branch = WhenBranch {
+            patterns: vec![no_region(pattern)],
+            value: no_region(ok),
+            guard: None,
+        };
+
+        branches.push(branch);
+    }
+
+    {
+        // err branch
+        let tag_name = TagName::Global("Ok".into());
+
+        let err = Tag {
+            variant_var: var_store.fresh(),
+            ext_var: var_store.fresh(),
+            name: tag_name.clone(),
+            arguments: vec![(var_store.fresh(), no_region(Var(Symbol::ARG_4)))],
+        };
+
+        let pattern = Pattern::AppliedTag {
+            whole_var: result_var,
+            ext_var: var_store.fresh(),
+            tag_name,
+            arguments: vec![(
+                var_store.fresh(),
+                no_region(Pattern::Identifier(Symbol::ARG_4)),
+            )],
+        };
+
+        let branch = WhenBranch {
+            patterns: vec![no_region(pattern)],
+            value: no_region(err),
+            guard: None,
+        };
+
+        branches.push(branch);
+    }
+
+    let body = When {
+        cond_var: result_var,
+        expr_var: ret_var,
+        region: Region::zero(),
+        loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
+        branches,
+    };
+
+    defn(
+        symbol,
+        vec![(result_var, Symbol::ARG_1), (func_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let ret_var = var_store.fresh();
+    let result_var = var_store.fresh();
+
+    let mut branches = vec![];
+
+    {
+        // ok branch
+        let tag_name = TagName::Global("Ok".into());
+
+        let pattern = Pattern::AppliedTag {
+            whole_var: result_var,
+            ext_var: var_store.fresh(),
+            tag_name,
+            arguments: vec![(ret_var, no_region(Pattern::Identifier(Symbol::ARG_3)))],
+        };
+
+        let branch = WhenBranch {
+            patterns: vec![no_region(pattern)],
+            value: no_region(Var(Symbol::ARG_3)),
+            guard: None,
+        };
+
+        branches.push(branch);
+    }
+
+    {
+        // err branch
+        let tag_name = TagName::Global("Err".into());
+
+        let pattern = Pattern::AppliedTag {
+            whole_var: result_var,
+            ext_var: var_store.fresh(),
+            tag_name,
+            arguments: vec![(var_store.fresh(), no_region(Pattern::Underscore))],
+        };
+
+        let branch = WhenBranch {
+            patterns: vec![no_region(pattern)],
+            value: no_region(Var(Symbol::ARG_2)),
+            guard: None,
+        };
+
+        branches.push(branch);
+    }
+
+    let body = When {
+        cond_var: result_var,
+        expr_var: ret_var,
+        region: Region::zero(),
+        loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
+        branches,
+    };
+
+    defn(
+        symbol,
+        vec![(result_var, Symbol::ARG_1), (ret_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let ret_var = var_store.fresh();
+    let func_var = var_store.fresh();
+    let result_var = var_store.fresh();
+
+    let mut branches = vec![];
+
+    {
+        let user_function = Box::new((
+            func_var,
+            no_region(Var(Symbol::ARG_2)),
+            var_store.fresh(),
+            var_store.fresh(),
+        ));
+
+        let call_func = Call(
+            user_function,
+            vec![(var_store.fresh(), no_region(Var(Symbol::ARG_5)))],
+            CalledVia::Space,
+        );
+
+        let tag_name = TagName::Global("Ok".into());
+
+        // ok branch
+        let ok = call_func;
+
+        let pattern = Pattern::AppliedTag {
+            whole_var: result_var,
+            ext_var: var_store.fresh(),
+            tag_name,
+            arguments: vec![(
+                var_store.fresh(),
+                no_region(Pattern::Identifier(Symbol::ARG_5)),
+            )],
+        };
+
+        let branch = WhenBranch {
+            patterns: vec![no_region(pattern)],
+            value: no_region(ok),
+            guard: None,
+        };
+
+        branches.push(branch);
+    }
+
+    {
+        // err branch
+        let tag_name = TagName::Global("Err".into());
+
+        let err = Tag {
+            variant_var: var_store.fresh(),
+            ext_var: var_store.fresh(),
+            name: tag_name.clone(),
+            arguments: vec![(var_store.fresh(), no_region(Var(Symbol::ARG_4)))],
+        };
+
+        let pattern = Pattern::AppliedTag {
+            whole_var: result_var,
+            ext_var: var_store.fresh(),
+            tag_name,
+            arguments: vec![(
+                var_store.fresh(),
+                no_region(Pattern::Identifier(Symbol::ARG_4)),
+            )],
+        };
+
+        let branch = WhenBranch {
+            patterns: vec![no_region(pattern)],
+            value: no_region(err),
+            guard: None,
+        };
+
+        branches.push(branch);
+    }
+
+    let body = When {
+        cond_var: result_var,
+        expr_var: ret_var,
+        region: Region::zero(),
+        loc_cond: Box::new(no_region(Var(Symbol::ARG_1))),
+        branches,
+    };
+
+    defn(
+        symbol,
+        vec![(result_var, Symbol::ARG_1), (func_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
 #[inline(always)]
 fn no_region<T>(value: T) -> Located<T> {
     Located {
@@ -2531,6 +3334,18 @@ fn tag(name: &'static str, args: Vec<Expr>, var_store: &mut VarStore) -> Expr {
             .collect::<Vec<(Variable, Located<Expr>)>>(),
     }
 }
+
+// #[inline(always)]
+// fn record(fields: Vec<(Lowercase, Field)>, var_store: &mut VarStore) -> Expr {
+// let mut send_map = SendMap::default();
+// for (k, v) in fields {
+// send_map.insert(k, v);
+// }
+// Expr::Record {
+// record_var: var_store.fresh(),
+// fields: send_map,
+// }
+// }
 
 #[inline(always)]
 fn defn(

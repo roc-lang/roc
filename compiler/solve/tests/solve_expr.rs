@@ -211,6 +211,30 @@ mod solve_expr {
         );
     }
 
+    #[test]
+    fn string_from_int() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Str.fromInt
+                "#
+            ),
+            "Int * -> Str",
+        );
+    }
+
+    #[test]
+    fn string_from_utf8() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Str.fromUtf8
+                "#
+            ),
+            "List U8 -> Result Str [ BadUtf8 Utf8ByteProblem Nat ]*",
+        );
+    }
+
     // #[test]
     // fn block_string_literal() {
     //     infer_eq(
@@ -3194,6 +3218,18 @@ mod solve_expr {
     }
 
     #[test]
+    fn max_i128() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Num.maxI128
+                "#
+            ),
+            "I128",
+        );
+    }
+
+    #[test]
     fn reconstruct_path() {
         infer_eq_without_problem(
             indoc!(
@@ -3257,7 +3293,7 @@ mod solve_expr {
                                             else
                                                 Ok { position, cost: 0.0 }
 
-                    Set.foldl model.openSet folder (Ok { position: boom {}, cost: 0.0 })
+                    Set.walk model.openSet folder (Ok { position: boom {}, cost: 0.0 })
                         |> Result.map (\x -> x.position)
 
                 astar : Model position -> Result position [ KeyNotFound ]*
@@ -4289,6 +4325,28 @@ mod solve_expr {
                 "#
             ),
             "Str",
+        );
+    }
+
+    #[test]
+    fn int_type_let_polymorphism() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                x = 4
+
+                f : U8 -> U32
+                f = \z -> Num.intCast z
+
+                y = f x
+
+                main =
+                    x
+                "#
+            ),
+            "Num *",
         );
     }
 }

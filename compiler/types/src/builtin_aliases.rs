@@ -1,5 +1,6 @@
 use crate::solved_types::{BuiltinAlias, SolvedType};
 use crate::subs::VarId;
+use crate::types::RecordField;
 use roc_collections::all::{default_hasher, MutMap};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
@@ -104,7 +105,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         BuiltinAlias {
             region: Region::zero(),
             vars: Vec::new(),
-            typ: int_alias_content(signed128_type()),
+            typ: i128_alias_content(),
         },
     );
 
@@ -298,7 +299,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
-    // Result a e : [ Ok a, Err e ]
+    // Result ok err : [ Ok ok, Err err ]
     add_alias(
         Symbol::RESULT_RESULT,
         BuiltinAlias {
@@ -308,6 +309,26 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
                 Located::at(Region::zero(), "err".into()),
             ],
             typ: result_alias_content(flex(TVAR1), flex(TVAR2)),
+        },
+    );
+
+    // Utf8ByteProblem : [ InvalidStartByte, UnexpectedEndOfSequence, ExpectedContinuation, OverlongEncoding, CodepointTooLarge, EncodesSurrogateHalf ]
+    add_alias(
+        Symbol::STR_UT8_BYTE_PROBLEM,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: str_utf8_byte_problem_alias_content(),
+        },
+    );
+
+    // Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
+    add_alias(
+        Symbol::STR_UT8_PROBLEM,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: str_utf8_byte_problem_alias_content(),
         },
     );
 
@@ -389,6 +410,18 @@ fn u64_alias_content() -> SolvedType {
     int_alias_content(unsigned64_type())
 }
 
+// I128
+
+#[inline(always)]
+pub fn i128_type() -> SolvedType {
+    SolvedType::Alias(Symbol::NUM_I128, vec![], Box::new(i128_alias_content()))
+}
+
+#[inline(always)]
+fn i128_alias_content() -> SolvedType {
+    int_alias_content(signed128_type())
+}
+
 // INT
 
 #[inline(always)]
@@ -419,6 +452,15 @@ pub fn integer_type(range: SolvedType) -> SolvedType {
 #[inline(always)]
 fn integer_alias_content(range: SolvedType) -> SolvedType {
     single_private_tag(Symbol::NUM_AT_INTEGER, vec![range])
+}
+
+#[inline(always)]
+pub fn u8_type() -> SolvedType {
+    SolvedType::Alias(
+        Symbol::NUM_U8,
+        vec![],
+        Box::new(int_alias_content(unsigned8_type())),
+    )
 }
 
 #[inline(always)]
@@ -663,6 +705,57 @@ pub fn list_type(a: SolvedType) -> SolvedType {
 #[inline(always)]
 pub fn str_type() -> SolvedType {
     SolvedType::Apply(Symbol::STR_STR, Vec::new())
+}
+
+#[inline(always)]
+pub fn str_utf8_problem_type() -> SolvedType {
+    SolvedType::Alias(
+        Symbol::STR_UT8_PROBLEM,
+        Vec::new(),
+        Box::new(str_utf8_problem_alias_content()),
+    )
+}
+
+#[inline(always)]
+pub fn str_utf8_problem_alias_content() -> SolvedType {
+    SolvedType::Record {
+        fields: vec![
+            ("byteIndex".into(), RecordField::Required(nat_type())),
+            (
+                "problem".into(),
+                RecordField::Required(str_utf8_byte_problem_type()),
+            ),
+        ],
+        ext: Box::new(SolvedType::EmptyRecord),
+    }
+}
+
+#[inline(always)]
+pub fn str_utf8_byte_problem_type() -> SolvedType {
+    SolvedType::Alias(
+        Symbol::STR_UT8_BYTE_PROBLEM,
+        Vec::new(),
+        Box::new(str_utf8_byte_problem_alias_content()),
+    )
+}
+
+#[inline(always)]
+pub fn str_utf8_byte_problem_alias_content() -> SolvedType {
+    // 1. This must have the same values as the Zig struct Utf8ByteProblem in src/str.zig
+    // 2. This must be in alphabetical order
+    //
+    // [ CodepointTooLarge, EncodesSurrogateHalf, OverlongEncoding, InvalidStartByte, UnexpectedEndOfSequence, ExpectedContinuation ]
+    SolvedType::TagUnion(
+        vec![
+            (TagName::Global("CodepointTooLarge".into()), vec![]),
+            (TagName::Global("EncodesSurrogateHalf".into()), vec![]),
+            (TagName::Global("ExpectedContinuation".into()), vec![]),
+            (TagName::Global("InvalidStartByte".into()), vec![]),
+            (TagName::Global("OverlongEncoding".into()), vec![]),
+            (TagName::Global("UnexpectedEndOfSequence".into()), vec![]),
+        ],
+        Box::new(SolvedType::EmptyTagUnion),
+    )
 }
 
 #[inline(always)]

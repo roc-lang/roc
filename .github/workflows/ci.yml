@@ -15,13 +15,10 @@ jobs:
     steps:
       - uses: actions/checkout@v2
         with:
-          clean: 'false'
+          clean: "false"
 
       - name: Earthly version
         run: earthly --version
 
-      - name: Make empty cache folder if it does exist
-        run: mkdir -p sccache_dir;
-
-      - name: install dependencies, build, run zig tests, rustfmt, clippy, cargo test --release 
+      - name: install dependencies, build, run zig tests, rustfmt, clippy, cargo test --release
         run: earthly +test-all

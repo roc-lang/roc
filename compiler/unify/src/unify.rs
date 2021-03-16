@@ -190,7 +190,9 @@ fn unify_alias(
                         problems.extend(unify_pool(subs, pool, *l_var, *r_var));
                     }
 
-                    problems.extend(merge(subs, &ctx, other_content.clone()));
+                    if problems.is_empty() {
+                        problems.extend(merge(subs, &ctx, other_content.clone()));
+                    }
 
                     if problems.is_empty() {
                         problems.extend(unify_pool(subs, pool, real_var, *other_real_var));
@@ -865,7 +867,11 @@ fn unify_shared_tags(
 
         merge(subs, ctx, Structure(flat_type))
     } else {
-        mismatch!("Problem with Tag Union")
+        mismatch!(
+            "Problem with Tag Union\nThere should be {:?} matching tags, but I only got \n{:?}",
+            num_shared_tags,
+            &matching_tags
+        )
     }
 }
 

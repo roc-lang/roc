@@ -1,5 +1,4 @@
 [workspace]
-
 members = [
     "compiler/region",
     "compiler/collections",
@@ -20,6 +19,7 @@ members = [
     "compiler/gen_dev",
     "compiler/build",
     "compiler/arena_pool",
+    "compiler/test_gen",
     "vendor/ena",
     "vendor/pathfinding",
     "vendor/pretty",
@@ -31,8 +31,10 @@ members = [
 
 # Optimizations based on https://deterministic.space/high-performance-rust.html
 [profile.release]
-lto = "fat"
+lto = "thin"
 codegen-units = 1
+
 # debug = true # enable when profiling
-
-
+[profile.bench]
+lto = "thin"
+codegen-units = 1

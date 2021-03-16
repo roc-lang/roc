@@ -24,10 +24,10 @@ after = \effect, transform ->
 
 map : Task a err, (a -> b) -> Task b err
 map = \effect, transform ->
-    Effect.after effect \result ->
+    Effect.map effect \result ->
         when result is
-            Ok a -> Task.succeed (transform a)
-            Err err -> Effect.always (Err err) # Task.fail err  does not work. WEIRD!
+            Ok a -> Ok (transform a)
+            Err err -> Err err 
 
 putLine : Str -> Task {} *
 putLine = \line -> Effect.map (Effect.putLine line) (\_ -> Ok {})

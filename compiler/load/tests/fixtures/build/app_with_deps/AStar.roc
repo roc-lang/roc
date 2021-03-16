@@ -16,8 +16,8 @@ Model position :
 initialModel : position -> Model position
 initialModel = \start ->
     { evaluated : Set.empty
-    , openSet : Set.singleton start
-    , costs : Map.singleton start 0.0
+    , openSet : Set.single start
+    , costs : Dict.single start 0.0
     , cameFrom : Map.empty
     }
 
@@ -42,7 +42,7 @@ cheapestOpen = \costFunction, model ->
                             else
                                 Ok smallestSoFar
 
-    Set.foldl model.openSet folder (Err KeyNotFound)
+    Set.walk model.openSet folder (Err KeyNotFound)
         |> Result.map (\x -> x.position)
 
 
@@ -101,11 +101,11 @@ astar = \costFn, moveFn, goal, model ->
 
                neighbours = moveFn current
 
-               newNeighbours = Set.diff neighbours modelPopped.evaluated
+               newNeighbours = Set.difference neighbours modelPopped.evaluated
 
                modelWithNeighbours = { modelPopped & openSet : Set.union modelPopped.openSet newNeighbours }
 
-               modelWithCosts = Set.foldl newNeighbours (\nb, md -> updateCost current nb md) modelWithNeighbours
+               modelWithCosts = Set.walk newNeighbours (\nb, md -> updateCost current nb md) modelWithNeighbours
 
                astar costFn moveFn goal modelWithCosts
 

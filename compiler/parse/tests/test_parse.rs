@@ -23,14 +23,12 @@ mod test_parse {
     use roc_parse::ast::Pattern::{self, *};
     use roc_parse::ast::StrLiteral::{self, *};
     use roc_parse::ast::StrSegment::*;
-    use roc_parse::ast::{
-        self, Attempting, Def, EscapedChar, Spaceable, TypeAnnotation, WhenBranch,
-    };
+    use roc_parse::ast::{self, Def, EscapedChar, Spaceable, TypeAnnotation, WhenBranch};
     use roc_parse::header::{
         AppHeader, Effects, ExposesEntry, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
         PackageName, PackageOrPath, PlatformHeader, To,
     };
-    use roc_parse::module::{app_header, interface_header, module_defs, platform_header};
+    use roc_parse::module::module_defs;
     use roc_parse::parser::{Parser, State, SyntaxError};
     use roc_parse::test_helpers::parse_expr_with;
     use roc_region::all::{Located, Region};
@@ -43,10 +41,9 @@ mod test_parse {
         assert_eq!(Ok(expected_expr), actual);
     }
 
-    fn assert_parsing_fails<'a>(input: &'a str, _reason: SyntaxError, _attempting: Attempting) {
+    fn assert_parsing_fails<'a>(input: &'a str, _reason: SyntaxError) {
         let arena = Bump::new();
         let actual = parse_expr_with(&arena, input);
-        // let expected_fail = Fail { reason, attempting };
 
         assert!(actual.is_err());
     }
@@ -291,7 +288,7 @@ mod test_parse {
 
     #[test]
     fn empty_source_file() {
-        assert_parsing_fails("", SyntaxError::Eof(Region::zero()), Attempting::Module);
+        assert_parsing_fails("", SyntaxError::Eof(Region::zero()));
     }
 
     #[test]
@@ -308,11 +305,7 @@ mod test_parse {
         // Make sure it's longer than our maximum line length
         assert_eq!(too_long_str.len(), max_line_length + 1);
 
-        assert_parsing_fails(
-            &too_long_str,
-            SyntaxError::LineTooLong(0),
-            Attempting::Module,
-        );
+        assert_parsing_fails(&too_long_str, SyntaxError::LineTooLong(0));
     }
 
     // INT LITERALS
@@ -492,6 +485,29 @@ mod test_parse {
     }
 
     #[test]
+    fn var_minus_two() {
+        let arena = Bump::new();
+        let tuple = arena.alloc((
+            Located::new(
+                0,
+                0,
+                0,
+                1,
+                Var {
+                    module_name: "",
+                    ident: "x",
+                },
+            ),
+            Located::new(0, 0, 1, 2, Minus),
+            Located::new(0, 0, 2, 3, Num("2")),
+        ));
+        let expected = BinOp(tuple);
+        let actual = parse_expr_with(&arena, "x-2");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn add_with_spaces() {
         let arena = Bump::new();
         let tuple = arena.alloc((
@@ -620,6 +636,33 @@ mod test_parse {
         ));
         let expected = BinOp(tuple);
         let actual = parse_expr_with(&arena, "3  -\n  4");
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn newline_and_spaces_before_less_than() {
+        let arena = Bump::new();
+        let spaced_int = arena.alloc(Num("1")).after(&[Newline]);
+        let tuple = arena.alloc((
+            Located::new(0, 0, 4, 5, spaced_int),
+            Located::new(1, 1, 4, 5, LessThan),
+            Located::new(1, 1, 6, 7, Num("2")),
+        ));
+
+        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let def = Def::Body(
+            arena.alloc(Located::new(0, 0, 0, 1, Identifier("x"))),
+            arena.alloc(Located::new(0, 1, 4, 7, BinOp(tuple))),
+        );
+        let loc_def = &*arena.alloc(Located::new(0, 1, 0, 7, def));
+        let defs = &[loc_def];
+        let ret = Expr::SpaceBefore(arena.alloc(Num("42")), newlines.into_bump_slice());
+        let loc_ret = Located::new(3, 3, 0, 2, ret);
+        let expected = Defs(defs, arena.alloc(loc_ret));
+
+        // let expected = BinOp(tuple);
+        let actual = parse_expr_with(&arena, "x = 1\n    < 2\n\n42");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -975,22 +1018,25 @@ mod test_parse {
 
     #[test]
     fn qualified_global_tag() {
+        use roc_parse::ident::BadIdent;
+
         let arena = Bump::new();
-        let expected = Expr::MalformedIdent("One.Two.Whee");
+        let expected = Expr::MalformedIdent("One.Two.Whee", BadIdent::QualifiedTag(0, 12));
         let actual = parse_expr_with(&arena, "One.Two.Whee");
 
         assert_eq!(Ok(expected), actual);
     }
 
-    // TODO restore this test - it fails, but is not worth fixing right now.
-    // #[test]
-    // fn qualified_private_tag() {
-    //     let arena = Bump::new();
-    //     let expected = Expr::MalformedIdent("One.Two.@Whee");
-    //     let actual = parse_expr_with(&arena, "One.Two.@Whee");
+    #[test]
+    fn private_qualified_tag() {
+        use roc_parse::ident::BadIdent;
 
-    //     assert_eq!(Ok(expected), actual);
-    // }
+        let arena = Bump::new();
+        let expected = Expr::MalformedIdent("@One.Two.Whee", BadIdent::BadPrivateTag(0, 4));
+        let actual = parse_expr_with(&arena, "@One.Two.Whee");
+
+        assert_eq!(Ok(expected), actual);
+    }
 
     #[test]
     fn tag_pattern() {
@@ -999,15 +1045,6 @@ mod test_parse {
         let patterns = &[pattern];
         let expected = Closure(patterns, arena.alloc(Located::new(0, 0, 10, 12, Num("42"))));
         let actual = parse_expr_with(&arena, "\\Thing -> 42");
-
-        assert_eq!(Ok(expected), actual);
-    }
-
-    #[test]
-    fn private_qualified_tag() {
-        let arena = Bump::new();
-        let expected = Expr::MalformedIdent("@One.Two.Whee");
-        let actual = parse_expr_with(&arena, "@One.Two.Whee");
 
         assert_eq!(Ok(expected), actual);
     }
@@ -1304,21 +1341,18 @@ mod test_parse {
             },
         ));
         let args = &[&*arg1, &*arg2];
-        let apply_expr = Expr::Apply(
-            arena.alloc(Located::new(
-                0,
-                0,
-                1,
-                5,
-                Var {
-                    module_name: "",
-                    ident: "whee",
-                },
-            )),
-            args,
-            CalledVia::Space,
+        let function = Located::new(
+            0,
+            0,
+            1,
+            5,
+            Var {
+                module_name: "",
+                ident: "whee",
+            },
         );
-        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 13, apply_expr)), loc_op);
+        let unary = Located::new(0, 0, 0, 5, UnaryOp(arena.alloc(function), loc_op));
+        let expected = Expr::Apply(arena.alloc(unary), args, CalledVia::Space);
         let actual = parse_expr_with(&arena, "-whee  12 foo");
 
         assert_eq!(Ok(expected), actual);
@@ -1340,21 +1374,19 @@ mod test_parse {
             },
         ));
         let args = &[&*arg1, &*arg2];
-        let apply_expr = Expr::Apply(
-            arena.alloc(Located::new(
-                0,
-                0,
-                1,
-                5,
-                Var {
-                    module_name: "",
-                    ident: "whee",
-                },
-            )),
-            args,
-            CalledVia::Space,
+
+        let function = Located::new(
+            0,
+            0,
+            1,
+            5,
+            Var {
+                module_name: "",
+                ident: "whee",
+            },
         );
-        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 13, apply_expr)), loc_op);
+        let unary = Located::new(0, 0, 0, 5, UnaryOp(arena.alloc(function), loc_op));
+        let expected = Expr::Apply(arena.alloc(unary), args, CalledVia::Space);
         let actual = parse_expr_with(&arena, "!whee  12 foo");
 
         assert_eq!(Ok(expected), actual);
@@ -1390,7 +1422,7 @@ mod test_parse {
             args,
             CalledVia::Space,
         )));
-        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 15, apply_expr)), loc_op);
+        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 2, 14, apply_expr)), loc_op);
         let actual = parse_expr_with(&arena, "-(whee  12 foo)");
 
         assert_eq!(Ok(expected), actual);
@@ -1426,7 +1458,7 @@ mod test_parse {
             args,
             CalledVia::Space,
         )));
-        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 1, 15, apply_expr)), loc_op);
+        let expected = UnaryOp(arena.alloc(Located::new(0, 0, 2, 14, apply_expr)), loc_op);
         let actual = parse_expr_with(&arena, "!(whee  12 foo)");
 
         assert_eq!(Ok(expected), actual);
@@ -1506,9 +1538,21 @@ mod test_parse {
         // underscore in an argument name, it would parse as three arguments
         // (and would ignore the underscore as if it had been blank space).
         let arena = Bump::new();
+
+        let pattern = Located::new(
+            0,
+            0,
+            1,
+            11,
+            Pattern::MalformedIdent(&"the_answer", roc_parse::ident::BadIdent::Underscore(0, 5)),
+        );
+        let patterns = &[pattern];
+        let expr = Located::new(0, 0, 15, 17, Expr::Num("42"));
+
+        let expected = Closure(patterns, &expr);
         let actual = parse_expr_with(&arena, "\\the_answer -> 42");
 
-        assert_eq!(Ok(MalformedClosure), actual);
+        assert_eq!(Ok(expected), actual);
     }
 
     #[test]
@@ -1720,6 +1764,120 @@ mod test_parse {
                 y = 6
 
                 42
+                "#
+            ),
+            expected,
+        );
+    }
+
+    #[test]
+    fn one_backpassing() {
+        let arena = Bump::new();
+        let newlines = bumpalo::vec![in &arena; Newline, Newline];
+        let identifier_x = Located::new(1, 1, 0, 1, Identifier("x"));
+        let identifier_y = Located::new(1, 1, 7, 8, Identifier("y"));
+
+        let var_x = Var {
+            module_name: "",
+            ident: "x",
+        };
+
+        let var_y = Var {
+            module_name: "",
+            ident: "y",
+        };
+        let loc_var_y = arena.alloc(Located::new(1, 1, 12, 13, var_y));
+
+        let closure = ParensAround(arena.alloc(Closure(arena.alloc([identifier_y]), loc_var_y)));
+        let loc_closure = Located::new(1, 1, 5, 14, closure);
+
+        let ret = Expr::SpaceBefore(arena.alloc(var_x), newlines.into_bump_slice());
+        let loc_ret = Located::new(3, 3, 0, 1, ret);
+
+        let reset_indentation = bumpalo::vec![in &arena; LineComment(" leading comment")];
+        let expected = Expr::SpaceBefore(
+            arena.alloc(Expr::Backpassing(
+                arena.alloc([identifier_x]),
+                arena.alloc(loc_closure),
+                arena.alloc(loc_ret),
+            )),
+            reset_indentation.into_bump_slice(),
+        );
+
+        assert_parses_to(
+            indoc!(
+                r#"# leading comment
+                x <- (\y -> y)
+
+                x
+                "#
+            ),
+            expected,
+        );
+    }
+
+    #[test]
+    fn two_backpassing() {
+        let arena = Bump::new();
+
+        let inner_backpassing = {
+            let identifier_z = Located::new(2, 2, 0, 1, Identifier("z"));
+
+            let empty_record = Record {
+                update: None,
+                fields: &[],
+                final_comments: &[],
+            };
+            let loc_empty_record = Located::new(2, 2, 5, 7, empty_record);
+
+            let var_x = Var {
+                module_name: "",
+                ident: "x",
+            };
+
+            let newlines = bumpalo::vec![in &arena; Newline, Newline];
+            let ret = Expr::SpaceBefore(arena.alloc(var_x), newlines.into_bump_slice());
+            let loc_ret = Located::new(4, 4, 0, 1, ret);
+
+            Expr::SpaceBefore(
+                arena.alloc(Expr::Backpassing(
+                    arena.alloc([identifier_z]),
+                    arena.alloc(loc_empty_record),
+                    arena.alloc(loc_ret),
+                )),
+                arena.alloc([Newline]),
+            )
+        };
+
+        let identifier_x = Located::new(1, 1, 0, 1, Identifier("x"));
+        let identifier_y = Located::new(1, 1, 7, 8, Identifier("y"));
+
+        let var_y = Var {
+            module_name: "",
+            ident: "y",
+        };
+        let loc_var_y = arena.alloc(Located::new(1, 1, 12, 13, var_y));
+
+        let closure = ParensAround(arena.alloc(Closure(arena.alloc([identifier_y]), loc_var_y)));
+        let loc_closure = Located::new(1, 1, 5, 14, closure);
+
+        let reset_indentation = bumpalo::vec![in &arena; LineComment(" leading comment")];
+        let expected = Expr::SpaceBefore(
+            arena.alloc(Expr::Backpassing(
+                arena.alloc([identifier_x]),
+                arena.alloc(loc_closure),
+                arena.alloc(Located::new(2, 4, 0, 1, inner_backpassing)),
+            )),
+            reset_indentation.into_bump_slice(),
+        );
+
+        assert_parses_to(
+            indoc!(
+                r#"# leading comment
+                x <- (\y -> y)
+                z <- {} 
+
+                x
                 "#
             ),
             expected,
@@ -2387,7 +2545,7 @@ mod test_parse {
         let imports = Vec::new_in(&arena);
         let provides = Vec::new_in(&arena);
         let module_name = StrLiteral::PlainLine("test-app");
-        let expected = AppHeader {
+        let header = AppHeader {
             name: Located::new(0, 0, 4, 14, module_name),
             packages,
             imports,
@@ -2404,17 +2562,15 @@ mod test_parse {
             after_to: &[],
         };
 
+        let expected = roc_parse::ast::Module::App { header };
+
         let src = indoc!(
             r#"
                 app "test-app" packages {} imports [] provides [] to blah
             "#
         );
-        let actual = app_header()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
-            .map(|tuple| tuple.1);
+        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2428,7 +2584,7 @@ mod test_parse {
         let imports = Vec::new_in(&arena);
         let provides = Vec::new_in(&arena);
         let module_name = StrLiteral::PlainLine("test-app");
-        let expected = AppHeader {
+        let header = AppHeader {
             name: Located::new(0, 0, 4, 14, module_name),
             packages,
             imports,
@@ -2445,17 +2601,16 @@ mod test_parse {
             after_to: &[],
         };
 
+        let expected = roc_parse::ast::Module::App { header };
+
         let src = indoc!(
             r#"
                 app "test-app" provides [] to "./blah"
             "#
         );
-        let actual = app_header()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
-            .map(|tuple| tuple.1);
+
+        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2480,7 +2635,8 @@ mod test_parse {
         let provide_entry = Located::new(3, 3, 15, 24, Exposed("quicksort"));
         let provides = bumpalo::vec![in &arena; provide_entry];
         let module_name = StrLiteral::PlainLine("quicksort");
-        let expected = AppHeader {
+
+        let header = AppHeader {
             name: Located::new(0, 0, 4, 15, module_name),
             packages,
             imports,
@@ -2497,6 +2653,8 @@ mod test_parse {
             after_to: &[],
         };
 
+        let expected = roc_parse::ast::Module::App { header };
+
         let src = indoc!(
             r#"
                 app "quicksort"
@@ -2506,12 +2664,8 @@ mod test_parse {
             "#
         );
 
-        let actual = app_header()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
-            .map(|tuple| tuple.1);
+        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2531,7 +2685,7 @@ mod test_parse {
             spaces_after_effects_keyword: &[],
             spaces_after_type_name: &[],
         };
-        let expected = PlatformHeader {
+        let header = PlatformHeader {
             name: Located::new(0, 0, 9, 23, pkg_name),
             requires: Vec::new_in(&arena),
             exposes: Vec::new_in(&arena),
@@ -2552,13 +2706,11 @@ mod test_parse {
             after_provides: &[],
         };
 
+        let expected = roc_parse::ast::Module::Platform { header };
+
         let src = "platform rtfeldman/blah requires {} exposes [] packages {} imports [] provides [] effects fx.Blah {}";
-        let actual = platform_header()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
-            .map(|tuple| tuple.1);
+        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2592,7 +2744,7 @@ mod test_parse {
             spaces_after_effects_keyword: &[],
             spaces_after_type_name: &[],
         };
-        let expected = PlatformHeader {
+        let header = PlatformHeader {
             name: Located::new(0, 0, 9, 19, pkg_name),
             requires: Vec::new_in(&arena),
             exposes: Vec::new_in(&arena),
@@ -2613,6 +2765,8 @@ mod test_parse {
             after_provides: &[],
         };
 
+        let expected = roc_parse::ast::Module::Platform { header };
+
         let src = indoc!(
             r#"
                 platform foo/barbaz
@@ -2624,12 +2778,8 @@ mod test_parse {
                     effects fx.Effect {}
             "#
         );
-        let actual = platform_header()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
-            .map(|tuple| tuple.1);
+        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2640,7 +2790,7 @@ mod test_parse {
         let exposes = Vec::new_in(&arena);
         let imports = Vec::new_in(&arena);
         let module_name = ModuleName::new("Foo");
-        let expected = InterfaceHeader {
+        let header = InterfaceHeader {
             name: Located::new(0, 0, 10, 13, module_name),
             exposes,
             imports,
@@ -2651,17 +2801,16 @@ mod test_parse {
             before_imports: &[],
             after_imports: &[],
         };
+
+        let expected = roc_parse::ast::Module::Interface { header };
+
         let src = indoc!(
             r#"
                 interface Foo exposes [] imports []
             "#
         );
-        let actual = interface_header()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
-            .map(|tuple| tuple.1);
+        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2672,7 +2821,7 @@ mod test_parse {
         let exposes = Vec::new_in(&arena);
         let imports = Vec::new_in(&arena);
         let module_name = ModuleName::new("Foo.Bar.Baz");
-        let expected = InterfaceHeader {
+        let header = InterfaceHeader {
             name: Located::new(0, 0, 10, 21, module_name),
             exposes,
             imports,
@@ -2683,17 +2832,16 @@ mod test_parse {
             before_imports: &[],
             after_imports: &[],
         };
+
+        let expected = roc_parse::ast::Module::Interface { header };
+
         let src = indoc!(
             r#"
                 interface Foo.Bar.Baz exposes [] imports []
             "#
         );
-        let actual = interface_header()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
-            .map(|tuple| tuple.1);
+        let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert_eq!(Ok(expected), actual);
     }
@@ -2719,10 +2867,7 @@ mod test_parse {
             "#
         );
         let actual = module_defs()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
+            .parse(&arena, State::new(src.as_bytes()))
             .map(|tuple| tuple.1);
 
         // It should occur twice in the debug output - once for the pattern,
@@ -2781,10 +2926,7 @@ mod test_parse {
         );
 
         let actual = module_defs()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
+            .parse(&arena, State::new(src.as_bytes()))
             .map(|tuple| tuple.1);
 
         assert_eq!(Ok(expected), actual);
@@ -2804,11 +2946,8 @@ mod test_parse {
         );
 
         let actual = module_defs()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
-            .map(|tuple| tuple.1);
+            .parse(&arena, State::new(src.as_bytes()))
+            .map(|tuple| tuple.0);
 
         assert!(actual.is_ok());
     }
@@ -2829,18 +2968,16 @@ mod test_parse {
         );
 
         let actual = module_defs()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
-            .map(|tuple| tuple.1);
+            .parse(&arena, State::new(src.as_bytes()))
+            .map(|tuple| tuple.0);
+
 
         assert!(actual.is_ok());
     }
 
     #[test]
     fn outdenting_newline_after_else() {
-        let arena = Bump::new();
+        let arena = &Bump::new();
 
         // highlights a problem with the else branch demanding a newline after its expression
         let src = indoc!(
@@ -2852,16 +2989,19 @@ mod test_parse {
             "#
         );
 
-        let actual = module_defs()
-            .parse(
-                &arena,
-                State::new_in(&arena, src.as_bytes(), Attempting::Module),
-            )
-            .map(|tuple| tuple.1);
-
-        dbg!(&actual);
-
-        assert!(actual.is_ok());
+        let state = State::new(src.as_bytes());
+        let parser = module_defs();
+        let parsed = parser.parse(arena, state);
+        match parsed {
+            Ok((_, _, state)) => {
+                dbg!(state);
+                return;
+            }
+            Err((_, _fail, _state)) => {
+                dbg!(_fail, _state);
+                assert!(false);
+            }
+        }
     }
 
     #[test]

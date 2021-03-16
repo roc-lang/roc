@@ -16,9 +16,8 @@ use roc_module::ident::ModuleName;
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
+use roc_parse::ast;
 use roc_parse::ast::StrLiteral;
-use roc_parse::ast::{self, Attempting};
-use roc_parse::blankspace::space0_before;
 use roc_parse::expr::expr;
 use roc_parse::parser::{loc, Parser, State, SyntaxError};
 use roc_problem::can::{Problem, RuntimeError};
@@ -235,14 +234,10 @@ pub fn str_to_expr2<'a>(
     scope: &mut Scope,
     region: Region,
 ) -> Result<(Expr2, self::Output), SyntaxError<'a>> {
-    let state = State::new_in(arena, input.trim().as_bytes(), Attempting::Module);
-    let parser = space0_before(loc(expr(0)), 0);
-    let parse_res = parser.parse(&arena, state);
-
-    parse_res
-        .map(|(_, loc_expr, _)| arena.alloc(loc_expr.value))
-        .map(|loc_expr_val_ref| to_expr2(env, scope, loc_expr_val_ref, region))
-        .map_err(|(_, fail, _)| fail)
+    match roc_parse::test_helpers::parse_loc_with(arena, input.trim()) {
+        Ok(loc_expr) => Ok(to_expr2(env, scope, arena.alloc(loc_expr.value), region)),
+        Err(fail) => Err(fail),
+    }
 }
 
 pub fn to_expr2<'a>(
@@ -508,22 +503,31 @@ pub fn to_expr2<'a>(
             Output::default(),
         ),
 
-        If(cond, then_branch, else_branch) => {
-            let (cond, mut output) = to_expr2(env, scope, &cond.value, cond.region);
+        If(branches, final_else) => {
+            let mut new_branches = Vec::with_capacity(branches.len());
+            let mut output = Output::default();
 
-            let (then_expr, then_output) =
-                to_expr2(env, scope, &then_branch.value, then_branch.region);
+            for (condition, then_branch) in branches.iter() {
+                let (cond, cond_output) = to_expr2(env, scope, &condition.value, condition.region);
+
+                let (then_expr, then_output) =
+                    to_expr2(env, scope, &then_branch.value, then_branch.region);
+
+                output.references.union_mut(cond_output.references);
+                output.references.union_mut(then_output.references);
+
+                new_branches.push((cond, then_expr));
+            }
 
             let (else_expr, else_output) =
-                to_expr2(env, scope, &else_branch.value, else_branch.region);
+                to_expr2(env, scope, &final_else.value, final_else.region);
 
-            output.references.union_mut(then_output.references);
             output.references.union_mut(else_output.references);
 
             let expr = Expr2::If {
                 cond_var: env.var_store.fresh(),
                 expr_var: env.var_store.fresh(),
-                branches: PoolVec::new(vec![(cond, then_expr)].into_iter(), env.pool),
+                branches: PoolVec::new(new_branches.into_iter(), env.pool),
                 final_else: env.pool.add(else_expr),
             };
 
@@ -798,7 +802,7 @@ pub fn to_expr2<'a>(
             //            (RuntimeError(MalformedClosure(region)), Output::default())
             todo!()
         }
-        MalformedIdent(_name) => {
+        MalformedIdent(_name, _problem) => {
             //            use roc_problem::can::RuntimeError::*;
             //
             //            let problem = MalformedIdentifier((*name).into(), region);

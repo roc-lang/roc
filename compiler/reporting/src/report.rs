@@ -146,12 +146,12 @@ pub const DEFAULT_PALETTE: Palette = Palette {
 };
 
 pub const RED_CODE: &str = "\u{001b}[31m";
-pub const WHITE_CODE: &str = "\u{001b}[37m";
-pub const BLUE_CODE: &str = "\u{001b}[34m";
+pub const GREEN_CODE: &str = "\u{001b}[32m";
 pub const YELLOW_CODE: &str = "\u{001b}[33m";
-pub const GREEN_CODE: &str = "\u{001b}[42m";
-pub const CYAN_CODE: &str = "\u{001b}[36m";
+pub const BLUE_CODE: &str = "\u{001b}[34m";
 pub const MAGENTA_CODE: &str = "\u{001b}[35m";
+pub const CYAN_CODE: &str = "\u{001b}[36m";
+pub const WHITE_CODE: &str = "\u{001b}[37m";
 
 pub const BOLD_CODE: &str = "\u{001b}[1m";
 

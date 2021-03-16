@@ -520,7 +520,7 @@ impl<
             Literal::Int(x) => {
                 let reg = self.claim_general_reg(sym)?;
                 let val = *x;
-                ASM::mov_reg64_imm64(&mut self.buf, reg, val);
+                ASM::mov_reg64_imm64(&mut self.buf, reg, val as i64);
                 Ok(())
             }
             Literal::Float(x) => {

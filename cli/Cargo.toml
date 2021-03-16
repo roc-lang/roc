@@ -58,7 +58,6 @@ im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.2", features = ["collections"] }
 inlinable_string = "0.1"
-tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded", "process", "io-driver"] }
 libc = "0.2"
 libloading = "0.6"
 
@@ -81,6 +80,7 @@ libloading = "0.6"
 # This way, GitHub Actions works and nobody's builds get broken.
 inkwell = { git = "https://github.com/rtfeldman/inkwell", tag = "llvm10-0.release3" }
 target-lexicon = "0.10"
+tempfile = "3.1.0"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"

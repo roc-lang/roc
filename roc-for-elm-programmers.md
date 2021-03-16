@@ -955,7 +955,7 @@ Either way, you get `+` being able to work on both integers and floats!
 
 Separately, there's also `Int a`, which is a type alias for `Num (Integer a)`,
 and `Float a`, which is a type alias for `Num (Float a)`. These allow functions
-that can work on any integer or any flaot. For example,
+that can work on any integer or any float. For example,
 `Num.bitwiseAnd : Int a, Int a -> Int a`.
 
 In Roc, number literals with decimal points are `Float *` values.
@@ -984,7 +984,7 @@ These don't exist in Roc.
 Also [like Python](https://www.python.org/dev/peps/pep-0515/)
 Roc permits underscores in number literals for readability purposes. Roc also supports
 hexadecimal (`0x01`), octal (`0o01`), and binary (`0b01`) integer literals; these
-literals all have type `Int` instead of `Num *`.
+literals all have type `Int *` instead of `Num *`.
 
 If you put these into a hypothetical Roc REPL, here's what you'd see:
 
@@ -993,16 +993,16 @@ If you put these into a hypothetical Roc REPL, here's what you'd see:
 2048 : Num *
 
 > 1 + 2.14
-3.14 : Float
+3.14 : Float *
 
 > 1.0 + 1
-2.0 : Float
+2.0 : Float *
 
 > 1.1 + 0x11
-<type mismatch between 1.1 : Float and 0x11 : Int>
+<type mismatch between `1.1 : Float *` and `0x11 : Int *`>
 
 > 11 + 0x11
-28 : Int
+28 : Int *
 ```
 
 ## Phantom Types

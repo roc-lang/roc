@@ -118,6 +118,7 @@ pub enum Expr<'a> {
     Closure(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>),
     /// Multiple defs in a row
     Defs(&'a [&'a Loc<Def<'a>>], &'a Loc<Expr<'a>>),
+    Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
 
     // Application
     /// To apply by name, do Apply(Var(...), ...)
@@ -127,7 +128,7 @@ pub enum Expr<'a> {
     UnaryOp(&'a Loc<Expr<'a>>, Loc<UnaryOp>),
 
     // Conditionals
-    If(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
+    If(&'a [(Loc<Expr<'a>>, Loc<Expr<'a>>)], &'a Loc<Expr<'a>>),
     When(
         /// The condition
         &'a Loc<Expr<'a>>,
@@ -150,7 +151,7 @@ pub enum Expr<'a> {
     Nested(&'a Expr<'a>),
 
     // Problems
-    MalformedIdent(&'a str),
+    MalformedIdent(&'a str, crate::ident::BadIdent),
     MalformedClosure,
     // Both operators were non-associative, e.g. (True == False == False).
     // We should tell the author to disambiguate by grouping them with parens.
@@ -356,6 +357,7 @@ pub enum Pattern<'a> {
 
     // Malformed
     Malformed(&'a str),
+    MalformedIdent(&'a str, crate::ident::BadIdent),
     QualifiedIdentifier {
         module_name: &'a str,
         ident: &'a str,
@@ -411,7 +413,7 @@ impl<'a> Pattern<'a> {
                 }
             }
             Ident::AccessorFunction(string) => Pattern::Malformed(string),
-            Ident::Malformed(string) => Pattern::Malformed(string),
+            Ident::Malformed(string, _problem) => Pattern::Malformed(string),
         }
     }
 
@@ -585,33 +587,6 @@ impl<'a> Spaceable<'a> for Def<'a> {
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         Def::SpaceAfter(self, spaces)
     }
-}
-
-/// What we're currently attempting to parse, e.g.
-/// "currently attempting to parse a list." This helps error messages!
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Attempting {
-    LineComment,
-    List,
-    Keyword,
-    StrLiteral,
-    RecordLiteral,
-    RecordFieldLabel,
-    InterpolatedString,
-    NumberLiteral,
-    UnicodeEscape,
-    ClosureParams,
-    ClosureBody,
-    Def,
-    Module,
-    Record,
-    Identifier,
-    HexDigit,
-    ConcreteType,
-    TypeVariable,
-    WhenCondition,
-    WhenBranch,
-    TODO,
 }
 
 impl<'a> Expr<'a> {

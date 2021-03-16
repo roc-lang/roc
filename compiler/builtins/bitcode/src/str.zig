@@ -1,3 +1,5 @@
+const utils = @import("utils.zig");
+const RocList = @import("list.zig").RocList;
 const std = @import("std");
 const mem = std.mem;
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
@@ -5,6 +7,7 @@ const Allocator = mem.Allocator;
 const unicode = std.unicode;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
+const expectError = testing.expectError;
 const expect = testing.expect;
 
 const InPlace = packed enum(u8) {
@@ -12,6 +15,7 @@ const InPlace = packed enum(u8) {
     Clone,
 };
 
+const SMALL_STR_MAX_LENGTH = small_string_size - 1;
 const small_string_size = 2 * @sizeOf(usize);
 const blank_small_string: [16]u8 = init_blank_small_string(small_string_size);
 
@@ -47,18 +51,7 @@ pub const RocStr = extern struct {
     }
 
     pub fn initBig(allocator: *Allocator, in_place: InPlace, number_of_chars: u64) RocStr {
-        const length = @sizeOf(usize) + number_of_chars;
-        var new_bytes: []usize = allocator.alloc(usize, length) catch unreachable;
-
-        if (in_place == InPlace.InPlace) {
-            new_bytes[0] = @intCast(usize, number_of_chars);
-        } else {
-            const v: isize = std.math.minInt(isize);
-            new_bytes[0] = @bitCast(usize, v);
-        }
-
-        var first_element = @ptrCast([*]align(@alignOf(usize)) u8, new_bytes);
-        first_element += @sizeOf(usize);
+        const first_element = utils.allocateWithRefcount(allocator, @sizeOf(usize), number_of_chars);
 
         return RocStr{
             .str_bytes = first_element,
@@ -93,6 +86,12 @@ pub const RocStr = extern struct {
             const str_bytes: []u8 = (str_bytes_ptr - refcount_bytes)[0 .. self.str_len + refcount_bytes];
             allocator.free(str_bytes);
         }
+    }
+
+    pub fn toSlice(self: RocStr) []u8 {
+        const str_bytes_ptr: [*]u8 = self.str_bytes orelse unreachable;
+        const str_bytes: []u8 = str_bytes_ptr[0..self.str_len];
+        return str_bytes;
     }
 
     // This takes ownership of the pointed-to bytes if they won't fit in a
@@ -266,6 +265,10 @@ pub const RocStr = extern struct {
     }
 };
 
+pub fn init(bytes_ptr: [*]const u8, length: usize) callconv(.C) RocStr {
+    return @call(.{ .modifier = always_inline }, RocStr.init, .{ std.heap.c_allocator, bytes_ptr, length });
+}
+
 // Str.equal
 pub fn strEqual(self: RocStr, other: RocStr) callconv(.C) bool {
     return self.eq(other);
@@ -300,6 +303,23 @@ fn strFromIntHelp(allocator: *Allocator, comptime T: type, int: T) RocStr {
     const result = std.fmt.bufPrint(&buf, "{}", .{int}) catch unreachable;
 
     return RocStr.init(allocator, &buf, result.len);
+}
+
+// Str.fromFloat
+// When we actually use this in Roc, libc will be linked so we have access to std.heap.c_allocator
+pub fn strFromFloatC(float: f64) callconv(.C) RocStr {
+    // NOTE the compiled zig for float formatting seems to use LLVM11-specific features
+    // hopefully we can use zig instead of snprintf in the future when we upgrade
+    const c = @cImport({
+        // See https://github.com/ziglang/zig/issues/515
+        @cDefine("_NO_CRT_STDIO_INLINE", "1");
+        @cInclude("stdio.h");
+    });
+    var buf: [100]u8 = undefined;
+
+    const result = c.snprintf(&buf, 100, "%f", float);
+
+    return RocStr.init(std.heap.c_allocator, &buf, @intCast(usize, result));
 }
 
 // Str.split
@@ -816,8 +836,10 @@ pub fn strConcatC(result_in_place: InPlace, arg1: RocStr, arg2: RocStr) callconv
 
 fn strConcat(allocator: *Allocator, result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
     if (arg1.isEmpty()) {
+        // the second argument is borrowed, so we must increment its refcount before returning
         return RocStr.clone(allocator, result_in_place, arg2);
     } else if (arg2.isEmpty()) {
+        // the first argument is owned, so we can return it without cloning
         return RocStr.clone(allocator, result_in_place, arg1);
     } else {
         const combined_length = arg1.len() + arg2.len();
@@ -939,4 +961,294 @@ test "RocStr.joinWith: result is big" {
     defer result.deinit(testing.allocator);
 
     expect(roc_result.eq(result));
+}
+
+// Str.toBytes
+pub fn strToBytesC(arg: RocStr) callconv(.C) RocList {
+    return @call(.{ .modifier = always_inline }, strToBytes, .{ std.heap.c_allocator, arg });
+}
+
+fn strToBytes(allocator: *Allocator, arg: RocStr) RocList {
+    if (arg.isEmpty()) {
+        return RocList.empty();
+    } else if (arg.isSmallStr()) {
+        const length = arg.len();
+        const ptr = utils.allocateWithRefcount(allocator, @alignOf(usize), length);
+
+        @memcpy(ptr, arg.asU8ptr(), length);
+
+        return RocList{ .length = length, .bytes = ptr };
+    } else {
+        return RocList{ .length = arg.len(), .bytes = arg.str_bytes };
+    }
+}
+
+const FromUtf8Result = extern struct {
+    byte_index: usize,
+    string: RocStr,
+    is_ok: bool,
+    problem_code: Utf8ByteProblem,
+};
+
+pub fn fromUtf8C(arg: RocList, output: *FromUtf8Result) callconv(.C) void {
+    output.* = @call(.{ .modifier = always_inline }, fromUtf8, .{ std.heap.c_allocator, arg });
+}
+
+fn fromUtf8(allocator: *Allocator, arg: RocList) FromUtf8Result {
+    const bytes = @ptrCast([*]const u8, arg.bytes)[0..arg.length];
+
+    if (unicode.utf8ValidateSlice(bytes)) {
+        // the output will be correct. Now we need to take ownership of the input
+        if (arg.len() <= SMALL_STR_MAX_LENGTH) {
+            // turn the bytes into a small string
+            const string = RocStr.init(allocator, @ptrCast([*]u8, arg.bytes), arg.len());
+
+            // then decrement the input list
+            const data_bytes = arg.len();
+            utils.decref(allocator, @alignOf(usize), arg.bytes, data_bytes);
+
+            return FromUtf8Result{ .is_ok = true, .string = string, .byte_index = 0, .problem_code = Utf8ByteProblem.InvalidStartByte };
+        } else {
+            const byte_list = arg.makeUnique(allocator, @alignOf(usize), @sizeOf(u8));
+
+            const string = RocStr{ .str_bytes = byte_list.bytes, .str_len = byte_list.length };
+
+            return FromUtf8Result{ .is_ok = true, .string = string, .byte_index = 0, .problem_code = Utf8ByteProblem.InvalidStartByte };
+        }
+    } else {
+        const temp = errorToProblem(@ptrCast([*]u8, arg.bytes), arg.length);
+
+        // consume the input list
+        const data_bytes = arg.len();
+        utils.decref(allocator, @alignOf(usize), arg.bytes, data_bytes);
+
+        return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = temp.index, .problem_code = temp.problem };
+    }
+}
+
+fn errorToProblem(bytes: [*]u8, length: usize) struct { index: usize, problem: Utf8ByteProblem } {
+    var index: usize = 0;
+
+    while (index < length) {
+        const nextNumBytes = numberOfNextCodepointBytes(bytes, length, index) catch |err| {
+            switch (err) {
+                error.UnexpectedEof => {
+                    return .{ .index = index, .problem = Utf8ByteProblem.UnexpectedEndOfSequence };
+                },
+                error.Utf8InvalidStartByte => return .{ .index = index, .problem = Utf8ByteProblem.InvalidStartByte },
+                error.Utf8ExpectedContinuation => return .{ .index = index, .problem = Utf8ByteProblem.ExpectedContinuation },
+                error.Utf8OverlongEncoding => return .{ .index = index, .problem = Utf8ByteProblem.OverlongEncoding },
+                error.Utf8EncodesSurrogateHalf => return .{ .index = index, .problem = Utf8ByteProblem.EncodesSurrogateHalf },
+                error.Utf8CodepointTooLarge => return .{ .index = index, .problem = Utf8ByteProblem.CodepointTooLarge },
+            }
+        };
+        index += nextNumBytes;
+    }
+
+    unreachable;
+}
+
+pub fn isValidUnicode(ptr: [*]u8, len: usize) callconv(.C) bool {
+    const bytes: []u8 = ptr[0..len];
+    return @call(.{ .modifier = always_inline }, unicode.utf8ValidateSlice, .{bytes});
+}
+
+const Utf8DecodeError = error{
+    UnexpectedEof,
+    Utf8InvalidStartByte,
+    Utf8ExpectedContinuation,
+    Utf8OverlongEncoding,
+    Utf8EncodesSurrogateHalf,
+    Utf8CodepointTooLarge,
+};
+
+// Essentially unicode.utf8ValidateSlice -> https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L156
+// but only for the next codepoint from the index. Then we return the number of bytes of that codepoint.
+// TODO: we only ever use the values 0-4, so can we use smaller int than `usize`?
+pub fn numberOfNextCodepointBytes(ptr: [*]u8, len: usize, index: usize) Utf8DecodeError!usize {
+    const codepoint_len = try unicode.utf8ByteSequenceLength(ptr[index]);
+    const codepoint_end_index = index + codepoint_len;
+    if (codepoint_end_index > len) {
+        return error.UnexpectedEof;
+    }
+    _ = try unicode.utf8Decode(ptr[index..codepoint_end_index]);
+    return codepoint_end_index - index;
+}
+
+// Return types for validateUtf8Bytes
+// Values must be in alphabetical order. That is, lowest values are the first alphabetically.
+pub const Utf8ByteProblem = packed enum(u8) {
+    CodepointTooLarge = 0,
+    EncodesSurrogateHalf = 1,
+    ExpectedContinuation = 2,
+    InvalidStartByte = 3,
+    OverlongEncoding = 4,
+    UnexpectedEndOfSequence = 5,
+};
+
+fn validateUtf8Bytes(bytes: [*]u8, length: usize) FromUtf8Result {
+    return fromUtf8(std.testing.allocator, RocList{ .bytes = bytes, .length = length });
+}
+
+fn validateUtf8BytesX(str: RocList) FromUtf8Result {
+    return fromUtf8(std.testing.allocator, str);
+}
+
+fn expectOk(result: FromUtf8Result) void {
+    expectEqual(result.is_ok, true);
+}
+
+fn sliceHelp(bytes: [*]const u8, length: usize) RocList {
+    var list = RocList.allocate(testing.allocator, @alignOf(usize), length, @sizeOf(u8));
+    @memcpy(list.bytes orelse unreachable, bytes, length);
+    list.length = length;
+
+    return list;
+}
+
+fn toErrUtf8ByteResponse(index: usize, problem: Utf8ByteProblem) FromUtf8Result {
+    return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = index, .problem_code = problem };
+}
+
+// NOTE on memory: the validate function consumes a RC token of the input. Since
+// we freshly created it (in `sliceHelp`), it has only one RC token, and input list will be deallocated.
+//
+// If we tested with big strings, we'd have to deallocate the output string, but never the input list
+
+test "validateUtf8Bytes: ascii" {
+    const raw = "abc";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
+
+    expectOk(validateUtf8BytesX(list));
+}
+
+test "validateUtf8Bytes: unicode œ" {
+    const raw = "œ";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
+
+    expectOk(validateUtf8BytesX(list));
+}
+
+test "validateUtf8Bytes: unicode ∆" {
+    const raw = "∆";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
+
+    expectOk(validateUtf8BytesX(list));
+}
+
+test "validateUtf8Bytes: emoji" {
+    const raw = "💖";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
+
+    expectOk(validateUtf8BytesX(list));
+}
+
+test "validateUtf8Bytes: unicode ∆ in middle of array" {
+    const raw = "œb∆c¬";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
+
+    expectOk(validateUtf8BytesX(list));
+}
+
+fn expectErr(list: RocList, index: usize, err: Utf8DecodeError, problem: Utf8ByteProblem) void {
+    const str_ptr = @ptrCast([*]u8, list.bytes);
+    const str_len = list.length;
+
+    expectError(err, numberOfNextCodepointBytes(str_ptr, str_len, index));
+    expectEqual(toErrUtf8ByteResponse(index, problem), validateUtf8Bytes(str_ptr, str_len));
+}
+
+test "validateUtf8Bytes: invalid start byte" {
+    // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L426
+    const raw = "ab\x80c";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
+
+    expectErr(list, 2, error.Utf8InvalidStartByte, Utf8ByteProblem.InvalidStartByte);
+}
+
+test "validateUtf8Bytes: unexpected eof for 2 byte sequence" {
+    // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L426
+    const raw = "abc\xc2";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
+
+    expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
+}
+
+test "validateUtf8Bytes: expected continuation for 2 byte sequence" {
+    // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L426
+    const raw = "abc\xc2\x00";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
+
+    expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
+}
+
+test "validateUtf8Bytes: unexpected eof for 3 byte sequence" {
+    // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L430
+    const raw = "abc\xe0\x00";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
+
+    expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
+}
+
+test "validateUtf8Bytes: expected continuation for 3 byte sequence" {
+    // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L430
+    const raw = "abc\xe0\xa0\xc0";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
+
+    expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
+}
+
+test "validateUtf8Bytes: unexpected eof for 4 byte sequence" {
+    // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L437
+    const raw = "abc\xf0\x90\x00";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
+
+    expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
+}
+
+test "validateUtf8Bytes: expected continuation for 4 byte sequence" {
+    // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L437
+    const raw = "abc\xf0\x90\x80\x00";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
+
+    expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
+}
+
+test "validateUtf8Bytes: overlong" {
+    // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L451
+    const raw = "abc\xf0\x80\x80\x80";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
+
+    expectErr(list, 3, error.Utf8OverlongEncoding, Utf8ByteProblem.OverlongEncoding);
+}
+
+test "validateUtf8Bytes: codepoint out too large" {
+    // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L465
+    const raw = "abc\xf4\x90\x80\x80";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
+
+    expectErr(list, 3, error.Utf8CodepointTooLarge, Utf8ByteProblem.CodepointTooLarge);
+}
+
+test "validateUtf8Bytes: surrogate halves" {
+    // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L468
+    const raw = "abc\xed\xa0\x80";
+    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const list = sliceHelp(ptr, raw.len);
+
+    expectErr(list, 3, error.Utf8EncodesSurrogateHalf, Utf8ByteProblem.EncodesSurrogateHalf);
 }

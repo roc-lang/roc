@@ -1,13 +1,9 @@
-pub type ColorTup = (f32, f32, f32, f32);
-pub const WHITE: ColorTup = (1.0, 1.0, 1.0, 1.0);
-pub const BLACK: ColorTup = (0.0, 0.0, 0.0, 1.0);
-pub const TXT_COLOR: ColorTup = (1.0, 1.0, 1.0, 1.0);
-pub const CODE_COLOR: ColorTup = (0.21, 0.55, 0.83, 1.0);
-pub const CARET_COLOR: ColorTup = WHITE;
-pub const SELECT_COLOR: ColorTup = (0.45, 0.61, 1.0, 1.0);
-pub const BG_COLOR: ColorTup = (0.11, 0.11, 0.13, 1.0);
+use palette::{Hsv, LinSrgb};
 
-pub fn to_wgpu_color((r, g, b, a): ColorTup) -> wgpu::Color {
+pub type RgbaTup = (f32, f32, f32, f32);
+pub const WHITE: RgbaTup = (1.0, 1.0, 1.0, 1.0);
+
+pub fn to_wgpu_color((r, g, b, a): RgbaTup) -> wgpu::Color {
     wgpu::Color {
         r: r as f64,
         g: g as f64,
@@ -16,6 +12,20 @@ pub fn to_wgpu_color((r, g, b, a): ColorTup) -> wgpu::Color {
     }
 }
 
-pub fn to_slice((r, g, b, a): ColorTup) -> [f32; 4] {
+pub fn to_slice((r, g, b, a): RgbaTup) -> [f32; 4] {
     [r, g, b, a]
+}
+
+pub fn from_hsb(hue: usize, saturation: usize, brightness: usize) -> RgbaTup {
+    from_hsba(hue, saturation, brightness, 1.0)
+}
+
+pub fn from_hsba(hue: usize, saturation: usize, brightness: usize, alpha: f32) -> RgbaTup {
+    let rgb = LinSrgb::from(Hsv::new(
+        hue as f32,
+        (saturation as f32) / 100.0,
+        (brightness as f32) / 100.0,
+    ));
+
+    (rgb.red, rgb.green, rgb.blue, alpha)
 }

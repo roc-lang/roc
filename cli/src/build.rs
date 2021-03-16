@@ -7,10 +7,11 @@ use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
 use roc_gen::llvm::build::OptLevel;
 use roc_load::file::LoadingProblem;
-use std::fs;
+use std::env;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
+use tempfile::Builder;
 
 fn report_timing(buf: &mut String, label: &str, duration: Duration) {
     buf.push_str(&format!(
@@ -52,8 +53,14 @@ pub fn build_file<'a>(
     )?;
 
     let path_to_platform = loaded.platform_path.clone();
-
-    let app_o_file = roc_file_path.with_file_name("roc_app.o");
+    let app_o_file = Builder::new()
+        .prefix("roc_app")
+        .suffix(".o")
+        .tempfile()
+        .map_err(|err| {
+            todo!("TODO Gracefully handle tempfile creation error {:?}", err);
+        })?;
+    let app_o_file = app_o_file.path();
     let buf = &mut String::with_capacity(1024);
 
     let mut it = loaded.timings.iter().peekable();
@@ -96,13 +103,12 @@ pub fn build_file<'a>(
         }
     }
 
-    let cwd = app_o_file.parent().unwrap();
+    let cwd = roc_file_path.parent().unwrap();
     let binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
-
     let code_gen_timing = program::gen_from_mono_module(
         &arena,
         loaded,
-        roc_file_path,
+        &roc_file_path,
         Triple::host(),
         &app_o_file,
         opt_level,
@@ -117,25 +123,33 @@ pub fn build_file<'a>(
     report_timing(buf, "Generate LLVM IR", code_gen_timing.code_gen);
     report_timing(buf, "Emit .o file", code_gen_timing.emit_o_file);
 
-    println!(
-        "\n\nCompilation finished! Here's how long each module took to compile:\n\n{}",
-        buf
-    );
-
-    println!("\nSuccess! 🎉\n\n\t➡ {}\n", app_o_file.display());
-
     let compilation_end = compilation_start.elapsed().unwrap();
 
-    let size = std::fs::metadata(&app_o_file).unwrap().len();
+    let size = std::fs::metadata(&app_o_file)
+        .unwrap_or_else(|err| {
+            panic!(
+                "Could not open {:?} - which was supposed to have been generated. Error: {:?}",
+                app_o_file, err
+            );
+        })
+        .len();
 
-    println!(
-        "Finished compilation and code gen in {} ms\n\nProduced a app.o file of size {:?}\n",
-        compilation_end.as_millis(),
-        size,
-    );
+    if emit_debug_info {
+        println!(
+            "\n\nCompilation finished!\n\nHere's how long each module took to compile:\n\n{}",
+            buf
+        );
+
+        println!(
+            "Finished compilation and code gen in {} ms\n\nProduced a app.o file of size {:?}\n",
+            compilation_end.as_millis(),
+            size,
+        );
+    }
 
     // Step 2: link the precompiled host and compiled app
     let mut host_input_path = PathBuf::from(cwd);
+
     host_input_path.push(&*path_to_platform);
     host_input_path.push("host.o");
 
@@ -144,10 +158,13 @@ pub fn build_file<'a>(
     let rebuild_host_start = SystemTime::now();
     rebuild_host(host_input_path.as_path());
     let rebuild_host_end = rebuild_host_start.elapsed().unwrap();
-    println!(
-        "Finished rebuilding the host in {} ms\n",
-        rebuild_host_end.as_millis()
-    );
+
+    if emit_debug_info {
+        println!(
+            "Finished rebuilding the host in {} ms\n",
+            rebuild_host_end.as_millis()
+        );
+    }
 
     // TODO try to move as much of this linking as possible to the precompiled
     // host, to minimize the amount of host-application linking required.
@@ -156,7 +173,7 @@ pub fn build_file<'a>(
         link(
             target,
             binary_path,
-            &[host_input_path.as_path().to_str().unwrap(), app_o_file.as_path().to_str().unwrap()],
+            &[host_input_path.as_path().to_str().unwrap(), app_o_file.to_str().unwrap()],
             link_type
         )
         .map_err(|_| {
@@ -168,18 +185,25 @@ pub fn build_file<'a>(
     });
 
     let link_end = link_start.elapsed().unwrap();
-    println!("Finished linking in {} ms\n", link_end.as_millis());
-
-    // Clean up the leftover .o file from the Roc, if possible.
-    // (If cleaning it up fails, that's fine. No need to take action.)
-    // TODO compile the app_o_file to a tmpdir, as an extra precaution.
-    let _ = fs::remove_file(app_o_file);
+    if emit_debug_info {
+        println!("Finished linking in {} ms\n", link_end.as_millis());
+    }
 
     // If the cmd errored out, return the Err.
     cmd_result?;
 
+    // If possible, report the generated executable name relative to the current dir.
+    let generated_filename = binary_path
+        .strip_prefix(env::current_dir().unwrap())
+        .unwrap_or(&binary_path);
+
     let total_end = compilation_start.elapsed().unwrap();
-    println!("Finished entire process in {} ms\n", total_end.as_millis());
+
+    println!(
+        "🎉 Built {} in {} ms",
+        generated_filename.to_str().unwrap(),
+        total_end.as_millis()
+    );
 
     Ok(binary_path)
 }

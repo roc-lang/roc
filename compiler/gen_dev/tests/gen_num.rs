@@ -209,6 +209,26 @@ mod gen_num {
     }
 
     #[test]
+    fn pow_int() {
+        assert_evals_to!("Num.powInt 2 3", 8, i64);
+    }
+
+    #[test]
+    fn acos() {
+        assert_evals_to!("Num.acos 0.5", 1.0471975511965979, f64);
+    }
+
+    #[test]
+    fn asin() {
+        assert_evals_to!("Num.asin 0.5", 0.5235987755982989, f64);
+    }
+
+    #[test]
+    fn atan() {
+        assert_evals_to!("Num.atan 10", 1.4711276743037347, f64);
+    }
+
+    #[test]
     fn gen_if_fn() {
         assert_evals_to!(
             indoc!(
@@ -737,16 +757,6 @@ mod gen_num {
         assert_evals_to!("Num.floor 1.9", 1, i64);
     }
 
-    #[test]
-    fn pow_int() {
-        assert_evals_to!("Num.powInt 2 3", 8, i64);
-    }
-
-    #[test]
-    fn atan() {
-        assert_evals_to!("Num.atan 10", 1.4711276743037347, f64);
-    }
-
     // #[test]
     // #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
     // fn int_overflow() {
@@ -844,6 +854,19 @@ mod gen_num {
     //             f64
     //         );
     //     }
+
+    #[test]
+    fn max_i128() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Num.maxI128
+                "#
+            ),
+            i128::MAX,
+            i128
+        );
+    }
 
     #[test]
     fn num_max_int() {

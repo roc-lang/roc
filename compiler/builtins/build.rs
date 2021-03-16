@@ -14,13 +14,23 @@ fn main() {
     let build_script_dir_path = fs::canonicalize(Path::new(".")).unwrap();
     let bitcode_path = build_script_dir_path.join("bitcode");
 
-    let src_path = bitcode_path.join("src");
+    let src_obj_path = bitcode_path.join("builtins.o");
+    let src_obj = src_obj_path.to_str().expect("Invalid src object path");
+    println!("Compiling zig object to: {}", src_obj);
+
+    run_command(&bitcode_path, "zig", &["build", "object", "-Drelease=true"]);
+
+    let dest_obj_path = Path::new(&out_dir).join("builtins.o");
+    let dest_obj = dest_obj_path.to_str().expect("Invalid dest object path");
+    println!("Moving zig object to: {}", dest_obj);
+
+    run_command(&bitcode_path, "mv", &[src_obj, dest_obj]);
 
     let dest_ir_path = bitcode_path.join("builtins.ll");
     let dest_ir = dest_ir_path.to_str().expect("Invalid dest ir path");
     println!("Compiling ir to: {}", dest_ir);
 
-    run_command(bitcode_path, "zig", &["build", "ir", "-Drelease=true"]);
+    run_command(&bitcode_path, "zig", &["build", "ir", "-Drelease=true"]);
 
     let dest_bc_path = Path::new(&out_dir).join("builtins.bc");
     let dest_bc = dest_bc_path.to_str().expect("Invalid dest bc path");
@@ -34,7 +44,8 @@ fn main() {
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rustc-env=BUILTINS_BC={}", dest_bc);
-    get_zig_files(src_path.as_path(), &|path| {
+    println!("cargo:rustc-env=BUILTINS_O={}", dest_obj);
+    get_zig_files(bitcode_path.as_path(), &|path| {
         let path: &Path = path;
         println!(
             "cargo:rerun-if-changed={}",
@@ -74,7 +85,9 @@ fn get_zig_files(dir: &Path, cb: &dyn Fn(&Path)) -> io::Result<()> {
             let entry = entry?;
             let path_buf = entry.path();
             if path_buf.is_dir() {
-                get_zig_files(&path_buf, cb).unwrap();
+                if !path_buf.ends_with("zig-cache") {
+                    get_zig_files(&path_buf, cb).unwrap();
+                }
             } else {
                 let path = path_buf.as_path();
 
