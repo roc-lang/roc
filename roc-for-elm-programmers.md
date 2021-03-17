@@ -4,7 +4,7 @@ Roc is a direct descendant of the [Elm programming language](https://elm-lang.or
 
 This is a guide to help Elm programmers learn what's different between Elm and Roc.
 
-> NOTE: As of 2021, most but not all of what's in this document has been implemented.
+> NOTE: Almost all what's in this document has been implemented - but not quite all of it!
 
 ## Comments
 
@@ -32,7 +32,7 @@ The Elm equivalent would be:
 This interpolation syntax comes from [Swift](https://swift.org/). Only a single
 identifier can go inside the parentheses (like `(name)` here), and the identifier
 needs to be a string already. Arbitrary expressions are not allowed, which means
-weird situations like string literals inside string literals do not come up.
+weird situations like string literals inside string literals don't come up.
 
 Roc strings also have the type `Str` rather than Elm's `String`. This is to make
 common qualified operations like `Str.join` more concise; the idea is that you'll use the
@@ -109,8 +109,10 @@ One minor benefit of the comma is that you don't need to use parentheses to
 destructure arguments inline. For example, in Elm, you always need to use parens
 to destructure variants inline in function declarations, like in these two examples:
 
-```
+```elm
 \(UserId id1) (UserId id2) ->
+```
+```elm
 \(UserId id) ->
 ```
 
@@ -119,8 +121,10 @@ Without the parentheses, it wouldn't be clear where one argument ended and the n
 In Roc, the commas make argument boundaries unambiguous, so no parens are needed.
 You can write the above like so in Roc:
 
-```
+```elm
 \UserId id1, UserId id2 ->
+```
+```elm
 \UserId id ->
 ```
 
@@ -128,7 +132,7 @@ You can write the above like so in Roc:
 
 In Elm, every type variable is named. For example:
 
-```
+```elm
 List.reverse : List a -> List a
 
 [] : List a
@@ -137,13 +141,13 @@ List.reverse : List a -> List a
 The `a` in `List.reverse` is a *bound* type variable, because it appears more than once in the type.
 Whatever the first list's `a` is, that's what the second list's `a` must be as well.
 
-The `a` in `[]` is an *unbound* type variable. It has no restrictions,
+The `a` in `[] : List a` is an *unbound* type variable. It has no restrictions,
 which is why `[]` can be passed to any function that expects a `List`.
 
 In Roc, this distinction between bound and unbound type variables is reflected at
 the syntax level. Here are those types in Roc:
 
-```
+```elm
 List.reverse : List a -> List a
 
 [] : List *
@@ -164,6 +168,177 @@ always : a -> (* -> a)
 This makes unbound type variables easier to talk about out loud. Rather than saying
 (for example) "List a" or "Html msg with a lowercase m" you can say "List star" or "Html star".
 
+## Record Syntax
+
+Roc uses Rust/JavaScript syntax for record literals, e.g. `{ x: 1, y: 2 }`.
+
+It also allows omitting the value; `{ x, y }` is sugar for `{ x: x, y: y }`.
+
+You can pattern match on exact record values, e.g. `{ x: 5 } ->`.
+
+Roc does not have the "a type alias for a record creates a convenience constructor function"
+feature that Elm has. However, it does allow trailing commas, in both values and
+type annotations. Roc's formatter (which is built into the compiler, and which
+is zero-configuration like `elm-format`) formats multi-line record literals (and
+record types) with a comma at the end of each line, like so:
+
+```elm
+user =
+    {
+        firstName: "Sam",
+        lastName: "Sample",
+        email: "sam@example.com",
+    }
+```
+
+This is easy to read and leads to tidy version control diffs; no matter how
+you reorder these fields, or add or remove fields, the diffs will only be of the
+relevant fields in question, not any adjacent fields or tokens.
+
+> Lists are formatted similarly to records, except of course they don't have labeled fields.
+
+Closed record annotations look the same as they do in Elm, e.g.
+`{ name : Str, email : Str }`. Open record annotations look a bit different.
+
+In Elm:
+
+```
+{ a | name : Str, email : Str } -> Str
+```
+
+In Roc:
+
+```
+{ x : name : Str, email : Str }* -> Str
+```
+
+Here, the open record's type variable appears immediately after the `}`.
+
+> In the Elm example, the `a` is unbound, which in Roc means it appears as `*`.
+
+This syntax makes it easier to write a function that accepts an open record with an unbound
+type variable (e.g. "this record, plus other fields if you like"). This is a totally reasonable
+thing to do - as often as you like! It has multiple upsides: it makes "named arguments"
+work with data model records more often, and makes it easier to change functions in
+backwards-compatible ways. It has no major downsides.
+
+The syntax encourages doing this. "Just add a star" like so:
+
+```elm
+{ name : Str, email : Str }* -> Str
+```
+
+You can also use bound type variables too. In Elm:
+
+```elm
+{ a | name : Str, email : Str } -> { a | name : Str, email : Str }
+```
+
+In Roc:
+
+```elm
+{ name : Str, email : Str }a -> { name : Str, email : Str }a
+```
+
+> Like in Elm, using records with bound variables should be extremely rare.
+> They need to exist for the type system to work, and they aren't *useless*,
+> but any time you find yourself reaching for them, there is a very high chance
+> that there's a better way to write that code!
+
+## Record Update
+
+Elm has "record update" syntax like this:
+
+```elm
+{ user | firstName = "Sam", lastName = "Sample" }
+```
+
+Roc has the same feature, but its syntax looks like this:
+
+```elm
+{ user & firstName: "Sam", lastName: "Sample" }
+```
+
+The record before the `&` can be qualified, like so:
+
+```elm
+{ Foo.defaultConfig & timeZone: utc }
+```
+
+However, it cannot involve record field access. So this would *not* compile:
+
+```elm
+{ Foo.defaults.config & timeZone: utc }
+```
+
+## Optional Record Fields
+
+There's a pattern in Elm where you pass a function a record of configuration
+values, some of which you don't really care about and want to leave as defaults.
+To incorporate the default config options, you call the function like so:
+
+```elm
+table { defaultConfig | height = 800, width = 600 }
+```
+
+This way, as the caller I'm specifying only the `height` and `width` fields,
+and leaving the others to whatever is inside `defaultConfig`. Perhaps it also
+has the fields `x` and `y`.
+
+In Roc, you can do this like so:
+
+```elm
+table { height: 800, width: 600 }
+```
+
+...and the `table` function will fill in its default values for `x` and `y`.
+There is no need to use a `defaultConfig` record.
+
+Here's how `table` would be defined in Roc:
+
+```
+table = \{ height, width, title ? "", description ? "" } ->
+```
+
+This is using *optional field destructuring* to destructure a record while
+also providing default values for any fields that might be missing.
+Here's the type of `table`:
+
+```
+table :
+    {
+        height : Pixels,
+        width : Pixels,
+        title ? Str,
+        description ? Str,
+    }
+    -> Table
+table = \{ height, width, title ? "", description ? "" } ->
+```
+
+This says that `table` takes a record with two *required* fields (`height` and
+`width` and two *optional* fields (`title` and `description`). It also says that
+the `height` and `width` fields have the type `Pixels` (a type alias for some
+numeric type), whereas the `title` and `description` fields have the type `Str.`
+This means you can choose to omit `title`, `description`, or both, when calling
+the function...but if you provide them, they must have the type `Str`.
+
+This is also the type that would have been inferred for `table` if no annotation
+had been written. Roc's compiler can tell from the destructuring syntax
+`title ? ""` that `title` is an optional field, and that it has the type `Str`.
+These default values can reference other expressions in the record destructure; if you
+wanted, you could write
+`{ height, width, title ? "", description ? Str.concat "A table called " title }`.
+
+Destructuring is the only way to implement a record with optional fields.
+(For example, if you write the expression `config.title` and `title` is an
+optional field, you'll get a compile error.)
+
+This means it's never possible to end up with an "optional value" that exists
+outside a record field. Optionality is a concept that exists only in record
+fields, and it's intended for the use case of config records like this. The
+ergonomics of destructuring mean this wouldn't be a good fit for data modeling.
+
 ## Pattern matching
 
 Roc's pattern matching conditionals work about the same as how they do in Elm.
@@ -174,7 +349,7 @@ Here are two differences:
 
 For example:
 
-```elm
+```coffeescript
 when color is
     Blue -> 1
     Green | Red | Yellow -> 2
@@ -203,8 +378,8 @@ doStuff = \filename ->
             File.write filename (responseToData response)
 ```
 
-Note that in Elm you'd need to add a `<|` before the anonymous functions
-(e.g. `<| \response ->`) but in Roc you don't.
+> Note that in Elm you'd need to add a `<|` before the anonymous functions
+> (e.g. `<| \response ->`) but in Roc you don't.
 
 What would the type of the above expression be? Let's say these function calls
 have the following types:
@@ -258,15 +433,62 @@ The key is that each of the error types is a type alias for a Roc *tag union*.
 Here's how those look:
 
 ```elm
-Http.Err a : [ PageNotFound, Timeout, BadPayload ]a
-File.ReadErr a : [ FileNotFound, Corrupted, BadFormat ]a
-File.WriteErr a : [ FileNotFound, DiskFull ]a
+Http.Err a :
+    [
+        PageNotFound,
+        Timeout,
+        BadPayload Str,
+    ]a
+
+File.ReadErr a :
+    [
+        FileNotFound,
+        Corrupted,
+        BadFormat,
+    ]a
+
+File.WriteErr a :
+    [
+        FileNotFound,
+        DiskFull,
+    ]a
 ```
 
-In Elm, these would be defined as custom types (aka algebraic data types) using
-the `type` keyword. However, instead of traditional algebraic data types, Roc has
-only tags - which work more like OCaml's *polymorphic variants*, and which
-can be used in type aliases without a separate `type` keyword. (Roc has no `type` keyword.)
+For a side-by-side comparison, here's how we would implement something similar in Elm:
+
+```elm
+type Http.Err
+    = PageNotFound
+    | Timeout
+    | BadPayload String
+
+type File.ReadErr
+    = FileNotFound
+    | Corrupted
+    | BadFormat
+
+type File.WriteErr
+    = FileNotFound
+    | DiskFull
+```
+
+There are a few differences between them, but the most significant one here is
+that the Roc version has a type variable.
+
+That type variable has a similar purpose to the type variable in Elm's *open records*
+(e.g. the `a` in `{ a | name : String, email : String }` which in Roc would be
+`{ name : Str, email : Str }a`) - except applied to sum types (such as
+Elm's custom types) instead of product types (such as records).
+
+> If you were to remove the type variables from the Roc declaraionts for
+> `Http.Err`, `File.ReadErr`, and `File.WriteErr`, they would work practically
+> the same way as the Elm one. Roc *tag unions* can be used as traditional
+> algebraic data types, and they have the usual support for pattern matching,
+> exhaustiveness checking, and so on.
+
+You don't need to declare tag unions them before using them. Instead, you can
+just write a *tag* (essentially a variant) anywhere you like, and Roc will infer
+the type of the union it goes in.
 
 Here are some examples of using tags in a REPL:
 
@@ -293,27 +515,34 @@ Foo "hi" 5 : [ Foo Str [ Bar ]* ]*
 Foo [ "str1", "str2" ] : [ Foo (List Str) ]*
 ```
 
-Tags have a lot in common with traditional algebraic data types' *variants*,
-but are different in several ways.
+The `[` `]`s in the types are tag *unions*, and they list all the possible
+different *tags* that the value could be at runtime. In all of these tag unions,
+there is only one tag. Notice the `*` at the end; that's the type variable
+we saw earlier.
 
-One difference is that you can make up any tag you want, on the fly, and use it in any module,
-without declaring it first. (These cannot be used to create opaque types; we'll discuss those
-in the next section.)
+Similarly to how if you put `{ name = "" }` into `elm repl`, it will
+infer a type of `{ a | name : String }` - that is, an *open record* with an
+unbound type variable and `name : Str` field - if you put a tag `Foo ""` into
+`roc repl`, it will infer a type of `[ Foo Str ]*` - that is, an *open tag union*
+with one alternative: a `Foo` tag with a `Str` payload.
 
-Another difference is that the same tag can be used with different arities and types.
-In the REPL above, `x`, `y`, and `z`, can all coexist in the same module even though
-they use `Foo` with different arities - and also with different types within the same arity.
+The same tag can be used with different arities and types. In the REPL above,
+`x`, `y`, and `z`, can all coexist even though they use `Foo` with different
+arities - and also with different types within the same arity.
 
-Now let's say I do a pattern match with no type annotations.
+Similarly, you can pattern match on tags without declaring any types, and Roc
+will infer the type of the tag union being matched.
 
-```elm
+For example, suppose we don't write any type annotations anywhere, and have
+this pattern match:
+
+```coffeescript
 when blah is
     MyStr str -> Str.concat str "!"
     MyBool bool -> Bool.not bool
 ```
 
-The inferred type of this expression would be `[ MyStr Str, MyBool Bool ]`,
-based on its usage.
+The inferred type of this expression would be `[ MyStr Str, MyBool Bool ]`.
 
 > Exhaustiveness checking is still in full effect here.  It's based on usage;
 > if any code pathways led to `blah` being set to the tag `Foo`, I'd get
@@ -505,157 +734,6 @@ Like Elm, Roc does not allow shadowing.
 Elm does permit overriding open imports - e.g. if you have
 `import Foo exposing (bar)`, or `import Foo exposing (..)`, you can still define
 `bar = ...` in the module. Roc treats this as shadowing and does not allow it.
-
-## Record Syntax
-
-Roc uses Rust/JavaScript syntax for record literals, e.g. `{ x: 1, y: 2 }`.
-
-It also allows omitting the value; `{ x, y }` is sugar for `{ x: x, y: y }`.
-
-You can pattern match on exact record values, e.g. `{ x: 5 } ->`.
-
-Roc does not have the "a type alias for a record creates a convenience constructor function"
-feature that Elm has. This is partly because `Point x y` is already defined to be tag application
-in Roc, but also because `{ x, y }` would be the recommended way to write it regardless.
-
-Closed record annotations look the same as they do in Elm, e.g.
-`{ name : Str, email : Str }`. Open record annotations look a bit different.
-
-In Elm:
-
-```
-{ a | name : Str, email : Str } -> Str
-```
-
-In Roc:
-
-```
-{ x : name : Str, email : Str }* -> Str
-```
-
-Here, the open record's type variable appears attached to the `}`.
-
-> In the Elm example, the `a` is unbound, which in Roc means it appears as `*`.
-
-Here's how that looks with a bound type variable. In Elm:
-
-```elm
-{ a | name : Str, email : Str } -> { a | name : Str, email : Str }
-```
-
-In Roc:
-
-```elm
-{ name : Str, email : Str }a -> { name : Str, email : Str }a
-```
-
-By design, this syntax makes the unbound case look natural and the bound case look unnatural.
-
-That's because writing a function that accepts an open record with an unbound
-type variable (e.g. "this record, plus other fields if you like") is a totally reasonable
-thing to do - as often as you like! It has multiple upsides: it makes "named arguments"
-work with data model records more often, and makes it easier to change functions in
-backwards-compatible ways. It has no major downsides.
-
-The syntax encourages doing this. "Just add a star" like so:
-
-```elm
-{ name : Str, email : Str }* -> Str
-```
-
-In contrast, using records with bound variables should be extremely rare.
-
-They need to exist for the type system to work, and they aren't *useless*,
-but if you find yourself reaching for them, there is a very high chance
-that there's a better way to write that code.
-
-The unnatural-looking syntax is the language's way of nudging you to reconsider,
-to search a little further for a better way to express things.
-
-## Record Update
-
-Elm has "record update" syntax like this:
-
-```elm
-{ user | firstName = "Sam", lastName = "Sample" }
-```
-
-Roc has the same feature, but its syntax looks like this:
-
-```elm
-{ user & firstName: "Sam", lastName: "Sample" }
-```
-
-The record before the `&` can be qualified, like so:
-
-```elm
-{ Foo.defaultConfig & timeZone: utc }
-```
-
-However, it cannot involve record field access. So this would *not* compile:
-
-```elm
-{ Foo.defaults.config & timeZone: utc }
-```
-
-## Optional Record Fields
-
-There's a pattern in Elm where you pass a function a record of configuration
-values, some of which you don't really care about and want to leave as defaults.
-To incorporate the default config options, you call the function like so:
-
-```elm
-table { defaultConfig | height = 800, width = 600 }
-```
-
-This way, as the caller I'm specifying only the `height` and `width` fields,
-and leaving the others to whatever is inside `defaultConfig`. Perhaps it also
-has the fields `x` and `y`.
-
-In Roc, you can do this like so:
-
-```elm
-table { height: 800, width: 600 }
-```
-
-...and the `table` function will fill in its default values for `x` and `y`.
-There is no need to use a `defaultConfig` record.
-
-Here's how `table` would be defined in Roc:
-
-```
-table = \{ height, width, x ? 0, y ? 0 } ->
-```
-
-This is using *optional field destructuring* to destructure a record while
-also providing default values for any fields that might be missing.
-Here's the type of `table`:
-
-```
-table : { height : Pixels, width : Pixels, x ? Pixels, y ? Pixels } -> Table
-table = \{ height, width, x ? 0, y ? 0 } ->
-```
-
-This says that `table` takes a record with two *required* fields (`height` and
-`width` and two *optional* fields (`x` and `y`). It also says that all of those
-fields have the type `Pixels` This means you can choose to omit `x`, `y`, or both,
-when calling the function...but if you provide them, they must have the type `Pixels`.
-(`Pixels` ia a type alias for a numeric type here.)
-
-This is also the type that would have been inferred for `table` if no annotation
-had been written. Roc's compiler can tell from the destructuring syntax
-`x ? 0` that `x` is an optional field, and that it has the type `Pixels`. These
-default values can reference other expressions in the record destructure; if you
-wanted, you could write `{ height, width, x ? 0, y ? x + 1 }`.
-
-Destructuring is the only way to implement a record with optional fields.
-(For example, if you write the expression `config.x` and `x` is an optional field,
-you'll get a compile error.)
-
-This means it's never possible to end up with an "optional value" that exists
-outside a record field. Optionality is a concept that exists only in record fields,
-and it's intended for the use case of config records like this. The ergonomics
-of destructuring mean this wouldn't be a good fit for data modeling.
 
 ## Function equality
 

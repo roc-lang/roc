@@ -4781,24 +4781,25 @@ fn build_int_binop<'a, 'ctx, 'env>(
         NumIsMultipleOf => {
             /* this builds the following construct
 
-                if rhs == 0 {
-                    lhs == 0
-                } else {
+                if rhs != 0 {
                     let rem = lhs % rhs;
                     rem == 0
+                } else {
+                    // rhs == 0 && lhs ==0
+                    lhs == 0
                 }
             */
             let zero = rhs.get_type().const_zero();
-            let condition_rhs = bd.build_int_compare(IntPredicate::EQ, rhs, zero, "is_zero_rhs");
+            let condition_rhs = bd.build_int_compare(IntPredicate::NE, rhs, zero, "is_zero_rhs");
             let condition_lhs = bd.build_int_compare(IntPredicate::EQ, lhs, zero, "is_zero_lhs");
 
             let current_block = bd.get_insert_block().unwrap(); //block that we are in right now;
-            let else_block = env.context.append_basic_block(parent, "else"); //
+            let then_block = env.context.append_basic_block(parent, "then");
             let cont_block = env.context.append_basic_block(parent, "branchcont");
 
-            bd.build_conditional_branch(condition_rhs, cont_block, else_block);
+            bd.build_conditional_branch(condition_rhs, then_block, cont_block);
 
-            bd.position_at_end(else_block);
+            bd.position_at_end(then_block);
 
             let rem = bd.build_int_signed_rem(lhs, rhs, "int_rem");
             let condition_rem = bd.build_int_compare(IntPredicate::EQ, rem, zero, "is_zero_rem");
@@ -4810,8 +4811,8 @@ fn build_int_binop<'a, 'ctx, 'env>(
             let phi = bd.build_phi(env.context.bool_type(), "branch");
 
             phi.add_incoming(&[
+                (&condition_rem, then_block),
                 (&condition_lhs, current_block),
-                (&condition_rem, else_block),
             ]);
 
             phi.as_basic_value()
