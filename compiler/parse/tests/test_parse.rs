@@ -1736,10 +1736,10 @@ mod test_parse {
             Located::new(1, 1, 5, 7, Identifier("y"))
         ];
         let def1 = Def::Body(
-            arena.alloc(Located::new(1, 1, 1, 8, RecordDestructure(&fields))),
+            arena.alloc(Located::new(1, 1, 0, 8, RecordDestructure(&fields))),
             arena.alloc(Located::new(1, 1, 11, 12, Num("5"))),
         );
-        let loc_def1 = &*arena.alloc(Located::new(1, 1, 1, 12, def1));
+        let loc_def1 = &*arena.alloc(Located::new(1, 1, 0, 12, def1));
         let def2 = Def::SpaceBefore(
             &*arena.alloc(Def::Body(
                 arena.alloc(Located::new(2, 2, 0, 1, Identifier("y"))),
@@ -1759,7 +1759,8 @@ mod test_parse {
 
         assert_parses_to(
             indoc!(
-                r#"# leading comment
+                r#"
+                # leading comment
                 { x, y } = 5
                 y = 6
 

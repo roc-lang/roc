@@ -447,6 +447,7 @@ fn parse_expr_operator_chain<'a>(
     }
 }
 
+#[derive(Debug)]
 struct ExprState<'a> {
     operators: Vec<'a, (Located<Expr<'a>>, Located<BinOp>)>,
     arguments: Vec<'a, &'a Located<Expr<'a>>>,
@@ -488,7 +489,7 @@ impl<'a> ExprState<'a> {
         F: Fn(Region, Row, Col) -> EExpr<'a>,
     {
         if !self.operators.is_empty() {
-            // this `=` or `:` likely occured inline; treat it as an invalid operator
+            // this `=` or `<-` likely occured inline; treat it as an invalid operator
             let opchar = match loc_op.value {
                 BinOp::Assignment => arena.alloc([b'=']) as &[_],
                 BinOp::Backpassing => arena.alloc([b'<', b'-']) as &[_],
@@ -2638,117 +2639,30 @@ fn record_help<'a>(
 
 fn record_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     then(
-        and!(
-            loc!(specialize(EExpr::Record, record_help(min_indent))),
-            optional(and!(
-                space0_e(min_indent, EExpr::Space, EExpr::IndentEquals),
-                either!(equals_with_indent_help(), colon_with_indent())
-            ))
-        ),
-        move |arena, state, progress, (loc_record, opt_def)| {
+        loc!(specialize(EExpr::Record, record_help(min_indent))),
+        move |arena, state, _, loc_record| {
             let (opt_update, loc_assigned_fields_with_comments) = loc_record.value;
-            match opt_def {
-                None => {
-                    // This is a record literal, not a destructure.
-                    let mut value = Expr::Record {
-                        update: opt_update.map(|loc_expr| &*arena.alloc(loc_expr)),
-                        fields: loc_assigned_fields_with_comments.value.0.into_bump_slice(),
-                        final_comments: loc_assigned_fields_with_comments.value.1,
-                    };
 
-                    // there can be field access, e.g. `{ x : 4 }.x`
-                    let (_, accesses, state) =
-                        optional(record_field_access_chain()).parse(arena, state)?;
+            // This is a record literal, not a destructure.
+            let mut value = Expr::Record {
+                update: opt_update.map(|loc_expr| &*arena.alloc(loc_expr)),
+                fields: loc_assigned_fields_with_comments.value.0.into_bump_slice(),
+                final_comments: loc_assigned_fields_with_comments.value.1,
+            };
 
-                    if let Some(fields) = accesses {
-                        for field in fields {
-                            // Wrap the previous answer in the new one, so we end up
-                            // with a nested Expr. That way, `foo.bar.baz` gets represented
-                            // in the AST as if it had been written (foo.bar).baz all along.
-                            value = Expr::Access(arena.alloc(value), field);
-                        }
-                    }
+            // there can be field access, e.g. `{ x : 4 }.x`
+            let (_, accesses, state) = optional(record_field_access_chain()).parse(arena, state)?;
 
-                    Ok((MadeProgress, value, state))
-                }
-                Some((spaces_before_equals, Either::First(equals_indent))) => {
-                    // This is a record destructure def.
-                    let region = loc_assigned_fields_with_comments.region;
-                    let assigned_fields = loc_assigned_fields_with_comments.value.0;
-                    let mut loc_patterns = Vec::with_capacity_in(assigned_fields.len(), arena);
-
-                    for loc_assigned_field in assigned_fields {
-                        let region = loc_assigned_field.region;
-                        match assigned_expr_field_to_pattern(arena, &loc_assigned_field.value) {
-                            Ok(value) => loc_patterns.push(Located { region, value }),
-                            // an Expr became a pattern that should not be.
-                            Err(_fail) => {
-                                return Err((
-                                    progress,
-                                    EExpr::MalformedPattern(state.line, state.column),
-                                    state,
-                                ))
-                            }
-                        }
-                    }
-
-                    let pattern = Pattern::RecordDestructure(loc_patterns.into_bump_slice());
-                    let value = if spaces_before_equals.is_empty() {
-                        pattern
-                    } else {
-                        Pattern::SpaceAfter(arena.alloc(pattern), spaces_before_equals)
-                    };
-                    let loc_pattern = Located { region, value };
-                    let (_, spaces_after_equals, state) =
-                        space0_e(min_indent, EExpr::Space, EExpr::IndentDefBody)
-                            .parse(arena, state)?;
-
-                    // The def's starting column is the '{' char in the record literal.
-                    let def_start_col = loc_record.region.start_col;
-                    let (_, parsed_expr, state) = parse_def_expr_help(
-                        min_indent,
-                        def_start_col,
-                        equals_indent,
-                        arena,
-                        state,
-                        loc_pattern,
-                        spaces_after_equals,
-                    )?;
-
-                    Ok((MadeProgress, parsed_expr, state))
-                }
-                Some((spaces_before_colon, Either::Second(colon_indent))) => {
-                    // This is a record type annotation
-                    let region = loc_assigned_fields_with_comments.region;
-                    let assigned_fields = loc_assigned_fields_with_comments.value.0;
-                    let mut loc_patterns = Vec::with_capacity_in(assigned_fields.len(), arena);
-
-                    for loc_assigned_field in assigned_fields {
-                        let region = loc_assigned_field.region;
-                        match assigned_expr_field_to_pattern(arena, &loc_assigned_field.value) {
-                            Ok(value) => loc_patterns.push(Located { region, value }),
-                            // an Expr became a pattern that should not be.
-                            Err(_fail) => {
-                                return Err((
-                                    progress,
-                                    EExpr::MalformedPattern(state.line, state.column),
-                                    state,
-                                ))
-                            }
-                        }
-                    }
-
-                    let pattern = Pattern::RecordDestructure(loc_patterns.into_bump_slice());
-                    let value = if spaces_before_colon.is_empty() {
-                        pattern
-                    } else {
-                        Pattern::SpaceAfter(arena.alloc(pattern), spaces_before_colon)
-                    };
-                    let loc_pattern = Located { region, value };
-
-                    parse_def_signature_help(min_indent, colon_indent, arena, state, loc_pattern)
+            if let Some(fields) = accesses {
+                for field in fields {
+                    // Wrap the previous answer in the new one, so we end up
+                    // with a nested Expr. That way, `foo.bar.baz` gets represented
+                    // in the AST as if it had been written (foo.bar).baz all along.
+                    value = Expr::Access(arena.alloc(value), field);
                 }
             }
+
+            Ok((MadeProgress, value, state))
         },
     )
 }
