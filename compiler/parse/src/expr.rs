@@ -829,6 +829,7 @@ fn append_alias_definition<'a>(
     defs.push(arena.alloc(loc_def));
 }
 
+#[derive(Debug)]
 struct DefState<'a> {
     defs: Vec<'a, &'a Located<Def<'a>>>,
     spaces_after: &'a [CommentOrNewline<'a>],
@@ -1576,7 +1577,52 @@ pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, SyntaxError<'a>> {
     specialize(|e, _, _| SyntaxError::Expr(e), def_help(min_indent))
 }
 
-pub fn def_help<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, EExpr<'a>> {
+pub fn def_help_help<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Def<'a>>>, EExpr<'a>> {
+    move |arena, state: State<'a>| {
+        let def_state = DefState {
+            defs: Vec::new_in(arena),
+            spaces_after: &[],
+        };
+
+        let (_, initial_space, state) =
+            space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state)?;
+
+        let start = state.get_position();
+        let (_, def_state, state) = parse_defs_end(start, def_state, arena, state)?;
+
+        let (_, final_space, state) =
+            space0_e(start.col, EExpr::Space, EExpr::IndentEnd).parse(arena, state)?;
+
+        let mut output = Vec::with_capacity_in(def_state.defs.len(), arena);
+
+        if !def_state.defs.is_empty() {
+            let first = 0;
+            let last = def_state.defs.len() - 1;
+
+            for (i, ref_def) in def_state.defs.into_iter().enumerate() {
+                let mut def = ref_def.clone();
+
+                if i == first {
+                    def = arena
+                        .alloc(def.value)
+                        .with_spaces_before(initial_space, def.region)
+                }
+
+                if i == last {
+                    def = arena
+                        .alloc(def.value)
+                        .with_spaces_after(final_space, def.region)
+                }
+
+                output.push(def);
+            }
+        }
+
+        Ok((MadeProgress, output, state))
+    }
+}
+
+fn def_help<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, EExpr<'a>> {
     let indented_more = min_indent + 1;
 
     enum DefKind {

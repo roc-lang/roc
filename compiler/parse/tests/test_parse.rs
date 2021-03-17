@@ -2878,6 +2878,7 @@ mod test_parse {
     }
 
     #[test]
+    #[ignore]
     fn standalone_module_defs() {
         use Def::*;
 

@@ -265,19 +265,12 @@ fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
 
 #[inline(always)]
 pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>, SyntaxError<'a>> {
-    use crate::parser::EExpr;
     // force that we pare until the end of the input
     let min_indent = 0;
     skip_second!(
         specialize(
             |e, _, _| SyntaxError::Expr(e),
-            zero_or_more!(crate::blankspace::space0_around_ee(
-                loc!(crate::expr::def_help(min_indent)),
-                min_indent,
-                EExpr::Space,
-                EExpr::IndentStart,
-                EExpr::IndentEnd,
-            ))
+            crate::expr::def_help_help(min_indent),
         ),
         end_of_file()
     )
