@@ -5,10 +5,9 @@ use crate::blankspace::{
 use crate::ident::{lowercase_ident, parse_ident_help, Ident};
 use crate::keyword;
 use crate::parser::{
-    self, allocated, and_then_with_indent_level, backtrackable, map, optional, sep_by1, sep_by1_e,
-    specialize, specialize_ref, then, trailing_sep_by0, word1, word2, EExpr, EInParens, ELambda,
-    EPattern, ERecord, EString, Either, If, List, Number, ParseResult, Parser, State, SyntaxError,
-    Type, When,
+    self, backtrackable, optional, sep_by1, sep_by1_e, specialize, specialize_ref, then,
+    trailing_sep_by0, word1, word2, EExpr, EInParens, ELambda, EPattern, ERecord, EString, Either,
+    If, List, Number, ParseResult, Parser, State, SyntaxError, Type, When,
 };
 use crate::pattern::loc_closure_param;
 use crate::type_annotation;
@@ -1428,55 +1427,6 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
     }
 }
 
-/// use for expressions like { x: a + b }
-fn assigned_expr_field_to_pattern<'a>(
-    arena: &'a Bump,
-    assigned_field: &AssignedField<'a, Expr<'a>>,
-) -> Result<Pattern<'a>, ()> {
-    // the assigned fields always store spaces, but this slice is often empty
-    Ok(match assigned_field {
-        AssignedField::RequiredValue(name, spaces, value) => {
-            let pattern = expr_to_pattern_help(arena, &value.value)?;
-            let result = arena.alloc(Located {
-                region: value.region,
-                value: pattern,
-            });
-            if spaces.is_empty() {
-                Pattern::RequiredField(name.value, result)
-            } else {
-                Pattern::SpaceAfter(
-                    arena.alloc(Pattern::RequiredField(name.value, result)),
-                    spaces,
-                )
-            }
-        }
-        AssignedField::OptionalValue(name, spaces, value) => {
-            let result = arena.alloc(Located {
-                region: value.region,
-                value: value.value.clone(),
-            });
-            if spaces.is_empty() {
-                Pattern::OptionalField(name.value, result)
-            } else {
-                Pattern::SpaceAfter(
-                    arena.alloc(Pattern::OptionalField(name.value, result)),
-                    spaces,
-                )
-            }
-        }
-        AssignedField::LabelOnly(name) => Pattern::Identifier(name.value),
-        AssignedField::SpaceBefore(nested, spaces) => Pattern::SpaceBefore(
-            arena.alloc(assigned_expr_field_to_pattern(arena, nested)?),
-            spaces,
-        ),
-        AssignedField::SpaceAfter(nested, spaces) => Pattern::SpaceAfter(
-            arena.alloc(assigned_expr_field_to_pattern(arena, nested)?),
-            spaces,
-        ),
-        AssignedField::Malformed(string) => Pattern::Malformed(string),
-    })
-}
-
 fn assigned_expr_field_to_pattern_help<'a>(
     arena: &'a Bump,
     assigned_field: &AssignedField<'a, Expr<'a>>,
@@ -1915,119 +1865,6 @@ fn parse_def_expr_help<'a>(
         },
     )
     .parse(arena, state)
-}
-
-fn parse_def_signature_help<'a>(
-    min_indent: u16,
-    colon_indent: u16,
-    arena: &'a Bump,
-    state: State<'a>,
-    loc_first_pattern: Located<Pattern<'a>>,
-) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    let original_indent = state.indent_col;
-    let state = check_def_indent(min_indent, original_indent, colon_indent, state)?;
-
-    // Indented more beyond the original indent.
-    let indented_more = original_indent + 1;
-
-    let parser1 = {
-        // Parse the first annotation. It doesn't need any spaces
-        // around it parsed, because both the subsquent defs and the
-        // final body will have space1_before on them.
-        //
-        // It should be indented more than the original, and it will
-        // end when outdented again.
-        and_then_with_indent_level(
-            space0_before_e(
-                specialize(EExpr::Type, type_annotation::located_help(indented_more)),
-                min_indent,
-                EExpr::Space,
-                EExpr::IndentAnnotation,
-            ),
-            // The first annotation may be immediately (spaces_then_comment_or_newline())
-            // followed by a body at the exact same indent_level
-            // leading to an AnnotatedBody in this case
-            |_progress, type_ann, indent_level| {
-                map(
-                    optional(and!(
-                        backtrackable(spaces_till_end_of_line()),
-                        body_at_indent_help(indent_level)
-                    )),
-                    move |opt_body| (type_ann.clone(), opt_body),
-                )
-            },
-        )
-    };
-
-    let parser2 = {
-        and!(
-            // Optionally parse additional defs.
-            zero_or_more!(backtrackable(allocated(space0_before_e(
-                loc!(def_help(original_indent)),
-                original_indent,
-                EExpr::Space,
-                EExpr::IndentStart,
-            )))),
-            // Parse the final expression that will be returned.
-            // It should be indented the same amount as the original.
-            space0_before_e(
-                one_of![
-                    |arena, state| parse_expr_help(original_indent, arena, state),
-                    loc!(|_, state: State<'a>| Err((
-                        MadeProgress,
-                        EExpr::DefMissingFinalExpr(state.line, state.column),
-                        state
-                    ))),
-                ],
-                original_indent,
-                EExpr::Space,
-                EExpr::IndentEnd,
-            )
-        )
-    };
-
-    and!(parser1, parser2).parse(arena, state).map(
-        move |(progress, ((loc_first_annotation, opt_body), (mut defs, loc_ret)), state)| {
-            let loc_first_def: Located<Def<'a>> = match opt_body {
-                None => {
-                    let region = Region::span_across(
-                        &loc_first_pattern.region,
-                        &loc_first_annotation.region,
-                    );
-                    Located {
-                        value: annotation_or_alias(
-                            arena,
-                            &loc_first_pattern.value,
-                            loc_first_pattern.region,
-                            loc_first_annotation,
-                        ),
-                        region,
-                    }
-                }
-                Some((opt_comment, (body_pattern, body_expr))) => {
-                    let region = Region::span_across(&loc_first_pattern.region, &body_expr.region);
-                    Located {
-                        value: Def::AnnotatedBody {
-                            ann_pattern: arena.alloc(loc_first_pattern),
-                            ann_type: arena.alloc(loc_first_annotation),
-                            comment: opt_comment,
-                            body_pattern: arena.alloc(body_pattern),
-                            body_expr: arena.alloc(body_expr),
-                        },
-                        region,
-                    }
-                }
-            };
-
-            // contrary to defs with an expression body, we must ensure the annotation comes just before its
-            // corresponding definition (the one with the body).
-            defs.insert(0, &*arena.alloc(loc_first_def));
-
-            let defs = defs.into_bump_slice();
-
-            (progress, Expr::Defs(defs, arena.alloc(loc_ret)), state)
-        },
-    )
 }
 
 fn closure_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, ELambda<'a>> {
