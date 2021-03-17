@@ -93,41 +93,44 @@ fn loc_expr_in_parens_help_help<'a>(
 fn loc_expr_in_parens_etc_help<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
-    then(
-        loc!(and!(
+    move |arena, state: State<'a>| {
+        let parser = loc!(and!(
             specialize(EExpr::InParens, loc_expr_in_parens_help(min_indent)),
-            and!(
-                one_of![record_field_access_chain(), |a, s| Ok((
-                    NoProgress,
-                    Vec::new_in(a),
-                    s
-                ))],
-                // TODO remove the either
-                optional(
-                    // There may optionally be function args after the ')'
-                    // e.g. ((foo bar) baz)
-                    // loc_function_args_help(min_indent),
-                    // If there aren't any args, there may be a '=' or ':' after it.
-                    //
-                    // (It's a syntax error to write e.g. `foo bar =` - so if there
-                    // were any args, there is definitely no need to parse '=' or ':'!)
-                    //
-                    // Also, there may be a '.' for field access (e.g. `(foo).bar`),
-                    // but we only want to look for that if there weren't any args,
-                    // as if there were any args they'd have consumed it anyway
-                    // e.g. in `((foo bar) baz.blah)` the `.blah` will be consumed by the `baz` parser
-                    map!(
-                        and!(
-                            space0_e(min_indent, EExpr::Space, EExpr::IndentEquals),
-                            equals_with_indent_help()
-                        ),
-                        Either::Second
-                    )
-                )
-            )
-        )),
-        move |arena, state, _progress, parsed| helper_help(arena, state, parsed, min_indent),
-    )
+            one_of![record_field_access_chain(), |a, s| Ok((
+                NoProgress,
+                Vec::new_in(a),
+                s
+            ))]
+        ));
+
+        let (
+            _,
+            Located {
+                mut region,
+                value: (loc_expr, field_accesses),
+            },
+            state,
+        ) = parser.parse(arena, state)?;
+
+        let mut value = loc_expr.value;
+
+        // if there are field accesses, include the parentheses in the region
+        // otherwise, don't include the parentheses
+        if field_accesses.is_empty() {
+            region = loc_expr.region;
+        } else {
+            for field in field_accesses {
+                // Wrap the previous answer in the new one, so we end up
+                // with a nested Expr. That way, `foo.bar.baz` gets represented
+                // in the AST as if it had been written (foo.bar).baz all along.
+                value = Expr::Access(arena.alloc(value), field);
+            }
+        }
+
+        let loc_expr = Located::at(region, value);
+
+        Ok((MadeProgress, loc_expr, state))
+    }
 }
 
 fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, &'a str>, EExpr<'a>> {
