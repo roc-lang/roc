@@ -1,4 +1,4 @@
-use crate::editor::markup::MarkupNode;
+use crate::editor::markup::nodes::MarkupNode;
 
 pub type SlowNodeId = usize;
 

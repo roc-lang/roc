@@ -1,4 +1,5 @@
-use super::markup::{Attribute, Attributes, MarkupNode};
+use super::markup::nodes::{MarkupNode, BLANK_PLACEHOLDER};
+use super::markup::attribute::{Attribute, Attributes};
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::{ed_error::EdResult, theme::EdTheme, util::map_get};
 use crate::graphics::primitives::rect::Rect;
@@ -86,7 +87,7 @@ fn draw_attributes(
 
                 let top_left_y = code_style.txt_coords.y
                     + (txt_row_col.0 as f32) * char_width
-                    + caret_col * char_width;
+                    + char_width * 0.2;
 
                 make_caret_rect(
                     top_left_x,
@@ -150,8 +151,7 @@ fn markup_to_wgpu_helper<'a>(
             syn_high_style,
             parent_id_opt: _,
         } => {
-            let hole_placeholder = " ";
-            let glyph_text = wgpu_glyph::Text::new(hole_placeholder)
+            let glyph_text = wgpu_glyph::Text::new(BLANK_PLACEHOLDER)
                 .with_color(colors::to_slice(colors::WHITE))
                 .with_scale(code_style.font_size);
 
@@ -173,7 +173,7 @@ fn markup_to_wgpu_helper<'a>(
 
             rects.extend(draw_attributes(attributes, txt_row_col, code_style));
 
-            txt_row_col.1 += hole_placeholder.len();
+            txt_row_col.1 += BLANK_PLACEHOLDER.len();
             wgpu_texts.push(glyph_text);
         }
     };

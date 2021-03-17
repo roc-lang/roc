@@ -1,15 +1,20 @@
-#![allow(dead_code)]
 
-use super::syntax_highlight::HighlightStyle;
-use crate::editor::ed_error::{CaretNotFound, EdResult};
-use crate::editor::slow_pool::{SlowNodeId, SlowPool};
+use crate::editor::ed_error::GetContentOnNestedNode;
+use crate::editor::ed_error::NodeWithoutAttributes;
+use crate::editor::ed_error::{NestedNodeMissingChild, NestedNodeWithoutChildren};
+use crate::editor::{
+    syntax_highlight::HighlightStyle,
+    slow_pool::{SlowNodeId, SlowPool},
+    ed_error::{EdResult},
+};
 use crate::lang::{
     ast::Expr2,
     expr::Env,
     pool::{NodeId, PoolStr},
 };
 use bumpalo::Bump;
-use snafu::ensure;
+use super::attribute::{Attributes};
+use snafu::OptionExt;
 
 #[derive(Debug)]
 pub enum MarkupNode {
@@ -34,113 +39,101 @@ pub enum MarkupNode {
     },
 }
 
-#[derive(Debug)]
-pub struct Caret {
-    pub offset_col: usize,
-}
+pub const BLANK_PLACEHOLDER: &str = " ";
 
-impl Caret {
-    pub fn new_attr(offset_col: usize) -> Attribute {
-        Attribute::Caret {
-            caret: Caret { offset_col },
+impl MarkupNode {
+    pub fn get_parent_id(&self) -> Option<SlowNodeId> {
+        match self {
+            MarkupNode::Nested { ast_node_id:_, children_ids:_, parent_id_opt } => *parent_id_opt,
+            MarkupNode::Text{ content:_, ast_node_id:_, syn_high_style:_, attributes:_, parent_id_opt} => *parent_id_opt,
+            MarkupNode::Blank{ ast_node_id:_, attributes:_, syn_high_style:_, parent_id_opt} => *parent_id_opt,
         }
     }
-}
-#[derive(Debug)]
-struct SelectionStart {
-    offset_col: usize,
-}
-#[derive(Debug)]
-struct SelectionEnd {
-    offset_col: usize,
-}
 
-// Highlight is used for example when searching for a specific string to highlight all search results in the module
-#[derive(Debug)]
-struct HighlightStart {
-    offset_col: usize,
-}
-#[derive(Debug)]
-struct HighlightEnd {
-    offset_col: usize,
-}
-
-// Underline is used for warnings and errors
-#[derive(Debug)]
-struct UnderlineStart {
-    offset_col: usize,
-}
-#[derive(Debug)]
-struct UnderlineEnd {
-    offset_col: usize,
-}
-
-#[derive(Debug)]
-pub enum Attribute {
-    // Rust does not yet support types for enum variants so we have to do it like this
-    Caret { caret: Caret },
-
-    SelectionStart { selection_start: SelectionStart },
-    SelectionEnd { selection_end: SelectionEnd },
-
-    HighlightStart { highlight_start: HighlightStart },
-    HighlightEnd { highlight_end: HighlightEnd },
-
-    UnderlineStart { underline_start: UnderlineStart },
-    UnderlineEnd { underline_end: UnderlineEnd },
-}
-
-#[derive(Debug)]
-pub struct Attributes {
-    pub all: Vec<Attribute>,
-}
-
-impl Attributes {
-    pub fn new() -> Attributes {
-        Attributes { all: Vec::new() }
-    }
-
-    pub fn add(&mut self, attr: Attribute) {
-        self.all.push(attr);
-    }
-
-    pub fn get_carets(&self) -> Vec<&Caret> {
-        let mut carets = Vec::new();
-
-        for attr in self.all.iter() {
-            if let Attribute::Caret { caret } = attr {
-                carets.push(caret)
-            }
+    pub fn get_children_ids(&self) -> Vec<SlowNodeId> {
+        match self {
+            MarkupNode::Nested { ast_node_id:_, children_ids, parent_id_opt:_ } => children_ids.to_vec(),
+            MarkupNode::Text{ content:_, ast_node_id:_, syn_high_style:_, attributes:_, parent_id_opt:_} => unreachable!(),//TODO use result
+            MarkupNode::Blank{ ast_node_id:_, attributes:_, syn_high_style:_, parent_id_opt:_} => unreachable!(),
         }
-
-        carets
     }
 
-    pub fn move_caret(&mut self, old_offset_col: usize, new_offset_col: usize) -> EdResult<()> {
-        let mut caret_changed = false;
+    // can't be &str, this creates borrowing issues
+    pub fn get_content(&self) -> EdResult<String> {
+        match self {
+            MarkupNode::Nested { ast_node_id:_, children_ids:_, parent_id_opt:_ } => {
+                GetContentOnNestedNode{}.fail()
+            },
+            MarkupNode::Text{ content, ast_node_id:_, syn_high_style:_, attributes:_, parent_id_opt:_} => Ok(content.clone()),
+            MarkupNode::Blank{ ast_node_id:_, attributes:_, syn_high_style:_, parent_id_opt:_} => Ok(BLANK_PLACEHOLDER.to_owned()),
+        }
+    }
 
-        for attr in self.all.iter_mut() {
-            if let Attribute::Caret { ref mut caret } = attr {
-                if caret.offset_col == old_offset_col {
-                    caret.offset_col = new_offset_col;
-                    caret_changed = true;
-                    break;
+    // Goes up to the parent and if it has a child after the current one, that child will be returned.
+    // If the child is a nested node we return the left most child of a possible chain of nested nodes.
+    pub fn get_next_leaf(&self, curr_child_id: SlowNodeId, markup_node_pool: &SlowPool) -> EdResult<Option<SlowNodeId>> {
+        let parent_id_opt = self.get_parent_id();
+
+        if let Some(parent_id) = parent_id_opt {
+            let parent = markup_node_pool.get(parent_id);
+            let children_ids = parent.get_children_ids();
+            let nr_of_children = children_ids.len();
+
+            for (indx, child_id) in children_ids.iter().enumerate() {
+                if *child_id == curr_child_id {
+                    if indx + 1 < nr_of_children {
+                        if let Some(next_child_id) = children_ids.get(indx + 1) {
+                            return Ok(Some(MarkupNode::descend_to_left_leaf(*next_child_id, markup_node_pool)?))
+                        } else {
+                            return Ok(None)
+                        }
+                    } else {
+                        return Ok(None)
+                    }
                 }
             }
+
+            NestedNodeMissingChild{node_id: parent_id, children_ids}.fail()
+        } else {
+            Ok(None)
         }
-
-        ensure!(
-            caret_changed,
-            CaretNotFound {
-                offset_col: old_offset_col,
-                str_attrs: format!("{:?}", self)
-            }
-        );
-
-        Ok(())
     }
 
-    // TODO add move_carets function
+    pub fn descend_to_left_leaf(node_id: SlowNodeId, markup_node_pool: &SlowPool) -> EdResult<SlowNodeId> {
+        let node = markup_node_pool.get(node_id);
+
+        match node {
+            MarkupNode::Nested { ast_node_id:_, children_ids, parent_id_opt:_ } => {
+                let first_child_id = children_ids.first().with_context( ||
+                    NestedNodeWithoutChildren { node_id }
+                )?;
+
+                MarkupNode::descend_to_left_leaf(*first_child_id, markup_node_pool)
+            },
+            MarkupNode::Text{ .. } => Ok(node_id),
+            MarkupNode::Blank{ .. } => Ok(node_id),
+        }
+    }
+
+    pub fn get_mut_attributes(&mut self) -> EdResult<&mut Attributes> {
+        let attrs_ref = match self {
+            MarkupNode::Nested { .. } => None,
+            MarkupNode::Text{ content:_, ast_node_id:_, syn_high_style:_, attributes, parent_id_opt:_} => Some(attributes),
+            MarkupNode::Blank{ ast_node_id:_, attributes, syn_high_style:_, parent_id_opt:_} => Some(attributes),
+        };
+
+        attrs_ref.with_context(|| NodeWithoutAttributes {})
+    }
+
+    pub fn get_attributes(&self) -> EdResult<&Attributes> {
+        let attrs_ref = match self {
+            MarkupNode::Nested { .. } => None,
+            MarkupNode::Text{ content:_, ast_node_id:_, syn_high_style:_, attributes, parent_id_opt:_} => Some(attributes),
+            MarkupNode::Blank{ ast_node_id:_, attributes, syn_high_style:_, parent_id_opt:_} => Some(attributes),
+        };
+
+        attrs_ref.with_context(|| NodeWithoutAttributes {})
+    }
 }
 
 fn get_string<'a>(env: &Env<'a>, pool_str: &PoolStr) -> String {
@@ -360,95 +353,4 @@ pub fn set_parent_for_all_helper(
             parent_id_opt,
         } => *parent_id_opt = Some(parent_node_id),
     }
-}
-
-// Returns id of node that has Caret attribute
-pub fn set_caret_at_start(
-    markup_node_id: SlowNodeId,
-    markup_node_pool: &mut SlowPool,
-) -> SlowNodeId {
-    let markup_node = markup_node_pool.get_mut(markup_node_id);
-
-    match markup_node {
-        MarkupNode::Nested {
-            ast_node_id: _,
-            children_ids,
-            parent_id_opt: _,
-        } => {
-            if let Some(child_id) = children_ids.first() {
-                set_caret_at_start(*child_id, markup_node_pool)
-            } else {
-                //TODO use result instead
-                unreachable!()
-            }
-        }
-        MarkupNode::Text {
-            content: _,
-            ast_node_id: _,
-            syn_high_style: _,
-            attributes,
-            parent_id_opt: _,
-        } => {
-            attributes.add(Caret::new_attr(0));
-            markup_node_id
-        }
-        MarkupNode::Blank {
-            ast_node_id: _,
-            attributes,
-            syn_high_style: _,
-            parent_id_opt: _,
-        } => {
-            attributes.add(Caret::new_attr(0));
-            markup_node_id
-        }
-    }
-}
-
-// returns node containing the caret after the move
-pub fn move_carets_right(
-    node_with_caret_id: SlowNodeId,
-    markup_node_pool: &mut SlowPool,
-) -> Vec<SlowNodeId> {
-    let current_caret_node = markup_node_pool.get_mut(node_with_caret_id);
-
-    match current_caret_node {
-        MarkupNode::Nested { .. } => unreachable!(), // TODO use result instead
-        MarkupNode::Text {
-            content,
-            ast_node_id: _,
-            syn_high_style: _,
-            attributes,
-            parent_id_opt: _,
-        } => {
-            let carets = attributes.get_carets();
-            for caret in carets {
-                if caret.offset_col + 1 < content.len() {
-                    // TODO return Result
-                    attributes.move_caret(caret.offset_col, caret.offset_col + 1);
-                } else {
-                    // TODO move caret to next node
-                }
-            }
-        }
-        MarkupNode::Blank {
-            ast_node_id: _,
-            attributes,
-            syn_high_style: _,
-            parent_id_opt: _,
-        } => {
-            //TODO DRY
-            let carets = attributes.get_carets();
-            for caret in carets {
-                if caret.offset_col < 1 {
-                    // TODO return Result
-                    attributes.move_caret(caret.offset_col, caret.offset_col + 1);
-                } else {
-                    // TODO move caret to next node
-                }
-            }
-        }
-    };
-
-    //TODO return correct node
-    vec![node_with_caret_id]
 }
