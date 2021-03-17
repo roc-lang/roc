@@ -48,6 +48,7 @@ let
         xorg.libXcursor
         xorg.libXrandr
         xorg.libXi
+        xorg.libxcb
       ]
     else
       [ ];
@@ -74,13 +75,14 @@ let
     llvmPkgs.clang
     pkg-config
     zig
-    # llb deps
-    libffi
-    libxml2
-    zlib
+    # lib deps
     llvmPkgs.libcxx
     llvmPkgs.libcxxabi
+    libffi
     libunwind
+    libxml2
+    ncurses
+    zlib
     # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
     llvmPkgs.lld
     # dev tools
@@ -93,9 +95,17 @@ in mkShell (nixos-env // {
 
   # Additional Env vars
   LLVM_SYS_100_PREFIX = "${llvmPkgs.llvm}";
-  APPEND_LIBRARY_PATH = stdenv.lib.makeLibraryPath
-    ([ pkg-config llvmPkgs.libcxx llvmPkgs.libcxxabi libunwind ] ++ linux-inputs);
-  LD_LIBRARY_PATH = "$LD_LIBRARY_PATH:$APPEND_LIBRARY_PATH";
+  LD_LIBRARY_PATH = stdenv.lib.makeLibraryPath
+    ([
+      pkg-config
+      stdenv.cc.cc.lib
+      llvmPkgs.libcxx
+      llvmPkgs.libcxxabi
+      libunwind
+      libffi
+      ncurses
+      zlib
+    ] ++ linux-inputs);
 
   # Aliases don't work cross shell, so we do this
   shellHook = ''
