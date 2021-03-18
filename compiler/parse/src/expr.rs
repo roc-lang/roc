@@ -5,7 +5,7 @@ use crate::keyword;
 use crate::parser::{
     self, backtrackable, optional, sep_by1, sep_by1_e, specialize, specialize_ref, then,
     trailing_sep_by0, word1, word2, EExpr, EInParens, ELambda, EPattern, ERecord, EString, Either,
-    If, List, Number, ParseResult, Parser, State, SyntaxError, Type, When,
+    If, List, Number, ParseResult, Parser, State, Type, When,
 };
 use crate::pattern::loc_closure_param;
 use crate::type_annotation;
@@ -32,19 +32,6 @@ pub fn test_parse_expr<'a>(
         Ok((_, expression, _)) => Ok(expression),
         Err((_, fail, _)) => Err(fail),
     }
-}
-
-// public for testing purposes
-pub fn expr<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, SyntaxError<'a>> {
-    // Recursive parsers must not directly invoke functions which return (impl Parser),
-    // as this causes rustc to stack overflow. Thus, parse_expr must be a
-    // separate function which recurses by calling itself directly.
-    specialize(
-        |e, _, _| SyntaxError::Expr(e),
-        move |arena, state: State<'a>| {
-            parse_expr_help(min_indent, arena, state).map(|(a, b, c)| (a, b.value, c))
-        },
-    )
 }
 
 pub fn expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {

@@ -28,6 +28,7 @@ mod test_parse {
         AppHeader, Effects, ExposesEntry, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
         PackageName, PackageOrPath, PlatformHeader, To,
     };
+    use roc_parse::module::module_defs;
     use roc_parse::parser::{Parser, State, SyntaxError};
     use roc_parse::test_helpers::parse_expr_with;
     use roc_region::all::{Located, Region};
