@@ -15,6 +15,33 @@ use crate::type_annotation;
 use bumpalo::collections::Vec;
 use roc_region::all::Located;
 
+fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
+    |_arena, state: State<'a>| {
+        if state.has_reached_end() {
+            Ok((NoProgress, (), state))
+        } else {
+            Err((
+                NoProgress,
+                SyntaxError::NotEndOfFile(state.line, state.column),
+                state,
+            ))
+        }
+    }
+}
+
+#[inline(always)]
+pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>, SyntaxError<'a>> {
+    // force that we pare until the end of the input
+    let min_indent = 0;
+    skip_second!(
+        specialize(
+            |e, _, _| SyntaxError::Expr(e),
+            crate::expr::defs(min_indent),
+        ),
+        end_of_file()
+    )
+}
+
 pub fn parse_header<'a>(
     arena: &'a bumpalo::Bump,
     state: State<'a>,
@@ -249,32 +276,6 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
     }
 }
 
-fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
-    |_arena, state: State<'a>| {
-        if state.has_reached_end() {
-            Ok((NoProgress, (), state))
-        } else {
-            Err((
-                NoProgress,
-                SyntaxError::NotEndOfFile(state.line, state.column),
-                state,
-            ))
-        }
-    }
-}
-
-#[inline(always)]
-pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>, SyntaxError<'a>> {
-    // force that we pare until the end of the input
-    let min_indent = 0;
-    skip_second!(
-        specialize(
-            |e, _, _| SyntaxError::Expr(e),
-            crate::expr::def_help_help(min_indent),
-        ),
-        end_of_file()
-    )
-}
 #[derive(Debug)]
 struct ProvidesTo<'a> {
     entries: Vec<'a, Located<ExposesEntry<'a, &'a str>>>,

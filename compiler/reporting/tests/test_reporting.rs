@@ -5656,7 +5656,6 @@ mod test_reporting {
     }
 
     #[test]
-    #[ignore]
     fn argument_without_space() {
         report_problem_as(
             indoc!(
@@ -5666,6 +5665,19 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                
+                I cannot find a `bar` value
+                
+                1│  [ "foo", bar("") ]
+                             ^^^
+                
+                these names seem close though:
+                
+                    Nat
+                    Str
+                    U8
+                    F64
                 "#
             ),
         )

@@ -1344,27 +1344,7 @@ fn assigned_expr_field_to_pattern_help<'a>(
     })
 }
 
-/// A definition, consisting of one of these:
-///
-/// * A type alias using `:`
-/// * A pattern followed by '=' and then an expression
-/// * A type annotation
-/// * A type annotation followed on the next line by a pattern, an `=`, and an expression
-pub fn def<'a>(min_indent: u16) -> impl Parser<'a, Def<'a>, SyntaxError<'a>> {
-    move |arena, state: State<'a>| {
-        // specialize(|e, _, _| SyntaxError::Expr(e), def_help(min_indent))
-
-        match def_help_help(min_indent).parse(arena, state) {
-            Err((progress, fail, state)) => Err((progress, SyntaxError::Expr(fail), state)),
-            Ok((progress, mut loc_defs, state)) => match loc_defs.pop() {
-                Some(loc_def) => Ok((progress, loc_def.value, state)),
-                None => panic!(),
-            },
-        }
-    }
-}
-
-pub fn def_help_help<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Def<'a>>>, EExpr<'a>> {
+pub fn defs<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Def<'a>>>, EExpr<'a>> {
     move |arena, state: State<'a>| {
         let def_state = DefState {
             defs: Vec::new_in(arena),
