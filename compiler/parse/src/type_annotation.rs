@@ -433,8 +433,6 @@ fn parse_concrete_type<'a>(
                 TApply::Space(crate::parser::BadInputError::LineTooLong, r, c)
             })?;
 
-            dbg!(&state);
-
             Ok((MadeProgress, TypeAnnotation::Malformed(parsed_str), state))
         }
     }

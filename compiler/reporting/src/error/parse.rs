@@ -480,6 +480,8 @@ fn to_expr_report<'a>(
             }
         }
 
+        EExpr::Space(error, row, col) => to_space_report(alloc, filename, &error, *row, *col),
+
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }
@@ -1818,6 +1820,22 @@ fn to_type_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED INLINE ALIAS".to_string(),
+            }
+        }
+
+        Type::TBadTypeVariable(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am expecting a type variable, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "BAD TYPE VARIABLE".to_string(),
             }
         }
 

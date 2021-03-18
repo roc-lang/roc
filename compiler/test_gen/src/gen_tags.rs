@@ -974,3 +974,19 @@ fn newtype_wrapper() {
         |x: &i64| *x
     );
 }
+
+#[test]
+fn open_tag_union_cannot_grow() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            f : [ A ]* -> [ A, B, C ]
+            f = \a -> a
+
+            f
+            "#
+        ),
+        4,
+        i64
+    )
+}
