@@ -480,6 +480,25 @@ fn to_expr_report<'a>(
             }
         }
 
+        EExpr::BackpassArrow(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am partway through parsing an expression, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("Looks like you are trying to define a function. ")
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "BAD BACKPASSING ARROW".to_string(),
+            }
+        }
+
         EExpr::Space(error, row, col) => to_space_report(alloc, filename, &error, *row, *col),
 
         _ => todo!("unhandled parse error: {:?}", parse_problem),

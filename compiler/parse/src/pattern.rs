@@ -395,8 +395,9 @@ fn record_pattern_field<'a>(min_indent: u16) -> impl Parser<'a, Located<Pattern<
                 ))
             }
             Some(Second(_)) => {
-                let val_parser =
-                    specialize_ref(PRecord::Expr, loc!(crate::expr::expr_help(min_indent)));
+                let val_parser = specialize_ref(PRecord::Expr, move |a, s| {
+                    crate::expr::parse_loc_expr_no_multi_backpassing(min_indent, a, s)
+                });
 
                 let (_, loc_val, state) =
                     space0_before_e(val_parser, min_indent, PRecord::Space, PRecord::IndentColon)

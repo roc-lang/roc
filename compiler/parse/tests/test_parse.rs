@@ -454,6 +454,41 @@ mod test_parse {
         assert_eq!(Ok(expected), actual);
     }
 
+    #[test]
+    fn record_with_if() {
+        let arena = Bump::new();
+        let if_expr = Expr::If(
+            arena.alloc([(
+                Located::new(0, 0, 8, 12, Expr::GlobalTag("True")),
+                Located::new(0, 0, 18, 19, Expr::Num("1")),
+            )]),
+            arena.alloc(Located::new(0, 0, 25, 26, Num("2"))),
+        );
+
+        let label1 = RequiredValue(
+            Located::new(0, 0, 1, 2, "x"),
+            &[],
+            arena.alloc(Located::new(0, 0, 5, 26, if_expr)),
+        );
+        let label2 = RequiredValue(
+            Located::new(0, 0, 28, 29, "y"),
+            &[],
+            arena.alloc(Located::new(0, 0, 31, 32, Num("3"))),
+        );
+        let fields = &[
+            Located::new(0, 0, 1, 26, label1),
+            Located::new(0, 0, 28, 32, label2),
+        ];
+        let expected = Record {
+            update: None,
+            fields,
+            final_comments: &[],
+        };
+
+        let actual = parse_expr_with(&arena, "{x : if True then 1 else 2, y: 3 }");
+        assert_eq!(Ok(expected), actual);
+    }
+
     // OPERATORS
 
     #[test]
@@ -1889,61 +1924,56 @@ mod test_parse {
     fn multi_backpassing() {
         let arena = Bump::new();
 
-        let inner_backpassing = {
-            let identifier_z = Located::new(2, 2, 0, 1, Identifier("z"));
+        let identifier_x = Located::new(0, 0, 0, 1, Identifier("x"));
+        let identifier_y = Located::new(0, 0, 3, 4, Identifier("y"));
 
-            let empty_record = Record {
-                update: None,
-                fields: &[],
-                final_comments: &[],
-            };
-            let loc_empty_record = Located::new(2, 2, 5, 7, empty_record);
-
-            let var_x = Var {
-                module_name: "",
-                ident: "x",
-            };
-
-            let newlines = bumpalo::vec![in &arena; Newline, Newline];
-            let ret = Expr::SpaceBefore(arena.alloc(var_x), newlines.into_bump_slice());
-            let loc_ret = Located::new(4, 4, 0, 1, ret);
-
-            Expr::SpaceBefore(
-                arena.alloc(Expr::Backpassing(
-                    arena.alloc([identifier_z]),
-                    arena.alloc(loc_empty_record),
-                    arena.alloc(loc_ret),
-                )),
-                arena.alloc([Newline]),
-            )
+        let var_x = Var {
+            module_name: "",
+            ident: "x",
         };
-
-        let identifier_x = Located::new(1, 1, 0, 1, Identifier("x"));
-        let identifier_y = Located::new(1, 1, 7, 8, Identifier("y"));
+        let loc_var_x = Located::new(2, 2, 0, 1, var_x);
 
         let var_y = Var {
             module_name: "",
             ident: "y",
         };
-        let loc_var_y = arena.alloc(Located::new(1, 1, 12, 13, var_y));
+        let loc_var_y = Located::new(2, 2, 4, 5, var_y);
 
-        let closure = ParensAround(arena.alloc(Closure(arena.alloc([identifier_y]), loc_var_y)));
-        let loc_closure = Located::new(1, 1, 5, 14, closure);
+        let var_list_map2 = Var {
+            module_name: "List",
+            ident: "map2",
+        };
 
-        let reset_indentation = bumpalo::vec![in &arena; LineComment(" leading comment")];
-        let expected = Expr::SpaceBefore(
-            arena.alloc(Expr::Backpassing(
-                arena.alloc([identifier_x]),
-                arena.alloc(loc_closure),
-                arena.alloc(Located::new(2, 4, 0, 1, inner_backpassing)),
-            )),
-            reset_indentation.into_bump_slice(),
+        let apply = Expr::Apply(
+            arena.alloc(Located::new(0, 0, 8, 17, var_list_map2)),
+            bumpalo::vec![ in &arena;
+                &*arena.alloc(Located::new(0, 0, 18, 20, Expr::List{ items: &[], final_comments: &[] })),
+                &*arena.alloc(Located::new(0, 0, 21, 23, Expr::List{ items: &[], final_comments: &[] })),
+            ]
+            .into_bump_slice(),
+            CalledVia::Space,
+        );
+
+        let loc_closure = Located::new(0, 0, 8, 23, apply);
+
+        let binop = Expr::BinOp(arena.alloc((
+            loc_var_x,
+            Located::new(2, 2, 2, 3, roc_module::operator::BinOp::Plus),
+            loc_var_y,
+        )));
+
+        let spaced_binop = Expr::SpaceBefore(arena.alloc(binop), &[Newline, Newline]);
+
+        let expected = Expr::Backpassing(
+            arena.alloc([identifier_x, identifier_y]),
+            arena.alloc(loc_closure),
+            arena.alloc(Located::new(2, 2, 0, 5, spaced_binop)),
         );
 
         assert_parses_to(
             indoc!(
                 r#"
-                x, y <- List.map2 [1,2,3] [3,2,1]
+                x, y <- List.map2 [] []
 
                 x + y
                 "#
