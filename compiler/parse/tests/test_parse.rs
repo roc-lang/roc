@@ -2879,51 +2879,53 @@ mod test_parse {
     }
 
     #[test]
-    #[ignore]
     fn standalone_module_defs() {
         use Def::*;
 
         let arena = Bump::new();
-        let newlines1 = &[Newline, Newline];
-        let newlines2 = &[Newline];
-        let newlines3 = &[Newline];
         let pattern1 = Identifier("foo");
         let pattern2 = Identifier("bar");
         let pattern3 = Identifier("baz");
-        let def1 = SpaceAfter(
+        let def1 = SpaceBefore(
             arena.alloc(Body(
-                arena.alloc(Located::new(0, 0, 0, 3, pattern1)),
-                arena.alloc(Located::new(0, 0, 6, 7, Num("1"))),
+                arena.alloc(Located::new(1, 1, 0, 3, pattern1)),
+                arena.alloc(Located::new(1, 1, 6, 7, Num("1"))),
             )),
-            newlines1,
+            &[LineComment(" comment 1")],
         );
-        let def2 = SpaceAfter(
+        let def2 = SpaceBefore(
             arena.alloc(Body(
-                arena.alloc(Located::new(2, 2, 0, 3, pattern2)),
-                arena.alloc(Located::new(2, 2, 6, 10, Str(PlainLine("hi")))),
+                arena.alloc(Located::new(4, 4, 0, 3, pattern2)),
+                arena.alloc(Located::new(4, 4, 6, 10, Str(PlainLine("hi")))),
             )),
-            newlines2,
+            &[Newline, Newline, LineComment(" comment 2")],
         );
         let def3 = SpaceAfter(
-            arena.alloc(Body(
-                arena.alloc(Located::new(3, 3, 0, 3, pattern3)),
-                arena.alloc(Located::new(3, 3, 6, 13, Str(PlainLine("stuff")))),
+            arena.alloc(SpaceBefore(
+                arena.alloc(Body(
+                    arena.alloc(Located::new(5, 5, 0, 3, pattern3)),
+                    arena.alloc(Located::new(5, 5, 6, 13, Str(PlainLine("stuff")))),
+                )),
+                &[Newline],
             )),
-            newlines3,
+            &[Newline, LineComment(" comment n")],
         );
 
         let expected = bumpalo::vec![in &arena;
-            Located::new(0, 0, 0, 7, def1),
-            Located::new(2, 2, 0, 10, def2),
-            Located::new(3, 3, 0, 13, def3),
+            Located::new(1,1, 0, 7, def1),
+            Located::new(4,4, 0, 10, def2),
+            Located::new(5,5, 0, 13, def3),
         ];
 
         let src = indoc!(
             r#"
+                # comment 1
                 foo = 1
 
+                # comment 2
                 bar = "hi"
                 baz = "stuff"
+                # comment n
             "#
         );
 
