@@ -1224,6 +1224,8 @@ fn parse_expr_end<'a>(
                         match word2(b'<', b'-', EExpr::BackpassArrow).parse(arena, state) {
                             Err((_, fail, state)) => Err((MadeProgress, fail, state)),
                             Ok((_, _, state)) => {
+                                let min_indent = start.col;
+
                                 let parse_body = space0_before_e(
                                     move |a, s| parse_loc_expr(min_indent + 1, a, s),
                                     min_indent,
