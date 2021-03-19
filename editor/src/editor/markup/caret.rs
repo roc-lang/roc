@@ -1,3 +1,4 @@
+use crate::editor::mvc::ed_model::LeafIndex;
 use crate::editor::{
     ed_error::{CaretNotFound, EdResult},
     markup::attribute::Caret,
@@ -51,8 +52,10 @@ pub fn set_caret_at_start(
 // returns node containing the caret after the move
 pub fn move_carets_right_for_node(
     node_with_caret_id: SlowNodeId,
+    caret_id_leaf_index: LeafIndex,
+    next_leaf_id_opt: Option<SlowNodeId>,
     markup_node_pool: &mut SlowPool,
-) -> EdResult<Vec<SlowNodeId>> {
+) -> EdResult<Vec<(SlowNodeId, LeafIndex)>> {
     let carets = get_carets(node_with_caret_id, markup_node_pool)?;
     let node_content = markup_node_pool.get(node_with_caret_id).get_content()?;
 
@@ -66,29 +69,29 @@ pub fn move_carets_right_for_node(
     let mut new_nodes_w_carets = Vec::new();
 
     for caret in carets {
-        let new_node = if caret.offset_col + 1 < node_content.len() {
+        let (new_node, new_leaf_index) = if caret.offset_col + 1 < node_content.len() {
             increase_caret_offset(node_with_caret_id, caret.offset_col, markup_node_pool)?;
 
-            node_with_caret_id
-        } else {
+            (node_with_caret_id, caret_id_leaf_index)
+        } else if let Some(next_child_id) = next_leaf_id_opt {
             delete_caret(node_with_caret_id, caret.offset_col, markup_node_pool)?;
 
-            let next_child_opt = markup_node_pool
-                .get(node_with_caret_id)
-                .get_next_leaf(node_with_caret_id, markup_node_pool)?;
+            let next_child = markup_node_pool.get_mut(next_child_id);
+            let child_attrs = next_child.get_mut_attributes()?;
+            child_attrs.add_caret(0);
 
-            if let Some(next_child_id) = next_child_opt {
-                let next_child = markup_node_pool.get_mut(next_child_id);
-                let child_attrs = next_child.get_mut_attributes()?;
-                child_attrs.add_caret(0);
-
-                next_child_id
-            } else {
-                node_with_caret_id
-            }
+            (next_child_id, caret_id_leaf_index + 1)
+        } else if caret.offset_col + 1 == node_content.len() {
+            // For last char in editor.
+            // In other places we jump to start of next node instead of going to end of
+            // this node, otherwise it would be like there is a space between every node.
+            increase_caret_offset(node_with_caret_id, caret.offset_col, markup_node_pool)?;
+            (node_with_caret_id, caret_id_leaf_index)
+        } else {
+            (node_with_caret_id, caret_id_leaf_index)
         };
 
-        new_nodes_w_carets.push(new_node);
+        new_nodes_w_carets.push((new_node, new_leaf_index));
     }
 
     Ok(new_nodes_w_carets)

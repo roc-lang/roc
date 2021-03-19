@@ -1,7 +1,6 @@
 use super::attribute::Attributes;
 use crate::editor::ed_error::GetContentOnNestedNode;
 use crate::editor::ed_error::NodeWithoutAttributes;
-use crate::editor::ed_error::{NestedNodeMissingChild, NestedNodeWithoutChildren};
 use crate::editor::{
     ed_error::EdResult,
     slow_pool::{SlowNodeId, SlowPool},
@@ -41,29 +40,6 @@ pub enum MarkupNode {
 pub const BLANK_PLACEHOLDER: &str = " ";
 
 impl MarkupNode {
-    pub fn get_parent_id(&self) -> Option<SlowNodeId> {
-        match self {
-            MarkupNode::Nested {
-                ast_node_id: _,
-                children_ids: _,
-                parent_id_opt,
-            } => *parent_id_opt,
-            MarkupNode::Text {
-                content: _,
-                ast_node_id: _,
-                syn_high_style: _,
-                attributes: _,
-                parent_id_opt,
-            } => *parent_id_opt,
-            MarkupNode::Blank {
-                ast_node_id: _,
-                attributes: _,
-                syn_high_style: _,
-                parent_id_opt,
-            } => *parent_id_opt,
-        }
-    }
-
     pub fn get_children_ids(&self) -> Vec<SlowNodeId> {
         match self {
             MarkupNode::Nested {
@@ -77,13 +53,13 @@ impl MarkupNode {
                 syn_high_style: _,
                 attributes: _,
                 parent_id_opt: _,
-            } => unreachable!(), //TODO use result
+            } => Vec::new(),
             MarkupNode::Blank {
                 ast_node_id: _,
                 attributes: _,
                 syn_high_style: _,
                 parent_id_opt: _,
-            } => unreachable!(),
+            } => Vec::new(),
         }
     }
 
@@ -111,67 +87,23 @@ impl MarkupNode {
         }
     }
 
-    // Goes up to the parent and if it has a child after the current one, that child will be returned.
-    // If the child is a nested node we return the left most child of a possible chain of nested nodes.
-    pub fn get_next_leaf(
+    // Do Depth First Search and return SlowNodeId's in order of encounter
+    // The returning vec is used for caret movement
+    pub fn get_dfs_leaves(
         &self,
-        curr_child_id: SlowNodeId,
-        markup_node_pool: &SlowPool,
-    ) -> EdResult<Option<SlowNodeId>> {
-        let parent_id_opt = self.get_parent_id();
-
-        if let Some(parent_id) = parent_id_opt {
-            let parent = markup_node_pool.get(parent_id);
-            let children_ids = parent.get_children_ids();
-            let nr_of_children = children_ids.len();
-
-            for (indx, child_id) in children_ids.iter().enumerate() {
-                if *child_id == curr_child_id {
-                    if indx + 1 < nr_of_children {
-                        if let Some(next_child_id) = children_ids.get(indx + 1) {
-                            return Ok(Some(MarkupNode::descend_to_left_leaf(
-                                *next_child_id,
-                                markup_node_pool,
-                            )?));
-                        } else {
-                            return Ok(None);
-                        }
-                    } else {
-                        return Ok(None);
-                    }
-                }
-            }
-
-            NestedNodeMissingChild {
-                node_id: parent_id,
-                children_ids,
-            }
-            .fail()
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub fn descend_to_left_leaf(
         node_id: SlowNodeId,
         markup_node_pool: &SlowPool,
-    ) -> EdResult<SlowNodeId> {
-        let node = markup_node_pool.get(node_id);
+        ordered_leaves: &mut Vec<SlowNodeId>,
+    ) {
+        let children_ids = self.get_children_ids();
 
-        match node {
-            MarkupNode::Nested {
-                ast_node_id: _,
-                children_ids,
-                parent_id_opt: _,
-            } => {
-                let first_child_id = children_ids
-                    .first()
-                    .with_context(|| NestedNodeWithoutChildren { node_id })?;
-
-                MarkupNode::descend_to_left_leaf(*first_child_id, markup_node_pool)
+        if children_ids.is_empty() {
+            ordered_leaves.push(node_id);
+        } else {
+            for child_id in self.get_children_ids() {
+                let child = markup_node_pool.get(child_id);
+                child.get_dfs_leaves(child_id, markup_node_pool, ordered_leaves);
             }
-            MarkupNode::Text { .. } => Ok(node_id),
-            MarkupNode::Blank { .. } => Ok(node_id),
         }
     }
 
@@ -396,8 +328,11 @@ pub fn set_parent_for_all(markup_node_id: SlowNodeId, markup_node_pool: &mut Slo
         parent_id_opt: _,
     } = node
     {
-        if let Some(child_id) = children_ids.first() {
-            set_parent_for_all_helper(*child_id, markup_node_id, markup_node_pool);
+        // need to clone because of borrowing issues
+        let children_ids_clone = children_ids.clone();
+
+        for child_id in children_ids_clone {
+            set_parent_for_all_helper(child_id, markup_node_id, markup_node_pool);
         }
     }
 }
@@ -417,8 +352,11 @@ pub fn set_parent_for_all_helper(
         } => {
             *parent_id_opt = Some(parent_node_id);
 
-            if let Some(child_id) = children_ids.first() {
-                set_parent_for_all_helper(*child_id, markup_node_id, markup_node_pool);
+            // need to clone because of borrowing issues
+            let children_ids_clone = children_ids.clone();
+
+            for child_id in children_ids_clone {
+                set_parent_for_all_helper(child_id, markup_node_id, markup_node_pool);
             }
         }
         MarkupNode::Text {

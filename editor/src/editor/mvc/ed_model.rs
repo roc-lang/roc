@@ -11,9 +11,14 @@ use crate::graphics::primitives::rect::Rect;
 use crate::lang::ast::Expr2;
 use crate::lang::expr::{str_to_expr2, Env};
 use crate::lang::scope::Scope;
+use crate::window::keyboard_input::Modifiers;
 use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
 use roc_region::all::Region;
+use std::collections::HashSet;
+use winit::event::VirtualKeyCode;
+
+pub type LeafIndex = usize;
 
 #[derive(Debug)]
 pub struct EdModel<'a> {
@@ -22,7 +27,9 @@ pub struct EdModel<'a> {
     pub markup_root_id: SlowNodeId,
     pub glyph_dim_rect_opt: Option<Rect>,
     pub has_focus: bool,
-    carets: Vec<SlowNodeId>,
+    // This HashSet may have less elements than there are carets. There can be multiple carets for a single node.
+    caret_nodes: HashSet<(SlowNodeId, LeafIndex)>,
+    dfs_ordered_leaves: Vec<SlowNodeId>,
 }
 
 pub fn init_model<'a>(
@@ -61,14 +68,59 @@ pub fn init_model<'a>(
         (temp_markup_root_id, node_w_caret_id)
     };
 
+    let mut dfs_ordered_leaves = Vec::new();
+    markup_node_pool.get(markup_root_id).get_dfs_leaves(
+        markup_root_id,
+        markup_node_pool,
+        &mut dfs_ordered_leaves,
+    );
+
     Ok(EdModel {
         module,
         code_as_str: code_str,
         markup_root_id,
         glyph_dim_rect_opt: None,
         has_focus: true,
-        carets: vec![node_with_caret_id],
+        caret_nodes: vec![(node_with_caret_id, 0)].into_iter().collect(),
+        dfs_ordered_leaves,
     })
+}
+
+impl<'a> EdModel<'a> {
+    pub fn handle_key_down(
+        &mut self,
+        _modifiers: &Modifiers,
+        virtual_keycode: VirtualKeyCode,
+        markup_node_pool: &mut SlowPool,
+    ) -> EdResult<()> {
+        match virtual_keycode {
+            VirtualKeyCode::Right => {
+                let mut new_caret_nodes: Vec<(SlowNodeId, LeafIndex)> = Vec::new();
+
+                for (caret_node_id_ref, leaf_index) in self.caret_nodes.iter() {
+                    let caret_node_id = *caret_node_id_ref;
+                    let next_leaf_id_opt = self.get_next_leaf(*leaf_index);
+
+                    new_caret_nodes.extend(move_carets_right_for_node(
+                        caret_node_id,
+                        *leaf_index,
+                        next_leaf_id_opt,
+                        markup_node_pool,
+                    )?);
+                }
+
+                self.caret_nodes = new_caret_nodes.into_iter().collect();
+            }
+            VirtualKeyCode::Left => unimplemented!("TODO"),
+            _ => (),
+        };
+
+        Ok(())
+    }
+
+    pub fn get_next_leaf(&self, index: usize) -> Option<SlowNodeId> {
+        self.dfs_ordered_leaves.get(index + 1).copied()
+    }
 }
 
 #[derive(Debug)]

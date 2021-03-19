@@ -256,6 +256,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                                 virtual_keycode,
                                 keyboard_modifiers,
                                 &mut app_model,
+                                &mut markup_node_pool,
                             );
 
                             if let Err(e) = keydown_res {
