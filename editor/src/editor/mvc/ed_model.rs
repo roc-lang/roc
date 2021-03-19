@@ -1,12 +1,12 @@
+use crate::editor::slow_pool::{SlowNodeId, SlowPool};
+use crate::editor::syntax_highlight::HighlightStyle;
 use crate::editor::{
     ed_error::EdError::ParseError,
     ed_error::EdResult,
     markup::attribute::{Attributes, Caret},
-    markup::nodes::{MarkupNode, expr2_to_markup, set_parent_for_all},
     markup::caret::{move_carets_right_for_node, set_caret_at_start},
+    markup::nodes::{expr2_to_markup, set_parent_for_all, MarkupNode},
 };
-use crate::editor::slow_pool::{SlowNodeId, SlowPool};
-use crate::editor::syntax_highlight::HighlightStyle;
 use crate::graphics::primitives::rect::Rect;
 use crate::lang::ast::Expr2;
 use crate::lang::expr::{str_to_expr2, Env};
@@ -57,9 +57,6 @@ pub fn init_model<'a>(
         );
         set_parent_for_all(temp_markup_root_id, markup_node_pool);
         let node_w_caret_id = set_caret_at_start(temp_markup_root_id, markup_node_pool);
-        //TODO remove me
-        move_carets_right_for_node(node_w_caret_id, markup_node_pool);
-        move_carets_right_for_node(node_w_caret_id, markup_node_pool);
 
         (temp_markup_root_id, node_w_caret_id)
     };

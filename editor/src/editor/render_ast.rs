@@ -1,5 +1,5 @@
-use super::markup::nodes::{MarkupNode, BLANK_PLACEHOLDER};
 use super::markup::attribute::{Attribute, Attributes};
+use super::markup::nodes::{MarkupNode, BLANK_PLACEHOLDER};
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::{ed_error::EdResult, theme::EdTheme, util::map_get};
 use crate::graphics::primitives::rect::Rect;

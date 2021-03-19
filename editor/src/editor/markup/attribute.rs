@@ -1,5 +1,7 @@
-
 #![allow(dead_code)]
+
+use crate::editor::ed_error::{CaretNotFound, EdResult};
+use snafu::ensure;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Caret {
@@ -72,7 +74,9 @@ impl Attributes {
     }
 
     pub fn add_caret(&mut self, offset_col: usize) {
-        self.all.push(Attribute::Caret{ caret: Caret{ offset_col }});
+        self.all.push(Attribute::Caret {
+            caret: Caret { offset_col },
+        });
     }
 
     pub fn get_mut_carets(&mut self) -> Vec<&mut Caret> {
@@ -98,5 +102,22 @@ impl Attributes {
 
         carets
     }
-    
+
+    pub fn delete_caret(&mut self, offset_col: usize, node_id: usize) -> EdResult<()> {
+        let old_len = self.all.len();
+
+        self.all.retain(|attr| {
+            if let Attribute::Caret { caret } = attr {
+                caret.offset_col != offset_col
+            } else {
+                true
+            }
+        });
+
+        let new_len = self.all.len();
+
+        ensure!(old_len != new_len, CaretNotFound { node_id });
+
+        Ok(())
+    }
 }

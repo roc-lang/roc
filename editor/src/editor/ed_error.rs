@@ -11,11 +11,11 @@ use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
 #[snafu(visibility(pub))]
 pub enum EdError {
     #[snafu(display(
-        "CaretNotFound: No carets were found in the expected node with content: {}",
-        node_content
+        "CaretNotFound: No carets were found in the expected node with id {}",
+        node_id
     ))]
     CaretNotFound {
-        node_content: String,
+        node_id: SlowNodeId,
         backtrace: Backtrace,
     },
 
@@ -32,9 +32,7 @@ pub enum EdError {
     ClipboardInitFailed { err_msg: String },
 
     #[snafu(display("GetContentOnNestedNode: tried to get string content from Nested MarkupNode. Can only get content from Text or Blank nodes."))]
-    GetContentOnNestedNode {
-        backtrace: Backtrace,
-    },
+    GetContentOnNestedNode { backtrace: Backtrace },
 
     #[snafu(display("KeyNotFound: key {} was not found in HashMap.", key_str,))]
     KeyNotFound {
@@ -56,9 +54,7 @@ pub enum EdError {
     },
 
     #[snafu(display("NodeWithoutAttributes: expected to have a node with attributes. This is a Nested MarkupNode, only Text and Blank nodes have attributes."))]
-    NodeWithoutAttributes {
-        backtrace: Backtrace,
-    },
+    NodeWithoutAttributes { backtrace: Backtrace },
 
     #[snafu(display(
         "OutOfBounds: index {} was out of bounds for {} with length {}.",

@@ -1,11 +1,11 @@
-
+use super::attribute::Attributes;
 use crate::editor::ed_error::GetContentOnNestedNode;
 use crate::editor::ed_error::NodeWithoutAttributes;
 use crate::editor::ed_error::{NestedNodeMissingChild, NestedNodeWithoutChildren};
 use crate::editor::{
-    syntax_highlight::HighlightStyle,
+    ed_error::EdResult,
     slow_pool::{SlowNodeId, SlowPool},
-    ed_error::{EdResult},
+    syntax_highlight::HighlightStyle,
 };
 use crate::lang::{
     ast::Expr2,
@@ -13,7 +13,6 @@ use crate::lang::{
     pool::{NodeId, PoolStr},
 };
 use bumpalo::Bump;
-use super::attribute::{Attributes};
 use snafu::OptionExt;
 
 #[derive(Debug)]
@@ -44,34 +43,81 @@ pub const BLANK_PLACEHOLDER: &str = " ";
 impl MarkupNode {
     pub fn get_parent_id(&self) -> Option<SlowNodeId> {
         match self {
-            MarkupNode::Nested { ast_node_id:_, children_ids:_, parent_id_opt } => *parent_id_opt,
-            MarkupNode::Text{ content:_, ast_node_id:_, syn_high_style:_, attributes:_, parent_id_opt} => *parent_id_opt,
-            MarkupNode::Blank{ ast_node_id:_, attributes:_, syn_high_style:_, parent_id_opt} => *parent_id_opt,
+            MarkupNode::Nested {
+                ast_node_id: _,
+                children_ids: _,
+                parent_id_opt,
+            } => *parent_id_opt,
+            MarkupNode::Text {
+                content: _,
+                ast_node_id: _,
+                syn_high_style: _,
+                attributes: _,
+                parent_id_opt,
+            } => *parent_id_opt,
+            MarkupNode::Blank {
+                ast_node_id: _,
+                attributes: _,
+                syn_high_style: _,
+                parent_id_opt,
+            } => *parent_id_opt,
         }
     }
 
     pub fn get_children_ids(&self) -> Vec<SlowNodeId> {
         match self {
-            MarkupNode::Nested { ast_node_id:_, children_ids, parent_id_opt:_ } => children_ids.to_vec(),
-            MarkupNode::Text{ content:_, ast_node_id:_, syn_high_style:_, attributes:_, parent_id_opt:_} => unreachable!(),//TODO use result
-            MarkupNode::Blank{ ast_node_id:_, attributes:_, syn_high_style:_, parent_id_opt:_} => unreachable!(),
+            MarkupNode::Nested {
+                ast_node_id: _,
+                children_ids,
+                parent_id_opt: _,
+            } => children_ids.to_vec(),
+            MarkupNode::Text {
+                content: _,
+                ast_node_id: _,
+                syn_high_style: _,
+                attributes: _,
+                parent_id_opt: _,
+            } => unreachable!(), //TODO use result
+            MarkupNode::Blank {
+                ast_node_id: _,
+                attributes: _,
+                syn_high_style: _,
+                parent_id_opt: _,
+            } => unreachable!(),
         }
     }
 
     // can't be &str, this creates borrowing issues
     pub fn get_content(&self) -> EdResult<String> {
         match self {
-            MarkupNode::Nested { ast_node_id:_, children_ids:_, parent_id_opt:_ } => {
-                GetContentOnNestedNode{}.fail()
-            },
-            MarkupNode::Text{ content, ast_node_id:_, syn_high_style:_, attributes:_, parent_id_opt:_} => Ok(content.clone()),
-            MarkupNode::Blank{ ast_node_id:_, attributes:_, syn_high_style:_, parent_id_opt:_} => Ok(BLANK_PLACEHOLDER.to_owned()),
+            MarkupNode::Nested {
+                ast_node_id: _,
+                children_ids: _,
+                parent_id_opt: _,
+            } => GetContentOnNestedNode {}.fail(),
+            MarkupNode::Text {
+                content,
+                ast_node_id: _,
+                syn_high_style: _,
+                attributes: _,
+                parent_id_opt: _,
+            } => Ok(content.clone()),
+            MarkupNode::Blank {
+                ast_node_id: _,
+                attributes: _,
+                syn_high_style: _,
+                parent_id_opt: _,
+            } => Ok(BLANK_PLACEHOLDER.to_owned()),
         }
     }
 
     // Goes up to the parent and if it has a child after the current one, that child will be returned.
     // If the child is a nested node we return the left most child of a possible chain of nested nodes.
-    pub fn get_next_leaf(&self, curr_child_id: SlowNodeId, markup_node_pool: &SlowPool) -> EdResult<Option<SlowNodeId>> {
+    pub fn get_next_leaf(
+        &self,
+        curr_child_id: SlowNodeId,
+        markup_node_pool: &SlowPool,
+    ) -> EdResult<Option<SlowNodeId>> {
         let parent_id_opt = self.get_parent_id();
 
         if let Some(parent_id) = parent_id_opt {
@@ -83,43 +129,68 @@ impl MarkupNode {
                 if *child_id == curr_child_id {
                     if indx + 1 < nr_of_children {
                         if let Some(next_child_id) = children_ids.get(indx + 1) {
-                            return Ok(Some(MarkupNode::descend_to_left_leaf(*next_child_id, markup_node_pool)?))
+                            return Ok(Some(MarkupNode::descend_to_left_leaf(
+                                *next_child_id,
+                                markup_node_pool,
+                            )?));
                         } else {
-                            return Ok(None)
+                            return Ok(None);
                         }
                     } else {
-                        return Ok(None)
+                        return Ok(None);
                     }
                 }
             }
 
-            NestedNodeMissingChild{node_id: parent_id, children_ids}.fail()
+            NestedNodeMissingChild {
+                node_id: parent_id,
+                children_ids,
+            }
+            .fail()
         } else {
             Ok(None)
         }
     }
 
-    pub fn descend_to_left_leaf(node_id: SlowNodeId, markup_node_pool: &SlowPool) -> EdResult<SlowNodeId> {
+    pub fn descend_to_left_leaf(
+        node_id: SlowNodeId,
+        markup_node_pool: &SlowPool,
+    ) -> EdResult<SlowNodeId> {
         let node = markup_node_pool.get(node_id);
 
         match node {
-            MarkupNode::Nested { ast_node_id:_, children_ids, parent_id_opt:_ } => {
-                let first_child_id = children_ids.first().with_context( ||
-                    NestedNodeWithoutChildren { node_id }
-                )?;
+            MarkupNode::Nested {
+                ast_node_id: _,
+                children_ids,
+                parent_id_opt: _,
+            } => {
+                let first_child_id = children_ids
+                    .first()
+                    .with_context(|| NestedNodeWithoutChildren { node_id })?;
 
                 MarkupNode::descend_to_left_leaf(*first_child_id, markup_node_pool)
-            },
-            MarkupNode::Text{ .. } => Ok(node_id),
-            MarkupNode::Blank{ .. } => Ok(node_id),
+            }
+            MarkupNode::Text { .. } => Ok(node_id),
+            MarkupNode::Blank { .. } => Ok(node_id),
         }
     }
 
     pub fn get_mut_attributes(&mut self) -> EdResult<&mut Attributes> {
         let attrs_ref = match self {
             MarkupNode::Nested { .. } => None,
-            MarkupNode::Text{ content:_, ast_node_id:_, syn_high_style:_, attributes, parent_id_opt:_} => Some(attributes),
-            MarkupNode::Blank{ ast_node_id:_, attributes, syn_high_style:_, parent_id_opt:_} => Some(attributes),
+            MarkupNode::Text {
+                content: _,
+                ast_node_id: _,
+                syn_high_style: _,
+                attributes,
+                parent_id_opt: _,
+            } => Some(attributes),
+            MarkupNode::Blank {
+                ast_node_id: _,
+                attributes,
+                syn_high_style: _,
+                parent_id_opt: _,
+            } => Some(attributes),
         };
 
         attrs_ref.with_context(|| NodeWithoutAttributes {})
@@ -128,8 +199,19 @@ impl MarkupNode {
     pub fn get_attributes(&self) -> EdResult<&Attributes> {
         let attrs_ref = match self {
             MarkupNode::Nested { .. } => None,
-            MarkupNode::Text{ content:_, ast_node_id:_, syn_high_style:_, attributes, parent_id_opt:_} => Some(attributes),
-            MarkupNode::Blank{ ast_node_id:_, attributes, syn_high_style:_, parent_id_opt:_} => Some(attributes),
+            MarkupNode::Text {
+                content: _,
+                ast_node_id: _,
+                syn_high_style: _,
+                attributes,
+                parent_id_opt: _,
+            } => Some(attributes),
+            MarkupNode::Blank {
+                ast_node_id: _,
+                attributes,
+                syn_high_style: _,
+                parent_id_opt: _,
+            } => Some(attributes),
         };
 
         attrs_ref.with_context(|| NodeWithoutAttributes {})
