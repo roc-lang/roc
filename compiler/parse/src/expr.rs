@@ -34,6 +34,12 @@ pub fn test_parse_expr<'a>(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MultiBackpassing {
+    Allow,
+    Disallow,
+}
+
 pub fn expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     move |arena, state: State<'a>| {
         parse_loc_expr(min_indent, arena, state).map(|(a, b, c)| (a, b.value, c))
@@ -153,6 +159,7 @@ fn record_field_access<'a>() -> impl Parser<'a, &'a str, EExpr<'a>> {
 
 fn parse_loc_term<'a>(
     min_indent: u16,
+    multi_backpassing: MultiBackpassing,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
@@ -160,7 +167,10 @@ fn parse_loc_term<'a>(
         loc_expr_in_parens_etc_help(min_indent),
         loc!(specialize(EExpr::Str, string_literal_help())),
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
-        loc!(specialize(EExpr::Lambda, closure_help(min_indent))),
+        loc!(specialize(
+            EExpr::Lambda,
+            closure_help(min_indent, multi_backpassing)
+        )),
         loc!(record_literal_help(min_indent)),
         loc!(specialize(EExpr::List, list_literal_help(min_indent))),
         loc!(map_with_arena!(
@@ -173,13 +183,17 @@ fn parse_loc_term<'a>(
 
 fn loc_possibly_negative_or_negated_term<'a>(
     min_indent: u16,
+    multi_backpassing: MultiBackpassing,
 ) -> impl Parser<'a, Located<Expr<'a>>, EExpr<'a>> {
     one_of![
         |arena, state: State<'a>| {
             let initial = state;
 
             let (_, (loc_op, loc_expr), state) = and!(loc!(unary_negate()), |a, s| parse_loc_term(
-                min_indent, a, s
+                min_indent,
+                multi_backpassing,
+                a,
+                s
             ))
             .parse(arena, state)?;
 
@@ -191,7 +205,7 @@ fn loc_possibly_negative_or_negated_term<'a>(
         loc!(specialize(EExpr::Number, number_literal_help())),
         loc!(map_with_arena!(
             and!(loc!(word1(b'!', EExpr::Start)), |a, s| {
-                parse_loc_term(min_indent, a, s)
+                parse_loc_term(min_indent, multi_backpassing, a, s)
             }),
             |arena: &'a Bump, (loc_op, loc_expr): (Located<_>, _)| {
                 Expr::UnaryOp(
@@ -202,7 +216,7 @@ fn loc_possibly_negative_or_negated_term<'a>(
         )),
         |arena, state| {
             // TODO use parse_loc_term_better
-            parse_loc_term(min_indent, arena, state)
+            parse_loc_term(min_indent, multi_backpassing, arena, state)
         }
     ]
 }
@@ -246,15 +260,25 @@ fn unary_negate<'a>() -> impl Parser<'a, (), EExpr<'a>> {
 
 fn parse_expr_start<'a>(
     min_indent: u16,
+    multi_backpassing: MultiBackpassing,
     start: Position,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
     one_of![
-        loc!(specialize(EExpr::If, if_expr_help(min_indent))),
-        loc!(specialize(EExpr::When, when::expr_help(min_indent))),
-        loc!(specialize(EExpr::Lambda, closure_help(min_indent))),
-        loc!(|a, s| parse_expr_operator_chain(min_indent, start, a, s)),
+        loc!(specialize(
+            EExpr::If,
+            if_expr_help(min_indent, multi_backpassing)
+        )),
+        loc!(specialize(
+            EExpr::When,
+            when::expr_help(min_indent, multi_backpassing)
+        )),
+        loc!(specialize(
+            EExpr::Lambda,
+            closure_help(min_indent, multi_backpassing)
+        )),
+        loc!(move |a, s| parse_expr_operator_chain(min_indent, multi_backpassing, start, a, s)),
         fail_expr_start_e()
     ]
     .parse(arena, state)
@@ -262,11 +286,13 @@ fn parse_expr_start<'a>(
 
 fn parse_expr_operator_chain<'a>(
     min_indent: u16,
+    multi_backpassing: MultiBackpassing,
     start: Position,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    let (_, expr, state) = loc_possibly_negative_or_negated_term(min_indent).parse(arena, state)?;
+    let (_, expr, state) =
+        loc_possibly_negative_or_negated_term(min_indent, multi_backpassing).parse(arena, state)?;
 
     let initial = state;
     let end = state.get_position();
@@ -283,7 +309,14 @@ fn parse_expr_operator_chain<'a>(
                 end,
             };
 
-            parse_expr_end(min_indent, start, expr_state, arena, state)
+            parse_expr_end(
+                min_indent,
+                multi_backpassing,
+                start,
+                expr_state,
+                arena,
+                state,
+            )
         }
     }
 }
@@ -652,6 +685,7 @@ struct DefState<'a> {
 }
 
 fn parse_defs_end<'a>(
+    multi_backpassing: MultiBackpassing,
     start: Position,
     mut def_state: DefState<'a>,
     arena: &'a Bump,
@@ -706,7 +740,7 @@ fn parse_defs_end<'a>(
                     loc_def_expr,
                 );
 
-                parse_defs_end(start, def_state, arena, state)
+                parse_defs_end(multi_backpassing, start, def_state, arena, state)
             }
             Ok((_, BinOp::HasType, state)) => {
                 let (_, ann_type, state) = specialize(
@@ -728,14 +762,16 @@ fn parse_defs_end<'a>(
                     ann_type,
                 );
 
-                parse_defs_end(start, def_state, arena, state)
+                parse_defs_end(multi_backpassing, start, def_state, arena, state)
             }
+
             _ => Ok((MadeProgress, def_state, initial)),
         },
     }
 }
 
 fn parse_defs_expr<'a>(
+    multi_backpassing: MultiBackpassing,
     start: Position,
     def_state: DefState<'a>,
     arena: &'a Bump,
@@ -743,7 +779,7 @@ fn parse_defs_expr<'a>(
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
     let min_indent = start.col;
 
-    match parse_defs_end(start, def_state, arena, state) {
+    match parse_defs_end(multi_backpassing, start, def_state, arena, state) {
         Err(bad) => Err(bad),
         Ok((_, def_state, state)) => {
             // this is no def, because there is no `=` or `:`; parse as an expr
@@ -776,6 +812,7 @@ fn parse_defs_expr<'a>(
 
 fn parse_expr_operator<'a>(
     min_indent: u16,
+    multi_backpassing: MultiBackpassing,
     start: Position,
     mut expr_state: ExprState<'a>,
     loc_op: Located<BinOp>,
@@ -795,7 +832,8 @@ fn parse_expr_operator<'a>(
         BinOp::Minus if expr_state.end != op_start && op_end == new_start => {
             // negative terms
 
-            let (_, negated_expr, state) = parse_loc_term(min_indent, arena, state)?;
+            let (_, negated_expr, state) =
+                parse_loc_term(min_indent, multi_backpassing, arena, state)?;
             let new_end = state.get_position();
 
             let arg = numeric_negate_expression(
@@ -818,7 +856,14 @@ fn parse_expr_operator<'a>(
             expr_state.spaces_after = spaces;
             expr_state.end = new_end;
 
-            parse_expr_end(min_indent, start, expr_state, arena, state)
+            parse_expr_end(
+                min_indent,
+                multi_backpassing,
+                start,
+                expr_state,
+                arena,
+                state,
+            )
         }
         BinOp::Assignment => {
             let expr_region = expr_state.expr.region;
@@ -867,7 +912,7 @@ fn parse_expr_operator<'a>(
                 spaces_after: &[],
             };
 
-            parse_defs_expr(start, def_state, arena, state)
+            parse_defs_expr(multi_backpassing, start, def_state, arena, state)
         }
         BinOp::Backpassing => {
             let expr_region = expr_state.expr.region;
@@ -1014,9 +1059,11 @@ fn parse_expr_operator<'a>(
                 spaces_after: &[],
             };
 
-            parse_defs_expr(start, def_state, arena, state)
+            parse_defs_expr(multi_backpassing, start, def_state, arena, state)
         }
-        _ => match loc_possibly_negative_or_negated_term(min_indent).parse(arena, state) {
+        _ => match loc_possibly_negative_or_negated_term(min_indent, multi_backpassing)
+            .parse(arena, state)
+        {
             Err((MadeProgress, f, s)) => Err((MadeProgress, f, s)),
             Ok((_, mut new_expr, state)) => {
                 let new_end = state.get_position();
@@ -1054,7 +1101,14 @@ fn parse_expr_operator<'a>(
                         expr_state.spaces_after = spaces;
 
                         // TODO new start?
-                        parse_expr_end(min_indent, start, expr_state, arena, state)
+                        parse_expr_end(
+                            min_indent,
+                            multi_backpassing,
+                            start,
+                            expr_state,
+                            arena,
+                            state,
+                        )
                     }
                 }
             }
@@ -1067,6 +1121,7 @@ fn parse_expr_operator<'a>(
 
 fn parse_expr_end<'a>(
     min_indent: u16,
+    multi_backpassing: MultiBackpassing,
     start: Position,
     mut expr_state: ExprState<'a>,
     arena: &'a Bump,
@@ -1074,7 +1129,7 @@ fn parse_expr_end<'a>(
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
     let parser = skip_first!(
         crate::blankspace::check_indent(min_indent, EExpr::IndentEnd),
-        move |a, s| parse_loc_term(min_indent, a, s)
+        move |a, s| parse_loc_term(min_indent, multi_backpassing, a, s)
     );
 
     match parser.parse(arena, state) {
@@ -1105,7 +1160,14 @@ fn parse_expr_end<'a>(
                     expr_state.end = new_end;
                     expr_state.spaces_after = new_spaces;
 
-                    parse_expr_end(min_indent, start, expr_state, arena, state)
+                    parse_expr_end(
+                        min_indent,
+                        multi_backpassing,
+                        start,
+                        expr_state,
+                        arena,
+                        state,
+                    )
                 }
             }
         }
@@ -1117,26 +1179,99 @@ fn parse_expr_end<'a>(
                 Ok((_, loc_op, state)) => {
                     expr_state.consume_spaces(arena);
                     expr_state.initial = before_op;
-                    parse_expr_operator(min_indent, start, expr_state, loc_op, arena, state)
+                    parse_expr_operator(
+                        min_indent,
+                        multi_backpassing,
+                        start,
+                        expr_state,
+                        loc_op,
+                        arena,
+                        state,
+                    )
                 }
-                Err((NoProgress, _, _)) => {
-                    // roll back space parsing
-                    let state = expr_state.initial;
+                Err((NoProgress, _, mut state)) => {
+                    // try multi-backpassing
+                    if multi_backpassing == MultiBackpassing::Allow && state.bytes.starts_with(b",")
+                    {
+                        state.bytes = &state.bytes[1..];
+                        state.column += 1;
 
-                    if expr_state.operators.is_empty() {
-                        let expr = to_call(arena, expr_state.arguments, expr_state.expr);
+                        let (_, mut patterns, state) = specialize_ref(
+                            EExpr::Pattern,
+                            crate::parser::sep_by0(
+                                word1(b',', EPattern::Start),
+                                space0_around_ee(
+                                    crate::pattern::loc_pattern_help(min_indent),
+                                    min_indent,
+                                    EPattern::Space,
+                                    EPattern::Start,
+                                    EPattern::IndentEnd,
+                                ),
+                            ),
+                        )
+                        .parse(arena, state)?;
 
-                        Ok((MadeProgress, expr.value, state))
-                    } else {
-                        let mut expr = to_call(arena, expr_state.arguments, expr_state.expr);
+                        expr_state.consume_spaces(arena);
+                        let call = to_call(arena, expr_state.arguments, expr_state.expr);
 
-                        for (left_arg, op) in expr_state.operators.into_iter().rev() {
-                            let region = Region::span_across(&left_arg.region, &expr.region);
-                            let new = Expr::BinOp(arena.alloc((left_arg, op, expr)));
-                            expr = Located::at(region, new);
+                        let loc_pattern = Located::at(
+                            call.region,
+                            expr_to_pattern_help(arena, &call.value).unwrap(),
+                        );
+
+                        patterns.insert(0, loc_pattern);
+
+                        match word2(b'<', b'-', EExpr::BackpassArrow).parse(arena, state) {
+                            Err((_, fail, state)) => Err((MadeProgress, fail, state)),
+                            Ok((_, _, state)) => {
+                                let min_indent = start.col;
+
+                                let parse_body = space0_before_e(
+                                    move |a, s| parse_loc_expr(min_indent + 1, a, s),
+                                    min_indent,
+                                    EExpr::Space,
+                                    EExpr::IndentEnd,
+                                );
+
+                                let (_, loc_body, state) = parse_body.parse(arena, state)?;
+
+                                let parse_cont = space0_before_e(
+                                    move |a, s| parse_loc_expr(min_indent, a, s),
+                                    min_indent,
+                                    EExpr::Space,
+                                    EExpr::IndentEnd,
+                                );
+
+                                let (_, loc_cont, state) = parse_cont.parse(arena, state)?;
+
+                                let ret = Expr::Backpassing(
+                                    patterns.into_bump_slice(),
+                                    arena.alloc(loc_body),
+                                    arena.alloc(loc_cont),
+                                );
+
+                                Ok((MadeProgress, ret, state))
+                            }
                         }
+                    } else {
+                        // roll back space parsing
+                        let state = expr_state.initial;
 
-                        Ok((MadeProgress, expr.value, state))
+                        if expr_state.operators.is_empty() {
+                            let expr = to_call(arena, expr_state.arguments, expr_state.expr);
+
+                            Ok((MadeProgress, expr.value, state))
+                        } else {
+                            let mut expr = to_call(arena, expr_state.arguments, expr_state.expr);
+
+                            for (left_arg, op) in expr_state.operators.into_iter().rev() {
+                                let region = Region::span_across(&left_arg.region, &expr.region);
+                                let new = Expr::BinOp(arena.alloc((left_arg, op, expr)));
+                                expr = Located::at(region, new);
+                            }
+
+                            Ok((MadeProgress, expr.value, state))
+                        }
                     }
                 }
             }
@@ -1149,8 +1284,25 @@ fn parse_loc_expr<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
+    parse_loc_expr_with_options(min_indent, MultiBackpassing::Allow, arena, state)
+}
+
+pub fn parse_loc_expr_no_multi_backpassing<'a>(
+    min_indent: u16,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
+    parse_loc_expr_with_options(min_indent, MultiBackpassing::Disallow, arena, state)
+}
+
+fn parse_loc_expr_with_options<'a>(
+    min_indent: u16,
+    multi_backpassing: MultiBackpassing,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
     let start = state.get_position();
-    parse_expr_start(min_indent, start, arena, state)
+    parse_expr_start(min_indent, multi_backpassing, start, arena, state)
 }
 
 /// If the given Expr would parse the same way as a valid Pattern, convert it.
@@ -1307,7 +1459,8 @@ pub fn defs<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Def<'a>>>, E
             space0_e(min_indent, EExpr::Space, EExpr::IndentEnd).parse(arena, state)?;
 
         let start = state.get_position();
-        let (_, def_state, state) = parse_defs_end(start, def_state, arena, state)?;
+        let (_, def_state, state) =
+            parse_defs_end(MultiBackpassing::Disallow, start, def_state, arena, state)?;
 
         let (_, final_space, state) =
             space0_e(start.col, EExpr::Space, EExpr::IndentEnd).parse(arena, state)?;
@@ -1343,7 +1496,10 @@ pub fn defs<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Def<'a>>>, E
 
 // PARSER HELPERS
 
-fn closure_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, ELambda<'a>> {
+fn closure_help<'a>(
+    min_indent: u16,
+    multi_backpassing: MultiBackpassing,
+) -> impl Parser<'a, Expr<'a>, ELambda<'a>> {
     map_with_arena!(
         skip_first!(
             // All closures start with a '\' - e.g. (\x -> x + 1)
@@ -1369,9 +1525,9 @@ fn closure_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, ELambda<'a>> {
                     word2(b'-', b'>', ELambda::Arrow),
                     // Parse the body
                     space0_before_e(
-                        specialize_ref(ELambda::Body, move |arena, state| parse_loc_expr(
-                            min_indent, arena, state
-                        )),
+                        specialize_ref(ELambda::Body, move |arena, state| {
+                            parse_loc_expr_with_options(min_indent, multi_backpassing, arena, state)
+                        }),
                         min_indent,
                         ELambda::Space,
                         ELambda::IndentBody
@@ -1393,14 +1549,17 @@ mod when {
     use crate::ast::WhenBranch;
 
     /// Parser for when expressions.
-    pub fn expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, When<'a>> {
+    pub fn expr_help<'a>(
+        min_indent: u16,
+        multi_backpassing: MultiBackpassing,
+    ) -> impl Parser<'a, Expr<'a>, When<'a>> {
         then(
             and!(
                 when_with_indent(),
                 skip_second!(
                     space0_around_ee(
                         specialize_ref(When::Condition, move |arena, state| {
-                            parse_loc_expr(min_indent, arena, state)
+                            parse_loc_expr_with_options(min_indent, multi_backpassing, arena, state)
                         }),
                         min_indent,
                         When::Space,
@@ -1644,7 +1803,10 @@ fn if_branch<'a>(
     }
 }
 
-fn if_expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, If<'a>> {
+fn if_expr_help<'a>(
+    min_indent: u16,
+    multi_backpassing: MultiBackpassing,
+) -> impl Parser<'a, Expr<'a>, If<'a>> {
     move |arena: &'a Bump, state| {
         let (_, _, state) = parser::keyword_e(keyword::IF, If::If).parse(arena, state)?;
 
@@ -1675,7 +1837,7 @@ fn if_expr_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, If<'a>> {
 
         let (_, else_branch, state) = space0_before_e(
             specialize_ref(If::ElseBranch, move |arena, state| {
-                parse_loc_expr(min_indent, arena, state)
+                parse_loc_expr_with_options(min_indent, multi_backpassing, arena, state)
             }),
             min_indent,
             If::Space,
@@ -1767,7 +1929,9 @@ fn list_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, List<'a>>
     move |arena, state| {
         let (_, (parsed_elems, final_comments), state) = collection_trailing_sep_e!(
             word1(b'[', List::Open),
-            specialize_ref(List::Expr, loc!(expr_help(min_indent))),
+            specialize_ref(List::Expr, move |a, s| parse_loc_expr_no_multi_backpassing(
+                min_indent, a, s
+            )),
             word1(b',', List::End),
             word1(b']', List::End),
             min_indent,
@@ -1815,7 +1979,9 @@ fn record_field_help<'a>(
                 word1(b'?', ERecord::QuestionMark)
             ),
             space0_before_e(
-                specialize_ref(ERecord::Expr, loc!(expr_help(min_indent))),
+                specialize_ref(ERecord::Expr, move |a, s| {
+                    parse_loc_expr_no_multi_backpassing(min_indent, a, s)
+                }),
                 min_indent,
                 ERecord::Space,
                 ERecord::IndentEnd,

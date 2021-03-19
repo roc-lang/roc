@@ -454,6 +454,41 @@ mod test_parse {
         assert_eq!(Ok(expected), actual);
     }
 
+    #[test]
+    fn record_with_if() {
+        let arena = Bump::new();
+        let if_expr = Expr::If(
+            arena.alloc([(
+                Located::new(0, 0, 8, 12, Expr::GlobalTag("True")),
+                Located::new(0, 0, 18, 19, Expr::Num("1")),
+            )]),
+            arena.alloc(Located::new(0, 0, 25, 26, Num("2"))),
+        );
+
+        let label1 = RequiredValue(
+            Located::new(0, 0, 1, 2, "x"),
+            &[],
+            arena.alloc(Located::new(0, 0, 5, 26, if_expr)),
+        );
+        let label2 = RequiredValue(
+            Located::new(0, 0, 28, 29, "y"),
+            &[],
+            arena.alloc(Located::new(0, 0, 31, 32, Num("3"))),
+        );
+        let fields = &[
+            Located::new(0, 0, 1, 26, label1),
+            Located::new(0, 0, 28, 32, label2),
+        ];
+        let expected = Record {
+            update: None,
+            fields,
+            final_comments: &[],
+        };
+
+        let actual = parse_expr_with(&arena, "{x : if True then 1 else 2, y: 3 }");
+        assert_eq!(Ok(expected), actual);
+    }
+
     // OPERATORS
 
     #[test]
@@ -1879,6 +1914,68 @@ mod test_parse {
                 z <- {} 
 
                 x
+                "#
+            ),
+            expected,
+        );
+    }
+
+    #[test]
+    fn multi_backpassing() {
+        let arena = Bump::new();
+
+        let identifier_x = Located::new(0, 0, 0, 1, Identifier("x"));
+        let identifier_y = Located::new(0, 0, 3, 4, Identifier("y"));
+
+        let var_x = Var {
+            module_name: "",
+            ident: "x",
+        };
+        let loc_var_x = Located::new(2, 2, 0, 1, var_x);
+
+        let var_y = Var {
+            module_name: "",
+            ident: "y",
+        };
+        let loc_var_y = Located::new(2, 2, 4, 5, var_y);
+
+        let var_list_map2 = Var {
+            module_name: "List",
+            ident: "map2",
+        };
+
+        let apply = Expr::Apply(
+            arena.alloc(Located::new(0, 0, 8, 17, var_list_map2)),
+            bumpalo::vec![ in &arena;
+                &*arena.alloc(Located::new(0, 0, 18, 20, Expr::List{ items: &[], final_comments: &[] })),
+                &*arena.alloc(Located::new(0, 0, 21, 23, Expr::List{ items: &[], final_comments: &[] })),
+            ]
+            .into_bump_slice(),
+            CalledVia::Space,
+        );
+
+        let loc_closure = Located::new(0, 0, 8, 23, apply);
+
+        let binop = Expr::BinOp(arena.alloc((
+            loc_var_x,
+            Located::new(2, 2, 2, 3, roc_module::operator::BinOp::Plus),
+            loc_var_y,
+        )));
+
+        let spaced_binop = Expr::SpaceBefore(arena.alloc(binop), &[Newline, Newline]);
+
+        let expected = Expr::Backpassing(
+            arena.alloc([identifier_x, identifier_y]),
+            arena.alloc(loc_closure),
+            arena.alloc(Located::new(2, 2, 0, 5, spaced_binop)),
+        );
+
+        assert_parses_to(
+            indoc!(
+                r#"
+                x, y <- List.map2 [] []
+
+                x + y
                 "#
             ),
             expected,
