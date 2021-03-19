@@ -2331,23 +2331,6 @@ mod test_reporting {
     }
 
     #[test]
-    #[ignore]
-    fn open_tag_union_can_grow() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : [ A ]* -> [ A, B, C ]
-                f = \a -> a
-
-                f
-                "#
-            ),
-            // should not give errors
-            indoc!(""),
-        )
-    }
-
-    #[test]
     fn patterns_fn_not_exhaustive() {
         report_problem_as(
             indoc!(
@@ -3264,7 +3247,6 @@ mod test_reporting {
     }
 
     #[test]
-    #[ignore]
     fn mutually_recursive_types_with_type_error() {
         report_problem_as(
             indoc!(
@@ -3284,22 +3266,21 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
-
+                
                 Something is off with the body of the `x` definition:
-
+                
                 4│  x : AList I64 I64
                 5│  x = ACons 0 (BCons 1 (ACons "foo" BNil ))
                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
+                
                 This `ACons` global tag application has the type:
-
-                    [ ACons (Num Integer) [ BCons (Num Integer) [ ACons Str [
-                    BCons I64 [ ACons I64 (BList I64 I64), ANil ] as a, BNil ], ANil
-                    ], BNil ], ANil ]
-
+                
+                    [ ACons Num (Integer Signed64) [ BCons (Num a) [ ACons Str [ BNil
+                    ]b ]c ]d, ANil ]
+                
                 But the type annotation on `x` says it should be:
-
-                    [ ACons I64 (BList I64 I64), ANil ] as a
+                
+                    [ ACons I64 BList I64 I64, ANil ]
                 "#
             ),
         )
@@ -4162,7 +4143,6 @@ mod test_reporting {
     }
 
     #[test]
-    #[ignore]
     fn type_annotation_double_colon() {
         report_problem_as(
             indoc!(
@@ -4175,12 +4155,15 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
-
-                Unexpected token :
-
+                ── UNKNOWN OPERATOR ────────────────────────────────────────────────────────────
+                
+                This looks like an operator, but it's not one I recognize!
+                
                 1│  f :: I64
-                       ^
+                      ^^
+                
+                I have no specific suggestion for this operator, see TODO for the full
+                list of operators in Roc.
             "#
             ),
         )
@@ -4488,19 +4471,18 @@ mod test_reporting {
     }
 
     #[test]
-    #[ignore]
     fn comment_with_tab() {
         report_problem_as(
             "# comment with a \t\n4",
             indoc!(
                 r#"
                 ── TAB CHARACTER ───────────────────────────────────────────────────────────────
-
+                
                 I encountered a tab character
-
-                1│  f : { foo 	 }
-                              ^
-
+                
+                1│  # comment with a 	
+                                     ^
+                
                 Tab characters are not allowed.
             "#
             ),
@@ -4508,8 +4490,8 @@ mod test_reporting {
     }
 
     #[test]
-    #[ignore]
     fn type_in_parens_start() {
+        // TODO bad error message
         report_problem_as(
             indoc!(
                 r#"
@@ -4518,15 +4500,12 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── UNFINISHED RECORD TYPE ──────────────────────────────────────────────────────
-
-                I am partway through parsing a record type, but I got stuck here:
-
-                1│  f : { a: Int,
-                                 ^
-
-                I was expecting to see a closing curly brace before this, so try
-                adding a } and see if that helps?
+                ── BAD TYPE VARIABLE ───────────────────────────────────────────────────────────
+                
+                I am expecting a type variable, but I got stuck here:
+                
+                1│  f : (
+                         ^
             "#
             ),
         )
@@ -4979,9 +4958,8 @@ mod test_reporting {
     }
 
     #[test]
-    #[ignore]
     fn pattern_binds_keyword() {
-        // this should get better with time
+        // TODO check if "what_is_next" is a keyword
         report_problem_as(
             indoc!(
                 r#"
@@ -4995,12 +4973,15 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── PARSE PROBLEM ───────────────────────────────────────────────────────────────
-
-                Unexpected token :
-
-                2│      Just if ->
-                                ^
+                ── MISSING EXPRESSION ──────────────────────────────────────────────────────────
+                
+                I am partway through parsing a definition, but I got stuck here:
+                
+                1│  when Just 4 is
+                2│      Just when ->
+                             ^
+                
+                I was expecting to see an expression like 42 or "hello".
             "#
             ),
         )
@@ -5656,7 +5637,6 @@ mod test_reporting {
     }
 
     #[test]
-    #[ignore]
     fn argument_without_space() {
         report_problem_as(
             indoc!(
@@ -5666,6 +5646,19 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                
+                I cannot find a `bar` value
+                
+                1│  [ "foo", bar("") ]
+                             ^^^
+                
+                these names seem close though:
+                
+                    Nat
+                    Str
+                    U8
+                    F64
                 "#
             ),
         )
@@ -5928,50 +5921,6 @@ mod test_reporting {
                 foo = True
 
                 !foo 1 2
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
-
-                This value is not a function, but it was given 2 arguments:
-
-                3│  !foo 1 2
-                    ^^^^
-
-                Are there any missing commas? Or missing parentheses?
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    #[ignore]
-    fn foobar() {
-        report_problem_as(
-            indoc!(
-                r#"
-                g = \x ->
-                    when x is
-                        0 -> 0
-                        _ -> g (x - 1)
-
-                # use parens to force the ordering!
-                (h = \x ->
-                    when x is
-                        0 -> 0
-                        _ -> g (x - 1)
-
-                 (p = \x ->
-                    when x is
-                        0 -> 0
-                        1 -> g (x - 1)
-                        _ -> p (x - 1)
-
-
-                  # variables must be (indirectly) referenced in the body for analysis to work
-                  { x: p, y: h }
-                  ))
                 "#
             ),
             indoc!(

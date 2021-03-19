@@ -72,7 +72,14 @@ pub fn helper<'a>(
         test_builtin_defs,
     );
 
-    let mut loaded = loaded.expect("failed to load module");
+    let mut loaded = match loaded {
+        Ok(x) => x,
+        Err(roc_load::file::LoadingProblem::ParsingFailedReport(report)) => {
+            println!("{}", report);
+            panic!();
+        }
+        Err(e) => panic!("{:?}", e),
+    };
 
     use roc_load::file::MonomorphizedModule;
     let MonomorphizedModule {

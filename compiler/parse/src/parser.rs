@@ -727,25 +727,6 @@ where
     }
 }
 
-pub fn and_then_with_indent_level<'a, P1, P2, F, Before, After, E>(
-    parser: P1,
-    transform: F,
-) -> impl Parser<'a, After, E>
-where
-    P1: Parser<'a, Before, E>,
-    P2: Parser<'a, After, E>,
-    F: Fn(Progress, Before, u16) -> P2,
-    E: 'a,
-{
-    move |arena, state| {
-        parser
-            .parse(arena, state)
-            .and_then(|(progress, output, next_state)| {
-                transform(progress, output, next_state.indent_col).parse(arena, next_state)
-            })
-    }
-}
-
 pub fn then<'a, P1, F, Before, After, E>(parser: P1, transform: F) -> impl Parser<'a, After, E>
 where
     P1: Parser<'a, Before, E>,
@@ -1659,17 +1640,6 @@ where
     Error: 'a,
 {
     loc!(parser)
-}
-
-/// For some reason, some usages won't compile unless they use this instead of the macro version
-#[inline(always)]
-pub fn map<'a, P, F, Before, After, E>(parser: P, transform: F) -> impl Parser<'a, After, E>
-where
-    P: Parser<'a, Before, E>,
-    F: Fn(Before) -> After,
-    E: 'a,
-{
-    map!(parser, transform)
 }
 
 /// For some reason, some usages won't compile unless they use this instead of the macro version

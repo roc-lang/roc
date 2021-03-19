@@ -9,6 +9,7 @@ use roc_builtins::std::StdLib;
 use roc_can::builtins::builtin_defs_map;
 use roc_load::docs::Documentation;
 use roc_load::docs::ModuleDocumentation;
+use roc_load::file::LoadingProblem;
 
 use std::fs;
 extern crate roc_load;
@@ -127,7 +128,7 @@ fn files_to_documentations(
     let mut files_docs = vec![];
 
     for filename in filenames {
-        let mut loaded = roc_load::file::load_and_typecheck(
+        match roc_load::file::load_and_typecheck(
             &arena,
             filename,
             &std_lib,
@@ -135,9 +136,14 @@ fn files_to_documentations(
             MutMap::default(),
             8, // TODO: Is it okay to hardcode ptr_bytes here? I think it should be fine since we'er only type checking (also, 8 => 32bit system)
             builtin_defs_map,
-        )
-        .expect("TODO gracefully handle load failing");
-        files_docs.extend(loaded.documentation.drain().map(|x| x.1));
+        ) {
+            Ok(mut loaded) => files_docs.extend(loaded.documentation.drain().map(|x| x.1)),
+            Err(LoadingProblem::ParsingFailedReport(report)) => {
+                println!("{}", report);
+                panic!();
+            }
+            Err(e) => panic!("{:?}", e),
+        }
     }
     files_docs
 }

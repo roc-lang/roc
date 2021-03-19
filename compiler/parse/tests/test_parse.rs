@@ -454,6 +454,41 @@ mod test_parse {
         assert_eq!(Ok(expected), actual);
     }
 
+    #[test]
+    fn record_with_if() {
+        let arena = Bump::new();
+        let if_expr = Expr::If(
+            arena.alloc([(
+                Located::new(0, 0, 8, 12, Expr::GlobalTag("True")),
+                Located::new(0, 0, 18, 19, Expr::Num("1")),
+            )]),
+            arena.alloc(Located::new(0, 0, 25, 26, Num("2"))),
+        );
+
+        let label1 = RequiredValue(
+            Located::new(0, 0, 1, 2, "x"),
+            &[],
+            arena.alloc(Located::new(0, 0, 5, 26, if_expr)),
+        );
+        let label2 = RequiredValue(
+            Located::new(0, 0, 28, 29, "y"),
+            &[],
+            arena.alloc(Located::new(0, 0, 31, 32, Num("3"))),
+        );
+        let fields = &[
+            Located::new(0, 0, 1, 26, label1),
+            Located::new(0, 0, 28, 32, label2),
+        ];
+        let expected = Record {
+            update: None,
+            fields,
+            final_comments: &[],
+        };
+
+        let actual = parse_expr_with(&arena, "{x : if True then 1 else 2, y: 3 }");
+        assert_eq!(Ok(expected), actual);
+    }
+
     // OPERATORS
 
     #[test]
@@ -1736,10 +1771,10 @@ mod test_parse {
             Located::new(1, 1, 5, 7, Identifier("y"))
         ];
         let def1 = Def::Body(
-            arena.alloc(Located::new(1, 1, 1, 8, RecordDestructure(&fields))),
+            arena.alloc(Located::new(1, 1, 0, 8, RecordDestructure(&fields))),
             arena.alloc(Located::new(1, 1, 11, 12, Num("5"))),
         );
-        let loc_def1 = &*arena.alloc(Located::new(1, 1, 1, 12, def1));
+        let loc_def1 = &*arena.alloc(Located::new(1, 1, 0, 12, def1));
         let def2 = Def::SpaceBefore(
             &*arena.alloc(Def::Body(
                 arena.alloc(Located::new(2, 2, 0, 1, Identifier("y"))),
@@ -1759,7 +1794,8 @@ mod test_parse {
 
         assert_parses_to(
             indoc!(
-                r#"# leading comment
+                r#"
+                # leading comment
                 { x, y } = 5
                 y = 6
 
@@ -1878,6 +1914,68 @@ mod test_parse {
                 z <- {} 
 
                 x
+                "#
+            ),
+            expected,
+        );
+    }
+
+    #[test]
+    fn multi_backpassing() {
+        let arena = Bump::new();
+
+        let identifier_x = Located::new(0, 0, 0, 1, Identifier("x"));
+        let identifier_y = Located::new(0, 0, 3, 4, Identifier("y"));
+
+        let var_x = Var {
+            module_name: "",
+            ident: "x",
+        };
+        let loc_var_x = Located::new(2, 2, 0, 1, var_x);
+
+        let var_y = Var {
+            module_name: "",
+            ident: "y",
+        };
+        let loc_var_y = Located::new(2, 2, 4, 5, var_y);
+
+        let var_list_map2 = Var {
+            module_name: "List",
+            ident: "map2",
+        };
+
+        let apply = Expr::Apply(
+            arena.alloc(Located::new(0, 0, 8, 17, var_list_map2)),
+            bumpalo::vec![ in &arena;
+                &*arena.alloc(Located::new(0, 0, 18, 20, Expr::List{ items: &[], final_comments: &[] })),
+                &*arena.alloc(Located::new(0, 0, 21, 23, Expr::List{ items: &[], final_comments: &[] })),
+            ]
+            .into_bump_slice(),
+            CalledVia::Space,
+        );
+
+        let loc_closure = Located::new(0, 0, 8, 23, apply);
+
+        let binop = Expr::BinOp(arena.alloc((
+            loc_var_x,
+            Located::new(2, 2, 2, 3, roc_module::operator::BinOp::Plus),
+            loc_var_y,
+        )));
+
+        let spaced_binop = Expr::SpaceBefore(arena.alloc(binop), &[Newline, Newline]);
+
+        let expected = Expr::Backpassing(
+            arena.alloc([identifier_x, identifier_y]),
+            arena.alloc(loc_closure),
+            arena.alloc(Located::new(2, 2, 0, 5, spaced_binop)),
+        );
+
+        assert_parses_to(
+            indoc!(
+                r#"
+                x, y <- List.map2 [] []
+
+                x + y
                 "#
             ),
             expected,
@@ -2882,46 +2980,49 @@ mod test_parse {
         use Def::*;
 
         let arena = Bump::new();
-        let newlines1 = &[Newline, Newline];
-        let newlines2 = &[Newline];
-        let newlines3 = &[Newline];
         let pattern1 = Identifier("foo");
         let pattern2 = Identifier("bar");
         let pattern3 = Identifier("baz");
-        let def1 = SpaceAfter(
+        let def1 = SpaceBefore(
             arena.alloc(Body(
-                arena.alloc(Located::new(0, 0, 0, 3, pattern1)),
-                arena.alloc(Located::new(0, 0, 6, 7, Num("1"))),
+                arena.alloc(Located::new(1, 1, 0, 3, pattern1)),
+                arena.alloc(Located::new(1, 1, 6, 7, Num("1"))),
             )),
-            newlines1,
+            &[LineComment(" comment 1")],
         );
-        let def2 = SpaceAfter(
+        let def2 = SpaceBefore(
             arena.alloc(Body(
-                arena.alloc(Located::new(2, 2, 0, 3, pattern2)),
-                arena.alloc(Located::new(2, 2, 6, 10, Str(PlainLine("hi")))),
+                arena.alloc(Located::new(4, 4, 0, 3, pattern2)),
+                arena.alloc(Located::new(4, 4, 6, 10, Str(PlainLine("hi")))),
             )),
-            newlines2,
+            &[Newline, Newline, LineComment(" comment 2")],
         );
         let def3 = SpaceAfter(
-            arena.alloc(Body(
-                arena.alloc(Located::new(3, 3, 0, 3, pattern3)),
-                arena.alloc(Located::new(3, 3, 6, 13, Str(PlainLine("stuff")))),
+            arena.alloc(SpaceBefore(
+                arena.alloc(Body(
+                    arena.alloc(Located::new(5, 5, 0, 3, pattern3)),
+                    arena.alloc(Located::new(5, 5, 6, 13, Str(PlainLine("stuff")))),
+                )),
+                &[Newline],
             )),
-            newlines3,
+            &[Newline, LineComment(" comment n")],
         );
 
         let expected = bumpalo::vec![in &arena;
-            Located::new(0, 0, 0, 7, def1),
-            Located::new(2, 2, 0, 10, def2),
-            Located::new(3, 3, 0, 13, def3),
+            Located::new(1,1, 0, 7, def1),
+            Located::new(4,4, 0, 10, def2),
+            Located::new(5,5, 0, 13, def3),
         ];
 
         let src = indoc!(
             r#"
+                # comment 1
                 foo = 1
 
+                # comment 2
                 bar = "hi"
                 baz = "stuff"
+                # comment n
             "#
         );
 

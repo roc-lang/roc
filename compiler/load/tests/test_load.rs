@@ -132,7 +132,14 @@ mod test_load {
             8,
             builtin_defs_map,
         );
-        let mut loaded_module = loaded.expect("Test module failed to load");
+        let mut loaded_module = match loaded {
+            Ok(x) => x,
+            Err(roc_load::file::LoadingProblem::ParsingFailedReport(report)) => {
+                println!("{}", report);
+                panic!();
+            }
+            Err(e) => panic!("{:?}", e),
+        };
 
         let home = loaded_module.module_id;
 

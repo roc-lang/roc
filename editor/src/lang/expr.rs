@@ -18,7 +18,6 @@ use roc_module::operator::CalledVia;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast;
 use roc_parse::ast::StrLiteral;
-use roc_parse::expr::expr;
 use roc_parse::parser::{loc, Parser, State, SyntaxError};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
