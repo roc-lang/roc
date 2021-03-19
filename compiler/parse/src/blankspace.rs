@@ -247,65 +247,6 @@ fn chomp_line_comment(buffer: &[u8]) -> Result<&str, Progress> {
     }
 }
 
-/// Advance the parser while also indenting as appropriate.
-/// This assumes we are only advancing with spaces, since they can indent.
-fn advance_spaces_e<TE, E>(
-    state: State,
-    spaces: usize,
-    to_error: TE,
-) -> Result<State, (Progress, E, State)>
-where
-    TE: Fn(Row, Col) -> E,
-{
-    match (state.column as usize).checked_add(spaces) {
-        Some(column_usize) => Ok(State {
-            bytes: &state.bytes[spaces..],
-            column: column_usize as u16,
-            ..state
-        }),
-        _ => Err((NoProgress, to_error(state.line, state.column), state)),
-    }
-}
-
-#[inline(always)]
-pub fn spaces_exactly_e<'a>(spaces_expected: u16) -> impl Parser<'a, (), parser::EExpr<'a>> {
-    use parser::EExpr;
-
-    move |_, state: State<'a>| {
-        if spaces_expected == 0 {
-            return Ok((NoProgress, (), state));
-        }
-
-        let mut spaces_seen: u16 = 0;
-
-        for c in state.bytes {
-            match c {
-                b' ' => {
-                    spaces_seen += 1;
-                    if spaces_seen == spaces_expected {
-                        let state =
-                            advance_spaces_e(state, spaces_expected as usize, EExpr::IndentStart)?;
-                        return Ok((MadeProgress, (), state));
-                    }
-                }
-                _ => {
-                    return Err((
-                        NoProgress,
-                        EExpr::IndentStart(state.line, state.column + spaces_seen),
-                        state,
-                    ))
-                }
-            }
-        }
-
-        Err((
-            NoProgress,
-            EExpr::IndentStart(state.line, state.column + spaces_seen),
-            state,
-        ))
-    }
-}
-
 #[inline(always)]
 fn spaces_help_help<'a, E>(
     min_indent: u16,

@@ -501,7 +501,7 @@ fn desugar_bin_op<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'_>>) -> &'a L
                                     (NonAssociative, NonAssociative) => {
                                         // Both operators were non-associative, e.g. (True == False == False).
                                         // We should tell the author to disambiguate by grouping them with parens.
-                                        let bad_op = next_op.clone();
+                                        let bad_op = next_op;
                                         let right = arg_stack.pop().unwrap();
                                         let left = arg_stack.pop().unwrap();
                                         let broken_expr = new_op_expr(
@@ -675,7 +675,7 @@ impl<'a> Iterator for Infixes<'a> {
                     Expr::BinOp((left, loc_op, right))
                     | Expr::Nested(Expr::BinOp((left, loc_op, right))) => {
                         self.remaining_expr = Some(right);
-                        self.next_op = Some(loc_op.clone());
+                        self.next_op = Some(*loc_op);
 
                         InfixToken::Arg(left)
                     }

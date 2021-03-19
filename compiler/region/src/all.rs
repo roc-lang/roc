@@ -152,7 +152,7 @@ pub struct Position {
     pub col: u16,
 }
 
-#[derive(Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Eq, Copy, PartialEq, PartialOrd, Ord, Hash)]
 pub struct Located<T> {
     pub region: Region,
     pub value: T,
