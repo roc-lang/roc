@@ -1,6 +1,6 @@
 use crate::editor::mvc::ed_model::LeafIndex;
 use crate::editor::{
-    ed_error::{CaretNotFound, EdResult},
+    ed_error::{CaretNotFound, EdResult, NodeWithoutAttributes},
     markup::attribute::Caret,
     markup::nodes::MarkupNode,
     slow_pool::{SlowNodeId, SlowPool},
@@ -11,22 +11,15 @@ use snafu::ensure;
 pub fn set_caret_at_start(
     markup_node_id: SlowNodeId,
     markup_node_pool: &mut SlowPool,
-) -> SlowNodeId {
+) -> EdResult<SlowNodeId> {
     let markup_node = markup_node_pool.get_mut(markup_node_id);
 
     match markup_node {
         MarkupNode::Nested {
             ast_node_id: _,
-            children_ids,
+            children_ids: _,
             parent_id_opt: _,
-        } => {
-            if let Some(child_id) = children_ids.first() {
-                set_caret_at_start(*child_id, markup_node_pool)
-            } else {
-                //TODO use result instead
-                unreachable!()
-            }
-        }
+        } => NodeWithoutAttributes {}.fail(),
         MarkupNode::Text {
             content: _,
             ast_node_id: _,
@@ -35,7 +28,7 @@ pub fn set_caret_at_start(
             parent_id_opt: _,
         } => {
             attributes.add(Caret::new_attr(0));
-            markup_node_id
+            Ok(markup_node_id)
         }
         MarkupNode::Blank {
             ast_node_id: _,
@@ -44,12 +37,12 @@ pub fn set_caret_at_start(
             parent_id_opt: _,
         } => {
             attributes.add(Caret::new_attr(0));
-            markup_node_id
+            Ok(markup_node_id)
         }
     }
 }
 
-// returns node containing the caret after the move
+// Returns nodes containing the carets after the move, as well as its position in a DFS ordered list of leaves.
 pub fn move_carets_right_for_node(
     node_with_caret_id: SlowNodeId,
     caret_id_leaf_index: LeafIndex,
@@ -88,6 +81,7 @@ pub fn move_carets_right_for_node(
             increase_caret_offset(node_with_caret_id, caret.offset_col, markup_node_pool)?;
             (node_with_caret_id, caret_id_leaf_index)
         } else {
+            // Caret is at its end, keep it here.
             (node_with_caret_id, caret_id_leaf_index)
         };
 

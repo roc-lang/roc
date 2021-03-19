@@ -16,7 +16,6 @@ use snafu::OptionExt;
 
 #[derive(Debug)]
 pub enum MarkupNode {
-    // TODO add parent field, necessary for moving caret to next node
     Nested {
         ast_node_id: NodeId<Expr2>,
         children_ids: Vec<SlowNodeId>,

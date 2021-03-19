@@ -42,7 +42,7 @@ pub fn init_model<'a>(
     // TODO fix moving issue and insert module.ast_root into pool
     let ast_root_id = module.env.pool.add(Expr2::Blank);
 
-    let (markup_root_id, node_with_caret_id) = if code_str.is_empty() {
+    let markup_root_id = if code_str.is_empty() {
         let blank_root = MarkupNode::Blank {
             ast_node_id: ast_root_id,
             attributes: Attributes {
@@ -52,9 +52,7 @@ pub fn init_model<'a>(
             parent_id_opt: None,
         };
 
-        let root_id = markup_node_pool.add(blank_root);
-
-        (root_id, root_id)
+        markup_node_pool.add(blank_root)
     } else {
         let temp_markup_root_id = expr2_to_markup(
             code_arena,
@@ -63,9 +61,8 @@ pub fn init_model<'a>(
             markup_node_pool,
         );
         set_parent_for_all(temp_markup_root_id, markup_node_pool);
-        let node_w_caret_id = set_caret_at_start(temp_markup_root_id, markup_node_pool);
 
-        (temp_markup_root_id, node_w_caret_id)
+        temp_markup_root_id
     };
 
     let mut dfs_ordered_leaves = Vec::new();
@@ -75,13 +72,17 @@ pub fn init_model<'a>(
         &mut dfs_ordered_leaves,
     );
 
+    // unwrap because it's not possible to only have a single Nested node without children.
+    let first_leaf_id = dfs_ordered_leaves.first().unwrap();
+    let node_w_caret_id = set_caret_at_start(*first_leaf_id, markup_node_pool)?;
+
     Ok(EdModel {
         module,
         code_as_str: code_str,
         markup_root_id,
         glyph_dim_rect_opt: None,
         has_focus: true,
-        caret_nodes: vec![(node_with_caret_id, 0)].into_iter().collect(),
+        caret_nodes: vec![(node_w_caret_id, 0)].into_iter().collect(),
         dfs_ordered_leaves,
     })
 }
