@@ -1069,6 +1069,28 @@ fn unify_flat_type(
                 problems
             }
         }
+        (TagUnion(tags, ext), Func(args, closure, ret)) if tags.len() == 1 => {
+            let (tag, payload) = tags.iter().next().unwrap();
+
+            if payload.len() == 0 {
+                let mut new_payload = vec![];
+                let mut new_tags = MutMap::default();
+
+                for arg in args {
+                    new_payload.push(*arg);
+                }
+
+                new_tags.insert(tag.clone(), new_payload);
+
+                vec![]
+            } else {
+                mismatch!(
+                    "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
+                    TagUnion(tags.clone(), ext.clone()),
+                    Func(args.clone(), closure.clone(), ret.clone())
+                )
+            }
+        }
         (other1, other2) => mismatch!(
             "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
             other1,

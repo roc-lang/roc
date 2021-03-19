@@ -567,6 +567,48 @@ mod solve_expr {
     }
 
     #[test]
+    fn applied_tag_function() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    foo : [ Foo Str ]*
+
+                    List.map [ "a", "b" ] Foo
+                "#
+            ),
+            "List [ Foo Str ]*",
+        )
+    }
+
+    #[test]
+    fn applied_tag_function_other() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    foo : [ Foo Str ]*
+
+                    Foo "hi"
+                "#
+            ),
+            "[ Foo Str ]*",
+        )
+    }
+
+    #[test]
+    fn applied_tag() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                    foo : [ Foo Str ]*
+
+                    List.map [ "a", "b" ] \elem -> Foo elem
+                "#
+            ),
+            "List [ Foo Str ]*",
+        )
+    }
+
+    #[test]
     fn def_2_arg_closure() {
         infer_eq(
             indoc!(
