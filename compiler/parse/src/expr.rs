@@ -1372,7 +1372,6 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::List { .. }
         | Expr::Closure(_, _)
         | Expr::Backpassing(_, _, _)
-        | Expr::BinOp(_)
         | Expr::BinOps { .. }
         | Expr::Defs(_, _)
         | Expr::If(_, _)

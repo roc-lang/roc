@@ -832,9 +832,9 @@ pub fn to_expr2<'a>(
                 bad_expr
             );
         }
-        bad_expr @ BinOp(_) => {
+        bad_expr @ BinOps { .. } => {
             panic!(
-                "A binary operator did not get desugared somehow: {:#?}",
+                "A binary operator chain did not get desugared somehow: {:#?}",
                 bad_expr
             );
         }

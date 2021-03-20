@@ -292,7 +292,6 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 _ => panic!(),
             }
         }
-        BinOp(_) | Nested(BinOp(_)) => todo!(), // desugar_bin_op(arena, loc_expr),
         BinOps(lefts, right) | Nested(BinOps(lefts, right)) => {
             desugar_bin_ops(arena, loc_expr.region, lefts, right)
         }

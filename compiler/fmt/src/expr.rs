@@ -65,15 +65,6 @@ impl<'a> Formattable<'a> for Expr<'a> {
                         .any(|(c, t)| c.is_multiline() || t.is_multiline())
             }
 
-            BinOp((loc_left, _, loc_right)) => {
-                let next_is_multiline_bin_op: bool = match &loc_right.value {
-                    Expr::BinOp((_, _, nested_loc_right)) => nested_loc_right.is_multiline(),
-                    _ => false,
-                };
-
-                next_is_multiline_bin_op || loc_left.is_multiline() || loc_right.is_multiline()
-            }
-
             BinOps(lefts, loc_right) => {
                 lefts.iter().any(|(loc_expr, _)| loc_expr.is_multiline())
                     || loc_right.is_multiline()
@@ -294,15 +285,6 @@ impl<'a> Formattable<'a> for Expr<'a> {
             } => {
                 fmt_list(buf, &items, final_comments, indent);
             }
-            BinOp((loc_left_side, bin_op, loc_right_side)) => fmt_bin_op(
-                buf,
-                loc_left_side,
-                bin_op,
-                loc_right_side,
-                false,
-                parens,
-                indent,
-            ),
             BinOps(lefts, right) => fmt_bin_ops(buf, lefts, right, false, parens, indent),
             UnaryOp(sub_expr, unary_op) => {
                 match &unary_op.value {
@@ -387,50 +369,6 @@ fn push_op(buf: &mut String, op: BinOp) {
         operator::BinOp::Assignment => unreachable!(),
         operator::BinOp::HasType => unreachable!(),
         operator::BinOp::Backpassing => unreachable!(),
-    }
-}
-
-fn fmt_bin_op<'a>(
-    buf: &mut String<'a>,
-    loc_left_side: &'a Located<Expr<'a>>,
-    loc_bin_op: &'a Located<BinOp>,
-    loc_right_side: &'a Located<Expr<'a>>,
-    part_of_multi_line_bin_ops: bool,
-    apply_needs_parens: Parens,
-    indent: u16,
-) {
-    loc_left_side.format_with_options(buf, apply_needs_parens, Newlines::No, indent);
-
-    let is_multiline = (&loc_right_side.value).is_multiline()
-        || (&loc_left_side.value).is_multiline()
-        || part_of_multi_line_bin_ops;
-
-    if is_multiline {
-        newline(buf, indent + INDENT)
-    } else {
-        buf.push(' ');
-    }
-
-    push_op(buf, loc_bin_op.value);
-
-    buf.push(' ');
-
-    match &loc_right_side.value {
-        Expr::BinOp((nested_left_side, nested_bin_op, nested_right_side)) => {
-            fmt_bin_op(
-                buf,
-                nested_left_side,
-                nested_bin_op,
-                nested_right_side,
-                is_multiline,
-                apply_needs_parens,
-                indent,
-            );
-        }
-
-        _ => {
-            loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, indent);
-        }
     }
 }
 
