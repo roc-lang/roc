@@ -502,8 +502,8 @@ fn desugar_bin_ops<'a>(
     lefts: &'a [(Located<Expr<'_>>, Located<BinOp>)],
     right: &'a Located<Expr<'_>>,
 ) -> &'a Located<Expr<'a>> {
-    let mut arg_stack: Vec<&'a Located<Expr>> = Vec::new_in(arena);
-    let mut op_stack: Vec<Located<BinOp>> = Vec::new_in(arena);
+    let mut arg_stack: Vec<&'a Located<Expr>> = Vec::with_capacity_in(lefts.len() + 1, arena);
+    let mut op_stack: Vec<Located<BinOp>> = Vec::with_capacity_in(lefts.len(), arena);
 
     for (loc_expr, loc_op) in lefts {
         arg_stack.push(desugar_expr(arena, loc_expr));
@@ -524,7 +524,7 @@ fn desugar_bin_ops<'a>(
             Pizza => {
                 // Rewrite the Pizza operator into an Apply
 
-                match &right.value {
+                match right.value {
                     Apply(function, arguments, _called_via) => {
                         let mut args = Vec::with_capacity_in(1 + arguments.len(), arena);
 
@@ -538,20 +538,15 @@ fn desugar_bin_ops<'a>(
 
                         Apply(function, args, CalledVia::BinOp(Pizza))
                     }
-                    expr => {
+                    _ => {
                         // e.g. `1 |> (if b then (\a -> a) else (\c -> c))`
                         let mut args = Vec::with_capacity_in(1, arena);
 
                         args.push(left);
 
-                        let function = arena.alloc(Located {
-                            value: Nested(expr),
-                            region: right.region,
-                        });
-
                         let args = args.into_bump_slice();
 
-                        Apply(function, args, CalledVia::BinOp(Pizza))
+                        Apply(right, args, CalledVia::BinOp(Pizza))
                     }
                 }
             }
