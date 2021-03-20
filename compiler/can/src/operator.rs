@@ -28,10 +28,7 @@ fn new_op_call_expr<'a>(
                     let mut args = Vec::with_capacity_in(1 + arguments.len(), arena);
 
                     args.push(left);
-
-                    for arg in arguments.iter() {
-                        args.push(arg);
-                    }
+                    args.extend(arguments.iter());
 
                     let args = args.into_bump_slice();
 
@@ -39,13 +36,7 @@ fn new_op_call_expr<'a>(
                 }
                 _ => {
                     // e.g. `1 |> (if b then (\a -> a) else (\c -> c))`
-                    let mut args = Vec::with_capacity_in(1, arena);
-
-                    args.push(left);
-
-                    let args = args.into_bump_slice();
-
-                    Apply(right, args, CalledVia::BinOp(Pizza))
+                    Apply(right, arena.alloc([left]), CalledVia::BinOp(Pizza))
                 }
             }
         }
@@ -273,12 +264,12 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             // first desugar the body, because it may contain |>
             let desugared_body = desugar_expr(arena, loc_body);
 
+            let desugared_ret = desugar_expr(arena, loc_ret);
+            let closure = Expr::Closure(loc_patterns, desugared_ret);
+            let loc_closure = Located::at_zero(closure);
+
             match &desugared_body.value {
                 Expr::Apply(function, arguments, called_via) => {
-                    let desugared_ret = desugar_expr(arena, loc_ret);
-                    let closure = Expr::Closure(loc_patterns, desugared_ret);
-                    let loc_closure = Located::at_zero(closure);
-
                     let mut new_arguments: Vec<'a, &'a Located<Expr<'a>>> =
                         Vec::with_capacity_in(arguments.len() + 1, arena);
                     new_arguments.extend(arguments.iter());
@@ -289,7 +280,17 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
 
                     arena.alloc(loc_call)
                 }
-                _ => panic!(),
+                _ => {
+                    // e.g. `x <- (if b then (\a -> a) else (\c -> c))`
+                    let call = Expr::Apply(
+                        desugared_body,
+                        arena.alloc([&*arena.alloc(loc_closure)]),
+                        CalledVia::Space,
+                    );
+                    let loc_call = Located::at(loc_expr.region, call);
+
+                    arena.alloc(loc_call)
+                }
             }
         }
         BinOps(lefts, right) | Nested(BinOps(lefts, right)) => {
@@ -371,9 +372,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 },
             };
             let loc_fn_var = arena.alloc(Located { region, value });
-            let desugared_args = bumpalo::vec![in arena; desugar_expr(arena, loc_arg)];
-
-            let desugared_args = desugared_args.into_bump_slice();
+            let desugared_args = arena.alloc([desugar_expr(arena, loc_arg)]);
 
             arena.alloc(Located {
                 value: Apply(loc_fn_var, desugared_args, CalledVia::UnaryOp(op)),
@@ -513,69 +512,13 @@ fn desugar_bin_ops<'a>(
         }
     }
 
-    arg_stack.push(desugar_expr(arena, right));
+    let mut expr = desugar_expr(arena, right);
 
-    for loc_op in op_stack.into_iter().rev() {
-        let right = arg_stack.pop().unwrap();
-        let left = arg_stack.pop().unwrap();
-
-        let region = Region::span_across(&left.region, &right.region);
-        let value = match loc_op.value {
-            Pizza => {
-                // Rewrite the Pizza operator into an Apply
-
-                match right.value {
-                    Apply(function, arguments, _called_via) => {
-                        let mut args = Vec::with_capacity_in(1 + arguments.len(), arena);
-
-                        args.push(left);
-
-                        for arg in arguments.iter() {
-                            args.push(arg);
-                        }
-
-                        let args = args.into_bump_slice();
-
-                        Apply(function, args, CalledVia::BinOp(Pizza))
-                    }
-                    _ => {
-                        // e.g. `1 |> (if b then (\a -> a) else (\c -> c))`
-                        let mut args = Vec::with_capacity_in(1, arena);
-
-                        args.push(left);
-
-                        let args = args.into_bump_slice();
-
-                        Apply(right, args, CalledVia::BinOp(Pizza))
-                    }
-                }
-            }
-            binop => {
-                // This is a normal binary operator like (+), so desugar it
-                // into the appropriate function call.
-                let (module_name, ident) = binop_to_function(binop);
-                let mut args = Vec::with_capacity_in(2, arena);
-
-                args.push(left);
-                args.push(right);
-
-                let loc_expr = arena.alloc(Located {
-                    value: Expr::Var { module_name, ident },
-                    region: loc_op.region,
-                });
-
-                let args = args.into_bump_slice();
-
-                Apply(loc_expr, args, CalledVia::BinOp(binop))
-            }
-        };
-
-        arg_stack.push(arena.alloc(Located { region, value }));
+    for (left, loc_op) in arg_stack.into_iter().zip(op_stack.into_iter()).rev() {
+        expr = arena.alloc(new_op_call_expr(arena, left, loc_op, expr));
     }
 
-    assert_eq!(arg_stack.len(), 1);
-
-    arg_stack.pop().unwrap()
+    expr
 }
 
 enum Step<'a> {
