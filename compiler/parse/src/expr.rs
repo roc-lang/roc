@@ -1352,7 +1352,6 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
 
         Expr::Record {
             fields,
-            update: None,
             final_comments: _,
         } => {
             let mut loc_patterns = Vec::with_capacity_in(fields.len(), arena);
@@ -1390,9 +1389,6 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::When(_, _)
         | Expr::MalformedClosure
         | Expr::PrecedenceConflict { .. }
-        | Expr::Record {
-            update: Some(_), ..
-        }
         | Expr::RecordUpdate { .. }
         | Expr::UnaryOp(_, _) => Err(()),
 
@@ -2086,10 +2082,16 @@ fn record_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'
             let (opt_update, loc_assigned_fields_with_comments) = loc_record.value;
 
             // This is a record literal, not a destructure.
-            let mut value = Expr::Record {
-                update: opt_update.map(|loc_expr| &*arena.alloc(loc_expr)),
-                fields: loc_assigned_fields_with_comments.value.0.into_bump_slice(),
-                final_comments: loc_assigned_fields_with_comments.value.1,
+            let mut value = match opt_update {
+                Some(update) => Expr::RecordUpdate {
+                    update: &*arena.alloc(update),
+                    fields: loc_assigned_fields_with_comments.value.0.into_bump_slice(),
+                    final_comments: loc_assigned_fields_with_comments.value.1,
+                },
+                None => Expr::Record {
+                    fields: loc_assigned_fields_with_comments.value.0.into_bump_slice(),
+                    final_comments: loc_assigned_fields_with_comments.value.1,
+                },
             };
 
             // there can be field access, e.g. `{ x : 4 }.x`

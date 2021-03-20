@@ -207,55 +207,6 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::Record {
             fields,
-            update: Some(loc_update),
-            final_comments: _,
-        } => {
-            let (can_update, update_out) =
-                canonicalize_expr(env, var_store, scope, loc_update.region, &loc_update.value);
-            if let Var(symbol) = &can_update.value {
-                match canonicalize_fields(env, var_store, scope, region, fields) {
-                    Ok((can_fields, mut output)) => {
-                        output.references = output.references.union(update_out.references);
-
-                        let answer = Update {
-                            record_var: var_store.fresh(),
-                            ext_var: var_store.fresh(),
-                            symbol: *symbol,
-                            updates: can_fields,
-                        };
-
-                        (answer, output)
-                    }
-                    Err(CanonicalizeRecordProblem::InvalidOptionalValue {
-                        field_name,
-                        field_region,
-                        record_region,
-                    }) => (
-                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
-                            field_name,
-                            field_region,
-                            record_region,
-                        }),
-                        Output::default(),
-                    ),
-                }
-            } else {
-                // only (optionally qualified) variables can be updated, not arbitrary expressions
-
-                let error = roc_problem::can::RuntimeError::InvalidRecordUpdate {
-                    region: can_update.region,
-                };
-
-                let answer = Expr::RuntimeError(error.clone());
-
-                env.problems.push(Problem::RuntimeError(error));
-
-                (answer, Output::default())
-            }
-        }
-        ast::Expr::Record {
-            fields,
-            update: None,
             final_comments: _,
         } => {
             if fields.is_empty() {

@@ -243,10 +243,9 @@ impl<'a> Formattable<'a> for Expr<'a> {
             }
             Record {
                 fields,
-                update,
                 final_comments,
             } => {
-                fmt_record(buf, *update, fields, final_comments, indent);
+                fmt_record(buf, None, fields, final_comments, indent);
             }
             RecordUpdate {
                 fields,

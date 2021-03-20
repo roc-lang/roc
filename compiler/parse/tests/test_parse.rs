@@ -414,7 +414,6 @@ mod test_parse {
         let arena = Bump::new();
         let expected = Record {
             fields: &[],
-            update: None,
             final_comments: &[],
         };
         let actual = parse_expr_with(&arena, "{}");
@@ -444,8 +443,8 @@ mod test_parse {
             ident: "baz",
         };
         let update_target = Located::new(0, 0, 2, 13, var);
-        let expected = Record {
-            update: Some(&*arena.alloc(update_target)),
+        let expected = RecordUpdate {
+            update: &*arena.alloc(update_target),
             fields,
             final_comments: &[],
         };
@@ -480,7 +479,6 @@ mod test_parse {
             Located::new(0, 0, 28, 32, label2),
         ];
         let expected = Record {
-            update: None,
             fields,
             final_comments: &[],
         };
@@ -1860,7 +1858,6 @@ mod test_parse {
             let identifier_z = Located::new(2, 2, 0, 1, Identifier("z"));
 
             let empty_record = Record {
-                update: None,
                 fields: &[],
                 final_comments: &[],
             };

@@ -105,7 +105,6 @@ pub enum Expr<'a> {
     },
 
     Record {
-        update: Option<&'a Loc<Expr<'a>>>,
         fields: &'a [Loc<AssignedField<'a, Expr<'a>>>],
         final_comments: &'a [CommentOrNewline<'a>],
     },

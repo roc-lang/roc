@@ -379,9 +379,9 @@ pub fn to_expr2<'a>(
             )
         }
 
-        Record {
+        RecordUpdate {
             fields,
-            update: Some(loc_update),
+            update: loc_update,
             final_comments: _,
         } => {
             let (can_update, update_out) =
@@ -435,7 +435,6 @@ pub fn to_expr2<'a>(
 
         Record {
             fields,
-            update: None,
             final_comments: _,
         } => {
             if fields.is_empty() {
