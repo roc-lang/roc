@@ -4779,43 +4779,72 @@ fn build_int_binop<'a, 'ctx, 'env>(
         NumLte => bd.build_int_compare(SLE, lhs, rhs, "int_lte").into(),
         NumRemUnchecked => bd.build_int_signed_rem(lhs, rhs, "rem_int").into(),
         NumIsMultipleOf => {
-            /* this builds the following construct
-
-                if rhs != 0 {
-                    let rem = lhs % rhs;
-                    rem == 0
-                } else {
-                    // rhs == 0 && lhs ==0
-                    lhs == 0
-                }
-            */
+            // this builds the following construct
+            //
+            //    if (rhs == 0 || rhs == -1) {
+            //        // lhs is a multiple of rhs iff
+            //        //
+            //        // - rhs == -1
+            //        // - both rhs and lhs are 0
+            //        //
+            //        // the -1 case is important for overflow reasons `isize::MIN % -1` crashes in rust
+            //        (rhs == -1) || (lhs == 0)
+            //    } else {
+            //        let rem = lhs % rhs;
+            //        rem == 0
+            //    }
+            //
+            // NOTE we'd like the branches to be swapped for better branch prediciton,
+            // but llvm normalizes to the above ordering in -O3
             let zero = rhs.get_type().const_zero();
-            let condition_rhs = bd.build_int_compare(IntPredicate::NE, rhs, zero, "is_zero_rhs");
-            let condition_lhs = bd.build_int_compare(IntPredicate::EQ, lhs, zero, "is_zero_lhs");
+            let neg_1 = rhs.get_type().const_int(-1i64 as u64, false);
 
-            let current_block = bd.get_insert_block().unwrap(); //block that we are in right now;
-            let then_block = env.context.append_basic_block(parent, "then");
+            let special_block = env.context.append_basic_block(parent, "special_block");
+            let default_block = env.context.append_basic_block(parent, "default_block");
             let cont_block = env.context.append_basic_block(parent, "branchcont");
 
-            bd.build_conditional_branch(condition_rhs, then_block, cont_block);
+            bd.build_switch(
+                rhs,
+                default_block,
+                &[(zero, special_block), (neg_1, special_block)],
+            );
 
-            bd.position_at_end(then_block);
+            let condition_rem = {
+                bd.position_at_end(default_block);
 
-            let rem = bd.build_int_signed_rem(lhs, rhs, "int_rem");
-            let condition_rem = bd.build_int_compare(IntPredicate::EQ, rem, zero, "is_zero_rem");
+                let rem = bd.build_int_signed_rem(lhs, rhs, "int_rem");
+                let result = bd.build_int_compare(IntPredicate::EQ, rem, zero, "is_zero_rem");
 
-            bd.build_unconditional_branch(cont_block);
+                bd.build_unconditional_branch(cont_block);
+                result
+            };
 
-            bd.position_at_end(cont_block);
+            let condition_special = {
+                bd.position_at_end(special_block);
 
-            let phi = bd.build_phi(env.context.bool_type(), "branch");
+                let is_zero = bd.build_int_compare(IntPredicate::EQ, lhs, zero, "is_zero_lhs");
+                let is_neg_one =
+                    bd.build_int_compare(IntPredicate::EQ, rhs, neg_1, "is_neg_one_rhs");
 
-            phi.add_incoming(&[
-                (&condition_rem, then_block),
-                (&condition_lhs, current_block),
-            ]);
+                let result = bd.build_or(is_neg_one, is_zero, "cond");
 
-            phi.as_basic_value()
+                bd.build_unconditional_branch(cont_block);
+
+                result
+            };
+
+            {
+                bd.position_at_end(cont_block);
+
+                let phi = bd.build_phi(env.context.bool_type(), "branch");
+
+                phi.add_incoming(&[
+                    (&condition_rem, default_block),
+                    (&condition_special, special_block),
+                ]);
+
+                phi.as_basic_value()
+            }
         }
         NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
         NumPowInt => call_bitcode_fn(env, &[lhs.into(), rhs.into()], &bitcode::NUM_POW_INT),
