@@ -303,7 +303,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 parens,
                 indent,
             ),
-            BinOps(_, _) => todo!(),
+            BinOps(lefts, right) => fmt_bin_ops(buf, lefts, right, false, parens, indent),
             UnaryOp(sub_expr, unary_op) => {
                 match &unary_op.value {
                     operator::UnaryOp::Negate => {
@@ -365,28 +365,8 @@ fn format_str_segment<'a>(seg: &StrSegment<'a>, buf: &mut String<'a>, indent: u1
     }
 }
 
-fn fmt_bin_op<'a>(
-    buf: &mut String<'a>,
-    loc_left_side: &'a Located<Expr<'a>>,
-    loc_bin_op: &'a Located<BinOp>,
-    loc_right_side: &'a Located<Expr<'a>>,
-    part_of_multi_line_bin_ops: bool,
-    apply_needs_parens: Parens,
-    indent: u16,
-) {
-    loc_left_side.format_with_options(buf, apply_needs_parens, Newlines::No, indent);
-
-    let is_multiline = (&loc_right_side.value).is_multiline()
-        || (&loc_left_side.value).is_multiline()
-        || part_of_multi_line_bin_ops;
-
-    if is_multiline {
-        newline(buf, indent + INDENT)
-    } else {
-        buf.push(' ');
-    }
-
-    match &loc_bin_op.value {
+fn push_op(buf: &mut String, op: BinOp) {
+    match op {
         operator::BinOp::Caret => buf.push('^'),
         operator::BinOp::Star => buf.push('*'),
         operator::BinOp::Slash => buf.push('/'),
@@ -408,6 +388,30 @@ fn fmt_bin_op<'a>(
         operator::BinOp::HasType => unreachable!(),
         operator::BinOp::Backpassing => unreachable!(),
     }
+}
+
+fn fmt_bin_op<'a>(
+    buf: &mut String<'a>,
+    loc_left_side: &'a Located<Expr<'a>>,
+    loc_bin_op: &'a Located<BinOp>,
+    loc_right_side: &'a Located<Expr<'a>>,
+    part_of_multi_line_bin_ops: bool,
+    apply_needs_parens: Parens,
+    indent: u16,
+) {
+    loc_left_side.format_with_options(buf, apply_needs_parens, Newlines::No, indent);
+
+    let is_multiline = (&loc_right_side.value).is_multiline()
+        || (&loc_left_side.value).is_multiline()
+        || part_of_multi_line_bin_ops;
+
+    if is_multiline {
+        newline(buf, indent + INDENT)
+    } else {
+        buf.push(' ');
+    }
+
+    push_op(buf, loc_bin_op.value);
 
     buf.push(' ');
 
@@ -428,6 +432,35 @@ fn fmt_bin_op<'a>(
             loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, indent);
         }
     }
+}
+
+fn fmt_bin_ops<'a>(
+    buf: &mut String<'a>,
+    lefts: &'a [(Located<Expr<'a>>, Located<BinOp>)],
+    loc_right_side: &'a Located<Expr<'a>>,
+    part_of_multi_line_bin_ops: bool,
+    apply_needs_parens: Parens,
+    indent: u16,
+) {
+    let is_multiline = part_of_multi_line_bin_ops
+        || (&loc_right_side.value).is_multiline()
+        || lefts.iter().any(|(expr, _)| expr.value.is_multiline());
+
+    for (loc_left_side, loc_bin_op) in lefts {
+        loc_left_side.format_with_options(buf, apply_needs_parens, Newlines::No, indent);
+
+        if is_multiline {
+            newline(buf, indent + INDENT)
+        } else {
+            buf.push(' ');
+        }
+
+        push_op(buf, loc_bin_op.value);
+
+        buf.push(' ');
+    }
+
+    loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, indent);
 }
 
 fn fmt_list<'a>(
