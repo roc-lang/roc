@@ -47,6 +47,18 @@ pub enum BinOp {
     Backpassing,
 }
 
+impl BinOp {
+    /// how wide this operator is when typed out
+    pub fn width(self) -> u16 {
+        match self {
+            Caret | Star | Slash | Percent | Plus | Minus | LessThan | GreaterThan => 1,
+            DoubleSlash | DoublePercent | Equals | NotEquals | LessThanOrEq | GreaterThanOrEq
+            | And | Or | Pizza => 2,
+            Assignment | HasType | Backpassing => unreachable!(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ArgSide {
     Left,

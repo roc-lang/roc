@@ -519,8 +519,10 @@ fn desugar_bin_op<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'_>>) -> &'a L
                                         let region = broken_expr.region;
                                         let value = Expr::PrecedenceConflict {
                                             whole_region: loc_expr.region,
-                                            binop1: stack_op,
-                                            binop2: bad_op,
+                                            binop1_position: stack_op.region.start(),
+                                            binop1: stack_op.value,
+                                            binop2_position: bad_op.region.start(),
+                                            binop2: bad_op.value,
                                             expr: arena.alloc(broken_expr),
                                         };
 

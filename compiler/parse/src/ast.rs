@@ -3,7 +3,7 @@ use crate::ident::Ident;
 use bumpalo::collections::String;
 use bumpalo::Bump;
 use roc_module::operator::{BinOp, CalledVia, UnaryOp};
-use roc_region::all::{Loc, Region};
+use roc_region::all::{Loc, Position, Region};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Module<'a> {
@@ -157,8 +157,10 @@ pub enum Expr<'a> {
     // We should tell the author to disambiguate by grouping them with parens.
     PrecedenceConflict {
         whole_region: Region,
-        binop1: Loc<BinOp>,
-        binop2: Loc<BinOp>,
+        binop1_position: Position,
+        binop2_position: Position,
+        binop1: BinOp,
+        binop2: BinOp,
         expr: &'a Loc<Expr<'a>>,
     },
 }

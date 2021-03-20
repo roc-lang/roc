@@ -722,13 +722,32 @@ pub fn canonicalize_expr<'a>(
 
         ast::Expr::PrecedenceConflict {
             whole_region,
+            binop1_position,
+            binop2_position,
             binop1,
             binop2,
             expr: _,
         } => {
             use roc_problem::can::RuntimeError::*;
 
-            let problem = PrecedenceProblem::BothNonAssociative(*whole_region, *binop1, *binop2);
+            let region1 = Region::new(
+                binop1_position.row,
+                binop1_position.row,
+                binop1_position.col,
+                binop1_position.col + binop1.width(),
+            );
+            let loc_binop1 = Located::at(region1, *binop1);
+
+            let region2 = Region::new(
+                binop2_position.row,
+                binop2_position.row,
+                binop2_position.col,
+                binop2_position.col + binop2.width(),
+            );
+            let loc_binop2 = Located::at(region2, *binop2);
+
+            let problem =
+                PrecedenceProblem::BothNonAssociative(*whole_region, loc_binop1, loc_binop2);
 
             env.problem(Problem::PrecedenceProblem(problem.clone()));
 
