@@ -1389,5 +1389,8 @@ mod gen_num {
         // false
         assert_evals_to!("Num.isMultipleOf 5 2", false, bool);
         assert_evals_to!("Num.isMultipleOf 5 0", false, bool);
+
+        // overflow
+        assert_evals_to!("Num.isMultipleOf -9223372036854775808 -1", true, bool);
     }
 }
