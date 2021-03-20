@@ -74,6 +74,11 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 next_is_multiline_bin_op || loc_left.is_multiline() || loc_right.is_multiline()
             }
 
+            BinOps(lefts, loc_right) => {
+                lefts.iter().any(|(loc_expr, _)| loc_expr.is_multiline())
+                    || loc_right.is_multiline()
+            }
+
             UnaryOp(loc_subexpr, _)
             | PrecedenceConflict(roc_parse::ast::PrecedenceConflict {
                 expr: loc_subexpr, ..
@@ -298,6 +303,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 parens,
                 indent,
             ),
+            BinOps(_, _) => todo!(),
             UnaryOp(sub_expr, unary_op) => {
                 match &unary_op.value {
                     operator::UnaryOp::Negate => {

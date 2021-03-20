@@ -31,6 +31,63 @@ fn new_op_expr<'a>(
     }
 }
 
+fn new_op_call_expr<'a>(
+    arena: &'a Bump,
+    left: &'a Located<Expr<'a>>,
+    loc_op: Located<BinOp>,
+    right: &'a Located<Expr<'a>>,
+) -> Located<Expr<'a>> {
+    let region = Region::span_across(&left.region, &right.region);
+
+    let value = match loc_op.value {
+        Pizza => {
+            // Rewrite the Pizza operator into an Apply
+
+            match &right.value {
+                Apply(function, arguments, _called_via) => {
+                    let mut args = Vec::with_capacity_in(1 + arguments.len(), arena);
+
+                    args.push(left);
+
+                    for arg in arguments.iter() {
+                        args.push(arg);
+                    }
+
+                    let args = args.into_bump_slice();
+
+                    Apply(function, args, CalledVia::BinOp(Pizza))
+                }
+                _ => {
+                    // e.g. `1 |> (if b then (\a -> a) else (\c -> c))`
+                    let mut args = Vec::with_capacity_in(1, arena);
+
+                    args.push(left);
+
+                    let args = args.into_bump_slice();
+
+                    Apply(right, args, CalledVia::BinOp(Pizza))
+                }
+            }
+        }
+        binop => {
+            // This is a normal binary operator like (+), so desugar it
+            // into the appropriate function call.
+            let (module_name, ident) = binop_to_function(binop);
+
+            let args = arena.alloc([left, right]);
+
+            let loc_expr = arena.alloc(Located {
+                value: Expr::Var { module_name, ident },
+                region: loc_op.region,
+            });
+
+            Apply(loc_expr, args, CalledVia::BinOp(binop))
+        }
+    };
+
+    Located { value, region }
+}
+
 fn desugar_defs<'a>(
     arena: &'a Bump,
     region: Region,
@@ -255,7 +312,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 _ => panic!(),
             }
         }
-        BinOp(_) | Nested(BinOp(_)) => desugar_bin_op(arena, loc_expr),
+        BinOp(_) | Nested(BinOp(_)) => todo!(), // desugar_bin_op(arena, loc_expr),
+        BinOps(lefts, right) | Nested(BinOps(lefts, right)) => {
+            desugar_bin_ops(arena, loc_expr.region, lefts, right)
+        }
         Defs(defs, loc_ret) | Nested(Defs(defs, loc_ret)) => {
             desugar_defs(arena, loc_expr.region, *defs, loc_ret)
         }
@@ -454,6 +514,214 @@ fn binop_to_function(binop: BinOp) -> (&'static str, &'static str) {
         Assignment => unreachable!("Cannot desugar the = operator"),
         HasType => unreachable!("Cannot desugar the : operator"),
         Backpassing => unreachable!("Cannot desugar the <- operator"),
+    }
+}
+
+fn desugar_bin_ops<'a>(
+    arena: &'a Bump,
+    whole_region: Region,
+    lefts: &'a [(Located<Expr<'_>>, Located<BinOp>)],
+    right: &'a Located<Expr<'_>>,
+) -> &'a Located<Expr<'a>> {
+    let mut arg_stack: Vec<&'a Located<Expr>> = Vec::new_in(arena);
+    let mut op_stack: Vec<Located<BinOp>> = Vec::new_in(arena);
+
+    for (loc_expr, loc_op) in lefts {
+        arg_stack.push(desugar_expr(arena, loc_expr));
+        match run_binop_step(arena, whole_region, &mut arg_stack, &mut op_stack, *loc_op) {
+            Err(problem) => return problem,
+            Ok(()) => continue,
+        }
+    }
+
+    arg_stack.push(desugar_expr(arena, right));
+
+    for loc_op in op_stack.into_iter().rev() {
+        let right = arg_stack.pop().unwrap();
+        let left = arg_stack.pop().unwrap();
+
+        let region = Region::span_across(&left.region, &right.region);
+        let value = match loc_op.value {
+            Pizza => {
+                // Rewrite the Pizza operator into an Apply
+
+                match &right.value {
+                    Apply(function, arguments, _called_via) => {
+                        let mut args = Vec::with_capacity_in(1 + arguments.len(), arena);
+
+                        args.push(left);
+
+                        for arg in arguments.iter() {
+                            args.push(arg);
+                        }
+
+                        let args = args.into_bump_slice();
+
+                        Apply(function, args, CalledVia::BinOp(Pizza))
+                    }
+                    expr => {
+                        // e.g. `1 |> (if b then (\a -> a) else (\c -> c))`
+                        let mut args = Vec::with_capacity_in(1, arena);
+
+                        args.push(left);
+
+                        let function = arena.alloc(Located {
+                            value: Nested(expr),
+                            region: right.region,
+                        });
+
+                        let args = args.into_bump_slice();
+
+                        Apply(function, args, CalledVia::BinOp(Pizza))
+                    }
+                }
+            }
+            binop => {
+                // This is a normal binary operator like (+), so desugar it
+                // into the appropriate function call.
+                let (module_name, ident) = binop_to_function(binop);
+                let mut args = Vec::with_capacity_in(2, arena);
+
+                args.push(left);
+                args.push(right);
+
+                let loc_expr = arena.alloc(Located {
+                    value: Expr::Var { module_name, ident },
+                    region: loc_op.region,
+                });
+
+                let args = args.into_bump_slice();
+
+                Apply(loc_expr, args, CalledVia::BinOp(binop))
+            }
+        };
+
+        arg_stack.push(arena.alloc(Located { region, value }));
+    }
+
+    assert_eq!(arg_stack.len(), 1);
+
+    arg_stack.pop().unwrap()
+}
+
+enum Step<'a> {
+    Error(&'a Located<Expr<'a>>),
+    Push(Located<BinOp>),
+    Skip,
+}
+
+fn run_binop_step<'a>(
+    arena: &'a Bump,
+    whole_region: Region,
+    arg_stack: &mut Vec<&'a Located<Expr<'a>>>,
+    op_stack: &mut Vec<Located<BinOp>>,
+    next_op: Located<BinOp>,
+) -> Result<(), &'a Located<Expr<'a>>> {
+    use Step::*;
+
+    match binop_step(arena, whole_region, arg_stack, op_stack, next_op) {
+        Error(problem) => Err(problem),
+        Push(loc_op) => run_binop_step(arena, whole_region, arg_stack, op_stack, loc_op),
+        Skip => Ok(()),
+    }
+}
+
+fn binop_step<'a>(
+    arena: &'a Bump,
+    whole_region: Region,
+    arg_stack: &mut Vec<&'a Located<Expr<'a>>>,
+    op_stack: &mut Vec<Located<BinOp>>,
+    next_op: Located<BinOp>,
+) -> Step<'a> {
+    use roc_module::operator::Associativity::*;
+    use std::cmp::Ordering;
+
+    match op_stack.pop() {
+        Some(stack_op) => {
+            match next_op.value.cmp(&stack_op.value) {
+                Ordering::Less => {
+                    // Inline
+                    let right = arg_stack.pop().unwrap();
+                    let left = arg_stack.pop().unwrap();
+
+                    arg_stack.push(arena.alloc(new_op_call_expr(arena, left, stack_op, right)));
+
+                    Step::Push(next_op)
+                }
+
+                Ordering::Greater => {
+                    // Swap
+                    op_stack.push(stack_op);
+                    op_stack.push(next_op);
+
+                    Step::Skip
+                }
+
+                Ordering::Equal => {
+                    match (
+                        next_op.value.associativity(),
+                        stack_op.value.associativity(),
+                    ) {
+                        (LeftAssociative, LeftAssociative) => {
+                            // Inline
+                            let right = arg_stack.pop().unwrap();
+                            let left = arg_stack.pop().unwrap();
+
+                            arg_stack
+                                .push(arena.alloc(new_op_call_expr(arena, left, stack_op, right)));
+
+                            Step::Push(next_op)
+                        }
+
+                        (RightAssociative, RightAssociative) => {
+                            // Swap
+                            op_stack.push(stack_op);
+                            op_stack.push(next_op);
+
+                            Step::Skip
+                        }
+
+                        (NonAssociative, NonAssociative) => {
+                            // Both operators were non-associative, e.g. (True == False == False).
+                            // We should tell the author to disambiguate by grouping them with parens.
+                            let bad_op = next_op;
+                            let right = arg_stack.pop().unwrap();
+                            let left = arg_stack.pop().unwrap();
+                            let broken_expr =
+                                arena.alloc(new_op_call_expr(arena, left, stack_op, right));
+                            let region = broken_expr.region;
+                            let data = roc_parse::ast::PrecedenceConflict {
+                                whole_region,
+                                binop1_position: stack_op.region.start(),
+                                binop1: stack_op.value,
+                                binop2_position: bad_op.region.start(),
+                                binop2: bad_op.value,
+                                expr: arena.alloc(broken_expr),
+                            };
+                            let value = Expr::PrecedenceConflict(arena.alloc(data));
+
+                            Step::Error(arena.alloc(Located { region, value }))
+                        }
+
+                        _ => {
+                            // The operators had the same precedence but different associativity.
+                            //
+                            // In many languages, this case can happen due to (for example) <| and |> having the same
+                            // precedence but different associativity. Languages which support custom operators with
+                            // (e.g. Haskell) can potentially have arbitrarily many of these cases.
+                            //
+                            // By design, Roc neither allows custom operators nor has any built-in operators with
+                            // the same precedence and different associativity, so this should never happen!
+                            panic!("BinOps had the same associativity, but different precedence. This should never happen!");
+                        }
+                    }
+                }
+            }
+        }
+        None => {
+            op_stack.push(next_op);
+            Step::Skip
+        }
     }
 }
 

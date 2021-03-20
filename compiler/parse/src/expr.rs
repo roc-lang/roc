@@ -416,15 +416,14 @@ fn parse_expr_final<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    let mut expr = to_call(arena, expr_state.arguments, expr_state.expr);
+    let right_arg = to_call(arena, expr_state.arguments, expr_state.expr);
 
-    for (left_arg, op) in expr_state.operators.into_iter().rev() {
-        let region = Region::span_across(&left_arg.region, &expr.region);
-        let new = Expr::BinOp(arena.alloc((left_arg, op, expr)));
-        expr = Located::at(region, new);
-    }
+    let expr = Expr::BinOps(
+        expr_state.operators.into_bump_slice(),
+        arena.alloc(right_arg),
+    );
 
-    Ok((MadeProgress, expr.value, state))
+    Ok((MadeProgress, expr, state))
 }
 
 fn to_call<'a>(
@@ -1262,15 +1261,14 @@ fn parse_expr_end<'a>(
 
                             Ok((MadeProgress, expr.value, state))
                         } else {
-                            let mut expr = to_call(arena, expr_state.arguments, expr_state.expr);
+                            let right_arg = to_call(arena, expr_state.arguments, expr_state.expr);
 
-                            for (left_arg, op) in expr_state.operators.into_iter().rev() {
-                                let region = Region::span_across(&left_arg.region, &expr.region);
-                                let new = Expr::BinOp(arena.alloc((left_arg, op, expr)));
-                                expr = Located::at(region, new);
-                            }
+                            let expr = Expr::BinOps(
+                                expr_state.operators.into_bump_slice(),
+                                arena.alloc(right_arg),
+                            );
 
-                            Ok((MadeProgress, expr.value, state))
+                            Ok((MadeProgress, expr, state))
                         }
                     }
                 }
@@ -1384,6 +1382,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::Closure(_, _)
         | Expr::Backpassing(_, _, _)
         | Expr::BinOp(_)
+        | Expr::BinOps { .. }
         | Expr::Defs(_, _)
         | Expr::If(_, _)
         | Expr::When(_, _)

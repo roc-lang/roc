@@ -809,6 +809,12 @@ pub fn canonicalize_expr<'a>(
                 bad_expr
             );
         }
+        bad_expr @ ast::Expr::BinOps { .. } => {
+            panic!(
+                "A binary operator chain did not get desugared somehow: {:#?}",
+                bad_expr
+            );
+        }
         bad_expr @ ast::Expr::UnaryOp(_, _) => {
             panic!(
                 "A unary operator did not get desugared somehow: {:#?}",
