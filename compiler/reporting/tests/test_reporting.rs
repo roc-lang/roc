@@ -65,7 +65,6 @@ mod test_reporting {
             problems: can_problems,
             ..
         } = can_expr(arena, expr_src)?;
-        dbg!(&loc_expr);
         let mut subs = Subs::new(var_store.into());
 
         for (var, name) in output.introduced_variables.name_by_var {

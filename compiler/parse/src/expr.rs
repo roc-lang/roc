@@ -418,10 +418,14 @@ fn parse_expr_final<'a>(
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
     let right_arg = to_call(arena, expr_state.arguments, expr_state.expr);
 
-    let expr = Expr::BinOps(
-        expr_state.operators.into_bump_slice(),
-        arena.alloc(right_arg),
-    );
+    let expr = if expr_state.operators.is_empty() {
+        right_arg.value
+    } else {
+        Expr::BinOps(
+            expr_state.operators.into_bump_slice(),
+            arena.alloc(right_arg),
+        )
+    };
 
     Ok((MadeProgress, expr, state))
 }
@@ -1256,20 +1260,7 @@ fn parse_expr_end<'a>(
                         // roll back space parsing
                         let state = expr_state.initial;
 
-                        if expr_state.operators.is_empty() {
-                            let expr = to_call(arena, expr_state.arguments, expr_state.expr);
-
-                            Ok((MadeProgress, expr.value, state))
-                        } else {
-                            let right_arg = to_call(arena, expr_state.arguments, expr_state.expr);
-
-                            let expr = Expr::BinOps(
-                                expr_state.operators.into_bump_slice(),
-                                arena.alloc(right_arg),
-                            );
-
-                            Ok((MadeProgress, expr, state))
-                        }
+                        parse_expr_final(expr_state, arena, state)
                     }
                 }
             }
