@@ -447,7 +447,7 @@ mod test_parse {
             &[],
             arena.alloc(Located::new(0, 0, 25, 26, Num("0"))),
         );
-        let fields = &[
+        let fields: &[_] = &[
             Located::new(0, 0, 16, 20, label1),
             Located::new(0, 0, 22, 26, label2),
         ];
@@ -459,7 +459,7 @@ mod test_parse {
         let expected = RecordUpdate {
             update: &*arena.alloc(update_target),
             fields,
-            final_comments: &[],
+            final_comments: &(&[] as &[_]),
         };
 
         let actual = parse_expr_with(&arena, "{ Foo.Bar.baz & x: 5, y: 0 }");
@@ -3377,6 +3377,11 @@ mod test_parse {
         );
 
         assert!(actual.is_ok());
+    }
+
+    #[test]
+    fn parse_expr_size() {
+        assert_eq!(std::mem::size_of::<roc_parse::ast::Expr>(), 40);
     }
 
     // PARSE ERROR

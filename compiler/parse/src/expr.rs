@@ -2075,7 +2075,7 @@ fn record_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'
                 Some(update) => Expr::RecordUpdate {
                     update: &*arena.alloc(update),
                     fields: loc_assigned_fields_with_comments.value.0.into_bump_slice(),
-                    final_comments: loc_assigned_fields_with_comments.value.1,
+                    final_comments: arena.alloc(loc_assigned_fields_with_comments.value.1),
                 },
                 None => Expr::Record {
                     fields: loc_assigned_fields_with_comments.value.0.into_bump_slice(),
