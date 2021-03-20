@@ -517,7 +517,7 @@ fn desugar_bin_op<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'_>>) -> &'a L
                                             },
                                         );
                                         let region = broken_expr.region;
-                                        let value = Expr::PrecedenceConflict {
+                                        let data = roc_parse::ast::PrecedenceConflict {
                                             whole_region: loc_expr.region,
                                             binop1_position: stack_op.region.start(),
                                             binop1: stack_op.value,
@@ -525,6 +525,7 @@ fn desugar_bin_op<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'_>>) -> &'a L
                                             binop2: bad_op.value,
                                             expr: arena.alloc(broken_expr),
                                         };
+                                        let value = Expr::PrecedenceConflict(arena.alloc(data));
 
                                         return arena.alloc(Located { region, value });
                                     }

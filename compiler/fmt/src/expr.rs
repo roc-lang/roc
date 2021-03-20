@@ -75,9 +75,9 @@ impl<'a> Formattable<'a> for Expr<'a> {
             }
 
             UnaryOp(loc_subexpr, _)
-            | PrecedenceConflict {
+            | PrecedenceConflict(roc_parse::ast::PrecedenceConflict {
                 expr: loc_subexpr, ..
-            } => loc_subexpr.is_multiline(),
+            }) => loc_subexpr.is_multiline(),
 
             ParensAround(subexpr) | Nested(subexpr) => subexpr.is_multiline(),
 

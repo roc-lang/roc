@@ -720,14 +720,14 @@ pub fn canonicalize_expr<'a>(
             )
         }
 
-        ast::Expr::PrecedenceConflict {
+        ast::Expr::PrecedenceConflict(ast::PrecedenceConflict {
             whole_region,
             binop1_position,
             binop2_position,
             binop1,
             binop2,
             expr: _,
-        } => {
+        }) => {
             use roc_problem::can::RuntimeError::*;
 
             let region1 = Region::new(
