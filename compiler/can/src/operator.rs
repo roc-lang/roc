@@ -190,6 +190,40 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 },
             })
         }
+
+        RecordUpdate {
+            fields,
+            update,
+            final_comments,
+        }
+        | Nested(RecordUpdate {
+            fields,
+            update,
+            final_comments,
+        }) => {
+            // NOTE the `update` field is always a `Var { .. }` and does not need to be desugared
+            let mut new_fields = Vec::with_capacity_in(fields.len(), arena);
+
+            for field in fields.iter() {
+                let value = desugar_field(arena, &field.value);
+
+                new_fields.push(Located {
+                    value,
+                    region: field.region,
+                });
+            }
+
+            let new_fields = new_fields.into_bump_slice();
+
+            arena.alloc(Located {
+                region: loc_expr.region,
+                value: RecordUpdate {
+                    update: *update,
+                    fields: new_fields,
+                    final_comments,
+                },
+            })
+        }
         Closure(loc_patterns, loc_ret) | Nested(Closure(loc_patterns, loc_ret)) => {
             arena.alloc(Located {
                 region: loc_expr.region,

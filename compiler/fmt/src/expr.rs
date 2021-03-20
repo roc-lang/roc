@@ -98,6 +98,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
             }
 
             Record { fields, .. } => fields.iter().any(|loc_field| loc_field.is_multiline()),
+            RecordUpdate { fields, .. } => fields.iter().any(|loc_field| loc_field.is_multiline()),
         }
     }
 
@@ -246,6 +247,13 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 final_comments,
             } => {
                 fmt_record(buf, *update, fields, final_comments, indent);
+            }
+            RecordUpdate {
+                fields,
+                update,
+                final_comments,
+            } => {
+                fmt_record(buf, Some(*update), fields, final_comments, indent);
             }
             Closure(loc_patterns, loc_ret) => {
                 fmt_closure(buf, loc_patterns, loc_ret, indent);

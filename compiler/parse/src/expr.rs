@@ -1393,6 +1393,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::Record {
             update: Some(_), ..
         }
+        | Expr::RecordUpdate { .. }
         | Expr::UnaryOp(_, _) => Err(()),
 
         Expr::Str(string) => Ok(Pattern::StrLiteral(string.clone())),
