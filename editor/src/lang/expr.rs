@@ -779,7 +779,7 @@ pub fn to_expr2<'a>(
             (expr, output)
         }
 
-        PrecedenceConflict(_whole_region, _binop1, _binop2, _expr) => {
+        PrecedenceConflict { .. } => {
             //            use roc_problem::can::RuntimeError::*;
             //
             //            let problem = PrecedenceProblem::BothNonAssociative(

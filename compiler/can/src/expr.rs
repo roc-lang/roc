@@ -720,7 +720,12 @@ pub fn canonicalize_expr<'a>(
             )
         }
 
-        ast::Expr::PrecedenceConflict(whole_region, binop1, binop2, _expr) => {
+        ast::Expr::PrecedenceConflict {
+            whole_region,
+            binop1,
+            binop2,
+            expr: _,
+        } => {
             use roc_problem::can::RuntimeError::*;
 
             let problem = PrecedenceProblem::BothNonAssociative(*whole_region, *binop1, *binop2);

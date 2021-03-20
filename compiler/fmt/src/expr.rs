@@ -74,9 +74,10 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 next_is_multiline_bin_op || loc_left.is_multiline() || loc_right.is_multiline()
             }
 
-            UnaryOp(loc_subexpr, _) | PrecedenceConflict(_, _, _, loc_subexpr) => {
-                loc_subexpr.is_multiline()
-            }
+            UnaryOp(loc_subexpr, _)
+            | PrecedenceConflict {
+                expr: loc_subexpr, ..
+            } => loc_subexpr.is_multiline(),
 
             ParensAround(subexpr) | Nested(subexpr) => subexpr.is_multiline(),
 
@@ -316,7 +317,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
             }
             MalformedIdent(_, _) => {}
             MalformedClosure => {}
-            PrecedenceConflict(_, _, _, _) => {}
+            PrecedenceConflict { .. } => {}
         }
     }
 }

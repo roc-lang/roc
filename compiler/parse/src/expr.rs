@@ -1389,7 +1389,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::If(_, _)
         | Expr::When(_, _)
         | Expr::MalformedClosure
-        | Expr::PrecedenceConflict(_, _, _, _)
+        | Expr::PrecedenceConflict { .. }
         | Expr::Record {
             update: Some(_), ..
         }
