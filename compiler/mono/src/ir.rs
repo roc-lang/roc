@@ -4049,9 +4049,8 @@ pub fn with_hole<'a>(
             let arg_symbols = arg_symbols.into_bump_slice();
 
             // layout of the return type
-            let layout = layout_cache
-                .from_var(env.arena, ret_var, env.subs)
-                .unwrap_or_else(|err| todo!("TODO turn fn_var into a RuntimeError {:?}", err));
+            let layout =
+                return_on_layout_error!(env, layout_cache.from_var(env.arena, ret_var, env.subs));
 
             let call = self::Call {
                 call_type: CallType::Foreign {
@@ -4072,8 +4071,6 @@ pub fn with_hole<'a>(
         }
 
         RunLowLevel { op, args, ret_var } => {
-            let op = optimize_low_level(env.subs, op, &args);
-
             let mut arg_symbols = Vec::with_capacity_in(args.len(), env.arena);
 
             for (_, arg_expr) in args.iter() {
@@ -4082,23 +4079,8 @@ pub fn with_hole<'a>(
             let arg_symbols = arg_symbols.into_bump_slice();
 
             // layout of the return type
-            let layout = match layout_cache.from_var(env.arena, ret_var, env.subs) {
-                Ok(cached) => cached,
-                Err(LayoutProblem::UnresolvedTypeVar(_)) => {
-                    return Stmt::RuntimeError(env.arena.alloc(format!(
-                        "UnresolvedTypeVar {} line {}",
-                        file!(),
-                        line!()
-                    )));
-                }
-                Err(LayoutProblem::Erroneous) => {
-                    return Stmt::RuntimeError(env.arena.alloc(format!(
-                        "Erroneous {} line {}",
-                        file!(),
-                        line!()
-                    )));
-                }
-            };
+            let layout =
+                return_on_layout_error!(env, layout_cache.from_var(env.arena, ret_var, env.subs));
 
             let call = self::Call {
                 call_type: CallType::LowLevel { op },
@@ -7032,44 +7014,6 @@ fn from_can_record_destruct<'a>(
             ),
         },
     })
-}
-
-/// Potentially translate LowLevel operations into more efficient ones based on
-/// uniqueness type info.
-///
-/// For example, turning LowLevel::ListSet to LowLevel::ListSetInPlace if the
-/// list is Unique.
-fn optimize_low_level(
-    subs: &Subs,
-    op: LowLevel,
-    args: &[(Variable, roc_can::expr::Expr)],
-) -> LowLevel {
-    match op {
-        LowLevel::ListSet => {
-            // The first arg is the one with the List in it.
-            // List.set : List elem, Int, elem -> List elem
-            let list_arg_var = args[0].0;
-            let content = subs.get_without_compacting(list_arg_var).content;
-
-            match content {
-                Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, attr_args)) => {
-                    debug_assert_eq!(attr_args.len(), 2);
-
-                    // If the first argument (the List) is unique,
-                    // then we can safely upgrade to List.set_in_place
-                    let attr_arg_content = subs.get_without_compacting(attr_args[0]).content;
-
-                    if attr_arg_content.is_unique(subs) {
-                        LowLevel::ListSetInPlace
-                    } else {
-                        LowLevel::ListSet
-                    }
-                }
-                _ => op,
-            }
-        }
-        _ => op,
-    }
 }
 
 pub enum IntPrecision {
