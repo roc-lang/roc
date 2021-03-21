@@ -129,7 +129,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             let region = loc_expr.region;
             let loc_sub_expr = Located {
                 region,
-                value: (*sub_expr).clone(),
+                value: **sub_expr,
             };
             let value = Access(&desugar_expr(arena, arena.alloc(loc_sub_expr)).value, paths);
 
@@ -277,7 +277,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 alternatives.extend(branch.patterns.iter().copied());
 
                 let desugared_guard = if let Some(guard) = &branch.guard {
-                    Some(desugar_expr(arena, guard).clone())
+                    Some(*desugar_expr(arena, guard))
                 } else {
                     None
                 };
@@ -286,10 +286,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
 
                 desugared_branches.push(&*arena.alloc(WhenBranch {
                     patterns: alternatives,
-                    value: Located {
-                        region: desugared.region,
-                        value: desugared.value.clone(),
-                    },
+                    value: *desugared,
                     guard: desugared_guard,
                 }));
             }
@@ -333,7 +330,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             desugar_expr(
                 arena,
                 arena.alloc(Located {
-                    value: (*expr).clone(),
+                    value: **expr,
                     region: loc_expr.region,
                 }),
             )
@@ -346,8 +343,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
 
             for (condition, then_branch) in if_thens.iter() {
                 desugared_if_thens.push((
-                    desugar_expr(arena, condition).clone(),
-                    desugar_expr(arena, then_branch).clone(),
+                    *desugar_expr(arena, condition),
+                    *desugar_expr(arena, then_branch),
                 ));
             }
 
