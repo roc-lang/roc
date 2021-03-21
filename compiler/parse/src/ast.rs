@@ -74,7 +74,7 @@ pub enum StrLiteral<'a> {
 /// we move on to canonicalization, which often needs to allocate more because
 /// it's doing things like turning local variables into fully qualified symbols.
 /// Once canonicalization is done, the arena and the input string get dropped.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Expr<'a> {
     // Number Literals
     Float(&'a str),
