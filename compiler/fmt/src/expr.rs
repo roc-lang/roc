@@ -75,7 +75,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 expr: loc_subexpr, ..
             }) => loc_subexpr.is_multiline(),
 
-            ParensAround(subexpr) | Nested(subexpr) => subexpr.is_multiline(),
+            ParensAround(subexpr) => subexpr.is_multiline(),
 
             Closure(loc_patterns, loc_body) => {
                 // check the body first because it's more likely to be multiline
@@ -298,9 +298,6 @@ impl<'a> Formattable<'a> for Expr<'a> {
 
                 sub_expr.format_with_options(buf, parens, newlines, indent);
             }
-            Nested(nested_expr) => {
-                nested_expr.format_with_options(buf, parens, newlines, indent);
-            }
             AccessorFunction(key) => {
                 buf.push('.');
                 buf.push_str(key);
@@ -507,8 +504,6 @@ fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
 
             false
         }
-
-        Nested(nested_expr) => empty_line_before_expr(nested_expr),
 
         _ => false,
     }
