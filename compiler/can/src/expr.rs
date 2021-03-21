@@ -408,46 +408,7 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::Var { module_name, ident } => {
             canonicalize_lookup(env, scope, module_name, ident, region)
-        } //ast::Expr::InterpolatedStr(pairs, suffix) => {
-        //    let mut output = Output::new();
-        //    let can_pairs: Vec<(String, Located<Expr>)> = pairs
-        //        .into_iter()
-        //        .map(|(string, loc_ident)| {
-        //            // From a language design perspective, we only permit idents in interpolation.
-        //            // However, in a canonical Expr we store it as a full Expr, not a Symbol.
-        //            // This is so that we can resolve it to either Var or Unrecognized; if we
-        //            // stored it as a Symbol, we couldn't record runtime errors here.
-        //            let can_expr = match resolve_ident(
-        //                &env,
-        //                &scope,
-        //                loc_ident.value,
-        //                &mut output.references,
-        //            ) {
-        //                Ok(symbol) => Var(symbol),
-        //                Err(ident) => {
-        //                    let loc_ident = Located {
-        //                        region: loc_ident.region,
-        //                        value: ident,
-        //                    };
-
-        //                    env.problem(Problem::LookupNotInScope(loc_ident.clone()));
-
-        //                    RuntimeError(LookupNotInScope(loc_ident))
-        //                }
-        //            };
-
-        //            (
-        //                string,
-        //                Located {
-        //                    region: loc_ident.region,
-        //                    value: can_expr,
-        //                },
-        //            )
-        //        })
-        //        .collect();
-
-        //    (InterpolatedStr(can_pairs, suffix), output)
-        //}
+        }
         ast::Expr::Defs(loc_defs, loc_ret) => {
             can_defs_with_return(
                 env,
