@@ -69,7 +69,7 @@ fn malformed(env: &mut Env, region: Region, name: &str) {
     use roc_problem::can::RuntimeError::*;
 
     let problem = MalformedTypeName((*name).into(), region);
-    env.problem(roc_problem::can::Problem::RuntimeError(problem.clone()));
+    env.problem(roc_problem::can::Problem::RuntimeError(problem));
 }
 
 pub fn canonicalize_annotation(
