@@ -3265,20 +3265,20 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
-                
+
                 Something is off with the body of the `x` definition:
-                
+
                 4│  x : AList I64 I64
                 5│  x = ACons 0 (BCons 1 (ACons "foo" BNil ))
                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                
+
                 This `ACons` global tag application has the type:
-                
+
                     [ ACons Num (Integer Signed64) [ BCons (Num a) [ ACons Str [ BNil
                     ]b ]c ]d, ANil ]
-                
+
                 But the type annotation on `x` says it should be:
-                
+
                     [ ACons I64 BList I64 I64, ANil ]
                 "#
             ),
@@ -4155,12 +4155,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNKNOWN OPERATOR ────────────────────────────────────────────────────────────
-                
+
                 This looks like an operator, but it's not one I recognize!
-                
+
                 1│  f :: I64
                       ^^
-                
+
                 I have no specific suggestion for this operator, see TODO for the full
                 list of operators in Roc.
             "#
@@ -4188,12 +4188,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── TOO MANY ARGS ───────────────────────────────────────────────────────────────
-                
+
                 This value is not a function, but it was given 3 arguments:
-                
+
                 3│      x == 5
                              ^
-                
+
                 Are there any missing commas? Or missing parentheses?
             "#
             ),
@@ -4474,16 +4474,16 @@ mod test_reporting {
         report_problem_as(
             "# comment with a \t\n4",
             indoc!(
-                r#"
+                "
                 ── TAB CHARACTER ───────────────────────────────────────────────────────────────
-                
+
                 I encountered a tab character
-                
-                1│  # comment with a 	
+
+                1│  # comment with a \t
                                      ^
-                
+
                 Tab characters are not allowed.
-            "#
+            "
             ),
         )
     }
@@ -4500,9 +4500,9 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── BAD TYPE VARIABLE ───────────────────────────────────────────────────────────
-                
+
                 I am expecting a type variable, but I got stuck here:
-                
+
                 1│  f : (
                          ^
             "#
@@ -4545,7 +4545,19 @@ mod test_reporting {
                 f
                 "#
             ),
-            indoc!(r#""#),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am confused by this type name:
+
+                1│  f : Foo..Bar
+                        ^^^^^^^^
+
+                Type names start with an uppercase letter, and can optionally be
+                qualified by a module name, like Bool or Http.Request.Request.
+            "#
+            ),
         )
 
         //                ── DOUBLE DOT ──────────────────────────────────────────────────────────────────
@@ -4568,7 +4580,19 @@ mod test_reporting {
                 f
                 "#
             ),
-            indoc!(r#""#),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am confused by this type name:
+
+                1│  f : Foo.Bar.
+                        ^^^^^^^^
+
+                Type names start with an uppercase letter, and can optionally be
+                qualified by a module name, like Bool or Http.Request.Request.
+            "#
+            ),
         )
 
         //                ── TRAILING DOT ────────────────────────────────────────────────────────────────
@@ -4619,7 +4643,19 @@ mod test_reporting {
                 f
                 "#
             ),
-            indoc!(r#""#),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am confused by this type name:
+
+                1│  f : Foo.1
+                        ^^^^^
+
+                Type names start with an uppercase letter, and can optionally be
+                qualified by a module name, like Bool or Http.Request.Request.
+            "#
+            ),
         )
 
         //                ── WEIRD QUALIFIED NAME ────────────────────────────────────────────────────────
@@ -4643,7 +4679,19 @@ mod test_reporting {
                 f
                 "#
             ),
-            indoc!(r#""#),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am confused by this type name:
+
+                1│  f : Foo.foo
+                        ^^^^^^^
+
+                Type names start with an uppercase letter, and can optionally be
+                qualified by a module name, like Bool or Http.Request.Request.
+            "#
+            ),
         )
     }
 
@@ -4658,19 +4706,19 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── MISSING FINAL EXPRESSION ────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a definition's final expression, but I
                 got stuck here:
-                
+
                 1│  f : Foo.foo
                                ^
-                
+
                 This definition is missing a final expression. A nested definition
                 must be followed by either another definition, or an expression
-                
+
                     x = 4
                     y = 2
-                
+
                     x + y
             "#
             ),
@@ -4973,13 +5021,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── MISSING EXPRESSION ──────────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a definition, but I got stuck here:
-                
+
                 1│  when Just 4 is
                 2│      Just when ->
                              ^
-                
+
                 I was expecting to see an expression like 42 or "hello".
             "#
             ),
@@ -5646,14 +5694,14 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-                
+
                 I cannot find a `bar` value
-                
+
                 1│  [ "foo", bar("") ]
                              ^^^
-                
+
                 these names seem close though:
-                
+
                     Nat
                     Str
                     U8
@@ -5729,16 +5777,16 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNKNOWN OPERATOR ────────────────────────────────────────────────────────────
-                
+
                 This looks like an operator, but it's not one I recognize!
-                
+
                 1│  main =
                 2│      (\x -> x) : I64
                                   ^
-                
+
                 The has-type operator : can only occur in a definition's type
                 signature, like
-                
+
                     increment : I64 -> I64
                     increment = \x -> x + 1
             "#
@@ -5759,19 +5807,19 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── MISSING FINAL EXPRESSION ────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a definition's final expression, but I
                 got stuck here:
-                
+
                 1│  main = 5 -> 3
                               ^
-                
+
                 This definition is missing a final expression. A nested definition
                 must be followed by either another definition, or an expression
-                
+
                     x = 4
                     y = 2
-                
+
                     x + y
             "#
             ),
