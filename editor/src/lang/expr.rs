@@ -809,7 +809,6 @@ pub fn to_expr2<'a>(
             //            (RuntimeError(problem), Output::default())
             todo!()
         }
-        Nested(sub_expr) => to_expr2(env, scope, sub_expr, region),
         Var { module_name, ident } => canonicalize_lookup(env, scope, module_name, ident, region),
 
         // Below this point, we shouln't see any of these nodes anymore because

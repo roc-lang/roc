@@ -1335,9 +1335,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             spaces,
         )),
 
-        Expr::ParensAround(sub_expr) | Expr::Nested(sub_expr) => {
-            expr_to_pattern_help(arena, sub_expr)
-        }
+        Expr::ParensAround(sub_expr) => expr_to_pattern_help(arena, sub_expr),
 
         Expr::Record {
             fields,

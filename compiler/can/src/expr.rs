@@ -728,11 +728,6 @@ pub fn canonicalize_expr<'a>(
 
             (RuntimeError(problem), Output::default())
         }
-        ast::Expr::Nested(sub_expr) => {
-            let (answer, output) = canonicalize_expr(env, var_store, scope, region, sub_expr);
-
-            (answer.value, output)
-        }
         ast::Expr::NonBase10Int {
             string,
             base,

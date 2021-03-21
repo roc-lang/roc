@@ -59,7 +59,7 @@ fn new_op_call_expr<'a>(
     Located { value, region }
 }
 
-fn desugar_defs<'a>(
+fn desugar_def_helps<'a>(
     arena: &'a Bump,
     region: Region,
     defs: &'a [&'a Located<Def<'a>>],
@@ -69,7 +69,7 @@ fn desugar_defs<'a>(
 
     for loc_def in defs.iter() {
         let loc_def = Located {
-            value: desugar_def(arena, &loc_def.value),
+            value: desugar_def_help(arena, &loc_def.value),
             region: loc_def.region,
         };
 
@@ -94,8 +94,8 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
         SpaceBefore(def, _)
         | SpaceAfter(def, _)
         | Nested(SpaceBefore(def, _))
-        | Nested(SpaceAfter(def, _)) => desugar_def(arena, def),
-        Nested(Nested(def)) => desugar_def(arena, def),
+        | Nested(SpaceAfter(def, _)) => desugar_def_help(arena, def),
+        Nested(Nested(def)) => desugar_def_help(arena, def),
         alias @ Alias { .. } => Nested(alias),
         Nested(alias @ Alias { .. }) => Nested(alias),
         ann @ Annotation(_, _) => Nested(ann),
@@ -130,33 +130,22 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
 pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a Located<Expr<'a>> {
     match &loc_expr.value {
         Float(_)
-        | Nested(Float(_))
         | Num(_)
-        | Nested(Num(_))
         | NonBase10Int { .. }
-        | Nested(NonBase10Int { .. })
         | Str(_)
-        | Nested(Str(_))
         | AccessorFunction(_)
-        | Nested(AccessorFunction(_))
         | Var { .. }
-        | Nested(Var { .. })
         | MalformedIdent(_, _)
-        | Nested(MalformedIdent(_, _))
         | MalformedClosure
-        | Nested(MalformedClosure)
         | PrecedenceConflict { .. }
-        | Nested(PrecedenceConflict { .. })
         | GlobalTag(_)
-        | Nested(GlobalTag(_))
-        | PrivateTag(_)
-        | Nested(PrivateTag(_)) => loc_expr,
+        | PrivateTag(_) => loc_expr,
 
-        Access(sub_expr, paths) | Nested(Access(sub_expr, paths)) => {
+        Access(sub_expr, paths) => {
             let region = loc_expr.region;
             let loc_sub_expr = Located {
                 region,
-                value: Nested(sub_expr),
+                value: (*sub_expr).clone(),
             };
             let value = Access(&desugar_expr(arena, arena.alloc(loc_sub_expr)).value, paths);
 
@@ -165,11 +154,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
         List {
             items,
             final_comments,
-        }
-        | Nested(List {
-            items,
-            final_comments,
-        }) => {
+        } => {
             let mut new_items = Vec::with_capacity_in(items.len(), arena);
 
             for item in items.iter() {
@@ -189,11 +174,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
         Record {
             fields,
             final_comments,
-        }
-        | Nested(Record {
-            fields,
-            final_comments,
-        }) => {
+        } => {
             let mut new_fields = Vec::with_capacity_in(fields.len(), arena);
 
             for field in fields.iter() {
@@ -220,12 +201,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             fields,
             update,
             final_comments,
-        }
-        | Nested(RecordUpdate {
-            fields,
-            update,
-            final_comments,
-        }) => {
+        } => {
             // NOTE the `update` field is always a `Var { .. }` and does not need to be desugared
             let mut new_fields = Vec::with_capacity_in(fields.len(), arena);
 
@@ -249,14 +225,11 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 },
             })
         }
-        Closure(loc_patterns, loc_ret) | Nested(Closure(loc_patterns, loc_ret)) => {
-            arena.alloc(Located {
-                region: loc_expr.region,
-                value: Closure(loc_patterns, desugar_expr(arena, loc_ret)),
-            })
-        }
-        Backpassing(loc_patterns, loc_body, loc_ret)
-        | Nested(Backpassing(loc_patterns, loc_body, loc_ret)) => {
+        Closure(loc_patterns, loc_ret) => arena.alloc(Located {
+            region: loc_expr.region,
+            value: Closure(loc_patterns, desugar_expr(arena, loc_ret)),
+        }),
+        Backpassing(loc_patterns, loc_body, loc_ret) => {
             // loc_patterns <- loc_body
             //
             // loc_ret
@@ -293,13 +266,9 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 }
             }
         }
-        BinOps(lefts, right) | Nested(BinOps(lefts, right)) => {
-            desugar_bin_ops(arena, loc_expr.region, lefts, right)
-        }
-        Defs(defs, loc_ret) | Nested(Defs(defs, loc_ret)) => {
-            desugar_defs(arena, loc_expr.region, *defs, loc_ret)
-        }
-        Apply(loc_fn, loc_args, called_via) | Nested(Apply(loc_fn, loc_args, called_via)) => {
+        BinOps(lefts, right) => desugar_bin_ops(arena, loc_expr.region, lefts, right),
+        Defs(defs, loc_ret) => desugar_def_helps(arena, loc_expr.region, *defs, loc_ret),
+        Apply(loc_fn, loc_args, called_via) => {
             let mut desugared_args = Vec::with_capacity_in(loc_args.len(), arena);
 
             for loc_arg in loc_args.iter() {
@@ -313,7 +282,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 region: loc_expr.region,
             })
         }
-        When(loc_cond_expr, branches) | Nested(When(loc_cond_expr, branches)) => {
+        When(loc_cond_expr, branches) => {
             let loc_desugared_cond = &*arena.alloc(desugar_expr(arena, &loc_cond_expr));
             let mut desugared_branches = Vec::with_capacity_in(branches.len(), arena);
 
@@ -340,7 +309,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                     patterns: alternatives,
                     value: Located {
                         region: desugared.region,
-                        value: Nested(&desugared.value),
+                        value: desugared.value.clone(),
                     },
                     guard: desugared_guard,
                 }));
@@ -353,7 +322,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 region: loc_expr.region,
             })
         }
-        UnaryOp(loc_arg, loc_op) | Nested(UnaryOp(loc_arg, loc_op)) => {
+        UnaryOp(loc_arg, loc_op) => {
             use roc_module::operator::UnaryOp::*;
 
             let region = loc_op.region;
@@ -379,24 +348,18 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 region: loc_expr.region,
             })
         }
-        SpaceBefore(expr, _)
-        | Nested(SpaceBefore(expr, _))
-        | SpaceAfter(expr, _)
-        | Nested(SpaceAfter(expr, _))
-        | ParensAround(expr)
-        | Nested(ParensAround(expr))
-        | Nested(Nested(expr)) => {
+        SpaceBefore(expr, _) | SpaceAfter(expr, _) | ParensAround(expr) => {
             // Since we've already begun canonicalization, spaces and parens
             // are no longer needed and should be dropped.
             desugar_expr(
                 arena,
                 arena.alloc(Located {
-                    value: Nested(expr),
+                    value: (*expr).clone(),
                     region: loc_expr.region,
                 }),
             )
         }
-        If(if_thens, final_else_branch) | Nested(If(if_thens, final_else_branch)) => {
+        If(if_thens, final_else_branch) => {
             // If does not get desugared into `when` so we can give more targetted error messages during type checking.
             let desugared_final_else = &*arena.alloc(desugar_expr(arena, &final_else_branch));
 
