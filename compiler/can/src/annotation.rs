@@ -65,6 +65,13 @@ impl IntroducedVariables {
     }
 }
 
+fn malformed(env: &mut Env, region: Region, name: &str) {
+    use roc_problem::can::RuntimeError::*;
+
+    let problem = MalformedTypeName((*name).into(), region);
+    env.problem(roc_problem::can::Problem::RuntimeError(problem.clone()));
+}
+
 pub fn canonicalize_annotation(
     env: &mut Env,
     scope: &mut Scope,
@@ -446,7 +453,16 @@ fn can_annotation_help(
             local_aliases,
             references,
         ),
-        Wildcard | Malformed(_) => {
+        Wildcard => {
+            let var = var_store.fresh();
+
+            introduced_variables.insert_wildcard(var);
+
+            Type::Variable(var)
+        }
+        Malformed(string) => {
+            malformed(env, region, string);
+
             let var = var_store.fresh();
 
             introduced_variables.insert_wildcard(var);
@@ -542,8 +558,9 @@ fn can_assigned_fields<'a>(
                     field = nested;
                     continue 'inner;
                 }
-                Malformed(_) => {
-                    // TODO report this?
+                Malformed(string) => {
+                    malformed(env, region, string);
+
                     // completely skip this element, advance to the next tag
                     continue 'outer;
                 }
@@ -645,8 +662,9 @@ fn can_tags<'a>(
                     tag = nested;
                     continue 'inner;
                 }
-                Tag::Malformed(_) => {
-                    // TODO report this?
+                Tag::Malformed(string) => {
+                    malformed(env, region, string);
+
                     // completely skip this element, advance to the next tag
                     continue 'outer;
                 }
