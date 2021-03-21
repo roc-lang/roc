@@ -238,7 +238,7 @@ pub fn canonicalize_pattern<'a>(
             ptype => unsupported_pattern(env, ptype, region),
         },
 
-        SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) | Nested(sub_pattern) => {
+        SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) => {
             return canonicalize_pattern(env, var_store, scope, pattern_type, sub_pattern, region)
         }
         RecordDestructure(patterns) => {

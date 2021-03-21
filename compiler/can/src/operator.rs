@@ -4,7 +4,7 @@ use roc_module::ident::ModuleName;
 use roc_module::operator::BinOp::Pizza;
 use roc_module::operator::{BinOp, CalledVia};
 use roc_parse::ast::Expr::{self, *};
-use roc_parse::ast::{AssignedField, Def, Pattern, WhenBranch};
+use roc_parse::ast::{AssignedField, Def, WhenBranch};
 use roc_region::all::{Located, Region};
 
 // BinOp precedence logic adapted from Gluon by Markus Westerlind, MIT licensed
@@ -290,12 +290,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 let desugared = desugar_expr(arena, &branch.value);
 
                 let mut alternatives = Vec::with_capacity_in(branch.patterns.len(), arena);
-                for loc_pattern in branch.patterns.iter() {
-                    alternatives.push(Located {
-                        region: loc_pattern.region,
-                        value: Pattern::Nested(&loc_pattern.value),
-                    })
-                }
+                alternatives.extend(branch.patterns.iter().copied());
 
                 let desugared_guard = if let Some(guard) = &branch.guard {
                     Some(desugar_expr(arena, guard).clone())

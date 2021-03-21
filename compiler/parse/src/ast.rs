@@ -57,7 +57,7 @@ impl EscapedChar {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StrLiteral<'a> {
     /// The most common case: a plain string with no escapes or interpolations
     PlainLine(&'a str),
@@ -326,7 +326,7 @@ impl<'a> CommentOrNewline<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pattern<'a> {
     // Identifier
     Identifier(&'a str),
@@ -346,10 +346,6 @@ pub enum Pattern<'a> {
     /// An optional field pattern, e.g. { x ? Just 0 } -> ...
     /// Can only occur inside of a RecordDestructure
     OptionalField(&'a str, &'a Loc<Expr<'a>>),
-
-    /// This is used only to avoid cloning when reordering expressions (e.g. in desugar()).
-    /// It lets us take an (&Expr) and create a plain (Expr) from it.
-    Nested(&'a Pattern<'a>),
 
     // Literal
     NumLiteral(&'a str),
@@ -460,8 +456,6 @@ impl<'a> Pattern<'a> {
                 //      { x, y ? False } = rec
                 x == y
             }
-            (Nested(x), Nested(y)) => x.equivalent(y),
-
             // Literal
             (NumLiteral(x), NumLiteral(y)) => x == y,
             (
