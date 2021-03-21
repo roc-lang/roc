@@ -150,7 +150,7 @@ impl Pool {
         }
     }
 
-    fn get_mut<T>(&mut self, node_id: NodeId<T>) -> &mut T {
+    pub fn get_mut<T>(&mut self, node_id: NodeId<T>) -> &mut T {
         unsafe {
             let node_ptr = self.nodes.offset(node_id.index as isize) as *mut T;
 

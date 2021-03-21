@@ -1,4 +1,6 @@
-use super::markup::{Attribute, MarkupNode};
+use super::markup::attribute::{Attribute, Attributes};
+use super::markup::nodes::{MarkupNode, BLANK_PLACEHOLDER};
+use crate::editor::slow_pool::SlowPool;
 use crate::editor::{ed_error::EdResult, theme::EdTheme, util::map_get};
 use crate::graphics::primitives::rect::Rect;
 use crate::graphics::primitives::text as gr_text;
@@ -14,6 +16,7 @@ pub fn build_code_graphics<'a>(
     txt_coords: Vector2<f32>,
     config: &Config,
     glyph_dim_rect: Rect,
+    markup_node_pool: &'a SlowPool,
 ) -> EdResult<(wgpu_glyph::Section<'a>, Vec<Rect>)> {
     let area_bounds = (size.width as f32, size.height as f32);
     let layout = wgpu_glyph::Layout::default().h_align(wgpu_glyph::HorizontalAlign::Left);
@@ -26,6 +29,7 @@ pub fn build_code_graphics<'a>(
             txt_coords,
             glyph_dim_rect,
         },
+        markup_node_pool,
     )?;
 
     let section =
@@ -44,6 +48,7 @@ struct CodeStyle<'a> {
 fn markup_to_wgpu<'a>(
     markup_node: &'a MarkupNode,
     code_style: &CodeStyle,
+    markup_node_pool: &'a SlowPool,
 ) -> EdResult<(Vec<wgpu_glyph::Text<'a>>, Vec<Rect>)> {
     let mut wgpu_texts: Vec<wgpu_glyph::Text<'a>> = Vec::new();
     let mut rects: Vec<Rect> = Vec::new();
@@ -56,29 +61,33 @@ fn markup_to_wgpu<'a>(
         &mut rects,
         code_style,
         &mut txt_row_col,
+        markup_node_pool,
     )?;
 
     Ok((wgpu_texts, rects))
 }
 
 fn draw_attributes(
-    attributes: &[Attribute],
+    attributes: &Attributes,
     txt_row_col: &(usize, usize),
     code_style: &CodeStyle,
 ) -> Vec<Rect> {
     let char_width = code_style.glyph_dim_rect.width;
 
     attributes
+        .all
         .iter()
         .map(|attr| match attr {
-            Attribute::Caret { offset_col } => {
+            Attribute::Caret { caret } => {
+                let caret_col = caret.offset_col as f32;
+
                 let top_left_x = code_style.txt_coords.x
                     + (txt_row_col.1 as f32) * char_width
-                    + (*offset_col as f32) * char_width;
+                    + caret_col * char_width;
 
                 let top_left_y = code_style.txt_coords.y
                     + (txt_row_col.0 as f32) * char_width
-                    + (*offset_col as f32) * char_width;
+                    + char_width * 0.2;
 
                 make_caret_rect(
                     top_left_x,
@@ -99,14 +108,24 @@ fn markup_to_wgpu_helper<'a>(
     rects: &mut Vec<Rect>,
     code_style: &CodeStyle,
     txt_row_col: &mut (usize, usize),
+    markup_node_pool: &'a SlowPool,
 ) -> EdResult<()> {
     match markup_node {
         MarkupNode::Nested {
             ast_node_id: _,
-            children,
+            children_ids,
+            parent_id_opt: _,
         } => {
-            for child in children.iter() {
-                markup_to_wgpu_helper(child, wgpu_texts, rects, code_style, txt_row_col)?;
+            for child_id in children_ids.iter() {
+                let child = markup_node_pool.get(*child_id);
+                markup_to_wgpu_helper(
+                    child,
+                    wgpu_texts,
+                    rects,
+                    code_style,
+                    txt_row_col,
+                    markup_node_pool,
+                )?;
             }
         }
         MarkupNode::Text {
@@ -114,6 +133,7 @@ fn markup_to_wgpu_helper<'a>(
             ast_node_id: _,
             syn_high_style,
             attributes,
+            parent_id_opt: _,
         } => {
             let highlight_color = map_get(&code_style.ed_theme.syntax_high_map, &syn_high_style)?;
 
@@ -125,13 +145,13 @@ fn markup_to_wgpu_helper<'a>(
             txt_row_col.1 += content.len();
             wgpu_texts.push(glyph_text);
         }
-        MarkupNode::Hole {
+        MarkupNode::Blank {
             ast_node_id: _,
             attributes,
             syn_high_style,
+            parent_id_opt: _,
         } => {
-            let hole_placeholder = " ";
-            let glyph_text = wgpu_glyph::Text::new(hole_placeholder)
+            let glyph_text = wgpu_glyph::Text::new(BLANK_PLACEHOLDER)
                 .with_color(colors::to_slice(colors::WHITE))
                 .with_scale(code_style.font_size);
 
@@ -153,7 +173,7 @@ fn markup_to_wgpu_helper<'a>(
 
             rects.extend(draw_attributes(attributes, txt_row_col, code_style));
 
-            txt_row_col.1 += hole_placeholder.len();
+            txt_row_col.1 += BLANK_PLACEHOLDER.len();
             wgpu_texts.push(glyph_text);
         }
     };
