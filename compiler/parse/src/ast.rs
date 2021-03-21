@@ -12,20 +12,20 @@ pub enum Module<'a> {
     Platform { header: PlatformHeader<'a> },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WhenBranch<'a> {
     pub patterns: &'a [Loc<Pattern<'a>>],
     pub value: Loc<Expr<'a>>,
     pub guard: Option<Loc<Expr<'a>>>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WhenPattern<'a> {
     pub pattern: Loc<Pattern<'a>>,
     pub guard: Option<Loc<Expr<'a>>>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StrSegment<'a> {
     Plaintext(&'a str),              // e.g. "foo"
     Unicode(Loc<&'a str>),           // e.g. "00A0" in "\u(00A0)"
@@ -33,7 +33,7 @@ pub enum StrSegment<'a> {
     Interpolated(Loc<&'a Expr<'a>>), // e.g. (name) in "Hi, \(name)!"
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EscapedChar {
     Newline,        // \n
     Tab,            // \t
@@ -253,7 +253,7 @@ pub enum TypeAnnotation<'a> {
     Malformed(&'a str),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Tag<'a> {
     Global {
         name: Loc<&'a str>,
@@ -273,7 +273,7 @@ pub enum Tag<'a> {
     Malformed(&'a str),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AssignedField<'a, Val> {
     // A required field with a label, e.g. `{ name: "blah" }` or `{ name : Str }`
     RequiredValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
@@ -295,7 +295,7 @@ pub enum AssignedField<'a, Val> {
     Malformed(&'a str),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CommentOrNewline<'a> {
     Newline,
     LineComment(&'a str),
