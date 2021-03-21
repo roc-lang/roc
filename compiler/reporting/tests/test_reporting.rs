@@ -5935,4 +5935,19 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn pattern_in_parens() {
+        report_problem_as(
+            indoc!(
+                r#"
+                \( a,
+                "#
+            ),
+            indoc!(
+                r#"
+            "#
+            ),
+        )
+    }
 }
