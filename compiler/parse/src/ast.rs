@@ -3,7 +3,7 @@ use crate::ident::Ident;
 use bumpalo::collections::String;
 use bumpalo::Bump;
 use roc_module::operator::{BinOp, CalledVia, UnaryOp};
-use roc_region::all::{Loc, Region};
+use roc_region::all::{Loc, Position, Region};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Module<'a> {
@@ -12,20 +12,20 @@ pub enum Module<'a> {
     Platform { header: PlatformHeader<'a> },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WhenBranch<'a> {
     pub patterns: &'a [Loc<Pattern<'a>>],
     pub value: Loc<Expr<'a>>,
     pub guard: Option<Loc<Expr<'a>>>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WhenPattern<'a> {
     pub pattern: Loc<Pattern<'a>>,
     pub guard: Option<Loc<Expr<'a>>>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StrSegment<'a> {
     Plaintext(&'a str),              // e.g. "foo"
     Unicode(Loc<&'a str>),           // e.g. "00A0" in "\u(00A0)"
@@ -33,7 +33,7 @@ pub enum StrSegment<'a> {
     Interpolated(Loc<&'a Expr<'a>>), // e.g. (name) in "Hi, \(name)!"
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EscapedChar {
     Newline,        // \n
     Tab,            // \t
@@ -57,7 +57,7 @@ impl EscapedChar {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StrLiteral<'a> {
     /// The most common case: a plain string with no escapes or interpolations
     PlainLine(&'a str),
@@ -74,7 +74,7 @@ pub enum StrLiteral<'a> {
 /// we move on to canonicalization, which often needs to allocate more because
 /// it's doing things like turning local variables into fully qualified symbols.
 /// Once canonicalization is done, the arena and the input string get dropped.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Expr<'a> {
     // Number Literals
     Float(&'a str),
@@ -98,8 +98,13 @@ pub enum Expr<'a> {
         final_comments: &'a [CommentOrNewline<'a>],
     },
 
+    RecordUpdate {
+        update: &'a Loc<Expr<'a>>,
+        fields: &'a [Loc<AssignedField<'a, Expr<'a>>>],
+        final_comments: &'a &'a [CommentOrNewline<'a>],
+    },
+
     Record {
-        update: Option<&'a Loc<Expr<'a>>>,
         fields: &'a [Loc<AssignedField<'a, Expr<'a>>>],
         final_comments: &'a [CommentOrNewline<'a>],
     },
@@ -124,7 +129,7 @@ pub enum Expr<'a> {
     /// To apply by name, do Apply(Var(...), ...)
     /// To apply a tag by name, do Apply(Tag(...), ...)
     Apply(&'a Loc<Expr<'a>>, &'a [&'a Loc<Expr<'a>>], CalledVia),
-    BinOp(&'a (Loc<Expr<'a>>, Loc<BinOp>, Loc<Expr<'a>>)),
+    BinOps(&'a [(Loc<Expr<'a>>, Loc<BinOp>)], &'a Loc<Expr<'a>>),
     UnaryOp(&'a Loc<Expr<'a>>, Loc<UnaryOp>),
 
     // Conditionals
@@ -146,19 +151,25 @@ pub enum Expr<'a> {
     SpaceAfter(&'a Expr<'a>, &'a [CommentOrNewline<'a>]),
     ParensAround(&'a Expr<'a>),
 
-    /// This is used only to avoid cloning when reordering expressions (e.g. in desugar()).
-    /// It lets us take an (&Expr) and create a plain (Expr) from it.
-    Nested(&'a Expr<'a>),
-
     // Problems
     MalformedIdent(&'a str, crate::ident::BadIdent),
     MalformedClosure,
     // Both operators were non-associative, e.g. (True == False == False).
     // We should tell the author to disambiguate by grouping them with parens.
-    PrecedenceConflict(Region, Loc<BinOp>, Loc<BinOp>, &'a Loc<Expr<'a>>),
+    PrecedenceConflict(&'a PrecedenceConflict<'a>),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PrecedenceConflict<'a> {
+    pub whole_region: Region,
+    pub binop1_position: Position,
+    pub binop2_position: Position,
+    pub binop1: BinOp,
+    pub binop2: BinOp,
+    pub expr: &'a Loc<Expr<'a>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Def<'a> {
     // TODO in canonicalization, validate the pattern; only certain patterns
     // are allowed in annotations.
@@ -193,14 +204,10 @@ pub enum Def<'a> {
     SpaceBefore(&'a Def<'a>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a Def<'a>, &'a [CommentOrNewline<'a>]),
 
-    /// This is used only to avoid cloning when reordering expressions (e.g. in desugar()).
-    /// It lets us take a (&Def) and create a plain (Def) from it.
-    Nested(&'a Def<'a>),
-
     NotYetImplemented(&'static str),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum TypeAnnotation<'a> {
     /// A function. The types of its arguments, then the type of its return value.
     Function(&'a [Loc<TypeAnnotation<'a>>], &'a Loc<TypeAnnotation<'a>>),
@@ -246,7 +253,7 @@ pub enum TypeAnnotation<'a> {
     Malformed(&'a str),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Tag<'a> {
     Global {
         name: Loc<&'a str>,
@@ -266,7 +273,7 @@ pub enum Tag<'a> {
     Malformed(&'a str),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AssignedField<'a, Val> {
     // A required field with a label, e.g. `{ name: "blah" }` or `{ name : Str }`
     RequiredValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
@@ -288,7 +295,7 @@ pub enum AssignedField<'a, Val> {
     Malformed(&'a str),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CommentOrNewline<'a> {
     Newline,
     LineComment(&'a str),
@@ -315,7 +322,7 @@ impl<'a> CommentOrNewline<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pattern<'a> {
     // Identifier
     Identifier(&'a str),
@@ -335,10 +342,6 @@ pub enum Pattern<'a> {
     /// An optional field pattern, e.g. { x ? Just 0 } -> ...
     /// Can only occur inside of a RecordDestructure
     OptionalField(&'a str, &'a Loc<Expr<'a>>),
-
-    /// This is used only to avoid cloning when reordering expressions (e.g. in desugar()).
-    /// It lets us take an (&Expr) and create a plain (Expr) from it.
-    Nested(&'a Pattern<'a>),
 
     // Literal
     NumLiteral(&'a str),
@@ -449,8 +452,6 @@ impl<'a> Pattern<'a> {
                 //      { x, y ? False } = rec
                 x == y
             }
-            (Nested(x), Nested(y)) => x.equivalent(y),
-
             // Literal
             (NumLiteral(x), NumLiteral(y)) => x == y,
             (

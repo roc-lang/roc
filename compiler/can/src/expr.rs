@@ -207,7 +207,37 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::Record {
             fields,
-            update: Some(loc_update),
+            final_comments: _,
+        } => {
+            if fields.is_empty() {
+                (EmptyRecord, Output::default())
+            } else {
+                match canonicalize_fields(env, var_store, scope, region, fields) {
+                    Ok((can_fields, output)) => (
+                        Record {
+                            record_var: var_store.fresh(),
+                            fields: can_fields,
+                        },
+                        output,
+                    ),
+                    Err(CanonicalizeRecordProblem::InvalidOptionalValue {
+                        field_name,
+                        field_region,
+                        record_region,
+                    }) => (
+                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
+                            field_name,
+                            field_region,
+                            record_region,
+                        }),
+                        Output::default(),
+                    ),
+                }
+            }
+        }
+        ast::Expr::RecordUpdate {
+            fields,
+            update: loc_update,
             final_comments: _,
         } => {
             let (can_update, update_out) =
@@ -251,37 +281,6 @@ pub fn canonicalize_expr<'a>(
                 env.problems.push(Problem::RuntimeError(error));
 
                 (answer, Output::default())
-            }
-        }
-        ast::Expr::Record {
-            fields,
-            update: None,
-            final_comments: _,
-        } => {
-            if fields.is_empty() {
-                (EmptyRecord, Output::default())
-            } else {
-                match canonicalize_fields(env, var_store, scope, region, fields) {
-                    Ok((can_fields, output)) => (
-                        Record {
-                            record_var: var_store.fresh(),
-                            fields: can_fields,
-                        },
-                        output,
-                    ),
-                    Err(CanonicalizeRecordProblem::InvalidOptionalValue {
-                        field_name,
-                        field_region,
-                        record_region,
-                    }) => (
-                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
-                            field_name,
-                            field_region,
-                            record_region,
-                        }),
-                        Output::default(),
-                    ),
-                }
             }
         }
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
@@ -409,46 +408,7 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::Var { module_name, ident } => {
             canonicalize_lookup(env, scope, module_name, ident, region)
-        } //ast::Expr::InterpolatedStr(pairs, suffix) => {
-        //    let mut output = Output::new();
-        //    let can_pairs: Vec<(String, Located<Expr>)> = pairs
-        //        .into_iter()
-        //        .map(|(string, loc_ident)| {
-        //            // From a language design perspective, we only permit idents in interpolation.
-        //            // However, in a canonical Expr we store it as a full Expr, not a Symbol.
-        //            // This is so that we can resolve it to either Var or Unrecognized; if we
-        //            // stored it as a Symbol, we couldn't record runtime errors here.
-        //            let can_expr = match resolve_ident(
-        //                &env,
-        //                &scope,
-        //                loc_ident.value,
-        //                &mut output.references,
-        //            ) {
-        //                Ok(symbol) => Var(symbol),
-        //                Err(ident) => {
-        //                    let loc_ident = Located {
-        //                        region: loc_ident.region,
-        //                        value: ident,
-        //                    };
-
-        //                    env.problem(Problem::LookupNotInScope(loc_ident.clone()));
-
-        //                    RuntimeError(LookupNotInScope(loc_ident))
-        //                }
-        //            };
-
-        //            (
-        //                string,
-        //                Located {
-        //                    region: loc_ident.region,
-        //                    value: can_expr,
-        //                },
-        //            )
-        //        })
-        //        .collect();
-
-        //    (InterpolatedStr(can_pairs, suffix), output)
-        //}
+        }
         ast::Expr::Defs(loc_defs, loc_ret) => {
             can_defs_with_return(
                 env,
@@ -720,10 +680,34 @@ pub fn canonicalize_expr<'a>(
             )
         }
 
-        ast::Expr::PrecedenceConflict(whole_region, binop1, binop2, _expr) => {
+        ast::Expr::PrecedenceConflict(ast::PrecedenceConflict {
+            whole_region,
+            binop1_position,
+            binop2_position,
+            binop1,
+            binop2,
+            expr: _,
+        }) => {
             use roc_problem::can::RuntimeError::*;
 
-            let problem = PrecedenceProblem::BothNonAssociative(*whole_region, *binop1, *binop2);
+            let region1 = Region::new(
+                binop1_position.row,
+                binop1_position.row,
+                binop1_position.col,
+                binop1_position.col + binop1.width(),
+            );
+            let loc_binop1 = Located::at(region1, *binop1);
+
+            let region2 = Region::new(
+                binop2_position.row,
+                binop2_position.row,
+                binop2_position.col,
+                binop2_position.col + binop2.width(),
+            );
+            let loc_binop2 = Located::at(region2, *binop2);
+
+            let problem =
+                PrecedenceProblem::BothNonAssociative(*whole_region, loc_binop1, loc_binop2);
 
             env.problem(Problem::PrecedenceProblem(problem.clone()));
 
@@ -743,11 +727,6 @@ pub fn canonicalize_expr<'a>(
             env.problem(Problem::RuntimeError(problem.clone()));
 
             (RuntimeError(problem), Output::default())
-        }
-        ast::Expr::Nested(sub_expr) => {
-            let (answer, output) = canonicalize_expr(env, var_store, scope, region, sub_expr);
-
-            (answer.value, output)
         }
         ast::Expr::NonBase10Int {
             string,
@@ -780,9 +759,9 @@ pub fn canonicalize_expr<'a>(
                 bad_expr
             );
         }
-        bad_expr @ ast::Expr::BinOp(_) => {
+        bad_expr @ ast::Expr::BinOps { .. } => {
             panic!(
-                "A binary operator did not get desugared somehow: {:#?}",
+                "A binary operator chain did not get desugared somehow: {:#?}",
                 bad_expr
             );
         }

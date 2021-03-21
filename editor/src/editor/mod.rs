@@ -6,6 +6,7 @@ mod markup;
 mod mvc;
 mod render_ast;
 mod resources;
+mod slow_pool;
 mod style;
 mod syntax_highlight;
 mod theme;

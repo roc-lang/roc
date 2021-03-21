@@ -65,20 +65,17 @@ impl<'a> Formattable<'a> for Expr<'a> {
                         .any(|(c, t)| c.is_multiline() || t.is_multiline())
             }
 
-            BinOp((loc_left, _, loc_right)) => {
-                let next_is_multiline_bin_op: bool = match &loc_right.value {
-                    Expr::BinOp((_, _, nested_loc_right)) => nested_loc_right.is_multiline(),
-                    _ => false,
-                };
-
-                next_is_multiline_bin_op || loc_left.is_multiline() || loc_right.is_multiline()
+            BinOps(lefts, loc_right) => {
+                lefts.iter().any(|(loc_expr, _)| loc_expr.is_multiline())
+                    || loc_right.is_multiline()
             }
 
-            UnaryOp(loc_subexpr, _) | PrecedenceConflict(_, _, _, loc_subexpr) => {
-                loc_subexpr.is_multiline()
-            }
+            UnaryOp(loc_subexpr, _)
+            | PrecedenceConflict(roc_parse::ast::PrecedenceConflict {
+                expr: loc_subexpr, ..
+            }) => loc_subexpr.is_multiline(),
 
-            ParensAround(subexpr) | Nested(subexpr) => subexpr.is_multiline(),
+            ParensAround(subexpr) => subexpr.is_multiline(),
 
             Closure(loc_patterns, loc_body) => {
                 // check the body first because it's more likely to be multiline
@@ -97,6 +94,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
             }
 
             Record { fields, .. } => fields.iter().any(|loc_field| loc_field.is_multiline()),
+            RecordUpdate { fields, .. } => fields.iter().any(|loc_field| loc_field.is_multiline()),
         }
     }
 
@@ -241,10 +239,16 @@ impl<'a> Formattable<'a> for Expr<'a> {
             }
             Record {
                 fields,
+                final_comments,
+            } => {
+                fmt_record(buf, None, fields, final_comments, indent);
+            }
+            RecordUpdate {
+                fields,
                 update,
                 final_comments,
             } => {
-                fmt_record(buf, *update, fields, final_comments, indent);
+                fmt_record(buf, Some(*update), fields, final_comments, indent);
             }
             Closure(loc_patterns, loc_ret) => {
                 fmt_closure(buf, loc_patterns, loc_ret, indent);
@@ -281,15 +285,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
             } => {
                 fmt_list(buf, &items, final_comments, indent);
             }
-            BinOp((loc_left_side, bin_op, loc_right_side)) => fmt_bin_op(
-                buf,
-                loc_left_side,
-                bin_op,
-                loc_right_side,
-                false,
-                parens,
-                indent,
-            ),
+            BinOps(lefts, right) => fmt_bin_ops(buf, lefts, right, false, parens, indent),
             UnaryOp(sub_expr, unary_op) => {
                 match &unary_op.value {
                     operator::UnaryOp::Negate => {
@@ -302,9 +298,6 @@ impl<'a> Formattable<'a> for Expr<'a> {
 
                 sub_expr.format_with_options(buf, parens, newlines, indent);
             }
-            Nested(nested_expr) => {
-                nested_expr.format_with_options(buf, parens, newlines, indent);
-            }
             AccessorFunction(key) => {
                 buf.push('.');
                 buf.push_str(key);
@@ -316,7 +309,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
             }
             MalformedIdent(_, _) => {}
             MalformedClosure => {}
-            PrecedenceConflict(_, _, _, _) => {}
+            PrecedenceConflict { .. } => {}
         }
     }
 }
@@ -351,28 +344,8 @@ fn format_str_segment<'a>(seg: &StrSegment<'a>, buf: &mut String<'a>, indent: u1
     }
 }
 
-fn fmt_bin_op<'a>(
-    buf: &mut String<'a>,
-    loc_left_side: &'a Located<Expr<'a>>,
-    loc_bin_op: &'a Located<BinOp>,
-    loc_right_side: &'a Located<Expr<'a>>,
-    part_of_multi_line_bin_ops: bool,
-    apply_needs_parens: Parens,
-    indent: u16,
-) {
-    loc_left_side.format_with_options(buf, apply_needs_parens, Newlines::No, indent);
-
-    let is_multiline = (&loc_right_side.value).is_multiline()
-        || (&loc_left_side.value).is_multiline()
-        || part_of_multi_line_bin_ops;
-
-    if is_multiline {
-        newline(buf, indent + INDENT)
-    } else {
-        buf.push(' ');
-    }
-
-    match &loc_bin_op.value {
+fn push_op(buf: &mut String, op: BinOp) {
+    match op {
         operator::BinOp::Caret => buf.push('^'),
         operator::BinOp::Star => buf.push('*'),
         operator::BinOp::Slash => buf.push('/'),
@@ -394,26 +367,35 @@ fn fmt_bin_op<'a>(
         operator::BinOp::HasType => unreachable!(),
         operator::BinOp::Backpassing => unreachable!(),
     }
+}
 
-    buf.push(' ');
+fn fmt_bin_ops<'a>(
+    buf: &mut String<'a>,
+    lefts: &'a [(Located<Expr<'a>>, Located<BinOp>)],
+    loc_right_side: &'a Located<Expr<'a>>,
+    part_of_multi_line_bin_ops: bool,
+    apply_needs_parens: Parens,
+    indent: u16,
+) {
+    let is_multiline = part_of_multi_line_bin_ops
+        || (&loc_right_side.value).is_multiline()
+        || lefts.iter().any(|(expr, _)| expr.value.is_multiline());
 
-    match &loc_right_side.value {
-        Expr::BinOp((nested_left_side, nested_bin_op, nested_right_side)) => {
-            fmt_bin_op(
-                buf,
-                nested_left_side,
-                nested_bin_op,
-                nested_right_side,
-                is_multiline,
-                apply_needs_parens,
-                indent,
-            );
+    for (loc_left_side, loc_bin_op) in lefts {
+        loc_left_side.format_with_options(buf, apply_needs_parens, Newlines::No, indent);
+
+        if is_multiline {
+            newline(buf, indent + INDENT)
+        } else {
+            buf.push(' ');
         }
 
-        _ => {
-            loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, indent);
-        }
+        push_op(buf, loc_bin_op.value);
+
+        buf.push(' ');
     }
+
+    loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, indent);
 }
 
 fn fmt_list<'a>(
@@ -522,8 +504,6 @@ fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
 
             false
         }
-
-        Nested(nested_expr) => empty_line_before_expr(nested_expr),
 
         _ => false,
     }

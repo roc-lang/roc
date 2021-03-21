@@ -134,6 +134,7 @@ pub enum RuntimeError {
     },
     InvalidPrecedence(PrecedenceProblem, Region),
     MalformedIdentifier(Box<str>, roc_parse::ident::BadIdent, Region),
+    MalformedTypeName(Box<str>, Region),
     MalformedClosure(Region),
     InvalidRecordUpdate {
         region: Region,
