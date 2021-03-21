@@ -4474,16 +4474,16 @@ mod test_reporting {
         report_problem_as(
             "# comment with a \t\n4",
             indoc!(
-                r#"
+                "
                 ── TAB CHARACTER ───────────────────────────────────────────────────────────────
 
                 I encountered a tab character
 
-                1│  # comment with a
+                1│  # comment with a \t
                                      ^
 
                 Tab characters are not allowed.
-            "#
+            "
             ),
         )
     }
