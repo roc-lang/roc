@@ -1781,7 +1781,13 @@ fn to_type_report<'a>(
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I just started parsing a type, but I got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
-                alloc.note("I may be confused by indentation"),
+                alloc.concat(vec![
+                    alloc.reflow(r"I am expecting a type next, like "),
+                    alloc.parser_suggestion("Bool"),
+                    alloc.reflow(r" or "),
+                    alloc.parser_suggestion("List a"),
+                    alloc.reflow("."),
+                ]),
             ]);
 
             Report {

@@ -221,10 +221,7 @@ fn loc_possibly_negative_or_negated_term<'a>(
     ]
 }
 
-fn fail_expr_start_e<'a, T>() -> impl Parser<'a, T, EExpr<'a>>
-where
-    T: 'a,
-{
+fn fail_expr_start_e<'a, T: 'a>() -> impl Parser<'a, T, EExpr<'a>> {
     |_arena, state: State<'a>| Err((NoProgress, EExpr::Start(state.line, state.column), state))
 }
 
@@ -1019,7 +1016,7 @@ fn parse_expr_operator<'a>(
 
                     match expr_to_pattern_help(arena, &call.value) {
                         Ok(good) => {
-                            let (_, mut ann_type, state) = specialize(
+                            let parser = specialize(
                                 EExpr::Type,
                                 space0_before_e(
                                     type_annotation::located_help(indented_more),
@@ -1027,21 +1024,28 @@ fn parse_expr_operator<'a>(
                                     Type::TSpace,
                                     Type::TIndentStart,
                                 ),
-                            )
-                            .parse(arena, state)?;
+                            );
 
-                            // put the spaces from after the operator in front of the call
-                            if !spaces_after_operator.is_empty() {
-                                ann_type = arena
-                                    .alloc(ann_type.value)
-                                    .with_spaces_before(spaces_after_operator, ann_type.region);
+                            match parser.parse(arena, state) {
+                                Err((_, fail, state)) => return Err((MadeProgress, fail, state)),
+                                Ok((_, mut ann_type, state)) => {
+                                    // put the spaces from after the operator in front of the call
+                                    if !spaces_after_operator.is_empty() {
+                                        ann_type = arena.alloc(ann_type.value).with_spaces_before(
+                                            spaces_after_operator,
+                                            ann_type.region,
+                                        );
+                                    }
+
+                                    let alias_region =
+                                        Region::span_across(&call.region, &ann_type.region);
+
+                                    let alias =
+                                        Def::Annotation(Located::at(expr_region, good), ann_type);
+
+                                    (&*arena.alloc(Located::at(alias_region, alias)), state)
+                                }
                             }
-
-                            let alias_region = Region::span_across(&call.region, &ann_type.region);
-
-                            let alias = Def::Annotation(Located::at(expr_region, good), ann_type);
-
-                            (&*arena.alloc(Located::at(alias_region, alias)), state)
                         }
                         Err(_) => {
                             // this `:` likely occured inline; treat it as an invalid operator
