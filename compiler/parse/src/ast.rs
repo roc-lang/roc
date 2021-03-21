@@ -159,7 +159,7 @@ pub enum Expr<'a> {
     PrecedenceConflict(&'a PrecedenceConflict<'a>),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PrecedenceConflict<'a> {
     pub whole_region: Region,
     pub binop1_position: Position,
@@ -169,7 +169,7 @@ pub struct PrecedenceConflict<'a> {
     pub expr: &'a Loc<Expr<'a>>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Def<'a> {
     // TODO in canonicalization, validate the pattern; only certain patterns
     // are allowed in annotations.
@@ -211,7 +211,7 @@ pub enum Def<'a> {
     NotYetImplemented(&'static str),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum TypeAnnotation<'a> {
     /// A function. The types of its arguments, then the type of its return value.
     Function(&'a [Loc<TypeAnnotation<'a>>], &'a Loc<TypeAnnotation<'a>>),
