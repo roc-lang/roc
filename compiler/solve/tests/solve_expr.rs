@@ -567,13 +567,11 @@ mod solve_expr {
     }
 
     #[test]
-    fn applied_tag_function() {
+    fn applied_tag() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    foo : [ Foo Str ]*
-
-                    List.map [ "a", "b" ] Foo
+                List.map [ "a", "b" ] \elem -> Foo elem
                 "#
             ),
             "List [ Foo Str ]*",
@@ -581,13 +579,13 @@ mod solve_expr {
     }
 
     #[test]
-    fn applied_tag_function_other() {
+    fn applied_tag_function() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    foo : [ Foo Str ]*
+                foo = Foo
 
-                    Foo "hi"
+                foo "hi"
                 "#
             ),
             "[ Foo Str ]*",
@@ -595,16 +593,56 @@ mod solve_expr {
     }
 
     #[test]
-    fn applied_tag() {
+    fn applied_tag_function_list_map() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                    foo : [ Foo Str ]*
-
-                    List.map [ "a", "b" ] \elem -> Foo elem
+                List.map [ "a", "b" ] Foo
                 "#
             ),
             "List [ Foo Str ]*",
+        )
+    }
+
+    #[test]
+    fn applied_tag_function_list() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                [ Foo, \x -> Bar x ]
+                "#
+            ),
+            "List (a -> [ Bar a, Foo a ]*)",
+        )
+    }
+
+    #[test]
+    fn applied_tag_function_record() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                foo = Foo
+
+                {
+                    x: [ foo, Foo ],
+                    y: [ foo, \x -> Foo x ],
+                    z: [ foo, \x,y  -> Foo x y ]
+                }
+                "#
+            ),
+            "{ x: List (a, b -> [ Foo a b ]*), y: List (a, b -> [ Foo a b ]*), z: List (a, b -> [ Foo a b ]*) }",
+        )
+    }
+
+    #[test]
+    fn applied_tag_function_mismatch() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                \foo -> { x: [ foo, Foo ], y: [ foo, \x -> Foo x ] }
+                "#
+            ),
+            "",
         )
     }
 
