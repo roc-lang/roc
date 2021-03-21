@@ -31,8 +31,8 @@ Applications are often built on a *framework.* Typically, both application and f
 * [Phoenix](https://phoenixframework.org/) applications are written in Elixir, and so is Phoenix.
 
 Some programs support plugins. Often the plugins are written in the same language as the underlying program.
-* [Sublime Text](https://www.sublimetext.com/) plugins are written in Python, and so is Sublime.
 * [Webpack](https://webpack.js.org/) plugins are written in JavaScript, and so is Webpack.
+* [Eclipse](https://www.eclipse.org/ide/) plugins are written in Java, and so is Eclipse.
 * [Leiningen](https://leiningen.org/) plugins are written in Clojure, and so is Leiningen.
 
 All of these can be considered examples of a platform/application relationship. There is an underlying platform, and many applications are built on top of it. (Plugins are a type of application in this sense.)

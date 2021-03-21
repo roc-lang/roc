@@ -1,6 +1,6 @@
 use super::app_model::AppModel;
 use crate::editor::ed_error::EdResult;
-use crate::ui::ui_error::UIResult;
+use crate::editor::slow_pool::SlowPool;
 use crate::window::keyboard_input::from_winit;
 use winit::event::{ModifiersState, VirtualKeyCode};
 
@@ -36,14 +36,15 @@ pub fn handle_cut(app_model: &mut AppModel) -> EdResult<()> {
 
 pub fn pass_keydown_to_focused(
     modifiers_winit: &ModifiersState,
-    _virtual_keycode: VirtualKeyCode,
+    virtual_keycode: VirtualKeyCode,
     app_model: &mut AppModel,
-) -> UIResult<()> {
-    let _modifiers = from_winit(modifiers_winit);
+    markup_node_pool: &mut SlowPool,
+) -> EdResult<()> {
+    let modifiers = from_winit(modifiers_winit);
 
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            unimplemented!("TODO");
+            ed_model.handle_key_down(&modifiers, virtual_keycode, markup_node_pool)?;
         }
     }
 

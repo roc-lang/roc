@@ -1,3 +1,4 @@
+use crate::editor::slow_pool::SlowNodeId;
 use colored::*;
 use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
 
@@ -9,6 +10,15 @@ use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub))]
 pub enum EdError {
+    #[snafu(display(
+        "CaretNotFound: No carets were found in the expected node with id {}",
+        node_id
+    ))]
+    CaretNotFound {
+        node_id: SlowNodeId,
+        backtrace: Backtrace,
+    },
+
     #[snafu(display("ClipboardReadFailed: could not get clipboard contents: {}", err_msg))]
     ClipboardReadFailed { err_msg: String },
 
@@ -21,6 +31,31 @@ pub enum EdError {
     ))]
     ClipboardInitFailed { err_msg: String },
 
+    #[snafu(display("GetContentOnNestedNode: tried to get string content from Nested MarkupNode. Can only get content from Text or Blank nodes."))]
+    GetContentOnNestedNode { backtrace: Backtrace },
+
+    #[snafu(display("KeyNotFound: key {} was not found in HashMap.", key_str,))]
+    KeyNotFound {
+        key_str: String,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display("NestedNodeWithoutChildren: tried to retrieve child from Nested MarkupNode with id {} but it had no children.", node_id))]
+    NestedNodeWithoutChildren {
+        node_id: SlowNodeId,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display("NestedNodeMissingChild: expected to find child with id {} in Nested MarkupNode, but it was missing. Id's of the children are {:?}.", node_id, children_ids))]
+    NestedNodeMissingChild {
+        node_id: SlowNodeId,
+        children_ids: Vec<SlowNodeId>,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display("NodeWithoutAttributes: expected to have a node with attributes. This is a Nested MarkupNode, only Text and Blank nodes have attributes."))]
+    NodeWithoutAttributes { backtrace: Backtrace },
+
     #[snafu(display(
         "OutOfBounds: index {} was out of bounds for {} with length {}.",
         index,
@@ -31,12 +66,6 @@ pub enum EdError {
         index: usize,
         collection_name: String,
         len: usize,
-        backtrace: Backtrace,
-    },
-
-    #[snafu(display("KeyNotFound: key {} was not found in HashMap.", key_str,))]
-    KeyNotFound {
-        key_str: String,
         backtrace: Backtrace,
     },
 

@@ -379,9 +379,9 @@ pub fn to_expr2<'a>(
             )
         }
 
-        Record {
+        RecordUpdate {
             fields,
-            update: Some(loc_update),
+            update: loc_update,
             final_comments: _,
         } => {
             let (can_update, update_out) =
@@ -435,7 +435,6 @@ pub fn to_expr2<'a>(
 
         Record {
             fields,
-            update: None,
             final_comments: _,
         } => {
             if fields.is_empty() {
@@ -779,7 +778,7 @@ pub fn to_expr2<'a>(
             (expr, output)
         }
 
-        PrecedenceConflict(_whole_region, _binop1, _binop2, _expr) => {
+        PrecedenceConflict { .. } => {
             //            use roc_problem::can::RuntimeError::*;
             //
             //            let problem = PrecedenceProblem::BothNonAssociative(
@@ -833,9 +832,9 @@ pub fn to_expr2<'a>(
                 bad_expr
             );
         }
-        bad_expr @ BinOp(_) => {
+        bad_expr @ BinOps { .. } => {
             panic!(
-                "A binary operator did not get desugared somehow: {:#?}",
+                "A binary operator chain did not get desugared somehow: {:#?}",
                 bad_expr
             );
         }
