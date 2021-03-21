@@ -204,10 +204,6 @@ pub enum Def<'a> {
     SpaceBefore(&'a Def<'a>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a Def<'a>, &'a [CommentOrNewline<'a>]),
 
-    /// This is used only to avoid cloning when reordering expressions (e.g. in desugar()).
-    /// It lets us take a (&Def) and create a plain (Def) from it.
-    Nested(&'a Def<'a>),
-
     NotYetImplemented(&'static str),
 }
 

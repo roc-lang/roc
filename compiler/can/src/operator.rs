@@ -69,7 +69,7 @@ fn desugar_def_helps<'a>(
 
     for loc_def in defs.iter() {
         let loc_def = Located {
-            value: desugar_def_help(arena, &loc_def.value),
+            value: desugar_def(arena, &loc_def.value),
             region: loc_def.region,
         };
 
@@ -88,39 +88,23 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
     use roc_parse::ast::Def::*;
 
     match def {
-        Body(loc_pattern, loc_expr) | Nested(Body(loc_pattern, loc_expr)) => {
-            Body(loc_pattern, desugar_expr(arena, loc_expr))
-        }
-        SpaceBefore(def, _)
-        | SpaceAfter(def, _)
-        | Nested(SpaceBefore(def, _))
-        | Nested(SpaceAfter(def, _)) => desugar_def_help(arena, def),
-        Nested(Nested(def)) => desugar_def_help(arena, def),
-        alias @ Alias { .. } => Nested(alias),
-        Nested(alias @ Alias { .. }) => Nested(alias),
-        ann @ Annotation(_, _) => Nested(ann),
-        Nested(ann @ Annotation(_, _)) => Nested(ann),
+        Body(loc_pattern, loc_expr) => Body(loc_pattern, desugar_expr(arena, loc_expr)),
+        SpaceBefore(def, _) | SpaceAfter(def, _) => desugar_def(arena, def),
+        alias @ Alias { .. } => *alias,
+        ann @ Annotation(_, _) => *ann,
         AnnotatedBody {
             ann_pattern,
             ann_type,
             comment,
             body_pattern,
             body_expr,
-        }
-        | Nested(AnnotatedBody {
-            ann_pattern,
-            ann_type,
-            comment,
-            body_pattern,
-            body_expr,
-        }) => AnnotatedBody {
+        } => AnnotatedBody {
             ann_pattern,
             ann_type,
             comment: *comment,
             body_pattern: *body_pattern,
             body_expr: desugar_expr(arena, body_expr),
         },
-        Nested(NotYetImplemented(s)) => todo!("{}", s),
         NotYetImplemented(s) => todo!("{}", s),
     }
 }
