@@ -1099,8 +1099,8 @@ fn unify_flat_type(
             } else {
                 mismatch!(
                     "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
-                    TagUnion(tags.clone(), ext.clone()),
-                    Func(args.clone(), closure.clone(), ret.clone())
+                    TagUnion(tags.clone(), *ext),
+                    Func(args.clone(), *closure, *ret)
                 )
             }
         }
@@ -1134,8 +1134,8 @@ fn unify_flat_type(
             } else {
                 mismatch!(
                     "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
-                    Func(args.clone(), closure.clone(), ret.clone()),
-                    TagUnion(tags.clone(), ext.clone()),
+                    Func(args.clone(), *closure, *ret),
+                    TagUnion(tags.clone(), *ext),
                 )
             }
         }
