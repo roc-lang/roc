@@ -82,6 +82,19 @@ mod test_parse {
         }
     }
 
+    fn single_binop<'a>(
+        arena: &'a Bump,
+        args: (
+            Located<Expr<'a>>,
+            Located<roc_module::operator::BinOp>,
+            Located<Expr<'a>>,
+        ),
+    ) -> Expr<'a> {
+        let (left, op, right) = args;
+
+        Expr::BinOps(arena.alloc([(left, op)]), arena.alloc(right))
+    }
+
     // STRING LITERALS
 
     fn expect_parsed_str(input: &str, expected: &str) {
@@ -414,7 +427,6 @@ mod test_parse {
         let arena = Bump::new();
         let expected = Record {
             fields: &[],
-            update: None,
             final_comments: &[],
         };
         let actual = parse_expr_with(&arena, "{}");
@@ -435,7 +447,7 @@ mod test_parse {
             &[],
             arena.alloc(Located::new(0, 0, 25, 26, Num("0"))),
         );
-        let fields = &[
+        let fields: &[_] = &[
             Located::new(0, 0, 16, 20, label1),
             Located::new(0, 0, 22, 26, label2),
         ];
@@ -444,10 +456,10 @@ mod test_parse {
             ident: "baz",
         };
         let update_target = Located::new(0, 0, 2, 13, var);
-        let expected = Record {
-            update: Some(&*arena.alloc(update_target)),
+        let expected = RecordUpdate {
+            update: &*arena.alloc(update_target),
             fields,
-            final_comments: &[],
+            final_comments: &(&[] as &[_]),
         };
 
         let actual = parse_expr_with(&arena, "{ Foo.Bar.baz & x: 5, y: 0 }");
@@ -480,7 +492,6 @@ mod test_parse {
             Located::new(0, 0, 28, 32, label2),
         ];
         let expected = Record {
-            update: None,
             fields,
             final_comments: &[],
         };
@@ -494,12 +505,12 @@ mod test_parse {
     #[test]
     fn one_plus_two() {
         let arena = Bump::new();
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(0, 0, 0, 1, Num("1")),
             Located::new(0, 0, 1, 2, Plus),
             Located::new(0, 0, 2, 3, Num("2")),
-        ));
-        let expected = BinOp(tuple);
+        );
+        let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "1+2");
 
         assert_eq!(Ok(expected), actual);
@@ -508,12 +519,12 @@ mod test_parse {
     #[test]
     fn one_minus_two() {
         let arena = Bump::new();
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(0, 0, 0, 1, Num("1")),
             Located::new(0, 0, 1, 2, Minus),
             Located::new(0, 0, 2, 3, Num("2")),
-        ));
-        let expected = BinOp(tuple);
+        );
+        let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "1-2");
 
         assert_eq!(Ok(expected), actual);
@@ -522,7 +533,7 @@ mod test_parse {
     #[test]
     fn var_minus_two() {
         let arena = Bump::new();
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(
                 0,
                 0,
@@ -535,8 +546,8 @@ mod test_parse {
             ),
             Located::new(0, 0, 1, 2, Minus),
             Located::new(0, 0, 2, 3, Num("2")),
-        ));
-        let expected = BinOp(tuple);
+        );
+        let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "x-2");
 
         assert_eq!(Ok(expected), actual);
@@ -545,12 +556,12 @@ mod test_parse {
     #[test]
     fn add_with_spaces() {
         let arena = Bump::new();
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(0, 0, 0, 1, Num("1")),
             Located::new(0, 0, 3, 4, Plus),
             Located::new(0, 0, 7, 8, Num("2")),
-        ));
-        let expected = BinOp(tuple);
+        );
+        let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "1  +   2");
 
         assert_eq!(Ok(expected), actual);
@@ -559,12 +570,12 @@ mod test_parse {
     #[test]
     fn sub_with_spaces() {
         let arena = Bump::new();
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(0, 0, 0, 1, Num("1")),
             Located::new(0, 0, 3, 4, Minus),
             Located::new(0, 0, 7, 8, Num("2")),
-        ));
-        let expected = BinOp(tuple);
+        );
+        let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "1  -   2");
 
         assert_eq!(Ok(expected), actual);
@@ -582,12 +593,12 @@ mod test_parse {
             module_name: "",
             ident: "x",
         };
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(0, 0, 0, 1, var),
             Located::new(0, 0, 2, 3, Plus),
             Located::new(0, 0, 4, 5, Num("2")),
-        ));
-        let expected = BinOp(tuple);
+        );
+        let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "x + 2");
 
         assert_eq!(Ok(expected), actual);
@@ -604,12 +615,12 @@ mod test_parse {
             module_name: "",
             ident: "x",
         };
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(0, 0, 0, 1, var),
             Located::new(0, 0, 2, 3, Minus),
             Located::new(0, 0, 4, 5, Num("2")),
-        ));
-        let expected = BinOp(tuple);
+        );
+        let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "x - 2");
 
         assert_eq!(Ok(expected), actual);
@@ -619,12 +630,12 @@ mod test_parse {
     fn newline_before_add() {
         let arena = Bump::new();
         let spaced_int = Expr::SpaceAfter(arena.alloc(Num("3")), &[Newline]);
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(0, 0, 0, 1, spaced_int),
             Located::new(1, 1, 0, 1, Plus),
             Located::new(1, 1, 2, 3, Num("4")),
-        ));
-        let expected = BinOp(tuple);
+        );
+        let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "3  \n+ 4");
 
         assert_eq!(Ok(expected), actual);
@@ -634,12 +645,12 @@ mod test_parse {
     fn newline_before_sub() {
         let arena = Bump::new();
         let spaced_int = Expr::SpaceAfter(arena.alloc(Num("3")), &[Newline]);
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(0, 0, 0, 1, spaced_int),
             Located::new(1, 1, 0, 1, Minus),
             Located::new(1, 1, 2, 3, Num("4")),
-        ));
-        let expected = BinOp(tuple);
+        );
+        let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "3  \n- 4");
 
         assert_eq!(Ok(expected), actual);
@@ -649,12 +660,12 @@ mod test_parse {
     fn newline_after_mul() {
         let arena = Bump::new();
         let spaced_int = arena.alloc(Num("4")).before(&[Newline]);
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(0, 0, 0, 1, Num("3")),
             Located::new(0, 0, 3, 4, Star),
             Located::new(1, 1, 2, 3, spaced_int),
-        ));
-        let expected = BinOp(tuple);
+        );
+        let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "3  *\n  4");
 
         assert_eq!(Ok(expected), actual);
@@ -664,12 +675,12 @@ mod test_parse {
     fn newline_after_sub() {
         let arena = Bump::new();
         let spaced_int = arena.alloc(Num("4")).before(&[Newline]);
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(0, 0, 0, 1, Num("3")),
             Located::new(0, 0, 3, 4, Minus),
             Located::new(1, 1, 2, 3, spaced_int),
-        ));
-        let expected = BinOp(tuple);
+        );
+        let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "3  -\n  4");
 
         assert_eq!(Ok(expected), actual);
@@ -679,16 +690,16 @@ mod test_parse {
     fn newline_and_spaces_before_less_than() {
         let arena = Bump::new();
         let spaced_int = arena.alloc(Num("1")).after(&[Newline]);
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(0, 0, 4, 5, spaced_int),
             Located::new(1, 1, 4, 5, LessThan),
             Located::new(1, 1, 6, 7, Num("2")),
-        ));
+        );
 
         let newlines = bumpalo::vec![in &arena; Newline, Newline];
         let def = Def::Body(
             arena.alloc(Located::new(0, 0, 0, 1, Identifier("x"))),
-            arena.alloc(Located::new(0, 1, 4, 7, BinOp(tuple))),
+            arena.alloc(Located::new(0, 1, 4, 7, single_binop(&arena, tuple))),
         );
         let loc_def = &*arena.alloc(Located::new(0, 1, 0, 7, def));
         let defs = &[loc_def];
@@ -696,7 +707,7 @@ mod test_parse {
         let loc_ret = Located::new(3, 3, 0, 2, ret);
         let expected = Defs(defs, arena.alloc(loc_ret));
 
-        // let expected = BinOp(tuple);
+        // let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "x = 1\n    < 2\n\n42");
 
         assert_eq!(Ok(expected), actual);
@@ -706,12 +717,12 @@ mod test_parse {
     fn comment_with_non_ascii() {
         let arena = Bump::new();
         let spaced_int = arena.alloc(Num("3")).after(&[LineComment(" 2 × 2")]);
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(0, 0, 0, 1, spaced_int),
             Located::new(1, 1, 0, 1, Plus),
             Located::new(1, 1, 2, 3, Num("4")),
-        ));
-        let expected = BinOp(tuple);
+        );
+        let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "3  # 2 × 2\n+ 4");
 
         assert_eq!(Ok(expected), actual);
@@ -721,12 +732,12 @@ mod test_parse {
     fn comment_before_op() {
         let arena = Bump::new();
         let spaced_int = arena.alloc(Num("3")).after(&[LineComment(" test!")]);
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(0, 0, 0, 1, spaced_int),
             Located::new(1, 1, 0, 1, Plus),
             Located::new(1, 1, 2, 3, Num("4")),
-        ));
-        let expected = BinOp(tuple);
+        );
+        let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "3  # test!\n+ 4");
 
         assert_eq!(Ok(expected), actual);
@@ -736,12 +747,12 @@ mod test_parse {
     fn comment_after_op() {
         let arena = Bump::new();
         let spaced_int = arena.alloc(Num("92")).before(&[LineComment(" test!")]);
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(0, 0, 0, 2, Num("12")),
             Located::new(0, 0, 4, 5, Star),
             Located::new(1, 1, 1, 3, spaced_int),
-        ));
-        let expected = BinOp(tuple);
+        );
+        let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "12  * # test!\n 92");
 
         assert_eq!(Ok(expected), actual);
@@ -752,12 +763,12 @@ mod test_parse {
         let arena = Bump::new();
         let spaced_int1 = arena.alloc(Num("3")).after(&[Newline]);
         let spaced_int2 = arena.alloc(Num("4")).before(&[Newline, Newline]);
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(0, 0, 0, 1, spaced_int1),
             Located::new(1, 1, 0, 1, Plus),
             Located::new(3, 3, 2, 3, spaced_int2),
-        ));
-        let expected = BinOp(tuple);
+        );
+        let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "3  \n+ \n\n  4");
 
         assert_eq!(Ok(expected), actual);
@@ -776,12 +787,12 @@ mod test_parse {
             module_name: "",
             ident: "y",
         };
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(0, 0, 0, 1, var1),
             Located::new(0, 0, 1, 2, Minus),
             Located::new(0, 0, 3, 4, var2),
-        ));
-        let expected = BinOp(tuple);
+        );
+        let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "x- y");
 
         assert_eq!(Ok(expected), actual);
@@ -790,12 +801,12 @@ mod test_parse {
     #[test]
     fn minus_twelve_minus_five() {
         let arena = Bump::new();
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(0, 0, 0, 3, Num("-12")),
             Located::new(0, 0, 3, 4, Minus),
             Located::new(0, 0, 4, 5, Num("5")),
-        ));
-        let expected = BinOp(tuple);
+        );
+        let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "-12-5");
 
         assert_eq!(Ok(expected), actual);
@@ -804,12 +815,12 @@ mod test_parse {
     #[test]
     fn ten_times_eleven() {
         let arena = Bump::new();
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(0, 0, 0, 2, Num("10")),
             Located::new(0, 0, 2, 3, Star),
             Located::new(0, 0, 3, 5, Num("11")),
-        ));
-        let expected = BinOp(tuple);
+        );
+        let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "10*11");
 
         assert_eq!(Ok(expected), actual);
@@ -818,17 +829,20 @@ mod test_parse {
     #[test]
     fn multiple_operators() {
         let arena = Bump::new();
-        let inner = arena.alloc((
-            Located::new(0, 0, 3, 5, Num("42")),
-            Located::new(0, 0, 5, 6, Plus),
-            Located::new(0, 0, 6, 9, Num("534")),
-        ));
-        let outer = arena.alloc((
-            Located::new(0, 0, 0, 2, Num("31")),
-            Located::new(0, 0, 2, 3, Star),
-            Located::new(0, 0, 3, 9, BinOp(inner)),
-        ));
-        let expected = BinOp(outer);
+
+        let lefts = [
+            (
+                Located::new(0, 0, 0, 2, Num("31")),
+                Located::new(0, 0, 2, 3, Star),
+            ),
+            (
+                Located::new(0, 0, 3, 5, Num("42")),
+                Located::new(0, 0, 5, 6, Plus),
+            ),
+        ];
+        let right = Located::new(0, 0, 6, 9, Num("534"));
+
+        let expected = BinOps(&lefts, &right);
         let actual = parse_expr_with(&arena, "31*42+534");
 
         assert_eq!(Ok(expected), actual);
@@ -845,12 +859,12 @@ mod test_parse {
             module_name: "",
             ident: "y",
         };
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(0, 0, 0, 1, var1),
             Located::new(0, 0, 1, 3, Equals),
             Located::new(0, 0, 3, 4, var2),
-        ));
-        let expected = BinOp(tuple);
+        );
+        let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "x==y");
 
         assert_eq!(Ok(expected), actual);
@@ -867,12 +881,12 @@ mod test_parse {
             module_name: "",
             ident: "y",
         };
-        let tuple = arena.alloc((
+        let tuple = (
             Located::new(0, 0, 0, 1, var1),
             Located::new(0, 0, 2, 4, Equals),
             Located::new(0, 0, 5, 6, var2),
-        ));
-        let expected = BinOp(tuple);
+        );
+        let expected = single_binop(&arena, tuple);
         let actual = parse_expr_with(&arena, "x == y");
 
         assert_eq!(Ok(expected), actual);
@@ -1860,7 +1874,6 @@ mod test_parse {
             let identifier_z = Located::new(2, 2, 0, 1, Identifier("z"));
 
             let empty_record = Record {
-                update: None,
                 fields: &[],
                 final_comments: &[],
             };
@@ -1956,11 +1969,14 @@ mod test_parse {
 
         let loc_closure = Located::new(0, 0, 8, 23, apply);
 
-        let binop = Expr::BinOp(arena.alloc((
-            loc_var_x,
-            Located::new(2, 2, 2, 3, roc_module::operator::BinOp::Plus),
-            loc_var_y,
-        )));
+        let binop = single_binop(
+            &arena,
+            (
+                loc_var_x,
+                Located::new(2, 2, 2, 3, roc_module::operator::BinOp::Plus),
+                loc_var_y,
+            ),
+        );
 
         let spaced_binop = Expr::SpaceBefore(arena.alloc(binop), &[Newline, Newline]);
 
@@ -3361,6 +3377,11 @@ mod test_parse {
         );
 
         assert!(actual.is_ok());
+    }
+
+    #[test]
+    fn parse_expr_size() {
+        assert_eq!(std::mem::size_of::<roc_parse::ast::Expr>(), 40);
     }
 
     // PARSE ERROR

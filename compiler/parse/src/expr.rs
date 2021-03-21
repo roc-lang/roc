@@ -416,15 +416,18 @@ fn parse_expr_final<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
-    let mut expr = to_call(arena, expr_state.arguments, expr_state.expr);
+    let right_arg = to_call(arena, expr_state.arguments, expr_state.expr);
 
-    for (left_arg, op) in expr_state.operators.into_iter().rev() {
-        let region = Region::span_across(&left_arg.region, &expr.region);
-        let new = Expr::BinOp(arena.alloc((left_arg, op, expr)));
-        expr = Located::at(region, new);
-    }
+    let expr = if expr_state.operators.is_empty() {
+        right_arg.value
+    } else {
+        Expr::BinOps(
+            expr_state.operators.into_bump_slice(),
+            arena.alloc(right_arg),
+        )
+    };
 
-    Ok((MadeProgress, expr.value, state))
+    Ok((MadeProgress, expr, state))
 }
 
 fn to_call<'a>(
@@ -1257,21 +1260,7 @@ fn parse_expr_end<'a>(
                         // roll back space parsing
                         let state = expr_state.initial;
 
-                        if expr_state.operators.is_empty() {
-                            let expr = to_call(arena, expr_state.arguments, expr_state.expr);
-
-                            Ok((MadeProgress, expr.value, state))
-                        } else {
-                            let mut expr = to_call(arena, expr_state.arguments, expr_state.expr);
-
-                            for (left_arg, op) in expr_state.operators.into_iter().rev() {
-                                let region = Region::span_across(&left_arg.region, &expr.region);
-                                let new = Expr::BinOp(arena.alloc((left_arg, op, expr)));
-                                expr = Located::at(region, new);
-                            }
-
-                            Ok((MadeProgress, expr.value, state))
-                        }
+                        parse_expr_final(expr_state, arena, state)
                     }
                 }
             }
@@ -1352,7 +1341,6 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
 
         Expr::Record {
             fields,
-            update: None,
             final_comments: _,
         } => {
             let mut loc_patterns = Vec::with_capacity_in(fields.len(), arena);
@@ -1384,15 +1372,13 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::List { .. }
         | Expr::Closure(_, _)
         | Expr::Backpassing(_, _, _)
-        | Expr::BinOp(_)
+        | Expr::BinOps { .. }
         | Expr::Defs(_, _)
         | Expr::If(_, _)
         | Expr::When(_, _)
         | Expr::MalformedClosure
-        | Expr::PrecedenceConflict(_, _, _, _)
-        | Expr::Record {
-            update: Some(_), ..
-        }
+        | Expr::PrecedenceConflict { .. }
+        | Expr::RecordUpdate { .. }
         | Expr::UnaryOp(_, _) => Err(()),
 
         Expr::Str(string) => Ok(Pattern::StrLiteral(string.clone())),
@@ -2085,10 +2071,16 @@ fn record_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'
             let (opt_update, loc_assigned_fields_with_comments) = loc_record.value;
 
             // This is a record literal, not a destructure.
-            let mut value = Expr::Record {
-                update: opt_update.map(|loc_expr| &*arena.alloc(loc_expr)),
-                fields: loc_assigned_fields_with_comments.value.0.into_bump_slice(),
-                final_comments: loc_assigned_fields_with_comments.value.1,
+            let mut value = match opt_update {
+                Some(update) => Expr::RecordUpdate {
+                    update: &*arena.alloc(update),
+                    fields: loc_assigned_fields_with_comments.value.0.into_bump_slice(),
+                    final_comments: arena.alloc(loc_assigned_fields_with_comments.value.1),
+                },
+                None => Expr::Record {
+                    fields: loc_assigned_fields_with_comments.value.0.into_bump_slice(),
+                    final_comments: loc_assigned_fields_with_comments.value.1,
+                },
             };
 
             // there can be field access, e.g. `{ x : 4 }.x`

@@ -3,7 +3,7 @@ use crate::ident::Ident;
 use bumpalo::collections::String;
 use bumpalo::Bump;
 use roc_module::operator::{BinOp, CalledVia, UnaryOp};
-use roc_region::all::{Loc, Region};
+use roc_region::all::{Loc, Position, Region};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Module<'a> {
@@ -98,8 +98,13 @@ pub enum Expr<'a> {
         final_comments: &'a [CommentOrNewline<'a>],
     },
 
+    RecordUpdate {
+        update: &'a Loc<Expr<'a>>,
+        fields: &'a [Loc<AssignedField<'a, Expr<'a>>>],
+        final_comments: &'a &'a [CommentOrNewline<'a>],
+    },
+
     Record {
-        update: Option<&'a Loc<Expr<'a>>>,
         fields: &'a [Loc<AssignedField<'a, Expr<'a>>>],
         final_comments: &'a [CommentOrNewline<'a>],
     },
@@ -124,7 +129,7 @@ pub enum Expr<'a> {
     /// To apply by name, do Apply(Var(...), ...)
     /// To apply a tag by name, do Apply(Tag(...), ...)
     Apply(&'a Loc<Expr<'a>>, &'a [&'a Loc<Expr<'a>>], CalledVia),
-    BinOp(&'a (Loc<Expr<'a>>, Loc<BinOp>, Loc<Expr<'a>>)),
+    BinOps(&'a [(Loc<Expr<'a>>, Loc<BinOp>)], &'a Loc<Expr<'a>>),
     UnaryOp(&'a Loc<Expr<'a>>, Loc<UnaryOp>),
 
     // Conditionals
@@ -155,7 +160,17 @@ pub enum Expr<'a> {
     MalformedClosure,
     // Both operators were non-associative, e.g. (True == False == False).
     // We should tell the author to disambiguate by grouping them with parens.
-    PrecedenceConflict(Region, Loc<BinOp>, Loc<BinOp>, &'a Loc<Expr<'a>>),
+    PrecedenceConflict(&'a PrecedenceConflict<'a>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrecedenceConflict<'a> {
+    pub whole_region: Region,
+    pub binop1_position: Position,
+    pub binop2_position: Position,
+    pub binop1: BinOp,
+    pub binop2: BinOp,
+    pub expr: &'a Loc<Expr<'a>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

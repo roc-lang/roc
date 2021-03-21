@@ -121,7 +121,6 @@ fn jit_to_ast_help<'a>(
         }
         Layout::PhantomEmptyStruct => Ok(run_jit_function!(lib, main_fn_name, &u8, |_| {
             Expr::Record {
-                update: None,
                 fields: &[],
                 final_comments: env.arena.alloc([]),
             }
@@ -474,7 +473,6 @@ fn struct_to_ast<'a>(
         let output = env.arena.alloc([loc_field]);
 
         Expr::Record {
-            update: None,
             fields: output,
             final_comments: &[],
         }
@@ -510,7 +508,6 @@ fn struct_to_ast<'a>(
         let output = output.into_bump_slice();
 
         Expr::Record {
-            update: None,
             fields: output,
             final_comments: &[],
         }
@@ -554,7 +551,6 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                     };
 
                     Expr::Record {
-                        update: None,
                         fields: arena.alloc([loc_assigned_field]),
                         final_comments: arena.alloc([]),
                     }
@@ -667,7 +663,6 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                     };
 
                     Expr::Record {
-                        update: None,
                         fields: arena.alloc([loc_assigned_field]),
                         final_comments: &[],
                     }
@@ -783,7 +778,6 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                     };
 
                     Expr::Record {
-                        update: None,
                         fields: arena.alloc([loc_assigned_field]),
                         final_comments: arena.alloc([]),
                     }
