@@ -414,7 +414,7 @@ pub fn to_pattern2<'a>(
             malformed_pattern(env, problem, region)
         }
 
-        SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) | Nested(sub_pattern) => {
+        SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) => {
             return to_pattern2(env, scope, pattern_type, sub_pattern, region)
         }
     };
