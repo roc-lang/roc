@@ -776,8 +776,20 @@ fn pretty_runtime_error<'b>(
         }
         RuntimeError::MalformedIdentifier(_box_str, bad_ident, surroundings) => {
             to_bad_ident_expr_report(alloc, bad_ident, surroundings)
-
-
+        }
+        RuntimeError::MalformedTypeName(_box_str, surroundings) => {
+            alloc.stack(vec![
+                alloc.reflow(r"I am confused by this type name:"),
+                alloc.region(surroundings),
+                alloc.concat(vec![
+                    alloc.reflow("Type names start with an uppercase letter, "),
+                    alloc.reflow("and can optionally be qualified by a module name, like "),
+                    alloc.parser_suggestion("Bool"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("Http.Request.Request"),
+                    alloc.reflow("."),
+                ]),
+            ])
         }
         RuntimeError::MalformedClosure(_) => todo!(""),
         RuntimeError::InvalidFloat(sign @ FloatErrorKind::PositiveInfinity, region, _raw_str)
