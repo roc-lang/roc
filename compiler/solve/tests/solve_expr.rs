@@ -653,13 +653,16 @@ mod solve_expr {
 
     #[test]
     fn applied_tag_function_mismatch() {
-        infer_eq_without_problem(
+        infer_eq(
             indoc!(
                 r#"
-                \foo -> { x: [ foo, Foo ], y: [ foo, \x -> Foo x ] }
+                x : List [ Foo Str ]
+                x = List.map [ 1, 2 ] Foo
+
+                x
                 "#
             ),
-            "",
+            "<type mismatch>",
         )
     }
 
