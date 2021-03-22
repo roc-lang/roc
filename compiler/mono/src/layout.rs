@@ -23,7 +23,7 @@ pub enum LayoutProblem {
 }
 
 /// Types for code gen must be monomorphic. No type variables allowed!
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Layout<'a> {
     Builtin(Builtin<'a>),
     /// A layout that is empty (turns into the empty struct in LLVM IR
@@ -39,7 +39,7 @@ pub enum Layout<'a> {
     Pointer(&'a Layout<'a>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UnionLayout<'a> {
     /// A non-recursive tag union
     /// e.g. `Result a e : [ Ok a, Err e ]`
@@ -93,7 +93,7 @@ impl<'a> UnionLayout<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ClosureLayout<'a> {
     /// the layout that this specific closure captures
     /// uses a Vec instead of a MutMap because it's Hash
@@ -382,7 +382,7 @@ pub enum MemoryMode {
     Refcounted,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Builtin<'a> {
     Int128,
     Int64,
