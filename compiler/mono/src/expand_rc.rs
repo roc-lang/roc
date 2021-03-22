@@ -141,7 +141,7 @@ impl<'a, 'i> Env<'a, 'i> {
                 tag_id,
             } => {
                 self.constructor_map.insert(*scrutinee, *tag_id as u64);
-                self.layout_map.insert(*scrutinee, layout.clone());
+                self.layout_map.insert(*scrutinee, *layout);
             }
             BranchInfo::None => (),
         }
@@ -167,7 +167,7 @@ impl<'a, 'i> Env<'a, 'i> {
             }
             Closure(arguments, closure_layout, result) => {
                 let fpointer = Layout::FunctionPointer(arguments, result);
-                let fields = self.arena.alloc([fpointer, closure_layout.layout.clone()]);
+                let fields = self.arena.alloc([fpointer, *closure_layout.layout]);
                 self.constructor_map.insert(symbol, 0);
                 self.layout_map.insert(symbol, Layout::Struct(fields));
             }
@@ -247,7 +247,7 @@ fn layout_for_constructor<'a>(
         }
         Closure(arguments, closure_layout, result) => {
             let fpointer = Layout::FunctionPointer(arguments, result);
-            let fields = arena.alloc([fpointer, closure_layout.layout.clone()]);
+            let fields = arena.alloc([fpointer, *closure_layout.layout]);
             HasFields(fields)
         }
         other => unreachable!("weird layout {:?}", other),
@@ -315,9 +315,9 @@ fn work_for_constructor<'a>(
                             let alias_symbol = Env::manual_unique_symbol(env.home, env.ident_ids);
 
                             let layout = if let Layout::RecursivePointer = field_layout {
-                                full_layout.clone()
+                                *full_layout
                             } else {
-                                field_layout.clone()
+                                *field_layout
                             };
 
                             env.deferred.assignments.push((alias_symbol, expr, layout));
@@ -375,7 +375,7 @@ pub fn expand_and_cancel_proc<'a>(
             }
             Layout::Closure(arguments, closure_layout, result) => {
                 let fpointer = Layout::FunctionPointer(arguments, result);
-                let fields = env.arena.alloc([fpointer, closure_layout.layout.clone()]);
+                let fields = env.arena.alloc([fpointer, *closure_layout.layout]);
                 env.insert_struct_info(*symbol, fields);
                 introduced.push(*symbol);
             }
@@ -412,7 +412,7 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
     let mut result = {
         match stmt {
             Let(mut symbol, expr, layout, cont) => {
-                env.layout_map.insert(symbol, layout.clone());
+                env.layout_map.insert(symbol, *layout);
 
                 let mut expr = expr;
                 let mut layout = layout;
@@ -423,7 +423,7 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
 
                 while !matches!(&expr, Expr::AccessAtIndex { .. } | Expr::Struct(_)) {
                     if let Stmt::Let(symbol1, expr1, layout1, cont1) = cont {
-                        literal_stack.push((symbol, expr.clone(), layout.clone()));
+                        literal_stack.push((symbol, expr.clone(), *layout));
 
                         symbol = *symbol1;
                         expr = expr1;
@@ -479,7 +479,7 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                     }
                 }
 
-                let stmt = Let(symbol, expr.clone(), layout.clone(), new_cont);
+                let stmt = Let(symbol, expr.clone(), *layout, new_cont);
                 let mut stmt = &*env.arena.alloc(stmt);
 
                 for (symbol, expr, layout) in literal_stack.into_iter().rev() {
@@ -519,8 +519,8 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
 
                 let stmt = Switch {
                     cond_symbol: *cond_symbol,
-                    cond_layout: cond_layout.clone(),
-                    ret_layout: ret_layout.clone(),
+                    cond_layout: *cond_layout,
+                    ret_layout: *ret_layout,
                     branches: new_branches.into_bump_slice(),
                     default_branch: new_default,
                 };
@@ -579,7 +579,7 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                 let stmt = Invoke {
                     symbol: *symbol,
                     call: call.clone(),
-                    layout: layout.clone(),
+                    layout: *layout,
                     pass,
                     fail,
                 };

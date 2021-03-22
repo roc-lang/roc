@@ -2030,7 +2030,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 // access itself!
                 // scope = scope.clone();
 
-                scope.insert(*symbol, (layout.clone(), val));
+                scope.insert(*symbol, (*layout, val));
                 stack.push(*symbol);
             }
 
@@ -2063,8 +2063,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
         } => {
             // when the fail case is just Rethrow, there is no cleanup work to do
             // so we can just treat this invoke as a normal call
-            let stmt =
-                roc_mono::ir::Stmt::Let(*symbol, Expr::Call(call.clone()), layout.clone(), pass);
+            let stmt = roc_mono::ir::Stmt::Let(*symbol, Expr::Call(call.clone()), *layout, pass);
             build_exp_stmt(env, layout_ids, scope, parent, &stmt)
         }
 
@@ -2088,7 +2087,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     scope,
                     parent,
                     *symbol,
-                    layout.clone(),
+                    *layout,
                     function_value.into(),
                     call.arguments,
                     None,
@@ -2108,7 +2107,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             scope,
                             parent,
                             *symbol,
-                            layout.clone(),
+                            *layout,
                             function_ptr.into(),
                             call.arguments,
                             None,
@@ -2135,7 +2134,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             scope,
                             parent,
                             *symbol,
-                            layout.clone(),
+                            *layout,
                             function_ptr.into(),
                             call.arguments,
                             Some(closure_data),
@@ -2194,7 +2193,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 basic_type_from_layout(env.arena, env.context, &ret_layout, env.ptr_bytes);
 
             let switch_args = SwitchArgsIr {
-                cond_layout: cond_layout.clone(),
+                cond_layout: *cond_layout,
                 cond_symbol: *cond_symbol,
                 branches,
                 default_branch: default_branch.1,
@@ -2242,7 +2241,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
             for (ptr, param) in joinpoint_args.iter().zip(parameters.iter()) {
                 let value = env.builder.build_load(*ptr, "load_jp_argument");
-                scope.insert(param.symbol, (param.layout.clone(), value));
+                scope.insert(param.symbol, (param.layout, value));
             }
 
             // put the continuation in
@@ -2277,7 +2276,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             match modify {
                 Inc(symbol, inc_amount) => {
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
-                    let layout = layout.clone();
+                    let layout = *layout;
 
                     if layout.contains_refcounted() {
                         increment_refcount_layout(
@@ -3177,7 +3176,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
     let function_pointer_type = {
         let function_layout =
-            ClosureLayout::extend_function_layout(arena, arguments, closure.clone(), result);
+            ClosureLayout::extend_function_layout(arena, arguments, *closure, result);
 
         // this is already a (function) pointer type
         basic_type_from_layout(arena, context, &function_layout, env.ptr_bytes)
@@ -3252,7 +3251,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     );
 
     // STEP 4: build a {} -> u64 function that gives the size of the closure
-    let layout = Layout::Closure(arguments, closure.clone(), result);
+    let layout = Layout::Closure(arguments, *closure, result);
     build_host_exposed_alias_size(env, def_name, alias_symbol, &layout);
 }
 
@@ -3455,7 +3454,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
     // Add args to scope
     for (arg_val, (layout, arg_symbol)) in fn_val.get_param_iter().zip(args) {
         set_name(arg_val, arg_symbol.ident_string(&env.interns));
-        scope.insert(*arg_symbol, (layout.clone(), arg_val));
+        scope.insert(*arg_symbol, (*layout, arg_val));
     }
 
     let body = build_exp_stmt(env, layout_ids, &mut scope, fn_val, &proc.body);
@@ -4559,7 +4558,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
             {
                 env.builder.position_at_end(pass_block);
 
-                scope.insert(symbol, (ret_layout.clone(), call_result));
+                scope.insert(symbol, (*ret_layout, call_result));
 
                 build_exp_stmt(env, layout_ids, scope, parent, pass);
 
