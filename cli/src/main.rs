@@ -1,6 +1,6 @@
-use roc_cli::{build, build_app, repl, DIRECTORY_OR_FILES};
+use roc_cli::{build, docs, build_app, repl, DIRECTORY_OR_FILES};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use target_lexicon::Triple;
 
 fn main() -> io::Result<()> {
@@ -34,6 +34,21 @@ fn main() -> io::Result<()> {
                     roc_editor::launch(&paths)
                 }
             }
+        }
+        Some("docs") => {
+            let values = matches
+                .subcommand_matches("docs")
+                .unwrap()
+                .values_of_os(DIRECTORY_OR_FILES)
+                .unwrap();
+
+            let paths = values
+                .map(|os_str| Path::new(os_str).to_path_buf())
+                .collect::<Vec<PathBuf>>();
+
+            docs(paths);
+
+            Ok(())
         }
         _ => unreachable!(),
     }
