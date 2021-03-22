@@ -1335,9 +1335,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             spaces,
         )),
 
-        Expr::ParensAround(sub_expr) | Expr::Nested(sub_expr) => {
-            expr_to_pattern_help(arena, sub_expr)
-        }
+        Expr::ParensAround(sub_expr) => expr_to_pattern_help(arena, sub_expr),
 
         Expr::Record {
             fields,
@@ -1381,7 +1379,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::RecordUpdate { .. }
         | Expr::UnaryOp(_, _) => Err(()),
 
-        Expr::Str(string) => Ok(Pattern::StrLiteral(string.clone())),
+        Expr::Str(string) => Ok(Pattern::StrLiteral(*string)),
         Expr::MalformedIdent(string, _problem) => Ok(Pattern::Malformed(string)),
     }
 }
@@ -1410,7 +1408,7 @@ fn assigned_expr_field_to_pattern_help<'a>(
         AssignedField::OptionalValue(name, spaces, value) => {
             let result = arena.alloc(Located {
                 region: value.region,
-                value: value.value.clone(),
+                value: value.value,
             });
             if spaces.is_empty() {
                 Pattern::OptionalField(name.value, result)
@@ -1458,7 +1456,7 @@ pub fn defs<'a>(min_indent: u16) -> impl Parser<'a, Vec<'a, Located<Def<'a>>>, E
             let last = def_state.defs.len() - 1;
 
             for (i, ref_def) in def_state.defs.into_iter().enumerate() {
-                let mut def = ref_def.clone();
+                let mut def = *ref_def;
 
                 if i == first {
                     def = arena

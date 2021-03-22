@@ -22,8 +22,6 @@ impl<'a> Formattable<'a> for Pattern<'a> {
                 spaces.iter().any(|s| s.is_comment())
             }
 
-            Pattern::Nested(nested_pat) => nested_pat.is_multiline(),
-
             Pattern::RecordDestructure(fields) => fields.iter().any(|f| f.is_multiline()),
             Pattern::RequiredField(_, subpattern) => subpattern.is_multiline(),
 
@@ -151,10 +149,6 @@ impl<'a> Formattable<'a> for Pattern<'a> {
                 } else {
                     fmt_spaces(buf, spaces.iter(), indent);
                 }
-            }
-
-            Nested(sub_pattern) => {
-                sub_pattern.format_with_options(buf, parens, newlines, indent);
             }
 
             // Malformed
