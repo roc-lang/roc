@@ -132,17 +132,6 @@ impl<'a> Hash for Test<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum Path {
-    Index {
-        index: u64,
-        tag_id: u8,
-        path: Box<Path>,
-    },
-    Unbox(Box<Path>),
-    Empty,
-}
-
 // ACTUALLY BUILD DECISION TREES
 
 #[derive(Clone, Debug, PartialEq)]
@@ -237,7 +226,7 @@ fn flatten<'a>(
         {
             // TODO ^ do we need to check that guard.is_none() here?
 
-            let mut path = path_pattern.0;
+            let path = path_pattern.0;
             // Theory: unbox doesn't have any value for us, because one-element tag unions
             // don't store the tag anyway.
             if arguments.len() == 1 {
@@ -982,34 +971,6 @@ pub fn optimize_when<'a>(
 pub struct PathInstruction {
     index: u64,
     tag_id: u8,
-}
-
-fn reverse_path(mut path: &Path) -> Vec<PathInstruction> {
-    let mut result = Vec::new();
-
-    loop {
-        match path {
-            Path::Unbox(nested) => {
-                path = nested;
-            }
-            Path::Empty => break,
-            Path::Index {
-                index,
-                tag_id,
-                path: nested,
-            } => {
-                result.push(PathInstruction {
-                    index: *index,
-                    tag_id: *tag_id,
-                });
-                path = nested;
-            }
-        }
-    }
-
-    result.reverse();
-
-    result
 }
 
 fn path_to_expr_help<'a>(
