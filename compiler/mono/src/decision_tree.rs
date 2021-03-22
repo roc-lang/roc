@@ -172,13 +172,13 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
                     decision_tree.clone()
                 }
                 (_, None) => DecisionTree::Decision {
-                    path,
+                    path: path.clone(),
                     edges: decision_edges,
                     default: None,
                 },
                 (None, Some(_)) => to_decision_tree(fallback),
                 _ => DecisionTree::Decision {
-                    path,
+                    path: path.clone(),
                     edges: decision_edges,
                     default: Some(Box::new(to_decision_tree(fallback))),
                 },
@@ -879,7 +879,6 @@ fn small_defaults(branches: &[Branch], path: &Path) -> usize {
 }
 
 fn small_branching_factor(branches: &[Branch], path: &Path) -> usize {
-    // TODO remove clone
     let (edges, fallback) = gather_edges(branches.to_vec(), path);
 
     edges.len() + (if fallback.is_empty() { 0 } else { 1 })
@@ -1033,7 +1032,6 @@ fn path_to_expr_help<'a>(
 
                 debug_assert_eq!(field_layouts.len(), 1);
 
-                let inner_layout = field_layouts[*index as usize].clone();
                 let inner_expr = Expr::AccessAtIndex {
                     index: *index,
                     field_layouts: env.arena.alloc(field_layouts),
@@ -1042,7 +1040,8 @@ fn path_to_expr_help<'a>(
                 };
 
                 symbol = env.unique_symbol();
-                stores.push((symbol, inner_layout.clone(), inner_expr));
+                let inner_layout = layout.clone();
+                stores.push((symbol, inner_layout, inner_expr));
 
                 break;
             }
