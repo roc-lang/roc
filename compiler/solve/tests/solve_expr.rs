@@ -630,7 +630,7 @@ mod solve_expr {
                 }
                 "#
             ),
-            "{ x: List (a, b -> [ Foo a b ]*), y: List (a, b -> [ Foo a b ]*), z: List (a, b -> [ Foo a b ]*) }",
+            "{ x : List [ Foo ]*, y : List (a -> [ Foo a ]*), z : List (b, c -> [ Foo b c ]*) }",
         )
     }
 

@@ -1124,7 +1124,7 @@ fn unify_flat_type(
                 let problems = unify_pool(subs, pool, *ret, new_tag_union_var);
 
                 if problems.is_empty() {
-                    let desc = subs.get(ctx.second);
+                    let desc = subs.get(ctx.first);
                     subs.union(ctx.first, ctx.second, desc);
 
                     vec![]
