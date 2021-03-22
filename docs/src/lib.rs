@@ -45,76 +45,37 @@ pub struct TemplateLinkEntry {
     name: String,
 }
 
-// fn main() {
-//     generate(
-//         vec![
-//             PathBuf::from(r"../compiler/builtins/docs/Bool.roc"),
-//             // PathBuf::from(r"../compiler/builtins/docs/Dict.roc"),
-//             // Not working
-//             // PathBuf::from(r"../compiler/builtins/docs/List.roc"),
-//             // Not working
-//             // PathBuf::from(r"../compiler/builtins/docs/Num.roc"),
-//             // PathBuf::from(r"../compiler/builtins/docs/Set.roc"),
-//             // PathBuf::from(r"../compiler/builtins/docs/Str.roc"),
-//         ],
-//         roc_builtins::std::standard_stdlib(),
-//         Path::new("../compiler/builtins/docs"),
-//         // Path::new("./build"),
-//     )
-// }
-
 pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
-    // let files_docs = files_to_documentations(filenames, std_lib);
+    let files_docs = files_to_documentations(filenames, std_lib);
     //
-    // // TODO: get info from a file like "elm.json"
-    // let package = roc_load::docs::Documentation {
-    //     name: "roc/builtins".to_string(),
-    //     version: "1.0.0".to_string(),
-    //     docs: "Package introduction or README.".to_string(),
-    //     modules: files_docs,
-    // };
-    //
-    // let version_folder = build_dir
-    //     .join(package.name.clone())
-    //     .join(package.version.clone());
-    //
-    // println!("{}", version_folder.display());
+    // TODO: get info from a file like "elm.json"
+    let package = roc_load::docs::Documentation {
+        name: "roc/builtins".to_string(),
+        version: "1.0.0".to_string(),
+        docs: "Package introduction or README.".to_string(),
+        modules: files_docs,
+    };
 
-    // // Make sure the output directories exists
-    // fs::create_dir_all(&version_folder)
-    //     .expect("TODO gracefully handle creating directories failing");
-    //
-    // // Register handlebars template
-    // let mut handlebars = handlebars::Handlebars::new();
-    // handlebars
-    //     .register_template_file("page", "./docs/src/templates/page.hbs")
-    //     .expect("TODO gracefully handle registering template failing");
-    //
-    // // Write each package's module docs html file
-    // for module in &package.modules {
-    //     let template = documentation_to_template_data(&package, module);
-    //
-    //     let handlebars_data = handlebars::to_json(&template);
-    //     let filepath = version_folder.join(format!("{}.html", module.name));
-    //     let mut output_file =
-    //         fs::File::create(filepath).expect("TODO gracefully handle creating file failing");
-    //     handlebars
-    //         .render_to_write("page", &handlebars_data, &mut output_file)
-    //         .expect("TODO gracefully handle writing file failing");
-    // }
-    //
-    // // Copy /static folder content to /build
-    // let copy_options = fs_extra::dir::CopyOptions {
-    //     overwrite: true,
-    //     skip_exist: false,
-    //     buffer_size: 64000, //64kb
-    //     copy_inside: false,
-    //     content_only: true,
-    //     depth: 0,
-    // };
-    // fs_extra::dir::copy("./docs/src/static/", &build_dir, &copy_options)
-    //     .expect("TODO gracefully handle copying static content failing");
-    // println!("Docs generated at {}", build_dir.display());
+    // Register handlebars template
+    let mut handlebars = handlebars::Handlebars::new();
+    handlebars
+        .register_template_file("page", "./docs/src/templates/page.hbs")
+        .expect("TODO gracefully handle registering template failing");
+
+    // Write each package's module docs html file
+    for module in &package.modules {
+        let template = documentation_to_template_data(&package, module);
+
+        let handlebars_data = handlebars::to_json(&template);
+        let filepath = build_dir.join(format!("{}.html", module.name));
+        let mut output_file =
+            fs::File::create(filepath).expect("TODO gracefully handle creating file failing");
+        handlebars
+            .render_to_write("page", &handlebars_data, &mut output_file)
+            .expect("TODO gracefully handle writing file failing");
+    }
+
+    println!("Docs generated at {}", build_dir.display());
 }
 
 pub fn files_to_documentations(

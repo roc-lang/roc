@@ -91,22 +91,7 @@ pub fn build_app<'a>() -> App<'a> {
 }
 
 pub fn docs(files: Vec<PathBuf>) {
-    roc_docs::generate(
-        files,
-        // vec![
-        //     PathBuf::from(r"./compiler/builtins/docs/Bool.roc"),
-        //     // PathBuf::from(r"../compiler/builtins/docs/Dict.roc"),
-        //     // Not working
-        //     // PathBuf::from(r"../compiler/builtins/docs/List.roc"),
-        //     // Not working
-        //     // PathBuf::from(r"../compiler/builtins/docs/Num.roc"),
-        //     // PathBuf::from(r"../compiler/builtins/docs/Set.roc"),
-        //     // PathBuf::from(r"../compiler/builtins/docs/Str.roc"),
-        // ],
-        roc_builtins::std::standard_stdlib(),
-        Path::new("./"),
-        // Path::new("./build"),
-    )
+    roc_docs::generate(files, roc_builtins::std::standard_stdlib(), Path::new("./"))
 }
 
 pub fn build(target: &Triple, matches: &ArgMatches, run_after_build: bool) -> io::Result<()> {
