@@ -298,7 +298,7 @@ oks : List (Result elem *) -> List elem
 ##
 ## > For a generalized version that returns whatever you like, instead of a `Pair`,
 ## > see `zipMap`.
-zip : List a, List b, -> List [ Pair a b ]*
+zip : List a, List b -> List [ Pair a b ]*
 
 ## Like `zip` but you can specify what to do with each element.
 ##
@@ -307,7 +307,7 @@ zip : List a, List b, -> List [ Pair a b ]*
 ## >>> List.zipMap [ 1, 2, 3 ] [ 0, 5, 4 ] [ 2, 1 ] \num1 num2 num3 -> num1 + num2 - num3
 ##
 ## Accepts up to 8 lists.
-zipMap : List a, List b, (a, b) -> List c
+zipMap : List a, List b, (a, b -> c) -> List c
 
 
 ## Filter
