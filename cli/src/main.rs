@@ -1,4 +1,4 @@
-use roc_cli::{build, docs, build_app, repl, DIRECTORY_OR_FILES};
+use roc_cli::{build, build_app, docs, repl, DIRECTORY_OR_FILES};
 use std::io;
 use std::path::{Path, PathBuf};
 use target_lexicon::Triple;
