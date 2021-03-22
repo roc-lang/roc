@@ -409,10 +409,10 @@ fn test_at_path<'a>(
                     for destruct in destructs {
                         match &destruct.typ {
                             DestructType::Guard(guard) => {
-                                arguments.push((guard.clone(), destruct.layout.clone()));
+                                arguments.push((guard.clone(), destruct.layout));
                             }
                             DestructType::Required(_) => {
-                                arguments.push((Pattern::Underscore, destruct.layout.clone()));
+                                arguments.push((Pattern::Underscore, destruct.layout));
                             }
                         }
                     }
@@ -991,7 +991,7 @@ fn path_to_expr_help<'a>(
                 debug_assert_eq!(*tag_id, 0);
                 debug_assert!(it.peek().is_none());
 
-                let field_layouts = vec![layout.clone()];
+                let field_layouts = vec![layout];
 
                 debug_assert!(*index < field_layouts.len() as u64);
 
@@ -1005,7 +1005,7 @@ fn path_to_expr_help<'a>(
                 };
 
                 symbol = env.unique_symbol();
-                let inner_layout = layout.clone();
+                let inner_layout = layout;
                 stores.push((symbol, inner_layout, inner_expr));
 
                 break;
@@ -1060,7 +1060,7 @@ fn path_to_expr_help<'a>(
                     }
 
                     Layout::Struct(layouts) => layouts,
-                    other => env.arena.alloc([other.clone()]),
+                    other => env.arena.alloc([*other]),
                 };
 
                 debug_assert!(
@@ -1073,8 +1073,8 @@ fn path_to_expr_help<'a>(
                 );
 
                 let inner_layout = match &field_layouts[index as usize] {
-                    Layout::RecursivePointer => layout.clone(),
-                    other => other.clone(),
+                    Layout::RecursivePointer => layout,
+                    other => *other,
                 };
 
                 let inner_expr = Expr::AccessAtIndex {
@@ -1085,7 +1085,7 @@ fn path_to_expr_help<'a>(
                 };
 
                 symbol = env.unique_symbol();
-                stores.push((symbol, inner_layout.clone(), inner_expr));
+                stores.push((symbol, inner_layout, inner_expr));
 
                 layout = inner_layout;
             }
@@ -1103,7 +1103,7 @@ fn test_to_equality<'a>(
     test: Test<'a>,
 ) -> (StoresVec<'a>, Symbol, Symbol, Layout<'a>) {
     let (rhs_symbol, mut stores, _layout) =
-        path_to_expr_help(env, cond_symbol, &path, cond_layout.clone());
+        path_to_expr_help(env, cond_symbol, &path, *cond_layout);
 
     match test {
         Test::IsCtor {
@@ -1363,12 +1363,12 @@ fn compile_test_help<'a>(
             } => {
                 let pass_info = BranchInfo::Constructor {
                     scrutinee,
-                    layout: layout.clone(),
+                    layout,
                     tag_id: pass,
                 };
                 let fail_info = BranchInfo::Constructor {
                     scrutinee,
-                    layout: layout.clone(),
+                    layout,
                     tag_id: fail,
                 };
 
@@ -1382,7 +1382,7 @@ fn compile_test_help<'a>(
             } => {
                 let pass_info = BranchInfo::Constructor {
                     scrutinee,
-                    layout: layout.clone(),
+                    layout,
                     tag_id,
                 };
 
@@ -1437,11 +1437,11 @@ fn compile_tests<'a>(
 
     // the guard is the final thing that we check, so needs to be layered on first!
     if let Some((_, id, stmt)) = opt_guard {
-        cond = compile_guard(env, ret_layout.clone(), id, arena.alloc(stmt), fail, cond);
+        cond = compile_guard(env, ret_layout, id, arena.alloc(stmt), fail, cond);
     }
 
     for (new_stores, lhs, rhs, _layout) in tests.into_iter() {
-        cond = compile_test(env, ret_layout.clone(), new_stores, lhs, rhs, fail, cond);
+        cond = compile_test(env, ret_layout, new_stores, lhs, rhs, fail, cond);
     }
     cond
 }
@@ -1473,14 +1473,14 @@ impl<'a> ConstructorKnown<'a> {
                     if union.alternatives.len() == 2 {
                         // excluded middle: we also know the tag_id in the fail branch
                         ConstructorKnown::Both {
-                            layout: cond_layout.clone(),
+                            layout: *cond_layout,
                             scrutinee: cond_symbol,
                             pass: *tag_id,
                             fail: (*tag_id == 0) as u8,
                         }
                     } else {
                         ConstructorKnown::OnlyPass {
-                            layout: cond_layout.clone(),
+                            layout: *cond_layout,
                             scrutinee: cond_symbol,
                             tag_id: *tag_id,
                         }
@@ -1533,8 +1533,8 @@ fn decide_to_branching<'a>(
                 procs,
                 layout_cache,
                 cond_symbol,
-                cond_layout.clone(),
-                ret_layout.clone(),
+                cond_layout,
+                ret_layout,
                 *success,
                 jumps,
             );
@@ -1544,8 +1544,8 @@ fn decide_to_branching<'a>(
                 procs,
                 layout_cache,
                 cond_symbol,
-                cond_layout.clone(),
-                ret_layout.clone(),
+                cond_layout,
+                ret_layout,
                 *failure,
                 jumps,
             );
@@ -1572,7 +1572,7 @@ fn decide_to_branching<'a>(
                     compile_test_help(
                         env,
                         chain_branch_info,
-                        ret_layout.clone(),
+                        ret_layout,
                         new_stores,
                         lhs,
                         rhs,
@@ -1607,15 +1607,15 @@ fn decide_to_branching<'a>(
             // switch on the tag discriminant (currently an i64 value)
             // NOTE the tag discriminant is not actually loaded, `cond` can point to a tag
             let (inner_cond_symbol, cond_stores_vec, inner_cond_layout) =
-                path_to_expr_help(env, cond_symbol, &path, cond_layout.clone());
+                path_to_expr_help(env, cond_symbol, &path, cond_layout);
 
             let default_branch = decide_to_branching(
                 env,
                 procs,
                 layout_cache,
                 cond_symbol,
-                cond_layout.clone(),
-                ret_layout.clone(),
+                cond_layout,
+                ret_layout,
                 *fallback,
                 jumps,
             );
@@ -1631,8 +1631,8 @@ fn decide_to_branching<'a>(
                     procs,
                     layout_cache,
                     cond_symbol,
-                    cond_layout.clone(),
-                    ret_layout.clone(),
+                    cond_layout,
+                    ret_layout,
                     decider,
                     jumps,
                 );
@@ -1653,7 +1653,7 @@ fn decide_to_branching<'a>(
 
                     BranchInfo::Constructor {
                         scrutinee: inner_cond_symbol,
-                        layout: inner_cond_layout.clone(),
+                        layout: inner_cond_layout,
                         tag_id,
                     }
                 } else {
@@ -1668,7 +1668,7 @@ fn decide_to_branching<'a>(
             let default_branch_info = if tag_id_sum > 0 && union_size > 0 {
                 BranchInfo::Constructor {
                     scrutinee: inner_cond_symbol,
-                    layout: inner_cond_layout.clone(),
+                    layout: inner_cond_layout,
                     tag_id: tag_id_sum as u8,
                 }
             } else {

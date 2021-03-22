@@ -1950,7 +1950,7 @@ fn update<'a>(
                     };
 
                     for (layout, pend) in specs {
-                        existing.insert(layout.clone(), pend.clone());
+                        existing.insert(*layout, pend.clone());
                     }
                 }
             }

@@ -42,7 +42,7 @@ pub fn make_tail_recursive<'a>(
             let params = Vec::from_iter_in(
                 args.iter().map(|(layout, symbol)| Param {
                     symbol: *symbol,
-                    layout: layout.clone(),
+                    layout: *layout,
                     borrow: true,
                 }),
                 arena,
@@ -117,7 +117,7 @@ fn insert_jumps<'a>(
             if opt_cont.is_some() {
                 let cont = opt_cont.unwrap_or(cont);
 
-                Some(arena.alloc(Let(*symbol, expr.clone(), layout.clone(), cont)))
+                Some(arena.alloc(Let(*symbol, expr.clone(), *layout, cont)))
             } else {
                 None
             }
@@ -140,7 +140,7 @@ fn insert_jumps<'a>(
                 let stmt = Invoke {
                     symbol: *symbol,
                     call: call.clone(),
-                    layout: layout.clone(),
+                    layout: *layout,
                     pass,
                     fail,
                 };
@@ -222,10 +222,10 @@ fn insert_jumps<'a>(
 
                 Some(arena.alloc(Switch {
                     cond_symbol: *cond_symbol,
-                    cond_layout: cond_layout.clone(),
+                    cond_layout: *cond_layout,
                     default_branch,
                     branches,
-                    ret_layout: ret_layout.clone(),
+                    ret_layout: *ret_layout,
                 }))
             } else {
                 None

@@ -470,7 +470,7 @@ impl<'a> Context<'a> {
                 name, full_layout, ..
             } => {
                 // get the borrow signature
-                match self.param_map.get_symbol(*name, full_layout.clone()) {
+                match self.param_map.get_symbol(*name, *full_layout) {
                     Some(ps) => {
                         let v = Expr::Call(crate::ir::Call {
                             call_type,
@@ -695,7 +695,7 @@ impl<'a> Context<'a> {
                     let pair = ctx.visit_variable_declaration(
                         *symbol,
                         (*expr).clone(),
-                        (*layout).clone(),
+                        *layout,
                         b,
                         &b_live_vars,
                     );
@@ -712,13 +712,7 @@ impl<'a> Context<'a> {
             Let(symbol, expr, layout, cont) => {
                 let ctx = self.update_var_info(*symbol, layout, expr);
                 let (b, b_live_vars) = ctx.visit_stmt(cont);
-                ctx.visit_variable_declaration(
-                    *symbol,
-                    expr.clone(),
-                    layout.clone(),
-                    b,
-                    &b_live_vars,
-                )
+                ctx.visit_variable_declaration(*symbol, expr.clone(), *layout, b, &b_live_vars)
             }
 
             Invoke {
@@ -759,7 +753,7 @@ impl<'a> Context<'a> {
                     call: call.clone(),
                     pass,
                     fail,
-                    layout: layout.clone(),
+                    layout: *layout,
                 };
 
                 let cont = self.arena.alloc(invoke);
@@ -783,7 +777,7 @@ impl<'a> Context<'a> {
                         name, full_layout, ..
                     } => {
                         // get the borrow signature
-                        match self.param_map.get_symbol(*name, full_layout.clone()) {
+                        match self.param_map.get_symbol(*name, *full_layout) {
                             Some(ps) => self.add_dec_after_application(
                                 call.arguments,
                                 ps,
@@ -908,8 +902,8 @@ impl<'a> Context<'a> {
                     cond_symbol: *cond_symbol,
                     branches,
                     default_branch,
-                    cond_layout: cond_layout.clone(),
-                    ret_layout: ret_layout.clone(),
+                    cond_layout: *cond_layout,
+                    ret_layout: *ret_layout,
                 });
 
                 (switch, case_live_vars)

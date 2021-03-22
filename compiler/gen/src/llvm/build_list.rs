@@ -423,7 +423,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
     let ctx = env.context;
 
     let wrapper_struct = list.into_struct_value();
-    let (input_inplace, element_layout) = match list_layout.clone() {
+    let (input_inplace, element_layout) = match *list_layout {
         Layout::Builtin(Builtin::EmptyList) => (
             InPlace::InPlace,
             // this pointer will never actually be dereferenced
@@ -434,7 +434,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
                 MemoryMode::Unique => InPlace::InPlace,
                 MemoryMode::Refcounted => InPlace::Clone,
             },
-            elem_layout.clone(),
+            *elem_layout,
         ),
 
         _ => unreachable!("Invalid layout {:?} in List.reverse", list_layout),
@@ -868,7 +868,7 @@ fn list_walk_generic<'a, 'ctx, 'env>(
         env,
         layout_ids,
         func_layout,
-        &[element_layout.clone(), default_layout.clone()],
+        &[*element_layout, *default_layout],
     )
     .as_global_value()
     .as_pointer_value();
@@ -959,7 +959,7 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
     env.builder.build_store(transform_ptr, transform);
 
     let stepper_caller =
-        build_transform_caller(env, layout_ids, transform_layout, &[element_layout.clone()])
+        build_transform_caller(env, layout_ids, transform_layout, &[*element_layout])
             .as_global_value()
             .as_pointer_value();
 
@@ -1066,7 +1066,7 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
     env.builder.build_store(transform_ptr, transform);
 
     let stepper_caller =
-        build_transform_caller(env, layout_ids, transform_layout, &[before_layout.clone()])
+        build_transform_caller(env, layout_ids, transform_layout, &[*before_layout])
             .as_global_value()
             .as_pointer_value();
 
@@ -1130,7 +1130,7 @@ pub fn list_map<'a, 'ctx, 'env>(
         list,
         element_layout,
         bitcode::LIST_MAP,
-        &[element_layout.clone()],
+        &[*element_layout],
     )
 }
 
@@ -1151,7 +1151,7 @@ pub fn list_map_with_index<'a, 'ctx, 'env>(
         list,
         element_layout,
         bitcode::LIST_MAP_WITH_INDEX,
-        &[Layout::Builtin(Builtin::Usize), element_layout.clone()],
+        &[Layout::Builtin(Builtin::Usize), *element_layout],
     )
 }
 
@@ -1255,7 +1255,7 @@ pub fn list_map2<'a, 'ctx, 'env>(
     let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
     env.builder.build_store(transform_ptr, transform);
 
-    let argument_layouts = [element1_layout.clone(), element2_layout.clone()];
+    let argument_layouts = [*element1_layout, *element2_layout];
     let stepper_caller =
         build_transform_caller(env, layout_ids, transform_layout, &argument_layouts)
             .as_global_value()
@@ -1351,11 +1351,7 @@ pub fn list_map3<'a, 'ctx, 'env>(
     let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
     env.builder.build_store(transform_ptr, transform);
 
-    let argument_layouts = [
-        element1_layout.clone(),
-        element2_layout.clone(),
-        element3_layout.clone(),
-    ];
+    let argument_layouts = [*element1_layout, *element2_layout, *element3_layout];
     let stepper_caller =
         build_transform_caller(env, layout_ids, transform_layout, &argument_layouts)
             .as_global_value()
