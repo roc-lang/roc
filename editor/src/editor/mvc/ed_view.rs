@@ -27,4 +27,13 @@ pub fn model_to_wgpu<'a>(
         glyph_dim_rect,
         markup_node_pool,
     )
+
+    //TODO implement method
+    build_selection_graphics(
+        ed_model.caret_w_select_vec
+        size,
+        txt_coords,
+        config,
+        glyph_dim_rect,
+    )
 }

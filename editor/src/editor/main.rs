@@ -1,6 +1,6 @@
 use super::keyboard_input;
 use super::style::CODE_TXT_XY;
-use super::util::slice_get;
+use crate::ui::util::slice_get;
 use crate::editor::ed_error::print_ui_err;
 use crate::editor::resources::strings::NOTHING_OPENED;
 use crate::editor::slow_pool::SlowPool;
@@ -153,21 +153,27 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
     let mut code_str = BumpString::from_str_in("", &code_arena);
 
-    if let Some(file_path) = file_path_opt {
+    let file_path = if let Some(file_path) = file_path_opt {
         match std::fs::read_to_string(file_path) {
             Ok(file_as_str) => {
                 code_str = BumpString::from_str_in(&file_as_str, &code_arena);
+                file_path
             }
 
-            Err(e) => print_ui_err(&FileOpenFailed {
-                path_str: file_path.to_string_lossy().to_string(),
-                err_msg: e.to_string(),
-            }),
+            Err(e) => {
+                print_ui_err(&FileOpenFailed {
+                    path_str: file_path.to_string_lossy().to_string(),
+                    err_msg: e.to_string(),
+                });
+                Path::new("")
+            },
         }
-    }
+    } else {
+        Path::new("")
+    };
 
     let ed_model_opt = {
-        let ed_model_res = ed_model::init_model(&code_str, env, &code_arena, &mut markup_node_pool);
+        let ed_model_res = ed_model::init_model(&code_str, file_path, env, &code_arena, &mut markup_node_pool);
 
         match ed_model_res {
             Ok(mut ed_model) => {
