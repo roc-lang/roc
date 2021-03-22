@@ -578,6 +578,7 @@ mod solve_expr {
         )
     }
 
+    // Tests (TagUnion, Func)
     #[test]
     fn applied_tag_function() {
         infer_eq_without_problem(
@@ -592,6 +593,7 @@ mod solve_expr {
         )
     }
 
+    // Tests (TagUnion, Func)
     #[test]
     fn applied_tag_function_list_map() {
         infer_eq_without_problem(
@@ -604,8 +606,22 @@ mod solve_expr {
         )
     }
 
+    // Tests (TagUnion, Func)
     #[test]
     fn applied_tag_function_list() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                [ \x -> Bar x, Foo ]
+                "#
+            ),
+            "List (a -> [ Bar a, Foo a ]*)",
+        )
+    }
+
+    // Tests (Func, TagUnion)
+    #[test]
+    fn applied_tag_function_list_other_way() {
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -616,6 +632,7 @@ mod solve_expr {
         )
     }
 
+    // Tests (Func, TagUnion)
     #[test]
     fn applied_tag_function_record() {
         infer_eq_without_problem(
