@@ -70,7 +70,7 @@ fn build_hash_layout<'a, 'ctx, 'env>(
                 unreachable!("recursion pointers should never be hashed directly")
             }
             WhenRecursive::Loop(union_layout) => {
-                let layout = Layout::Union(union_layout.clone());
+                let layout = Layout::Union(union_layout);
 
                 let bt = basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
 
@@ -287,7 +287,7 @@ fn hash_struct<'a, 'ctx, 'env>(
                         unreachable!("The current layout should not be recursive, but is")
                     }
                     WhenRecursive::Loop(union_layout) => {
-                        let field_layout = Layout::Union(union_layout.clone());
+                        let field_layout = Layout::Union(*union_layout);
 
                         let bt = basic_type_from_layout(
                             env.arena,
@@ -811,7 +811,7 @@ fn hash_ptr_to_struct<'a, 'ctx, 'env>(
         env,
         layout_ids,
         field_layouts,
-        WhenRecursive::Loop(union_layout.clone()),
+        WhenRecursive::Loop(*union_layout),
         seed,
         struct_value,
     )

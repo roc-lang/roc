@@ -306,6 +306,18 @@ impl Subs {
         self.utable.probe_value(key)
     }
 
+    pub fn get_ref(&self, key: Variable) -> &Descriptor {
+        &self.utable.probe_value_ref(key).value
+    }
+
+    pub fn get_rank(&mut self, key: Variable) -> Rank {
+        self.utable.probe_value_ref(key).value.rank
+    }
+
+    pub fn get_mark(&mut self, key: Variable) -> Mark {
+        self.utable.probe_value_ref(key).value.mark
+    }
+
     pub fn get_without_compacting(&self, key: Variable) -> Descriptor {
         self.utable.probe_value_without_compacting(key)
     }

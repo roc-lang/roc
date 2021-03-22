@@ -176,7 +176,7 @@ pub fn helper<'a>(
     }
 
     let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
-        Some(found) => found.clone(),
+        Some(found) => *found,
         None => panic!(
             "The main function symbol {:?} does not have a procedure in {:?}",
             main_fn_symbol,
