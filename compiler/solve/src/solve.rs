@@ -880,7 +880,7 @@ fn check_for_infinite_type(
     let var = loc_var.value;
 
     let is_uniq_infer = matches!(
-        subs.get(var).content,
+        subs.get_ref(var).content,
         Content::Alias(Symbol::ATTR_ATTR, _, _)
     );
 
@@ -1088,7 +1088,7 @@ fn generalize(
     for vars in all_but_last_pool {
         for &var in vars {
             if !subs.redundant(var) {
-                let rank = subs.get(var).rank;
+                let rank = subs.get_rank(var);
 
                 pools.get_mut(rank).push(var);
             }
@@ -1099,13 +1099,12 @@ fn generalize(
     // otherwise generalize
     for &var in last_pool {
         if !subs.redundant(var) {
-            let mut desc = subs.get(var);
+            let desc_rank = subs.get_rank(var);
 
-            if desc.rank < young_rank {
-                pools.get_mut(desc.rank).push(var);
+            if desc_rank < young_rank {
+                pools.get_mut(desc_rank).push(var);
             } else {
-                desc.rank = Rank::NONE;
-                subs.set(var, desc);
+                subs.set_rank(var, Rank::NONE);
             }
         }
     }
@@ -1121,18 +1120,8 @@ fn pool_to_rank_table(
 
     // Sort the variables into buckets by rank.
     for &var in young_vars.iter() {
-        let desc = subs.get(var);
-        let rank = desc.rank;
-
-        subs.set(
-            var,
-            Descriptor {
-                rank,
-                mark: young_mark,
-                content: desc.content,
-                copy: desc.copy,
-            },
-        );
+        let rank = subs.get_rank(var);
+        subs.set_mark(var, young_mark);
 
         debug_assert!(rank.into_usize() < young_rank.into_usize() + 1);
         pools.get_mut(rank).push(var);
@@ -1155,24 +1144,15 @@ fn adjust_rank(
     if desc.mark == young_mark {
         let Descriptor {
             content,
-            rank,
+            rank: _,
             mark: _,
             copy,
         } = desc;
 
         // Mark the variable as visited before adjusting content, as it may be cyclic.
-        subs.set(
-            var,
-            Descriptor {
-                content: content.clone(),
-                rank,
-                mark: visit_mark,
-                copy,
-            },
-        );
+        subs.set_mark(var, visit_mark);
 
-        let max_rank =
-            adjust_rank_content(subs, young_mark, visit_mark, group_rank, content.clone());
+        let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, &content);
 
         subs.set(
             var,
@@ -1208,7 +1188,7 @@ fn adjust_rank_content(
     young_mark: Mark,
     visit_mark: Mark,
     group_rank: Rank,
-    content: Content,
+    content: &Content,
 ) -> Rank {
     use roc_types::subs::Content::*;
     use roc_types::subs::FlatType::*;
@@ -1224,14 +1204,15 @@ fn adjust_rank_content(
                     let mut rank = Rank::toplevel();
 
                     for var in args {
-                        rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                        rank =
+                            rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
                     }
 
                     rank
                 }
 
                 Func(arg_vars, closure_var, ret_var) => {
-                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, ret_var);
+                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ret_var);
 
                     // TODO investigate further.
                     //
@@ -1244,12 +1225,13 @@ fn adjust_rank_content(
                             young_mark,
                             visit_mark,
                             group_rank,
-                            closure_var,
+                            *closure_var,
                         ));
                     }
 
                     for var in arg_vars {
-                        rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                        rank =
+                            rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
                     }
 
                     rank
@@ -1263,7 +1245,7 @@ fn adjust_rank_content(
                 EmptyTagUnion => Rank::toplevel(),
 
                 Record(fields, ext_var) => {
-                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, ext_var);
+                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
 
                     for (_, var) in fields {
                         rank = rank.max(adjust_rank(
@@ -1279,7 +1261,7 @@ fn adjust_rank_content(
                 }
 
                 TagUnion(tags, ext_var) => {
-                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, ext_var);
+                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
 
                     for var in tags.values().flatten() {
                         rank =
@@ -1290,9 +1272,9 @@ fn adjust_rank_content(
                 }
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, rec_var);
+                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *rec_var);
                     rank = rank.max(adjust_rank(
-                        subs, young_mark, visit_mark, group_rank, ext_var,
+                        subs, young_mark, visit_mark, group_rank, *ext_var,
                     ));
 
                     for var in tags.values().flatten() {
@@ -1305,10 +1287,11 @@ fn adjust_rank_content(
 
                 Boolean(Bool::Shared) => Rank::toplevel(),
                 Boolean(Bool::Container(cvar, mvars)) => {
-                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, cvar);
+                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *cvar);
 
                     for var in mvars {
-                        rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                        rank =
+                            rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
                     }
 
                     rank
@@ -1322,13 +1305,13 @@ fn adjust_rank_content(
             let mut rank = Rank::toplevel();
 
             for (_, var) in args {
-                rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
             }
 
             // from elm-compiler: THEORY: anything in the real_var would be Rank::toplevel()
             // this theory is not true in Roc! aliases of function types capture the closure var
             rank = rank.max(adjust_rank(
-                subs, young_mark, visit_mark, group_rank, real_var,
+                subs, young_mark, visit_mark, group_rank, *real_var,
             ));
 
             rank
