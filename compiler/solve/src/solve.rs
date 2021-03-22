@@ -1247,7 +1247,7 @@ fn adjust_rank_content(
                 Record(fields, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
 
-                    for (_, var) in fields {
+                    for var in fields.values() {
                         rank = rank.max(adjust_rank(
                             subs,
                             young_mark,
