@@ -22,7 +22,7 @@ pub fn infer_borrow<'a>(
     };
 
     for (key, proc) in procs {
-        param_map.visit_proc(arena, proc, key.clone());
+        param_map.visit_proc(arena, proc, *key);
     }
 
     let mut env = BorrowInfState {
@@ -47,7 +47,7 @@ pub fn infer_borrow<'a>(
         // mutually recursive functions (or just make all their arguments owned)
 
         for (key, proc) in procs {
-            env.collect_proc(proc, key.1.clone());
+            env.collect_proc(proc, key.1);
         }
 
         if !env.modified {
@@ -113,7 +113,7 @@ impl<'a> ParamMap<'a> {
         Vec::from_iter_in(
             ps.iter().map(|p| Param {
                 borrow: p.layout.is_refcounted(),
-                layout: p.layout.clone(),
+                layout: p.layout,
                 symbol: p.symbol,
             }),
             arena,
@@ -125,7 +125,7 @@ impl<'a> ParamMap<'a> {
         Vec::from_iter_in(
             ps.iter().map(|(layout, symbol)| Param {
                 borrow: should_borrow_layout(layout),
-                layout: layout.clone(),
+                layout: *layout,
                 symbol: *symbol,
             }),
             arena,
@@ -140,7 +140,7 @@ impl<'a> ParamMap<'a> {
         Vec::from_iter_in(
             ps.iter().map(|(layout, symbol)| Param {
                 borrow: false,
-                layout: layout.clone(),
+                layout: *layout,
                 symbol: *symbol,
             }),
             arena,
@@ -367,7 +367,7 @@ impl<'a> BorrowInfState<'a> {
                 name, full_layout, ..
             } => {
                 // get the borrow signature of the applied function
-                match self.param_map.get_symbol(*name, full_layout.clone()) {
+                match self.param_map.get_symbol(*name, *full_layout) {
                     Some(ps) => {
                         // the return value will be owned
                         self.own_var(z);
@@ -499,7 +499,7 @@ impl<'a> BorrowInfState<'a> {
                 if self.current_proc == *g && x == *z {
                     // anonymous functions (for which the ps may not be known)
                     // can never be tail-recursive, so this is fine
-                    if let Some(ps) = self.param_map.get_symbol(*g, full_layout.clone()) {
+                    if let Some(ps) = self.param_map.get_symbol(*g, *full_layout) {
                         self.own_params_using_args(ys, ps)
                     }
                 }
@@ -541,14 +541,14 @@ impl<'a> BorrowInfState<'a> {
 
             Let(x, Expr::FunctionPointer(fsymbol, layout), _, b) => {
                 // ensure that the function pointed to is in the param map
-                if let Some(params) = self.param_map.get_symbol(*fsymbol, layout.clone()) {
+                if let Some(params) = self.param_map.get_symbol(*fsymbol, *layout) {
                     self.param_map
                         .items
-                        .insert(Key::Declaration(*x, layout.clone()), params);
+                        .insert(Key::Declaration(*x, *layout), params);
                 }
 
                 self.collect_stmt(b);
-                self.preserve_tail_call(*x, &Expr::FunctionPointer(*fsymbol, layout.clone()), b);
+                self.preserve_tail_call(*x, &Expr::FunctionPointer(*fsymbol, *layout), b);
             }
 
             Let(x, v, _, b) => {

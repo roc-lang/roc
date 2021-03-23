@@ -17,6 +17,6 @@ isEmpty : Dict * * -> Bool
 ## See for example #Result.map, #List.map, and #Set.map.
 map :
     Dict beforeKey beforeValue,
-    (\{ key: beforeKey, value: beforeValue } ->
+    ({ key: beforeKey, value: beforeValue } ->
         { key: afterKey, value: afterValue }
     ) -> Dict afterKey afterValue

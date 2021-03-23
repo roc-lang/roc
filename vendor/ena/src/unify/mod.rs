@@ -433,6 +433,17 @@ where
         self.value(id).value.clone()
     }
 
+    /// Returns the current value for the given key. If the key has
+    /// been union'd, this will give the value from the current root.
+    pub fn probe_value_ref<K1>(&self, id: K1) -> &VarValue<K>
+    where
+        K1: Into<K>,
+    {
+        let id = id.into();
+        let id = self.get_root_key_without_compacting(id);
+        self.value(id)
+    }
+
     /// This is for a debug_assert! in solve() only. Do not use it elsewhere!
     pub fn probe_value_without_compacting<K1>(&self, id: K1) -> V
     where

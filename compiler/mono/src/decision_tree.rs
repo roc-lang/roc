@@ -22,7 +22,7 @@ pub fn compile<'a>(raw_branches: Vec<(Guard<'a>, Pattern<'a>, u64)>) -> Decision
         .into_iter()
         .map(|(guard, pattern, index)| Branch {
             goal: index,
-            patterns: vec![(Path::Empty, guard, pattern)],
+            patterns: vec![(Vec::new(), guard, pattern)],
         })
         .collect();
 
@@ -52,7 +52,7 @@ impl<'a> Guard<'a> {
 pub enum DecisionTree<'a> {
     Match(Label),
     Decision {
-        path: Path,
+        path: Vec<PathInstruction>,
         edges: Vec<(Test<'a>, DecisionTree<'a>)>,
         default: Option<Box<DecisionTree<'a>>>,
     },
@@ -132,23 +132,12 @@ impl<'a> Hash for Test<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum Path {
-    Index {
-        index: u64,
-        tag_id: u8,
-        path: Box<Path>,
-    },
-    Unbox(Box<Path>),
-    Empty,
-}
-
 // ACTUALLY BUILD DECISION TREES
 
 #[derive(Clone, Debug, PartialEq)]
 struct Branch<'a> {
     goal: Label,
-    patterns: Vec<(Path, Guard<'a>, Pattern<'a>)>,
+    patterns: Vec<(Vec<PathInstruction>, Guard<'a>, Pattern<'a>)>,
 }
 
 fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
@@ -172,13 +161,13 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
                     decision_tree.clone()
                 }
                 (_, None) => DecisionTree::Decision {
-                    path,
+                    path: path.clone(),
                     edges: decision_edges,
                     default: None,
                 },
                 (None, Some(_)) => to_decision_tree(fallback),
                 _ => DecisionTree::Decision {
-                    path,
+                    path: path.clone(),
                     edges: decision_edges,
                     default: Some(Box::new(to_decision_tree(fallback))),
                 },
@@ -218,8 +207,8 @@ fn flatten_patterns(branch: Branch) -> Branch {
 }
 
 fn flatten<'a>(
-    path_pattern: (Path, Guard<'a>, Pattern<'a>),
-    path_patterns: &mut Vec<(Path, Guard<'a>, Pattern<'a>)>,
+    path_pattern: (Vec<PathInstruction>, Guard<'a>, Pattern<'a>),
+    path_patterns: &mut Vec<(Vec<PathInstruction>, Guard<'a>, Pattern<'a>)>,
 ) {
     match path_pattern.2 {
         Pattern::AppliedTag {
@@ -241,8 +230,9 @@ fn flatten<'a>(
             // Theory: unbox doesn't have any value for us, because one-element tag unions
             // don't store the tag anyway.
             if arguments.len() == 1 {
+                // NOTE here elm will unbox, but we don't use that
                 path_patterns.push((
-                    Path::Unbox(Box::new(path)),
+                    path,
                     path_pattern.1.clone(),
                     Pattern::AppliedTag {
                         union,
@@ -254,13 +244,15 @@ fn flatten<'a>(
                 ));
             } else {
                 for (index, (arg_pattern, _)) in arguments.iter().enumerate() {
+                    let mut new_path = path.clone();
+                    new_path.push(PathInstruction {
+                        index: index as u64,
+                        tag_id,
+                    });
+
                     flatten(
                         (
-                            Path::Index {
-                                index: index as u64,
-                                tag_id,
-                                path: Box::new(path.clone()),
-                            },
+                            new_path,
                             // same guard here?
                             path_pattern.1.clone(),
                             arg_pattern.clone(),
@@ -283,7 +275,7 @@ fn flatten<'a>(
 /// path. If that is the case we give the resulting label and a mapping from free
 /// variables to "how to get their value". So a pattern like (Just (x,_)) will give
 /// us something like ("x" => value.0.0)
-fn check_for_match(branches: &Vec<Branch>) -> Option<Label> {
+fn check_for_match(branches: &[Branch]) -> Option<Label> {
     match branches.get(0) {
         Some(Branch { goal, patterns })
             if patterns
@@ -300,7 +292,7 @@ fn check_for_match(branches: &Vec<Branch>) -> Option<Label> {
 
 fn gather_edges<'a>(
     branches: Vec<Branch<'a>>,
-    path: &Path,
+    path: &[PathInstruction],
 ) -> (Vec<(Test<'a>, Vec<Branch<'a>>)>, Vec<Branch<'a>>) {
     let relevant_tests = tests_at_path(path, &branches);
 
@@ -326,7 +318,7 @@ fn gather_edges<'a>(
 
 /// FIND RELEVANT TESTS
 
-fn tests_at_path<'a>(selected_path: &Path, branches: &[Branch<'a>]) -> Vec<Test<'a>> {
+fn tests_at_path<'a>(selected_path: &[PathInstruction], branches: &[Branch<'a>]) -> Vec<Test<'a>> {
     // NOTE the ordering of the result is important!
 
     let mut all_tests = Vec::new();
@@ -360,7 +352,11 @@ fn tests_at_path<'a>(selected_path: &Path, branches: &[Branch<'a>]) -> Vec<Test<
     unique
 }
 
-fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut Vec<Test<'a>>) {
+fn test_at_path<'a>(
+    selected_path: &[PathInstruction],
+    branch: &Branch<'a>,
+    all_tests: &mut Vec<Test<'a>>,
+) {
     use Pattern::*;
     use Test::*;
 
@@ -413,10 +409,10 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
                     for destruct in destructs {
                         match &destruct.typ {
                             DestructType::Guard(guard) => {
-                                arguments.push((guard.clone(), destruct.layout.clone()));
+                                arguments.push((guard.clone(), destruct.layout));
                             }
                             DestructType::Required(_) => {
-                                arguments.push((Pattern::Underscore, destruct.layout.clone()));
+                                arguments.push((Pattern::Underscore, destruct.layout));
                             }
                         }
                     }
@@ -469,7 +465,7 @@ fn test_at_path<'a>(selected_path: &Path, branch: &Branch<'a>, all_tests: &mut V
 /// BUILD EDGES
 
 fn edges_for<'a>(
-    path: &Path,
+    path: &[PathInstruction],
     branches: Vec<Branch<'a>>,
     test: Test<'a>,
 ) -> (Test<'a>, Vec<Branch<'a>>) {
@@ -484,7 +480,7 @@ fn edges_for<'a>(
 
 fn to_relevant_branch<'a>(
     test: &Test<'a>,
-    path: &Path,
+    path: &[PathInstruction],
     branch: &Branch<'a>,
     new_branches: &mut Vec<Branch<'a>>,
 ) {
@@ -524,9 +520,9 @@ fn to_relevant_branch<'a>(
 
 fn to_relevant_branch_help<'a>(
     test: &Test<'a>,
-    path: &Path,
-    mut start: Vec<(Path, Guard<'a>, Pattern<'a>)>,
-    end: Vec<(Path, Guard<'a>, Pattern<'a>)>,
+    path: &[PathInstruction],
+    mut start: Vec<(Vec<PathInstruction>, Guard<'a>, Pattern<'a>)>,
+    end: Vec<(Vec<PathInstruction>, Guard<'a>, Pattern<'a>)>,
     branch: &Branch<'a>,
     guard: Guard<'a>,
     pattern: Pattern<'a>,
@@ -550,15 +546,13 @@ fn to_relevant_branch_help<'a>(
                         DestructType::Required(_) => Pattern::Underscore,
                     };
 
-                    (
-                        Path::Index {
-                            index: index as u64,
-                            tag_id: *tag_id,
-                            path: Box::new(path.clone()),
-                        },
-                        Guard::NoGuard,
-                        pattern,
-                    )
+                    let mut new_path = path.to_vec();
+                    new_path.push(PathInstruction {
+                        index: index as u64,
+                        tag_id: *tag_id,
+                    });
+
+                    (new_path, Guard::NoGuard, pattern)
                 });
                 start.extend(sub_positions);
                 start.extend(end);
@@ -597,26 +591,21 @@ fn to_relevant_branch_help<'a>(
                                     debug_assert_eq!(arguments.len(), 1);
                                     let arg = arguments[0].clone();
                                     {
-                                        start.push((
-                                            Path::Unbox(Box::new(path.clone())),
-                                            guard,
-                                            arg.0,
-                                        ));
+                                        // NOTE here elm unboxes, but we ignore that
+                                        // Path::Unbox(Box::new(path.clone()))
+                                        start.push((path.to_vec(), guard, arg.0));
                                         start.extend(end);
                                     }
                                 }
                                 Wrapped::RecordOrSingleTagUnion => {
                                     let sub_positions = arguments.into_iter().enumerate().map(
                                         |(index, (pattern, _))| {
-                                            (
-                                                Path::Index {
-                                                    index: index as u64,
-                                                    tag_id,
-                                                    path: Box::new(path.clone()),
-                                                },
-                                                Guard::NoGuard,
-                                                pattern,
-                                            )
+                                            let mut new_path = path.to_vec();
+                                            new_path.push(PathInstruction {
+                                                index: index as u64,
+                                                tag_id,
+                                            });
+                                            (new_path, Guard::NoGuard, pattern)
                                         },
                                     );
                                     start.extend(sub_positions);
@@ -625,15 +614,12 @@ fn to_relevant_branch_help<'a>(
                                 Wrapped::MultiTagUnion => {
                                     let sub_positions = arguments.into_iter().enumerate().map(
                                         |(index, (pattern, _))| {
-                                            (
-                                                Path::Index {
-                                                    index: 1 + index as u64,
-                                                    tag_id,
-                                                    path: Box::new(path.clone()),
-                                                },
-                                                Guard::NoGuard,
-                                                pattern,
-                                            )
+                                            let mut new_path = path.to_vec();
+                                            new_path.push(PathInstruction {
+                                                index: 1 + index as u64,
+                                                tag_id,
+                                            });
+                                            (new_path, Guard::NoGuard, pattern)
                                         },
                                     );
                                     start.extend(sub_positions);
@@ -715,22 +701,22 @@ fn to_relevant_branch_help<'a>(
 enum Extract<'a> {
     NotFound,
     Found {
-        start: Vec<(Path, Guard<'a>, Pattern<'a>)>,
+        start: Vec<(Vec<PathInstruction>, Guard<'a>, Pattern<'a>)>,
         found_pattern: (Guard<'a>, Pattern<'a>),
-        end: Vec<(Path, Guard<'a>, Pattern<'a>)>,
+        end: Vec<(Vec<PathInstruction>, Guard<'a>, Pattern<'a>)>,
     },
 }
 
 fn extract<'a>(
-    selected_path: &Path,
-    path_patterns: Vec<(Path, Guard<'a>, Pattern<'a>)>,
+    selected_path: &[PathInstruction],
+    path_patterns: Vec<(Vec<PathInstruction>, Guard<'a>, Pattern<'a>)>,
 ) -> Extract<'a> {
     let mut start = Vec::new();
 
     // TODO potential ordering problem
     let mut it = path_patterns.into_iter();
     while let Some(current) = it.next() {
-        if &current.0 == selected_path {
+        if current.0 == selected_path {
             return Extract::Found {
                 start,
                 found_pattern: (current.1, current.2),
@@ -746,7 +732,7 @@ fn extract<'a>(
 
 /// FIND IRRELEVANT BRANCHES
 
-fn is_irrelevant_to<'a>(selected_path: &Path, branch: &Branch<'a>) -> bool {
+fn is_irrelevant_to<'a>(selected_path: &[PathInstruction], branch: &Branch<'a>) -> bool {
     match branch
         .patterns
         .iter()
@@ -775,7 +761,7 @@ fn needs_tests(pattern: &Pattern) -> bool {
 
 /// PICK A PATH
 
-fn pick_path<'a>(branches: &'a [Branch]) -> &'a Path {
+fn pick_path<'a>(branches: &'a [Branch]) -> &'a Vec<PathInstruction> {
     let mut all_paths = Vec::with_capacity(branches.len());
 
     // is choice path
@@ -804,9 +790,12 @@ fn pick_path<'a>(branches: &'a [Branch]) -> &'a Path {
     }
 }
 
-fn bests_by_small_branching_factor<'a, I>(branches: &[Branch], mut all_paths: I) -> Vec<&'a Path>
+fn bests_by_small_branching_factor<'a, I>(
+    branches: &[Branch],
+    mut all_paths: I,
+) -> Vec<&'a Vec<PathInstruction>>
 where
-    I: Iterator<Item = &'a Path>,
+    I: Iterator<Item = &'a Vec<PathInstruction>>,
 {
     match all_paths.next() {
         None => panic!("Cannot choose the best of zero paths. This should never happen."),
@@ -836,9 +825,12 @@ where
     }
 }
 
-fn bests_by_small_defaults<'a, I>(branches: &[Branch], mut all_paths: I) -> Vec<&'a Path>
+fn bests_by_small_defaults<'a, I>(
+    branches: &[Branch],
+    mut all_paths: I,
+) -> Vec<&'a Vec<PathInstruction>>
 where
-    I: Iterator<Item = &'a Path>,
+    I: Iterator<Item = &'a Vec<PathInstruction>>,
 {
     match all_paths.next() {
         None => panic!("Cannot choose the best of zero paths. This should never happen."),
@@ -870,7 +862,7 @@ where
 
 /// PATH PICKING HEURISTICS
 
-fn small_defaults(branches: &[Branch], path: &Path) -> usize {
+fn small_defaults(branches: &[Branch], path: &[PathInstruction]) -> usize {
     branches
         .iter()
         .filter(|b| is_irrelevant_to(path, b))
@@ -878,8 +870,7 @@ fn small_defaults(branches: &[Branch], path: &Path) -> usize {
         .sum()
 }
 
-fn small_branching_factor(branches: &[Branch], path: &Path) -> usize {
-    // TODO remove clone
+fn small_branching_factor(branches: &[Branch], path: &[PathInstruction]) -> usize {
     let (edges, fallback) = gather_edges(branches.to_vec(), path);
 
     edges.len() + (if fallback.is_empty() { 0 } else { 1 })
@@ -889,12 +880,12 @@ fn small_branching_factor(branches: &[Branch], path: &Path) -> usize {
 enum Decider<'a, T> {
     Leaf(T),
     Chain {
-        test_chain: Vec<(Path, Test<'a>)>,
+        test_chain: Vec<(Vec<PathInstruction>, Test<'a>)>,
         success: Box<Decider<'a, T>>,
         failure: Box<Decider<'a, T>>,
     },
     FanOut {
-        path: Path,
+        path: Vec<PathInstruction>,
         tests: Vec<(Test<'a>, Decider<'a, T>)>,
         fallback: Box<Decider<'a, T>>,
     },
@@ -973,49 +964,22 @@ pub fn optimize_when<'a>(
     stmt
 }
 
-#[derive(Debug)]
-struct PathInstruction {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PathInstruction {
     index: u64,
     tag_id: u8,
-}
-
-fn reverse_path(mut path: &Path) -> Vec<PathInstruction> {
-    let mut result = Vec::new();
-
-    loop {
-        match path {
-            Path::Unbox(nested) => {
-                path = nested;
-            }
-            Path::Empty => break,
-            Path::Index {
-                index,
-                tag_id,
-                path: nested,
-            } => {
-                result.push(PathInstruction {
-                    index: *index,
-                    tag_id: *tag_id,
-                });
-                path = nested;
-            }
-        }
-    }
-
-    result.reverse();
-
-    result
 }
 
 fn path_to_expr_help<'a>(
     env: &mut Env<'a, '_>,
     mut symbol: Symbol,
-    path: &Path,
+    path: &[PathInstruction],
     mut layout: Layout<'a>,
 ) -> (Symbol, StoresVec<'a>, Layout<'a>) {
     let mut stores = bumpalo::collections::Vec::new_in(env.arena);
 
-    let instructions = reverse_path(path);
+    // let instructions = reverse_path(path);
+    let instructions = path;
     let mut it = instructions.iter().peekable();
 
     while let Some(PathInstruction { index, tag_id }) = it.next() {
@@ -1027,13 +991,12 @@ fn path_to_expr_help<'a>(
                 debug_assert_eq!(*tag_id, 0);
                 debug_assert!(it.peek().is_none());
 
-                let field_layouts = vec![layout.clone()];
+                let field_layouts = vec![layout];
 
                 debug_assert!(*index < field_layouts.len() as u64);
 
                 debug_assert_eq!(field_layouts.len(), 1);
 
-                let inner_layout = field_layouts[*index as usize].clone();
                 let inner_expr = Expr::AccessAtIndex {
                     index: *index,
                     field_layouts: env.arena.alloc(field_layouts),
@@ -1042,7 +1005,8 @@ fn path_to_expr_help<'a>(
                 };
 
                 symbol = env.unique_symbol();
-                stores.push((symbol, inner_layout.clone(), inner_expr));
+                let inner_layout = layout;
+                stores.push((symbol, inner_layout, inner_expr));
 
                 break;
             }
@@ -1096,7 +1060,7 @@ fn path_to_expr_help<'a>(
                     }
 
                     Layout::Struct(layouts) => layouts,
-                    other => env.arena.alloc([other.clone()]),
+                    other => env.arena.alloc([*other]),
                 };
 
                 debug_assert!(
@@ -1109,8 +1073,8 @@ fn path_to_expr_help<'a>(
                 );
 
                 let inner_layout = match &field_layouts[index as usize] {
-                    Layout::RecursivePointer => layout.clone(),
-                    other => other.clone(),
+                    Layout::RecursivePointer => layout,
+                    other => *other,
                 };
 
                 let inner_expr = Expr::AccessAtIndex {
@@ -1121,7 +1085,7 @@ fn path_to_expr_help<'a>(
                 };
 
                 symbol = env.unique_symbol();
-                stores.push((symbol, inner_layout.clone(), inner_expr));
+                stores.push((symbol, inner_layout, inner_expr));
 
                 layout = inner_layout;
             }
@@ -1135,11 +1099,11 @@ fn test_to_equality<'a>(
     env: &mut Env<'a, '_>,
     cond_symbol: Symbol,
     cond_layout: &Layout<'a>,
-    path: &Path,
+    path: &[PathInstruction],
     test: Test<'a>,
 ) -> (StoresVec<'a>, Symbol, Symbol, Layout<'a>) {
     let (rhs_symbol, mut stores, _layout) =
-        path_to_expr_help(env, cond_symbol, &path, cond_layout.clone());
+        path_to_expr_help(env, cond_symbol, &path, *cond_layout);
 
     match test {
         Test::IsCtor {
@@ -1273,7 +1237,7 @@ fn stores_and_condition<'a>(
     env: &mut Env<'a, '_>,
     cond_symbol: Symbol,
     cond_layout: &Layout<'a>,
-    test_chain: Vec<(Path, Test<'a>)>,
+    test_chain: Vec<(Vec<PathInstruction>, Test<'a>)>,
 ) -> (Tests<'a>, Option<(Symbol, JoinPointId, Stmt<'a>)>) {
     let mut tests = Vec::with_capacity(test_chain.len());
 
@@ -1399,12 +1363,12 @@ fn compile_test_help<'a>(
             } => {
                 let pass_info = BranchInfo::Constructor {
                     scrutinee,
-                    layout: layout.clone(),
+                    layout,
                     tag_id: pass,
                 };
                 let fail_info = BranchInfo::Constructor {
                     scrutinee,
-                    layout: layout.clone(),
+                    layout,
                     tag_id: fail,
                 };
 
@@ -1418,7 +1382,7 @@ fn compile_test_help<'a>(
             } => {
                 let pass_info = BranchInfo::Constructor {
                     scrutinee,
-                    layout: layout.clone(),
+                    layout,
                     tag_id,
                 };
 
@@ -1473,11 +1437,11 @@ fn compile_tests<'a>(
 
     // the guard is the final thing that we check, so needs to be layered on first!
     if let Some((_, id, stmt)) = opt_guard {
-        cond = compile_guard(env, ret_layout.clone(), id, arena.alloc(stmt), fail, cond);
+        cond = compile_guard(env, ret_layout, id, arena.alloc(stmt), fail, cond);
     }
 
     for (new_stores, lhs, rhs, _layout) in tests.into_iter() {
-        cond = compile_test(env, ret_layout.clone(), new_stores, lhs, rhs, fail, cond);
+        cond = compile_test(env, ret_layout, new_stores, lhs, rhs, fail, cond);
     }
     cond
 }
@@ -1501,22 +1465,22 @@ impl<'a> ConstructorKnown<'a> {
     fn from_test_chain(
         cond_symbol: Symbol,
         cond_layout: &Layout<'a>,
-        test_chain: &[(Path, Test)],
+        test_chain: &[(Vec<PathInstruction>, Test)],
     ) -> Self {
         match test_chain {
-            [(path, test)] => match (path, test) {
-                (Path::Empty, Test::IsCtor { tag_id, union, .. }) => {
+            [(path, test)] => match test {
+                Test::IsCtor { tag_id, union, .. } if path.is_empty() => {
                     if union.alternatives.len() == 2 {
                         // excluded middle: we also know the tag_id in the fail branch
                         ConstructorKnown::Both {
-                            layout: cond_layout.clone(),
+                            layout: *cond_layout,
                             scrutinee: cond_symbol,
                             pass: *tag_id,
                             fail: (*tag_id == 0) as u8,
                         }
                     } else {
                         ConstructorKnown::OnlyPass {
-                            layout: cond_layout.clone(),
+                            layout: *cond_layout,
                             scrutinee: cond_symbol,
                             tag_id: *tag_id,
                         }
@@ -1541,7 +1505,7 @@ fn decide_to_branching<'a>(
     cond_layout: Layout<'a>,
     ret_layout: Layout<'a>,
     decider: Decider<'a, Choice<'a>>,
-    jumps: &Vec<(u64, JoinPointId, Stmt<'a>)>,
+    jumps: &[(u64, JoinPointId, Stmt<'a>)],
 ) -> Stmt<'a> {
     use Choice::*;
     use Decider::*;
@@ -1569,8 +1533,8 @@ fn decide_to_branching<'a>(
                 procs,
                 layout_cache,
                 cond_symbol,
-                cond_layout.clone(),
-                ret_layout.clone(),
+                cond_layout,
+                ret_layout,
                 *success,
                 jumps,
             );
@@ -1580,8 +1544,8 @@ fn decide_to_branching<'a>(
                 procs,
                 layout_cache,
                 cond_symbol,
-                cond_layout.clone(),
-                ret_layout.clone(),
+                cond_layout,
+                ret_layout,
                 *failure,
                 jumps,
             );
@@ -1608,7 +1572,7 @@ fn decide_to_branching<'a>(
                     compile_test_help(
                         env,
                         chain_branch_info,
-                        ret_layout.clone(),
+                        ret_layout,
                         new_stores,
                         lhs,
                         rhs,
@@ -1643,15 +1607,15 @@ fn decide_to_branching<'a>(
             // switch on the tag discriminant (currently an i64 value)
             // NOTE the tag discriminant is not actually loaded, `cond` can point to a tag
             let (inner_cond_symbol, cond_stores_vec, inner_cond_layout) =
-                path_to_expr_help(env, cond_symbol, &path, cond_layout.clone());
+                path_to_expr_help(env, cond_symbol, &path, cond_layout);
 
             let default_branch = decide_to_branching(
                 env,
                 procs,
                 layout_cache,
                 cond_symbol,
-                cond_layout.clone(),
-                ret_layout.clone(),
+                cond_layout,
+                ret_layout,
                 *fallback,
                 jumps,
             );
@@ -1667,8 +1631,8 @@ fn decide_to_branching<'a>(
                     procs,
                     layout_cache,
                     cond_symbol,
-                    cond_layout.clone(),
-                    ret_layout.clone(),
+                    cond_layout,
+                    ret_layout,
                     decider,
                     jumps,
                 );
@@ -1689,7 +1653,7 @@ fn decide_to_branching<'a>(
 
                     BranchInfo::Constructor {
                         scrutinee: inner_cond_symbol,
-                        layout: inner_cond_layout.clone(),
+                        layout: inner_cond_layout,
                         tag_id,
                     }
                 } else {
@@ -1704,7 +1668,7 @@ fn decide_to_branching<'a>(
             let default_branch_info = if tag_id_sum > 0 && union_size > 0 {
                 BranchInfo::Constructor {
                     scrutinee: inner_cond_symbol,
-                    layout: inner_cond_layout.clone(),
+                    layout: inner_cond_layout,
                     tag_id: tag_id_sum as u8,
                 }
             } else {
@@ -1847,7 +1811,7 @@ fn tree_to_decider(tree: DecisionTree) -> Decider<u64> {
 }
 
 fn to_chain<'a>(
-    path: Path,
+    path: Vec<PathInstruction>,
     test: Test<'a>,
     success_tree: DecisionTree<'a>,
     failure_tree: DecisionTree<'a>,
