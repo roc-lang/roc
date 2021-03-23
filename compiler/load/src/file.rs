@@ -784,6 +784,10 @@ enum Msg<'a> {
     },
 
     FailedToParse(ParseProblem<'a, SyntaxError<'a>>),
+    FailedToReadFile {
+        filename: PathBuf,
+        error: io::ErrorKind,
+    },
 }
 
 #[derive(Debug)]
@@ -996,18 +1000,16 @@ pub enum LoadingProblem<'a> {
     FileProblem {
         filename: PathBuf,
         error: io::ErrorKind,
-        msg: &'static str,
     },
     ParsingFailed(ParseProblem<'a, SyntaxError<'a>>),
     UnexpectedHeader(String),
-    /// there is no platform (likely running an Interface module)
-    NoPlatform(String),
 
     MsgChannelDied,
     ErrJoiningWorkerThreads,
     TriedToImportAppModule,
-    /// a formatted report of parsing failure
-    ParsingFailedReport(String),
+
+    /// a formatted report
+    FormattedReport(String),
 }
 
 pub enum Phases {
@@ -1399,6 +1401,14 @@ where
                                             Err(LoadingProblem::ParsingFailed(problem)) => {
                                                 msg_tx.send(Msg::FailedToParse(problem)).unwrap();
                                             }
+                                            Err(LoadingProblem::FileProblem {
+                                                filename,
+                                                error,
+                                            }) => {
+                                                msg_tx
+                                                    .send(Msg::FailedToReadFile { filename, error })
+                                                    .unwrap();
+                                            }
                                             Err(other) => {
                                                 return Err(other);
                                             }
@@ -1503,6 +1513,18 @@ where
                             exposed_to_host,
                         )?));
                     }
+                    Msg::FailedToReadFile { filename, error } => {
+                        // Shut down all the worker threads.
+                        for listener in worker_listeners {
+                            listener
+                                .send(WorkerMsg::Shutdown)
+                                .map_err(|_| LoadingProblem::MsgChannelDied)?;
+                        }
+
+                        let buf = to_file_problem_report(&filename, error);
+                        return Err(LoadingProblem::FormattedReport(buf));
+                    }
+
                     Msg::FailedToParse(problem) => {
                         // Shut down all the worker threads.
                         for listener in worker_listeners {
@@ -1546,7 +1568,7 @@ where
 
                         report.render_color_terminal(&mut buf, &alloc, &palette);
 
-                        return Err(LoadingProblem::ParsingFailedReport(buf));
+                        return Err(LoadingProblem::FormattedReport(buf));
                     }
                     msg => {
                         // This is where most of the main thread's work gets done.
@@ -2086,6 +2108,9 @@ fn update<'a>(
         Msg::FailedToParse(_) => {
             unreachable!();
         }
+        Msg::FailedToReadFile { .. } => {
+            unreachable!();
+        }
     }
 }
 
@@ -2207,7 +2232,7 @@ fn finish_specialization(
 
                 report.render_color_terminal(&mut buf, &alloc, &palette);
 
-                return Err(LoadingProblem::NoPlatform(buf));
+                return Err(LoadingProblem::FormattedReport(buf));
             }
         };
 
@@ -2368,7 +2393,6 @@ fn load_pkg_config<'a>(
         Err(err) => Err(LoadingProblem::FileProblem {
             filename,
             error: err.kind(),
-            msg: "while reading a Pkg-Config.roc file",
         }),
     }
 }
@@ -2670,7 +2694,6 @@ fn load_filename<'a>(
         Err(err) => Err(LoadingProblem::FileProblem {
             filename,
             error: err.kind(),
-            msg: "in `load_filename`",
         }),
     }
 }
@@ -4179,4 +4202,79 @@ where
         .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
     Ok(())
+}
+
+fn to_file_problem_report(filename: &PathBuf, error: io::ErrorKind) -> String {
+    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
+    use ven_pretty::DocAllocator;
+
+    let src_lines: Vec<&str> = Vec::new();
+
+    let mut module_ids = ModuleIds::default();
+
+    let module_id = module_ids.get_or_insert(&"find module name somehow?".into());
+
+    let interns = Interns::default();
+
+    // Report parsing and canonicalization problems
+    let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
+
+    let report = match error {
+        io::ErrorKind::NotFound => {
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am looking for this file, but it's not there:"),
+                alloc
+                    .parser_suggestion(filename.to_str().unwrap())
+                    .indent(4),
+                alloc.concat(vec![
+                    alloc.reflow(r"Is the file supposed to be there? "),
+                    alloc.reflow("Maybe there is a typo in the file name?"),
+                ]),
+            ]);
+
+            Report {
+                filename: "UNKNOWN.roc".into(),
+                doc,
+                title: "FILE NOT FOUND".to_string(),
+            }
+        }
+        io::ErrorKind::PermissionDenied => {
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I don't have the required permissions to read this file:"),
+                alloc
+                    .parser_suggestion(filename.to_str().unwrap())
+                    .indent(4),
+                alloc.concat(vec![
+                    alloc.reflow(r"Is it the right file? Maybe change its permissions?")
+                ]),
+            ]);
+
+            Report {
+                filename: "UNKNOWN.roc".into(),
+                doc,
+                title: "PERMISSION DENIED".to_string(),
+            }
+        }
+        _ => {
+            let error = std::io::Error::from(error);
+            let formatted = format!("{}", error);
+            let doc = alloc.concat(vec![
+                alloc.reflow(r"I tried to read this file, but ran into a "),
+                alloc.text(formatted),
+                alloc.reflow(r" problem."),
+            ]);
+
+            Report {
+                filename: "UNKNOWN.roc".into(),
+                doc,
+                title: "FILE PROBLEM".to_string(),
+            }
+        }
+    };
+
+    let mut buf = String::new();
+    let palette = DEFAULT_PALETTE;
+    report.render_color_terminal(&mut buf, &alloc, &palette);
+
+    buf
 }

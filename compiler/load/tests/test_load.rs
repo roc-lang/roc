@@ -134,7 +134,7 @@ mod test_load {
         );
         let mut loaded_module = match loaded {
             Ok(x) => x,
-            Err(roc_load::file::LoadingProblem::ParsingFailedReport(report)) => {
+            Err(roc_load::file::LoadingProblem::FormattedReport(report)) => {
                 println!("{}", report);
                 panic!();
             }
