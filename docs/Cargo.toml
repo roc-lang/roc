@@ -1,5 +1,5 @@
 [package]
-name = "docs"
+name = "roc_docs"
 version = "0.1.0"
 authors = ["Pablo Hirafuji <pablohirafuji@gmail.com>"]
 edition = "2018"
