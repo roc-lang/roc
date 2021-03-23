@@ -424,6 +424,8 @@ impl<'a> Procs<'a> {
         is_self_recursive: bool,
         ret_var: Variable,
     ) {
+        let number_of_arguments = loc_args.len();
+
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
                 // a named closure. Since these aren't specialized by the surrounding
@@ -444,17 +446,22 @@ impl<'a> Procs<'a> {
             }
 
             Err(error) => {
-                // If the function has invalid patterns in its arguments,
-                // its call sites will code gen to runtime errors. This happens
-                // at the call site so we don't have to try to define the
-                // function LLVM, which would be difficult considering LLVM
-                // wants to know what symbols each argument corresponds to,
-                // and in this case the patterns were invalid, so we don't know
-                // what the symbols ought to be.
+                let mut pattern_symbols = Vec::with_capacity_in(number_of_arguments, env.arena);
 
-                let error_msg = format!("TODO generate a RuntimeError message for {:?}", error);
+                for _ in 0..number_of_arguments {
+                    pattern_symbols.push(env.unique_symbol());
+                }
 
-                self.runtime_errors.insert(name, env.arena.alloc(error_msg));
+                self.partial_procs.insert(
+                    name,
+                    PartialProc {
+                        annotation,
+                        pattern_symbols: pattern_symbols.into_bump_slice() ,
+                        captured_symbols: CapturedSymbols::None,
+                        body: roc_can::expr::Expr::RuntimeError(error.value),
+                        is_self_recursive: false,
+                    },
+                );
             }
         }
     }
