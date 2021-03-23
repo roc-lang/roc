@@ -1,5 +1,4 @@
-
-use super::ui_error::{UIResult, OutOfBounds};
+use super::ui_error::{OutOfBounds, UIResult};
 use snafu::OptionExt;
 use std::slice::SliceIndex;
 

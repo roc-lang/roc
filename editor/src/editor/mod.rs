@@ -1,3 +1,4 @@
+mod code_lines;
 mod config;
 mod ed_error;
 mod keyboard_input;
@@ -11,4 +12,3 @@ mod style;
 mod syntax_highlight;
 mod theme;
 mod util;
-mod code_lines;

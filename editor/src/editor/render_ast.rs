@@ -1,14 +1,8 @@
-use crate::editor::slow_pool::SlowNodeId;
-use crate::ui::text::text_pos::TextPos;
-use nonempty::NonEmpty;
-use crate::ui::text::caret_w_select::CaretWSelect;
-use super::markup::attribute::{Attribute, Attributes};
 use super::markup::nodes::{MarkupNode, BLANK_PLACEHOLDER};
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::{ed_error::EdResult, theme::EdTheme, util::map_get};
 use crate::graphics::primitives::rect::Rect;
 use crate::graphics::primitives::text as gr_text;
-use crate::ui::text::caret_w_select::make_caret_rect;
 use cgmath::Vector2;
 use winit::dpi::PhysicalSize;
 
@@ -116,7 +110,7 @@ fn markup_to_wgpu_helper<'a>(
         }
         MarkupNode::Blank {
             ast_node_id: _,
-            attributes,
+            attributes: _,
             syn_high_style,
             parent_id_opt: _,
         } => {

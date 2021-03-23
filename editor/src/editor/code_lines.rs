@@ -1,9 +1,8 @@
-
+use crate::ui::text::lines::Lines;
 use crate::ui::ui_error::UIResult;
 use crate::ui::util::slice_get;
 use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
-use crate::ui::text::lines::Lines;
 
 #[derive(Debug)]
 pub struct CodeLines {
@@ -12,7 +11,7 @@ pub struct CodeLines {
 }
 
 impl CodeLines {
-    pub fn from_bump_str(code_str: &str) -> CodeLines {
+    pub fn from_str(code_str: &str) -> CodeLines {
         CodeLines {
             lines: split_inclusive(code_str),
             nr_of_chars: code_str.len(),
@@ -24,18 +23,13 @@ impl CodeLines {
 fn split_inclusive(code_str: &str) -> Vec<String> {
     let mut split_vec: Vec<String> = Vec::new();
     let mut temp_str = String::new();
-    let mut non_space_encountered = false;
 
     for token in code_str.chars() {
-        if token != ' ' && token != '\n' {
-            non_space_encountered = true;
+        if token != '\n' {
             temp_str.push(token);
-        } else if non_space_encountered {
+        } else {
             split_vec.push(temp_str);
             temp_str = String::new();
-            temp_str.push(token);
-            non_space_encountered = false;
-        } else {
             temp_str.push(token);
         }
     }

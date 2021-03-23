@@ -1,17 +1,4 @@
-use std::path::Path;
-use crate::ui::text::selection::validate_raw_sel;
-use crate::ui::text::selection::RawSelection;
-use crate::ui::text::selection::Selection;
-use crate::ui::ui_error::UIResult;
-use crate::ui::text::lines::MoveCaretFun;
 use crate::editor::code_lines::CodeLines;
-use crate::ui::text::text_pos::TextPos;
-use crate::ui::text::{
-    lines,
-    lines::Lines,
-    lines::SelectableLines,
-};
-use crate::ui::text::caret_w_select::CaretWSelect;
 use crate::editor::slow_pool::{SlowNodeId, SlowPool};
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::editor::{
@@ -24,22 +11,33 @@ use crate::graphics::primitives::rect::Rect;
 use crate::lang::ast::Expr2;
 use crate::lang::expr::{str_to_expr2, Env};
 use crate::lang::scope::Scope;
+use crate::ui::text::caret_w_select::CaretWSelect;
+use crate::ui::text::lines::MoveCaretFun;
+use crate::ui::text::selection::validate_raw_sel;
+use crate::ui::text::selection::RawSelection;
+use crate::ui::text::selection::Selection;
+use crate::ui::text::text_pos::TextPos;
+use crate::ui::text::{lines, lines::Lines, lines::SelectableLines};
+use crate::ui::ui_error::UIResult;
 use crate::window::keyboard_input::Modifiers;
 use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
-use roc_region::all::Region;
-use winit::event::VirtualKeyCode;
 use nonempty::NonEmpty;
+use roc_region::all::Region;
+use std::path::Path;
+use winit::event::VirtualKeyCode;
+use VirtualKeyCode::*;
 
 #[derive(Debug)]
 pub struct EdModel<'a> {
     pub module: EdModule<'a>,
+    pub file_path: &'a Path,
     pub code_lines: CodeLines,
     pub markup_root_id: SlowNodeId,
     pub glyph_dim_rect_opt: Option<Rect>,
     pub has_focus: bool,
-    caret_w_select_vec:  NonEmpty<(CaretWSelect, Option<SlowNodeId>)>,
     // Option<SlowNodeId>: MarkupNode that corresponds to caret position, Option because this SlowNodeId is only calculated when it needs to be used.
+    pub caret_w_select_vec: NonEmpty<(CaretWSelect, Option<SlowNodeId>)>,
 }
 
 pub fn init_model<'a>(
@@ -78,7 +76,8 @@ pub fn init_model<'a>(
 
     Ok(EdModel {
         module,
-        code_lines: CodeLines::from_bump_str(code_str),
+        file_path,
+        code_lines: CodeLines::from_str(code_str),
         markup_root_id,
         glyph_dim_rect_opt: None,
         has_focus: true,
@@ -87,26 +86,11 @@ pub fn init_model<'a>(
 }
 
 impl<'a> EdModel<'a> {
-    pub fn handle_key_down(
+    pub fn move_caret(
         &mut self,
+        move_fun: MoveCaretFun<CodeLines>,
         modifiers: &Modifiers,
-        virtual_keycode: VirtualKeyCode,
-        markup_node_pool: &mut SlowPool,
-    ) -> EdResult<()> {
-        match virtual_keycode {
-            VirtualKeyCode::Right => {
-                self.move_caret_right(modifiers)?;
-            }
-            VirtualKeyCode::Left => {
-                self.move_caret_left(modifiers)?;
-            },
-            _ => (),
-        };
-
-        Ok(())
-    }
-
-    pub fn move_caret(&mut self, move_fun: MoveCaretFun<CodeLines>, modifiers: &Modifiers) -> UIResult<()> {
+    ) -> UIResult<()> {
         for caret_tup in self.caret_w_select_vec.iter_mut() {
             caret_tup.0 = move_fun(&self.code_lines, caret_tup.0, modifiers)?;
             caret_tup.1 = None;
@@ -180,8 +164,6 @@ impl<'a> SelectableLines for EdModel<'a> {
 
     fn get_selected_str(&self) -> UIResult<Option<String>> {
         if let Some(selection) = self.get_selection() {
-            
-
             let start_line_index = selection.start_pos.line;
             let start_col = selection.start_pos.column;
             let end_line_index = selection.end_pos.line;
@@ -190,19 +172,12 @@ impl<'a> SelectableLines for EdModel<'a> {
             if start_line_index == end_line_index {
                 let line_ref = self.code_lines.get_line(start_line_index)?;
 
-                Ok(
-                    Some(
-                        line_ref[start_col..end_col].to_string()                    )
-                )
+                Ok(Some(line_ref[start_col..end_col].to_string()))
             } else {
                 let full_str = String::new();
 
                 // TODO
-                Ok(
-                    Some(
-                        full_str
-                    )
-                )
+                Ok(Some(full_str))
             }
         } else {
             Ok(None)
@@ -243,12 +218,10 @@ impl<'a> SelectableLines for EdModel<'a> {
         let last_line_index = nr_of_lines - 1;
         let last_line = self.code_lines.get_line(last_line_index)?;
 
-        Ok(
-            TextPos {
-                line: self.code_lines.lines.len() - 1,
-                column: last_line.len(),
-            }
-        )
+        Ok(TextPos {
+            line: self.code_lines.lines.len() - 1,
+            column: last_line.len(),
+        })
     }
 
     fn handle_key_down(

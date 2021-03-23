@@ -34,7 +34,6 @@ pub fn validate_raw_sel(raw_sel: RawSelection) -> UIResult<Selection> {
     validate_selection(raw_sel.start_pos, raw_sel.end_pos)
 }
 
-
 pub fn validate_sel_opt(start_pos: TextPos, end_pos: TextPos) -> UIResult<Option<Selection>> {
     Ok(Some(validate_selection(start_pos, end_pos)?))
 }

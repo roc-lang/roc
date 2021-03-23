@@ -20,12 +20,7 @@ use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
 use ropey::Rope;
 use snafu::ensure;
-use std::{
-    fmt,
-    fs::File,
-    io,
-    path::Path,
-};
+use std::{fmt, fs::File, io, path::Path};
 use winit::event::{VirtualKeyCode, VirtualKeyCode::*};
 
 pub struct BigTextArea {
@@ -224,9 +219,7 @@ impl SelectableLines for BigTextArea {
     }
 
     fn last_text_pos(&self) -> UIResult<TextPos> {
-        Ok(
-            self.char_indx_to_pos(self.nr_of_chars())
-        )
+        Ok(self.char_indx_to_pos(self.nr_of_chars()))
     }
 
     fn handle_key_down(

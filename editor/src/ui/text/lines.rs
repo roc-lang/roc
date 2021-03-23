@@ -1,18 +1,18 @@
 // Adapted from https://github.com/cessen/ropey by Nathan Vegdahl, licensed under the MIT license
 
-use std::cmp::max;
-use std::cmp::min;
-use crate::ui::util::is_newline;
-use crate::ui::text::selection::validate_sel_opt;
 use crate::ui::text::caret_w_select::CaretWSelect;
+use crate::ui::text::selection::validate_sel_opt;
 use crate::ui::text::{
     selection::{RawSelection, Selection},
     text_pos::TextPos,
 };
 use crate::ui::ui_error::UIResult;
+use crate::ui::util::is_newline;
 use crate::window::keyboard_input::Modifiers;
 use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
+use std::cmp::max;
+use std::cmp::min;
 use winit::event::VirtualKeyCode;
 
 pub trait Lines {
@@ -82,10 +82,14 @@ pub trait MutSelectableLines {
     fn del_selection(&mut self) -> UIResult<()>;
 }
 
-pub type MoveCaretFun<T: Lines> =
-    fn(&T, CaretWSelect, &Modifiers) -> UIResult<CaretWSelect>;
+// T: Lines
+pub type MoveCaretFun<T> = fn(&T, CaretWSelect, &Modifiers) -> UIResult<CaretWSelect>;
 
-pub fn move_caret_left<T: Lines>(lines: &T, caret_w_select: CaretWSelect, modifiers: &Modifiers) -> UIResult<CaretWSelect> {
+pub fn move_caret_left<T: Lines>(
+    lines: &T,
+    caret_w_select: CaretWSelect,
+    modifiers: &Modifiers,
+) -> UIResult<CaretWSelect> {
     let old_selection_opt = caret_w_select.selection_opt;
     let old_caret_pos = caret_w_select.caret_pos;
     let old_line_nr = old_caret_pos.line;
@@ -95,9 +99,7 @@ pub fn move_caret_left<T: Lines>(lines: &T, caret_w_select: CaretWSelect, modifi
 
     let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
         match old_selection_opt {
-            Some(old_selection) => {
-                (old_selection.start_pos.line, old_selection.start_pos.column)
-            }
+            Some(old_selection) => (old_selection.start_pos.line, old_selection.start_pos.column),
             None => unreachable!(),
         }
     } else if old_col_nr == 0 {
@@ -155,7 +157,11 @@ pub fn move_caret_left<T: Lines>(lines: &T, caret_w_select: CaretWSelect, modifi
     Ok(CaretWSelect::new(new_caret_pos, new_selection_opt))
 }
 
-pub fn move_caret_right<T: Lines>(lines: &T, caret_w_select: CaretWSelect, modifiers: &Modifiers) -> UIResult<CaretWSelect> {
+pub fn move_caret_right<T: Lines>(
+    lines: &T,
+    caret_w_select: CaretWSelect,
+    modifiers: &Modifiers,
+) -> UIResult<CaretWSelect> {
     let old_selection_opt = caret_w_select.selection_opt;
     let old_caret_pos = caret_w_select.caret_pos;
     let old_line_nr = old_caret_pos.line;
@@ -231,7 +237,11 @@ pub fn move_caret_right<T: Lines>(lines: &T, caret_w_select: CaretWSelect, modif
     Ok(CaretWSelect::new(new_caret_pos, new_selection_opt))
 }
 
-pub fn move_caret_up<T: Lines>(lines: &T, caret_w_select: CaretWSelect, modifiers: &Modifiers) -> UIResult<CaretWSelect> {
+pub fn move_caret_up<T: Lines>(
+    lines: &T,
+    caret_w_select: CaretWSelect,
+    modifiers: &Modifiers,
+) -> UIResult<CaretWSelect> {
     let old_selection_opt = caret_w_select.selection_opt;
     let old_caret_pos = caret_w_select.caret_pos;
     let old_line_nr = old_caret_pos.line;
@@ -241,9 +251,7 @@ pub fn move_caret_up<T: Lines>(lines: &T, caret_w_select: CaretWSelect, modifier
 
     let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
         match old_selection_opt {
-            Some(old_selection) => {
-                (old_selection.start_pos.line, old_selection.start_pos.column)
-            }
+            Some(old_selection) => (old_selection.start_pos.line, old_selection.start_pos.column),
             None => unreachable!(),
         }
     } else if old_line_nr == 0 {
@@ -292,7 +300,11 @@ pub fn move_caret_up<T: Lines>(lines: &T, caret_w_select: CaretWSelect, modifier
     Ok(CaretWSelect::new(new_caret_pos, new_selection_opt))
 }
 
-pub fn move_caret_down<T: Lines>(lines: &T, caret_w_select: CaretWSelect, modifiers: &Modifiers) -> UIResult<CaretWSelect> {
+pub fn move_caret_down<T: Lines>(
+    lines: &T,
+    caret_w_select: CaretWSelect,
+    modifiers: &Modifiers,
+) -> UIResult<CaretWSelect> {
     let old_selection_opt = caret_w_select.selection_opt;
     let old_caret_pos = caret_w_select.caret_pos;
     let old_line_nr = old_caret_pos.line;
@@ -361,7 +373,11 @@ pub fn move_caret_down<T: Lines>(lines: &T, caret_w_select: CaretWSelect, modifi
     Ok(CaretWSelect::new(new_caret_pos, new_selection_opt))
 }
 
-pub fn move_caret_home<T: Lines>(lines: &T, caret_w_select: CaretWSelect, modifiers: &Modifiers) -> UIResult<CaretWSelect> {
+pub fn move_caret_home<T: Lines>(
+    lines: &T,
+    caret_w_select: CaretWSelect,
+    modifiers: &Modifiers,
+) -> UIResult<CaretWSelect> {
     let curr_line_nr = caret_w_select.caret_pos.line;
     let old_col_nr = caret_w_select.caret_pos.column;
 
@@ -399,7 +415,11 @@ pub fn move_caret_home<T: Lines>(lines: &T, caret_w_select: CaretWSelect, modifi
     )
 }
 
-pub fn move_caret_end<T: Lines>(lines: &T, caret_w_select: CaretWSelect, modifiers: &Modifiers) -> UIResult<CaretWSelect> {
+pub fn move_caret_end<T: Lines>(
+    lines: &T,
+    caret_w_select: CaretWSelect,
+    modifiers: &Modifiers,
+) -> UIResult<CaretWSelect> {
     let curr_line_nr = caret_w_select.caret_pos.line;
     let curr_line_len = lines.line_len(curr_line_nr)?;
 
