@@ -1467,6 +1467,16 @@ where
             let worker_listeners = worker_listeners.into_bump_slice();
             let msg_tx = msg_tx.clone();
 
+            macro_rules! shut_down_worker_threads {
+                () => {
+                    for listener in worker_listeners {
+                        listener
+                            .send(WorkerMsg::Shutdown)
+                            .map_err(|_| LoadingProblem::MsgChannelDied)?;
+                    }
+                };
+            }
+
             // The root module will have already queued up messages to process,
             // and processing those messages will in turn queue up more messages.
             for msg in msg_rx.iter() {
@@ -1500,12 +1510,7 @@ where
                         // We're done! There should be no more messages pending.
                         debug_assert!(msg_rx.is_empty());
 
-                        // Shut down all the worker threads.
-                        for listener in worker_listeners {
-                            listener
-                                .send(WorkerMsg::Shutdown)
-                                .map_err(|_| LoadingProblem::MsgChannelDied)?;
-                        }
+                        shut_down_worker_threads!();
 
                         return Ok(LoadResult::Monomorphized(finish_specialization(
                             state,
@@ -1514,60 +1519,27 @@ where
                         )?));
                     }
                     Msg::FailedToReadFile { filename, error } => {
-                        // Shut down all the worker threads.
-                        for listener in worker_listeners {
-                            listener
-                                .send(WorkerMsg::Shutdown)
-                                .map_err(|_| LoadingProblem::MsgChannelDied)?;
-                        }
+                        shut_down_worker_threads!();
 
                         let buf = to_file_problem_report(&filename, error);
                         return Err(LoadingProblem::FormattedReport(buf));
                     }
 
                     Msg::FailedToParse(problem) => {
-                        // Shut down all the worker threads.
-                        for listener in worker_listeners {
-                            listener
-                                .send(WorkerMsg::Shutdown)
-                                .map_err(|_| LoadingProblem::MsgChannelDied)?;
-                        }
+                        shut_down_worker_threads!();
 
-                        use roc_reporting::report::{
-                            parse_problem, RocDocAllocator, DEFAULT_PALETTE,
-                        };
-
-                        // TODO this is not in fact safe
-                        let src = unsafe { from_utf8_unchecked(problem.bytes) };
-                        let src_lines: Vec<&str> = src.split('\n').collect();
-
-                        let palette = DEFAULT_PALETTE;
-
-                        let mut module_ids = Arc::try_unwrap(state.arc_modules)
+                        let module_ids = Arc::try_unwrap(state.arc_modules)
                             .unwrap_or_else(|_| {
                                 panic!("There were still outstanding Arc references to module_ids")
                             })
                             .into_inner()
                             .into_module_ids();
 
-                        let module_id =
-                            module_ids.get_or_insert(&"find module name somehow?".into());
-
-                        let interns = Interns {
+                        let buf = to_parse_problem_report(
+                            problem,
                             module_ids,
-                            all_ident_ids: state.constrained_ident_ids,
-                        };
-
-                        // Report parsing and canonicalization problems
-                        let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
-
-                        let starting_line = 0;
-                        let report =
-                            parse_problem(&alloc, problem.filename.clone(), starting_line, problem);
-                        let mut buf = String::new();
-
-                        report.render_color_terminal(&mut buf, &alloc, &palette);
-
+                            state.constrained_ident_ids,
+                        );
                         return Err(LoadingProblem::FormattedReport(buf));
                     }
                     msg => {
@@ -2167,71 +2139,7 @@ fn finish_specialization(
             }
             Valid(To::NewPackage(p_or_p)) => p_or_p,
             other => {
-                use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
-                use ven_pretty::DocAllocator;
-
-                let module_id = state.root_id;
-
-                let palette = DEFAULT_PALETTE;
-
-                // Report parsing and canonicalization problems
-                let alloc = RocDocAllocator::new(&[], module_id, &interns);
-
-                let report = {
-                    match other {
-                        Valid(_) => unreachable!(),
-                        NotSpecified => {
-                            let doc = alloc.stack(vec![
-                                alloc.reflow("I could not find a platform based on your input file."),
-                                alloc.reflow(r"Does the module header contain an entry that looks like this:"),
-                                alloc
-                                    .parser_suggestion(" packages { base: \"platform\" }")
-                                    .indent(4),
-                                alloc.reflow("See also TODO."),
-                            ]);
-
-                            Report {
-                                filename: "UNKNOWN.roc".into(),
-                                doc,
-                                title: "NO PLATFORM".to_string(),
-                            }
-                        }
-                        RootIsInterface => {
-                            let doc = alloc.stack(vec![
-                                alloc.reflow(r"The input file is a interface file, but only app modules can be ran."),
-                                alloc.concat(vec![
-                                alloc.reflow(r"I will still parse and typecheck the input file and its dependencies,"),
-                                alloc.reflow(r"but won't output any executable."),
-                                ])
-                            ]);
-
-                            Report {
-                                filename: "UNKNOWN.roc".into(),
-                                doc,
-                                title: "NO PLATFORM".to_string(),
-                            }
-                        }
-                        RootIsPkgConfig => {
-                            let doc = alloc.stack(vec![
-                                alloc.reflow(r"The input file is a package config file, but only app modules can be ran."),
-                                alloc.concat(vec![
-                                alloc.reflow(r"I will still parse and typecheck the input file and its dependencies,"),
-                                alloc.reflow(r"but won't output any executable."),
-                                ])
-                            ]);
-
-                            Report {
-                                filename: "UNKNOWN.roc".into(),
-                                doc,
-                                title: "NO PLATFORM".to_string(),
-                            }
-                        }
-                    }
-                };
-                let mut buf = String::new();
-
-                report.render_color_terminal(&mut buf, &alloc, &palette);
-
+                let buf = to_missing_platform_report(state.root_id, other);
                 return Err(LoadingProblem::FormattedReport(buf));
             }
         };
@@ -4274,6 +4182,106 @@ fn to_file_problem_report(filename: &PathBuf, error: io::ErrorKind) -> String {
 
     let mut buf = String::new();
     let palette = DEFAULT_PALETTE;
+    report.render_color_terminal(&mut buf, &alloc, &palette);
+
+    buf
+}
+
+fn to_parse_problem_report<'a>(
+    problem: ParseProblem<'a, SyntaxError<'a>>,
+    mut module_ids: ModuleIds,
+    all_ident_ids: MutMap<ModuleId, IdentIds>,
+) -> String {
+    use roc_reporting::report::{parse_problem, RocDocAllocator, DEFAULT_PALETTE};
+
+    // TODO this is not in fact safe
+    let src = unsafe { from_utf8_unchecked(problem.bytes) };
+    let src_lines: Vec<&str> = src.split('\n').collect();
+
+    let module_id = module_ids.get_or_insert(&"find module name somehow?".into());
+
+    let interns = Interns {
+        module_ids,
+        all_ident_ids,
+    };
+
+    // Report parsing and canonicalization problems
+    let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
+
+    let starting_line = 0;
+    let report = parse_problem(&alloc, problem.filename.clone(), starting_line, problem);
+
+    let mut buf = String::new();
+    let palette = DEFAULT_PALETTE;
+
+    report.render_color_terminal(&mut buf, &alloc, &palette);
+
+    buf
+}
+
+fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> String {
+    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
+    use ven_pretty::DocAllocator;
+    use PlatformPath::*;
+
+    // Report parsing and canonicalization problems
+    let interns = Interns::default();
+    let alloc = RocDocAllocator::new(&[], module_id, &interns);
+
+    let report = {
+        match other {
+            Valid(_) => unreachable!(),
+            NotSpecified => {
+                let doc = alloc.stack(vec![
+                    alloc.reflow("I could not find a platform based on your input file."),
+                    alloc.reflow(r"Does the module header contain an entry that looks like this:"),
+                    alloc
+                        .parser_suggestion(" packages { base: \"platform\" }")
+                        .indent(4),
+                    alloc.reflow("See also TODO."),
+                ]);
+
+                Report {
+                    filename: "UNKNOWN.roc".into(),
+                    doc,
+                    title: "NO PLATFORM".to_string(),
+                }
+            }
+            RootIsInterface => {
+                let doc = alloc.stack(vec![
+                                alloc.reflow(r"The input file is a interface file, but only app modules can be ran."),
+                                alloc.concat(vec![
+                                alloc.reflow(r"I will still parse and typecheck the input file and its dependencies,"),
+                                alloc.reflow(r"but won't output any executable."),
+                                ])
+                            ]);
+
+                Report {
+                    filename: "UNKNOWN.roc".into(),
+                    doc,
+                    title: "NO PLATFORM".to_string(),
+                }
+            }
+            RootIsPkgConfig => {
+                let doc = alloc.stack(vec![
+                                alloc.reflow(r"The input file is a package config file, but only app modules can be ran."),
+                                alloc.concat(vec![
+                                alloc.reflow(r"I will still parse and typecheck the input file and its dependencies,"),
+                                alloc.reflow(r"but won't output any executable."),
+                                ])
+                            ]);
+
+                Report {
+                    filename: "UNKNOWN.roc".into(),
+                    doc,
+                    title: "NO PLATFORM".to_string(),
+                }
+            }
+        }
+    };
+
+    let palette = DEFAULT_PALETTE;
+    let mut buf = String::new();
     report.render_color_terminal(&mut buf, &alloc, &palette);
 
     buf
