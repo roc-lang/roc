@@ -102,7 +102,7 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
         Builtin::List(_, elem) => build_list_eq(
             env,
             layout_ids,
-            &Layout::Builtin(builtin.clone()),
+            &Layout::Builtin(*builtin),
             elem,
             lhs_val.into_struct_value(),
             rhs_val.into_struct_value(),
@@ -170,7 +170,7 @@ fn build_eq<'a, 'ctx, 'env>(
             }
 
             WhenRecursive::Loop(union_layout) => {
-                let layout = Layout::Union(union_layout.clone());
+                let layout = Layout::Union(union_layout);
 
                 let bt = basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
 
@@ -188,7 +188,7 @@ fn build_eq<'a, 'ctx, 'env>(
                 build_tag_eq(
                     env,
                     layout_ids,
-                    WhenRecursive::Loop(union_layout.clone()),
+                    WhenRecursive::Loop(union_layout),
                     &layout,
                     &union_layout,
                     field1_cast.into(),
@@ -262,7 +262,7 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
             let is_equal = build_list_eq(
                 env,
                 layout_ids,
-                &Layout::Builtin(builtin.clone()),
+                &Layout::Builtin(*builtin),
                 elem,
                 lhs_val.into_struct_value(),
                 rhs_val.into_struct_value(),
@@ -690,7 +690,7 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
                     unreachable!("The current layout should not be recursive, but is")
                 }
                 WhenRecursive::Loop(union_layout) => {
-                    let field_layout = Layout::Union(union_layout.clone());
+                    let field_layout = Layout::Union(*union_layout);
 
                     let bt = basic_type_from_layout(
                         env.arena,
@@ -717,7 +717,7 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
                         field2_cast.into(),
                         &field_layout,
                         &field_layout,
-                        WhenRecursive::Loop(union_layout.clone()),
+                        WhenRecursive::Loop(*union_layout),
                     )
                     .into_int_value()
                 }
@@ -1234,7 +1234,7 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
         env,
         layout_ids,
         field_layouts,
-        WhenRecursive::Loop(union_layout.clone()),
+        WhenRecursive::Loop(*union_layout),
         struct1,
         struct2,
     )

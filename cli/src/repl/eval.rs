@@ -148,7 +148,7 @@ fn jit_to_ast_help<'a>(
                 }
             };
 
-            let fields = [Layout::Builtin(Builtin::Int64), layout.clone()];
+            let fields = [Layout::Builtin(Builtin::Int64), *layout];
             let layout = Layout::Struct(&fields);
 
             let result_stack_size = layout.stack_size(env.ptr_bytes);

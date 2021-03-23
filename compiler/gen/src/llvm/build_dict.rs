@@ -717,11 +717,7 @@ pub fn dict_walk<'a, 'ctx, 'env>(
         env,
         layout_ids,
         stepper_layout,
-        &[
-            key_layout.clone(),
-            value_layout.clone(),
-            accum_layout.clone(),
-        ],
+        &[*key_layout, *value_layout, *accum_layout],
     )
     .as_global_value()
     .as_pointer_value();

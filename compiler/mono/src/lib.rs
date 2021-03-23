@@ -13,7 +13,6 @@ pub mod tail_recursion;
 // For now, following this warning's advice will lead to nasty type inference errors.
 //#[allow(clippy::ptr_arg)]
 //pub mod decision_tree;
-#[allow(clippy::ptr_arg)]
 pub mod decision_tree;
 #[allow(clippy::ptr_arg)]
 pub mod exhaustive;

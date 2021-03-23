@@ -890,25 +890,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fea41bba32d969b513997752735605054bc0dfa92b4c56bf1189f2e174be7a10"
 
 [[package]]
-name = "docs"
-version = "0.1.0"
-dependencies = [
- "bumpalo",
- "fs_extra",
- "handlebars",
- "maplit",
- "pretty_assertions 0.5.1",
- "pulldown-cmark",
- "roc_builtins",
- "roc_can",
- "roc_collections",
- "roc_load",
- "serde",
- "serde_derive",
- "serde_json",
-]
-
-[[package]]
 name = "downcast-rs"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2961,6 +2942,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_docs",
  "roc_editor",
  "roc_fmt",
  "roc_gen",
@@ -3010,6 +2992,25 @@ dependencies = [
  "roc_parse",
  "roc_region",
  "roc_types",
+]
+
+[[package]]
+name = "roc_docs"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "fs_extra",
+ "handlebars",
+ "maplit",
+ "pretty_assertions 0.5.1",
+ "pulldown-cmark",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_load",
+ "serde",
+ "serde_derive",
+ "serde_json",
 ]
 
 [[package]]
