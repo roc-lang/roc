@@ -32,87 +32,94 @@ mod test_load {
 
     // HELPERS
 
-    fn multiple_modules(files: Vec<(&str, &str)>) -> LoadedModule {
-        multiple_modules_help(files).unwrap()
+    fn multiple_modules(files: Vec<(&str, &str)>) -> Result<LoadedModule, String> {
+        use roc_load::file::LoadingProblem;
+
+        let arena = Bump::new();
+        let arena = &arena;
+
+        match multiple_modules_help(arena, files) {
+            Err(io_error) => panic!("IO trouble: {:?}", io_error),
+            Ok(Err(LoadingProblem::FormattedReport(buf))) => Err(buf),
+            Ok(Err(loading_problem)) => Err(format!("{:?}", loading_problem)),
+            Ok(Ok(mut loaded_module)) => {
+                let home = loaded_module.module_id;
+
+                assert_eq!(
+                    loaded_module.can_problems.remove(&home).unwrap_or_default(),
+                    Vec::new()
+                );
+                assert_eq!(
+                    loaded_module
+                        .type_problems
+                        .remove(&home)
+                        .unwrap_or_default(),
+                    Vec::new()
+                );
+
+                Ok(loaded_module)
+            }
+        }
     }
 
-    fn multiple_modules_help(mut files: Vec<(&str, &str)>) -> Result<LoadedModule, std::io::Error> {
+    fn multiple_modules_help<'a>(
+        arena: &'a Bump,
+        mut files: Vec<(&str, &str)>,
+    ) -> Result<Result<LoadedModule, roc_load::file::LoadingProblem<'a>>, std::io::Error> {
         use std::fs::File;
         use std::io::Write;
         use std::path::PathBuf;
         use tempfile::tempdir;
 
-        let arena = Bump::new();
-        let arena = &arena;
-
         let stdlib = roc_builtins::std::standard_stdlib();
 
         let mut file_handles: Vec<_> = Vec::new();
         let exposed_types = MutMap::default();
-        let loaded = {
-            // create a temporary directory
-            let dir = tempdir()?;
 
-            let app_module = files.pop().unwrap();
-            let interfaces = files;
+        // create a temporary directory
+        let dir = tempdir()?;
 
-            debug_assert!(
-                app_module.1.starts_with("app"),
-                "The final module should be the application module"
-            );
+        let app_module = files.pop().unwrap();
+        let interfaces = files;
 
-            for (name, source) in interfaces {
-                let mut filename = PathBuf::from(name);
-                filename.set_extension("roc");
-                let file_path = dir.path().join(filename.clone());
-                let mut file = File::create(file_path)?;
-                writeln!(file, "{}", source)?;
-                file_handles.push(file);
-            }
+        debug_assert!(
+            app_module.1.starts_with("app"),
+            "The final module should be the application module"
+        );
 
-            let result = {
-                let (name, source) = app_module;
+        for (name, source) in interfaces {
+            let mut filename = PathBuf::from(name);
+            filename.set_extension("roc");
+            let file_path = dir.path().join(filename.clone());
+            let mut file = File::create(file_path)?;
+            writeln!(file, "{}", source)?;
+            file_handles.push(file);
+        }
 
-                let filename = PathBuf::from(name);
-                let file_path = dir.path().join(filename);
-                let full_file_path = file_path.clone();
-                let mut file = File::create(file_path)?;
-                writeln!(file, "{}", source)?;
-                file_handles.push(file);
+        let result = {
+            let (name, source) = app_module;
 
-                roc_load::file::load_and_typecheck(
-                    arena,
-                    full_file_path,
-                    &stdlib,
-                    dir.path(),
-                    exposed_types,
-                    8,
-                    builtin_defs_map,
-                )
-            };
+            let filename = PathBuf::from(name);
+            let file_path = dir.path().join(filename);
+            let full_file_path = file_path.clone();
+            let mut file = File::create(file_path)?;
+            writeln!(file, "{}", source)?;
+            file_handles.push(file);
 
-            dir.close()?;
-
-            result
+            roc_load::file::load_and_typecheck(
+                arena,
+                full_file_path,
+                arena.alloc(stdlib),
+                dir.path(),
+                exposed_types,
+                8,
+                builtin_defs_map,
+            )
         };
 
-        let mut loaded_module = loaded.expect("failed to load module");
+        dir.close()?;
 
-        let home = loaded_module.module_id;
-
-        assert_eq!(
-            loaded_module.can_problems.remove(&home).unwrap_or_default(),
-            Vec::new()
-        );
-        assert_eq!(
-            loaded_module
-                .type_problems
-                .remove(&home)
-                .unwrap_or_default(),
-            Vec::new()
-        );
-
-        Ok(loaded_module)
+        Ok(result)
     }
 
     fn load_fixture(
@@ -136,7 +143,7 @@ mod test_load {
             Ok(x) => x,
             Err(roc_load::file::LoadingProblem::FormattedReport(report)) => {
                 println!("{}", report);
-                panic!();
+                panic!("{}", report);
             }
             Err(e) => panic!("{:?}", e),
         };
@@ -285,7 +292,8 @@ mod test_load {
                 ),
             ),
         ];
-        multiple_modules(modules);
+
+        assert!(multiple_modules(modules).is_ok());
     }
 
     #[test]
@@ -517,61 +525,69 @@ mod test_load {
         );
     }
 
-    // #[test]
-    // fn load_records() {
-    //     use roc::types::{ErrorType, Mismatch, Problem, TypeExt};
+    #[test]
+    fn parse_problem() {
+        let modules = vec![(
+            "Main",
+            indoc!(
+                r#"
+                        app "test-app" packages { blah: "./blah" } provides [ main ] to blah
 
-    //     let subs_by_module = MutMap::default();
-    //     let loaded_module =
-    //         load_fixture("interface_with_deps", "Records", subs_by_module);
+                        main = [
+                    "#
+            ),
+        )];
 
-    //     // NOTE: `a` here is unconstrained, so unifies with <type error>
-    //     let expected_types = hashmap! {
-    //         "Records.intVal" => "a",
-    //     };
+        match multiple_modules(modules) {
+            Err(report) => assert_eq!(
+                report,
+                indoc!(
+                    "
+            \u{1b}[36m── UNFINISHED LIST ─────────────────────────────────────────────────────────────\u{1b}[0m
+            
+            I cannot find the end of this list:
 
-    //     let a = ErrorType::FlexVar("a".into());
+            \u{1b}[36m3\u{1b}[0m\u{1b}[36m│\u{1b}[0m  \u{1b}[37mmain = [\u{1b}[0m
+                        \u{1b}[31m^\u{1b}[0m
 
-    //     let mut record = SendMap::default();
-    //     record.insert("x".into(), a);
+            You could change it to something like \u{1b}[33m[ 1, 2, 3 ]\u{1b}[0m or even just \u{1b}[33m[]\u{1b}[0m.
+            Anything where there is an open and a close square bracket, and where
+            the elements of the list are separated by commas.
 
-    //     let problem = Problem::Mismatch(
-    //         Mismatch::TypeMismatch,
-    //         ErrorType::Record(SendMap::default(), TypeExt::Closed),
-    //         ErrorType::Record(record, TypeExt::FlexOpen("b".into())),
-    //     );
+            \u{1b}[4mNote\u{1b}[0m: I may be confused by indentation"
+                )
+            ),
+            Ok(_) => unreachable!("we expect failure here"),
+        }
+    }
 
-    //     assert_eq!(loaded_module.problems, vec![problem]);
-    //     assert_eq!(expected_types.len(), loaded_module.declarations.len());
+    #[test]
+    #[should_panic(
+        expected = "FileProblem { filename: \"tests/fixtures/build/interface_with_deps/invalid$name.roc\", error: NotFound }"
+    )]
+    fn file_not_found() {
+        let subs_by_module = MutMap::default();
+        let loaded_module = load_fixture("interface_with_deps", "invalid$name", subs_by_module);
 
-    //     let mut subs = loaded_module.solved.into_inner();
+        expect_types(
+            loaded_module,
+            hashmap! {
+                "str" => "Str",
+            },
+        );
+    }
 
-    //     for decl in loaded_module.declarations {
-    //         let def = match decl {
-    //             Declare(def) => def,
-    //             rec_decl @ DeclareRec(_) => {
-    //                 panic!(
-    //                     "Unexpected recursive def in module declarations: {:?}",
-    //                     rec_decl
-    //                 );
-    //             }
-    //             cycle @ InvalidCycle(_, _) => {
-    //                 panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
-    //             }
-    //         };
+    #[test]
+    #[should_panic(expected = "FILE NOT FOUND")]
+    fn imported_file_not_found() {
+        let subs_by_module = MutMap::default();
+        let loaded_module = load_fixture("no_deps", "MissingDep", subs_by_module);
 
-    //         for (symbol, expr_var) in def.pattern_vars {
-    //             let content = subs.get(expr_var).content;
-
-    //             name_all_type_vars(expr_var, &mut subs);
-
-    //             let actual_str = content_to_string(content, &mut subs);
-    //             let expected_type = expected_types.get(symbol.as_str()).unwrap_or_else(|| {
-    //                 panic!("Defs included an unexpected symbol: {:?}", symbol)
-    //             });
-
-    //             assert_eq!((&symbol, expected_type), (&symbol, &actual_str.as_str()));
-    //         }
-    //     }
-    // }
+        expect_types(
+            loaded_module,
+            hashmap! {
+                "str" => "Str",
+            },
+        );
+    }
 }
