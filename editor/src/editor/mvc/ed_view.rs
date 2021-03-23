@@ -3,7 +3,6 @@ use crate::editor::code_lines::CodeLines;
 use crate::editor::config::Config;
 use crate::editor::ed_error::EdResult;
 use crate::editor::render_ast::build_code_graphics;
-use crate::editor::slow_pool::SlowPool;
 use crate::graphics::primitives::rect::Rect;
 use crate::ui::text::caret_w_select::make_caret_rect;
 use crate::ui::text::caret_w_select::CaretWSelect;
@@ -18,17 +17,16 @@ pub fn model_to_wgpu<'a>(
     size: &PhysicalSize<u32>,
     txt_coords: Vector2<f32>,
     config: &Config,
-    markup_node_pool: &'a SlowPool,
 ) -> EdResult<(wgpu_glyph::Section<'a>, Vec<Rect>)> {
     let glyph_dim_rect = ed_model.glyph_dim_rect_opt.context(MissingGlyphDims {})?;
 
     let (section, mut rects) = build_code_graphics(
-        markup_node_pool.get(ed_model.markup_root_id),
+        ed_model.markup_node_pool.get(ed_model.markup_root_id),
         size,
         txt_coords,
         config,
         glyph_dim_rect,
-        markup_node_pool,
+        &ed_model.markup_node_pool,
     )?;
 
     let mut all_code_string = String::new();

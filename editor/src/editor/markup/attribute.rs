@@ -15,36 +15,36 @@ impl Caret {
         }
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SelectionStart {
     offset_col: usize,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SelectionEnd {
     offset_col: usize,
 }
 
 // Highlight is used for example when searching for a specific string to highlight all search results in the module
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HighlightStart {
     offset_col: usize,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HighlightEnd {
     offset_col: usize,
 }
 
 // Underline is used for warnings and errors
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UnderlineStart {
     offset_col: usize,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UnderlineEnd {
     offset_col: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Attribute {
     // Rust does not yet support types for enum variants so we have to do it like this
     Caret { caret: Caret },
@@ -59,7 +59,7 @@ pub enum Attribute {
     UnderlineEnd { underline_end: UnderlineEnd },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Attributes {
     pub all: Vec<Attribute>,
 }

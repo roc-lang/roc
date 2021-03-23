@@ -1,4 +1,4 @@
-use crate::editor::slow_pool::SlowNodeId;
+use crate::editor::slow_pool::MarkNodeId;
 use colored::*;
 use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
 
@@ -15,7 +15,7 @@ pub enum EdError {
         node_id
     ))]
     CaretNotFound {
-        node_id: SlowNodeId,
+        node_id: MarkNodeId,
         backtrace: Backtrace,
     },
 
@@ -42,14 +42,14 @@ pub enum EdError {
 
     #[snafu(display("NestedNodeWithoutChildren: tried to retrieve child from Nested MarkupNode with id {} but it had no children.", node_id))]
     NestedNodeWithoutChildren {
-        node_id: SlowNodeId,
+        node_id: MarkNodeId,
         backtrace: Backtrace,
     },
 
     #[snafu(display("NestedNodeMissingChild: expected to find child with id {} in Nested MarkupNode, but it was missing. Id's of the children are {:?}.", node_id, children_ids))]
     NestedNodeMissingChild {
-        node_id: SlowNodeId,
-        children_ids: Vec<SlowNodeId>,
+        node_id: MarkNodeId,
+        children_ids: Vec<MarkNodeId>,
         backtrace: Backtrace,
     },
 

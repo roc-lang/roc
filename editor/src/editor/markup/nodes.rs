@@ -1,5 +1,5 @@
 use super::attribute::Attributes;
-use crate::editor::slow_pool::SlowNodeId;
+use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::lang::{
@@ -9,40 +9,64 @@ use crate::lang::{
 };
 use bumpalo::Bump;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum MarkupNode {
     Nested {
         ast_node_id: NodeId<Expr2>,
-        children_ids: Vec<SlowNodeId>,
-        parent_id_opt: Option<SlowNodeId>,
+        children_ids: Vec<MarkNodeId>,
+        parent_id_opt: Option<MarkNodeId>,
     },
     Text {
         content: String,
         ast_node_id: NodeId<Expr2>,
         syn_high_style: HighlightStyle,
         attributes: Attributes,
-        parent_id_opt: Option<SlowNodeId>,
+        parent_id_opt: Option<MarkNodeId>,
     },
     Blank {
         ast_node_id: NodeId<Expr2>,
         attributes: Attributes,
         syn_high_style: HighlightStyle,
-        parent_id_opt: Option<SlowNodeId>,
+        parent_id_opt: Option<MarkNodeId>,
     },
 }
 
-pub const BLANK_PLACEHOLDER: &str = " ";
+impl MarkupNode {
+    pub fn get_ast_node_id(&self) -> NodeId<Expr2> {
+        match self {
+            MarkupNode::Nested { ast_node_id, .. } => *ast_node_id,
+            MarkupNode::Text { ast_node_id, .. } => *ast_node_id,
+            MarkupNode::Blank { ast_node_id, .. } => *ast_node_id,
+        }
+    }
+
+    pub fn get_parent_id_opt(&self) -> Option<MarkNodeId> {
+        match self {
+            MarkupNode::Nested { parent_id_opt, .. } => *parent_id_opt,
+            MarkupNode::Text { parent_id_opt, .. } => *parent_id_opt,
+            MarkupNode::Blank { parent_id_opt, .. } => *parent_id_opt,
+        }
+    }
+
+    pub fn is_blank(&self) -> bool {
+        matches!(self, MarkupNode::Blank { .. })
+    }
+}
 
 fn get_string<'a>(env: &Env<'a>, pool_str: &PoolStr) -> String {
     pool_str.as_str(env.pool).to_owned()
 }
+
+pub const BLANK_PLACEHOLDER: &str = " ";
+pub const LEFT_ACCOLADE: &str = "{ ";
+pub const RIGHT_ACCOLADE: &str = " }";
 
 fn new_markup_node(
     text: String,
     node_id: NodeId<Expr2>,
     highlight_style: HighlightStyle,
     markup_node_pool: &mut SlowPool,
-) -> SlowNodeId {
+) -> MarkNodeId {
     let node = MarkupNode::Text {
         content: text,
         ast_node_id: node_id,
@@ -60,7 +84,7 @@ pub fn expr2_to_markup<'a, 'b>(
     env: &mut Env<'b>,
     expr2: &Expr2,
     markup_node_pool: &mut SlowPool,
-) -> SlowNodeId {
+) -> MarkNodeId {
     // TODO find way to add current expr2 to pool
     let node_id = env.pool.add(Expr2::Blank);
 
@@ -138,7 +162,7 @@ pub fn expr2_to_markup<'a, 'b>(
             let mut children_ids = Vec::new();
 
             children_ids.push(new_markup_node(
-                "{ ".to_string(),
+                LEFT_ACCOLADE.to_string(),
                 node_id,
                 HighlightStyle::Bracket,
                 markup_node_pool,
@@ -178,7 +202,7 @@ pub fn expr2_to_markup<'a, 'b>(
             }
 
             children_ids.push(new_markup_node(
-                " }".to_string(),
+                RIGHT_ACCOLADE.to_string(),
                 node_id,
                 HighlightStyle::Bracket,
                 markup_node_pool,
@@ -202,7 +226,7 @@ pub fn expr2_to_markup<'a, 'b>(
     }
 }
 
-pub fn set_parent_for_all(markup_node_id: SlowNodeId, markup_node_pool: &mut SlowPool) {
+pub fn set_parent_for_all(markup_node_id: MarkNodeId, markup_node_pool: &mut SlowPool) {
     let node = markup_node_pool.get(markup_node_id);
 
     if let MarkupNode::Nested {
@@ -221,17 +245,17 @@ pub fn set_parent_for_all(markup_node_id: SlowNodeId, markup_node_pool: &mut Slo
 }
 
 pub fn set_parent_for_all_helper(
-    markup_node_id: SlowNodeId,
-    parent_node_id: SlowNodeId,
+    markup_node_id: MarkNodeId,
+    parent_node_id: MarkNodeId,
     markup_node_pool: &mut SlowPool,
 ) {
     let node = markup_node_pool.get_mut(markup_node_id);
 
     match node {
         MarkupNode::Nested {
-            ast_node_id: _,
             children_ids,
             parent_id_opt,
+            ..
         } => {
             *parent_id_opt = Some(parent_node_id);
 
@@ -242,18 +266,7 @@ pub fn set_parent_for_all_helper(
                 set_parent_for_all_helper(child_id, markup_node_id, markup_node_pool);
             }
         }
-        MarkupNode::Text {
-            content: _,
-            ast_node_id: _,
-            syn_high_style: _,
-            attributes: _,
-            parent_id_opt,
-        } => *parent_id_opt = Some(parent_node_id),
-        MarkupNode::Blank {
-            ast_node_id: _,
-            attributes: _,
-            syn_high_style: _,
-            parent_id_opt,
-        } => *parent_id_opt = Some(parent_node_id),
+        MarkupNode::Text { parent_id_opt, .. } => *parent_id_opt = Some(parent_node_id),
+        MarkupNode::Blank { parent_id_opt, .. } => *parent_id_opt = Some(parent_node_id),
     }
 }
