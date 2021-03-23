@@ -2293,7 +2293,7 @@ fn load_pkg_config<'a>(
                     Ok(Msg::Many(vec![effects_module_msg, pkg_config_module_msg]))
                 }
                 Err(fail) => Err(LoadingProblem::ParsingFailed(
-                    SyntaxError::Header(fail).into_parse_problem(filename, bytes),
+                    SyntaxError::Header(fail).into_parse_problem(filename, "", bytes),
                 )),
             }
         }
@@ -2565,7 +2565,7 @@ fn parse_header<'a>(
             module_timing,
         )),
         Err(fail) => Err(LoadingProblem::ParsingFailed(
-            SyntaxError::Header(fail).into_parse_problem(filename, src_bytes),
+            SyntaxError::Header(fail).into_parse_problem(filename, "", src_bytes),
         )),
     }
 }
@@ -3614,9 +3614,11 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     let parsed_defs = match module_defs().parse(&arena, parse_state) {
         Ok((_, success, _state)) => success,
         Err((_, fail, _)) => {
-            return Err(LoadingProblem::ParsingFailed(
-                fail.into_parse_problem(header.module_path, source),
-            ));
+            return Err(LoadingProblem::ParsingFailed(fail.into_parse_problem(
+                header.module_path,
+                header.header_src,
+                source,
+            )));
         }
     };
 
@@ -4196,7 +4198,8 @@ fn to_parse_problem_report<'a>(
 
     // TODO this is not in fact safe
     let src = unsafe { from_utf8_unchecked(problem.bytes) };
-    let src_lines: Vec<&str> = src.split('\n').collect();
+    let mut src_lines: Vec<&str> = problem.prefix.lines().collect();
+    src_lines.extend(src.lines().skip(1));
 
     let module_id = module_ids.get_or_insert(&"find module name somehow?".into());
 

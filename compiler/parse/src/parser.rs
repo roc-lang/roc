@@ -360,6 +360,7 @@ impl<'a> SyntaxError<'a> {
     pub fn into_parse_problem(
         self,
         filename: std::path::PathBuf,
+        prefix: &'a str,
         bytes: &'a [u8],
     ) -> ParseProblem<'a, SyntaxError<'a>> {
         ParseProblem {
@@ -368,6 +369,7 @@ impl<'a> SyntaxError<'a> {
             problem: self,
             filename,
             bytes,
+            prefix,
         }
     }
 }
@@ -679,6 +681,8 @@ pub struct ParseProblem<'a, T> {
     pub problem: T,
     pub filename: std::path::PathBuf,
     pub bytes: &'a [u8],
+    /// prefix is usually the header (for parse problems in the body), or empty
+    pub prefix: &'a str,
 }
 
 pub trait Parser<'a, Output, Error> {
