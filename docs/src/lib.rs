@@ -16,6 +16,8 @@ use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use std::path::{Path, PathBuf};
 
+mod assets;
+
 #[derive(Serialize)]
 pub struct Template {
     pub package_name: String,
@@ -55,6 +57,17 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
         docs: "Package introduction or README.".to_string(),
         modules: files_docs,
     };
+
+    if !build_dir.exists() {
+        fs::create_dir_all(build_dir).expect("TODO gracefully handle unable to create build dir");
+    }
+
+    fs::write(build_dir.join("search.js"), assets::SEARCH_JS)
+        .expect("TODO gracefully handle failing to make the search javascript");
+    fs::write(build_dir.join("styles.css"), assets::STYLE_CSS)
+        .expect("TODO gracefully handle failing to make the stylesheet");
+    fs::write(build_dir.join("favicon.svg"), assets::FAVICON)
+        .expect("TODO gracefully handle failing to make the favicon");
 
     // Register handlebars template
     let mut handlebars = handlebars::Handlebars::new();
