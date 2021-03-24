@@ -88,7 +88,7 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
             .expect("TODO gracefully handle writing file failing");
     }
 
-    println!("Docs generated at {}", build_dir.display());
+    println!("🎉 Docs generated in {}", build_dir.display());
 }
 
 pub fn files_to_documentations(
