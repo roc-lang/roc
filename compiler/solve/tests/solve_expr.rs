@@ -652,8 +652,8 @@ mod solve_expr {
     }
 
     #[test]
-    fn applied_tag_function_mismatch() {
-        infer_eq(
+    fn mismatch_applied_tag_function() {
+        infer_eq_without_problem(
             indoc!(
                 r#"
                 x : List [ Foo Str ]
@@ -662,7 +662,7 @@ mod solve_expr {
                 x
                 "#
             ),
-            "<type mismatch>",
+            "List [ Foo Str ]",
         )
     }
 

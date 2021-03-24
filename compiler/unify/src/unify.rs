@@ -1088,6 +1088,8 @@ fn unify_flat_type(
 
                 let problems = unify_pool(subs, pool, new_tag_union_var, *ret);
 
+                dbg!(problems.clone());
+
                 if problems.is_empty() {
                     let desc = subs.get(ctx.second);
                     subs.union(ctx.first, ctx.second, desc);
