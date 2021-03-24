@@ -458,6 +458,27 @@ fn to_expr_report<'a>(
             *col,
         ),
 
+        EExpr::BadExprEnd(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
+            let region = Region::from_row_col(*row, *col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("Whatever I am running into is confusing me al lot! "),
+                    alloc.reflow("Normally I can give fairly specific hints, "),
+                    alloc.reflow("but something is really tripping me up this time."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "SYNTAX PROBLEM".to_string(),
+            }
+        }
+
         EExpr::Colon(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
             let region = Region::from_row_col(*row, *col);
@@ -982,7 +1003,7 @@ fn to_list_report<'a>(
         ),
 
         List::Open(row, col) | List::End(row, col) => {
-            match dbg!(what_is_next(alloc.src_lines, row, col)) {
+            match what_is_next(alloc.src_lines, row, col) {
                 Next::Other(Some(',')) => {
                     let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
                     let region = Region::from_row_col(row, col);
@@ -1388,24 +1409,56 @@ fn to_unfinished_when_report<'a>(
     start_col: Col,
     message: RocDocBuilder<'a>,
 ) -> Report<'a> {
-    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-    let region = Region::from_row_col(row, col);
+    match what_is_next(alloc.src_lines, row, col) {
+        Next::Token("->") => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_rows_cols(row, col, row, col + 2);
 
-    let doc = alloc.stack(vec![
-        alloc.concat(vec![
-            alloc.reflow(r"I was partway through parsing a "),
-            alloc.keyword("when"),
-            alloc.reflow(r" expression, but I got stuck here:"),
-        ]),
-        alloc.region_with_subregion(surroundings, region),
-        message,
-        note_for_when_error(alloc),
-    ]);
+            let doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow(r"I am parsing a "),
+                    alloc.keyword("when"),
+                    alloc.reflow(r" expression right now, but this arrow is confusing me:"),
+                ]),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"It makes sense to see arrows around here, "),
+                    alloc.reflow(r"so I suspect it is something earlier."),
+                    alloc.reflow(
+                        r"Maybe this pattern is indented a bit farther from the previous patterns?",
+                    ),
+                ]),
+                note_for_when_error(alloc),
+            ]);
 
-    Report {
-        filename,
-        doc,
-        title: "UNFINISHED WHEN".to_string(),
+            Report {
+                filename,
+                doc,
+                title: "UNEXPECTED ARROW".to_string(),
+            }
+        }
+
+        _ => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.concat(vec![
+                    alloc.reflow(r"I was partway through parsing a "),
+                    alloc.keyword("when"),
+                    alloc.reflow(r" expression, but I got stuck here:"),
+                ]),
+                alloc.region_with_subregion(surroundings, region),
+                message,
+                note_for_when_error(alloc),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED WHEN".to_string(),
+            }
+        }
     }
 }
 

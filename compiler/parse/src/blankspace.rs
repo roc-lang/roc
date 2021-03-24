@@ -125,7 +125,7 @@ where
     E: 'a,
 {
     move |_, state: State<'a>| {
-        if state.column > min_indent {
+        if state.column >= min_indent {
             Ok((NoProgress, (), state))
         } else {
             Err((NoProgress, indent_problem(state.line, state.column), state))

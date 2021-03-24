@@ -62,8 +62,8 @@ pub fn loc_pattern_help<'a>(
             EPattern::Record,
             crate::pattern::record_pattern_help(min_indent)
         )),
+        loc!(number_pattern_help()),
         loc!(string_pattern_help()),
-        loc!(number_pattern_help())
     )
 }
 
