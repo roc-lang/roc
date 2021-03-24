@@ -1,4 +1,6 @@
-use roc_collections::all::{get_shared, relative_complement, union, MutMap, SendSet};
+use roc_collections::all::{
+    default_hasher, get_shared, relative_complement, union, MutMap, SendSet,
+};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::boolean_algebra::Bool;
@@ -1070,17 +1072,12 @@ fn unify_flat_type(
             }
         }
         (TagUnion(tags, ext), Func(args, closure, ret)) if tags.len() == 1 => {
-            let (tag, payload) = tags.iter().next().unwrap();
+            let (tag_name, payload) = tags.iter().next().unwrap();
 
             if payload.is_empty() {
-                let mut new_payload = vec![];
-                let mut new_tags = MutMap::default();
+                let mut new_tags = MutMap::with_capacity_and_hasher(1, default_hasher());
 
-                for arg in args {
-                    new_payload.push(*arg);
-                }
-
-                new_tags.insert(tag.clone(), new_payload);
+                new_tags.insert(tag_name.clone(), args.clone());
 
                 let content = Structure(TagUnion(new_tags, *ext));
 
@@ -1088,16 +1085,12 @@ fn unify_flat_type(
 
                 let problems = unify_pool(subs, pool, new_tag_union_var, *ret);
 
-                dbg!(problems.clone());
-
                 if problems.is_empty() {
                     let desc = subs.get(ctx.second);
                     subs.union(ctx.first, ctx.second, desc);
-
-                    vec![]
-                } else {
-                    problems
                 }
+
+                problems
             } else {
                 mismatch!(
                     "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
@@ -1107,17 +1100,12 @@ fn unify_flat_type(
             }
         }
         (Func(args, closure, ret), TagUnion(tags, ext)) if tags.len() == 1 => {
-            let (tag, payload) = tags.iter().next().unwrap();
+            let (tag_name, payload) = tags.iter().next().unwrap();
 
             if payload.is_empty() {
-                let mut new_payload = vec![];
-                let mut new_tags = MutMap::default();
+                let mut new_tags = MutMap::with_capacity_and_hasher(1, default_hasher());
 
-                for arg in args {
-                    new_payload.push(*arg);
-                }
-
-                new_tags.insert(tag.clone(), new_payload);
+                new_tags.insert(tag_name.clone(), args.clone());
 
                 let content = Structure(TagUnion(new_tags, *ext));
 
@@ -1128,11 +1116,9 @@ fn unify_flat_type(
                 if problems.is_empty() {
                     let desc = subs.get(ctx.first);
                     subs.union(ctx.first, ctx.second, desc);
-
-                    vec![]
-                } else {
-                    problems
                 }
+
+                problems
             } else {
                 mismatch!(
                     "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
