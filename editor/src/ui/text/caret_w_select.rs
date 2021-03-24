@@ -37,7 +37,7 @@ impl CaretWSelect {
         }
     }
 
-    pub fn move_caret_w_mods(&mut self, new_pos: TextPos, mods: &Modifiers) -> UIResult<()> {
+    pub fn move_caret_w_mods(&self, new_pos: TextPos, mods: &Modifiers) -> UIResult<CaretWSelect> {
         let old_caret_pos = self.caret_pos;
 
         // one does not simply move the caret
@@ -75,10 +75,7 @@ impl CaretWSelect {
             None
         };
 
-        self.caret_pos = new_pos;
-        self.selection_opt = valid_sel_opt;
-
-        Ok(())
+        Ok(CaretWSelect::new(new_pos, valid_sel_opt))
     }
 }
 

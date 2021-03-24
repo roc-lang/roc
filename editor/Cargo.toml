@@ -48,6 +48,7 @@ confy = { git = 'https://github.com/rust-cli/confy', features = [
   "yaml_conf"
 ], default-features = false }
 serde = { version = "1.0.123", features = ["derive"] }
+nonempty = "0.6.0"
 
 [dependencies.bytemuck]
 version = "1.4"
