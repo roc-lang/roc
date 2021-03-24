@@ -1,3 +1,7 @@
+use crate::editor::util::index_of;
+use crate::editor::grid_node_map::GridNodeMap;
+use crate::editor::slow_pool::SlowPool;
+use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::code_lines::CodeLines;
 use crate::editor::ed_error::EdResult;
 use crate::editor::markup::attribute::Attributes;
@@ -15,7 +19,6 @@ use crate::ui::text::text_pos::TextPos;
 use crate::ui::text::{lines, lines::Lines, lines::SelectableLines};
 use crate::ui::ui_error::UIResult;
 use crate::ui::util::is_newline;
-use crate::window::keyboard_input::no_mods;
 use crate::window::keyboard_input::Modifiers;
 use winit::event::VirtualKeyCode;
 use VirtualKeyCode::*;
@@ -29,6 +32,66 @@ impl<'a> EdModel<'a> {
         for caret_tup in self.caret_w_select_vec.iter_mut() {
             caret_tup.0 = move_fun(&self.code_lines, caret_tup.0, modifiers)?;
             caret_tup.1 = None;
+        }
+
+        Ok(())
+    }
+
+    // TODO delete
+    // disregards EdModel.code_lines because the caller knows the resulting caret position will be valid.
+    // allows us to prevent multiple updates to EdModel.code_lines
+    pub fn simple_move_carets_right(&mut self) {
+        for caret_tup in self.caret_w_select_vec.iter_mut() {
+            caret_tup.0.caret_pos.column += 1;
+            caret_tup.1 = None;
+        }
+    }
+
+    pub fn build_node_map_from_markup(markup_root_id: MarkNodeId, markup_node_pool: &SlowPool) -> EdResult<GridNodeMap> {
+        let mut grid_node_map = GridNodeMap::new();
+
+        EdModel::build_grid_node_map(markup_root_id, &mut grid_node_map, markup_node_pool);
+
+        Ok(grid_node_map)
+    }
+
+    fn build_grid_node_map(node_id: MarkNodeId, grid_node_map: &mut GridNodeMap, markup_node_pool: &SlowPool)  -> EdResult<()> {
+        let node = markup_node_pool.get(node_id);
+
+        if node.is_nested() {
+            for child_id in node.get_children_ids() {
+                EdModel::build_grid_node_map(child_id, grid_node_map, markup_node_pool)?;
+            }
+        } else {
+            let node_content_str = node.get_content()?;
+
+            grid_node_map.add_to_line(0, node_content_str.len(), node_id);
+        }
+
+        Ok(())
+    }
+
+    pub fn build_code_lines_from_markup(markup_root_id: MarkNodeId, markup_node_pool: &SlowPool) -> EdResult<CodeLines> {
+        let mut all_code_string = String::new();
+
+        EdModel::build_markup_string(markup_root_id, &mut all_code_string, markup_node_pool)?;
+    
+        let code_lines = CodeLines::from_str(&all_code_string);
+
+        Ok(code_lines)
+    }
+
+    fn build_markup_string(node_id: MarkNodeId, all_code_string: &mut String, markup_node_pool: &SlowPool) -> EdResult<()> {
+        let node = markup_node_pool.get(node_id);
+
+        if node.is_nested() {
+            for child_id in node.get_children_ids() {
+                EdModel::build_markup_string(child_id, all_code_string, markup_node_pool)?;
+            }
+        } else {
+            let node_content_str = node.get_content()?;
+
+            all_code_string.push_str(&node_content_str);
         }
 
         Ok(())
@@ -189,8 +252,9 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
     match received_char {
         '{' => {
-            // TODO get MarkupNode where caret is positioned using a mapping from (row,col) to MarkNodeId
-            let curr_mark_node_id = ed_model.markup_root_id;
+            let old_caret_pos = ed_model.get_caret();
+
+            let curr_mark_node_id = ed_model.grid_node_map.get_id_at_row_col(old_caret_pos)?;
             let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
             let is_blank_node = curr_mark_node.is_blank();
             let parent_id_opt = curr_mark_node.get_parent_id_opt();
@@ -231,8 +295,10 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
             if is_blank_node {
                 mark_node_pool.replace_node(curr_mark_node_id, nested_node);
-                ed_model.move_caret_right(&no_mods())?;
-                ed_model.move_caret_right(&no_mods())?;
+
+                for _ in 0..nodes::LEFT_ACCOLADE.len() {
+                    ed_model.simple_move_carets_right();
+                }
             }
         }
         '\u{8}' | '\u{7f}' => {
@@ -253,7 +319,22 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
         => {
             // chars that can be ignored
         }
-        _ => {}
+        ch => {
+            let old_caret_pos = ed_model.get_caret();
+
+            let curr_mark_node_id = ed_model.grid_node_map.get_id_at_row_col(old_caret_pos)?;
+            let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
+            let parent_id_opt = curr_mark_node.get_parent_id_opt();
+            let ast_node_id = curr_mark_node.get_ast_node_id();
+            
+            if let Some(parent_id) = parent_id_opt {
+                let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
+
+                let new_child_index = index_of(curr_mark_node_id, &sibling_ids);
+
+                // TODO match, create new MarkupNode + ASTNode
+            }
+        }
     }
 
     Ok(())

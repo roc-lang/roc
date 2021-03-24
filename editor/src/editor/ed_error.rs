@@ -34,15 +34,16 @@ pub enum EdError {
     #[snafu(display("GetContentOnNestedNode: tried to get string content from Nested MarkupNode. Can only get content from Text or Blank nodes."))]
     GetContentOnNestedNode { backtrace: Backtrace },
 
-    #[snafu(display("KeyNotFound: key {} was not found in HashMap.", key_str,))]
-    KeyNotFound {
-        key_str: String,
+    #[snafu(display("IndexOfFailed: Element {} was not found in collection {}.", elt_str, collection_str))]
+    IndexOfFailed {
+        elt_str: String,
+        collection_str: String,
         backtrace: Backtrace,
     },
 
-    #[snafu(display("NestedNodeWithoutChildren: tried to retrieve child from Nested MarkupNode with id {} but it had no children.", node_id))]
-    NestedNodeWithoutChildren {
-        node_id: MarkNodeId,
+    #[snafu(display("KeyNotFound: key {} was not found in HashMap.", key_str,))]
+    KeyNotFound {
+        key_str: String,
         backtrace: Backtrace,
     },
 
@@ -50,6 +51,12 @@ pub enum EdError {
     NestedNodeMissingChild {
         node_id: MarkNodeId,
         children_ids: Vec<MarkNodeId>,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display("NestedNodeWithoutChildren: tried to retrieve child from Nested MarkupNode with id {} but it had no children.", node_id))]
+    NestedNodeWithoutChildren {
+        node_id: MarkNodeId,
         backtrace: Backtrace,
     },
 

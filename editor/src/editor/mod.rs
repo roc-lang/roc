@@ -12,3 +12,4 @@ mod style;
 mod syntax_highlight;
 mod theme;
 mod util;
+mod grid_node_map;

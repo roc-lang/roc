@@ -84,12 +84,12 @@ fn section_from_text<'a>(
 }
 
 pub fn section_from_glyph_text(
-    text: Vec<wgpu_glyph::Text>,
+    text: Vec<glyph_brush::OwnedText>,
     screen_position: (f32, f32),
     area_bounds: (f32, f32),
     layout: wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker>,
-) -> wgpu_glyph::Section {
-    Section {
+) -> glyph_brush::OwnedSection {
+    glyph_brush::OwnedSection {
         screen_position,
         bounds: area_bounds,
         layout,

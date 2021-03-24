@@ -1,3 +1,4 @@
+use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::code_lines::CodeLines;
 use crate::editor::slow_pool::{MarkNodeId, SlowPool};
 use crate::editor::syntax_highlight::HighlightStyle;
@@ -23,12 +24,17 @@ pub struct EdModel<'a> {
     pub module: EdModule<'a>,
     pub file_path: &'a Path,
     pub code_lines: CodeLines,
+    // allows us to map window coordinates to MarkNodeId's
+    pub grid_node_map: GridNodeMap,
     pub markup_root_id: MarkNodeId,
     pub markup_node_pool: SlowPool,
+    // contains single char dimensions, used to calculate line height, column width...
     pub glyph_dim_rect_opt: Option<Rect>,
     pub has_focus: bool,
     // Option<MarkNodeId>: MarkupNode that corresponds to caret position, Option because this MarkNodeId is only calculated when it needs to be used.
     pub caret_w_select_vec: NonEmpty<(CaretWSelect, Option<MarkNodeId>)>,
+    // EdModel is dirty if it has changed since the previous render.
+    pub dirty: bool, 
 }
 
 pub fn init_model<'a>(
@@ -65,15 +71,20 @@ pub fn init_model<'a>(
         temp_markup_root_id
     };
 
+    let code_lines = EdModel::build_code_lines_from_markup(markup_root_id, &markup_node_pool)?;
+    let grid_node_map = EdModel::build_node_map_from_markup(markup_root_id, &markup_node_pool)?;
+
     Ok(EdModel {
         module,
         file_path,
-        code_lines: CodeLines::from_str(code_str),
+        code_lines,
+        grid_node_map,
         markup_root_id,
         markup_node_pool,
         glyph_dim_rect_opt: None,
         has_focus: true,
         caret_w_select_vec: NonEmpty::new((CaretWSelect::default(), None)),
+        dirty: true
     })
 }
 

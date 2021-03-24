@@ -1,3 +1,5 @@
+use crate::editor::ed_error::GetContentOnNestedNode;
+use crate::editor::ed_error::EdResult;
 use super::attribute::Attributes;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
@@ -48,8 +50,46 @@ impl MarkupNode {
         }
     }
 
+    pub fn get_children_ids(&self) -> Vec<MarkNodeId> {
+        match self {
+            MarkupNode::Nested { children_ids, .. } => *children_ids,
+            MarkupNode::Text { parent_id_opt, .. } => vec![],
+            MarkupNode::Blank { parent_id_opt, .. } => vec![],
+        }
+    }
+
+    pub fn get_sibling_ids(&self, markup_node_pool: &SlowPool) -> Vec<MarkNodeId> {
+        if let Some(parent_id) = self.get_parent_id_opt() {
+            let parent_node = markup_node_pool.get(parent_id);
+
+            parent_node.get_children_ids()
+        } else {
+            vec![]
+        }
+    }
+
+    // can't be &str, this creates borrowing issues
+    pub fn get_content(&self) -> EdResult<String> {
+        match self {
+            MarkupNode::Nested {
+                ..
+            } => GetContentOnNestedNode {}.fail(),
+            MarkupNode::Text {
+                content,
+                ..
+            } => Ok(content.clone()),
+            MarkupNode::Blank {
+                ..
+            } => Ok(BLANK_PLACEHOLDER.to_owned()),
+        }
+    }
+
     pub fn is_blank(&self) -> bool {
         matches!(self, MarkupNode::Blank { .. })
+    }
+
+    pub fn is_nested(&self) -> bool {
+        matches!(self, MarkupNode::Nested { .. })
     }
 }
 
