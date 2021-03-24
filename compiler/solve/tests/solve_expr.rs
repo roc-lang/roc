@@ -651,18 +651,19 @@ mod solve_expr {
         )
     }
 
+    // Tests (TagUnion, Func)
     #[test]
-    fn mismatch_applied_tag_function() {
+    fn applied_tag_function_with_annotation() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                x : List [ Foo Str ]
+                x : List [ Foo I64 ]
                 x = List.map [ 1, 2 ] Foo
 
                 x
                 "#
             ),
-            "List [ Foo Str ]",
+            "List [ Foo I64 ]",
         )
     }
 
