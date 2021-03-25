@@ -1,18 +1,6 @@
-use super::ed_error::{EdResult, KeyNotFound, OutOfBounds};
+use super::ed_error::{EdResult, KeyNotFound};
 use snafu::OptionExt;
 use std::collections::HashMap;
-use std::slice::SliceIndex;
-
-// replace vec methods that return Option with ones that return Result and proper Error
-pub fn slice_get<T>(index: usize, slice: &[T]) -> EdResult<&<usize as SliceIndex<[T]>>::Output> {
-    let elt_ref = slice.get(index).context(OutOfBounds {
-        index,
-        collection_name: "Slice",
-        len: slice.len(),
-    })?;
-
-    Ok(elt_ref)
-}
 
 // replace HashMap method that returns Option with one that returns Result and proper Error
 pub fn map_get<'a, K: ::std::fmt::Debug + std::hash::Hash + std::cmp::Eq, V>(

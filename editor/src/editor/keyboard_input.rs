@@ -3,7 +3,6 @@ use crate::editor::mvc::app_model::AppModel;
 use crate::editor::mvc::app_update::{
     handle_copy, handle_cut, handle_paste, pass_keydown_to_focused,
 };
-use crate::editor::slow_pool::SlowPool;
 use winit::event::VirtualKeyCode::*;
 use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
 
@@ -12,7 +11,6 @@ pub fn handle_keydown(
     virtual_keycode: VirtualKeyCode,
     modifiers: ModifiersState,
     app_model: &mut AppModel,
-    markup_node_pool: &mut SlowPool,
 ) -> EdResult<()> {
     if let ElementState::Released = elem_state {
         return Ok(());
@@ -20,7 +18,7 @@ pub fn handle_keydown(
 
     match virtual_keycode {
         Left | Up | Right | Down => {
-            pass_keydown_to_focused(&modifiers, virtual_keycode, app_model, markup_node_pool)?
+            pass_keydown_to_focused(&modifiers, virtual_keycode, app_model)?
         }
 
         Copy => handle_copy(app_model)?,
@@ -42,9 +40,7 @@ pub fn handle_keydown(
             }
         }
 
-        A | Home | End => {
-            pass_keydown_to_focused(&modifiers, virtual_keycode, app_model, markup_node_pool)?
-        }
+        A | Home | End => pass_keydown_to_focused(&modifiers, virtual_keycode, app_model)?,
 
         _ => (),
     }

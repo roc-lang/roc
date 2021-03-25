@@ -122,7 +122,7 @@ pub fn files_to_documentations(
             builtin_defs_map,
         ) {
             Ok(mut loaded) => files_docs.extend(loaded.documentation.drain().map(|x| x.1)),
-            Err(LoadingProblem::ParsingFailedReport(report)) => {
+            Err(LoadingProblem::FormattedReport(report)) => {
                 println!("{}", report);
                 panic!();
             }
