@@ -562,6 +562,7 @@ impl<'a> Procs<'a> {
                                         "TODO generate a RuntimeError message for {:?}",
                                         error
                                     );
+                                    dbg!(symbol);
                                     self.runtime_errors
                                         .insert(symbol, env.arena.alloc(error_msg));
                                     panic!();
@@ -673,6 +674,7 @@ impl<'a> Procs<'a> {
                     Err(error) => {
                         let error_msg =
                             format!("TODO generate a RuntimeError message for {:?}", error);
+                        dbg!(symbol);
                         self.runtime_errors
                             .insert(symbol, env.arena.alloc(error_msg));
                         panic!();
@@ -1696,13 +1698,15 @@ pub fn specialize_all<'a>(
             Ok((proc, layout)) => {
                 procs.specialized.insert((name, layout), Done(proc));
             }
-            Err(error) => {
-                let error_msg = env.arena.alloc(format!(
-                    "TODO generate a RuntimeError message for {:?}",
-                    error
-                ));
+            Err(SpecializeFailure {
+                problem: _,
+                attempted_layout,
+            }) => {
+                let proc = generate_runtime_error_function(env, name, attempted_layout);
 
-                procs.runtime_errors.insert(name, error_msg);
+                procs
+                    .specialized
+                    .insert((name, attempted_layout), Done(proc));
             }
         }
     }
@@ -1772,6 +1776,47 @@ pub fn specialize_all<'a>(
     }
 
     procs
+}
+
+fn generate_runtime_error_function<'a>(
+    env: &mut Env<'a, '_>,
+    name: Symbol,
+    layout: Layout<'a>,
+) -> Proc<'a> {
+    let (arg_layouts, ret_layout) = match layout {
+        Layout::FunctionPointer(a, r) => (a, *r),
+        _ => (&[] as &[_], layout),
+    };
+
+    let mut args = Vec::with_capacity_in(arg_layouts.len(), env.arena);
+
+    for arg in arg_layouts {
+        args.push((*arg, env.unique_symbol()));
+    }
+
+    let mut msg = bumpalo::collections::string::String::with_capacity_in(80, env.arena);
+    use std::fmt::Write;
+    write!(
+        &mut msg,
+        "The {:?} function could not be generated, likely due to a type error.",
+        name
+    )
+    .unwrap();
+
+    eprintln!("emitted runtime error function {:?}", &msg);
+
+    let runtime_error = Stmt::RuntimeError(msg.into_bump_str());
+
+    Proc {
+        name,
+        args: args.into_bump_slice(),
+        body: runtime_error,
+        closure_data_layout: None,
+        ret_layout,
+        is_self_recursive: SelfRecursive::NotSelfRecursive,
+        must_own_arguments: false,
+        host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+    }
 }
 
 fn specialize_external<'a>(
@@ -2270,6 +2315,14 @@ fn build_specialized_proc<'a>(
     }
 }
 
+#[derive(Debug)]
+struct SpecializeFailure<'a> {
+    /// The layout we attempted to create
+    attempted_layout: Layout<'a>,
+    /// The problem we ran into while creating it
+    problem: LayoutProblem,
+}
+
 fn specialize<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
@@ -2277,7 +2330,7 @@ fn specialize<'a>(
     layout_cache: &mut LayoutCache<'a>,
     pending: PendingSpecialization,
     partial_proc: PartialProc<'a>,
-) -> Result<(Proc<'a>, Layout<'a>), LayoutProblem> {
+) -> Result<(Proc<'a>, Layout<'a>), SpecializeFailure<'a>> {
     let PendingSpecialization {
         solved_type,
         host_exposed_aliases,
@@ -2321,7 +2374,7 @@ fn specialize_solved_type<'a>(
     solved_type: SolvedType,
     host_exposed_aliases: MutMap<Symbol, SolvedType>,
     partial_proc: PartialProc<'a>,
-) -> Result<(Proc<'a>, Layout<'a>), LayoutProblem> {
+) -> Result<(Proc<'a>, Layout<'a>), SpecializeFailure<'a>> {
     // add the specializations that other modules require of us
     use roc_solve::solve::instantiate_rigids;
 
@@ -2329,6 +2382,10 @@ fn specialize_solved_type<'a>(
     let cache_snapshot = layout_cache.snapshot();
 
     let fn_var = introduce_solved_type_to_subs(env, &solved_type);
+
+    let attempted_layout = layout_cache
+        .from_var(&env.arena, fn_var, env.subs)
+        .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
     // make sure rigid variables in the annotation are converted to flex variables
     instantiate_rigids(env.subs, partial_proc.annotation);
@@ -2353,17 +2410,24 @@ fn specialize_solved_type<'a>(
 
     match specialized {
         Ok(proc) => {
-            let layout = layout_cache
-                .from_var(&env.arena, fn_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
+            debug_assert_eq!(
+                attempted_layout,
+                layout_cache
+                    .from_var(&env.arena, fn_var, env.subs)
+                    .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err))
+            );
+
             env.subs.rollback_to(snapshot);
             layout_cache.rollback_to(cache_snapshot);
-            Ok((proc, layout))
+            Ok((proc, attempted_layout))
         }
         Err(error) => {
             env.subs.rollback_to(snapshot);
             layout_cache.rollback_to(cache_snapshot);
-            Err(error)
+            Err(SpecializeFailure {
+                problem: error,
+                attempted_layout,
+            })
         }
     }
 }
@@ -5893,6 +5957,20 @@ fn call_by_name<'a>(
 
     // Register a pending_specialization for this function
     match layout_cache.from_var(env.arena, fn_var, env.subs) {
+        Err(LayoutProblem::UnresolvedTypeVar(var)) => {
+            let msg = format!(
+                "Hit an unresolved type variable {:?} when creating a layout for {:?} (var {:?})",
+                var, proc_name, fn_var
+            );
+            Stmt::RuntimeError(env.arena.alloc(msg))
+        }
+        Err(LayoutProblem::Erroneous) => {
+            let msg = format!(
+                "Hit an erroneous type when creating a layout for {:?}",
+                proc_name
+            );
+            Stmt::RuntimeError(env.arena.alloc(msg))
+        }
         Ok(layout) => {
             // Build the CallByName node
             let arena = env.arena;
@@ -6203,20 +6281,6 @@ fn call_by_name<'a>(
                     }
                 }
             }
-        }
-        Err(LayoutProblem::UnresolvedTypeVar(var)) => {
-            let msg = format!(
-                "Hit an unresolved type variable {:?} when creating a layout for {:?} (var {:?})",
-                var, proc_name, fn_var
-            );
-            Stmt::RuntimeError(env.arena.alloc(msg))
-        }
-        Err(LayoutProblem::Erroneous) => {
-            let msg = format!(
-                "Hit an erroneous type when creating a layout for {:?}",
-                proc_name
-            );
-            Stmt::RuntimeError(env.arena.alloc(msg))
         }
     }
 }
