@@ -2746,6 +2746,52 @@ mod test_parse {
     }
 
     #[test]
+    fn when_in_parens() {
+        let arena = Bump::new();
+
+        let branch1 = {
+            let newlines = &[Newline];
+            let pattern1 = Pattern::SpaceBefore(arena.alloc(Pattern::GlobalTag("Ok")), newlines);
+            let loc_pattern1 = Located::new(1, 1, 4, 6, pattern1);
+            let num_1 = Num("3");
+            let expr1 = Located::new(
+                2,
+                2,
+                8,
+                9,
+                Expr::SpaceBefore(arena.alloc(num_1), &[Newline]),
+            );
+            let loc_expr1 = expr1; // Located::new(1, 2, 9, 6, expr1);
+            &*arena.alloc(WhenBranch {
+                patterns: arena.alloc([loc_pattern1]),
+                value: loc_expr1,
+                guard: None,
+            })
+        };
+
+        let branches = &[branch1];
+        let var = Var {
+            module_name: "",
+            ident: "x",
+        };
+        let loc_cond = Located::new(0, 0, 6, 7, var);
+        let when = Expr::When(arena.alloc(loc_cond), branches);
+        let expected = Expr::ParensAround(&when);
+        let actual = parse_expr_with(
+            &arena,
+            indoc!(
+                r#"
+                (when x is
+                    Ok ->
+                        3)
+                "#
+            ),
+        );
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn when_with_records() {
         let arena = Bump::new();
         let newlines = &[Newline];

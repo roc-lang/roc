@@ -1753,12 +1753,12 @@ mod when {
             match space0_e(0, When::Space, When::IndentPattern).parse(arena, state) {
                 Err((MadeProgress, fail, _)) => Err((NoProgress, fail, initial)),
                 Err((NoProgress, fail, _)) => Err((NoProgress, fail, initial)),
-                Ok((_, spaces, state)) => {
+                Ok((progress, spaces, state)) => {
                     match pattern_indent_level {
                         Some(wanted) if state.column > wanted => {
                             // this branch is indented too much
                             Err((
-                                MadeProgress,
+                                progress,
                                 When::IndentPattern(state.line, state.column),
                                 state,
                             ))
