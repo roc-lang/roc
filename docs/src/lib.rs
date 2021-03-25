@@ -16,8 +16,6 @@ use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use std::path::{Path, PathBuf};
 
-mod assets;
-
 #[derive(Serialize)]
 pub struct Template {
     pub package_name: String,
@@ -62,12 +60,24 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
         fs::create_dir_all(build_dir).expect("TODO gracefully handle unable to create build dir");
     }
 
-    fs::write(build_dir.join("search.js"), assets::SEARCH_JS)
-        .expect("TODO gracefully handle failing to make the search javascript");
-    fs::write(build_dir.join("styles.css"), assets::STYLE_CSS)
-        .expect("TODO gracefully handle failing to make the stylesheet");
-    fs::write(build_dir.join("favicon.svg"), assets::FAVICON)
-        .expect("TODO gracefully handle failing to make the favicon");
+    // Copy over the assets
+    fs::write(
+        build_dir.join("search.js"),
+        include_str!("./static/search.js"),
+    )
+    .expect("TODO gracefully handle failing to make the search javascript");
+
+    fs::write(
+        build_dir.join("styles.css"),
+        include_str!("./static/styles.css"),
+    )
+    .expect("TODO gracefully handle failing to make the stylesheet");
+
+    fs::write(
+        build_dir.join("favicon.svg"),
+        include_str!("./static/favicon.svg"),
+    )
+    .expect("TODO gracefully handle failing to make the favicon");
 
     // Register handlebars template
     let mut handlebars = handlebars::Handlebars::new();
