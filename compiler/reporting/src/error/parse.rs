@@ -272,22 +272,31 @@ fn to_expr_report<'a>(
                         ])
                         .indent(4),
                 ])],
-                b"->" => vec![alloc.stack(vec![
-                    alloc.concat(vec![
-                        alloc.reflow("The arrow "),
-                        alloc.parser_suggestion("->"),
-                        alloc.reflow(" is only used to define cases in a "),
-                        alloc.keyword("when"),
-                        alloc.reflow("."),
-                    ]),
-                    alloc
-                        .vcat(vec![
-                            alloc.text("when color is"),
-                            alloc.text("Red -> \"stop!\"").indent(4),
-                            alloc.text("Green -> \"go!\"").indent(4),
-                        ])
-                        .indent(4),
-                ])],
+                b"->" => match context {
+                    Context::InNode(Node::WhenBranch, _row, _col, _) => {
+                        return to_unexpected_arrow_report(
+                            alloc, filename, *row, *col, start_row, start_col,
+                        );
+                    }
+                    _ => {
+                        vec![alloc.stack(vec![
+                            alloc.concat(vec![
+                                alloc.reflow("The arrow "),
+                                alloc.parser_suggestion("->"),
+                                alloc.reflow(" is only used to define cases in a "),
+                                alloc.keyword("when"),
+                                alloc.reflow("."),
+                            ]),
+                            alloc
+                                .vcat(vec![
+                                    alloc.text("when color is"),
+                                    alloc.text("Red -> \"stop!\"").indent(4),
+                                    alloc.text("Green -> \"go!\"").indent(4),
+                                ])
+                                .indent(4),
+                        ])]
+                    }
+                },
                 b"!" => vec![
                     alloc.reflow("The boolean negation operator "),
                     alloc.parser_suggestion("!"),
@@ -1411,31 +1420,7 @@ fn to_unfinished_when_report<'a>(
 ) -> Report<'a> {
     match what_is_next(alloc.src_lines, row, col) {
         Next::Token("->") => {
-            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-            let region = Region::from_rows_cols(row, col, row, col + 2);
-
-            let doc = alloc.stack(vec![
-                alloc.concat(vec![
-                    alloc.reflow(r"I am parsing a "),
-                    alloc.keyword("when"),
-                    alloc.reflow(r" expression right now, but this arrow is confusing me:"),
-                ]),
-                alloc.region_with_subregion(surroundings, region),
-                alloc.concat(vec![
-                    alloc.reflow(r"It makes sense to see arrows around here, "),
-                    alloc.reflow(r"so I suspect it is something earlier."),
-                    alloc.reflow(
-                        r"Maybe this pattern is indented a bit farther from the previous patterns?",
-                    ),
-                ]),
-                note_for_when_error(alloc),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "UNEXPECTED ARROW".to_string(),
-            }
+            to_unexpected_arrow_report(alloc, filename, row, col, start_row, start_col)
         }
 
         _ => {
@@ -1459,6 +1444,41 @@ fn to_unfinished_when_report<'a>(
                 title: "UNFINISHED WHEN".to_string(),
             }
         }
+    }
+}
+
+fn to_unexpected_arrow_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    row: Row,
+    col: Col,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+    let region = Region::from_rows_cols(row, col, row, col + 2);
+
+    let doc = alloc.stack(vec![
+        alloc.concat(vec![
+            alloc.reflow(r"I am parsing a "),
+            alloc.keyword("when"),
+            alloc.reflow(r" expression right now, but this arrow is confusing me:"),
+        ]),
+        alloc.region_with_subregion(surroundings, region),
+        alloc.concat(vec![
+            alloc.reflow(r"It makes sense to see arrows around here, "),
+            alloc.reflow(r"so I suspect it is something earlier."),
+            alloc.reflow(
+                r"Maybe this pattern is indented a bit farther from the previous patterns?",
+            ),
+        ]),
+        note_for_when_error(alloc),
+    ]);
+
+    Report {
+        filename,
+        doc,
+        title: "UNEXPECTED ARROW".to_string(),
     }
 }
 

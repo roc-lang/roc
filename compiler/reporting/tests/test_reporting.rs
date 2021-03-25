@@ -5177,26 +5177,17 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── UNFINISHED WHEN ─────────────────────────────────────────────────────────────
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
                 
-                I was partway through parsing a `when` expression, but I got stuck here:
+                I got stuck here:
                 
-                3│       _ -> 2
-                         ^
+                1│  when 4 is
+                2│      5 -> 2
+                              ^
                 
-                I was expecting to see a pattern next
-                
-                Note: Here is an example of a valid `when` expression for reference.
-                
-                    when List.first plants is
-                      Ok n ->
-                        n
-                
-                      Err _ ->
-                        200
-                
-                Notice the indentation. All patterns are aligned, and each branch is
-                indented a bit more than the corresponding pattern. That is important!
+                Whatever I am running into is confusing me al lot! Normally I can give
+                fairly specific hints, but something is really tripping me up this
+                time.
             "#
             ),
         )
@@ -5886,21 +5877,18 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── MISSING FINAL EXPRESSION ────────────────────────────────────────────────────
-
-                I am partway through parsing a definition's final expression, but I
-                got stuck here:
-
+                ── UNKNOWN OPERATOR ────────────────────────────────────────────────────────────
+                
+                This looks like an operator, but it's not one I recognize!
+                
                 1│  main = 5 -> 3
-                              ^
-
-                This definition is missing a final expression. A nested definition
-                must be followed by either another definition, or an expression
-
-                    x = 4
-                    y = 2
-
-                    x + y
+                             ^^
+                
+                The arrow -> is only used to define cases in a `when`.
+                
+                    when color is
+                        Red -> "stop!"
+                        Green -> "go!"
             "#
             ),
         )
