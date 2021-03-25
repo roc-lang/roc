@@ -57,7 +57,7 @@ pub fn gen_and_eval<'a>(
 
     let mut loaded = match loaded {
         Ok(v) => v,
-        Err(LoadingProblem::ParsingFailedReport(report)) => {
+        Err(LoadingProblem::FormattedReport(report)) => {
             return Ok(ReplOutput::Problems(vec![report]));
         }
         Err(e) => {

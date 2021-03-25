@@ -90,7 +90,11 @@ pub fn build_app<'a>() -> App<'a> {
 }
 
 pub fn docs(files: Vec<PathBuf>) {
-    roc_docs::generate(files, roc_builtins::std::standard_stdlib(), Path::new("./"))
+    roc_docs::generate(
+        files,
+        roc_builtins::std::standard_stdlib(),
+        Path::new("./generated-docs"),
+    )
 }
 
 pub fn build(target: &Triple, matches: &ArgMatches, run_after_build: bool) -> io::Result<()> {
@@ -147,10 +151,7 @@ pub fn build(target: &Triple, matches: &ArgMatches, run_after_build: bool) -> io
                     .expect("TODO gracefully handle block_on failing");
             }
         }
-        Err(LoadingProblem::ParsingFailedReport(report)) => {
-            print!("{}", report);
-        }
-        Err(LoadingProblem::NoPlatform(report)) => {
+        Err(LoadingProblem::FormattedReport(report)) => {
             print!("{}", report);
         }
         Err(other) => {

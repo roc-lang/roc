@@ -4,8 +4,9 @@
 
 use crate::ui::text::{
     caret_w_select::CaretWSelect,
+    lines,
     lines::{Lines, MutSelectableLines, SelectableLines},
-    selection::{validate_raw_sel, validate_selection, RawSelection, Selection},
+    selection::{validate_raw_sel, RawSelection, Selection},
     text_pos::TextPos,
 };
 use crate::ui::ui_error::{
@@ -19,23 +20,17 @@ use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
 use ropey::Rope;
 use snafu::ensure;
-use std::{
-    cmp::{max, min},
-    fmt,
-    fs::File,
-    io,
-    path::Path,
-};
+use std::{fmt, fs::File, io, path::Path};
 use winit::event::{VirtualKeyCode, VirtualKeyCode::*};
 
-pub struct BigSelectableText {
+pub struct BigTextArea {
     pub caret_w_select: CaretWSelect,
     text_rope: Rope,
     pub path_str: String,
     arena: Bump,
 }
 
-impl BigSelectableText {
+impl BigTextArea {
     fn check_bounds(&self, char_indx: usize) -> UIResult<()> {
         ensure!(
             char_indx <= self.text_rope.len_chars(),
@@ -71,17 +66,13 @@ impl BigSelectableText {
     }
 }
 
-fn validate_sel_opt(start_pos: TextPos, end_pos: TextPos) -> UIResult<Option<Selection>> {
-    Ok(Some(validate_selection(start_pos, end_pos)?))
-}
-
-impl Lines for BigSelectableText {
+impl Lines for BigTextArea {
     fn get_line(&self, line_nr: usize) -> UIResult<&str> {
         ensure!(
             line_nr < self.nr_of_lines(),
             OutOfBounds {
                 index: line_nr,
-                collection_name: "BigSelectableText",
+                collection_name: "BigTextArea",
                 len: self.nr_of_lines(),
             }
         );
@@ -121,9 +112,13 @@ impl Lines for BigSelectableText {
 
         lines
     }
+
+    fn last_char(&self, line_nr: usize) -> UIResult<Option<char>> {
+        Ok(self.get_line(line_nr)?.chars().last())
+    }
 }
 
-impl SelectableLines for BigSelectableText {
+impl SelectableLines for BigTextArea {
     fn get_caret(self) -> TextPos {
         self.caret_w_select.caret_pos
     }
@@ -133,347 +128,39 @@ impl SelectableLines for BigSelectableText {
     }
 
     fn move_caret_left(&mut self, modifiers: &Modifiers) -> UIResult<()> {
-        let old_selection_opt = self.get_selection();
-        let old_caret_pos = self.caret_w_select.caret_pos;
-        let old_line_nr = old_caret_pos.line;
-        let old_col_nr = old_caret_pos.column;
-
-        let shift_pressed = modifiers.shift;
-
-        let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
-            match old_selection_opt {
-                Some(old_selection) => {
-                    (old_selection.start_pos.line, old_selection.start_pos.column)
-                }
-                None => unreachable!(),
-            }
-        } else if old_col_nr == 0 {
-            if old_line_nr == 0 {
-                (0, 0)
-            } else {
-                let curr_line_len = self.line_len(old_line_nr - 1)?;
-
-                (old_line_nr - 1, curr_line_len - 1)
-            }
-        } else {
-            (old_line_nr, old_col_nr - 1)
-        };
-
-        let new_caret_pos = TextPos {
-            line: line_nr,
-            column: col_nr,
-        };
-
-        let new_selection_opt = if shift_pressed {
-            if let Some(old_selection) = old_selection_opt {
-                if old_caret_pos >= old_selection.end_pos {
-                    if new_caret_pos == old_selection.start_pos {
-                        None
-                    } else {
-                        validate_sel_opt(old_selection.start_pos, new_caret_pos)?
-                    }
-                } else {
-                    validate_sel_opt(
-                        TextPos {
-                            line: line_nr,
-                            column: col_nr,
-                        },
-                        old_selection.end_pos,
-                    )?
-                }
-            } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
-                validate_sel_opt(
-                    TextPos {
-                        line: line_nr,
-                        column: col_nr,
-                    },
-                    TextPos {
-                        line: old_line_nr,
-                        column: old_col_nr,
-                    },
-                )?
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        self.caret_w_select = CaretWSelect::new(new_caret_pos, new_selection_opt);
+        self.caret_w_select = lines::move_caret_left(self, self.caret_w_select, modifiers)?;
 
         Ok(())
     }
 
     fn move_caret_right(&mut self, modifiers: &Modifiers) -> UIResult<()> {
-        let old_selection_opt = self.get_selection();
-        let old_caret_pos = self.caret_w_select.caret_pos;
-        let old_line_nr = old_caret_pos.line;
-        let old_col_nr = old_caret_pos.column;
-
-        let shift_pressed = modifiers.shift;
-
-        let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
-            match old_selection_opt {
-                Some(old_selection) => (old_selection.end_pos.line, old_selection.end_pos.column),
-                None => unreachable!(),
-            }
-        } else {
-            let curr_line = self.get_line(old_line_nr)?;
-
-            if let Some(last_char) = curr_line.chars().last() {
-                if is_newline(&last_char) {
-                    if old_col_nr + 1 > curr_line.len() - 1 {
-                        (old_line_nr + 1, 0)
-                    } else {
-                        (old_line_nr, old_col_nr + 1)
-                    }
-                } else if old_col_nr < curr_line.len() {
-                    (old_line_nr, old_col_nr + 1)
-                } else {
-                    (old_line_nr, old_col_nr)
-                }
-            } else {
-                (old_line_nr, old_col_nr)
-            }
-        };
-
-        let new_caret_pos = TextPos {
-            line: line_nr,
-            column: col_nr,
-        };
-
-        let new_selection_opt = if shift_pressed {
-            if let Some(old_selection) = old_selection_opt {
-                if old_caret_pos <= old_selection.start_pos {
-                    if new_caret_pos == old_selection.end_pos {
-                        None
-                    } else {
-                        validate_sel_opt(new_caret_pos, old_selection.end_pos)?
-                    }
-                } else {
-                    validate_sel_opt(
-                        old_selection.start_pos,
-                        TextPos {
-                            line: line_nr,
-                            column: col_nr,
-                        },
-                    )?
-                }
-            } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
-                validate_sel_opt(
-                    TextPos {
-                        line: old_line_nr,
-                        column: old_col_nr,
-                    },
-                    TextPos {
-                        line: line_nr,
-                        column: col_nr,
-                    },
-                )?
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        self.caret_w_select = CaretWSelect::new(new_caret_pos, new_selection_opt);
+        self.caret_w_select = lines::move_caret_right(self, self.caret_w_select, modifiers)?;
 
         Ok(())
     }
 
     fn move_caret_up(&mut self, modifiers: &Modifiers) -> UIResult<()> {
-        let old_selection_opt = self.get_selection();
-        let old_caret_pos = self.caret_w_select.caret_pos;
-        let old_line_nr = old_caret_pos.line;
-        let old_col_nr = old_caret_pos.column;
-
-        let shift_pressed = modifiers.shift;
-
-        let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
-            match old_selection_opt {
-                Some(old_selection) => {
-                    (old_selection.start_pos.line, old_selection.start_pos.column)
-                }
-                None => unreachable!(),
-            }
-        } else if old_line_nr == 0 {
-            (old_line_nr, 0)
-        } else {
-            let prev_line_len = self.line_len(old_line_nr - 1)?;
-
-            if prev_line_len <= old_col_nr {
-                (old_line_nr - 1, prev_line_len - 1)
-            } else {
-                (old_line_nr - 1, old_col_nr)
-            }
-        };
-
-        let new_caret_pos = TextPos {
-            line: line_nr,
-            column: col_nr,
-        };
-
-        let new_selection_opt = if shift_pressed {
-            if let Some(old_selection) = old_selection_opt {
-                if old_selection.end_pos <= old_caret_pos {
-                    if new_caret_pos == old_selection.start_pos {
-                        None
-                    } else {
-                        validate_sel_opt(
-                            min(old_selection.start_pos, new_caret_pos),
-                            max(old_selection.start_pos, new_caret_pos),
-                        )?
-                    }
-                } else {
-                    validate_sel_opt(new_caret_pos, old_selection.end_pos)?
-                }
-            } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
-                validate_sel_opt(
-                    min(old_caret_pos, new_caret_pos),
-                    max(old_caret_pos, new_caret_pos),
-                )?
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        self.caret_w_select = CaretWSelect::new(new_caret_pos, new_selection_opt);
+        self.caret_w_select = lines::move_caret_up(self, self.caret_w_select, modifiers)?;
 
         Ok(())
     }
 
     fn move_caret_down(&mut self, modifiers: &Modifiers) -> UIResult<()> {
-        let old_selection_opt = self.get_selection();
-        let old_caret_pos = self.caret_w_select.caret_pos;
-        let old_line_nr = old_caret_pos.line;
-        let old_col_nr = old_caret_pos.column;
-
-        let shift_pressed = modifiers.shift;
-
-        let (line_nr, col_nr) = if old_selection_opt.is_some() && !shift_pressed {
-            match old_selection_opt {
-                Some(old_selection) => (old_selection.end_pos.line, old_selection.end_pos.column),
-                None => unreachable!(),
-            }
-        } else if old_line_nr + 1 >= self.nr_of_lines() {
-            let curr_line_len = self.line_len(old_line_nr)?;
-
-            (old_line_nr, curr_line_len)
-        } else {
-            let next_line = self.get_line(old_line_nr + 1)?;
-
-            if next_line.len() <= old_col_nr {
-                if let Some(last_char) = next_line.chars().last() {
-                    if is_newline(&last_char) {
-                        (old_line_nr + 1, next_line.len() - 1)
-                    } else {
-                        (old_line_nr + 1, next_line.len())
-                    }
-                } else {
-                    (old_line_nr + 1, 0)
-                }
-            } else {
-                (old_line_nr + 1, old_col_nr)
-            }
-        };
-
-        let new_caret_pos = TextPos {
-            line: line_nr,
-            column: col_nr,
-        };
-
-        let new_selection_opt = if shift_pressed {
-            if let Some(old_selection) = old_selection_opt {
-                if old_caret_pos <= old_selection.start_pos {
-                    if new_caret_pos == old_selection.end_pos {
-                        None
-                    } else {
-                        validate_sel_opt(
-                            min(old_selection.end_pos, new_caret_pos),
-                            max(old_selection.end_pos, new_caret_pos),
-                        )?
-                    }
-                } else {
-                    validate_sel_opt(old_selection.start_pos, new_caret_pos)?
-                }
-            } else if !(old_line_nr == line_nr && old_col_nr == col_nr) {
-                validate_sel_opt(
-                    min(old_caret_pos, new_caret_pos),
-                    max(old_caret_pos, new_caret_pos),
-                )?
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        self.caret_w_select = CaretWSelect::new(new_caret_pos, new_selection_opt);
+        self.caret_w_select = lines::move_caret_down(self, self.caret_w_select, modifiers)?;
 
         Ok(())
     }
 
     fn move_caret_home(&mut self, modifiers: &Modifiers) -> UIResult<()> {
-        let curr_line_nr = self.caret_w_select.caret_pos.line;
-        let old_col_nr = self.caret_w_select.caret_pos.column;
+        self.caret_w_select = lines::move_caret_home(self, self.caret_w_select, modifiers)?;
 
-        let curr_line_str = self.get_line(curr_line_nr)?;
-        let line_char_iter = curr_line_str.chars();
-
-        let mut first_no_space_char_col = 0;
-        let mut non_space_found = false;
-
-        for c in line_char_iter {
-            if !c.is_whitespace() {
-                non_space_found = true;
-                break;
-            } else {
-                first_no_space_char_col += 1;
-            }
-        }
-
-        if !non_space_found {
-            first_no_space_char_col = 0;
-        }
-
-        let new_col_nr = if first_no_space_char_col == old_col_nr {
-            0
-        } else {
-            first_no_space_char_col
-        };
-
-        self.caret_w_select.move_caret_w_mods(
-            TextPos {
-                line: curr_line_nr,
-                column: new_col_nr,
-            },
-            modifiers,
-        )
+        Ok(())
     }
 
     fn move_caret_end(&mut self, modifiers: &Modifiers) -> UIResult<()> {
-        let curr_line_nr = self.caret_w_select.caret_pos.line;
-        let curr_line_len = self.line_len(curr_line_nr)?;
+        self.caret_w_select = lines::move_caret_end(self, self.caret_w_select, modifiers)?;
 
-        let new_col = if let Some(last_char) = self.last_char(curr_line_nr)? {
-            if is_newline(&last_char) {
-                curr_line_len - 1
-            } else {
-                curr_line_len
-            }
-        } else {
-            0
-        };
-
-        let new_pos = TextPos {
-            line: curr_line_nr,
-            column: new_col,
-        };
-
-        self.caret_w_select.move_caret_w_mods(new_pos, modifiers)
+        Ok(())
     }
 
     fn get_selection(&self) -> Option<Selection> {
@@ -484,7 +171,7 @@ impl SelectableLines for BigSelectableText {
         self.get_selection().is_some()
     }
 
-    fn get_selected_str(&self) -> UIResult<Option<&str>> {
+    fn get_selected_str(&self) -> UIResult<Option<String>> {
         if let Some(val_sel) = self.caret_w_select.selection_opt {
             let (start_char_indx, end_char_indx) = self.sel_to_tup(val_sel);
 
@@ -493,12 +180,9 @@ impl SelectableLines for BigSelectableText {
             let rope_slice = self.text_rope.slice(start_char_indx..end_char_indx);
 
             if let Some(line_str_ref) = rope_slice.as_str() {
-                Ok(Some(line_str_ref))
+                Ok(Some(line_str_ref.to_string()))
             } else {
-                // happens very rarely
-                let line_str = rope_slice.chunks().collect::<String>();
-                let arena_str_ref = self.arena.alloc(line_str);
-                Ok(Some(arena_str_ref))
+                Ok(Some(rope_slice.chunks().collect::<String>()))
             }
         } else {
             Ok(None)
@@ -511,13 +195,17 @@ impl SelectableLines for BigSelectableText {
         Ok(())
     }
 
+    fn set_caret_w_sel(&mut self, caret_w_sel: CaretWSelect) {
+        self.caret_w_select = caret_w_sel;
+    }
+
     fn set_sel_none(&mut self) {
         self.caret_w_select.selection_opt = None;
     }
 
     fn select_all(&mut self) -> UIResult<()> {
         if self.nr_of_chars() > 0 {
-            let last_pos = self.last_text_pos();
+            let last_pos = self.last_text_pos()?;
 
             self.set_raw_sel(RawSelection {
                 start_pos: TextPos { line: 0, column: 0 },
@@ -530,12 +218,8 @@ impl SelectableLines for BigSelectableText {
         Ok(())
     }
 
-    fn last_text_pos(&self) -> TextPos {
-        self.char_indx_to_pos(self.nr_of_chars())
-    }
-
-    fn last_char(&self, line_nr: usize) -> UIResult<Option<char>> {
-        Ok(self.get_line(line_nr)?.chars().last())
+    fn last_text_pos(&self) -> UIResult<TextPos> {
+        Ok(self.char_indx_to_pos(self.nr_of_chars()))
     }
 
     fn handle_key_down(
@@ -563,7 +247,7 @@ impl SelectableLines for BigSelectableText {
     }
 }
 
-impl MutSelectableLines for BigSelectableText {
+impl MutSelectableLines for BigTextArea {
     fn insert_char(&mut self, new_char: &char) -> UIResult<()> {
         if self.is_selection_active() {
             self.del_selection()?;
@@ -658,7 +342,7 @@ impl MutSelectableLines for BigSelectableText {
     }
 }
 
-impl Default for BigSelectableText {
+impl Default for BigTextArea {
     fn default() -> Self {
         let caret_w_select = CaretWSelect::default();
         let text_rope = Rope::from_str("");
@@ -674,11 +358,11 @@ impl Default for BigSelectableText {
     }
 }
 
-pub fn from_path(path: &Path) -> UIResult<BigSelectableText> {
+pub fn from_path(path: &Path) -> UIResult<BigTextArea> {
     let text_rope = rope_from_path(path)?;
     let path_str = path_to_string(path);
 
-    Ok(BigSelectableText {
+    Ok(BigTextArea {
         text_rope,
         path_str,
         ..Default::default()
@@ -687,10 +371,10 @@ pub fn from_path(path: &Path) -> UIResult<BigSelectableText> {
 
 #[allow(dead_code)]
 // used by tests but will also be used in the future
-pub fn from_str(text: &str) -> BigSelectableText {
+pub fn from_str(text: &str) -> BigTextArea {
     let text_rope = Rope::from_str(text);
 
-    BigSelectableText {
+    BigTextArea {
         text_rope,
         ..Default::default()
     }
@@ -723,9 +407,9 @@ fn rope_from_path(path: &Path) -> UIResult<Rope> {
 }
 
 // need to explicitly omit arena
-impl fmt::Debug for BigSelectableText {
+impl fmt::Debug for BigTextArea {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BigSelectableText")
+        f.debug_struct("BigTextArea")
             .field("caret_w_select", &self.caret_w_select)
             .field("text_rope", &self.text_rope)
             .field("path_str", &self.path_str)
@@ -736,8 +420,8 @@ impl fmt::Debug for BigSelectableText {
 #[cfg(test)]
 pub mod test_big_sel_text {
     use crate::ui::text::{
-        big_selectable_text::from_str,
-        big_selectable_text::BigSelectableText,
+        big_text_area::from_str,
+        big_text_area::BigTextArea,
         caret_w_select::CaretWSelect,
         lines::{Lines, MutSelectableLines, SelectableLines},
         selection::validate_selection,
@@ -843,7 +527,7 @@ pub mod test_big_sel_text {
         Ok(elt_ref)
     }
 
-    pub fn big_text_from_dsl_str(lines: &[String]) -> BigSelectableText {
+    pub fn big_text_from_dsl_str(lines: &[String]) -> BigTextArea {
         from_str(
             &lines
                 .iter()
@@ -853,7 +537,7 @@ pub mod test_big_sel_text {
         )
     }
 
-    pub fn all_lines_vec(big_sel_text: &BigSelectableText) -> Vec<String> {
+    pub fn all_lines_vec(big_sel_text: &BigTextArea) -> Vec<String> {
         let mut lines: Vec<String> = Vec::new();
 
         for i in 0..big_sel_text.nr_of_lines() {
@@ -963,7 +647,7 @@ pub mod test_big_sel_text {
         }
     }
 
-    pub fn gen_big_text(lines: &[&str]) -> Result<BigSelectableText, String> {
+    pub fn gen_big_text(lines: &[&str]) -> Result<BigTextArea, String> {
         let lines_string_slice: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
         let mut big_text = big_text_from_dsl_str(&lines_string_slice);
         let caret_w_select = convert_dsl_to_selection(&lines_string_slice).unwrap();
@@ -1141,7 +825,7 @@ pub mod test_big_sel_text {
         Ok(())
     }
 
-    type MoveCaretFun = fn(&mut BigSelectableText, &Modifiers) -> UIResult<()>;
+    type MoveCaretFun = fn(&mut BigTextArea, &Modifiers) -> UIResult<()>;
 
     // Convert nice string representations and compare results
     fn assert_move(
@@ -1720,7 +1404,7 @@ pub mod test_big_sel_text {
 
     #[test]
     fn move_home() -> Result<(), String> {
-        let move_caret_home = BigSelectableText::move_caret_home;
+        let move_caret_home = BigTextArea::move_caret_home;
         assert_move(&["|"], &["|"], &no_mods(), move_caret_home)?;
         assert_move(&["a|"], &["|a"], &no_mods(), move_caret_home)?;
         assert_move(&["|a"], &["|a"], &no_mods(), move_caret_home)?;
@@ -1834,7 +1518,7 @@ pub mod test_big_sel_text {
 
     #[test]
     fn move_end() -> Result<(), String> {
-        let move_caret_end = BigSelectableText::move_caret_end;
+        let move_caret_end = BigTextArea::move_caret_end;
         assert_move(&["|"], &["|"], &no_mods(), move_caret_end)?;
         assert_move(&["|a"], &["a|"], &no_mods(), move_caret_end)?;
         assert_move(&["a|"], &["a|"], &no_mods(), move_caret_end)?;
@@ -2467,7 +2151,7 @@ pub mod test_big_sel_text {
 
     #[test]
     fn start_selection_home() -> Result<(), String> {
-        let move_caret_home = BigSelectableText::move_caret_home;
+        let move_caret_home = BigTextArea::move_caret_home;
         assert_move(&["|"], &["|"], &shift_pressed(), move_caret_home)?;
         assert_move(&["|a"], &["|a"], &shift_pressed(), move_caret_home)?;
         assert_move(&["a|"], &["|[a]"], &shift_pressed(), move_caret_home)?;
@@ -2587,7 +2271,7 @@ pub mod test_big_sel_text {
 
     #[test]
     fn start_selection_end() -> Result<(), String> {
-        let move_caret_end = BigSelectableText::move_caret_end;
+        let move_caret_end = BigTextArea::move_caret_end;
         assert_move(&["|"], &["|"], &shift_pressed(), move_caret_end)?;
         assert_move(&["|a"], &["[a]|"], &shift_pressed(), move_caret_end)?;
         assert_move(&["a|"], &["a|"], &shift_pressed(), move_caret_end)?;
@@ -3253,7 +2937,7 @@ pub mod test_big_sel_text {
 
     #[test]
     fn end_selection_home() -> Result<(), String> {
-        let move_caret_home = BigSelectableText::move_caret_home;
+        let move_caret_home = BigTextArea::move_caret_home;
         assert_move(&["[a]|"], &["|a"], &no_mods(), move_caret_home)?;
         assert_move(&["|[a]"], &["|a"], &no_mods(), move_caret_home)?;
         assert_move(&[" |[a]"], &["| a"], &no_mods(), move_caret_home)?;
@@ -3318,7 +3002,7 @@ pub mod test_big_sel_text {
 
     #[test]
     fn end_selection_end() -> Result<(), String> {
-        let move_caret_end = BigSelectableText::move_caret_end;
+        let move_caret_end = BigTextArea::move_caret_end;
         assert_move(&["|[a]"], &["a|"], &no_mods(), move_caret_end)?;
         assert_move(&["[a]|"], &["a|"], &no_mods(), move_caret_end)?;
         assert_move(&[" a|[ ]"], &[" a |"], &no_mods(), move_caret_end)?;

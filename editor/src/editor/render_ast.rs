@@ -1,10 +1,8 @@
-use super::markup::attribute::{Attribute, Attributes};
 use super::markup::nodes::{MarkupNode, BLANK_PLACEHOLDER};
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::{ed_error::EdResult, theme::EdTheme, util::map_get};
 use crate::graphics::primitives::rect::Rect;
 use crate::graphics::primitives::text as gr_text;
-use crate::ui::text::caret_w_select::make_caret_rect;
 use cgmath::Vector2;
 use winit::dpi::PhysicalSize;
 
@@ -67,40 +65,6 @@ fn markup_to_wgpu<'a>(
     Ok((wgpu_texts, rects))
 }
 
-fn draw_attributes(
-    attributes: &Attributes,
-    txt_row_col: &(usize, usize),
-    code_style: &CodeStyle,
-) -> Vec<Rect> {
-    let char_width = code_style.glyph_dim_rect.width;
-
-    attributes
-        .all
-        .iter()
-        .map(|attr| match attr {
-            Attribute::Caret { caret } => {
-                let caret_col = caret.offset_col as f32;
-
-                let top_left_x = code_style.txt_coords.x
-                    + (txt_row_col.1 as f32) * char_width
-                    + caret_col * char_width;
-
-                let top_left_y = code_style.txt_coords.y
-                    + (txt_row_col.0 as f32) * char_width
-                    + char_width * 0.2;
-
-                make_caret_rect(
-                    top_left_x,
-                    top_left_y,
-                    &code_style.glyph_dim_rect,
-                    &code_style.ed_theme.ui_theme,
-                )
-            }
-            rest => todo!("implement draw_attributes for {:?}", rest),
-        })
-        .collect()
-}
-
 // TODO use text_row
 fn markup_to_wgpu_helper<'a>(
     markup_node: &'a MarkupNode,
@@ -132,7 +96,7 @@ fn markup_to_wgpu_helper<'a>(
             content,
             ast_node_id: _,
             syn_high_style,
-            attributes,
+            attributes: _,
             parent_id_opt: _,
         } => {
             let highlight_color = map_get(&code_style.ed_theme.syntax_high_map, &syn_high_style)?;
@@ -141,13 +105,12 @@ fn markup_to_wgpu_helper<'a>(
                 .with_color(colors::to_slice(*highlight_color))
                 .with_scale(code_style.font_size);
 
-            rects.extend(draw_attributes(attributes, txt_row_col, code_style));
             txt_row_col.1 += content.len();
             wgpu_texts.push(glyph_text);
         }
         MarkupNode::Blank {
             ast_node_id: _,
-            attributes,
+            attributes: _,
             syn_high_style,
             parent_id_opt: _,
         } => {
@@ -170,8 +133,6 @@ fn markup_to_wgpu_helper<'a>(
                 color: *highlight_color,
             };
             rects.push(hole_rect);
-
-            rects.extend(draw_attributes(attributes, txt_row_col, code_style));
 
             txt_row_col.1 += BLANK_PLACEHOLDER.len();
             wgpu_texts.push(glyph_text);
