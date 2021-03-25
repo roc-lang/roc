@@ -1,3 +1,4 @@
+mod code_lines;
 mod config;
 mod ed_error;
 mod keyboard_input;

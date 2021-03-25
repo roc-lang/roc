@@ -74,7 +74,7 @@ pub fn helper<'a>(
 
     let mut loaded = match loaded {
         Ok(x) => x,
-        Err(roc_load::file::LoadingProblem::ParsingFailedReport(report)) => {
+        Err(roc_load::file::LoadingProblem::FormattedReport(report)) => {
             println!("{}", report);
             panic!();
         }
