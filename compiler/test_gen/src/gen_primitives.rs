@@ -2276,22 +2276,3 @@ fn function_malformed_pattern() {
         i64
     );
 }
-
-#[test]
-#[should_panic(
-    expected = "Shadowing { original_region: |L 3-3, C 4-5|, shadow: |L 5-5, C 6-7| Ident(\\\"x\\\") }"
-)]
-fn call_invalid_layout() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                f : I64 -> I64
-                f = \x -> x
-
-                f {}
-            "#
-        ),
-        3,
-        i64
-    );
-}
