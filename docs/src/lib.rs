@@ -56,6 +56,29 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
         modules: files_docs,
     };
 
+    if !build_dir.exists() {
+        fs::create_dir_all(build_dir).expect("TODO gracefully handle unable to create build dir");
+    }
+
+    // Copy over the assets
+    fs::write(
+        build_dir.join("search.js"),
+        include_str!("./static/search.js"),
+    )
+    .expect("TODO gracefully handle failing to make the search javascript");
+
+    fs::write(
+        build_dir.join("styles.css"),
+        include_str!("./static/styles.css"),
+    )
+    .expect("TODO gracefully handle failing to make the stylesheet");
+
+    fs::write(
+        build_dir.join("favicon.svg"),
+        include_str!("./static/favicon.svg"),
+    )
+    .expect("TODO gracefully handle failing to make the favicon");
+
     // Register handlebars template
     let mut handlebars = handlebars::Handlebars::new();
     handlebars
@@ -75,7 +98,7 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
             .expect("TODO gracefully handle writing file failing");
     }
 
-    println!("Docs generated at {}", build_dir.display());
+    println!("🎉 Docs generated in {}", build_dir.display());
 }
 
 pub fn files_to_documentations(
