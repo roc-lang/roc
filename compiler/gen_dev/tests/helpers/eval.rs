@@ -5,6 +5,7 @@ use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
 use tempfile::tempdir;
 
+#[allow(dead_code)]
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
 
@@ -18,6 +19,7 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 
+#[allow(dead_code)]
 pub fn helper<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
