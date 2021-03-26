@@ -20,10 +20,12 @@ pub fn slice_get<T>(index: usize, slice: &[T]) -> UIResult<&<usize as SliceIndex
 }
 
 pub fn slice_get_mut<T>(index: usize, slice: &mut [T]) -> UIResult<&mut <usize as SliceIndex<[T]>>::Output> {
+    let slice_len = slice.len();
+    
     let elt_ref = slice.get_mut(index).context(OutOfBounds {
         index,
         collection_name: "Slice",
-        len: slice.len(),
+        len: slice_len,
     })?;
 
     Ok(elt_ref)

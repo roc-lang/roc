@@ -1,3 +1,5 @@
+use roc_types::subs::Variable;
+use crate::lang::pool::{PoolVec, PoolStr, NodeId};
 use crate::editor::util::index_of;
 use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::slow_pool::SlowPool;
@@ -50,7 +52,7 @@ impl<'a> EdModel<'a> {
     pub fn build_node_map_from_markup(markup_root_id: MarkNodeId, markup_node_pool: &SlowPool) -> EdResult<GridNodeMap> {
         let mut grid_node_map = GridNodeMap::new();
 
-        EdModel::build_grid_node_map(markup_root_id, &mut grid_node_map, markup_node_pool);
+        EdModel::build_grid_node_map(markup_root_id, &mut grid_node_map, markup_node_pool)?;
 
         Ok(grid_node_map)
     }
@@ -65,7 +67,7 @@ impl<'a> EdModel<'a> {
         } else {
             let node_content_str = node.get_content()?;
 
-            grid_node_map.add_to_line(0, node_content_str.len(), node_id);
+            grid_node_map.add_to_line(0, node_content_str.len(), node_id)?;
         }
 
         Ok(())
@@ -99,7 +101,7 @@ impl<'a> EdModel<'a> {
 }
 
 impl<'a> SelectableLines for EdModel<'a> {
-    fn get_caret(self) -> TextPos {
+    fn get_caret(&self) -> TextPos {
         self.caret_w_select_vec.first().0.caret_pos
     }
 
@@ -299,6 +301,19 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                 for _ in 0..nodes::LEFT_ACCOLADE.len() {
                     ed_model.simple_move_carets_right();
                 }
+
+                // update mapping from possible caret positions to MarkNodeId's
+                ed_model.grid_node_map.add_to_line(
+                    old_caret_pos.line,
+                    nodes::LEFT_ACCOLADE.len(),
+                    left_bracket_node_id
+                )?;
+
+                ed_model.grid_node_map.add_to_line(
+                    old_caret_pos.line,
+                    nodes::RIGHT_ACCOLADE.len(),
+                    right_bracket_node_id
+                )?;
             }
         }
         '\u{8}' | '\u{7f}' => {
@@ -326,13 +341,68 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
             let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
             let parent_id_opt = curr_mark_node.get_parent_id_opt();
             let ast_node_id = curr_mark_node.get_ast_node_id();
+            let pool = &mut ed_model.module.env.pool;
+            let ast_node_ref = pool.get_mut(ast_node_id);
             
             if let Some(parent_id) = parent_id_opt {
                 let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
 
-                let new_child_index = index_of(curr_mark_node_id, &sibling_ids);
+                let new_child_index = index_of(curr_mark_node_id, &sibling_ids)? + 1;
 
-                // TODO match, create new MarkupNode + ASTNode
+                match ast_node_ref {
+                    Expr2::EmptyRecord => {
+                        if curr_mark_node.get_content()? == nodes::LEFT_ACCOLADE {
+                            let record_field_node = MarkupNode::Text {
+                                content: ch.to_string(),
+                                ast_node_id,
+                                syn_high_style: HighlightStyle::RecordField,
+                                attributes: Attributes::new(),
+                                parent_id_opt: Some(parent_id),
+                            };
+
+                            let record_field_node_id = ed_model.markup_node_pool.add(record_field_node);
+
+                            let parent = ed_model.markup_node_pool.get_mut(parent_id);
+                            parent.add_child_at_index(new_child_index, record_field_node_id)?;
+
+                            ed_model.simple_move_carets_right();
+
+                            let field_str = &ch.to_string();
+                            let record_var = ed_model.module.env.var_store.fresh();
+                            let field_name = PoolStr::new(field_str, &mut ed_model.module.env.pool);
+                            let field_var = ed_model.module.env.var_store.fresh();
+                            //TODO actually check if field_str belongs to a previously defined variable
+                            let field_val = Expr2::InvalidLookup(
+                                                PoolStr::new(field_str, ed_model.module.env.pool)
+                                            );
+                            let field_val_id = ed_model.module.env.pool.add(field_val);
+                            let first_field = (field_name, field_var, field_val_id);
+                            
+                            let fields = PoolVec::new(
+                                vec![first_field].into_iter(),
+                                &mut ed_model.module.env.pool,
+                            );
+
+                            let new_ast_node =
+                                Expr2::Record {
+                                    record_var,
+                                    fields,
+                                };
+
+                            ed_model.module.env.pool.set(ast_node_id, new_ast_node);
+                        }
+                    },
+                    Expr2::Record { record_var:_, fields } => {
+                        if new_child_index == 3 {
+                            let first_field = fields.iter_mut(pool).take(1);
+
+                            for field in first_field {
+
+                            }
+                        }
+                    },
+                    _ => (),
+                }
             }
         }
     }

@@ -16,7 +16,7 @@ pub fn map_get<'a, K: ::std::fmt::Debug + std::hash::Hash + std::cmp::Eq, V>(
 }
 
 pub fn index_of<T: ::std::fmt::Debug + std::cmp::Eq>(elt:T, slice: &[T]) -> EdResult<usize> {
-    let index = slice.iter().position(|&slice_elt| slice_elt == elt).with_context(
+    let index = slice.iter().position(|slice_elt| *slice_elt == elt).with_context(
         || {
             let elt_str = format!("{:?}", elt);
             let collection_str = format!("{:?}", slice);

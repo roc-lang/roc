@@ -30,7 +30,7 @@ pub trait Lines {
 }
 
 pub trait SelectableLines {
-    fn get_caret(self) -> TextPos;
+    fn get_caret(&self) -> TextPos;
 
     fn set_caret(&mut self, caret_pos: TextPos);
 

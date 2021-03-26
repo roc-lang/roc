@@ -99,6 +99,7 @@ pub enum Expr2 {
     Str(PoolStr), // 8B
     // Lookups
     Var(Symbol), // 8B
+    InvalidLookup(PoolStr), // 8B
 
     List {
         list_var: Variable,    // 4B - required for uniqueness of the list

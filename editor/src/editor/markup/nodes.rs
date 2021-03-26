@@ -1,3 +1,4 @@
+use crate::editor::ed_error::NestedNodeRequired;
 use crate::editor::ed_error::GetContentOnNestedNode;
 use crate::editor::ed_error::EdResult;
 use super::attribute::Attributes;
@@ -52,9 +53,9 @@ impl MarkupNode {
 
     pub fn get_children_ids(&self) -> Vec<MarkNodeId> {
         match self {
-            MarkupNode::Nested { children_ids, .. } => *children_ids,
-            MarkupNode::Text { parent_id_opt, .. } => vec![],
-            MarkupNode::Blank { parent_id_opt, .. } => vec![],
+            MarkupNode::Nested { children_ids, .. } => children_ids.to_vec(),
+            MarkupNode::Text { .. } => vec![],
+            MarkupNode::Blank { .. } => vec![],
         }
     }
 
@@ -82,6 +83,28 @@ impl MarkupNode {
                 ..
             } => Ok(BLANK_PLACEHOLDER.to_owned()),
         }
+    }
+
+    pub fn add_child_at_index(&mut self, index: usize, child_id: MarkNodeId) -> EdResult<()> {
+        if let MarkupNode::Nested { children_ids, .. } = self {
+            children_ids.splice(index..index, vec![child_id]);
+        } else {
+            NestedNodeRequired {
+                node_type: self.node_type_as_string(),
+            }.fail()?;
+        }
+
+        Ok(())
+    }
+
+    pub fn node_type_as_string(&self) -> String {
+        let type_str = match self {
+            MarkupNode::Nested { .. } => "Nested",
+            MarkupNode::Text { .. } => "Text",
+            MarkupNode::Blank { .. } => "Blank",
+        };
+
+        type_str.to_owned()
     }
 
     pub fn is_blank(&self) -> bool {

@@ -54,6 +54,12 @@ pub enum EdError {
         backtrace: Backtrace,
     },
 
+    #[snafu(display("NestedNodeRequired: required a Nested node at this position, node was a {}.", node_type))]
+    NestedNodeRequired {
+        node_type: String,
+        backtrace: Backtrace,
+    },
+
     #[snafu(display("NestedNodeWithoutChildren: tried to retrieve child from Nested MarkupNode with id {} but it had no children.", node_id))]
     NestedNodeWithoutChildren {
         node_id: MarkNodeId,

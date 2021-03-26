@@ -1,3 +1,4 @@
+use crate::lang::pool::NodeId;
 use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::code_lines::CodeLines;
 use crate::editor::slow_pool::{MarkNodeId, SlowPool};
@@ -44,8 +45,8 @@ pub fn init_model<'a>(
     code_arena: &'a Bump,
 ) -> EdResult<EdModel<'a>> {
     let mut module = EdModule::new(&code_str, env, code_arena)?;
-    // TODO fix moving issue and insert module.ast_root into pool
-    let ast_root_id = module.env.pool.add(Expr2::Blank);
+
+    let ast_root_id = module.ast_root_id;
     let mut markup_node_pool = SlowPool::new();
 
     let markup_root_id = if code_str.is_empty() {
@@ -60,10 +61,12 @@ pub fn init_model<'a>(
 
         markup_node_pool.add(blank_root)
     } else {
+        let ast_root = &module.env.pool.get(ast_root_id);
+
         let temp_markup_root_id = expr2_to_markup(
             code_arena,
             &mut module.env,
-            &module.ast_root,
+            ast_root,
             &mut markup_node_pool,
         );
         set_parent_for_all(temp_markup_root_id, &mut markup_node_pool);
@@ -91,7 +94,7 @@ pub fn init_model<'a>(
 #[derive(Debug)]
 pub struct EdModule<'a> {
     pub env: Env<'a>,
-    pub ast_root: Expr2,
+    pub ast_root_id: NodeId<Expr2>,
 }
 
 impl<'a> EdModule<'a> {
@@ -104,18 +107,27 @@ impl<'a> EdModule<'a> {
             let expr2_result = str_to_expr2(&ast_arena, &code_str, &mut env, &mut scope, region);
 
             match expr2_result {
-                Ok((expr2, _output)) => Ok(EdModule {
-                    env,
-                    ast_root: expr2,
-                }),
+                Ok((expr2, _output)) => {
+
+                    let ast_root_id = env.pool.add(expr2);
+                    
+                    Ok(
+                        EdModule {
+                            env,
+                            ast_root_id,
+                        }
+                    )
+                },
                 Err(err) => Err(ParseError {
                     syntax_err: format!("{:?}", err),
                 }),
             }
         } else {
+            let ast_root_id = env.pool.add(Expr2::Blank);
+
             Ok(EdModule {
                 env,
-                ast_root: Expr2::Blank,
+                ast_root_id,
             })
         }
     }
