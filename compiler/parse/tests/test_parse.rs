@@ -2551,6 +2551,247 @@ mod test_parse {
     }
 
     #[test]
+    fn when_with_negative_numbers() {
+        let arena = Bump::new();
+        let newlines = &[Newline];
+        let pattern1 = Pattern::SpaceBefore(arena.alloc(NumLiteral("1")), newlines);
+        let loc_pattern1 = Located::new(1, 1, 1, 2, pattern1);
+        let expr1 = Num("2");
+        let loc_expr1 = Located::new(1, 1, 6, 7, expr1);
+        let branch1 = &*arena.alloc(WhenBranch {
+            patterns: arena.alloc([loc_pattern1]),
+            value: loc_expr1,
+            guard: None,
+        });
+        let newlines = &[Newline];
+        let pattern2 = Pattern::SpaceBefore(arena.alloc(NumLiteral("-3")), newlines);
+        let loc_pattern2 = Located::new(2, 2, 1, 3, pattern2);
+        let expr2 = Num("4");
+        let loc_expr2 = Located::new(2, 2, 7, 8, expr2);
+        let branch2 = &*arena.alloc(WhenBranch {
+            patterns: arena.alloc([loc_pattern2]),
+            value: loc_expr2,
+            guard: None,
+        });
+        let branches = &[branch1, branch2];
+        let var = Var {
+            module_name: "",
+            ident: "x",
+        };
+        let loc_cond = Located::new(0, 0, 5, 6, var);
+        let expected = Expr::When(arena.alloc(loc_cond), branches);
+        let actual = parse_expr_with(
+            &arena,
+            indoc!(
+                r#"
+                when x is
+                 1 -> 2
+                 -3 -> 4
+                "#
+            ),
+        );
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn when_with_function_application() {
+        let arena = Bump::new();
+        let newlines = &[Newline];
+        let pattern1 = Pattern::SpaceBefore(arena.alloc(NumLiteral("1")), newlines);
+        let loc_pattern1 = Located::new(1, 1, 4, 5, pattern1);
+        let num_2 = Num("2");
+        let num_neg = Located::new(
+            1,
+            1,
+            9,
+            16,
+            Expr::Var {
+                module_name: "Num",
+                ident: "neg",
+            },
+        );
+        let expr0 = Located::new(2, 2, 5, 6, Expr::SpaceBefore(&num_2, &[Newline]));
+        let expr1 = Expr::Apply(
+            &num_neg,
+            &*arena.alloc([&*arena.alloc(expr0)]),
+            CalledVia::Space,
+        );
+        let loc_expr1 = Located::new(1, 2, 9, 6, expr1);
+        let branch1 = &*arena.alloc(WhenBranch {
+            patterns: arena.alloc([loc_pattern1]),
+            value: loc_expr1,
+            guard: None,
+        });
+        let newlines = &[Newline];
+        let pattern2 = Pattern::SpaceBefore(arena.alloc(Underscore("")), newlines);
+        let loc_pattern2 = Located::new(3, 3, 4, 5, pattern2);
+        let expr2 = Num("4");
+        let loc_expr2 = Located::new(3, 3, 9, 10, expr2);
+        let branch2 = &*arena.alloc(WhenBranch {
+            patterns: arena.alloc([loc_pattern2]),
+            value: loc_expr2,
+            guard: None,
+        });
+        let branches = &[branch1, branch2];
+        let var = Var {
+            module_name: "",
+            ident: "x",
+        };
+        let loc_cond = Located::new(0, 0, 5, 6, var);
+        let expected = Expr::When(arena.alloc(loc_cond), branches);
+        let actual = parse_expr_with(
+            &arena,
+            indoc!(
+                r#"
+                when x is
+                    1 -> Num.neg
+                     2 
+                    _ -> 4
+                "#
+            ),
+        );
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn when_if_guard() {
+        let arena = Bump::new();
+
+        let branch1 = {
+            let newlines = &[Newline];
+            let pattern1 = Pattern::SpaceBefore(arena.alloc(Underscore("")), newlines);
+            let loc_pattern1 = Located::new(1, 1, 4, 5, pattern1);
+            let num_1 = Num("1");
+            let expr1 = Located::new(
+                2,
+                2,
+                8,
+                9,
+                Expr::SpaceBefore(arena.alloc(num_1), &[Newline]),
+            );
+            let loc_expr1 = expr1; // Located::new(1, 2, 9, 6, expr1);
+            &*arena.alloc(WhenBranch {
+                patterns: arena.alloc([loc_pattern1]),
+                value: loc_expr1,
+                guard: None,
+            })
+        };
+
+        let branch2 = {
+            let pattern1 = Pattern::SpaceBefore(arena.alloc(Underscore("")), &[Newline, Newline]);
+            let loc_pattern1 = Located::new(4, 4, 4, 5, pattern1);
+            let num_1 = Num("2");
+            let expr1 = Located::new(
+                5,
+                5,
+                8,
+                9,
+                Expr::SpaceBefore(arena.alloc(num_1), &[Newline]),
+            );
+            let loc_expr1 = expr1; // Located::new(1, 2, 9, 6, expr1);
+            &*arena.alloc(WhenBranch {
+                patterns: arena.alloc([loc_pattern1]),
+                value: loc_expr1,
+                guard: None,
+            })
+        };
+
+        let branch3 = {
+            let pattern1 =
+                Pattern::SpaceBefore(arena.alloc(Pattern::GlobalTag("Ok")), &[Newline, Newline]);
+            let loc_pattern1 = Located::new(7, 7, 4, 6, pattern1);
+            let num_1 = Num("3");
+            let expr1 = Located::new(
+                8,
+                8,
+                8,
+                9,
+                Expr::SpaceBefore(arena.alloc(num_1), &[Newline]),
+            );
+            let loc_expr1 = expr1; // Located::new(1, 2, 9, 6, expr1);
+            &*arena.alloc(WhenBranch {
+                patterns: arena.alloc([loc_pattern1]),
+                value: loc_expr1,
+                guard: None,
+            })
+        };
+
+        let branches = &[branch1, branch2, branch3];
+        let var = Var {
+            module_name: "",
+            ident: "x",
+        };
+        let loc_cond = Located::new(0, 0, 5, 6, var);
+        let expected = Expr::When(arena.alloc(loc_cond), branches);
+        let actual = parse_expr_with(
+            &arena,
+            indoc!(
+                r#"
+                when x is
+                    _ -> 
+                        1
+
+                    _ -> 
+                        2
+
+                    Ok -> 
+                        3
+                "#
+            ),
+        );
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
+    fn when_in_parens() {
+        let arena = Bump::new();
+
+        let branch1 = {
+            let newlines = &[Newline];
+            let pattern1 = Pattern::SpaceBefore(arena.alloc(Pattern::GlobalTag("Ok")), newlines);
+            let loc_pattern1 = Located::new(1, 1, 4, 6, pattern1);
+            let num_1 = Num("3");
+            let expr1 = Located::new(
+                2,
+                2,
+                8,
+                9,
+                Expr::SpaceBefore(arena.alloc(num_1), &[Newline]),
+            );
+            let loc_expr1 = expr1; // Located::new(1, 2, 9, 6, expr1);
+            &*arena.alloc(WhenBranch {
+                patterns: arena.alloc([loc_pattern1]),
+                value: loc_expr1,
+                guard: None,
+            })
+        };
+
+        let branches = &[branch1];
+        let var = Var {
+            module_name: "",
+            ident: "x",
+        };
+        let loc_cond = Located::new(0, 0, 6, 7, var);
+        let when = Expr::When(arena.alloc(loc_cond), branches);
+        let expected = Expr::ParensAround(&when);
+        let actual = parse_expr_with(
+            &arena,
+            indoc!(
+                r#"
+                (when x is
+                    Ok ->
+                        3)
+                "#
+            ),
+        );
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn when_with_records() {
         let arena = Bump::new();
         let newlines = &[Newline];
@@ -2600,6 +2841,47 @@ mod test_parse {
     }
 
     #[test]
+    fn when_in_parens_indented() {
+        let arena = Bump::new();
+
+        let branch1 = {
+            let newlines = &[Newline];
+            let pattern1 = Pattern::SpaceBefore(arena.alloc(Pattern::GlobalTag("Ok")), newlines);
+            let loc_pattern1 = Located::new(1, 1, 4, 6, pattern1);
+            let num_1 = Num("3");
+            let expr1 = Located::new(1, 1, 10, 11, num_1);
+            let loc_expr1 = expr1; // Located::new(1, 2, 9, 6, expr1);
+            &*arena.alloc(WhenBranch {
+                patterns: arena.alloc([loc_pattern1]),
+                value: loc_expr1,
+                guard: None,
+            })
+        };
+
+        let branches = &[branch1];
+        let var = Var {
+            module_name: "",
+            ident: "x",
+        };
+        let loc_cond = Located::new(0, 0, 6, 7, var);
+        let when = Expr::When(arena.alloc(loc_cond), branches);
+        let spaced = Expr::SpaceAfter(&when, &[Newline]);
+        let expected = Expr::ParensAround(&spaced);
+        let actual = parse_expr_with(
+            &arena,
+            indoc!(
+                r#"
+                (when x is
+                    Ok -> 3 
+                     )
+                "#
+            ),
+        );
+
+        assert_eq!(Ok(expected), actual);
+    }
+
+    #[test]
     fn when_with_alternative_patterns() {
         let arena = Bump::new();
         let newlines = &[Newline];
@@ -2620,9 +2902,9 @@ mod test_parse {
         let pattern2_alt =
             Pattern::SpaceBefore(arena.alloc(StrLiteral(PlainLine("bar"))), newlines);
         let loc_pattern2 = Located::new(2, 2, 1, 6, pattern2);
-        let loc_pattern2_alt = Located::new(3, 3, 1, 6, pattern2_alt);
+        let loc_pattern2_alt = Located::new(3, 3, 2, 7, pattern2_alt);
         let expr2 = Num("2");
-        let loc_expr2 = Located::new(3, 3, 10, 11, expr2);
+        let loc_expr2 = Located::new(3, 3, 11, 12, expr2);
         let branch2 = &*arena.alloc(WhenBranch {
             patterns: arena.alloc([loc_pattern2, loc_pattern2_alt]),
             value: loc_expr2,
@@ -2642,7 +2924,7 @@ mod test_parse {
                 when x is
                  "blah" | "blop" -> 1
                  "foo" |
-                 "bar" -> 2
+                  "bar" -> 2
                 "#
             ),
         );
