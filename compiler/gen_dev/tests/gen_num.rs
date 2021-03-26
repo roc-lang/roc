@@ -1,9 +1,3 @@
-#[macro_use]
-extern crate pretty_assertions;
-
-#[macro_use]
-extern crate indoc;
-
 extern crate bumpalo;
 extern crate libc;
 
@@ -12,7 +6,8 @@ mod helpers;
 
 #[cfg(all(test, target_os = "linux", any(target_arch = "x86_64"/*, target_arch = "aarch64"*/)))]
 mod gen_num {
-    //use roc_std::RocOrder;
+    #[macro_use]
+    extern crate pretty_assertions;
 
     #[macro_use]
     extern crate indoc;
