@@ -5134,7 +5134,7 @@ mod test_reporting {
                 2│      5 -> 2
                               ^
                 
-                Whatever I am running into is confusing me al lot! Normally I can give
+                Whatever I am running into is confusing me a lot! Normally I can give
                 fairly specific hints, but something is really tripping me up this
                 time.
                 "#
@@ -5185,7 +5185,7 @@ mod test_reporting {
                 2│      5 -> 2
                               ^
                 
-                Whatever I am running into is confusing me al lot! Normally I can give
+                Whatever I am running into is confusing me a lot! Normally I can give
                 fairly specific hints, but something is really tripping me up this
                 time.
             "#
