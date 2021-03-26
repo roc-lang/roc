@@ -1,7 +1,7 @@
-interface Str2
-    exposes [ Str2, decimal, split, isEmpty, startsWith, endsWith, contains, anyGraphemes, allGraphemes, join, joinWith, padGraphemesStart, padGraphemesEnd, graphemes, reverseGraphemes, isCaseInsensitiveEq, isCaseInsensitiveNeq, walkGraphemes, isCapitalized, isAllUppercase, isAllLowercase, toUtf8, toUtf16, toUtf32, walkUtf8, walkUtf16, walkUtf32, walkRevUtf8, walkRevUtf16, walkRevUtf32 ]
+interface Str
+    exposes [ Str, decimal, split, isEmpty, startsWith, endsWith, contains, anyGraphemes, allGraphemes, join, joinWith, padGraphemesStart, padGraphemesEnd, graphemes, reverseGraphemes, isCaseInsensitiveEq, isCaseInsensitiveNeq, walkGraphemes, isCapitalized, isAllUppercase, isAllLowercase, toUtf8, toUtf16, toUtf32, walkUtf8, walkUtf16, walkUtf32, walkRevUtf8, walkRevUtf16, walkRevUtf32 ]
     imports []
-## Types
+## # Types
 
 ## Dealing with text is a deep topic, so by design, Roc's `Str` module sticks
 ## to the basics.
