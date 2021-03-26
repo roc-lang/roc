@@ -185,7 +185,7 @@ pub enum SyntaxError<'a> {
     ReservedKeyword(Region),
     ArgumentsBeforeEquals(Region),
     NotYetImplemented(String),
-    TODO,
+    Todo,
     Type(Type<'a>),
     Pattern(EPattern<'a>),
     Expr(EExpr<'a>),
