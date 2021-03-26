@@ -10,6 +10,9 @@ mod gen_num {
     #[macro_use]
     extern crate pretty_assertions;
 
+    #[macro_use]
+    extern crate indoc;
+
     #[test]
     fn i64_values() {
         assert_evals_to!("0", 0, i64);
