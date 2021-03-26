@@ -93,9 +93,9 @@ impl VarStore {
     }
 }
 
-impl Into<Variable> for VarStore {
-    fn into(self) -> Variable {
-        Variable(self.next)
+impl From<VarStore> for Variable {
+    fn from(store: VarStore) -> Self {
+        Variable(store.next)
     }
 }
 
@@ -139,9 +139,9 @@ impl fmt::Debug for OptVariable {
     }
 }
 
-impl Into<Option<Variable>> for OptVariable {
-    fn into(self) -> Option<Variable> {
-        self.into_variable()
+impl From<OptVariable> for Option<Variable> {
+    fn from(opt_var: OptVariable) -> Self {
+        opt_var.into_variable()
     }
 }
 
@@ -180,9 +180,9 @@ impl Variable {
     }
 }
 
-impl Into<OptVariable> for Variable {
-    fn into(self) -> OptVariable {
-        OptVariable(self.0)
+impl From<Variable> for OptVariable {
+    fn from(var: Variable) -> Self {
+        OptVariable(var.0)
     }
 }
 
@@ -483,9 +483,9 @@ impl fmt::Debug for Rank {
     }
 }
 
-impl Into<usize> for Rank {
-    fn into(self) -> usize {
-        self.0
+impl From<Rank> for usize {
+    fn from(rank: Rank) -> Self {
+        rank.0
     }
 }
 

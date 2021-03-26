@@ -4114,7 +4114,7 @@ where
     Ok(())
 }
 
-fn to_file_problem_report(filename: &PathBuf, error: io::ErrorKind) -> String {
+fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
     use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
 
