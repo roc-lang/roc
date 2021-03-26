@@ -31,6 +31,7 @@
 //! The best way to see how it is used is to read the `tests.rs` file;
 //! search for e.g. `UnitKey`.
 
+use std::cmp::Ordering;
 use std::fmt::{self, Debug};
 use std::marker;
 use std::ops::Range;
@@ -361,17 +362,23 @@ impl<S: UnificationStore> UnificationTable<S> {
                 }
             };
             self.redirect_root(new_rank, redirected, new_root, new_value);
-        } else if rank_a > rank_b {
-            // a has greater rank, so a should become b's parent,
-            // i.e., b should redirect to a.
-            self.redirect_root(rank_a, key_b, key_a, new_value);
-        } else if rank_a < rank_b {
-            // b has greater rank, so a should redirect to b.
-            self.redirect_root(rank_b, key_a, key_b, new_value);
         } else {
-            // If equal, redirect one to the other and increment the
-            // other's rank.
-            self.redirect_root(rank_a + 1, key_a, key_b, new_value);
+            match rank_a.cmp(&rank_b) {
+                Ordering::Greater => {
+                    // a has greater rank, so a should become b's parent,
+                    // i.e., b should redirect to a.
+                    self.redirect_root(rank_a, key_b, key_a, new_value);
+                }
+                Ordering::Less => {
+                    // b has greater rank, so a should redirect to b.
+                    self.redirect_root(rank_b, key_a, key_b, new_value);
+                }
+                Ordering::Equal => {
+                    // If equal, redirect one to the other and increment the
+                    // other's rank.
+                    self.redirect_root(rank_a + 1, key_a, key_b, new_value);
+                }
+            }
         }
     }
 
