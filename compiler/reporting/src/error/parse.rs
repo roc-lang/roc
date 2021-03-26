@@ -475,7 +475,7 @@ fn to_expr_report<'a>(
                 alloc.reflow(r"I got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![
-                    alloc.reflow("Whatever I am running into is confusing me al lot! "),
+                    alloc.reflow("Whatever I am running into is confusing me a lot! "),
                     alloc.reflow("Normally I can give fairly specific hints, "),
                     alloc.reflow("but something is really tripping me up this time."),
                 ]),
