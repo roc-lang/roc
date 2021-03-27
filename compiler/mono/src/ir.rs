@@ -1762,13 +1762,14 @@ pub fn specialize_all<'a>(
                             procs.specialized.insert((name, layout), Done(proc));
                         }
                     }
-                    Err(error) => {
-                        let error_msg = env.arena.alloc(format!(
-                            "TODO generate a RuntimeError message for {:?}",
-                            error
-                        ));
+                    Err(SpecializeFailure {
+                        attempted_layout, ..
+                    }) => {
+                        let proc = generate_runtime_error_function(env, name, attempted_layout);
 
-                        procs.runtime_errors.insert(name, error_msg);
+                        procs
+                            .specialized
+                            .insert((name, attempted_layout), Done(proc));
                     }
                 }
             }
@@ -2410,6 +2411,7 @@ fn specialize_solved_type<'a>(
 
     match specialized {
         Ok(proc) => {
+            // when successful, the layout after unification should be the layout before unification
             debug_assert_eq!(
                 attempted_layout,
                 layout_cache
