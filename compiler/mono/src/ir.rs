@@ -2802,6 +2802,16 @@ pub fn with_hole<'a>(
             use crate::layout::UnionVariant::*;
             let arena = env.arena;
 
+            match layout_cache.from_var(arena, variant_var, env.subs) {
+                Err(e) => panic!("invalid layout {:?}", e),
+                Ok(Layout::FunctionPointer(argument_layouts, ret_layout)) => {
+                    dbg!(argument_layouts, ret_layout);
+                }
+                Ok(_) => {
+                    panic!("idk")
+                }
+            }
+
             let res_variant = crate::layout::union_sorted_tags(env.arena, variant_var, env.subs);
 
             let variant = match res_variant {
