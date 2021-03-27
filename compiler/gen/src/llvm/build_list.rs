@@ -805,7 +805,7 @@ pub fn list_product<'a, 'ctx, 'env>(
     let accum_alloca = builder.build_alloca(accum_type, "alloca_walk_right_accum");
 
     let default: BasicValueEnum = match accum_type {
-        BasicTypeEnum::IntType(int_type) => int_type.const_int(1,false).into(),
+        BasicTypeEnum::IntType(int_type) => int_type.const_int(1, false).into(),
         BasicTypeEnum::FloatType(float_type) => float_type.const_float(1.0).into(),
         _ => unreachable!(""),
     };
