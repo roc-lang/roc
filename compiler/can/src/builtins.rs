@@ -77,6 +77,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_CONCAT => list_concat,
         LIST_CONTAINS => list_contains,
         LIST_SUM => list_sum,
+        LIST_PRODUCT => list_product,
         LIST_PREPEND => list_prepend,
         LIST_JOIN => list_join,
         LIST_MAP => list_map,
@@ -217,6 +218,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_CONCAT => list_concat,
         Symbol::LIST_CONTAINS => list_contains,
         Symbol::LIST_SUM => list_sum,
+        Symbol::LIST_PRODUCT => list_product,
         Symbol::LIST_PREPEND => list_prepend,
         Symbol::LIST_JOIN => list_join,
         Symbol::LIST_MAP => list_map,
@@ -2116,22 +2118,12 @@ fn list_walk_backwards(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// List.sum : List (Num a) -> Num a
 fn list_sum(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_var = var_store.fresh();
-    let result_var = var_store.fresh();
+    lowlevel_1(symbol, LowLevel::ListSum, var_store)
+}
 
-    let body = RunLowLevel {
-        op: LowLevel::ListSum,
-        args: vec![(list_var, Var(Symbol::ARG_1))],
-        ret_var: result_var,
-    };
-
-    defn(
-        symbol,
-        vec![(list_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        result_var,
-    )
+/// List.product : List (Num a) -> Num a
+fn list_product(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::ListProduct, var_store)
 }
 
 /// List.keepIf : List elem, (elem -> Bool) -> List elem
