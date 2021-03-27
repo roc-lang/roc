@@ -1,8 +1,8 @@
-use crate::editor::mvc::ed_view;
-use crate::editor::mvc::ed_view::RenderedWgpu;
 use super::keyboard_input;
 use super::style::CODE_TXT_XY;
 use crate::editor::ed_error::print_ui_err;
+use crate::editor::mvc::ed_view;
+use crate::editor::mvc::ed_view::RenderedWgpu;
 use crate::editor::resources::strings::NOTHING_OPENED;
 use crate::editor::{
     config::Config,
@@ -296,17 +296,10 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 if let Some(ref mut ed_model) = app_model.ed_model_opt {
                     if rendered_wgpu_opt.is_none() || ed_model.dirty {
                         let rendered_wgpu_res =
-                            ed_view::model_to_wgpu(
-                                ed_model,
-                                &size,
-                                CODE_TXT_XY.into(),
-                                &config,
-                            );
+                            ed_view::model_to_wgpu(ed_model, &size, CODE_TXT_XY.into(), &config);
 
                         match rendered_wgpu_res {
-                            Ok(rendered_wgpu) => {
-                                rendered_wgpu_opt = Some(rendered_wgpu)
-                            }
+                            Ok(rendered_wgpu) => rendered_wgpu_opt = Some(rendered_wgpu),
                             Err(e) => print_err(&e),
                         }
                     }
@@ -314,16 +307,16 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     if let Some(ref rendered_wgpu) = rendered_wgpu_opt {
                         let borrowed_text = rendered_wgpu.text.to_borrowed();
 
-                            glyph_brush.queue(borrowed_text);
+                        glyph_brush.queue(borrowed_text);
 
-                            draw_all_rects(
-                                &rendered_wgpu.rects,
-                                &mut encoder,
-                                &frame.view,
-                                &gpu_device,
-                                &rect_resources,
-                                &ed_theme,
-                            )
+                        draw_all_rects(
+                            &rendered_wgpu.rects,
+                            &mut encoder,
+                            &frame.view,
+                            &gpu_device,
+                            &rect_resources,
+                            &ed_theme,
+                        )
                     }
                 } else {
                     queue_no_file_text(

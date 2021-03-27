@@ -1,5 +1,5 @@
-use crate::editor::ed_error::IndexOfFailed;
 use super::ed_error::{EdResult, KeyNotFound};
+use crate::editor::ed_error::IndexOfFailed;
 use snafu::OptionExt;
 use std::collections::HashMap;
 
@@ -15,9 +15,11 @@ pub fn map_get<'a, K: ::std::fmt::Debug + std::hash::Hash + std::cmp::Eq, V>(
     Ok(value)
 }
 
-pub fn index_of<T: ::std::fmt::Debug + std::cmp::Eq>(elt:T, slice: &[T]) -> EdResult<usize> {
-    let index = slice.iter().position(|slice_elt| *slice_elt == elt).with_context(
-        || {
+pub fn index_of<T: ::std::fmt::Debug + std::cmp::Eq>(elt: T, slice: &[T]) -> EdResult<usize> {
+    let index = slice
+        .iter()
+        .position(|slice_elt| *slice_elt == elt)
+        .with_context(|| {
             let elt_str = format!("{:?}", elt);
             let collection_str = format!("{:?}", slice);
 
@@ -25,8 +27,7 @@ pub fn index_of<T: ::std::fmt::Debug + std::cmp::Eq>(elt:T, slice: &[T]) -> EdRe
                 elt_str,
                 collection_str,
             }
-        }
-    )?;
+        })?;
 
     Ok(index)
 }

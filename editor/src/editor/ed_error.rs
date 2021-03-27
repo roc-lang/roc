@@ -31,10 +31,25 @@ pub enum EdError {
     ))]
     ClipboardInitFailed { err_msg: String },
 
+    #[snafu(display(
+        "ExpectedTextNode: the function {} expected a Text node, got {} instead.",
+        function_name,
+        node_type
+    ))]
+    ExpectedTextNode {
+        function_name: String,
+        node_type: String,
+        backtrace: Backtrace,
+    },
+
     #[snafu(display("GetContentOnNestedNode: tried to get string content from Nested MarkupNode. Can only get content from Text or Blank nodes."))]
     GetContentOnNestedNode { backtrace: Backtrace },
 
-    #[snafu(display("IndexOfFailed: Element {} was not found in collection {}.", elt_str, collection_str))]
+    #[snafu(display(
+        "IndexOfFailed: Element {} was not found in collection {}.",
+        elt_str,
+        collection_str
+    ))]
     IndexOfFailed {
         elt_str: String,
         collection_str: String,
@@ -54,7 +69,10 @@ pub enum EdError {
         backtrace: Backtrace,
     },
 
-    #[snafu(display("NestedNodeRequired: required a Nested node at this position, node was a {}.", node_type))]
+    #[snafu(display(
+        "NestedNodeRequired: required a Nested node at this position, node was a {}.",
+        node_type
+    ))]
     NestedNodeRequired {
         node_type: String,
         backtrace: Backtrace,
@@ -84,6 +102,9 @@ pub enum EdError {
 
     #[snafu(display("ParseError: Failed to parse AST: SyntaxError: {}.", syntax_err))]
     ParseError { syntax_err: String },
+
+    #[snafu(display("RecordWithoutFields: expected record to have at least one field because it is not an EmpyRecord."))]
+    RecordWithoutFields { backtrace: Backtrace },
 
     #[snafu(display("UIError: {}", msg))]
     UIErrorBacktrace { msg: String, backtrace: Backtrace },

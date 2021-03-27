@@ -1,13 +1,11 @@
-
-use crate::ui::text::text_pos::TextPos;
-use crate::ui::util::{slice_get, slice_get_mut};
-use crate::ui::ui_error::UIResult;
 use crate::editor::slow_pool::MarkNodeId;
-
+use crate::ui::text::text_pos::TextPos;
+use crate::ui::ui_error::UIResult;
+use crate::ui::util::{slice_get, slice_get_mut};
 
 #[derive(Debug)]
 pub struct GridNodeMap {
-    pub lines: Vec<Vec<MarkNodeId>>
+    pub lines: Vec<Vec<MarkNodeId>>,
 }
 
 impl GridNodeMap {
@@ -26,6 +24,21 @@ impl GridNodeMap {
         Ok(())
     }
 
+    pub fn insert_between_line(
+        &mut self,
+        line: usize,
+        index: usize,
+        len: usize,
+        node_id: MarkNodeId,
+    ) -> UIResult<()> {
+        let line_ref = slice_get_mut(line, &mut self.lines)?;
+        let new_cols_vec: Vec<MarkNodeId> = std::iter::repeat(node_id).take(len).collect();
+
+        line_ref.splice(index..index, new_cols_vec);
+
+        Ok(())
+    }
+
     /*pub fn new_line(&mut self) {
         self.lines.push(vec![])
     }*/
@@ -33,7 +46,7 @@ impl GridNodeMap {
     pub fn get_id_at_row_col(&self, caret_pos: TextPos) -> UIResult<MarkNodeId> {
         let line = slice_get(caret_pos.line, &self.lines)?;
         let node_id = slice_get(caret_pos.column, line)?;
-    
+
         Ok(*node_id)
     }
 }

@@ -1,7 +1,8 @@
-use crate::editor::ed_error::NestedNodeRequired;
-use crate::editor::ed_error::GetContentOnNestedNode;
-use crate::editor::ed_error::EdResult;
 use super::attribute::Attributes;
+use crate::editor::ed_error::EdResult;
+use crate::editor::ed_error::ExpectedTextNode;
+use crate::editor::ed_error::GetContentOnNestedNode;
+use crate::editor::ed_error::NestedNodeRequired;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
@@ -29,7 +30,7 @@ pub enum MarkupNode {
     Blank {
         ast_node_id: NodeId<Expr2>,
         attributes: Attributes,
-        syn_high_style: HighlightStyle,
+        syn_high_style: HighlightStyle, // TODO remove HighlightStyle, this is always HighlightStyle::Blank
         parent_id_opt: Option<MarkNodeId>,
     },
 }
@@ -72,16 +73,25 @@ impl MarkupNode {
     // can't be &str, this creates borrowing issues
     pub fn get_content(&self) -> EdResult<String> {
         match self {
-            MarkupNode::Nested {
-                ..
-            } => GetContentOnNestedNode {}.fail(),
-            MarkupNode::Text {
-                content,
-                ..
-            } => Ok(content.clone()),
-            MarkupNode::Blank {
-                ..
-            } => Ok(BLANK_PLACEHOLDER.to_owned()),
+            MarkupNode::Nested { .. } => GetContentOnNestedNode {}.fail(),
+            MarkupNode::Text { content, .. } => Ok(content.clone()),
+            MarkupNode::Blank { .. } => Ok(BLANK_PLACEHOLDER.to_owned()),
+        }
+    }
+
+    pub fn get_content_mut(&mut self) -> EdResult<&mut String> {
+        match self {
+            MarkupNode::Nested { .. } => ExpectedTextNode {
+                function_name: "set_content".to_owned(),
+                node_type: self.node_type_as_string(),
+            }
+            .fail(),
+            MarkupNode::Text { content, .. } => Ok(content),
+            MarkupNode::Blank { .. } => ExpectedTextNode {
+                function_name: "set_content".to_owned(),
+                node_type: self.node_type_as_string(),
+            }
+            .fail(),
         }
     }
 
@@ -91,7 +101,8 @@ impl MarkupNode {
         } else {
             NestedNodeRequired {
                 node_type: self.node_type_as_string(),
-            }.fail()?;
+            }
+            .fail()?;
         }
 
         Ok(())
@@ -123,6 +134,7 @@ fn get_string<'a>(env: &Env<'a>, pool_str: &PoolStr) -> String {
 pub const BLANK_PLACEHOLDER: &str = " ";
 pub const LEFT_ACCOLADE: &str = "{ ";
 pub const RIGHT_ACCOLADE: &str = " }";
+pub const COLON: &str = ": ";
 
 fn new_markup_node(
     text: String,
@@ -246,7 +258,7 @@ pub fn expr2_to_markup<'a, 'b>(
                 ));
 
                 children_ids.push(new_markup_node(
-                    ": ".to_string(),
+                    COLON.to_string(),
                     node_id,
                     HighlightStyle::Operator,
                     markup_node_pool,

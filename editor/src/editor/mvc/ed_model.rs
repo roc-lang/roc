@@ -1,6 +1,5 @@
-use crate::lang::pool::NodeId;
-use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::code_lines::CodeLines;
+use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::slow_pool::{MarkNodeId, SlowPool};
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::editor::{
@@ -12,6 +11,7 @@ use crate::editor::{
 use crate::graphics::primitives::rect::Rect;
 use crate::lang::ast::Expr2;
 use crate::lang::expr::{str_to_expr2, Env};
+use crate::lang::pool::NodeId;
 use crate::lang::scope::Scope;
 use crate::ui::text::caret_w_select::CaretWSelect;
 use bumpalo::collections::String as BumpString;
@@ -35,7 +35,7 @@ pub struct EdModel<'a> {
     // Option<MarkNodeId>: MarkupNode that corresponds to caret position, Option because this MarkNodeId is only calculated when it needs to be used.
     pub caret_w_select_vec: NonEmpty<(CaretWSelect, Option<MarkNodeId>)>,
     // EdModel is dirty if it has changed since the previous render.
-    pub dirty: bool, 
+    pub dirty: bool,
 }
 
 pub fn init_model<'a>(
@@ -63,12 +63,8 @@ pub fn init_model<'a>(
     } else {
         let ast_root = &module.env.pool.get(ast_root_id);
 
-        let temp_markup_root_id = expr2_to_markup(
-            code_arena,
-            &mut module.env,
-            ast_root,
-            &mut markup_node_pool,
-        );
+        let temp_markup_root_id =
+            expr2_to_markup(code_arena, &mut module.env, ast_root, &mut markup_node_pool);
         set_parent_for_all(temp_markup_root_id, &mut markup_node_pool);
 
         temp_markup_root_id
@@ -87,7 +83,7 @@ pub fn init_model<'a>(
         glyph_dim_rect_opt: None,
         has_focus: true,
         caret_w_select_vec: NonEmpty::new((CaretWSelect::default(), None)),
-        dirty: true
+        dirty: true,
     })
 }
 
@@ -108,16 +104,10 @@ impl<'a> EdModule<'a> {
 
             match expr2_result {
                 Ok((expr2, _output)) => {
-
                     let ast_root_id = env.pool.add(expr2);
-                    
-                    Ok(
-                        EdModule {
-                            env,
-                            ast_root_id,
-                        }
-                    )
-                },
+
+                    Ok(EdModule { env, ast_root_id })
+                }
                 Err(err) => Err(ParseError {
                     syntax_err: format!("{:?}", err),
                 }),
@@ -125,10 +115,7 @@ impl<'a> EdModule<'a> {
         } else {
             let ast_root_id = env.pool.add(Expr2::Blank);
 
-            Ok(EdModule {
-                env,
-                ast_root_id,
-            })
+            Ok(EdModule { env, ast_root_id })
         }
     }
 }

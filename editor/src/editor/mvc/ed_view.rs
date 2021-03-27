@@ -1,4 +1,3 @@
-
 use super::ed_model::EdModel;
 use crate::editor::config::Config;
 use crate::editor::ed_error::EdResult;
@@ -11,11 +10,10 @@ use cgmath::Vector2;
 use snafu::OptionExt;
 use winit::dpi::PhysicalSize;
 
-
 #[derive(Debug)]
 pub struct RenderedWgpu {
     pub text: glyph_brush::OwnedSection,
-    pub rects: Vec<Rect>
+    pub rects: Vec<Rect>,
 }
 
 // create text and rectangles based on EdModel's markup_root
@@ -47,7 +45,10 @@ pub fn model_to_wgpu<'a>(
 
     rects.append(&mut sel_rects);
 
-    Ok(RenderedWgpu{text: section, rects})
+    Ok(RenderedWgpu {
+        text: section,
+        rects,
+    })
 }
 
 pub fn build_selection_graphics(

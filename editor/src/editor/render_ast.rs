@@ -120,16 +120,19 @@ fn markup_to_wgpu_helper<'a>(
 
             let highlight_color = map_get(&code_style.ed_theme.syntax_high_map, &syn_high_style)?;
 
+            let char_width = code_style.glyph_dim_rect.width;
+            let char_height = code_style.glyph_dim_rect.height;
+
             let hole_rect = Rect {
                 top_left_coords: (
-                    code_style.txt_coords.x
-                        + (txt_row_col.0 as f32) * code_style.glyph_dim_rect.height,
+                    code_style.txt_coords.x + (txt_row_col.1 as f32) * char_width,
                     code_style.txt_coords.y
-                        + (txt_row_col.1 as f32) * code_style.glyph_dim_rect.width,
+                        + (txt_row_col.0 as f32) * char_height
+                        + 0.1 * char_height,
                 )
                     .into(),
-                width: code_style.glyph_dim_rect.width,
-                height: code_style.glyph_dim_rect.height,
+                width: char_width,
+                height: char_height,
                 color: *highlight_color,
             };
             rects.push(hole_rect);
