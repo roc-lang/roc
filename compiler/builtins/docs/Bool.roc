@@ -1,11 +1,11 @@
-interface Bool2
+interface Bool
     exposes [ not, and, or, xor, isEq, isNotEq ]
     imports []
 
-## Returns #False when given #True, and vice versa.
+## Returns `False` when given `True`, and vice versa.
 not : [True, False] -> [True, False]
 
-## Returns #True when given #True and #True, and #False when either argument is #False.
+## Returns `True` when given `True` and `True`, and `False` when either argument is `False`.
 ##
 ## `a && b` is shorthand for `Bool.and a b`
 ##
@@ -39,7 +39,7 @@ not : [True, False] -> [True, False]
 and : Bool, Bool -> Bool
 
 
-## Returns #True when given #True for either argument, and #False only when given #False and #False.
+## Returns `True` when given `True` for either argument, and `False` only when given `False` and `False`.
 ##
 ## `a || b` is shorthand for `Bool.or a b`.
 ##
@@ -55,14 +55,13 @@ and : Bool, Bool -> Bool
 ##
 ## In some languages, `&&` and `||` are special-cased in the compiler to skip
 ## evaluating the expression after the operator under certain circumstances.
-##
-## In Roc, this is not the case. See the performance notes for #Bool.and for details.
+## # In Roc, this is not the case. See the performance notes for #Bool.and for details.
 or : Bool, Bool -> Bool
 
 ## Exclusive or
 xor : Bool, Bool -> Bool
 
-## Returns #True if the two values are *structurally equal*, and #False otherwise.
+## Returns `True` if the two values are *structurally equal*, and `False` otherwise.
 ##
 ## `a == b` is shorthand for `Bool.isEq a b`
 ##

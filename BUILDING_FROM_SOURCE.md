@@ -31,14 +31,12 @@ For any other OS, checkout the [Zig installation page](https://github.com/ziglan
 
 ### LLVM
 
-To see which version of LLVM you need, take a look at `Cargo.toml`, in particular the `branch` section of the `inkwell` dependency. It should have something like `llvmX-Y` where X and Y are the major and minor revisions of LLVM you need.
-
 For Ubuntu and Debian, you can use the `Automatic installation script` at [apt.llvm.org](https://apt.llvm.org):
 ```
 sudo bash -c "$(wget -O - https://apt.llvm.org/llvm.sh)"
 ```
 
-For macOS, you can run `brew install llvm` (but before you do so, check the version with `brew info llvm`--if it's 10.0.1, you may need to install a slightly older version. See below for details.)
+For macOS, check the troubleshooting section below.
 
 There are also plenty of alternative options at http://releases.llvm.org/download.html
 
@@ -118,15 +116,30 @@ If you encounter `cannot find -lz` run `sudo apt install zlib1g-dev`.
 
 ### LLVM installation on macOS
 
-It looks like LLVM 10.0.1 [has some issues with libxml2 on macOS](https://discourse.brew.sh/t/llvm-config-10-0-1-advertise-libxml2-tbd-as-system-libs/8593). You can install the older 10.0.0_3 by doing
+By default homebrew will try to install llvm 11, which is currently
+unsupported. You need to install an older version (10.0.0_3) by doing:
 
 ```
-$ brew install https://raw.githubusercontent.com/Homebrew/homebrew-core/6616d50fb0b24dbe30f5e975210bdad63257f517/Formula/llvm.rb
+$ brew edit llvm
+
+# Replace the contents of the file with https://raw.githubusercontent.com/Homebrew/homebrew-core/6616d50fb0b24dbe30f5e975210bdad63257f517/Formula/llvm.rb
+
+# we expect llvm-as-10 to be present
+$ ln -s /usr/local/opt/llvm/bin/{llvm-as,llvm-as-10}
+
 # "pinning" ensures that homebrew doesn't update it automatically
 $ brew pin llvm
 ```
 
-If that doesn't work and you get a `brew` error `Error: Calling Installation of llvm from a GitHub commit URL is disabled! Use 'brew extract llvm' to stable tap on GitHub instead.` while trying the above solution, you can follow the steps extracting the formula into your private tap (one public version is at `sladwig/tap/llvm`). If installing LLVM still fails, it might help to run `sudo xcode-select -r` before installing again.
+It might also be useful to add these exports to your shell:
+
+```
+export PATH="/usr/local/opt/llvm/bin:$PATH"
+export LDFLAGS="-L/usr/local/opt/llvm/lib -Wl,-rpath,/usr/local/opt/llvm/lib"
+export CPPFLAGS="-I/usr/local/opt/llvm/include"
+```
+
+If installing LLVM still fails, it might help to run `sudo xcode-select -r` before installing again.
 
 ### LLVM installation on Windows
 

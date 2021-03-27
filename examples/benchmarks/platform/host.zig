@@ -59,7 +59,10 @@ pub export fn main() u8 {
 
         call_the_closure(function_pointer, closure_data_pointer);
     } else {
-        unreachable;
+        const msg = @intToPtr([*:0]const u8, elements[1]);
+        stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
+
+        return 0;
     }
 
     var ts2: std.os.timespec = undefined;

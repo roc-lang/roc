@@ -195,14 +195,12 @@ pub fn expr2_to_markup<'a, 'b>(
             new_markup_node(text, node_id, HighlightStyle::Variable, markup_node_pool)
         }
         Expr2::List { elems, .. } => {
-            let mut children_ids = Vec::new();
-
-            children_ids.push(new_markup_node(
+            let mut children_ids = vec![new_markup_node(
                 "[ ".to_string(),
                 node_id,
                 HighlightStyle::Bracket,
                 markup_node_pool,
-            ));
+            )];
 
             for (idx, node_id) in elems.iter_node_ids().enumerate() {
                 let sub_expr2 = env.pool.get(node_id);
@@ -234,14 +232,12 @@ pub fn expr2_to_markup<'a, 'b>(
             markup_node_pool.add(list_node)
         }
         Expr2::Record { fields, .. } => {
-            let mut children_ids = Vec::new();
-
-            children_ids.push(new_markup_node(
+            let mut children_ids = vec![new_markup_node(
                 LEFT_ACCOLADE.to_string(),
                 node_id,
                 HighlightStyle::Bracket,
                 markup_node_pool,
-            ));
+            )];
 
             for (idx, field_node_id) in fields.iter_node_ids().enumerate() {
                 let (pool_field_name, _, sub_expr2_node_id) = env.pool.get(field_node_id);

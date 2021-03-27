@@ -1,5 +1,5 @@
 use roc_docs::{documentation_to_template_data, files_to_documentations, ModuleEntry};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[cfg(test)]
 mod test_docs {

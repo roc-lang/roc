@@ -1,6 +1,6 @@
 #![warn(clippy::all, clippy::dbg_macro)]
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
-#![allow(clippy::large_enum_variant)]
+#![allow(clippy::large_enum_variant, clippy::upper_case_acronyms)]
 
 #[cfg_attr(test, macro_use)]
 extern crate indoc;

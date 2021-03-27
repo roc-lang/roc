@@ -502,11 +502,11 @@ pub enum RocCallResult<T> {
     Failure(*mut c_char),
 }
 
-impl<T: Sized> Into<Result<T, &'static str>> for RocCallResult<T> {
-    fn into(self) -> Result<T, &'static str> {
+impl<T: Sized> From<RocCallResult<T>> for Result<T, &'static str> {
+    fn from(call_result: RocCallResult<T>) -> Self {
         use RocCallResult::*;
 
-        match self {
+        match call_result {
             Success(value) => Ok(value),
             Failure(failure) => Err({
                 let msg = unsafe {
@@ -529,11 +529,11 @@ impl<T: Sized> Into<Result<T, &'static str>> for RocCallResult<T> {
     }
 }
 
-impl<'a, T: Sized + Copy> Into<Result<T, &'a str>> for &'a RocCallResult<T> {
-    fn into(self) -> Result<T, &'a str> {
+impl<'a, T: Sized + Copy> From<&'a RocCallResult<T>> for Result<T, &'a str> {
+    fn from(call_result: &'a RocCallResult<T>) -> Self {
         use RocCallResult::*;
 
-        match self {
+        match call_result {
             Success(value) => Ok(*value),
             Failure(failure) => Err({
                 let msg = unsafe {

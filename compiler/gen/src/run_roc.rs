@@ -8,9 +8,9 @@ pub enum RocCallResult<T> {
     Failure(*mut c_char),
 }
 
-impl<T: Sized> Into<Result<T, String>> for RocCallResult<T> {
-    fn into(self) -> Result<T, String> {
-        match self {
+impl<T: Sized> From<RocCallResult<T>> for Result<T, String> {
+    fn from(call_result: RocCallResult<T>) -> Self {
+        match call_result {
             Success(value) => Ok(value),
             Failure(failure) => Err({
                 let raw = unsafe { CString::from_raw(failure) };

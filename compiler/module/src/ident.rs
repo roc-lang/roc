@@ -117,21 +117,21 @@ impl From<InlinableString> for ModuleName {
     }
 }
 
-impl Into<InlinableString> for ModuleName {
-    fn into(self) -> InlinableString {
-        self.0
+impl From<ModuleName> for InlinableString {
+    fn from(name: ModuleName) -> Self {
+        name.0
     }
 }
 
-impl<'a> Into<&'a InlinableString> for &'a ModuleName {
-    fn into(self) -> &'a InlinableString {
-        &self.0
+impl<'a> From<&'a ModuleName> for &'a InlinableString {
+    fn from(name: &'a ModuleName) -> Self {
+        &name.0
     }
 }
 
-impl<'a> Into<Box<str>> for ModuleName {
-    fn into(self) -> Box<str> {
-        self.0.to_string().into()
+impl From<ModuleName> for Box<str> {
+    fn from(name: ModuleName) -> Self {
+        name.0.to_string().into()
     }
 }
 
@@ -197,9 +197,9 @@ impl<'a> From<String> for Lowercase {
     }
 }
 
-impl Into<InlinableString> for Lowercase {
-    fn into(self) -> InlinableString {
-        self.0
+impl From<Lowercase> for InlinableString {
+    fn from(lowercase: Lowercase) -> Self {
+        lowercase.0
     }
 }
 
@@ -234,21 +234,21 @@ impl From<InlinableString> for Ident {
     }
 }
 
-impl Into<InlinableString> for Ident {
-    fn into(self) -> InlinableString {
-        self.0
+impl From<Ident> for InlinableString {
+    fn from(ident: Ident) -> Self {
+        ident.0
     }
 }
 
-impl<'a> Into<&'a InlinableString> for &'a Ident {
-    fn into(self) -> &'a InlinableString {
-        &self.0
+impl<'a> From<&'a Ident> for &'a InlinableString {
+    fn from(ident: &'a Ident) -> Self {
+        &ident.0
     }
 }
 
-impl<'a> Into<Box<str>> for Ident {
-    fn into(self) -> Box<str> {
-        self.0.to_string().into()
+impl From<Ident> for Box<str> {
+    fn from(ident: Ident) -> Self {
+        ident.0.to_string().into()
     }
 }
 

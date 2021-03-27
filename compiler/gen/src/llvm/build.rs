@@ -90,9 +90,9 @@ pub enum OptLevel {
     Optimize,
 }
 
-impl Into<OptimizationLevel> for OptLevel {
-    fn into(self) -> OptimizationLevel {
-        match self {
+impl From<OptLevel> for OptimizationLevel {
+    fn from(level: OptLevel) -> Self {
+        match level {
             OptLevel::Normal => OptimizationLevel::None,
             OptLevel::Optimize => OptimizationLevel::Aggressive,
         }
