@@ -153,7 +153,6 @@ main {
   flex-direction: row;
   align-items: center;
   flex-wrap: nowrap;
-  flex-grow: 1;
   box-sizing: border-box;
   font-family: var(--font-sans);
   font-size: 24px;
@@ -467,18 +466,28 @@ pre code {
 
   body {
     grid-template-columns: auto;
-    grid-template-rows: [top-header] var(--top-header-height) [before-sidebar] auto [sidebar] auto [main-content] auto [above-footer] auto [footer] auto;
+    grid-template-rows: [top-header] var(--top-header-height) [before-sidebar] auto [sidebar] auto [above-footer] auto [footer] auto;
 /* [before-sidebar] 1fr [sidebar] var(--sidebar-width) [main-content] fit-content(calc(1280px - var(--sidebar-width))) [end] 1fr; */
 
     margin: 0;
     min-width: 320px;
     max-width: 100%;
-
-    /* Display the sidebar below <main> without affecting tab index */
-    flex-direction: column-reverse;
   }
 
   .top-header-triangle {
     display: none;
+  }
+
+  .pkg-and-logo {
+    width: 100%;
+  }
+
+  .pkg-full-name {
+    flex-grow: 1;
+  }
+
+  .pkg-full-name a {
+    padding-top: 24px;
+    padding-bottom: 12px;
   }
 }
