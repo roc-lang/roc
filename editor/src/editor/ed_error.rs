@@ -62,6 +62,15 @@ pub enum EdError {
         backtrace: Backtrace,
     },
 
+    #[snafu(display(
+        "MissingParent: MarkupNode with id {} should have a parent but there was none.",
+        node_id
+    ))]
+    MissingParent {
+        node_id: MarkNodeId,
+        backtrace: Backtrace,
+    },
+
     #[snafu(display("NestedNodeMissingChild: expected to find child with id {} in Nested MarkupNode, but it was missing. Id's of the children are {:?}.", node_id, children_ids))]
     NestedNodeMissingChild {
         node_id: MarkNodeId,

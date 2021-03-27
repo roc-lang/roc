@@ -1,11 +1,13 @@
 use crate::editor::code_lines::CodeLines;
 use crate::editor::ed_error::EdResult;
-use crate::editor::ed_error::RecordWithoutFields;
 use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::markup::attribute::Attributes;
 use crate::editor::markup::nodes;
 use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::ed_model::EdModel;
+use crate::editor::mvc::record_update::start_new_record;
+use crate::editor::mvc::record_update::update_record_colon;
+use crate::editor::mvc::record_update::update_record_field;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
@@ -22,8 +24,6 @@ use crate::ui::text::{lines, lines::Lines, lines::SelectableLines};
 use crate::ui::ui_error::UIResult;
 use crate::ui::util::is_newline;
 use crate::window::keyboard_input::Modifiers;
-use roc_types::subs::Variable;
-use snafu::OptionExt;
 use winit::event::VirtualKeyCode;
 use VirtualKeyCode::*;
 
@@ -265,157 +265,43 @@ impl<'a> SelectableLines for EdModel<'a> {
     }
 }
 
+pub struct NodeContext<'a> {
+    pub old_caret_pos: TextPos,
+    pub curr_mark_node_id: MarkNodeId,
+    pub curr_mark_node: &'a MarkupNode,
+    pub parent_id_opt: Option<MarkNodeId>,
+    pub ast_node_id: NodeId<Expr2>,
+}
+
+pub fn get_node_context<'a>(ed_model: &'a EdModel) -> EdResult<NodeContext<'a>> {
+    let old_caret_pos = ed_model.get_caret();
+    let curr_mark_node_id = ed_model
+        .grid_node_map
+        .get_id_at_row_col(ed_model.get_caret())?;
+    let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
+    let parent_id_opt = curr_mark_node.get_parent_id_opt();
+    let ast_node_id = curr_mark_node.get_ast_node_id();
+
+    Ok(NodeContext {
+        old_caret_pos,
+        curr_mark_node_id,
+        curr_mark_node,
+        parent_id_opt,
+        ast_node_id,
+    })
+}
+
 pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult<()> {
     // TODO set all selections to none
     // TODO nested records
 
     match received_char {
         '{' => {
-            let old_caret_pos = ed_model.get_caret();
-
-            let curr_mark_node_id = ed_model.grid_node_map.get_id_at_row_col(old_caret_pos)?;
-            let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
-            let is_blank_node = curr_mark_node.is_blank();
-            let parent_id_opt = curr_mark_node.get_parent_id_opt();
-            let ast_node_id = curr_mark_node.get_ast_node_id();
-
-            let ast_pool = &mut ed_model.module.env.pool;
-            let expr2_node = Expr2::EmptyRecord;
-
-            let mark_node_pool = &mut ed_model.markup_node_pool;
-
-            ast_pool.set(ast_node_id, expr2_node);
-
-            let left_bracket_node = MarkupNode::Text {
-                content: nodes::LEFT_ACCOLADE.to_owned(),
-                ast_node_id,
-                syn_high_style: HighlightStyle::Bracket,
-                attributes: Attributes::new(),
-                parent_id_opt: Some(curr_mark_node_id),
-            };
-
-            let left_bracket_node_id = mark_node_pool.add(left_bracket_node);
-
-            let right_bracket_node = MarkupNode::Text {
-                content: nodes::RIGHT_ACCOLADE.to_owned(),
-                ast_node_id,
-                syn_high_style: HighlightStyle::Bracket,
-                attributes: Attributes::new(),
-                parent_id_opt: Some(curr_mark_node_id),
-            };
-
-            let right_bracket_node_id = mark_node_pool.add(right_bracket_node);
-
-            let nested_node = MarkupNode::Nested {
-                ast_node_id,
-                children_ids: vec![left_bracket_node_id, right_bracket_node_id],
-                parent_id_opt,
-            };
-
-            if is_blank_node {
-                mark_node_pool.replace_node(curr_mark_node_id, nested_node);
-
-                for _ in 0..nodes::LEFT_ACCOLADE.len() {
-                    ed_model.simple_move_carets_right();
-                }
-
-                // update GridNodeMap
-                ed_model.grid_node_map.add_to_line(
-                    old_caret_pos.line,
-                    nodes::LEFT_ACCOLADE.len(),
-                    left_bracket_node_id
-                )?;
-
-                ed_model.grid_node_map.add_to_line(
-                    old_caret_pos.line,
-                    nodes::RIGHT_ACCOLADE.len(),
-                    right_bracket_node_id
-                )?;
-            }
+            start_new_record(ed_model)?;
         }
         ':' => {
-            let old_caret_pos = ed_model.get_caret();
-
-            let curr_mark_node_id = ed_model.grid_node_map.get_id_at_row_col(old_caret_pos)?;
-            let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
-            let parent_id_opt = curr_mark_node.get_parent_id_opt();
-            let ast_node_id = curr_mark_node.get_ast_node_id();
-
-            if let Some(parent_id) = parent_id_opt {
-                let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
-
-                let new_child_index = index_of(curr_mark_node_id, &sibling_ids)? + 1;
-
-                let ast_node_ref = ed_model.module.env.pool.get(ast_node_id);
-
-                match ast_node_ref {
-                    Expr2::Record { record_var:_, fields } => {
-                        // update Markup
-                        let record_colon = nodes::COLON;
-
-                        let record_colon_node = MarkupNode::Text {
-                            content: record_colon.to_owned(),
-                            ast_node_id,
-                            syn_high_style: HighlightStyle::Operator,
-                            attributes: Attributes::new(),
-                            parent_id_opt: Some(parent_id),
-                        };
-
-                        let record_colon_node_id = ed_model.markup_node_pool.add(record_colon_node);
-                        ed_model
-                            .markup_node_pool
-                            .get_mut(parent_id)
-                            .add_child_at_index(new_child_index, record_colon_node_id)?;
-
-
-                        let record_blank_node = MarkupNode::Blank {
-                            ast_node_id,
-                            syn_high_style: HighlightStyle::Blank,
-                            attributes: Attributes::new(),
-                            parent_id_opt: Some(parent_id),
-                        };
-
-                        let record_blank_node_id = ed_model.markup_node_pool.add(record_blank_node);
-                        ed_model
-                            .markup_node_pool
-                            .get_mut(parent_id)
-                            .add_child_at_index(new_child_index + 1, record_blank_node_id)?;
-
-                        // update caret
-                        for _ in 0..record_colon.len() {
-                            ed_model.simple_move_carets_right();
-                        }
-
-                        // update GridNodeMap
-                        ed_model.grid_node_map.add_to_line(
-                            old_caret_pos.line,
-                            nodes::COLON.len(),
-                            record_colon_node_id,
-                        )?;
-
-                        ed_model.grid_node_map.add_to_line(
-                            old_caret_pos.line,
-                            nodes::BLANK_PLACEHOLDER.len(),
-                            record_blank_node_id,
-                        )?;
-
-                        // update AST node
-                        let new_field_val = Expr2::Blank;
-                        let new_field_val_id = ed_model.module.env.pool.add(new_field_val);
-
-                        let first_field_mut =
-                            fields
-                            .iter_mut(ed_model.module.env.pool)
-                            .next()
-                            .with_context(
-                                || RecordWithoutFields {}
-                            )?;
-
-                        first_field_mut.2 = new_field_val_id;
-                    }
-                    other => unimplemented!("TODO implement updating of Expr2 {:?}.", other)
-                }
-            }
+            // TODO set up Dict if previous char is '{'
+            update_record_colon(ed_model)?;
         }
         '\u{8}' | '\u{7f}' => {
             // On Linux, '\u{8}' is backspace,
@@ -437,11 +323,11 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
         }
         ch => {
             let old_caret_pos = ed_model.get_caret();
-
-            let curr_mark_node_id = ed_model.grid_node_map.get_id_at_row_col(old_caret_pos)?;
+            let curr_mark_node_id = ed_model.grid_node_map.get_id_at_row_col(ed_model.get_caret())?;
             let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
             let parent_id_opt = curr_mark_node.get_parent_id_opt();
             let ast_node_id = curr_mark_node.get_ast_node_id();
+
             let ast_node_ref = ed_model.module.env.pool.get(ast_node_id);
 
             if let Some(parent_id) = parent_id_opt {
@@ -481,13 +367,12 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                             )?;
 
                             // update AST
-                            let field_str = &ch.to_string();
                             let record_var = ed_model.module.env.var_store.fresh();
-                            let field_name = PoolStr::new(field_str, &mut ed_model.module.env.pool);
+                            let field_name = PoolStr::new(record_field_str, &mut ed_model.module.env.pool);
                             let field_var = ed_model.module.env.var_store.fresh();
                             //TODO actually check if field_str belongs to a previously defined variable
                             let field_val = Expr2::InvalidLookup(
-                                                PoolStr::new(field_str, ed_model.module.env.pool)
+                                                PoolStr::new(record_field_str, ed_model.module.env.pool)
                                             );
                             let field_val_id = ed_model.module.env.pool.add(field_val);
                             let first_field = (field_name, field_var, field_val_id);
@@ -504,61 +389,19 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                 };
 
                             ed_model.module.env.pool.set(ast_node_id, new_ast_node);
+                        } else {
+                            unimplemented!("TODO handle this else")
                         }
                     },
                     Expr2::Record { record_var:_, fields } => {
-                        if new_child_index == 2 {
-
-                            // update MarkupNode
-                            let record_field_str_add = &ch.to_string();
-
-                            let curr_mark_node_mut = ed_model.markup_node_pool.get_mut(curr_mark_node_id);
-                            let content_str_mut = curr_mark_node_mut.get_content_mut()?;
-                            content_str_mut.push_str(record_field_str_add);
-
-                            // update caret
-                            for _ in 0..record_field_str_add.len() {
-                                ed_model.simple_move_carets_right();
-                            }
-
-                            // update GridNodeMap
-                            ed_model.grid_node_map.insert_between_line(
-                                old_caret_pos.line,
-                                old_caret_pos.column,
-                                record_field_str_add.len(),
-                                curr_mark_node_id,
-                            )?;
-
-                            // update AST Node
-                            let first_field =
-                                fields
-                                .iter(ed_model.module.env.pool)
-                                .next()
-                                .with_context(
-                                    || RecordWithoutFields {}
-                                )?;
-
-                            let mut new_field_name = String::new();
-
-                            first_field.0.as_str(ed_model.module.env.pool).to_string();
-
-
-                            new_field_name.push(*ch);
-
-                            let new_pool_str = PoolStr::new(&new_field_name, &mut ed_model.module.env.pool);
-
-                            let first_field_mut =
-                                fields
-                                .iter_mut(ed_model.module.env.pool)
-                                .next()
-                                .with_context(
-                                    || RecordWithoutFields {}
-                                )?;
-
-                            first_field_mut.0 = new_pool_str;
-
-                            // TODO adjust grid_node_map
-                        }
+                        update_record_field(
+                            &ch.to_string(),
+                            old_caret_pos,
+                            curr_mark_node_id,
+                            new_child_index,
+                            fields,
+                            ed_model,
+                        )?;
                     },
                     other => {
                         unimplemented!("TODO implement updating of Expr2 {:?}.", other)
@@ -570,73 +413,3 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
     Ok(())
 }
-
-/*
-    let old_caret_pos = ed_model.caret_pos;
-
-    match received_char {
-        '\u{8}' | '\u{7f}' => {
-            // On Linux, '\u{8}' is backspace,
-            // on macOS '\u{7f}'.
-            if let Some(selection) = ed_model.selection_opt {
-                del_selection(selection, ed_model)?;
-            } else {
-                ed_model.caret_pos =
-                    move_caret_left(old_caret_pos, None, false, &ed_model.text_buf).0;
-
-                ed_model.text_buf.pop_char(old_caret_pos);
-            }
-
-            ed_model.selection_opt = None;
-        }
-        ch if is_newline(ch) => {
-            if let Some(selection) = ed_model.selection_opt {
-                del_selection(selection, ed_model)?;
-                ed_model.text_buf.insert_char(ed_model.caret_pos, &'\n')?;
-            } else {
-                ed_model.text_buf.insert_char(old_caret_pos, &'\n')?;
-
-                ed_model.caret_pos = Position {
-                    line: old_caret_pos.line + 1,
-                    column: 0,
-                };
-            }
-
-            ed_model.selection_opt = None;
-        }
-        '\u{1}' // Ctrl + A
-        | '\u{3}' // Ctrl + C
-        | '\u{16}' // Ctrl + V
-        | '\u{18}' // Ctrl + X
-        | '\u{e000}'..='\u{f8ff}' // http://www.unicode.org/faq/private_use.html
-        | '\u{f0000}'..='\u{ffffd}' // ^
-        | '\u{100000}'..='\u{10fffd}' // ^
-        => {
-            // chars that can be ignored
-        }
-        _ => {
-            if let Some(selection) = ed_model.selection_opt {
-                del_selection(selection, ed_model)?;
-                ed_model
-                    .text_buf
-                    .insert_char(ed_model.caret_pos, received_char)?;
-
-                ed_model.caret_pos =
-                    move_caret_right(ed_model.caret_pos, None, false, &ed_model.text_buf).0;
-            } else {
-                ed_model
-                    .text_buf
-                    .insert_char(old_caret_pos, received_char)?;
-
-                ed_model.caret_pos = Position {
-                    line: old_caret_pos.line,
-                    column: old_caret_pos.column + 1,
-                };
-            }
-
-            ed_model.selection_opt = None;
-        }
-    }
-
-    Ok(())
-*/
