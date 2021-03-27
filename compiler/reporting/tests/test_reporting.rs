@@ -5946,6 +5946,32 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
+                ── UNFINISHED RECORD PATTERN ───────────────────────────────────────────────────
+
+                I am partway through parsing a pattern in parentheses, but I got stuck
+                here:
+
+                1│  \( a,
+                        ^
+
+                I was expecting to see a closing parenthesis before this, so try
+                adding a ) and see if that helps?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn pattern_in_parens_open_keyword() {
+        report_problem_as(
+            indoc!(
+                r#"
+                \( if
+                "#
+            ),
+            indoc!(
+                r#"
             "#
             ),
         )
