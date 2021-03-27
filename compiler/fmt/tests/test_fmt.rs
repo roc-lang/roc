@@ -28,7 +28,7 @@ mod test_fmt {
 
                 assert_eq!(buf, expected)
             }
-            Err(error) => panic!("Unexpected parse failure when parsing this for formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", input, error)
+            Err(error) => panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:?}\n\n", input, error)
         };
     }
 
@@ -1833,23 +1833,23 @@ mod test_fmt {
             indoc!(
                 r#"
             when b is
-            1   |   2 |
-                3
-            ->
+                1   |   2 |
+                    3
+                ->
 
-                    4
-            5   |   6 | 7 ->
+                        4
+                5   |   6 | 7 ->
 
-                    8
-            9
-            | 10 -> 11
+                        8
+                9
+                 | 10 -> 11
 
-            12 | 13 ->
-              when c is
-                14 | 15 -> 16
-                17
-                |  18 -> 19
-            20 -> 21
+                12 | 13 ->
+                  when c is
+                    14 | 15 -> 16
+                    17
+                     |  18 -> 19
+                20 -> 21
 
             "#
             ),

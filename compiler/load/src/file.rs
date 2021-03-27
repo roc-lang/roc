@@ -2265,6 +2265,10 @@ fn load_pkg_config<'a>(
                     )))
                 }
                 Ok((ast::Module::Platform { header }, parser_state)) => {
+                    let delta = bytes.len() - parser_state.bytes.len();
+                    let chomped = &bytes[..delta];
+                    let header_src = unsafe { std::str::from_utf8_unchecked(chomped) };
+
                     // make a Pkg-Config module that ultimately exposes `main` to the host
                     let pkg_config_module_msg = fabricate_pkg_config_module(
                         arena,
@@ -2275,6 +2279,7 @@ fn load_pkg_config<'a>(
                         module_ids.clone(),
                         ident_ids_by_module.clone(),
                         &header,
+                        header_src,
                         pkg_module_timing,
                     )
                     .1;
@@ -2870,24 +2875,42 @@ fn send_header<'a>(
     )
 }
 
-// TODO refactor so more logic is shared with `send_header`
-#[allow(clippy::too_many_arguments)]
-fn send_header_two<'a>(
-    arena: &'a Bump,
+#[derive(Debug)]
+struct PlatformHeaderInfo<'a> {
     filename: PathBuf,
     is_root_module: bool,
     shorthand: &'a str,
+    header_src: &'a str,
     app_module_id: ModuleId,
     packages: &'a [Located<PackageEntry<'a>>],
     provides: &'a [Located<ExposesEntry<'a, &'a str>>],
     requires: &'a [Located<TypedIdent<'a>>],
     imports: &'a [Located<ImportsEntry<'a>>],
+}
+
+// TODO refactor so more logic is shared with `send_header`
+#[allow(clippy::too_many_arguments)]
+fn send_header_two<'a>(
+    arena: &'a Bump,
+    info: PlatformHeaderInfo<'a>,
     parse_state: parser::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
     use inlinable_string::InlinableString;
+
+    let PlatformHeaderInfo {
+        filename,
+        shorthand,
+        is_root_module,
+        header_src,
+        app_module_id,
+        packages,
+        provides,
+        requires,
+        imports,
+    } = info;
 
     let declared_name: InlinableString = "".into();
 
@@ -3080,7 +3103,7 @@ fn send_header_two<'a>(
                 package_qualified_imported_modules,
                 deps_by_name,
                 exposes: exposed,
-                header_src: "#builtin effect header",
+                header_src,
                 parse_state,
                 exposed_imports: scope,
                 module_timing,
@@ -3209,21 +3232,27 @@ fn fabricate_pkg_config_module<'a>(
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     header: &PlatformHeader<'a>,
+    header_src: &'a str,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
     let provides: &'a [Located<ExposesEntry<'a, &'a str>>] =
         header.provides.clone().into_bump_slice();
 
+    let info = PlatformHeaderInfo {
+        filename,
+        is_root_module: false,
+        shorthand,
+        header_src,
+        app_module_id,
+        packages: &[],
+        provides,
+        requires: header.requires.clone().into_bump_slice(),
+        imports: header.imports.clone().into_bump_slice(),
+    };
+
     send_header_two(
         arena,
-        filename,
-        false,
-        shorthand,
-        app_module_id,
-        &[],
-        provides,
-        header.requires.clone().into_bump_slice(),
-        header.imports.clone().into_bump_slice(),
+        info,
         parse_state,
         module_ids,
         ident_ids_by_module,
@@ -4114,7 +4143,7 @@ where
     Ok(())
 }
 
-fn to_file_problem_report(filename: &PathBuf, error: io::ErrorKind) -> String {
+fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
     use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
 

@@ -54,7 +54,7 @@ mod cli_run {
     ) {
         let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags].concat());
         if !compile_out.stderr.is_empty() {
-            panic!(compile_out.stderr);
+            panic!("{}", compile_out.stderr);
         }
         assert!(compile_out.status.success());
 

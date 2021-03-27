@@ -90,7 +90,11 @@ pub fn build_app<'a>() -> App<'a> {
 }
 
 pub fn docs(files: Vec<PathBuf>) {
-    roc_docs::generate(files, roc_builtins::std::standard_stdlib(), Path::new("./"))
+    roc_docs::generate(
+        files,
+        roc_builtins::std::standard_stdlib(),
+        Path::new("./generated-docs"),
+    )
 }
 
 pub fn build(target: &Triple, matches: &ArgMatches, run_after_build: bool) -> io::Result<()> {

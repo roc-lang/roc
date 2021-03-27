@@ -51,7 +51,7 @@ interface Num2
 ##
 ## In practice, these are rarely needed. It's most common to write
 ## number literals without any suffix.
-Num range : @Num range
+Num range : [ @Num range ]
 
 ## A fixed-size integer - that is, a number with no fractional component.
 ##
@@ -102,21 +102,21 @@ Num range : @Num range
 ## * Start by deciding if this integer should allow negative numbers, and choose signed or unsigned accordingly.
 ## * Next, think about the range of numbers you expect this number to hold. Choose the smallest size you will never expect to overflow, no matter the inputs your program receives. (Validating inputs for size, and presenting the user with an error if they are too big, can help guard against overflow.)
 ## * Finally, if a particular numeric calculation is running too slowly, you can try experimenting with other number sizes. This rarely makes a meaningful difference, but some processors can operate on different number sizes at different speeds.
-Int size : Num (@Int size)
+Int size : Num [ @Int size ]
 
 ## A signed 8-bit integer, ranging from -128 to 127
-I8 : Int @I8
-U8 : Int @U8
-U16 : Int @U16
-I16 : Int @I16
-U32 : Int @U32
-I32 : Int @I32
-I64 : Int @I64
-U64 : Int @U64
-I128 : Int @I128
-U128 : Int @U128
-Ilen : Int @Ilen
-Nat : Int @Nat
+I8 : Int [ @I8 ]
+U8 : Int [ @U8 ]
+U16 : Int [ @U16 ]
+I16 : Int [ @I16 ]
+U32 : Int [ @U32 ]
+I32 : Int [ @I32 ]
+I64 : Int [ @I64 ]
+U64 : Int [ @U64 ]
+I128 : Int [ @I128 ]
+U128 : Int [ @U128 ]
+Ilen : Int [ @Ilen ]
+Nat : Int [ @Nat ]
 
 ## A 64-bit signed integer. All number literals without decimal points are compatible with #Int values.
 ##
@@ -574,9 +574,9 @@ divRound : Int, Int -> Int
 
 ## Bitwise
 
-xor : Int -> Int -> Int
+xor : Int, Int -> Int
 
-and : Int -> Int -> Int
+and : Int, Int -> Int
 
 not : Int -> Int
 

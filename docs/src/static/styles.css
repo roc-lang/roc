@@ -66,16 +66,14 @@ a:hover {
 }
 
 .pkg-and-logo {
-  min-width: 0;
-  /* necessary for text-overflow: ellipsis to work in descendants */
+  min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
   display: flex;
   align-items: center;
   height: 100%;
   background-color: var(--top-bar-bg);
 }
 
-.pkg-and-logo a,
-.pkg-and-logo a:visited {
+.pkg-and-logo a, .pkg-and-logo a:visited {
   color: var(--top-bar-fg);
 }
 
@@ -84,18 +82,11 @@ a:hover {
   text-decoration: none;
 }
 
-.main-container {
-  min-width: 0;
-  /* necessary for text-overflow: ellipsis to work in descendants */
-}
-
 .search-button {
-  flex-shrink: 0;
-  /* always shrink the package name before these; they have a relatively constrained length */
+  flex-shrink: 0; /* always shrink the package name before these; they have a relatively constrained length */
   padding: 12px 18px;
   margin-right: 42px;
-  display: none;
-  /* only show this in the mobile view */
+  display: none; /* only show this in the mobile view */
 }
 
 .version {
@@ -127,6 +118,8 @@ main {
   line-height: 1.85em;
   margin-top: 2px;
   padding: 48px;
+
+  min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
 }
 
 #sidebar-nav {
@@ -160,13 +153,11 @@ main {
   flex-direction: row;
   align-items: center;
   flex-wrap: nowrap;
-  flex-grow: 1;
   box-sizing: border-box;
   font-family: var(--font-sans);
   font-size: 24px;
   height: 100%;
-  min-width: 0;
-  /* necessary for text-overflow: ellipsis to work in descendants */
+  min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
 }
 
 .top-header-triangle {
@@ -181,8 +172,8 @@ main {
 }
 
 p {
-  overflow-wrap: break-word;
-  margin: 24px 0;
+    overflow-wrap: break-word;
+    margin: 24px 0;
 }
 
 footer {
@@ -240,8 +231,7 @@ footer p {
   margin-bottom: 48px;
 }
 
-.module-name a,
-.module-name a:visited {
+.module-name a, .module-name a:visited {
   color: inherit;
 }
 
@@ -259,8 +249,7 @@ footer p {
   text-overflow: ellipsis;
 }
 
-a,
-a:visited {
+a, a:visited {
   color: var(--link-color);
 }
 
@@ -325,20 +314,19 @@ pre code {
   height: 0;
 }
 
-#module-search,
-#module-search:focus {
+#module-search, #module-search:focus {
   opacity: 1;
   padding: 12px 16px;
   height: 48px;
 }
 
 /* Show the "Search" label link when the text input has a placeholder */
-#module-search:placeholder-shown+#search-link {
+#module-search:placeholder-shown + #search-link {
   display: flex;
 }
 
 /* Hide the "Search" label link when the text input has focus */
-#module-search:focus+#search-link {
+#module-search:focus + #search-link {
   display: none;
 }
 
@@ -398,13 +386,13 @@ pre code {
   }
 }
 
-@media only screen and (max-device-width: 480px) {
+@media only screen and (max-device-width: 480px) and (orientation: portrait) {
   .search-button {
-    display: block;
-    /* This is only visible in mobile. */
+    display: block; /* This is only visible in mobile. */
   }
 
   .top-header {
+    justify-content: space-between;
     width: auto;
   }
 
@@ -443,21 +431,19 @@ pre code {
   }
 
   main {
+    grid-column-start: none;
+    grid-column-end: none;
+    grid-row-start: above-footer;
+    grid-row-end: above-footer;
     padding: 18px;
     font-size: 16px;
   }
 
-  .container {
-    margin: 0;
-    min-width: 320px;
-    max-width: 100%;
-  }
-
-  .content {
-    flex-direction: column;
-  }
-
-  .sidebar {
+  #sidebar-nav {
+    grid-column-start: none;
+    grid-column-end: none;
+    grid-row-start: sidebar;
+    grid-row-end: sidebar;
     margin-top: 0;
     padding-left: 0;
     width: auto;
@@ -478,12 +464,30 @@ pre code {
     font-size: 16px;
   }
 
-  .top-header {
-    justify-content: space-between;
+  body {
+    grid-template-columns: auto;
+    grid-template-rows: [top-header] var(--top-header-height) [before-sidebar] auto [sidebar] auto [above-footer] auto [footer] auto;
+/* [before-sidebar] 1fr [sidebar] var(--sidebar-width) [main-content] fit-content(calc(1280px - var(--sidebar-width))) [end] 1fr; */
+
+    margin: 0;
+    min-width: 320px;
+    max-width: 100%;
   }
 
-  .content {
-    /* Display the sidebar below <main> without affecting tab index */
-    flex-direction: column-reverse;
+  .top-header-triangle {
+    display: none;
+  }
+
+  .pkg-and-logo {
+    width: 100%;
+  }
+
+  .pkg-full-name {
+    flex-grow: 1;
+  }
+
+  .pkg-full-name a {
+    padding-top: 24px;
+    padding-bottom: 12px;
   }
 }

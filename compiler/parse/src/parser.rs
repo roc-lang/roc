@@ -185,7 +185,7 @@ pub enum SyntaxError<'a> {
     ReservedKeyword(Region),
     ArgumentsBeforeEquals(Region),
     NotYetImplemented(String),
-    TODO,
+    Todo,
     Type(Type<'a>),
     Pattern(EPattern<'a>),
     Expr(EExpr<'a>),
@@ -381,6 +381,7 @@ pub type Col = u16;
 pub enum EExpr<'a> {
     Start(Row, Col),
     End(Row, Col),
+    BadExprEnd(Row, Col),
     Space(BadInputError, Row, Col),
 
     Dot(Row, Col),
@@ -930,8 +931,8 @@ where
                                     state = next_state;
                                     buf.push(next_output);
                                 }
-                                Err((element_progress, fail, state)) => {
-                                    return Err((element_progress, fail, state));
+                                Err((_, fail, state)) => {
+                                    return Err((MadeProgress, fail, state));
                                 }
                             }
                         }
