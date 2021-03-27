@@ -319,7 +319,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                     ed_model.simple_move_carets_right();
                 }
 
-                // update mapping from possible caret positions to MarkNodeId's
+                // update GridNodeMap
                 ed_model.grid_node_map.add_to_line(
                     old_caret_pos.line,
                     nodes::LEFT_ACCOLADE.len(),
@@ -349,7 +349,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                 let ast_node_ref = ed_model.module.env.pool.get(ast_node_id);
 
                 match ast_node_ref {
-                    Expr2::Record { record_var:_, fields:_ } => {
+                    Expr2::Record { record_var:_, fields } => {
                         // update Markup
                         let record_colon = nodes::COLON;
 
@@ -386,9 +386,32 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                             ed_model.simple_move_carets_right();
                         }
 
-                        // TODO update grid_node_map
+                        // update GridNodeMap
+                        ed_model.grid_node_map.add_to_line(
+                            old_caret_pos.line,
+                            nodes::COLON.len(),
+                            record_colon_node_id,
+                        )?;
 
-                        // TODO update AST node
+                        ed_model.grid_node_map.add_to_line(
+                            old_caret_pos.line,
+                            nodes::BLANK_PLACEHOLDER.len(),
+                            record_blank_node_id,
+                        )?;
+
+                        // update AST node
+                        let new_field_val = Expr2::Blank;
+                        let new_field_val_id = ed_model.module.env.pool.add(new_field_val);
+
+                        let first_field_mut =
+                            fields
+                            .iter_mut(ed_model.module.env.pool)
+                            .next()
+                            .with_context(
+                                || RecordWithoutFields {}
+                            )?;
+
+                        first_field_mut.2 = new_field_val_id;
                     }
                     other => unimplemented!("TODO implement updating of Expr2 {:?}.", other)
                 }
