@@ -1188,7 +1188,7 @@ fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.log : Float -> Result Float [ LogOfNegative ]*
+/// Num.log : Float -> Result Float [ LogNeedsPositive ]*
 fn num_log(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let float_var = var_store.fresh();
@@ -1220,7 +1220,7 @@ fn num_log(symbol: Symbol, var_store: &mut VarStore) -> Def {
         )],
         final_else: Box::new(no_region(tag(
             "Err",
-            vec![tag("LogOfNegative", Vec::new(), var_store)],
+            vec![tag("LogNeedsPositive", Vec::new(), var_store)],
             var_store,
         ))),
     };
