@@ -71,6 +71,7 @@ pub enum LowLevel {
     NumSin,
     NumCos,
     NumSqrtUnchecked,
+    NumLogUnchecked,
     NumRound,
     NumToFloat,
     NumPow,

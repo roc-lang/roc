@@ -138,6 +138,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_REM => num_rem,
         NUM_IS_MULTIPLE_OF => num_is_multiple_of,
         NUM_SQRT => num_sqrt,
+        NUM_LOG => num_log,
         NUM_ROUND => num_round,
         NUM_IS_ODD => num_is_odd,
         NUM_IS_EVEN => num_is_even,
@@ -274,6 +275,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::NUM_REM => num_rem,
         Symbol::NUM_IS_MULTIPLE_OF => num_is_multiple_of,
         Symbol::NUM_SQRT => num_sqrt,
+        Symbol::NUM_LOG => num_log,
         Symbol::NUM_ROUND => num_round,
         Symbol::NUM_IS_ODD => num_is_odd,
         Symbol::NUM_IS_EVEN => num_is_even,
@@ -1175,6 +1177,52 @@ fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 var_store,
             )),
         ),
+    };
+
+    defn(
+        symbol,
+        vec![(float_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+/// Num.log : Float -> Result Float [ LogOfNegative ]*
+fn num_log(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let bool_var = var_store.fresh();
+    let float_var = var_store.fresh();
+    let unbound_zero_var = var_store.fresh();
+    let precision_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+
+    let body = If {
+        branch_var: ret_var,
+        cond_var: bool_var,
+        branches: vec![(
+            no_region(RunLowLevel {
+                op: LowLevel::NumGt,
+                args: vec![
+                    (float_var, Var(Symbol::ARG_1)),
+                    (float_var, Float(unbound_zero_var, precision_var, 0.0)),
+                ],
+                ret_var: bool_var,
+            }),
+            no_region(tag(
+                "Ok",
+                vec![RunLowLevel {
+                    op: LowLevel::NumLogUnchecked,
+                    args: vec![(float_var, Var(Symbol::ARG_1))],
+                    ret_var: float_var,
+                }],
+                var_store,
+            )),
+        )],
+        final_else: Box::new(no_region(tag(
+            "Err",
+            vec![tag("LogOfNegative", Vec::new(), var_store)],
+            var_store,
+        ))),
     };
 
     defn(
