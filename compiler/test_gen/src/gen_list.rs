@@ -1761,6 +1761,13 @@ fn list_sum() {
 }
 
 #[test]
+fn list_product() {
+    assert_evals_to!("List.product []", 1, i64);
+    assert_evals_to!("List.product [ 1, 2, 3 ]", 6, i64);
+    assert_evals_to!("List.product [ 1.1, 2.2, 3.3 ]", 1.1 * 2.2 * 3.3, f64);
+}
+
+#[test]
 fn list_keep_oks() {
     assert_evals_to!("List.keepOks [] (\\x -> x)", 0, i64);
     assert_evals_to!("List.keepOks [1,2] (\\x -> Ok x)", &[1, 2], &[i64]);
