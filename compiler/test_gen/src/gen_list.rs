@@ -1803,19 +1803,3 @@ fn cleanup_because_exception() {
         RocList<bool>
     );
 }
-
-#[test]
-fn applied_tag_function() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            x : List [ Foo Str ]
-            x = List.map [ "a", "b" ] Foo
-
-            x
-            "#
-        ),
-        RocList::from_slice(&[false; 1]),
-        RocList<bool>
-    );
-}
