@@ -2803,18 +2803,66 @@ pub fn with_hole<'a>(
             variant_var,
             name: tag_name,
             arguments: args,
-            ..
+            ext_var,
         } => {
             use crate::layout::UnionVariant::*;
             let arena = env.arena;
 
-            match layout_cache.from_var(arena, variant_var, env.subs) {
-                Err(e) => panic!("invalid layout {:?}", e),
-                Ok(Layout::FunctionPointer(argument_layouts, ret_layout)) => {
-                    dbg!(argument_layouts, ret_layout);
+            let desc = env.subs.get_without_compacting(variant_var);
+
+            if let Content::Structure(FlatType::Func(arg_vars, _, ret_var)) = desc.content {
+                let mut loc_pattern_args = vec![];
+                let mut loc_expr_args = vec![];
+
+                let proc_symbol = env.unique_symbol();
+
+                for arg_var in arg_vars {
+                    let arg_symbol = env.unique_symbol();
+
+                    let loc_pattern =
+                        Located::at_zero(roc_can::pattern::Pattern::Identifier(arg_symbol));
+
+                    let loc_expr = Located::at_zero(roc_can::expr::Expr::Var(arg_symbol));
+
+                    loc_pattern_args.push((arg_var, loc_pattern));
+                    loc_expr_args.push((arg_var, loc_expr));
                 }
-                Ok(_) => {
-                    panic!("idk")
+
+                let loc_body = Located::at_zero(roc_can::expr::Expr::Tag {
+                    variant_var: ret_var,
+                    name: tag_name,
+                    arguments: loc_expr_args,
+                    ext_var,
+                });
+
+                let inserted = procs.insert_anonymous(
+                    env,
+                    proc_symbol,
+                    variant_var,
+                    loc_pattern_args,
+                    loc_body,
+                    CapturedSymbols::None,
+                    ret_var,
+                    layout_cache,
+                );
+
+                match inserted {
+                    Ok(layout) => {
+                        return Stmt::Let(
+                            assigned,
+                            call_by_pointer(env, procs, proc_symbol, layout),
+                            layout,
+                            hole,
+                        );
+                    }
+                    Err(runtime_error) => {
+                        return Stmt::RuntimeError(env.arena.alloc(format!(
+                            "RuntimeError {} line {} {:?}",
+                            file!(),
+                            line!(),
+                            runtime_error,
+                        )));
+                    }
                 }
             }
 
