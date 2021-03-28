@@ -1138,43 +1138,29 @@ fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
         branch_var: ret_var,
         cond_var: bool_var,
         branches: vec![(
-            // if-condition
-            no_region(
-                // Num.neq denominator 0
-                RunLowLevel {
-                    op: LowLevel::NotEq,
-                    args: vec![
-                        (float_var, Var(Symbol::ARG_1)),
-                        (float_var, Float(unbound_zero_var, precision_var, 0.0)),
-                    ],
-                    ret_var: bool_var,
-                },
-            ),
-            // denominator was not zero
-            no_region(
-                // Ok (Float.#divUnchecked numerator denominator)
-                tag(
-                    "Ok",
-                    vec![
-                        // Num.#divUnchecked numerator denominator
-                        RunLowLevel {
-                            op: LowLevel::NumSqrtUnchecked,
-                            args: vec![(float_var, Var(Symbol::ARG_1))],
-                            ret_var: float_var,
-                        },
-                    ],
-                    var_store,
-                ),
-            ),
-        )],
-        final_else: Box::new(
-            // denominator was zero
+            no_region(RunLowLevel {
+                op: LowLevel::NumGte,
+                args: vec![
+                    (float_var, Var(Symbol::ARG_1)),
+                    (float_var, Float(unbound_zero_var, precision_var, 0.0)),
+                ],
+                ret_var: bool_var,
+            }),
             no_region(tag(
-                "Err",
-                vec![tag("DivByZero", Vec::new(), var_store)],
+                "Ok",
+                vec![RunLowLevel {
+                    op: LowLevel::NumSqrtUnchecked,
+                    args: vec![(float_var, Var(Symbol::ARG_1))],
+                    ret_var: float_var,
+                }],
                 var_store,
             )),
-        ),
+        )],
+        final_else: Box::new(no_region(tag(
+            "Err",
+            vec![tag("SqrtOfNegative", Vec::new(), var_store)],
+            var_store,
+        ))),
     };
 
     defn(
