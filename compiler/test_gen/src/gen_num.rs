@@ -379,6 +379,21 @@ mod gen_num {
         assert_evals_to!(
             indoc!(
                 r#"
+                    when Num.log 7.38905609893 is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+            ),
+            1.999999999999912,
+            f64
+        );
+    }
+
+    #[test]
+    fn f64_log_one() {
+        assert_evals_to!(
+            indoc!(
+                r#"
                     when Num.log 1 is
                         Ok val -> val
                         Err _ -> -1
@@ -409,6 +424,36 @@ mod gen_num {
             indoc!(
                 r#"
                     when Num.sqrt -1 is
+                        Err _ -> 42
+                        Ok val -> val
+                "#
+            ),
+            42.0,
+            f64
+        );
+    }
+
+    #[test]
+    fn f64_log_zero() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Num.log 0 is
+                        Err _ -> 42
+                        Ok val -> val
+                "#
+            ),
+            42.0,
+            f64
+        );
+    }
+
+    #[test]
+    fn f64_log_negative() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Num.log -1 is
                         Err _ -> 42
                         Ok val -> val
                 "#
