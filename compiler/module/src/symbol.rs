@@ -914,6 +914,7 @@ define_builtins! {
         23 LIST_MAP_WITH_INDEX: "mapWithIndex"
         24 LIST_MAP2: "map2"
         25 LIST_MAP3: "map3"
+        26 LIST_PRODUCT: "product"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

@@ -389,6 +389,35 @@ mod gen_num {
         );
     }
 
+    fn f64_sqrt_zero() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Num.sqrt 0 is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+            ),
+            0.0,
+            f64
+        );
+    }
+
+    #[test]
+    fn f64_sqrt_negative() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Num.sqrt -1 is
+                        Err _ -> 42
+                        Ok val -> val
+                "#
+            ),
+            42.0,
+            f64
+        );
+    }
+
     #[test]
     fn f64_round_old() {
         assert_evals_to!("Num.round 3.6", 4, i64);

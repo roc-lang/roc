@@ -77,6 +77,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_CONCAT => list_concat,
         LIST_CONTAINS => list_contains,
         LIST_SUM => list_sum,
+        LIST_PRODUCT => list_product,
         LIST_PREPEND => list_prepend,
         LIST_JOIN => list_join,
         LIST_MAP => list_map,
@@ -218,6 +219,7 @@ pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
         Symbol::LIST_CONCAT => list_concat,
         Symbol::LIST_CONTAINS => list_contains,
         Symbol::LIST_SUM => list_sum,
+        Symbol::LIST_PRODUCT => list_product,
         Symbol::LIST_PREPEND => list_prepend,
         Symbol::LIST_JOIN => list_join,
         Symbol::LIST_MAP => list_map,
@@ -413,8 +415,8 @@ fn lowlevel_4(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
 /// Num.maxInt : Int
 fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
-    let int_percision_var = var_store.fresh();
-    let body = Int(int_var, int_percision_var, i64::MAX.into());
+    let int_precision_var = var_store.fresh();
+    let body = Int(int_var, int_precision_var, i64::MAX.into());
 
     Def {
         annotation: None,
@@ -428,8 +430,8 @@ fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.minInt : Int
 fn num_min_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
-    let int_percision_var = var_store.fresh();
-    let body = Int(int_var, int_percision_var, i64::MIN.into());
+    let int_precision_var = var_store.fresh();
+    let body = Int(int_var, int_precision_var, i64::MIN.into());
 
     Def {
         annotation: None,
@@ -1133,50 +1135,36 @@ fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let float_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
-    let percision_var = var_store.fresh();
+    let precision_var = var_store.fresh();
     let ret_var = var_store.fresh();
 
     let body = If {
         branch_var: ret_var,
         cond_var: bool_var,
         branches: vec![(
-            // if-condition
-            no_region(
-                // Num.neq denominator 0
-                RunLowLevel {
-                    op: LowLevel::NotEq,
-                    args: vec![
-                        (float_var, Var(Symbol::ARG_1)),
-                        (float_var, Float(unbound_zero_var, percision_var, 0.0)),
-                    ],
-                    ret_var: bool_var,
-                },
-            ),
-            // denominator was not zero
-            no_region(
-                // Ok (Float.#divUnchecked numerator denominator)
-                tag(
-                    "Ok",
-                    vec![
-                        // Num.#divUnchecked numerator denominator
-                        RunLowLevel {
-                            op: LowLevel::NumSqrtUnchecked,
-                            args: vec![(float_var, Var(Symbol::ARG_1))],
-                            ret_var: float_var,
-                        },
-                    ],
-                    var_store,
-                ),
-            ),
-        )],
-        final_else: Box::new(
-            // denominator was zero
+            no_region(RunLowLevel {
+                op: LowLevel::NumGte,
+                args: vec![
+                    (float_var, Var(Symbol::ARG_1)),
+                    (float_var, Float(unbound_zero_var, precision_var, 0.0)),
+                ],
+                ret_var: bool_var,
+            }),
             no_region(tag(
-                "Err",
-                vec![tag("DivByZero", Vec::new(), var_store)],
+                "Ok",
+                vec![RunLowLevel {
+                    op: LowLevel::NumSqrtUnchecked,
+                    args: vec![(float_var, Var(Symbol::ARG_1))],
+                    ret_var: float_var,
+                }],
                 var_store,
             )),
-        ),
+        )],
+        final_else: Box::new(no_region(tag(
+            "Err",
+            vec![tag("SqrtOfNegative", Vec::new(), var_store)],
+            var_store,
+        ))),
     };
 
     defn(
@@ -1433,8 +1421,8 @@ fn num_int_cast(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.maxI128: I128
 fn num_max_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
-    let int_percision_var = var_store.fresh();
-    let body = Int(int_var, int_percision_var, i128::MAX);
+    let int_precision_var = var_store.fresh();
+    let body = Int(int_var, int_precision_var, i128::MAX);
 
     let std = roc_builtins::std::types();
     let solved = std.get(&symbol).unwrap();
@@ -2164,22 +2152,12 @@ fn list_walk_backwards(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// List.sum : List (Num a) -> Num a
 fn list_sum(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_var = var_store.fresh();
-    let result_var = var_store.fresh();
+    lowlevel_1(symbol, LowLevel::ListSum, var_store)
+}
 
-    let body = RunLowLevel {
-        op: LowLevel::ListSum,
-        args: vec![(list_var, Var(Symbol::ARG_1))],
-        ret_var: result_var,
-    };
-
-    defn(
-        symbol,
-        vec![(list_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        result_var,
-    )
+/// List.product : List (Num a) -> Num a
+fn list_product(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::ListProduct, var_store)
 }
 
 /// List.keepIf : List elem, (elem -> Bool) -> List elem
@@ -2709,7 +2687,7 @@ fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let num_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
-    let percision_var = var_store.fresh();
+    let precision_var = var_store.fresh();
     let ret_var = var_store.fresh();
 
     let body = If {
@@ -2723,7 +2701,7 @@ fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     op: LowLevel::NotEq,
                     args: vec![
                         (num_var, Var(Symbol::ARG_2)),
-                        (num_var, Float(unbound_zero_var, percision_var, 0.0)),
+                        (num_var, Float(unbound_zero_var, precision_var, 0.0)),
                     ],
                     ret_var: bool_var,
                 },
@@ -2772,7 +2750,7 @@ fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let num_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
-    let unbound_zero_percision_var = var_store.fresh();
+    let unbound_zero_precision_var = var_store.fresh();
     let ret_var = var_store.fresh();
 
     let body = If {
@@ -2788,7 +2766,7 @@ fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         (num_var, Var(Symbol::ARG_2)),
                         (
                             num_var,
-                            Int(unbound_zero_var, unbound_zero_percision_var, 0),
+                            Int(unbound_zero_var, unbound_zero_precision_var, 0),
                         ),
                     ],
                     ret_var: bool_var,
@@ -2843,7 +2821,7 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let len_var = var_store.fresh();
     let zero_var = var_store.fresh();
-    let zero_percision_var = var_store.fresh();
+    let zero_precision_var = var_store.fresh();
     let list_elem_var = var_store.fresh();
     let ret_var = var_store.fresh();
 
@@ -2858,7 +2836,7 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (len_var, Int(zero_var, zero_percision_var, 0)),
+                        (len_var, Int(zero_var, zero_precision_var, 0)),
                         (
                             len_var,
                             RunLowLevel {
@@ -2882,7 +2860,7 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
                             op: LowLevel::ListGetUnsafe,
                             args: vec![
                                 (list_var, Var(Symbol::ARG_1)),
-                                (len_var, Int(zero_var, zero_percision_var, 0)),
+                                (len_var, Int(zero_var, zero_precision_var, 0)),
                             ],
                             ret_var: list_elem_var,
                         },
@@ -2924,7 +2902,7 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let len_var = var_store.fresh();
     let num_var = var_store.fresh();
-    let num_percision_var = var_store.fresh();
+    let num_precision_var = var_store.fresh();
     let list_elem_var = var_store.fresh();
     let ret_var = var_store.fresh();
 
@@ -2939,7 +2917,7 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (len_var, Int(num_var, num_percision_var, 0)),
+                        (len_var, Int(num_var, num_precision_var, 0)),
                         (
                             len_var,
                             RunLowLevel {
@@ -2978,7 +2956,7 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                                     ret_var: len_var,
                                                 },
                                             ),
-                                            (arg_var, Int(num_var, num_percision_var, 1)),
+                                            (arg_var, Int(num_var, num_precision_var, 1)),
                                         ],
                                         ret_var: len_var,
                                     },
