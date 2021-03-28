@@ -361,7 +361,6 @@ mod gen_num {
 
     #[test]
     fn f64_sqrt() {
-        // FIXME this works with normal types, but fails when checking uniqueness types
         assert_evals_to!(
             indoc!(
                 r#"
@@ -371,6 +370,21 @@ mod gen_num {
                 "#
             ),
             10.0,
+            f64
+        );
+    }
+
+    #[test]
+    fn f64_log() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when Num.log 1 is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+            ),
+            0.0,
             f64
         );
     }
