@@ -558,14 +558,7 @@ impl<'a> Procs<'a> {
                                     }
                                 }
                                 Err(error) => {
-                                    let error_msg = format!(
-                                        "TODO generate a RuntimeError message for {:?}",
-                                        error
-                                    );
-                                    dbg!(symbol);
-                                    self.runtime_errors
-                                        .insert(symbol, env.arena.alloc(error_msg));
-                                    panic!();
+                                    panic!("TODO generate a RuntimeError message for {:?}", error);
                                 }
                             }
                         }
@@ -672,12 +665,7 @@ impl<'a> Procs<'a> {
                         self.specialized.insert((symbol, layout), Done(proc));
                     }
                     Err(error) => {
-                        let error_msg =
-                            format!("TODO generate a RuntimeError message for {:?}", error);
-                        dbg!(symbol);
-                        self.runtime_errors
-                            .insert(symbol, env.arena.alloc(error_msg));
-                        panic!();
+                        panic!("TODO generate a RuntimeError message for {:?}", error);
                     }
                 }
             }
@@ -701,7 +689,6 @@ fn add_pending<'a>(
 #[derive(Default)]
 pub struct Specializations<'a> {
     by_symbol: MutMap<Symbol, MutMap<Layout<'a>, Proc<'a>>>,
-    runtime_errors: MutSet<Symbol>,
 }
 
 impl<'a> Specializations<'a> {
@@ -717,32 +704,15 @@ impl<'a> Specializations<'a> {
             !procs_by_layout.contains_key(&layout) || procs_by_layout.get(&layout) == Some(&proc)
         );
 
-        // We shouldn't already have a runtime error recorded for this symbol
-        debug_assert!(!self.runtime_errors.contains(&symbol));
-
         procs_by_layout.insert(layout, proc);
     }
 
-    pub fn runtime_error(&mut self, symbol: Symbol) {
-        // We shouldn't already have a normal proc recorded for this symbol
-        debug_assert!(!self.by_symbol.contains_key(&symbol));
-
-        self.runtime_errors.insert(symbol);
-    }
-
-    pub fn into_owned(self) -> (MutMap<Symbol, MutMap<Layout<'a>, Proc<'a>>>, MutSet<Symbol>) {
-        (self.by_symbol, self.runtime_errors)
-    }
-
     pub fn len(&self) -> usize {
-        let runtime_errors: usize = self.runtime_errors.len();
-        let specializations: usize = self.by_symbol.len();
-
-        runtime_errors + specializations
+        self.by_symbol.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.by_symbol.is_empty()
     }
 }
 
@@ -6108,123 +6078,42 @@ fn call_by_name<'a>(
                                             "\n\n{:?}\n\n{:?}",
                                             full_layout, layout
                                         );
-                                        let function_layout =
-                                            FunctionLayouts::from_layout(env.arena, layout);
 
-                                        procs.specialized.remove(&(proc_name, full_layout));
-
-                                        procs
-                                            .specialized
-                                            .insert((proc_name, function_layout.full), Done(proc));
-
-                                        if field_symbols.is_empty() {
-                                            debug_assert!(loc_args.is_empty());
-
-                                            // This happens when we return a function, e.g.
-                                            //
-                                            // foo = Num.add
-                                            //
-                                            // Even though the layout (and type) are functions,
-                                            // there are no arguments. This confuses our IR,
-                                            // and we have to fix it here.
-                                            match full_layout {
-                                                Layout::Closure(_, closure_layout, _) => {
-                                                    let call = self::Call {
-                                                        call_type: CallType::ByName {
-                                                            name: proc_name,
-                                                            ret_layout: function_layout.result,
-                                                            full_layout: function_layout.full,
-                                                            arg_layouts: function_layout.arguments,
-                                                        },
-                                                        arguments: field_symbols,
-                                                    };
-
-                                                    // in the case of a closure specifically, we
-                                                    // have to create a custom layout, to make sure
-                                                    // the closure data is part of the layout
-                                                    let closure_struct_layout = Layout::Struct(
-                                                        env.arena.alloc([
-                                                            function_layout.full,
-                                                            closure_layout
-                                                                .as_block_of_memory_layout(),
-                                                        ]),
-                                                    );
-
-                                                    build_call(
-                                                        env,
-                                                        call,
-                                                        assigned,
-                                                        closure_struct_layout,
-                                                        hole,
-                                                    )
-                                                }
-                                                _ => {
-                                                    let call = self::Call {
-                                                        call_type: CallType::ByName {
-                                                            name: proc_name,
-                                                            ret_layout: function_layout.result,
-                                                            full_layout: function_layout.full,
-                                                            arg_layouts: function_layout.arguments,
-                                                        },
-                                                        arguments: field_symbols,
-                                                    };
-
-                                                    build_call(
-                                                        env,
-                                                        call,
-                                                        assigned,
-                                                        function_layout.full,
-                                                        hole,
-                                                    )
-                                                }
-                                            }
-                                        } else {
-                                            debug_assert_eq!(
-                                                function_layout.arguments.len(),
-                                                field_symbols.len(),
-                                                "scroll up a bit for background"
-                                            );
-                                            let call = self::Call {
-                                                call_type: CallType::ByName {
-                                                    name: proc_name,
-                                                    ret_layout: function_layout.result,
-                                                    full_layout: function_layout.full,
-                                                    arg_layouts: function_layout.arguments,
-                                                },
-                                                arguments: field_symbols,
-                                            };
-
-                                            let iter = loc_args
-                                                .into_iter()
-                                                .rev()
-                                                .zip(field_symbols.iter().rev());
-
-                                            let result = build_call(
-                                                env,
-                                                call,
-                                                assigned,
-                                                function_layout.result,
-                                                hole,
-                                            );
-
-                                            assign_to_symbols(
-                                                env,
-                                                procs,
-                                                layout_cache,
-                                                iter,
-                                                result,
-                                            )
-                                        }
+                                        call_specialized_proc(
+                                            env,
+                                            procs,
+                                            proc_name,
+                                            proc,
+                                            layout,
+                                            field_symbols,
+                                            loc_args,
+                                            layout_cache,
+                                            assigned,
+                                            hole,
+                                        )
                                     }
-                                    Err(error) => {
-                                        let error_msg = env.arena.alloc(format!(
-                                            "TODO generate a RuntimeError message for {:?}",
-                                            error
-                                        ));
+                                    Err(SpecializeFailure {
+                                        attempted_layout,
+                                        problem: _,
+                                    }) => {
+                                        let proc = generate_runtime_error_function(
+                                            env,
+                                            proc_name,
+                                            attempted_layout,
+                                        );
 
-                                        procs.runtime_errors.insert(proc_name, error_msg);
-
-                                        Stmt::RuntimeError(error_msg)
+                                        call_specialized_proc(
+                                            env,
+                                            procs,
+                                            proc_name,
+                                            proc,
+                                            layout,
+                                            field_symbols,
+                                            loc_args,
+                                            layout_cache,
+                                            assigned,
+                                            hole,
+                                        )
                                     }
                                 }
                             }
@@ -6271,19 +6160,104 @@ fn call_by_name<'a>(
                             }
 
                             None => {
-                                // This must have been a runtime error.
-                                match procs.runtime_errors.get(&proc_name) {
-                                    Some(error) => Stmt::RuntimeError(
-                                        env.arena.alloc(format!("runtime error {:?}", error)),
-                                    ),
-                                    None => unreachable!("Proc name {:?} is invalid", proc_name),
-                                }
+                                unreachable!("Proc name {:?} is invalid", proc_name)
                             }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn call_specialized_proc<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    proc_name: Symbol,
+    proc: Proc<'a>,
+    layout: Layout<'a>,
+    field_symbols: &'a [Symbol],
+    loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
+    layout_cache: &mut LayoutCache<'a>,
+    assigned: Symbol,
+    hole: &'a Stmt<'a>,
+) -> Stmt<'a> {
+    let function_layout = FunctionLayouts::from_layout(env.arena, layout);
+
+    procs.specialized.remove(&(proc_name, layout));
+
+    procs
+        .specialized
+        .insert((proc_name, function_layout.full), Done(proc));
+
+    if field_symbols.is_empty() {
+        debug_assert!(loc_args.is_empty());
+
+        // This happens when we return a function, e.g.
+        //
+        // foo = Num.add
+        //
+        // Even though the layout (and type) are functions,
+        // there are no arguments. This confuses our IR,
+        // and we have to fix it here.
+        match layout {
+            Layout::Closure(_, closure_layout, _) => {
+                let call = self::Call {
+                    call_type: CallType::ByName {
+                        name: proc_name,
+                        ret_layout: function_layout.result,
+                        full_layout: function_layout.full,
+                        arg_layouts: function_layout.arguments,
+                    },
+                    arguments: field_symbols,
+                };
+
+                // in the case of a closure specifically, we
+                // have to create a custom layout, to make sure
+                // the closure data is part of the layout
+                let closure_struct_layout = Layout::Struct(env.arena.alloc([
+                    function_layout.full,
+                    closure_layout.as_block_of_memory_layout(),
+                ]));
+
+                build_call(env, call, assigned, closure_struct_layout, hole)
+            }
+            _ => {
+                let call = self::Call {
+                    call_type: CallType::ByName {
+                        name: proc_name,
+                        ret_layout: function_layout.result,
+                        full_layout: function_layout.full,
+                        arg_layouts: function_layout.arguments,
+                    },
+                    arguments: field_symbols,
+                };
+
+                build_call(env, call, assigned, function_layout.full, hole)
+            }
+        }
+    } else {
+        debug_assert_eq!(
+            function_layout.arguments.len(),
+            field_symbols.len(),
+            "scroll up a bit for background"
+        );
+        let call = self::Call {
+            call_type: CallType::ByName {
+                name: proc_name,
+                ret_layout: function_layout.result,
+                full_layout: function_layout.full,
+                arg_layouts: function_layout.arguments,
+            },
+            arguments: field_symbols,
+        };
+
+        let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
+
+        let result = build_call(env, call, assigned, function_layout.result, hole);
+
+        assign_to_symbols(env, procs, layout_cache, iter, result)
     }
 }
 
