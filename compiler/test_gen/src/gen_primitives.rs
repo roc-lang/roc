@@ -2278,7 +2278,7 @@ fn function_malformed_pattern() {
 }
 
 #[test]
-#[should_panic(expected = "Hit an erroneous type when creating a layout for `#UserApp.f`")]
+#[should_panic(expected = "Hit an erroneous type when creating a layout for")]
 fn call_invalid_layout() {
     assert_llvm_evals_to!(
         indoc!(
