@@ -13,7 +13,7 @@ use crate::lang::{
 };
 use bumpalo::Bump;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum MarkupNode {
     Nested {
         ast_node_id: NodeId<Expr2>,
