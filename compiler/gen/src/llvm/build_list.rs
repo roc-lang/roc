@@ -888,13 +888,6 @@ pub fn list_walk_help<'a, 'ctx, 'env>(
 
     let (default, default_layout) = load_symbol_and_layout(scope, &args[2]);
 
-    let bitcode_fn = match variant {
-        ListWalk::Walk => bitcode::LIST_WALK,
-        ListWalk::WalkBackwards => bitcode::LIST_WALK_BACKWARDS,
-        ListWalk::WalkUntil => todo!(),
-        ListWalk::WalkBackwardsUntil => todo!(),
-    };
-
     match list_layout {
         Layout::Builtin(Builtin::EmptyList) => default,
         Layout::Builtin(Builtin::List(_, element_layout)) => list_walk_generic(
@@ -907,7 +900,7 @@ pub fn list_walk_help<'a, 'ctx, 'env>(
             func_layout,
             default,
             default_layout,
-            &bitcode_fn,
+            variant,
         ),
         _ => unreachable!("invalid list layout"),
     }
@@ -923,9 +916,16 @@ fn list_walk_generic<'a, 'ctx, 'env>(
     func_layout: &Layout<'a>,
     default: BasicValueEnum<'ctx>,
     default_layout: &Layout<'a>,
-    zig_function: &str,
+    variant: ListWalk,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
+
+    let zig_function = match variant {
+        ListWalk::Walk => bitcode::LIST_WALK,
+        ListWalk::WalkBackwards => bitcode::LIST_WALK_BACKWARDS,
+        ListWalk::WalkUntil => bitcode::LIST_WALK_UNTIL,
+        ListWalk::WalkBackwardsUntil => todo!(),
+    };
 
     let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
@@ -959,21 +959,44 @@ fn list_walk_generic<'a, 'ctx, 'env>(
 
     let result_ptr = env.builder.build_alloca(default.get_type(), "result");
 
-    call_void_bitcode_fn(
-        env,
-        &[
-            list_i128,
-            env.builder
-                .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
-            stepper_caller.into(),
-            env.builder.build_bitcast(default_ptr, u8_ptr, "to_u8_ptr"),
-            alignment_iv.into(),
-            element_width.into(),
-            default_width.into(),
-            env.builder.build_bitcast(result_ptr, u8_ptr, "to_opaque"),
-        ],
-        zig_function,
-    );
+    match variant {
+        ListWalk::Walk | ListWalk::WalkBackwards => {
+            call_void_bitcode_fn(
+                env,
+                &[
+                    list_i128,
+                    env.builder
+                        .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+                    stepper_caller.into(),
+                    env.builder.build_bitcast(default_ptr, u8_ptr, "to_u8_ptr"),
+                    alignment_iv.into(),
+                    element_width.into(),
+                    default_width.into(),
+                    env.builder.build_bitcast(result_ptr, u8_ptr, "to_opaque"),
+                ],
+                zig_function,
+            );
+        }
+        ListWalk::WalkUntil | ListWalk::WalkBackwardsUntil => {
+            let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
+            call_void_bitcode_fn(
+                env,
+                &[
+                    list_i128,
+                    env.builder
+                        .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+                    stepper_caller.into(),
+                    env.builder.build_bitcast(default_ptr, u8_ptr, "to_u8_ptr"),
+                    alignment_iv.into(),
+                    element_width.into(),
+                    default_width.into(),
+                    dec_element_fn.as_global_value().as_pointer_value().into(),
+                    env.builder.build_bitcast(result_ptr, u8_ptr, "to_opaque"),
+                ],
+                zig_function,
+            );
+        }
+    }
 
     env.builder.build_load(result_ptr, "load_result")
 }
