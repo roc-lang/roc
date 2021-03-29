@@ -18,6 +18,7 @@ comptime {
     exportListFn(list.listContains, "contains");
     exportListFn(list.listRepeat, "repeat");
     exportListFn(list.listAppend, "append");
+    exportListFn(list.listRange, "range");
 }
 
 // Dict Module

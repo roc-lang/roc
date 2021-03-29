@@ -4,6 +4,58 @@ const Allocator = std.mem.Allocator;
 const REFCOUNT_ONE_ISIZE: comptime isize = std.math.minInt(isize);
 pub const REFCOUNT_ONE: usize = @bitCast(usize, REFCOUNT_ONE_ISIZE);
 
+pub const IntWidth = enum(u8) {
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    Usize,
+};
+
+pub fn intWidth(width: IntWidth) anytype {
+    switch (width) {
+        IntWidth.U8 => {
+            return u8;
+        },
+        IntWidth.U16 => {
+            return u16;
+        },
+        IntWidth.U32 => {
+            return u32;
+        },
+        IntWidth.U64 => {
+            return u64;
+        },
+        IntWidth.U128 => {
+            return u128;
+        },
+        IntWidth.I8 => {
+            return i8;
+        },
+        IntWidth.I16 => {
+            return i16;
+        },
+        IntWidth.I32 => {
+            return i32;
+        },
+        IntWidth.I64 => {
+            return i64;
+        },
+        IntWidth.I128 => {
+            return i128;
+        },
+        IntWidth.Usize => {
+            return usize;
+        },
+    }
+}
+
 pub fn decref(
     allocator: *Allocator,
     alignment: usize,

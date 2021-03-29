@@ -74,3 +74,4 @@ pub const LIST_WALK_BACKWARDS: &str = "roc_builtins.list.walk_backwards";
 pub const LIST_CONTAINS: &str = "roc_builtins.list.contains";
 pub const LIST_REPEAT: &str = "roc_builtins.list.repeat";
 pub const LIST_APPEND: &str = "roc_builtins.list.append";
+pub const LIST_RANGE: &str = "roc_builtins.list.range";
