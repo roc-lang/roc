@@ -502,6 +502,42 @@ pub fn listWalkBackwards(list: RocList, stepper: Opaque, stepper_caller: Caller2
     utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
 }
 
+pub fn listWalkUntil(list: RocList, stepper: Opaque, stepper_caller: Caller2, accum: Opaque, alignment: usize, element_width: usize, accum_width: usize, output: Opaque) callconv(.C) void {
+    if (accum_width == 0) {
+        return;
+    }
+
+    if (list.isEmpty()) {
+        @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
+        return;
+    }
+
+    const alloc: [*]u8 = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, accum_width) catch unreachable);
+    var b1 = output orelse unreachable;
+    var b2 = alloc;
+
+    @memcpy(b2, accum orelse unreachable, accum_width);
+
+    if (list.bytes) |source_ptr| {
+        var i: usize = 0;
+        const size = list.len();
+        while (i < size) : (i += 1) {
+            const element = source_ptr + i * element_width;
+            stepper_caller(stepper, element, b2, b1);
+
+            const temp = b1;
+            b2 = b1;
+            b1 = temp;
+        }
+    }
+
+    @memcpy(output orelse unreachable, b2, accum_width);
+    std.heap.c_allocator.free(alloc[0..accum_width]);
+
+    const data_bytes = list.len() * element_width;
+    utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
+}
+
 // List.contains : List k, k -> Bool
 pub fn listContains(list: RocList, key: Opaque, key_width: usize, is_eq: EqFn) callconv(.C) bool {
     if (list.bytes) |source_ptr| {

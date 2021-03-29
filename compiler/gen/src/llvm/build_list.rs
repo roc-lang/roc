@@ -863,56 +863,54 @@ pub fn list_product<'a, 'ctx, 'env>(
     builder.build_load(accum_alloca, "load_final_acum")
 }
 
-/// List.walk : List elem, (elem -> accum -> accum), accum -> accum
-pub fn list_walk<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    parent: FunctionValue<'ctx>,
-    list: BasicValueEnum<'ctx>,
-    element_layout: &Layout<'a>,
-    func: BasicValueEnum<'ctx>,
-    func_layout: &Layout<'a>,
-    default: BasicValueEnum<'ctx>,
-    default_layout: &Layout<'a>,
-) -> BasicValueEnum<'ctx> {
-    list_walk_generic(
-        env,
-        layout_ids,
-        parent,
-        list,
-        element_layout,
-        func,
-        func_layout,
-        default,
-        default_layout,
-        &bitcode::LIST_WALK,
-    )
+pub enum ListWalk {
+    Walk,
+    WalkBackwards,
+    WalkUntil,
+    WalkBackwardsUntil,
 }
 
-/// List.walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
-pub fn list_walk_backwards<'a, 'ctx, 'env>(
+pub fn list_walk_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
+    scope: &crate::llvm::build::Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
-    list: BasicValueEnum<'ctx>,
-    element_layout: &Layout<'a>,
-    func: BasicValueEnum<'ctx>,
-    func_layout: &Layout<'a>,
-    default: BasicValueEnum<'ctx>,
-    default_layout: &Layout<'a>,
+    args: &[roc_module::symbol::Symbol],
+    variant: ListWalk,
 ) -> BasicValueEnum<'ctx> {
-    list_walk_generic(
-        env,
-        layout_ids,
-        parent,
-        list,
-        element_layout,
-        func,
-        func_layout,
-        default,
-        default_layout,
-        &bitcode::LIST_WALK_BACKWARDS,
-    )
+    use crate::llvm::build::load_symbol_and_layout;
+
+    debug_assert_eq!(args.len(), 3);
+
+    let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+
+    let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
+
+    let (default, default_layout) = load_symbol_and_layout(scope, &args[2]);
+
+    let bitcode_fn = match variant {
+        ListWalk::Walk => bitcode::LIST_WALK,
+        ListWalk::WalkBackwards => bitcode::LIST_WALK_BACKWARDS,
+        ListWalk::WalkUntil => todo!(),
+        ListWalk::WalkBackwardsUntil => todo!(),
+    };
+
+    match list_layout {
+        Layout::Builtin(Builtin::EmptyList) => default,
+        Layout::Builtin(Builtin::List(_, element_layout)) => list_walk_generic(
+            env,
+            layout_ids,
+            parent,
+            list,
+            element_layout,
+            func,
+            func_layout,
+            default,
+            default_layout,
+            &bitcode_fn,
+        ),
+        _ => unreachable!("invalid list layout"),
+    }
 }
 
 fn list_walk_generic<'a, 'ctx, 'env>(
