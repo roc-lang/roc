@@ -295,21 +295,25 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
     // TODO set all selections to none
     // TODO nested records
 
+    ed_model.dirty = true;
+
     match received_char {
         '{' => {
             start_new_record(ed_model)?;
         }
         ':' => {
             // TODO set up Dict if previous char is '{'
+
             update_record_colon(ed_model)?;
         }
         '\u{8}' | '\u{7f}' => {
             // On Linux, '\u{8}' is backspace,
             // On macOS '\u{7f}'.
-            unimplemented!("TODO implement backspace")
+
+            unimplemented!("TODO implement backspace");
         }
         ch if is_newline(ch) => {
-            unimplemented!("TODO implement newline")
+            unimplemented!("TODO implement newline");
         }
         '\u{1}' // Ctrl + A
         | '\u{3}' // Ctrl + C
@@ -320,6 +324,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
         | '\u{100000}'..='\u{10fffd}' // ^
         => {
             // chars that can be ignored
+            ed_model.dirty = false;
         }
         ch => {
             let old_caret_pos = ed_model.get_caret();

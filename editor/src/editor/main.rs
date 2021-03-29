@@ -302,6 +302,8 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                             Ok(rendered_wgpu) => rendered_wgpu_opt = Some(rendered_wgpu),
                             Err(e) => print_err(&e),
                         }
+
+                        ed_model.dirty = false;
                     }
 
                     if let Some(ref rendered_wgpu) = rendered_wgpu_opt {
