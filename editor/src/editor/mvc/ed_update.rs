@@ -41,7 +41,7 @@ impl<'a> EdModel<'a> {
         Ok(())
     }
 
-    // TODO delete
+    // TODO delete once we use `GridNodeMap` for everything that now uses `CodeLines`.
     // disregards EdModel.code_lines because the caller knows the resulting caret position will be valid.
     // allows us to prevent multiple updates to EdModel.code_lines
     pub fn simple_move_carets_right(&mut self) {
