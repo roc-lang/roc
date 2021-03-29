@@ -8,8 +8,8 @@ To build the compiler, you need these installed:
 * `libunwind` (macOS should already have this one installed)
 * `libc++-dev`
 * Python 2.7 (Windows only), `python-is-python3` (Ubuntu)
-* [Zig](https://ziglang.org/) 0.7.1 or greater
-* a particular version of LLVM (see below)
+* [Zig](https://ziglang.org/), see below for version
+* LLVM, see below for version
 
 To run the test suite (via `cargo test`), you additionally need to install:
 
@@ -24,12 +24,14 @@ MacOS systems should already have `libunwind`, but other systems will need to in
 Some systems may already have `libc++-dev` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `sudo apt-get install libc++-dev`.)
 
 ### Zig
+**version: 0.7.x**
 
 If you're on MacOS, you can install with `brew install zig`
 If you're on Ubuntu and use Snap, you can install with `snap install zig --classic --beta`
 For any other OS, checkout the [Zig installation page](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
 
 ### LLVM
+**version: 10.0.x**
 
 For Ubuntu and Debian, you can use the `Automatic installation script` at [apt.llvm.org](https://apt.llvm.org):
 ```
