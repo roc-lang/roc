@@ -430,6 +430,20 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    // log : Float a -> Float a
+    let log_needs_positive = SolvedType::TagUnion(
+        vec![(TagName::Global("LogNeedsPositive".into()), vec![])],
+        Box::new(SolvedType::Wildcard),
+    );
+
+    add_type(
+        Symbol::NUM_LOG,
+        top_level_function(
+            vec![float_type(flex(TVAR1))],
+            Box::new(result_type(float_type(flex(TVAR1)), log_needs_positive)),
+        ),
+    );
+
     // round : Float a -> Int b
     add_type(
         Symbol::NUM_ROUND,
