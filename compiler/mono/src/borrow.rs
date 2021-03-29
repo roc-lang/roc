@@ -657,7 +657,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListContains => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         ListWalk => arena.alloc_slice_copy(&[owned, irrelevant, owned]),
         ListWalkBackwards => arena.alloc_slice_copy(&[owned, irrelevant, owned]),
-        ListSum => arena.alloc_slice_copy(&[borrowed]),
+        ListSum | ListProduct => arena.alloc_slice_copy(&[borrowed]),
 
         // TODO when we have lists with capacity (if ever)
         // List.append should own its first argument
@@ -671,10 +671,9 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         | NumBitwiseAnd | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy | NumShiftRightBy
         | NumShiftRightZfBy => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
 
-        NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumRound | NumCeiling | NumFloor
-        | NumToFloat | Not | NumIsFinite | NumAtan | NumAcos | NumAsin | NumIntCast => {
-            arena.alloc_slice_copy(&[irrelevant])
-        }
+        NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumLogUnchecked | NumRound
+        | NumCeiling | NumFloor | NumToFloat | Not | NumIsFinite | NumAtan | NumAcos | NumAsin
+        | NumIntCast => arena.alloc_slice_copy(&[irrelevant]),
         StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[owned, borrowed]),
         StrFromUtf8 => arena.alloc_slice_copy(&[owned]),
         StrToBytes => arena.alloc_slice_copy(&[owned]),

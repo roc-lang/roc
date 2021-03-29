@@ -7,8 +7,8 @@ use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
     list_get_unsafe, list_join, list_keep_errs, list_keep_if, list_keep_oks, list_len, list_map,
-    list_map2, list_map3, list_map_with_index, list_prepend, list_repeat, list_reverse, list_set,
-    list_single, list_sum, list_walk, list_walk_backwards,
+    list_map2, list_map3, list_map_with_index, list_prepend, list_product, list_repeat,
+    list_reverse, list_set, list_single, list_sum, list_walk, list_walk_backwards,
 };
 use crate::llvm::build_str::{
     str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_from_utf8,
@@ -339,6 +339,12 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
 
     add_intrinsic(
         module,
+        LLVM_LOG_F64,
+        f64_type.fn_type(&[f64_type.into()], false),
+    );
+
+    add_intrinsic(
+        module,
         LLVM_LROUND_I64_F64,
         i64_type.fn_type(&[f64_type.into()], false),
     );
@@ -455,6 +461,7 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
 static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
 static LLVM_SQRT_F64: &str = "llvm.sqrt.f64";
+static LLVM_LOG_F64: &str = "llvm.log.f64";
 static LLVM_LROUND_I64_F64: &str = "llvm.lround.i64.f64";
 static LLVM_FABS_F64: &str = "llvm.fabs.f64";
 static LLVM_SIN_F64: &str = "llvm.sin.f64";
@@ -3930,6 +3937,13 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_sum(env, parent, list, layout)
         }
+        ListProduct => {
+            debug_assert_eq!(args.len(), 1);
+
+            let list = load_symbol(scope, &args[0]);
+
+            list_product(env, parent, list, layout)
+        }
         ListAppend => {
             // List.append : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
@@ -3962,8 +3976,8 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_join(env, inplace, parent, list, outer_list_layout)
         }
-        NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumCeiling | NumFloor
-        | NumToFloat | NumIsFinite | NumAtan | NumAcos | NumAsin => {
+        NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumLogUnchecked | NumSin | NumCos
+        | NumCeiling | NumFloor | NumToFloat | NumIsFinite | NumAtan | NumAcos | NumAsin => {
             debug_assert_eq!(args.len(), 1);
 
             let (arg, arg_layout) = load_symbol_and_layout(scope, &args[0]);
@@ -5272,6 +5286,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
         NumNeg => bd.build_float_neg(arg, "negate_float").into(),
         NumAbs => env.call_intrinsic(LLVM_FABS_F64, &[arg.into()]),
         NumSqrtUnchecked => env.call_intrinsic(LLVM_SQRT_F64, &[arg.into()]),
+        NumLogUnchecked => env.call_intrinsic(LLVM_LOG_F64, &[arg.into()]),
         NumRound => env.call_intrinsic(LLVM_LROUND_I64_F64, &[arg.into()]),
         NumSin => env.call_intrinsic(LLVM_SIN_F64, &[arg.into()]),
         NumCos => env.call_intrinsic(LLVM_COS_F64, &[arg.into()]),
