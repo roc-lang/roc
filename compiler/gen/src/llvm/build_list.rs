@@ -980,6 +980,7 @@ fn list_walk_generic<'a, 'ctx, 'env>(
     env.builder.build_load(result_ptr, "load_result")
 }
 
+#[allow(dead_code)]
 #[repr(u8)]
 enum IntWidth {
     U8,
@@ -1014,7 +1015,6 @@ impl From<roc_mono::layout::Builtin<'_>> for IntWidth {
 /// List.range : Int a, Int a -> List (Int a)
 pub fn list_range<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
     builtin: Builtin<'a>,
     low: IntValue<'ctx>,
     high: IntValue<'ctx>,

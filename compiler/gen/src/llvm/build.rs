@@ -3891,13 +3891,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!(),
             };
 
-            list_range(
-                env,
-                layout_ids,
-                *builtin,
-                low.into_int_value(),
-                high.into_int_value(),
-            )
+            list_range(env, *builtin, low.into_int_value(), high.into_int_value())
         }
         ListWalk => {
             debug_assert_eq!(args.len(), 3);

@@ -1810,3 +1810,22 @@ fn cleanup_because_exception() {
         RocList<bool>
     );
 }
+
+#[test]
+fn list_range() {
+    assert_evals_to!(
+        indoc!("List.range 0 -1"),
+        RocList::from_slice(&[]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        indoc!("List.range 0 0"),
+        RocList::from_slice(&[0]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        indoc!("List.range 0 5"),
+        RocList::from_slice(&[0, 1, 2, 3, 4]),
+        RocList<i64>
+    );
+}
