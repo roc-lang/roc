@@ -1072,60 +1072,10 @@ fn unify_flat_type(
             }
         }
         (TagUnion(tags, ext), Func(args, closure, ret)) if tags.len() == 1 => {
-            let (tag_name, payload) = tags.iter().next().unwrap();
-
-            if payload.is_empty() {
-                let mut new_tags = MutMap::with_capacity_and_hasher(1, default_hasher());
-
-                new_tags.insert(tag_name.clone(), args.clone());
-
-                let content = Structure(TagUnion(new_tags, *ext));
-
-                let new_tag_union_var = fresh(subs, pool, ctx, content);
-
-                let problems = unify_pool(subs, pool, new_tag_union_var, *ret);
-
-                if problems.is_empty() {
-                    let desc = subs.get(ctx.second);
-                    subs.union(ctx.first, ctx.second, desc);
-                }
-
-                problems
-            } else {
-                mismatch!(
-                    "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
-                    TagUnion(tags.clone(), *ext),
-                    Func(args.clone(), *closure, *ret)
-                )
-            }
+            unify_tag_union_and_func(tags, args, subs, pool, ctx, ext, ret, closure, true)
         }
         (Func(args, closure, ret), TagUnion(tags, ext)) if tags.len() == 1 => {
-            let (tag_name, payload) = tags.iter().next().unwrap();
-
-            if payload.is_empty() {
-                let mut new_tags = MutMap::with_capacity_and_hasher(1, default_hasher());
-
-                new_tags.insert(tag_name.clone(), args.clone());
-
-                let content = Structure(TagUnion(new_tags, *ext));
-
-                let new_tag_union_var = fresh(subs, pool, ctx, content);
-
-                let problems = unify_pool(subs, pool, *ret, new_tag_union_var);
-
-                if problems.is_empty() {
-                    let desc = subs.get(ctx.first);
-                    subs.union(ctx.first, ctx.second, desc);
-                }
-
-                problems
-            } else {
-                mismatch!(
-                    "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
-                    Func(args.clone(), *closure, *ret),
-                    TagUnion(tags.clone(), *ext),
-                )
-            }
+            unify_tag_union_and_func(tags, args, subs, pool, ctx, ext, ret, closure, false)
         }
         (other1, other2) => mismatch!(
             "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
@@ -1307,4 +1257,55 @@ fn is_recursion_var(subs: &Subs, var: Variable) -> bool {
         subs.get_without_compacting(var).content,
         Content::RecursionVar { .. }
     )
+}
+
+#[allow(clippy::too_many_arguments, clippy::ptr_arg)]
+fn unify_tag_union_and_func(
+    tags: &MutMap<TagName, Vec<Variable>>,
+    args: &Vec<Variable>,
+    subs: &mut Subs,
+    pool: &mut Pool,
+    ctx: &Context,
+    ext: &Variable,
+    ret: &Variable,
+    closure: &Variable,
+    left: bool,
+) -> Outcome {
+    use FlatType::*;
+
+    let (tag_name, payload) = tags.iter().next().unwrap();
+
+    if payload.is_empty() {
+        let mut new_tags = MutMap::with_capacity_and_hasher(1, default_hasher());
+
+        new_tags.insert(tag_name.clone(), args.to_owned());
+
+        let content = Structure(TagUnion(new_tags, *ext));
+
+        let new_tag_union_var = fresh(subs, pool, ctx, content);
+
+        let problems = if left {
+            unify_pool(subs, pool, new_tag_union_var, *ret)
+        } else {
+            unify_pool(subs, pool, *ret, new_tag_union_var)
+        };
+
+        if problems.is_empty() {
+            let desc = if left {
+                subs.get(ctx.second)
+            } else {
+                subs.get(ctx.first)
+            };
+
+            subs.union(ctx.first, ctx.second, desc);
+        }
+
+        problems
+    } else {
+        mismatch!(
+            "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
+            TagUnion(tags.clone(), *ext),
+            Func(args.to_owned(), *closure, *ret)
+        )
+    }
 }
