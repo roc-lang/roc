@@ -2278,11 +2278,9 @@ fn function_malformed_pattern() {
 }
 
 #[test]
-#[should_panic(
-    expected = "Shadowing { original_region: |L 3-3, C 4-5|, shadow: |L 5-5, C 6-7| Ident(\\\"x\\\") }"
-)]
+#[should_panic(expected = "Hit an erroneous type when creating a layout for `#UserApp.f`")]
 fn call_invalid_layout() {
-    assert_evals_to!(
+    assert_llvm_evals_to!(
         indoc!(
             r#"
                 f : I64 -> I64
@@ -2292,6 +2290,9 @@ fn call_invalid_layout() {
             "#
         ),
         3,
-        i64
+        i64,
+        |x| x,
+        false,
+        true
     );
 }
