@@ -37,6 +37,7 @@ pub enum LowLevel {
     ListProduct,
     ListKeepOks,
     ListKeepErrs,
+    ListSortWith,
     DictSize,
     DictEmpty,
     DictInsert,
