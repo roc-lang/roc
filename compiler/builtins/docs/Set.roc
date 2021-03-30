@@ -1,7 +1,11 @@
-interface Set2
-    exposes [ empty, isEmpty, len, add, drop, map ]
+interface Set
+    exposes [ Set, empty, isEmpty, len, add, drop, map ]
     imports []
 
+## Set
+
+## A Set is an unordered collection of unique elements.
+Set elem : [ @Set elem ]
 
 ## An empty set.
 empty : Set *
