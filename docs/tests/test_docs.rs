@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate pretty_assertions;
+
 use roc_docs::{documentation_to_template_data, files_to_documentations, ModuleEntry};
 use std::path::PathBuf;
 
