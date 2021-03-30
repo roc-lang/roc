@@ -135,6 +135,7 @@ pub const BLANK_PLACEHOLDER: &str = " ";
 pub const LEFT_ACCOLADE: &str = "{ ";
 pub const RIGHT_ACCOLADE: &str = " }";
 pub const COLON: &str = ": ";
+pub const STRING_QUOTES: &str = "\"\"";
 
 fn new_markup_node(
     text: String,

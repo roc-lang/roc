@@ -58,6 +58,8 @@ fn size_of_intval() {
     assert_eq!(std::mem::size_of::<IntVal>(), 16);
 }
 
+pub type ArrString = ArrayString<U30>;
+
 /// An Expr that fits in 32B.
 /// It has a 1B discriminant and variants which hold payloads of at most 31B.
 #[derive(Debug)]
@@ -94,7 +96,7 @@ pub enum Expr2 {
         text: PoolStr,    // 8B
     },
     /// string literals of length up to 30B
-    SmallStr(ArrayString<U30>), // 31B
+    SmallStr(ArrString), // 31B
     /// string literals of length 31B or more
     Str(PoolStr), // 8B
     // Lookups

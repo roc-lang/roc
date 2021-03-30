@@ -23,6 +23,8 @@ impl CodeLines {
         let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
         line_ref.push_str(new_str);
 
+        self.nr_of_chars += new_str.len();
+
         Ok(())
     }
 
@@ -36,6 +38,8 @@ impl CodeLines {
 
         line_ref.insert_str(index, new_str);
 
+        self.nr_of_chars += new_str.len();
+
         Ok(())
     }
 
@@ -43,6 +47,8 @@ impl CodeLines {
         let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
 
         line_ref.remove(index);
+
+        self.nr_of_chars -= 1;
 
         Ok(())
     }

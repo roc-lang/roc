@@ -1,7 +1,6 @@
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::MissingParent;
 use crate::editor::ed_error::RecordWithoutFields;
-use crate::editor::grid_node_map::add_to_line_both;
 use crate::editor::grid_node_map::del_at_line_both;
 use crate::editor::grid_node_map::insert_between_line_both;
 use crate::editor::markup::attribute::Attributes;
@@ -44,7 +43,7 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<()> {
         ast_node_id,
         syn_high_style: HighlightStyle::Bracket,
         attributes: Attributes::new(),
-        parent_id_opt: Some(curr_mark_node_id),
+        parent_id_opt: Some(curr_mark_node_id), // current node will be replace with nested one
     };
 
     let left_bracket_node_id = mark_node_pool.add(left_bracket_node);
@@ -54,7 +53,7 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<()> {
         ast_node_id,
         syn_high_style: HighlightStyle::Bracket,
         attributes: Attributes::new(),
-        parent_id_opt: Some(curr_mark_node_id),
+        parent_id_opt: Some(curr_mark_node_id), // current node will be replace with nested one
     };
 
     let right_bracket_node_id = mark_node_pool.add(right_bracket_node);
@@ -81,18 +80,20 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<()> {
         }
 
         // update GridNodeMap and CodeLines
-        add_to_line_both(
+        insert_between_line_both(
             &mut ed_model.grid_node_map,
             &mut ed_model.code_lines,
             old_caret_pos.line,
+            old_caret_pos.column,
             nodes::LEFT_ACCOLADE,
             left_bracket_node_id,
         )?;
 
-        add_to_line_both(
+        insert_between_line_both(
             &mut ed_model.grid_node_map,
             &mut ed_model.code_lines,
             old_caret_pos.line,
+            old_caret_pos.column + nodes::LEFT_ACCOLADE.len(),
             nodes::RIGHT_ACCOLADE,
             right_bracket_node_id,
         )?;
@@ -212,18 +213,20 @@ pub fn update_record_colon(ed_model: &mut EdModel) -> EdResult<()> {
                 }
 
                 // update GridNodeMap and CodeLines
-                add_to_line_both(
+                insert_between_line_both(
                     &mut ed_model.grid_node_map,
                     &mut ed_model.code_lines,
                     old_caret_pos.line,
+                    old_caret_pos.column,
                     nodes::COLON,
                     record_colon_node_id,
                 )?;
 
-                add_to_line_both(
+                insert_between_line_both(
                     &mut ed_model.grid_node_map,
                     &mut ed_model.code_lines,
                     old_caret_pos.line,
+                    old_caret_pos.column + nodes::COLON.len(),
                     nodes::BLANK_PLACEHOLDER,
                     record_blank_node_id,
                 )?;
