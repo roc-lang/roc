@@ -341,13 +341,13 @@ mod test_mono {
             "#,
             indoc!(
                 r#"
-                procedure Num.46 (#Attr.2):
+                procedure Num.47 (#Attr.2):
                     let Test.3 = lowlevel NumRound #Attr.2;
                     ret Test.3;
 
                 procedure Test.0 ():
                     let Test.2 = 3.6f64;
-                    let Test.1 = CallByName Num.46 Test.2;
+                    let Test.1 = CallByName Num.47 Test.2;
                     ret Test.1;
                 "#
             ),

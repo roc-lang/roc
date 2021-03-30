@@ -404,6 +404,7 @@ mod gen_num {
         );
     }
 
+    #[test]
     fn f64_sqrt_zero() {
         assert_evals_to!(
             indoc!(
