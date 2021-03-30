@@ -37,6 +37,7 @@ pub fn helper<'a>(
     src: &str,
     stdlib: &'a roc_builtins::std::StdLib,
     leak: bool,
+    ignore_problems: bool,
     context: &'a inkwell::context::Context,
 ) -> (&'static str, String, Library) {
     use roc_gen::llvm::build::{build_proc, build_proc_header, Scope};
@@ -170,7 +171,7 @@ pub fn helper<'a>(
         println!("{}", lines.join("\n"));
 
         // only crash at this point if there were no delayed_errors
-        if delayed_errors.is_empty() {
+        if delayed_errors.is_empty() && !ignore_problems {
             assert_eq!(0, 1, "Mistakes were made");
         }
     }
@@ -331,7 +332,7 @@ pub fn helper<'a>(
 
 #[macro_export]
 macro_rules! assert_llvm_evals_to {
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {
+    ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr, $ignore_problems:expr) => {
         use bumpalo::Bump;
         use inkwell::context::Context;
         use roc_gen::run_jit_function;
@@ -343,7 +344,7 @@ macro_rules! assert_llvm_evals_to {
         let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
 
         let (main_fn_name, errors, lib) =
-            $crate::helpers::eval::helper(&arena, $src, stdlib, $leak, &context);
+            $crate::helpers::eval::helper(&arena, $src, stdlib, $leak, $ignore_problems, &context);
 
         let transform = |success| {
             let expected = $expected;
@@ -354,7 +355,7 @@ macro_rules! assert_llvm_evals_to {
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        assert_llvm_evals_to!($src, $expected, $ty, $transform, true);
+        assert_llvm_evals_to!($src, $expected, $ty, $transform, true, false);
     };
 }
 
@@ -375,7 +376,7 @@ macro_rules! assert_evals_to {
         // parsing the source, so that there's no chance their passing
         // or failing depends on leftover state from the previous one.
         {
-            assert_llvm_evals_to!($src, $expected, $ty, $transform, $leak);
+            assert_llvm_evals_to!($src, $expected, $ty, $transform, $leak, false);
         }
         {
             // NOTE at the moment, the optimized tests do the same thing
@@ -392,7 +393,7 @@ macro_rules! assert_non_opt_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         // Same as above, except with an additional transformation argument.
         {
-            assert_llvm_evals_to!($src, $expected, $ty, $transform, true);
+            assert_llvm_evals_to!($src, $expected, $ty, $transform, true, false);
         }
     };
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr) => {{
