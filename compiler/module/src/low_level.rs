@@ -33,8 +33,6 @@ pub enum LowLevel {
     ListKeepIf,
     ListWalk,
     ListWalkBackwards,
-    ListSum,
-    ListProduct,
     ListKeepOks,
     ListKeepErrs,
     DictSize,
