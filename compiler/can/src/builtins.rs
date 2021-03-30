@@ -2014,12 +2014,86 @@ fn list_walk_backwards(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// List.sum : List (Num a) -> Num a
 fn list_sum(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_1(symbol, LowLevel::ListSum, var_store)
+    let num_var = var_store.fresh();
+    let ret_var = num_var;
+    let list_var = var_store.fresh();
+    let closure_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::ListWalk,
+        args: vec![
+            (list_var, Var(Symbol::ARG_1)),
+            (closure_var, list_sum_add(num_var, var_store)),
+            (num_var, Num(var_store.fresh(), 0)),
+        ],
+        ret_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+fn list_sum_add(num_var: Variable, var_store: &mut VarStore) -> Expr {
+    let body = RunLowLevel {
+        op: LowLevel::NumAdd,
+        args: vec![(num_var, Var(Symbol::ARG_3)), (num_var, Var(Symbol::ARG_4))],
+        ret_var: num_var,
+    };
+
+    defn_help(
+        Symbol::LIST_SUM_ADD,
+        vec![(num_var, Symbol::ARG_3), (num_var, Symbol::ARG_4)],
+        var_store,
+        body,
+        num_var,
+    )
 }
 
 /// List.product : List (Num a) -> Num a
 fn list_product(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_1(symbol, LowLevel::ListProduct, var_store)
+    let num_var = var_store.fresh();
+    let ret_var = num_var;
+    let list_var = var_store.fresh();
+    let closure_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::ListWalk,
+        args: vec![
+            (list_var, Var(Symbol::ARG_1)),
+            (closure_var, list_product_mul(num_var, var_store)),
+            (num_var, Num(var_store.fresh(), 1)),
+        ],
+        ret_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+fn list_product_mul(num_var: Variable, var_store: &mut VarStore) -> Expr {
+    let body = RunLowLevel {
+        op: LowLevel::NumMul,
+        args: vec![(num_var, Var(Symbol::ARG_3)), (num_var, Var(Symbol::ARG_4))],
+        ret_var: num_var,
+    };
+
+    defn_help(
+        Symbol::LIST_PRODUCT_MUL,
+        vec![(num_var, Symbol::ARG_3), (num_var, Symbol::ARG_4)],
+        var_store,
+        body,
+        num_var,
+    )
 }
 
 /// List.keepIf : List elem, (elem -> Bool) -> List elem
@@ -3243,24 +3317,7 @@ fn defn(
     body: Expr,
     ret_var: Variable,
 ) -> Def {
-    use crate::pattern::Pattern::*;
-
-    let closure_args = args
-        .into_iter()
-        .map(|(var, symbol)| (var, no_region(Identifier(symbol))))
-        .collect();
-
-    let expr = Closure {
-        function_type: var_store.fresh(),
-        closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
-        return_type: ret_var,
-        name: fn_name,
-        captured_symbols: Vec::new(),
-        recursive: Recursive::NotRecursive,
-        arguments: closure_args,
-        loc_body: Box::new(no_region(body)),
-    };
+    let expr = defn_help(fn_name, args, var_store, body, ret_var);
 
     Def {
         loc_pattern: Located {
@@ -3274,5 +3331,33 @@ fn defn(
         expr_var: var_store.fresh(),
         pattern_vars: SendMap::default(),
         annotation: None,
+    }
+}
+
+#[inline(always)]
+fn defn_help(
+    fn_name: Symbol,
+    args: Vec<(Variable, Symbol)>,
+    var_store: &mut VarStore,
+    body: Expr,
+    ret_var: Variable,
+) -> Expr {
+    use crate::pattern::Pattern::*;
+
+    let closure_args = args
+        .into_iter()
+        .map(|(var, symbol)| (var, no_region(Identifier(symbol))))
+        .collect();
+
+    Closure {
+        function_type: var_store.fresh(),
+        closure_type: var_store.fresh(),
+        closure_ext_var: var_store.fresh(),
+        return_type: ret_var,
+        name: fn_name,
+        captured_symbols: Vec::new(),
+        recursive: Recursive::NotRecursive,
+        arguments: closure_args,
+        loc_body: Box::new(no_region(body)),
     }
 }
