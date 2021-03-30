@@ -111,12 +111,16 @@ fn generate_module_doc<'a>(
         },
 
         Alias {
-            name: _,
+            name,
             vars: _,
             ann: _,
-        } =>
-        // TODO
-        {
+        } => {
+            let entry = DocEntry {
+                name: name.value.to_string(),
+                docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
+            };
+            acc.push(entry);
+
             (acc, None)
         }
 
