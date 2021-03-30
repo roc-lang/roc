@@ -2,30 +2,13 @@ use crate::def::Def;
 use crate::expr::Expr::*;
 use crate::expr::{Expr, Recursive, WhenBranch};
 use crate::pattern::Pattern;
-use roc_collections::all::{MutMap, SendMap};
+use roc_collections::all::SendMap;
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
-
-macro_rules! defs {
-    (@single $($x:tt)*) => (());
-    (@count $($rest:expr),*) => (<[()]>::len(&[$(defs!(@single $rest)),*]));
-
-    ($var_store:expr; $($key:expr => $func:expr,)+) => { defs!($var_store; $($key => $func),+) };
-    ($var_store:expr; $($key:expr => $func:expr),*) => {
-        {
-            let _cap = defs!(@count $($key),*);
-            let mut _map = ::std::collections::HashMap::with_capacity_and_hasher(_cap, roc_collections::all::default_hasher());
-            $(
-                let _ = _map.insert($key, $func($key, $var_store));
-            )*
-            _map
-        }
-    };
-}
 
 macro_rules! macro_magic {
     (@single $($x:tt)*) => (());
@@ -44,6 +27,23 @@ macro_rules! macro_magic {
     };
 }
 
+/// Some builtins cannot be constructed in code gen alone, and need to be defined
+/// as separate Roc defs. For example, List.get has this type:
+///
+/// List.get : List elem, Int -> Result elem [ OutOfBounds ]*
+///
+/// Because this returns an open tag union for its Err type, it's not possible
+/// for code gen to return a hardcoded value for OutOfBounds. For example,
+/// if this Result unifies to [ Foo, OutOfBounds ] then OutOfBOunds will
+/// get assigned the number 1 (because Foo got 0 alphabetically), whereas
+/// if it unifies to [ OutOfBounds, Qux ] then OutOfBounds will get the number 0.
+///
+/// Getting these numbers right requires having List.get participate in the
+/// normal type-checking and monomorphization processes. As such, this function
+/// returns a normal def for List.get, which performs a bounds check and then
+/// delegates to the compiler-internal List.getUnsafe function to do the actual
+/// lookup (if the bounds check passed). That internal function is hardcoded in code gen,
+/// which works fine because it doesn't involve any open tag unions.
 pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def> {
     debug_assert!(symbol.is_builtin());
 
@@ -168,144 +168,6 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         RESULT_MAP_ERR => result_map_err,
         RESULT_AFTER => result_after,
         RESULT_WITH_DEFAULT => result_with_default,
-    }
-}
-
-/// Some builtins cannot be constructed in code gen alone, and need to be defined
-/// as separate Roc defs. For example, List.get has this type:
-///
-/// List.get : List elem, Int -> Result elem [ OutOfBounds ]*
-///
-/// Because this returns an open tag union for its Err type, it's not possible
-/// for code gen to return a hardcoded value for OutOfBounds. For example,
-/// if this Result unifies to [ Foo, OutOfBounds ] then OutOfBOunds will
-/// get assigned the number 1 (because Foo got 0 alphabetically), whereas
-/// if it unifies to [ OutOfBounds, Qux ] then OutOfBounds will get the number 0.
-///
-/// Getting these numbers right requires having List.get participate in the
-/// normal type-checking and monomorphization processes. As such, this function
-/// returns a normal def for List.get, which performs a bounds check and then
-/// delegates to the compiler-internal List.getUnsafe function to do the actual
-/// lookup (if the bounds check passed). That internal function is hardcoded in code gen,
-/// which works fine because it doesn't involve any open tag unions.
-pub fn builtin_defs(var_store: &mut VarStore) -> MutMap<Symbol, Def> {
-    defs! { var_store;
-        Symbol::BOOL_EQ => bool_eq,
-        Symbol::BOOL_NEQ => bool_neq,
-        Symbol::BOOL_AND => bool_and,
-        Symbol::BOOL_OR => bool_or,
-        Symbol::BOOL_NOT => bool_not,
-        Symbol::STR_CONCAT => str_concat,
-        Symbol::STR_JOIN_WITH => str_join_with,
-        Symbol::STR_SPLIT => str_split,
-        Symbol::STR_IS_EMPTY => str_is_empty,
-        Symbol::STR_STARTS_WITH => str_starts_with,
-        Symbol::STR_ENDS_WITH => str_ends_with,
-        Symbol::STR_COUNT_GRAPHEMES => str_count_graphemes,
-        Symbol::STR_FROM_INT => str_from_int,
-        Symbol::STR_FROM_UTF8 => str_from_utf8,
-        Symbol::STR_TO_BYTES => str_to_bytes,
-        Symbol::STR_FROM_FLOAT=> str_from_float,
-        Symbol::LIST_LEN => list_len,
-        Symbol::LIST_GET => list_get,
-        Symbol::LIST_SET => list_set,
-        Symbol::LIST_APPEND => list_append,
-        Symbol::LIST_FIRST => list_first,
-        Symbol::LIST_LAST => list_last,
-        Symbol::LIST_IS_EMPTY => list_is_empty,
-        Symbol::LIST_SINGLE => list_single,
-        Symbol::LIST_REPEAT => list_repeat,
-        Symbol::LIST_REVERSE => list_reverse,
-        Symbol::LIST_CONCAT => list_concat,
-        Symbol::LIST_CONTAINS => list_contains,
-        Symbol::LIST_SUM => list_sum,
-        Symbol::LIST_PRODUCT => list_product,
-        Symbol::LIST_PREPEND => list_prepend,
-        Symbol::LIST_JOIN => list_join,
-        Symbol::LIST_MAP => list_map,
-        Symbol::LIST_MAP2 => list_map2,
-        Symbol::LIST_MAP3 => list_map3,
-        Symbol::LIST_MAP_WITH_INDEX => list_map_with_index,
-        Symbol::LIST_KEEP_IF => list_keep_if,
-        Symbol::LIST_KEEP_OKS => list_keep_oks,
-        Symbol::LIST_KEEP_ERRS=> list_keep_errs,
-        Symbol::LIST_WALK => list_walk,
-        Symbol::LIST_WALK_BACKWARDS => list_walk_backwards,
-        Symbol::DICT_TEST_HASH => dict_hash_test_only,
-        Symbol::DICT_LEN => dict_len,
-        Symbol::DICT_EMPTY => dict_empty,
-        Symbol::DICT_SINGLE => dict_single,
-        Symbol::DICT_INSERT => dict_insert,
-        Symbol::DICT_REMOVE => dict_remove,
-        Symbol::DICT_GET => dict_get,
-        Symbol::DICT_CONTAINS => dict_contains,
-        Symbol::DICT_KEYS => dict_keys,
-        Symbol::DICT_VALUES => dict_values,
-        Symbol::DICT_UNION=> dict_union,
-        Symbol::DICT_INTERSECTION=> dict_intersection,
-        Symbol::DICT_DIFFERENCE=> dict_difference,
-        Symbol::DICT_WALK=> dict_walk,
-        Symbol::SET_EMPTY => set_empty,
-        Symbol::SET_LEN => set_len,
-        Symbol::SET_SINGLE => set_single,
-        Symbol::SET_UNION=> set_union,
-        Symbol::SET_INTERSECTION=> set_intersection,
-        Symbol::SET_DIFFERENCE=> set_difference,
-        Symbol::SET_TO_LIST => set_to_list,
-        Symbol::SET_FROM_LIST => set_from_list,
-        Symbol::SET_INSERT => set_insert,
-        Symbol::SET_REMOVE => set_remove,
-        Symbol::SET_CONTAINS => set_contains,
-        Symbol::SET_WALK => set_walk,
-        Symbol::NUM_ADD => num_add,
-        Symbol::NUM_ADD_CHECKED => num_add_checked,
-        Symbol::NUM_ADD_WRAP => num_add_wrap,
-        Symbol::NUM_SUB => num_sub,
-        Symbol::NUM_MUL => num_mul,
-        Symbol::NUM_GT => num_gt,
-        Symbol::NUM_GTE => num_gte,
-        Symbol::NUM_LT => num_lt,
-        Symbol::NUM_LTE => num_lte,
-        Symbol::NUM_COMPARE => num_compare,
-        Symbol::NUM_SIN => num_sin,
-        Symbol::NUM_COS => num_cos,
-        Symbol::NUM_TAN => num_tan,
-        Symbol::NUM_DIV_FLOAT => num_div_float,
-        Symbol::NUM_DIV_INT => num_div_int,
-        Symbol::NUM_ABS => num_abs,
-        Symbol::NUM_NEG => num_neg,
-        Symbol::NUM_REM => num_rem,
-        Symbol::NUM_IS_MULTIPLE_OF => num_is_multiple_of,
-        Symbol::NUM_SQRT => num_sqrt,
-        Symbol::NUM_LOG => num_log,
-        Symbol::NUM_ROUND => num_round,
-        Symbol::NUM_IS_ODD => num_is_odd,
-        Symbol::NUM_IS_EVEN => num_is_even,
-        Symbol::NUM_IS_ZERO => num_is_zero,
-        Symbol::NUM_IS_POSITIVE => num_is_positive,
-        Symbol::NUM_IS_NEGATIVE => num_is_negative,
-        Symbol::NUM_TO_FLOAT => num_to_float,
-        Symbol::NUM_POW => num_pow,
-        Symbol::NUM_CEILING => num_ceiling,
-        Symbol::NUM_POW_INT => num_pow_int,
-        Symbol::NUM_FLOOR => num_floor,
-        Symbol::NUM_ATAN => num_atan,
-        Symbol::NUM_ACOS => num_acos,
-        Symbol::NUM_ASIN => num_asin,
-        Symbol::NUM_MAX_INT => num_max_int,
-        Symbol::NUM_MIN_INT => num_min_int,
-        Symbol::NUM_BITWISE_AND => num_bitwise_and,
-        Symbol::NUM_BITWISE_XOR => num_bitwise_xor,
-        Symbol::NUM_BITWISE_OR => num_bitwise_or,
-        Symbol::NUM_SHIFT_LEFT => num_shift_left_by,
-        Symbol::NUM_SHIFT_RIGHT => num_shift_right_by,
-        Symbol::NUM_SHIFT_RIGHT_ZERO_FILL => num_shift_right_zf_by,
-        Symbol::NUM_INT_CAST=> num_int_cast,
-        Symbol::NUM_MAX_I128=> num_max_i128,
-        Symbol::RESULT_MAP => result_map,
-        Symbol::RESULT_MAP_ERR => result_map_err,
-        Symbol::RESULT_AFTER => result_after,
-        Symbol::RESULT_WITH_DEFAULT => result_with_default,
     }
 }
 
