@@ -1,5 +1,4 @@
 extern crate fs_extra;
-extern crate handlebars;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
@@ -19,26 +18,26 @@ use std::path::{Path, PathBuf};
 
 #[derive(Serialize)]
 pub struct Template {
-    package_name: String,
-    package_version: String,
-    module_name: String,
-    module_docs: String,
-    module_entries: Vec<ModuleEntry>,
-    module_links: Vec<TemplateLink>,
+    pub package_name: String,
+    pub package_version: String,
+    pub module_name: String,
+    pub module_docs: String,
+    pub module_entries: Vec<ModuleEntry>,
+    pub module_links: Vec<TemplateLink>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct ModuleEntry {
-    name: String,
-    docs: String,
+    pub name: String,
+    pub docs: String,
 }
 
 #[derive(Serialize)]
 pub struct TemplateLink {
-    name: String,
-    href: String,
-    classes: String,
-    entries: Vec<TemplateLinkEntry>,
+    pub name: String,
+    pub href: String,
+    pub classes: String,
+    pub entries: Vec<TemplateLinkEntry>,
 }
 
 #[derive(Serialize)]
@@ -46,27 +45,9 @@ pub struct TemplateLinkEntry {
     name: String,
 }
 
-fn main() {
-    generate(
-        vec![
-            PathBuf::from(r"../compiler/builtins/docs/Bool.roc"),
-            PathBuf::from(r"../compiler/builtins/docs/Dict.roc"),
-            // Not working
-            // PathBuf::from(r"../compiler/builtins/docs/List.roc"),
-            // Not working
-            // PathBuf::from(r"../compiler/builtins/docs/Num.roc"),
-            PathBuf::from(r"../compiler/builtins/docs/Set.roc"),
-            PathBuf::from(r"../compiler/builtins/docs/Str.roc"),
-        ],
-        roc_builtins::std::standard_stdlib(),
-        Path::new("../compiler/builtins/docs"),
-        Path::new("./build"),
-    )
-}
-
-pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, src_dir: &Path, build_dir: &Path) {
-    let files_docs = files_to_documentations(filenames, std_lib, src_dir);
-
+pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
+    let files_docs = files_to_documentations(filenames, std_lib);
+    //
     // TODO: get info from a file like "elm.json"
     let package = roc_load::docs::Documentation {
         name: "roc/builtins".to_string(),
@@ -75,21 +56,33 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, src_dir: &Path, build_
         modules: files_docs,
     };
 
-    // Remove old build folder, if exists
-    let _ = fs::remove_dir_all(build_dir);
+    if !build_dir.exists() {
+        fs::create_dir_all(build_dir).expect("TODO gracefully handle unable to create build dir");
+    }
 
-    let version_folder = build_dir
-        .join(package.name.clone())
-        .join(package.version.clone());
+    // Copy over the assets
+    fs::write(
+        build_dir.join("search.js"),
+        include_str!("./static/search.js"),
+    )
+    .expect("TODO gracefully handle failing to make the search javascript");
 
-    // Make sure the output directories exists
-    fs::create_dir_all(&version_folder)
-        .expect("TODO gracefully handle creating directories failing");
+    fs::write(
+        build_dir.join("styles.css"),
+        include_str!("./static/styles.css"),
+    )
+    .expect("TODO gracefully handle failing to make the stylesheet");
+
+    fs::write(
+        build_dir.join("favicon.svg"),
+        include_str!("./static/favicon.svg"),
+    )
+    .expect("TODO gracefully handle failing to make the favicon");
 
     // Register handlebars template
     let mut handlebars = handlebars::Handlebars::new();
     handlebars
-        .register_template_file("page", "./src/templates/page.hbs")
+        .register_template_file("page", "./docs/src/templates/page.hbs")
         .expect("TODO gracefully handle registering template failing");
 
     // Write each package's module docs html file
@@ -97,7 +90,7 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, src_dir: &Path, build_
         let template = documentation_to_template_data(&package, module);
 
         let handlebars_data = handlebars::to_json(&template);
-        let filepath = version_folder.join(format!("{}.html", module.name));
+        let filepath = build_dir.join(format!("{}.html", module.name));
         let mut output_file =
             fs::File::create(filepath).expect("TODO gracefully handle creating file failing");
         handlebars
@@ -105,40 +98,31 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, src_dir: &Path, build_
             .expect("TODO gracefully handle writing file failing");
     }
 
-    // Copy /static folder content to /build
-    let copy_options = fs_extra::dir::CopyOptions {
-        overwrite: true,
-        skip_exist: false,
-        buffer_size: 64000, //64kb
-        copy_inside: false,
-        content_only: true,
-        depth: 0,
-    };
-    fs_extra::dir::copy("./src/static/", &build_dir, &copy_options)
-        .expect("TODO gracefully handle copying static content failing");
-    println!("Docs generated at {}", build_dir.display());
+    println!("🎉 Docs generated in {}", build_dir.display());
 }
 
-fn files_to_documentations(
+pub fn files_to_documentations(
     filenames: Vec<PathBuf>,
     std_lib: StdLib,
-    src_dir: &Path,
 ) -> Vec<ModuleDocumentation> {
     let arena = Bump::new();
     let mut files_docs = vec![];
 
     for filename in filenames {
+        let mut src_dir = filename.clone();
+        src_dir.pop();
+
         match roc_load::file::load_and_typecheck(
             &arena,
             filename,
             &std_lib,
-            src_dir,
+            src_dir.as_path(),
             MutMap::default(),
             8, // TODO: Is it okay to hardcode ptr_bytes here? I think it should be fine since we'er only type checking (also, 8 => 32bit system)
             builtin_defs_map,
         ) {
             Ok(mut loaded) => files_docs.extend(loaded.documentation.drain().map(|x| x.1)),
-            Err(LoadingProblem::ParsingFailedReport(report)) => {
+            Err(LoadingProblem::FormattedReport(report)) => {
                 println!("{}", report);
                 panic!();
             }
@@ -148,7 +132,10 @@ fn files_to_documentations(
     files_docs
 }
 
-fn documentation_to_template_data(doc: &Documentation, module: &ModuleDocumentation) -> Template {
+pub fn documentation_to_template_data(
+    doc: &Documentation,
+    module: &ModuleDocumentation,
+) -> Template {
     Template {
         package_name: doc.name.clone(),
         package_version: doc.version.clone(),
@@ -247,52 +234,4 @@ fn markdown_to_html(markdown: String) -> String {
     let mut docs_html = String::new();
     pulldown_cmark::html::push_html(&mut docs_html, docs_parser.into_iter());
     docs_html
-}
-
-#[cfg(test)]
-mod test_docs {
-    use super::*;
-
-    #[test]
-    fn internal() {
-        let files_docs = files_to_documentations(
-            vec![PathBuf::from(r"tests/fixtures/Interface.roc")],
-            roc_builtins::std::standard_stdlib(),
-            Path::new("tests/fixtures"),
-        );
-
-        let package = roc_load::docs::Documentation {
-            name: "roc/builtins".to_string(),
-            version: "1.0.0".to_string(),
-            docs: "Package introduction or README.".to_string(),
-            modules: files_docs,
-        };
-
-        let expected_entries = vec![
-            ModuleEntry {
-                name: "singleline".to_string(),
-                docs: "<p>Single line documentation.</p>\n".to_string(),
-            },
-            ModuleEntry {
-                name: "multiline".to_string(),
-                docs: "<p>Multiline documentation.\nWithout any complex syntax yet!</p>\n".to_string(),
-            }, ModuleEntry {
-                name: "multiparagraph".to_string(),
-                docs: "<p>Multiparagraph documentation.</p>\n<p>Without any complex syntax yet!</p>\n".to_string(),
-            }, ModuleEntry {
-                name: "codeblock".to_string(),
-                docs: "<p>Turns &gt;&gt;&gt; into code block for now.</p>\n<pre><code class=\"language-roc\">codeblock</code></pre>\n".to_string(),
-            },
-        ];
-
-        for module in &package.modules {
-            let template = documentation_to_template_data(&package, module);
-            assert_eq!(template.module_name, "Test");
-            template
-                .module_entries
-                .iter()
-                .zip(expected_entries.iter())
-                .for_each(|(x, y)| assert_eq!(x, y));
-        }
-    }
 }

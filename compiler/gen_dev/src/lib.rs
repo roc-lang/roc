@@ -1,6 +1,6 @@
 #![warn(clippy::all, clippy::dbg_macro)]
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
-#![allow(clippy::large_enum_variant)]
+#![allow(clippy::large_enum_variant, clippy::upper_case_acronyms)]
 
 use bumpalo::{collections::Vec, Bump};
 use roc_builtins::bitcode;
@@ -105,7 +105,7 @@ where
             } => {
                 // for now, treat invoke as a normal call
 
-                let stmt = Stmt::Let(*symbol, Expr::Call(call.clone()), layout.clone(), pass);
+                let stmt = Stmt::Let(*symbol, Expr::Call(call.clone()), *layout, pass);
                 self.build_stmt(&stmt)
             }
             Stmt::Switch {
@@ -252,32 +252,20 @@ where
                     x => Err(format!("layout, {:?}, not implemented yet", x)),
                 }
             }
-            LowLevel::NumAcos => self.build_fn_call(
-                sym,
-                bitcode::NUM_ACOS.to_string(),
-                args,
-                &[layout.clone()],
-                layout,
-            ),
-            LowLevel::NumAsin => self.build_fn_call(
-                sym,
-                bitcode::NUM_ASIN.to_string(),
-                args,
-                &[layout.clone()],
-                layout,
-            ),
-            LowLevel::NumAtan => self.build_fn_call(
-                sym,
-                bitcode::NUM_ATAN.to_string(),
-                args,
-                &[layout.clone()],
-                layout,
-            ),
+            LowLevel::NumAcos => {
+                self.build_fn_call(sym, bitcode::NUM_ACOS.to_string(), args, &[*layout], layout)
+            }
+            LowLevel::NumAsin => {
+                self.build_fn_call(sym, bitcode::NUM_ASIN.to_string(), args, &[*layout], layout)
+            }
+            LowLevel::NumAtan => {
+                self.build_fn_call(sym, bitcode::NUM_ATAN.to_string(), args, &[*layout], layout)
+            }
             LowLevel::NumPowInt => self.build_fn_call(
                 sym,
                 bitcode::NUM_POW_INT.to_string(),
                 args,
-                &[layout.clone(), layout.clone()],
+                &[*layout, *layout],
                 layout,
             ),
             LowLevel::NumSub => {
@@ -472,7 +460,7 @@ where
             } => {
                 // for now, treat invoke as a normal call
 
-                let stmt = Stmt::Let(*symbol, Expr::Call(call.clone()), layout.clone(), pass);
+                let stmt = Stmt::Let(*symbol, Expr::Call(call.clone()), *layout, pass);
                 self.scan_ast(&stmt);
             }
 

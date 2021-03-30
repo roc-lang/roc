@@ -8,7 +8,7 @@ use roc_build::link::LinkType;
 use roc_gen::llvm::build::OptLevel;
 use roc_load::file::LoadingProblem;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
 use std::process::Command;
 use target_lexicon::Triple;
@@ -76,6 +76,25 @@ pub fn build_app<'a>() -> App<'a> {
                 .help("(optional) The directory or files to open on launch.")
             )
         )
+        .subcommand(
+            App::new("docs")
+                .about("Generate documentation for Roc modules")
+                .arg(Arg::with_name(DIRECTORY_OR_FILES)
+                    .index(1)
+                    .multiple(true)
+                    .required(true)
+                    .help("The directory or files to build documentation for")
+
+                )
+        )
+}
+
+pub fn docs(files: Vec<PathBuf>) {
+    roc_docs::generate(
+        files,
+        roc_builtins::std::standard_stdlib(),
+        Path::new("./generated-docs"),
+    )
 }
 
 pub fn build(target: &Triple, matches: &ArgMatches, run_after_build: bool) -> io::Result<()> {
@@ -132,10 +151,7 @@ pub fn build(target: &Triple, matches: &ArgMatches, run_after_build: bool) -> io
                     .expect("TODO gracefully handle block_on failing");
             }
         }
-        Err(LoadingProblem::ParsingFailedReport(report)) => {
-            print!("{}", report);
-        }
-        Err(LoadingProblem::NoPlatform(report)) => {
+        Err(LoadingProblem::FormattedReport(report)) => {
             print!("{}", report);
         }
         Err(other) => {

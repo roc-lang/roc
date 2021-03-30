@@ -423,7 +423,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
     let ctx = env.context;
 
     let wrapper_struct = list.into_struct_value();
-    let (input_inplace, element_layout) = match list_layout.clone() {
+    let (input_inplace, element_layout) = match *list_layout {
         Layout::Builtin(Builtin::EmptyList) => (
             InPlace::InPlace,
             // this pointer will never actually be dereferenced
@@ -434,7 +434,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
                 MemoryMode::Unique => InPlace::InPlace,
                 MemoryMode::Refcounted => InPlace::Clone,
             },
-            elem_layout.clone(),
+            *elem_layout,
         ),
 
         _ => unreachable!("Invalid layout {:?} in List.reverse", list_layout),
@@ -788,6 +788,81 @@ pub fn list_sum<'a, 'ctx, 'env>(
     builder.build_load(accum_alloca, "load_final_acum")
 }
 
+/// List.product : List (Num a) -> Num a
+pub fn list_product<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    list: BasicValueEnum<'ctx>,
+    default_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let ctx = env.context;
+    let builder = env.builder;
+
+    let list_wrapper = list.into_struct_value();
+    let len = list_len(env.builder, list_wrapper);
+
+    let accum_type = basic_type_from_layout(env.arena, ctx, default_layout, env.ptr_bytes);
+    let accum_alloca = builder.build_alloca(accum_type, "alloca_walk_right_accum");
+
+    let default: BasicValueEnum = match accum_type {
+        BasicTypeEnum::IntType(int_type) => int_type.const_int(1, false).into(),
+        BasicTypeEnum::FloatType(float_type) => float_type.const_float(1.0).into(),
+        _ => unreachable!(""),
+    };
+
+    builder.build_store(accum_alloca, default);
+
+    let then_block = ctx.append_basic_block(parent, "then");
+    let cont_block = ctx.append_basic_block(parent, "branchcont");
+
+    let condition = builder.build_int_compare(
+        IntPredicate::UGT,
+        len,
+        ctx.i64_type().const_zero(),
+        "list_non_empty",
+    );
+
+    builder.build_conditional_branch(condition, then_block, cont_block);
+
+    builder.position_at_end(then_block);
+
+    let elem_ptr_type = get_ptr_type(&accum_type, AddressSpace::Generic);
+    let list_ptr = load_list_ptr(builder, list_wrapper, elem_ptr_type);
+
+    let walk_right_loop = |_, elem: BasicValueEnum<'ctx>| {
+        // load current accumulator
+        let current = builder.build_load(accum_alloca, "retrieve_accum");
+
+        let new_current = build_num_binop(
+            env,
+            parent,
+            current,
+            default_layout,
+            elem,
+            default_layout,
+            roc_module::low_level::LowLevel::NumMul,
+        );
+
+        builder.build_store(accum_alloca, new_current);
+    };
+
+    incrementing_elem_loop(
+        builder,
+        ctx,
+        parent,
+        list_ptr,
+        len,
+        "#index",
+        walk_right_loop,
+    );
+
+    builder.build_unconditional_branch(cont_block);
+
+    builder.position_at_end(cont_block);
+
+    builder.build_load(accum_alloca, "load_final_acum")
+}
+
 /// List.walk : List elem, (elem -> accum -> accum), accum -> accum
 pub fn list_walk<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -868,7 +943,7 @@ fn list_walk_generic<'a, 'ctx, 'env>(
         env,
         layout_ids,
         func_layout,
-        &[element_layout.clone(), default_layout.clone()],
+        &[*element_layout, *default_layout],
     )
     .as_global_value()
     .as_pointer_value();
@@ -959,7 +1034,7 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
     env.builder.build_store(transform_ptr, transform);
 
     let stepper_caller =
-        build_transform_caller(env, layout_ids, transform_layout, &[element_layout.clone()])
+        build_transform_caller(env, layout_ids, transform_layout, &[*element_layout])
             .as_global_value()
             .as_pointer_value();
 
@@ -1066,7 +1141,7 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
     env.builder.build_store(transform_ptr, transform);
 
     let stepper_caller =
-        build_transform_caller(env, layout_ids, transform_layout, &[before_layout.clone()])
+        build_transform_caller(env, layout_ids, transform_layout, &[*before_layout])
             .as_global_value()
             .as_pointer_value();
 
@@ -1130,7 +1205,7 @@ pub fn list_map<'a, 'ctx, 'env>(
         list,
         element_layout,
         bitcode::LIST_MAP,
-        &[element_layout.clone()],
+        &[*element_layout],
     )
 }
 
@@ -1151,7 +1226,7 @@ pub fn list_map_with_index<'a, 'ctx, 'env>(
         list,
         element_layout,
         bitcode::LIST_MAP_WITH_INDEX,
-        &[Layout::Builtin(Builtin::Usize), element_layout.clone()],
+        &[Layout::Builtin(Builtin::Usize), *element_layout],
     )
 }
 
@@ -1255,7 +1330,7 @@ pub fn list_map2<'a, 'ctx, 'env>(
     let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
     env.builder.build_store(transform_ptr, transform);
 
-    let argument_layouts = [element1_layout.clone(), element2_layout.clone()];
+    let argument_layouts = [*element1_layout, *element2_layout];
     let stepper_caller =
         build_transform_caller(env, layout_ids, transform_layout, &argument_layouts)
             .as_global_value()
@@ -1351,11 +1426,7 @@ pub fn list_map3<'a, 'ctx, 'env>(
     let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
     env.builder.build_store(transform_ptr, transform);
 
-    let argument_layouts = [
-        element1_layout.clone(),
-        element2_layout.clone(),
-        element3_layout.clone(),
-    ];
+    let argument_layouts = [*element1_layout, *element2_layout, *element3_layout];
     let stepper_caller =
         build_transform_caller(env, layout_ids, transform_layout, &argument_layouts)
             .as_global_value()

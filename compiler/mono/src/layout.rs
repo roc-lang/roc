@@ -23,7 +23,7 @@ pub enum LayoutProblem {
 }
 
 /// Types for code gen must be monomorphic. No type variables allowed!
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Layout<'a> {
     Builtin(Builtin<'a>),
     /// A layout that is empty (turns into the empty struct in LLVM IR
@@ -39,7 +39,7 @@ pub enum Layout<'a> {
     Pointer(&'a Layout<'a>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UnionLayout<'a> {
     /// A non-recursive tag union
     /// e.g. `Result a e : [ Ok a, Err e ]`
@@ -93,7 +93,7 @@ impl<'a> UnionLayout<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ClosureLayout<'a> {
     /// the layout that this specific closure captures
     /// uses a Vec instead of a MutMap because it's Hash
@@ -258,7 +258,7 @@ impl<'a> ClosureLayout<'a> {
         // define the function pointer
         let function_ptr_layout = {
             let mut temp = Vec::from_iter_in(argument_layouts.iter().cloned(), arena);
-            temp.push(closure_data_layout.clone());
+            temp.push(*closure_data_layout);
             Layout::FunctionPointer(temp.into_bump_slice(), ret_layout)
         };
 
@@ -278,8 +278,8 @@ impl<'a> ClosureLayout<'a> {
     pub fn as_named_layout(&self, symbol: Symbol) -> Layout<'a> {
         let layouts = if self.captured.is_empty() {
             match self.layout {
-                Layout::Struct(fields) if fields.len() == 1 => fields[0].clone(),
-                other => other.clone(),
+                Layout::Struct(fields) if fields.len() == 1 => fields[0],
+                other => *other,
             }
         } else if let Some((_, tag_args)) = self
             .captured
@@ -287,7 +287,7 @@ impl<'a> ClosureLayout<'a> {
             .find(|(tn, _)| *tn == TagName::Closure(symbol))
         {
             if tag_args.len() == 1 {
-                tag_args[0].clone()
+                tag_args[0]
             } else {
                 Layout::Struct(tag_args)
             }
@@ -303,13 +303,13 @@ impl<'a> ClosureLayout<'a> {
 
     pub fn as_block_of_memory_layout(&self) -> Layout<'a> {
         match self.layout {
-            Layout::Struct(fields) if fields.len() == 1 => fields[0].clone(),
-            other => other.clone(),
+            Layout::Struct(fields) if fields.len() == 1 => fields[0],
+            other => *other,
         }
     }
 
     pub fn internal_layout(&self) -> Layout<'a> {
-        self.layout.clone()
+        *self.layout
     }
 
     pub fn build_closure_data(
@@ -382,7 +382,7 @@ pub enum MemoryMode {
     Refcounted,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Builtin<'a> {
     Int128,
     Int64,
@@ -825,7 +825,7 @@ impl<'a> LayoutCache<'a> {
                 // of a problem
                 if false {
                     let cached_layout = match &result {
-                        Ok(layout) => Cached(layout.clone()),
+                        Ok(layout) => Cached(*layout),
                         Err(problem) => Problem(problem.clone()),
                     };
 
@@ -2057,7 +2057,7 @@ impl<'a> LayoutIds<'a> {
         // If we had to default to next_id, it must not have been found;
         // store the ID we're going to return and increment next_id.
         if answer == ids.next_id {
-            ids.by_id.insert(layout.clone(), ids.next_id);
+            ids.by_id.insert(*layout, ids.next_id);
 
             ids.next_id += 1;
         }

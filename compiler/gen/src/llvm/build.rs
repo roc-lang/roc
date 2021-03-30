@@ -7,8 +7,8 @@ use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
     list_get_unsafe, list_join, list_keep_errs, list_keep_if, list_keep_oks, list_len, list_map,
-    list_map2, list_map3, list_map_with_index, list_prepend, list_repeat, list_reverse, list_set,
-    list_single, list_sum, list_walk, list_walk_backwards,
+    list_map2, list_map3, list_map_with_index, list_prepend, list_product, list_repeat,
+    list_reverse, list_set, list_single, list_sum, list_walk, list_walk_backwards,
 };
 use crate::llvm::build_str::{
     str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_from_utf8,
@@ -90,9 +90,9 @@ pub enum OptLevel {
     Optimize,
 }
 
-impl Into<OptimizationLevel> for OptLevel {
-    fn into(self) -> OptimizationLevel {
-        match self {
+impl From<OptLevel> for OptimizationLevel {
+    fn from(level: OptLevel) -> Self {
+        match level {
             OptLevel::Normal => OptimizationLevel::None,
             OptLevel::Optimize => OptimizationLevel::Aggressive,
         }
@@ -339,6 +339,12 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
 
     add_intrinsic(
         module,
+        LLVM_LOG_F64,
+        f64_type.fn_type(&[f64_type.into()], false),
+    );
+
+    add_intrinsic(
+        module,
         LLVM_LROUND_I64_F64,
         i64_type.fn_type(&[f64_type.into()], false),
     );
@@ -455,6 +461,7 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
 static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
 static LLVM_SQRT_F64: &str = "llvm.sqrt.f64";
+static LLVM_LOG_F64: &str = "llvm.log.f64";
 static LLVM_LROUND_I64_F64: &str = "llvm.lround.i64.f64";
 static LLVM_FABS_F64: &str = "llvm.fabs.f64";
 static LLVM_SIN_F64: &str = "llvm.sin.f64";
@@ -2030,7 +2037,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 // access itself!
                 // scope = scope.clone();
 
-                scope.insert(*symbol, (layout.clone(), val));
+                scope.insert(*symbol, (*layout, val));
                 stack.push(*symbol);
             }
 
@@ -2063,8 +2070,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
         } => {
             // when the fail case is just Rethrow, there is no cleanup work to do
             // so we can just treat this invoke as a normal call
-            let stmt =
-                roc_mono::ir::Stmt::Let(*symbol, Expr::Call(call.clone()), layout.clone(), pass);
+            let stmt = roc_mono::ir::Stmt::Let(*symbol, Expr::Call(call.clone()), *layout, pass);
             build_exp_stmt(env, layout_ids, scope, parent, &stmt)
         }
 
@@ -2088,7 +2094,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     scope,
                     parent,
                     *symbol,
-                    layout.clone(),
+                    *layout,
                     function_value.into(),
                     call.arguments,
                     None,
@@ -2108,7 +2114,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             scope,
                             parent,
                             *symbol,
-                            layout.clone(),
+                            *layout,
                             function_ptr.into(),
                             call.arguments,
                             None,
@@ -2135,7 +2141,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             scope,
                             parent,
                             *symbol,
-                            layout.clone(),
+                            *layout,
                             function_ptr.into(),
                             call.arguments,
                             Some(closure_data),
@@ -2194,7 +2200,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 basic_type_from_layout(env.arena, env.context, &ret_layout, env.ptr_bytes);
 
             let switch_args = SwitchArgsIr {
-                cond_layout: cond_layout.clone(),
+                cond_layout: *cond_layout,
                 cond_symbol: *cond_symbol,
                 branches,
                 default_branch: default_branch.1,
@@ -2242,7 +2248,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
             for (ptr, param) in joinpoint_args.iter().zip(parameters.iter()) {
                 let value = env.builder.build_load(*ptr, "load_jp_argument");
-                scope.insert(param.symbol, (param.layout.clone(), value));
+                scope.insert(param.symbol, (param.layout, value));
             }
 
             // put the continuation in
@@ -2277,7 +2283,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             match modify {
                 Inc(symbol, inc_amount) => {
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
-                    let layout = layout.clone();
+                    let layout = *layout;
 
                     if layout.contains_refcounted() {
                         increment_refcount_layout(
@@ -3177,7 +3183,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
     let function_pointer_type = {
         let function_layout =
-            ClosureLayout::extend_function_layout(arena, arguments, closure.clone(), result);
+            ClosureLayout::extend_function_layout(arena, arguments, *closure, result);
 
         // this is already a (function) pointer type
         basic_type_from_layout(arena, context, &function_layout, env.ptr_bytes)
@@ -3252,7 +3258,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     );
 
     // STEP 4: build a {} -> u64 function that gives the size of the closure
-    let layout = Layout::Closure(arguments, closure.clone(), result);
+    let layout = Layout::Closure(arguments, *closure, result);
     build_host_exposed_alias_size(env, def_name, alias_symbol, &layout);
 }
 
@@ -3455,7 +3461,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
     // Add args to scope
     for (arg_val, (layout, arg_symbol)) in fn_val.get_param_iter().zip(args) {
         set_name(arg_val, arg_symbol.ident_string(&env.interns));
-        scope.insert(*arg_symbol, (layout.clone(), arg_val));
+        scope.insert(*arg_symbol, (*layout, arg_val));
     }
 
     let body = build_exp_stmt(env, layout_ids, &mut scope, fn_val, &proc.body);
@@ -3931,6 +3937,13 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_sum(env, parent, list, layout)
         }
+        ListProduct => {
+            debug_assert_eq!(args.len(), 1);
+
+            let list = load_symbol(scope, &args[0]);
+
+            list_product(env, parent, list, layout)
+        }
         ListAppend => {
             // List.append : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
@@ -3963,8 +3976,8 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_join(env, inplace, parent, list, outer_list_layout)
         }
-        NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumSin | NumCos | NumCeiling | NumFloor
-        | NumToFloat | NumIsFinite | NumAtan | NumAcos | NumAsin => {
+        NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumLogUnchecked | NumSin | NumCos
+        | NumCeiling | NumFloor | NumToFloat | NumIsFinite | NumAtan | NumAcos | NumAsin => {
             debug_assert_eq!(args.len(), 1);
 
             let (arg, arg_layout) = load_symbol_and_layout(scope, &args[0]);
@@ -4559,7 +4572,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
             {
                 env.builder.position_at_end(pass_block);
 
-                scope.insert(symbol, (ret_layout.clone(), call_result));
+                scope.insert(symbol, (*ret_layout, call_result));
 
                 build_exp_stmt(env, layout_ids, scope, parent, pass);
 
@@ -5273,6 +5286,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
         NumNeg => bd.build_float_neg(arg, "negate_float").into(),
         NumAbs => env.call_intrinsic(LLVM_FABS_F64, &[arg.into()]),
         NumSqrtUnchecked => env.call_intrinsic(LLVM_SQRT_F64, &[arg.into()]),
+        NumLogUnchecked => env.call_intrinsic(LLVM_LOG_F64, &[arg.into()]),
         NumRound => env.call_intrinsic(LLVM_LROUND_I64_F64, &[arg.into()]),
         NumSin => env.call_intrinsic(LLVM_SIN_F64, &[arg.into()]),
         NumCos => env.call_intrinsic(LLVM_COS_F64, &[arg.into()]),

@@ -2258,3 +2258,41 @@ fn backpassing_result() {
         i64
     );
 }
+
+#[test]
+#[should_panic(
+    expected = "Shadowing { original_region: |L 3-3, C 4-5|, shadow: |L 5-5, C 6-7| Ident(\\\"x\\\") }"
+)]
+fn function_malformed_pattern() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                x = 3
+
+                (\x -> x) 42
+            "#
+        ),
+        3,
+        i64
+    );
+}
+
+#[test]
+#[should_panic(expected = "Hit an erroneous type when creating a layout for")]
+fn call_invalid_layout() {
+    assert_llvm_evals_to!(
+        indoc!(
+            r#"
+                f : I64 -> I64
+                f = \x -> x
+
+                f {}
+            "#
+        ),
+        3,
+        i64,
+        |x| x,
+        false,
+        true
+    );
+}

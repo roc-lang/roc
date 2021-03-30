@@ -129,7 +129,7 @@ mod test_reporting {
 
                 let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
-                let problem = fail.into_parse_problem(filename.clone(), src.as_bytes());
+                let problem = fail.into_parse_problem(filename.clone(), "", src.as_bytes());
                 let doc = parse_problem(&alloc, filename, 0, problem);
 
                 callback(doc.pretty(&alloc).append(alloc.line()), buf)
@@ -190,8 +190,11 @@ mod test_reporting {
                 let alloc = RocDocAllocator::new(&src_lines, home, &interns);
 
                 use roc_parse::parser::SyntaxError;
-                let problem =
-                    SyntaxError::Header(fail).into_parse_problem(filename.clone(), src.as_bytes());
+                let problem = SyntaxError::Header(fail).into_parse_problem(
+                    filename.clone(),
+                    "",
+                    src.as_bytes(),
+                );
                 let doc = parse_problem(&alloc, filename, 0, problem);
 
                 callback(doc.pretty(&alloc).append(alloc.line()), buf)
@@ -4483,7 +4486,7 @@ mod test_reporting {
                                      ^
 
                 Tab characters are not allowed.
-                "
+            "
             ),
         )
     }
@@ -4547,7 +4550,19 @@ mod test_reporting {
                 f
                 "#
             ),
-            indoc!(r#""#),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am confused by this type name:
+
+                1│  f : Foo..Bar
+                        ^^^^^^^^
+
+                Type names start with an uppercase letter, and can optionally be
+                qualified by a module name, like Bool or Http.Request.Request.
+            "#
+            ),
         )
 
         //                ── DOUBLE DOT ──────────────────────────────────────────────────────────────────
@@ -4570,7 +4585,19 @@ mod test_reporting {
                 f
                 "#
             ),
-            indoc!(r#""#),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am confused by this type name:
+
+                1│  f : Foo.Bar.
+                        ^^^^^^^^
+
+                Type names start with an uppercase letter, and can optionally be
+                qualified by a module name, like Bool or Http.Request.Request.
+            "#
+            ),
         )
 
         //                ── TRAILING DOT ────────────────────────────────────────────────────────────────
@@ -4618,7 +4645,19 @@ mod test_reporting {
                 f
                 "#
             ),
-            indoc!(r#""#),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am confused by this type name:
+
+                1│  f : Foo.1
+                        ^^^^^
+
+                Type names start with an uppercase letter, and can optionally be
+                qualified by a module name, like Bool or Http.Request.Request.
+            "#
+            ),
         )
 
         //                ── WEIRD QUALIFIED NAME ────────────────────────────────────────────────────────
@@ -4642,7 +4681,19 @@ mod test_reporting {
                 f
                 "#
             ),
-            indoc!(r#""#),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                I am confused by this type name:
+
+                1│  f : Foo.foo
+                        ^^^^^^^
+
+                Type names start with an uppercase letter, and can optionally be
+                qualified by a module name, like Bool or Http.Request.Request.
+            "#
+            ),
         )
     }
 
@@ -4915,7 +4966,6 @@ mod test_reporting {
 
     #[test]
     fn empty_or_pattern() {
-        // this should get better with time
         report_problem_as(
             indoc!(
                 r#"
@@ -4929,29 +4979,16 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── MISSING EXPRESSION ──────────────────────────────────────────────────────────
-
-                I am partway through parsing a definition, but I got stuck here:
-
-                1│  when Just 4 is
+                ── UNFINISHED PATTERN ──────────────────────────────────────────────────────────
+                
+                I just started parsing a pattern, but I got stuck here:
+                
                 2│      Just 4 | ->
-                                  ^
-
-                I was expecting to see an expression like 42 or "hello".
+                                 ^
+                
+                Note: I may be confused by indentation
                 "#
             ),
-            //            indoc!(
-            //                r#"
-            //                ── UNFINISHED PATTERN ──────────────────────────────────────────────────────────
-            //
-            //                I just started parsing a pattern, but I got stuck here:
-            //
-            //                2│      Just 4 | ->
-            //                                 ^
-            //
-            //                Note: I may be confused by indentation
-            //            "#
-            //            ),
         )
     }
 
@@ -5083,29 +5120,111 @@ mod test_reporting {
                 r#"
                 when 4 is
                     5 -> 2
-                  _ -> 2
+                 2 -> 2
                 "#
             ),
             indoc!(
                 r#"
-                ── UNFINISHED WHEN ─────────────────────────────────────────────────────────────
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                
+                I got stuck here:
+                
+                1│  when 4 is
+                2│      5 -> 2
+                              ^
+                
+                Whatever I am running into is confusing me a lot! Normally I can give
+                fairly specific hints, but something is really tripping me up this
+                time.
+                "#
+            ),
+            // TODO this formerly gave
+            //
+            //                ── UNFINISHED WHEN ─────────────────────────────────────────────────────────────
+            //
+            //                I was partway through parsing a `when` expression, but I got stuck here:
+            //
+            //                3│    _ -> 2
+            //                        ^
+            //
+            //                I suspect this is a pattern that is not indented enough? (by 2 spaces)
+            //
+            // but that requires parsing the next pattern blindly, irrespective of indentation. Can
+            // we find an efficient solution that doesn't require parsing an extra pattern for
+            // every `when`, i.e. we want a good error message for the test case above, but for
+            // a valid `when`, we don't want to do extra work, e.g. here
+            //
+            //  x
+            //      when x is
+            //          n -> n
+            //
+            //  4
+            //
+            // We don't want to parse the `4` and say it's an outdented pattern!
+        )
+    }
 
-                I was partway through parsing a `when` expression, but I got stuck here:
+    #[test]
+    fn when_over_indented_underscore() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when 4 is
+                    5 -> 2
+                     _ -> 2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                
+                I got stuck here:
+                
+                1│  when 4 is
+                2│      5 -> 2
+                              ^
+                
+                Whatever I am running into is confusing me a lot! Normally I can give
+                fairly specific hints, but something is really tripping me up this
+                time.
+            "#
+            ),
+        )
+    }
 
-                3│    _ -> 2
-                        ^
-
-                I suspect this is a pattern that is not indented enough? (by 2 spaces)
-
+    #[test]
+    fn when_over_indented_int() {
+        report_problem_as(
+            indoc!(
+                r#"
+                when 4 is
+                    5 -> Num.neg
+                     2 -> 2
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNEXPECTED ARROW ────────────────────────────────────────────────────────────
+                
+                I am parsing a `when` expression right now, but this arrow is confusing
+                me:
+                
+                3│       2 -> 2
+                           ^^
+                
+                It makes sense to see arrows around here, so I suspect it is something
+                earlier.Maybe this pattern is indented a bit farther from the previous
+                patterns?
+                
                 Note: Here is an example of a valid `when` expression for reference.
-
+                
                     when List.first plants is
                       Ok n ->
                         n
-
+                
                       Err _ ->
                         200
-
+                
                 Notice the indentation. All patterns are aligned, and each branch is
                 indented a bit more than the corresponding pattern. That is important!
             "#
@@ -5757,21 +5876,18 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── MISSING FINAL EXPRESSION ────────────────────────────────────────────────────
-
-                I am partway through parsing a definition's final expression, but I
-                got stuck here:
-
+                ── UNKNOWN OPERATOR ────────────────────────────────────────────────────────────
+                
+                This looks like an operator, but it's not one I recognize!
+                
                 1│  main = 5 -> 3
-                              ^
-
-                This definition is missing a final expression. A nested definition
-                must be followed by either another definition, or an expression
-
-                    x = 4
-                    y = 2
-
-                    x + y
+                             ^^
+                
+                The arrow -> is only used to define cases in a `when`.
+                
+                    when color is
+                        Red -> "stop!"
+                        Green -> "go!"
             "#
             ),
         )

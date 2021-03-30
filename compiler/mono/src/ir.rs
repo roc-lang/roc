@@ -200,7 +200,7 @@ impl<'a> Proc<'a> {
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, procs));
 
         for (key, proc) in procs.iter_mut() {
-            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1.clone());
+            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1);
         }
     }
 
@@ -364,7 +364,7 @@ impl<'a> Procs<'a> {
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
 
         for (key, proc) in result.iter_mut() {
-            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1.clone());
+            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1);
         }
 
         result
@@ -404,7 +404,7 @@ impl<'a> Procs<'a> {
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
 
         for (key, proc) in result.iter_mut() {
-            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1.clone());
+            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1);
         }
 
         (result, borrow_params)
@@ -424,6 +424,8 @@ impl<'a> Procs<'a> {
         is_self_recursive: bool,
         ret_var: Variable,
     ) {
+        let number_of_arguments = loc_args.len();
+
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
                 // a named closure. Since these aren't specialized by the surrounding
@@ -444,17 +446,22 @@ impl<'a> Procs<'a> {
             }
 
             Err(error) => {
-                // If the function has invalid patterns in its arguments,
-                // its call sites will code gen to runtime errors. This happens
-                // at the call site so we don't have to try to define the
-                // function LLVM, which would be difficult considering LLVM
-                // wants to know what symbols each argument corresponds to,
-                // and in this case the patterns were invalid, so we don't know
-                // what the symbols ought to be.
+                let mut pattern_symbols = Vec::with_capacity_in(number_of_arguments, env.arena);
 
-                let error_msg = format!("TODO generate a RuntimeError message for {:?}", error);
+                for _ in 0..number_of_arguments {
+                    pattern_symbols.push(env.unique_symbol());
+                }
 
-                self.runtime_errors.insert(name, env.arena.alloc(error_msg));
+                self.partial_procs.insert(
+                    name,
+                    PartialProc {
+                        annotation,
+                        pattern_symbols: pattern_symbols.into_bump_slice(),
+                        captured_symbols: CapturedSymbols::None,
+                        body: roc_can::expr::Expr::RuntimeError(error.value),
+                        is_self_recursive: false,
+                    },
+                );
             }
         }
     }
@@ -524,7 +531,7 @@ impl<'a> Procs<'a> {
                     match &mut self.pending_specializations {
                         Some(pending_specializations) => {
                             // register the pending specialization, so this gets code genned later
-                            add_pending(pending_specializations, symbol, layout.clone(), pending);
+                            add_pending(pending_specializations, symbol, layout, pending);
 
                             self.partial_procs.insert(symbol, partial_proc);
                         }
@@ -532,10 +539,9 @@ impl<'a> Procs<'a> {
                             // Mark this proc as in-progress, so if we're dealing with
                             // mutually recursive functions, we don't loop forever.
                             // (We had a bug around this before this system existed!)
-                            self.specialized
-                                .insert((symbol, layout.clone()), InProgress);
+                            self.specialized.insert((symbol, layout), InProgress);
 
-                            let outside_layout = layout.clone();
+                            let outside_layout = layout;
 
                             match specialize(env, self, symbol, layout_cache, pending, partial_proc)
                             {
@@ -552,13 +558,7 @@ impl<'a> Procs<'a> {
                                     }
                                 }
                                 Err(error) => {
-                                    let error_msg = format!(
-                                        "TODO generate a RuntimeError message for {:?}",
-                                        error
-                                    );
-                                    self.runtime_errors
-                                        .insert(symbol, env.arena.alloc(error_msg));
-                                    panic!();
+                                    panic!("TODO generate a RuntimeError message for {:?}", error);
                                 }
                             }
                         }
@@ -655,8 +655,7 @@ impl<'a> Procs<'a> {
                 // Mark this proc as in-progress, so if we're dealing with
                 // mutually recursive functions, we don't loop forever.
                 // (We had a bug around this before this system existed!)
-                self.specialized
-                    .insert((symbol, layout.clone()), InProgress);
+                self.specialized.insert((symbol, layout), InProgress);
 
                 match specialize(env, self, symbol, layout_cache, pending, partial_proc) {
                     Ok((proc, _ignore_layout)) => {
@@ -666,11 +665,7 @@ impl<'a> Procs<'a> {
                         self.specialized.insert((symbol, layout), Done(proc));
                     }
                     Err(error) => {
-                        let error_msg =
-                            format!("TODO generate a RuntimeError message for {:?}", error);
-                        self.runtime_errors
-                            .insert(symbol, env.arena.alloc(error_msg));
-                        panic!();
+                        panic!("TODO generate a RuntimeError message for {:?}", error);
                     }
                 }
             }
@@ -694,7 +689,6 @@ fn add_pending<'a>(
 #[derive(Default)]
 pub struct Specializations<'a> {
     by_symbol: MutMap<Symbol, MutMap<Layout<'a>, Proc<'a>>>,
-    runtime_errors: MutSet<Symbol>,
 }
 
 impl<'a> Specializations<'a> {
@@ -710,32 +704,15 @@ impl<'a> Specializations<'a> {
             !procs_by_layout.contains_key(&layout) || procs_by_layout.get(&layout) == Some(&proc)
         );
 
-        // We shouldn't already have a runtime error recorded for this symbol
-        debug_assert!(!self.runtime_errors.contains(&symbol));
-
         procs_by_layout.insert(layout, proc);
     }
 
-    pub fn runtime_error(&mut self, symbol: Symbol) {
-        // We shouldn't already have a normal proc recorded for this symbol
-        debug_assert!(!self.by_symbol.contains_key(&symbol));
-
-        self.runtime_errors.insert(symbol);
-    }
-
-    pub fn into_owned(self) -> (MutMap<Symbol, MutMap<Layout<'a>, Proc<'a>>>, MutSet<Symbol>) {
-        (self.by_symbol, self.runtime_errors)
-    }
-
     pub fn len(&self) -> usize {
-        let runtime_errors: usize = self.runtime_errors.len();
-        let specializations: usize = self.by_symbol.len();
-
-        runtime_errors + specializations
+        self.by_symbol.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.by_symbol.is_empty()
     }
 }
 
@@ -1691,13 +1668,15 @@ pub fn specialize_all<'a>(
             Ok((proc, layout)) => {
                 procs.specialized.insert((name, layout), Done(proc));
             }
-            Err(error) => {
-                let error_msg = env.arena.alloc(format!(
-                    "TODO generate a RuntimeError message for {:?}",
-                    error
-                ));
+            Err(SpecializeFailure {
+                problem: _,
+                attempted_layout,
+            }) => {
+                let proc = generate_runtime_error_function(env, name, attempted_layout);
 
-                procs.runtime_errors.insert(name, error_msg);
+                procs
+                    .specialized
+                    .insert((name, attempted_layout), Done(proc));
             }
         }
     }
@@ -1716,7 +1695,7 @@ pub fn specialize_all<'a>(
             // NOTE: this #[allow(clippy::map_entry)] here is for correctness!
             // Changing it to use .entry() would necessarily make it incorrect.
             #[allow(clippy::map_entry)]
-            if !procs.specialized.contains_key(&(name, layout.clone())) {
+            if !procs.specialized.contains_key(&(name, layout)) {
                 // TODO should pending_procs hold a Rc<Proc>?
                 let partial_proc = match procs.partial_procs.get(&name) {
                     Some(v) => v.clone(),
@@ -1730,10 +1709,8 @@ pub fn specialize_all<'a>(
                 // Mark this proc as in-progress, so if we're dealing with
                 // mutually recursive functions, we don't loop forever.
                 // (We had a bug around this before this system existed!)
-                let outside_layout = layout.clone();
-                procs
-                    .specialized
-                    .insert((name, outside_layout.clone()), InProgress);
+                let outside_layout = layout;
+                procs.specialized.insert((name, outside_layout), InProgress);
                 match specialize(
                     env,
                     &mut procs,
@@ -1755,13 +1732,14 @@ pub fn specialize_all<'a>(
                             procs.specialized.insert((name, layout), Done(proc));
                         }
                     }
-                    Err(error) => {
-                        let error_msg = env.arena.alloc(format!(
-                            "TODO generate a RuntimeError message for {:?}",
-                            error
-                        ));
+                    Err(SpecializeFailure {
+                        attempted_layout, ..
+                    }) => {
+                        let proc = generate_runtime_error_function(env, name, attempted_layout);
 
-                        procs.runtime_errors.insert(name, error_msg);
+                        procs
+                            .specialized
+                            .insert((name, attempted_layout), Done(proc));
                     }
                 }
             }
@@ -1769,6 +1747,47 @@ pub fn specialize_all<'a>(
     }
 
     procs
+}
+
+fn generate_runtime_error_function<'a>(
+    env: &mut Env<'a, '_>,
+    name: Symbol,
+    layout: Layout<'a>,
+) -> Proc<'a> {
+    let (arg_layouts, ret_layout) = match layout {
+        Layout::FunctionPointer(a, r) => (a, *r),
+        _ => (&[] as &[_], layout),
+    };
+
+    let mut args = Vec::with_capacity_in(arg_layouts.len(), env.arena);
+
+    for arg in arg_layouts {
+        args.push((*arg, env.unique_symbol()));
+    }
+
+    let mut msg = bumpalo::collections::string::String::with_capacity_in(80, env.arena);
+    use std::fmt::Write;
+    write!(
+        &mut msg,
+        "The {:?} function could not be generated, likely due to a type error.",
+        name
+    )
+    .unwrap();
+
+    eprintln!("emitted runtime error function {:?}", &msg);
+
+    let runtime_error = Stmt::RuntimeError(msg.into_bump_str());
+
+    Proc {
+        name,
+        args: args.into_bump_slice(),
+        body: runtime_error,
+        closure_data_layout: None,
+        ret_layout,
+        is_self_recursive: SelfRecursive::NotSelfRecursive,
+        must_own_arguments: false,
+        host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+    }
 }
 
 fn specialize_external<'a>(
@@ -1792,10 +1811,11 @@ fn specialize_external<'a>(
     let snapshot = env.subs.snapshot();
     let cache_snapshot = layout_cache.snapshot();
 
-    let unified = roc_unify::unify::unify(env.subs, annotation, fn_var);
+    let _unified = roc_unify::unify::unify(env.subs, annotation, fn_var);
 
-    let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
-    debug_assert!(is_valid, "unificaton failure for {:?}", proc_name);
+    // This will not hold for programs with type errors
+    // let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
+    // debug_assert!(is_valid, "unificaton failure for {:?}", proc_name);
 
     // if this is a closure, add the closure record argument
     let pattern_symbols = if let CapturedSymbols::Captured(_) = captured_symbols {
@@ -1885,7 +1905,7 @@ fn specialize_external<'a>(
             ret_layout,
         } => {
             // unpack the closure symbols, if any
-            match (opt_closure_layout.clone(), captured_symbols) {
+            match (opt_closure_layout, captured_symbols) {
                 (Some(closure_layout), CapturedSymbols::Captured(captured)) => {
                     debug_assert!(!captured.is_empty());
 
@@ -1917,7 +1937,7 @@ fn specialize_external<'a>(
                                             wrapped,
                                         };
 
-                                        let layout = field_layouts[index].clone();
+                                        let layout = field_layouts[index];
 
                                         specialized_body = Stmt::Let(
                                             *symbol,
@@ -1949,7 +1969,7 @@ fn specialize_external<'a>(
                                         wrapped,
                                     };
 
-                                    let layout = field_layouts[index].clone();
+                                    let layout = field_layouts[index];
 
                                     specialized_body = Stmt::Let(
                                         *symbol,
@@ -2053,7 +2073,7 @@ fn build_specialized_proc_from_var<'a>(
                 pattern_symbols,
                 pattern_layouts_vec,
                 None,
-                ret_layout.clone(),
+                *ret_layout,
             )
         }
         Ok(Layout::Closure(pattern_layouts, closure_layout, ret_layout)) => {
@@ -2066,7 +2086,7 @@ fn build_specialized_proc_from_var<'a>(
                 pattern_symbols,
                 pattern_layouts_vec,
                 Some(closure_layout),
-                ret_layout.clone(),
+                *ret_layout,
             )
         }
         _ => {
@@ -2135,9 +2155,7 @@ fn build_specialized_proc_adapter<'a>(
         arg_layouts.push(layout);
     }
 
-    let ret_layout = layout_cache
-        .from_var(&env.arena, ret_var, env.subs)
-        .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
+    let ret_layout = layout_cache.from_var(&env.arena, ret_var, env.subs)?;
 
     build_specialized_proc(
         env.arena,
@@ -2212,7 +2230,7 @@ fn build_specialized_proc<'a>(
 
             let closure_data_layout = layout.as_block_of_memory_layout();
             let function_ptr_layout = Layout::FunctionPointer(
-                arena.alloc([Layout::Struct(&[]), closure_data_layout.clone()]),
+                arena.alloc([Layout::Struct(&[]), closure_data_layout]),
                 arena.alloc(ret_layout),
             );
 
@@ -2268,6 +2286,14 @@ fn build_specialized_proc<'a>(
     }
 }
 
+#[derive(Debug)]
+struct SpecializeFailure<'a> {
+    /// The layout we attempted to create
+    attempted_layout: Layout<'a>,
+    /// The problem we ran into while creating it
+    problem: LayoutProblem,
+}
+
 fn specialize<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
@@ -2275,7 +2301,7 @@ fn specialize<'a>(
     layout_cache: &mut LayoutCache<'a>,
     pending: PendingSpecialization,
     partial_proc: PartialProc<'a>,
-) -> Result<(Proc<'a>, Layout<'a>), LayoutProblem> {
+) -> Result<(Proc<'a>, Layout<'a>), SpecializeFailure<'a>> {
     let PendingSpecialization {
         solved_type,
         host_exposed_aliases,
@@ -2319,7 +2345,7 @@ fn specialize_solved_type<'a>(
     solved_type: SolvedType,
     host_exposed_aliases: MutMap<Symbol, SolvedType>,
     partial_proc: PartialProc<'a>,
-) -> Result<(Proc<'a>, Layout<'a>), LayoutProblem> {
+) -> Result<(Proc<'a>, Layout<'a>), SpecializeFailure<'a>> {
     // add the specializations that other modules require of us
     use roc_solve::solve::instantiate_rigids;
 
@@ -2327,6 +2353,10 @@ fn specialize_solved_type<'a>(
     let cache_snapshot = layout_cache.snapshot();
 
     let fn_var = introduce_solved_type_to_subs(env, &solved_type);
+
+    let attempted_layout = layout_cache
+        .from_var(&env.arena, fn_var, env.subs)
+        .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
     // make sure rigid variables in the annotation are converted to flex variables
     instantiate_rigids(env.subs, partial_proc.annotation);
@@ -2351,17 +2381,25 @@ fn specialize_solved_type<'a>(
 
     match specialized {
         Ok(proc) => {
-            let layout = layout_cache
-                .from_var(&env.arena, fn_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
+            // when successful, the layout after unification should be the layout before unification
+            debug_assert_eq!(
+                attempted_layout,
+                layout_cache
+                    .from_var(&env.arena, fn_var, env.subs)
+                    .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err))
+            );
+
             env.subs.rollback_to(snapshot);
             layout_cache.rollback_to(cache_snapshot);
-            Ok((proc, layout))
+            Ok((proc, attempted_layout))
         }
         Err(error) => {
             env.subs.rollback_to(snapshot);
             layout_cache.rollback_to(cache_snapshot);
-            Err(error)
+            Err(SpecializeFailure {
+                problem: error,
+                attempted_layout,
+            })
         }
     }
 }
@@ -2378,20 +2416,20 @@ impl<'a> FunctionLayouts<'a> {
         match &layout {
             Layout::FunctionPointer(arguments, result) => FunctionLayouts {
                 arguments,
-                result: (*result).clone(),
+                result: *(*result),
                 full: layout,
             },
             Layout::Closure(arguments, closure_layout, result) => {
                 let full = ClosureLayout::extend_function_layout(
                     arena,
                     arguments,
-                    closure_layout.clone(),
+                    *closure_layout,
                     result,
                 );
                 FunctionLayouts::from_layout(arena, full)
             }
             _ => FunctionLayouts {
-                full: layout.clone(),
+                full: layout,
                 arguments: &[],
                 result: layout,
             },
@@ -2434,7 +2472,7 @@ fn specialize_naked_symbol<'a>(
                 match hole {
                     Stmt::Jump(_, _) => todo!("not sure what to do in this case yet"),
                     _ => {
-                        let expr = call_by_pointer(env, procs, symbol, layout.clone());
+                        let expr = call_by_pointer(env, procs, symbol, layout);
                         let new_symbol = env.unique_symbol();
                         return Stmt::Let(
                             new_symbol,
@@ -2912,7 +2950,7 @@ pub fn with_hole<'a>(
                                 Layout::Union(UnionLayout::Recursive(layouts.into_bump_slice()));
 
                             let tag = Expr::Tag {
-                                tag_layout: layout.clone(),
+                                tag_layout: layout,
                                 tag_name,
                                 tag_id: tag_id as u8,
                                 union_size,
@@ -2941,7 +2979,7 @@ pub fn with_hole<'a>(
                             let layout = Layout::Union(UnionLayout::NonNullableUnwrapped(fields));
 
                             let tag = Expr::Tag {
-                                tag_layout: layout.clone(),
+                                tag_layout: layout,
                                 tag_name,
                                 tag_id: tag_id as u8,
                                 union_size,
@@ -2975,7 +3013,7 @@ pub fn with_hole<'a>(
                                 Layout::Union(UnionLayout::NonRecursive(layouts.into_bump_slice()));
 
                             let tag = Expr::Tag {
-                                tag_layout: layout.clone(),
+                                tag_layout: layout,
                                 tag_name,
                                 tag_id: tag_id as u8,
                                 union_size,
@@ -3015,7 +3053,7 @@ pub fn with_hole<'a>(
                             });
 
                             let tag = Expr::Tag {
-                                tag_layout: layout.clone(),
+                                tag_layout: layout,
                                 tag_name,
                                 tag_id: tag_id as u8,
                                 union_size,
@@ -3051,7 +3089,7 @@ pub fn with_hole<'a>(
                             });
 
                             let tag = Expr::Tag {
-                                tag_layout: layout.clone(),
+                                tag_layout: layout,
                                 tag_name,
                                 tag_id: tag_id as u8,
                                 union_size,
@@ -3213,14 +3251,7 @@ pub fn with_hole<'a>(
                         terminator,
                     );
 
-                    stmt = cond(
-                        env,
-                        branching_symbol,
-                        cond_layout.clone(),
-                        then,
-                        stmt,
-                        ret_layout.clone(),
-                    );
+                    stmt = cond(env, branching_symbol, cond_layout, then, stmt, ret_layout);
 
                     // add condition
                     stmt = with_hole(
@@ -3265,14 +3296,7 @@ pub fn with_hole<'a>(
                         terminator,
                     );
 
-                    stmt = cond(
-                        env,
-                        branching_symbol,
-                        cond_layout.clone(),
-                        then,
-                        stmt,
-                        ret_layout.clone(),
-                    );
+                    stmt = cond(env, branching_symbol, cond_layout, then, stmt, ret_layout);
 
                     // add condition
                     stmt = assign_to_symbol(
@@ -3402,7 +3426,7 @@ pub fn with_hole<'a>(
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             let expr = Expr::Array {
-                elem_layout: elem_layout.clone(),
+                elem_layout,
                 elems: arg_symbols,
             };
 
@@ -3544,7 +3568,7 @@ pub fn with_hole<'a>(
                     // TODO should the let have layout Pointer?
                     Stmt::Let(
                         assigned,
-                        call_by_pointer(env, procs, name, layout.clone()),
+                        call_by_pointer(env, procs, name, layout),
                         layout,
                         hole,
                     )
@@ -3615,7 +3639,7 @@ pub fn with_hole<'a>(
 
             let field_layouts = match &record_layout {
                 Layout::Struct(layouts) => *layouts,
-                other => arena.alloc([other.clone()]),
+                other => arena.alloc([*other]),
             };
 
             let wrapped = if field_layouts.len() == 1 {
@@ -3648,12 +3672,7 @@ pub fn with_hole<'a>(
                             field_layouts,
                             wrapped,
                         };
-                        stmt = Stmt::Let(
-                            *symbol,
-                            access_expr,
-                            field_layout.clone(),
-                            arena.alloc(stmt),
-                        );
+                        stmt = Stmt::Let(*symbol, access_expr, *field_layout, arena.alloc(stmt));
                     }
                 }
             }
@@ -3706,7 +3725,7 @@ pub fn with_hole<'a>(
                     let function_ptr_layout = {
                         let mut temp =
                             Vec::from_iter_in(argument_layouts.iter().cloned(), env.arena);
-                        temp.push(closure_data_layout.clone());
+                        temp.push(closure_data_layout);
                         Layout::FunctionPointer(temp.into_bump_slice(), ret_layout)
                     };
 
@@ -3721,10 +3740,7 @@ pub fn with_hole<'a>(
                     stmt = Stmt::Let(
                         assigned,
                         expr,
-                        Layout::Struct(
-                            env.arena
-                                .alloc([function_ptr_layout.clone(), closure_data_layout.clone()]),
-                        ),
+                        Layout::Struct(env.arena.alloc([function_ptr_layout, closure_data_layout])),
                         env.arena.alloc(stmt),
                     );
 
@@ -3744,7 +3760,7 @@ pub fn with_hole<'a>(
                             stmt = Stmt::Let(
                                 closure_data,
                                 expr,
-                                closure_data_layout.clone(),
+                                closure_data_layout,
                                 env.arena.alloc(stmt),
                             );
                         }
@@ -3772,7 +3788,7 @@ pub fn with_hole<'a>(
                             stmt = Stmt::Let(
                                 closure_data,
                                 expr2,
-                                closure_data_layout.clone(),
+                                closure_data_layout,
                                 env.arena.alloc(stmt),
                             );
 
@@ -3785,7 +3801,7 @@ pub fn with_hole<'a>(
                         }
                     }
 
-                    let expr = call_by_pointer(env, procs, name, function_ptr_layout.clone());
+                    let expr = call_by_pointer(env, procs, name, function_ptr_layout);
 
                     stmt = Stmt::Let(
                         function_pointer,
@@ -3811,7 +3827,7 @@ pub fn with_hole<'a>(
                             // TODO should the let have layout Pointer?
                             Stmt::Let(
                                 assigned,
-                                call_by_pointer(env, procs, name, layout.clone()),
+                                call_by_pointer(env, procs, name, layout),
                                 layout,
                                 hole,
                             )
@@ -3925,14 +3941,14 @@ pub fn with_hole<'a>(
                                 let arg_layouts = {
                                     let mut temp =
                                         Vec::from_iter_in(arg_layouts.iter().cloned(), env.arena);
-                                    temp.push(closure_record_layout.clone());
+                                    temp.push(closure_record_layout);
                                     temp.into_bump_slice()
                                 };
 
                                 // layout of the function itself, so typically FunctionPointer(arg_layouts ++ [closure_record], ret_layout)
                                 let function_ptr_layout = Layout::FunctionPointer(
                                     arg_layouts,
-                                    env.arena.alloc(ret_layout.clone()),
+                                    env.arena.alloc(ret_layout),
                                 );
 
                                 // build the call
@@ -3941,8 +3957,8 @@ pub fn with_hole<'a>(
                                     Expr::Call(self::Call {
                                         call_type: CallType::ByPointer {
                                             name: closure_function_symbol,
-                                            full_layout: function_ptr_layout.clone(),
-                                            ret_layout: ret_layout.clone(),
+                                            full_layout: function_ptr_layout,
+                                            ret_layout,
                                             arg_layouts,
                                         },
                                         arguments: arg_symbols,
@@ -3952,10 +3968,9 @@ pub fn with_hole<'a>(
                                 );
 
                                 // layout of the ( function_pointer, closure_record ) pair
-                                let closure_layout = env.arena.alloc([
-                                    function_ptr_layout.clone(),
-                                    closure_record_layout.clone(),
-                                ]);
+                                let closure_layout = env
+                                    .arena
+                                    .alloc([function_ptr_layout, closure_record_layout]);
 
                                 // extract & assign the closure function
                                 let expr = Expr::AccessAtIndex {
@@ -3991,7 +4006,7 @@ pub fn with_hole<'a>(
                                         call_type: CallType::ByPointer {
                                             name: function_symbol,
                                             full_layout,
-                                            ret_layout: ret_layout.clone(),
+                                            ret_layout,
                                             arg_layouts,
                                         },
                                         arguments: arg_symbols,
@@ -4010,7 +4025,7 @@ pub fn with_hole<'a>(
                                     call_type: CallType::ByPointer {
                                         name: function_symbol,
                                         full_layout,
-                                        ret_layout: ret_layout.clone(),
+                                        ret_layout,
                                         arg_layouts,
                                     },
                                     arguments: arg_symbols,
@@ -4049,14 +4064,13 @@ pub fn with_hole<'a>(
             let arg_symbols = arg_symbols.into_bump_slice();
 
             // layout of the return type
-            let layout = layout_cache
-                .from_var(env.arena, ret_var, env.subs)
-                .unwrap_or_else(|err| todo!("TODO turn fn_var into a RuntimeError {:?}", err));
+            let layout =
+                return_on_layout_error!(env, layout_cache.from_var(env.arena, ret_var, env.subs));
 
             let call = self::Call {
                 call_type: CallType::Foreign {
                     foreign_symbol,
-                    ret_layout: layout.clone(),
+                    ret_layout: layout,
                 },
                 arguments: arg_symbols,
             };
@@ -4072,8 +4086,6 @@ pub fn with_hole<'a>(
         }
 
         RunLowLevel { op, args, ret_var } => {
-            let op = optimize_low_level(env.subs, op, &args);
-
             let mut arg_symbols = Vec::with_capacity_in(args.len(), env.arena);
 
             for (_, arg_expr) in args.iter() {
@@ -4082,23 +4094,8 @@ pub fn with_hole<'a>(
             let arg_symbols = arg_symbols.into_bump_slice();
 
             // layout of the return type
-            let layout = match layout_cache.from_var(env.arena, ret_var, env.subs) {
-                Ok(cached) => cached,
-                Err(LayoutProblem::UnresolvedTypeVar(_)) => {
-                    return Stmt::RuntimeError(env.arena.alloc(format!(
-                        "UnresolvedTypeVar {} line {}",
-                        file!(),
-                        line!()
-                    )));
-                }
-                Err(LayoutProblem::Erroneous) => {
-                    return Stmt::RuntimeError(env.arena.alloc(format!(
-                        "Erroneous {} line {}",
-                        file!(),
-                        line!()
-                    )));
-                }
-            };
+            let layout =
+                return_on_layout_error!(env, layout_cache.from_var(env.arena, ret_var, env.subs));
 
             let call = self::Call {
                 call_type: CallType::LowLevel { op },
@@ -4227,14 +4224,7 @@ pub fn from_can<'a>(
                 let branching_symbol = possible_reuse_symbol(env, procs, &loc_cond.value);
                 let then = from_can(env, branch_var, loc_then.value, procs, layout_cache);
 
-                stmt = cond(
-                    env,
-                    branching_symbol,
-                    cond_layout.clone(),
-                    then,
-                    stmt,
-                    ret_layout.clone(),
-                );
+                stmt = cond(env, branching_symbol, cond_layout, then, stmt, ret_layout);
 
                 stmt = assign_to_symbol(
                     env,
@@ -4748,7 +4738,7 @@ fn from_can_when<'a>(
         procs,
         layout_cache,
         cond_symbol,
-        cond_layout.clone(),
+        cond_layout,
         ret_layout,
         mono_branches,
     )
@@ -4791,7 +4781,7 @@ fn substitute_in_stmt_help<'a>(
                 let cont = opt_cont.unwrap_or(cont);
                 let expr = opt_expr.unwrap_or_else(|| expr.clone());
 
-                Some(arena.alloc(Let(*symbol, expr, layout.clone(), cont)))
+                Some(arena.alloc(Let(*symbol, expr, *layout, cont)))
             } else {
                 None
             }
@@ -4815,7 +4805,7 @@ fn substitute_in_stmt_help<'a>(
                 Some(arena.alloc(Invoke {
                     symbol: *symbol,
                     call,
-                    layout: layout.clone(),
+                    layout: *layout,
                     pass,
                     fail,
                 }))
@@ -4894,10 +4884,10 @@ fn substitute_in_stmt_help<'a>(
 
                 Some(arena.alloc(Switch {
                     cond_symbol: *cond_symbol,
-                    cond_layout: cond_layout.clone(),
+                    cond_layout: *cond_layout,
                     default_branch,
                     branches,
-                    ret_layout: ret_layout.clone(),
+                    ret_layout: *ret_layout,
                 }))
             } else {
                 None
@@ -4962,8 +4952,8 @@ fn substitute_in_call<'a>(
         } => substitute(subs, *name).map(|new| CallType::ByName {
             name: new,
             arg_layouts,
-            ret_layout: ret_layout.clone(),
-            full_layout: full_layout.clone(),
+            ret_layout: *ret_layout,
+            full_layout: *full_layout,
         }),
         CallType::ByPointer {
             name,
@@ -4973,8 +4963,8 @@ fn substitute_in_call<'a>(
         } => substitute(subs, *name).map(|new| CallType::ByPointer {
             name: new,
             arg_layouts,
-            ret_layout: ret_layout.clone(),
-            full_layout: full_layout.clone(),
+            ret_layout: *ret_layout,
+            full_layout: *full_layout,
         }),
         CallType::Foreign { .. } => None,
         CallType::LowLevel { .. } => None,
@@ -5041,7 +5031,7 @@ fn substitute_in_expr<'a>(
                 let arguments = new_args.into_bump_slice();
 
                 Some(Tag {
-                    tag_layout: tag_layout.clone(),
+                    tag_layout: *tag_layout,
                     tag_name: tag_name.clone(),
                     tag_id: *tag_id,
                     union_size: *union_size,
@@ -5096,7 +5086,7 @@ fn substitute_in_expr<'a>(
                 let args = new_args.into_bump_slice();
 
                 Some(Array {
-                    elem_layout: elem_layout.clone(),
+                    elem_layout: *elem_layout,
                     elems: args,
                 })
             } else {
@@ -5185,7 +5175,7 @@ fn store_pattern_help<'a>(
             }
 
             for (_, layout) in arguments {
-                arg_layouts.push(layout.clone());
+                arg_layouts.push(*layout);
             }
 
             for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
@@ -5207,7 +5197,7 @@ fn store_pattern_help<'a>(
                 match argument {
                     Identifier(symbol) => {
                         // store immediately in the given symbol
-                        stmt = Stmt::Let(*symbol, load, arg_layout.clone(), env.arena.alloc(stmt));
+                        stmt = Stmt::Let(*symbol, load, *arg_layout, env.arena.alloc(stmt));
                         is_productive = true;
                     }
                     Underscore => {
@@ -5229,12 +5219,7 @@ fn store_pattern_help<'a>(
                                 stmt = new;
                                 // only if we bind one of its (sub)fields to a used name should we
                                 // extract the field
-                                stmt = Stmt::Let(
-                                    symbol,
-                                    load,
-                                    arg_layout.clone(),
-                                    env.arena.alloc(stmt),
-                                );
+                                stmt = Stmt::Let(symbol, load, *arg_layout, env.arena.alloc(stmt));
                             }
                             StorePattern::NotProductive(new) => {
                                 // do nothing
@@ -5310,21 +5295,11 @@ fn store_record_destruct<'a>(
 
     match &destruct.typ {
         DestructType::Required(symbol) => {
-            stmt = Stmt::Let(
-                *symbol,
-                load,
-                destruct.layout.clone(),
-                env.arena.alloc(stmt),
-            );
+            stmt = Stmt::Let(*symbol, load, destruct.layout, env.arena.alloc(stmt));
         }
         DestructType::Guard(guard_pattern) => match &guard_pattern {
             Identifier(symbol) => {
-                stmt = Stmt::Let(
-                    *symbol,
-                    load,
-                    destruct.layout.clone(),
-                    env.arena.alloc(stmt),
-                );
+                stmt = Stmt::Let(*symbol, load, destruct.layout, env.arena.alloc(stmt));
             }
             Underscore => {
                 // important that this is special-cased to do nothing: mono record patterns will extract all the
@@ -5354,8 +5329,7 @@ fn store_record_destruct<'a>(
                 match store_pattern_help(env, procs, layout_cache, guard_pattern, symbol, stmt) {
                     StorePattern::Productive(new) => {
                         stmt = new;
-                        stmt =
-                            Stmt::Let(symbol, load, destruct.layout.clone(), env.arena.alloc(stmt));
+                        stmt = Stmt::Let(symbol, load, destruct.layout, env.arena.alloc(stmt));
                     }
                     StorePattern::NotProductive(stmt) => return StorePattern::NotProductive(stmt),
                 }
@@ -5432,7 +5406,7 @@ fn handle_variable_aliasing<'a>(
             .from_var(env.arena, variable, env.subs)
             .unwrap();
 
-        let expr = call_by_pointer(env, procs, right, layout.clone());
+        let expr = call_by_pointer(env, procs, right, layout);
         Stmt::Let(left, expr, layout, env.arena.alloc(result))
     } else {
         substitute_in_exprs(env.arena, &mut result, left, right);
@@ -5470,17 +5444,11 @@ fn reuse_function_symbol<'a>(
                         .from_var(env.arena, arg_var, env.subs)
                         .expect("creating layout does not fail");
 
-                    procs.insert_passed_by_name(
-                        env,
-                        arg_var,
-                        original,
-                        layout.clone(),
-                        layout_cache,
-                    );
+                    procs.insert_passed_by_name(env, arg_var, original, layout, layout_cache);
 
                     // an imported symbol is always a function pointer:
                     // either it's a function, or a top-level 0-argument thunk
-                    let expr = call_by_pointer(env, procs, original, layout.clone());
+                    let expr = call_by_pointer(env, procs, original, layout);
                     return Stmt::Let(symbol, expr, layout, env.arena.alloc(result));
                 }
                 _ => {
@@ -5527,7 +5495,7 @@ fn reuse_function_symbol<'a>(
                     let function_ptr_layout = ClosureLayout::extend_function_layout(
                         env.arena,
                         argument_layouts,
-                        closure_layout.clone(),
+                        closure_layout,
                         ret_layout,
                     );
 
@@ -5535,7 +5503,7 @@ fn reuse_function_symbol<'a>(
                         env,
                         arg_var,
                         original,
-                        function_ptr_layout.clone(),
+                        function_ptr_layout,
                         layout_cache,
                     );
 
@@ -5545,10 +5513,7 @@ fn reuse_function_symbol<'a>(
                     stmt = Stmt::Let(
                         symbol,
                         expr,
-                        Layout::Struct(
-                            env.arena
-                                .alloc([function_ptr_layout.clone(), closure_data_layout.clone()]),
-                        ),
+                        Layout::Struct(env.arena.alloc([function_ptr_layout, closure_data_layout])),
                         env.arena.alloc(stmt),
                     );
 
@@ -5572,7 +5537,7 @@ fn reuse_function_symbol<'a>(
                             stmt = Stmt::Let(
                                 closure_data,
                                 expr,
-                                closure_data_layout.clone(),
+                                closure_data_layout,
                                 env.arena.alloc(stmt),
                             );
                         }
@@ -5600,7 +5565,7 @@ fn reuse_function_symbol<'a>(
                             stmt = Stmt::Let(
                                 closure_data,
                                 expr2,
-                                closure_data_layout.clone(),
+                                closure_data_layout,
                                 env.arena.alloc(stmt),
                             );
 
@@ -5613,7 +5578,7 @@ fn reuse_function_symbol<'a>(
                         }
                     }
 
-                    let expr = call_by_pointer(env, procs, original, function_ptr_layout.clone());
+                    let expr = call_by_pointer(env, procs, original, function_ptr_layout);
 
                     stmt = Stmt::Let(
                         function_pointer,
@@ -5625,17 +5590,11 @@ fn reuse_function_symbol<'a>(
                     stmt
                 }
                 Ok(layout) => {
-                    procs.insert_passed_by_name(
-                        env,
-                        arg_var,
-                        original,
-                        layout.clone(),
-                        layout_cache,
-                    );
+                    procs.insert_passed_by_name(env, arg_var, original, layout, layout_cache);
 
                     Stmt::Let(
                         symbol,
-                        call_by_pointer(env, procs, original, layout.clone()),
+                        call_by_pointer(env, procs, original, layout),
                         layout,
                         env.arena.alloc(result),
                     )
@@ -5753,7 +5712,7 @@ fn call_by_pointer<'a>(
             Layout::FunctionPointer(arg_layouts, ret_layout) if !is_thunk => {
                 if arg_layouts.iter().any(|l| l.contains_refcounted()) {
                     if let Some(wrapper) = procs.call_by_pointer_wrappers.get(&symbol) {
-                        if procs.specialized.contains_key(&(*wrapper, layout.clone())) {
+                        if procs.specialized.contains_key(&(*wrapper, layout)) {
                             return Expr::FunctionPointer(*wrapper, layout);
                         }
                     }
@@ -5764,7 +5723,7 @@ fn call_by_pointer<'a>(
 
                     for layout in arg_layouts {
                         let symbol = env.unique_symbol();
-                        args.push((layout.clone(), symbol));
+                        args.push((*layout, symbol));
                         arg_symbols.push(symbol);
                     }
                     let args = args.into_bump_slice();
@@ -5773,8 +5732,8 @@ fn call_by_pointer<'a>(
                     debug_assert_eq!(arg_layouts.len(), arg_symbols.len());
                     let call_type = CallType::ByName {
                         name: symbol,
-                        full_layout: layout.clone(),
-                        ret_layout: ret_layout.clone(),
+                        full_layout: layout,
+                        ret_layout: *ret_layout,
                         arg_layouts,
                     };
                     let call = Call {
@@ -5785,7 +5744,7 @@ fn call_by_pointer<'a>(
 
                     let mut body = Stmt::Ret(call_symbol);
 
-                    body = Stmt::Let(call_symbol, expr, ret_layout.clone(), env.arena.alloc(body));
+                    body = Stmt::Let(call_symbol, expr, *ret_layout, env.arena.alloc(body));
 
                     let closure_data_layout = None;
                     let proc = Proc {
@@ -5793,7 +5752,7 @@ fn call_by_pointer<'a>(
                         args,
                         body,
                         closure_data_layout,
-                        ret_layout: ret_layout.clone(),
+                        ret_layout: *ret_layout,
                         is_self_recursive: SelfRecursive::NotSelfRecursive,
                         must_own_arguments: true,
                         host_exposed_layouts: HostExposedLayouts::NotHostExposed,
@@ -5801,7 +5760,7 @@ fn call_by_pointer<'a>(
 
                     procs
                         .specialized
-                        .insert((name, layout.clone()), InProgressProc::Done(proc));
+                        .insert((name, layout), InProgressProc::Done(proc));
 
                     procs.call_by_pointer_wrappers.insert(symbol, name);
 
@@ -5815,7 +5774,7 @@ fn call_by_pointer<'a>(
             Layout::FunctionPointer(arg_layouts, ret_layout) => {
                 if arg_layouts.iter().any(|l| l.contains_refcounted()) {
                     if let Some(wrapper) = procs.call_by_pointer_wrappers.get(&symbol) {
-                        if procs.specialized.contains_key(&(*wrapper, layout.clone())) {
+                        if procs.specialized.contains_key(&(*wrapper, layout)) {
                             return Expr::FunctionPointer(*wrapper, layout);
                         }
                     }
@@ -5826,7 +5785,7 @@ fn call_by_pointer<'a>(
 
                     for layout in arg_layouts {
                         let symbol = env.unique_symbol();
-                        args.push((layout.clone(), symbol));
+                        args.push((*layout, symbol));
                         arg_symbols.push(symbol);
                     }
                     let args = args.into_bump_slice();
@@ -5836,8 +5795,8 @@ fn call_by_pointer<'a>(
                     debug_assert_eq!(arg_layouts.len(), arg_symbols.len());
                     let call_type = CallType::ByPointer {
                         name: fpointer_symbol,
-                        full_layout: layout.clone(),
-                        ret_layout: ret_layout.clone(),
+                        full_layout: layout,
+                        ret_layout: *ret_layout,
                         arg_layouts,
                     };
                     let call = Call {
@@ -5848,10 +5807,10 @@ fn call_by_pointer<'a>(
 
                     let mut body = Stmt::Ret(call_symbol);
 
-                    body = Stmt::Let(call_symbol, expr, ret_layout.clone(), env.arena.alloc(body));
+                    body = Stmt::Let(call_symbol, expr, *ret_layout, env.arena.alloc(body));
 
-                    let expr = Expr::FunctionPointer(symbol, layout.clone());
-                    body = Stmt::Let(fpointer_symbol, expr, layout.clone(), env.arena.alloc(body));
+                    let expr = Expr::FunctionPointer(symbol, layout);
+                    body = Stmt::Let(fpointer_symbol, expr, layout, env.arena.alloc(body));
 
                     let closure_data_layout = None;
                     let proc = Proc {
@@ -5859,7 +5818,7 @@ fn call_by_pointer<'a>(
                         args,
                         body,
                         closure_data_layout,
-                        ret_layout: ret_layout.clone(),
+                        ret_layout: *ret_layout,
                         is_self_recursive: SelfRecursive::NotSelfRecursive,
                         must_own_arguments: true,
                         host_exposed_layouts: HostExposedLayouts::NotHostExposed,
@@ -5867,7 +5826,7 @@ fn call_by_pointer<'a>(
 
                     procs
                         .specialized
-                        .insert((name, layout.clone()), InProgressProc::Done(proc));
+                        .insert((name, layout), InProgressProc::Done(proc));
 
                     procs.call_by_pointer_wrappers.insert(symbol, name);
 
@@ -5970,6 +5929,20 @@ fn call_by_name<'a>(
 
     // Register a pending_specialization for this function
     match layout_cache.from_var(env.arena, fn_var, env.subs) {
+        Err(LayoutProblem::UnresolvedTypeVar(var)) => {
+            let msg = format!(
+                "Hit an unresolved type variable {:?} when creating a layout for {:?} (var {:?})",
+                var, proc_name, fn_var
+            );
+            Stmt::RuntimeError(env.arena.alloc(msg))
+        }
+        Err(LayoutProblem::Erroneous) => {
+            let msg = format!(
+                "Hit an erroneous type when creating a layout for {:?}",
+                proc_name
+            );
+            Stmt::RuntimeError(env.arena.alloc(msg))
+        }
         Ok(layout) => {
             // Build the CallByName node
             let arena = env.arena;
@@ -5996,7 +5969,7 @@ fn call_by_name<'a>(
                 }
             }
 
-            let full_layout = layout.clone();
+            let full_layout = layout;
 
             // TODO does this work?
             let empty = &[] as &[_];
@@ -6006,10 +5979,7 @@ fn call_by_name<'a>(
             };
 
             // If we've already specialized this one, no further work is needed.
-            if procs
-                .specialized
-                .contains_key(&(proc_name, full_layout.clone()))
-            {
+            if procs.specialized.contains_key(&(proc_name, full_layout)) {
                 debug_assert_eq!(
                     arg_layouts.len(),
                     field_symbols.len(),
@@ -6020,14 +5990,14 @@ fn call_by_name<'a>(
                 let call = self::Call {
                     call_type: CallType::ByName {
                         name: proc_name,
-                        ret_layout: ret_layout.clone(),
-                        full_layout: full_layout.clone(),
+                        ret_layout: *ret_layout,
+                        full_layout,
                         arg_layouts,
                     },
                     arguments: field_symbols,
                 };
 
-                let result = build_call(env, call, assigned, ret_layout.clone(), hole);
+                let result = build_call(env, call, assigned, *ret_layout, hole);
 
                 let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
                 assign_to_symbols(env, procs, layout_cache, iter, result)
@@ -6054,12 +6024,7 @@ fn call_by_name<'a>(
                             add_needed_external(procs, env, original_fn_var, proc_name);
                         } else {
                             // register the pending specialization, so this gets code genned later
-                            add_pending(
-                                pending_specializations,
-                                proc_name,
-                                full_layout.clone(),
-                                pending,
-                            );
+                            add_pending(pending_specializations, proc_name, full_layout, pending);
                         }
 
                         debug_assert_eq!(
@@ -6072,14 +6037,14 @@ fn call_by_name<'a>(
                         let call = self::Call {
                             call_type: CallType::ByName {
                                 name: proc_name,
-                                ret_layout: ret_layout.clone(),
-                                full_layout: full_layout.clone(),
+                                ret_layout: *ret_layout,
+                                full_layout,
                                 arg_layouts,
                             },
                             arguments: field_symbols,
                         };
 
-                        let result = build_call(env, call, assigned, ret_layout.clone(), hole);
+                        let result = build_call(env, call, assigned, *ret_layout, hole);
 
                         let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
                         assign_to_symbols(env, procs, layout_cache, iter, result)
@@ -6097,7 +6062,7 @@ fn call_by_name<'a>(
                                 // (We had a bug around this before this system existed!)
                                 procs
                                     .specialized
-                                    .insert((proc_name, full_layout.clone()), InProgress);
+                                    .insert((proc_name, full_layout), InProgress);
 
                                 match specialize(
                                     env,
@@ -6113,132 +6078,42 @@ fn call_by_name<'a>(
                                             "\n\n{:?}\n\n{:?}",
                                             full_layout, layout
                                         );
-                                        let function_layout =
-                                            FunctionLayouts::from_layout(env.arena, layout);
 
-                                        procs.specialized.remove(&(proc_name, full_layout.clone()));
-
-                                        procs.specialized.insert(
-                                            (proc_name, function_layout.full.clone()),
-                                            Done(proc),
+                                        call_specialized_proc(
+                                            env,
+                                            procs,
+                                            proc_name,
+                                            proc,
+                                            layout,
+                                            field_symbols,
+                                            loc_args,
+                                            layout_cache,
+                                            assigned,
+                                            hole,
+                                        )
+                                    }
+                                    Err(SpecializeFailure {
+                                        attempted_layout,
+                                        problem: _,
+                                    }) => {
+                                        let proc = generate_runtime_error_function(
+                                            env,
+                                            proc_name,
+                                            attempted_layout,
                                         );
 
-                                        if field_symbols.is_empty() {
-                                            debug_assert!(loc_args.is_empty());
-
-                                            // This happens when we return a function, e.g.
-                                            //
-                                            // foo = Num.add
-                                            //
-                                            // Even though the layout (and type) are functions,
-                                            // there are no arguments. This confuses our IR,
-                                            // and we have to fix it here.
-                                            match full_layout {
-                                                Layout::Closure(_, closure_layout, _) => {
-                                                    let call = self::Call {
-                                                        call_type: CallType::ByName {
-                                                            name: proc_name,
-                                                            ret_layout: function_layout
-                                                                .result
-                                                                .clone(),
-                                                            full_layout: function_layout
-                                                                .full
-                                                                .clone(),
-                                                            arg_layouts: function_layout.arguments,
-                                                        },
-                                                        arguments: field_symbols,
-                                                    };
-
-                                                    // in the case of a closure specifically, we
-                                                    // have to create a custom layout, to make sure
-                                                    // the closure data is part of the layout
-                                                    let closure_struct_layout = Layout::Struct(
-                                                        env.arena.alloc([
-                                                            function_layout.full,
-                                                            closure_layout
-                                                                .as_block_of_memory_layout(),
-                                                        ]),
-                                                    );
-
-                                                    build_call(
-                                                        env,
-                                                        call,
-                                                        assigned,
-                                                        closure_struct_layout,
-                                                        hole,
-                                                    )
-                                                }
-                                                _ => {
-                                                    let call = self::Call {
-                                                        call_type: CallType::ByName {
-                                                            name: proc_name,
-                                                            ret_layout: function_layout
-                                                                .result
-                                                                .clone(),
-                                                            full_layout: function_layout
-                                                                .full
-                                                                .clone(),
-                                                            arg_layouts: function_layout.arguments,
-                                                        },
-                                                        arguments: field_symbols,
-                                                    };
-
-                                                    build_call(
-                                                        env,
-                                                        call,
-                                                        assigned,
-                                                        function_layout.full,
-                                                        hole,
-                                                    )
-                                                }
-                                            }
-                                        } else {
-                                            debug_assert_eq!(
-                                                function_layout.arguments.len(),
-                                                field_symbols.len(),
-                                                "scroll up a bit for background"
-                                            );
-                                            let call = self::Call {
-                                                call_type: CallType::ByName {
-                                                    name: proc_name,
-                                                    ret_layout: function_layout.result.clone(),
-                                                    full_layout: function_layout.full.clone(),
-                                                    arg_layouts: function_layout.arguments,
-                                                },
-                                                arguments: field_symbols,
-                                            };
-
-                                            let iter = loc_args
-                                                .into_iter()
-                                                .rev()
-                                                .zip(field_symbols.iter().rev());
-
-                                            let result = build_call(
-                                                env,
-                                                call,
-                                                assigned,
-                                                function_layout.result,
-                                                hole,
-                                            );
-
-                                            assign_to_symbols(
-                                                env,
-                                                procs,
-                                                layout_cache,
-                                                iter,
-                                                result,
-                                            )
-                                        }
-                                    }
-                                    Err(error) => {
-                                        let error_msg = env.arena.alloc(format!(
-                                            "TODO generate a RuntimeError message for {:?}",
-                                            error
-                                        ));
-
-                                        procs.runtime_errors.insert(proc_name, error_msg);
-
-                                        Stmt::RuntimeError(error_msg)
+                                        call_specialized_proc(
+                                            env,
+                                            procs,
+                                            proc_name,
+                                            proc,
+                                            layout,
+                                            field_symbols,
+                                            loc_args,
+                                            layout_cache,
+                                            assigned,
+                                            hole,
+                                        )
                                     }
                                 }
                             }
@@ -6252,8 +6127,8 @@ fn call_by_name<'a>(
                                     self::Call {
                                         call_type: CallType::ByPointer {
                                             name: proc_name,
-                                            ret_layout: ret_layout.clone(),
-                                            full_layout: full_layout.clone(),
+                                            ret_layout: *ret_layout,
+                                            full_layout,
                                             arg_layouts,
                                         },
                                         arguments: field_symbols,
@@ -6268,16 +6143,15 @@ fn call_by_name<'a>(
                                     self::Call {
                                         call_type: CallType::ByName {
                                             name: proc_name,
-                                            ret_layout: ret_layout.clone(),
-                                            full_layout: full_layout.clone(),
+                                            ret_layout: *ret_layout,
+                                            full_layout,
                                             arg_layouts,
                                         },
                                         arguments: field_symbols,
                                     }
                                 };
 
-                                let result =
-                                    build_call(env, call, assigned, ret_layout.clone(), hole);
+                                let result = build_call(env, call, assigned, *ret_layout, hole);
 
                                 let iter =
                                     loc_args.into_iter().rev().zip(field_symbols.iter().rev());
@@ -6286,33 +6160,104 @@ fn call_by_name<'a>(
                             }
 
                             None => {
-                                // This must have been a runtime error.
-                                match procs.runtime_errors.get(&proc_name) {
-                                    Some(error) => Stmt::RuntimeError(
-                                        env.arena.alloc(format!("runtime error {:?}", error)),
-                                    ),
-                                    None => unreachable!("Proc name {:?} is invalid", proc_name),
-                                }
+                                unreachable!("Proc name {:?} is invalid", proc_name)
                             }
                         }
                     }
                 }
             }
         }
-        Err(LayoutProblem::UnresolvedTypeVar(var)) => {
-            let msg = format!(
-                "Hit an unresolved type variable {:?} when creating a layout for {:?} (var {:?})",
-                var, proc_name, fn_var
-            );
-            Stmt::RuntimeError(env.arena.alloc(msg))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn call_specialized_proc<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    proc_name: Symbol,
+    proc: Proc<'a>,
+    layout: Layout<'a>,
+    field_symbols: &'a [Symbol],
+    loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
+    layout_cache: &mut LayoutCache<'a>,
+    assigned: Symbol,
+    hole: &'a Stmt<'a>,
+) -> Stmt<'a> {
+    let function_layout = FunctionLayouts::from_layout(env.arena, layout);
+
+    procs.specialized.remove(&(proc_name, layout));
+
+    procs
+        .specialized
+        .insert((proc_name, function_layout.full), Done(proc));
+
+    if field_symbols.is_empty() {
+        debug_assert!(loc_args.is_empty());
+
+        // This happens when we return a function, e.g.
+        //
+        // foo = Num.add
+        //
+        // Even though the layout (and type) are functions,
+        // there are no arguments. This confuses our IR,
+        // and we have to fix it here.
+        match layout {
+            Layout::Closure(_, closure_layout, _) => {
+                let call = self::Call {
+                    call_type: CallType::ByName {
+                        name: proc_name,
+                        ret_layout: function_layout.result,
+                        full_layout: function_layout.full,
+                        arg_layouts: function_layout.arguments,
+                    },
+                    arguments: field_symbols,
+                };
+
+                // in the case of a closure specifically, we
+                // have to create a custom layout, to make sure
+                // the closure data is part of the layout
+                let closure_struct_layout = Layout::Struct(env.arena.alloc([
+                    function_layout.full,
+                    closure_layout.as_block_of_memory_layout(),
+                ]));
+
+                build_call(env, call, assigned, closure_struct_layout, hole)
+            }
+            _ => {
+                let call = self::Call {
+                    call_type: CallType::ByName {
+                        name: proc_name,
+                        ret_layout: function_layout.result,
+                        full_layout: function_layout.full,
+                        arg_layouts: function_layout.arguments,
+                    },
+                    arguments: field_symbols,
+                };
+
+                build_call(env, call, assigned, function_layout.full, hole)
+            }
         }
-        Err(LayoutProblem::Erroneous) => {
-            let msg = format!(
-                "Hit an erroneous type when creating a layout for {:?}",
-                proc_name
-            );
-            Stmt::RuntimeError(env.arena.alloc(msg))
-        }
+    } else {
+        debug_assert_eq!(
+            function_layout.arguments.len(),
+            field_symbols.len(),
+            "scroll up a bit for background"
+        );
+        let call = self::Call {
+            call_type: CallType::ByName {
+                name: proc_name,
+                ret_layout: function_layout.result,
+                full_layout: function_layout.full,
+                arg_layouts: function_layout.arguments,
+            },
+            arguments: field_symbols,
+        };
+
+        let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
+
+        let result = build_call(env, call, assigned, function_layout.result, hole);
+
+        assign_to_symbols(env, procs, layout_cache, iter, result)
     }
 }
 
@@ -6524,7 +6469,7 @@ fn from_can_pattern_help<'a>(
                     for ((_, loc_pat), layout) in arguments.iter().zip(field_layouts.iter()) {
                         mono_args.push((
                             from_can_pattern_help(env, layout_cache, &loc_pat.value, assignments)?,
-                            layout.clone(),
+                            *layout,
                         ));
                     }
 
@@ -6602,7 +6547,7 @@ fn from_can_pattern_help<'a>(
                                         &loc_pat.value,
                                         assignments,
                                     )?,
-                                    layout.clone(),
+                                    *layout,
                                 ));
                             }
 
@@ -6660,7 +6605,7 @@ fn from_can_pattern_help<'a>(
                                         &loc_pat.value,
                                         assignments,
                                     )?,
-                                    layout.clone(),
+                                    *layout,
                                 ));
                             }
 
@@ -6717,7 +6662,7 @@ fn from_can_pattern_help<'a>(
                                         &loc_pat.value,
                                         assignments,
                                     )?,
-                                    layout.clone(),
+                                    *layout,
                                 ));
                             }
 
@@ -6792,7 +6737,7 @@ fn from_can_pattern_help<'a>(
                                         &loc_pat.value,
                                         assignments,
                                     )?,
-                                    layout.clone(),
+                                    *layout,
                                 ));
                             }
 
@@ -6863,7 +6808,7 @@ fn from_can_pattern_help<'a>(
                                         &loc_pat.value,
                                         assignments,
                                     )?,
-                                    layout.clone(),
+                                    *layout,
                                 ));
                             }
 
@@ -6923,7 +6868,7 @@ fn from_can_pattern_help<'a>(
                                     env,
                                     layout_cache,
                                     &destruct.value,
-                                    field_layout.clone(),
+                                    field_layout,
                                     assignments,
                                 )?);
                             }
@@ -6933,7 +6878,7 @@ fn from_can_pattern_help<'a>(
                                 mono_destructs.push(RecordDestruct {
                                     label: label.clone(),
                                     variable,
-                                    layout: field_layout.clone(),
+                                    layout: field_layout,
                                     typ: DestructType::Guard(Pattern::Underscore),
                                 });
                             }
@@ -6968,7 +6913,7 @@ fn from_can_pattern_help<'a>(
                                 mono_destructs.push(RecordDestruct {
                                     label: label.clone(),
                                     variable,
-                                    layout: field_layout.clone(),
+                                    layout: field_layout,
                                     typ: DestructType::Guard(Pattern::Underscore),
                                 });
                             }
@@ -7032,44 +6977,6 @@ fn from_can_record_destruct<'a>(
             ),
         },
     })
-}
-
-/// Potentially translate LowLevel operations into more efficient ones based on
-/// uniqueness type info.
-///
-/// For example, turning LowLevel::ListSet to LowLevel::ListSetInPlace if the
-/// list is Unique.
-fn optimize_low_level(
-    subs: &Subs,
-    op: LowLevel,
-    args: &[(Variable, roc_can::expr::Expr)],
-) -> LowLevel {
-    match op {
-        LowLevel::ListSet => {
-            // The first arg is the one with the List in it.
-            // List.set : List elem, Int, elem -> List elem
-            let list_arg_var = args[0].0;
-            let content = subs.get_without_compacting(list_arg_var).content;
-
-            match content {
-                Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, attr_args)) => {
-                    debug_assert_eq!(attr_args.len(), 2);
-
-                    // If the first argument (the List) is unique,
-                    // then we can safely upgrade to List.set_in_place
-                    let attr_arg_content = subs.get_without_compacting(attr_args[0]).content;
-
-                    if attr_arg_content.is_unique(subs) {
-                        LowLevel::ListSetInPlace
-                    } else {
-                        LowLevel::ListSet
-                    }
-                }
-                _ => op,
-            }
-        }
-        _ => op,
-    }
 }
 
 pub enum IntPrecision {

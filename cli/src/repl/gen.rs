@@ -57,7 +57,7 @@ pub fn gen_and_eval<'a>(
 
     let mut loaded = match loaded {
         Ok(v) => v,
-        Err(LoadingProblem::ParsingFailedReport(report)) => {
+        Err(LoadingProblem::FormattedReport(report)) => {
             return Ok(ReplOutput::Problems(vec![report]));
         }
         Err(e) => {
@@ -153,7 +153,7 @@ pub fn gen_and_eval<'a>(
         let expr_type_str = content_to_string(content.clone(), &subs, home, &interns);
 
         let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
-            Some(layout) => layout.clone(),
+            Some(layout) => *layout,
             None => {
                 return Ok(ReplOutput::NoProblems {
                     expr: "<function>".to_string(),

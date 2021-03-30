@@ -12,8 +12,6 @@ mod helpers;
 
 #[cfg(all(test, target_os = "linux", any(target_arch = "x86_64"/*, target_arch = "aarch64"*/)))]
 mod gen_num {
-    //use roc_std::RocOrder;
-
     #[test]
     fn i64_values() {
         assert_evals_to!("0", 0, i64);

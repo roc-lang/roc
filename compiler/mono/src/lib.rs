@@ -1,6 +1,6 @@
 #![warn(clippy::all, clippy::dbg_macro)]
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
-#![allow(clippy::large_enum_variant)]
+#![allow(clippy::large_enum_variant, clippy::upper_case_acronyms)]
 
 pub mod borrow;
 pub mod expand_rc;
@@ -13,7 +13,6 @@ pub mod tail_recursion;
 // For now, following this warning's advice will lead to nasty type inference errors.
 //#[allow(clippy::ptr_arg)]
 //pub mod decision_tree;
-#[allow(clippy::ptr_arg)]
 pub mod decision_tree;
 #[allow(clippy::ptr_arg)]
 pub mod exhaustive;

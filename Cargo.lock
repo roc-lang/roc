@@ -890,25 +890,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fea41bba32d969b513997752735605054bc0dfa92b4c56bf1189f2e174be7a10"
 
 [[package]]
-name = "docs"
-version = "0.1.0"
-dependencies = [
- "bumpalo",
- "fs_extra",
- "handlebars",
- "maplit",
- "pretty_assertions 0.5.1",
- "pulldown-cmark",
- "roc_builtins",
- "roc_can",
- "roc_collections",
- "roc_load",
- "serde",
- "serde_derive",
- "serde_json",
-]
-
-[[package]]
 name = "downcast-rs"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2014,6 +1995,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "nonempty"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7fa586da3e43cc7df44aae0e21ed2e743218b876de3f38035683d30bd8a3828e"
+
+[[package]]
 name = "num-traits"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2961,6 +2948,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_docs",
  "roc_editor",
  "roc_fmt",
  "roc_gen",
@@ -3013,6 +3001,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_docs"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "fs_extra",
+ "handlebars",
+ "maplit",
+ "pretty_assertions 0.5.1",
+ "pulldown-cmark",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_load",
+ "serde",
+ "serde_derive",
+ "serde_json",
+]
+
+[[package]]
 name = "roc_editor"
 version = "0.1.0"
 dependencies = [
@@ -3034,6 +3041,7 @@ dependencies = [
  "libc",
  "log",
  "maplit",
+ "nonempty",
  "page_size",
  "palette",
  "pest",

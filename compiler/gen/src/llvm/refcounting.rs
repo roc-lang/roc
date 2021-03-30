@@ -454,7 +454,7 @@ fn modify_refcount_layout_help<'a, 'ctx, 'env>(
                         env,
                         layout_ids,
                         mode,
-                        &WhenRecursive::Loop(variant.clone()),
+                        &WhenRecursive::Loop(*variant),
                         tags,
                         value.into_pointer_value(),
                         true,
@@ -470,7 +470,7 @@ fn modify_refcount_layout_help<'a, 'ctx, 'env>(
                         env,
                         layout_ids,
                         mode,
-                        &WhenRecursive::Loop(variant.clone()),
+                        &WhenRecursive::Loop(*variant),
                         &*env.arena.alloc([other_fields]),
                         value.into_pointer_value(),
                         true,
@@ -484,7 +484,7 @@ fn modify_refcount_layout_help<'a, 'ctx, 'env>(
                         env,
                         layout_ids,
                         mode,
-                        &WhenRecursive::Loop(variant.clone()),
+                        &WhenRecursive::Loop(*variant),
                         &*env.arena.alloc([*fields]),
                         value.into_pointer_value(),
                         true,
@@ -497,7 +497,7 @@ fn modify_refcount_layout_help<'a, 'ctx, 'env>(
                         env,
                         layout_ids,
                         mode,
-                        &WhenRecursive::Loop(variant.clone()),
+                        &WhenRecursive::Loop(*variant),
                         tags,
                         value.into_pointer_value(),
                         false,
@@ -549,7 +549,7 @@ fn modify_refcount_layout_help<'a, 'ctx, 'env>(
                 unreachable!("recursion pointers should never be hashed directly")
             }
             WhenRecursive::Loop(union_layout) => {
-                let layout = Layout::Union(union_layout.clone());
+                let layout = Layout::Union(*union_layout);
 
                 let bt = basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
 

@@ -42,15 +42,15 @@ pub enum PackageOrPath<'a> {
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub struct ModuleName<'a>(&'a str);
 
-impl<'a> Into<&'a str> for ModuleName<'a> {
-    fn into(self) -> &'a str {
-        self.0
+impl<'a> From<ModuleName<'a>> for &'a str {
+    fn from(name: ModuleName<'a>) -> Self {
+        name.0
     }
 }
 
-impl<'a> Into<InlinableString> for ModuleName<'a> {
-    fn into(self) -> InlinableString {
-        self.0.into()
+impl<'a> From<ModuleName<'a>> for InlinableString {
+    fn from(name: ModuleName<'a>) -> InlinableString {
+        name.0.into()
     }
 }
 
