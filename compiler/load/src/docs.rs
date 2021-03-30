@@ -143,7 +143,9 @@ fn comments_or_new_lines_to_docs<'a>(
                 docs.push_str(doc_str);
                 docs.push('\n');
             }
-            Newline | LineComment(_) => {}
+            Newline | LineComment(_) => {
+                docs = String::new();
+            }
         }
     }
     if docs.is_empty() {
