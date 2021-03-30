@@ -1821,81 +1821,37 @@ fn to_pattern_in_parens_report<'a>(
     use roc_parse::parser::PInParens;
 
     match *parse_problem {
-        PInParens::Open(row, col) => match what_is_next(alloc.src_lines, row, col) {
-            Next::Keyword(keyword) => {
-                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                let region = to_keyword_region(row, col, keyword);
+        PInParens::Open(row, col) => {
+            // `Open` case is for exhaustiveness, this case shouldn not be reachable practically.
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
 
-                let doc = alloc.stack(vec![
-                    alloc.reflow(
-                        r"I just started parsing a pattern in parentheses, but I got stuck here:",
-                    ),
-                    alloc.region_with_subregion(surroundings, region),
-                    alloc.concat(vec![
-                        alloc.reflow(r"An expression in parentheses looks like "),
-                        alloc.parser_suggestion("(Ok 32)"),
-                        alloc.reflow(r" or "),
-                        alloc.parser_suggestion("(\"hello\")"),
-                        alloc.reflow(" so I was expecting to see an expression next."),
-                    ]),
-                ]);
+            let doc = alloc.stack(vec![
+                alloc.reflow(
+                    r"I just started parsing a pattern in parentheses, but I got stuck here:",
+                ),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"A pattern in parentheses looks like "),
+                    alloc.parser_suggestion("(Ok 32)"),
+                    alloc.reflow(r" or "),
+                    alloc.parser_suggestion("(\"hello\")"),
+                    alloc.reflow(" so I was expecting to see an expression next."),
+                ]),
+            ]);
 
-                Report {
-                    filename,
-                    doc,
-                    title: "UNFINISHED PARENTHESES".to_string(),
-                }
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED PARENTHESES".to_string(),
             }
-            _ => {
-                let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
-                let region = Region::from_row_col(row, col);
-
-                let doc = alloc.stack(vec![
-                    alloc.reflow(
-                        r"I just started parsing a pattern in parentheses, but I got stuck here:",
-                    ),
-                    alloc.region_with_subregion(surroundings, region),
-                    alloc.concat(vec![
-                        alloc.reflow(r"An expression in parentheses looks like "),
-                        alloc.parser_suggestion("(Ok 32)"),
-                        alloc.reflow(r" or "),
-                        alloc.parser_suggestion("(\"hello\")"),
-                        alloc.reflow(" so I was expecting to see an expression next."),
-                    ]),
-                ]);
-
-                Report {
-                    filename,
-                    doc,
-                    title: "UNFINISHED PARENTHESES".to_string(),
-                }
-            }
-        },
+        }
 
         PInParens::End(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
             let region = Region::from_row_col(row, col);
 
-            match what_is_next(alloc.src_lines, row, col) {
-                Next::Other(Some(c)) if c.is_alphabetic() => {
-                    let doc = alloc.stack(vec![
-                        alloc.reflow(r"I am partway through parsing a record pattern, but I got stuck here:"),
-                        alloc.region_with_subregion(surroundings, region),
-                        alloc.concat(vec![
-                            alloc.reflow(
-                                r"I was expecting to see a colon, question mark, comma or closing curly brace.",
-                            ),
-                        ]),
-                    ]);
-
-                    Report {
-                        filename,
-                        doc,
-                        title: "UNFINISHED PARENTHESES".to_string(),
-                    }
-                }
-                _ => {
-                    let doc = alloc.stack(vec![
+            let doc = alloc.stack(vec![
                 alloc.reflow("I am partway through parsing a pattern in parentheses, but I got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
                 alloc.concat(vec![
@@ -1907,12 +1863,10 @@ fn to_pattern_in_parens_report<'a>(
                 ]),
             ]);
 
-                    Report {
-                        filename,
-                        doc,
-                        title: "UNFINISHED RECORD PATTERN".to_string(),
-                    }
-                }
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED PARENTHESES".to_string(),
             }
         }
 
@@ -1925,7 +1879,9 @@ fn to_pattern_in_parens_report<'a>(
             let region = Region::from_row_col(row, col);
 
             let doc = alloc.stack(vec![
-                alloc.reflow(r"I just started parsing a record pattern, but I got stuck here:"),
+                alloc.reflow(
+                    r"I just started parsing a pattern in parentheses, but I got stuck here:",
+                ),
                 alloc.region_with_subregion(surroundings, region),
                 record_patterns_look_like(alloc),
                 note_for_record_pattern_indent(alloc),
@@ -1934,12 +1890,12 @@ fn to_pattern_in_parens_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "UNFINISHED RECORD PATTERN".to_string(),
+                title: "UNFINISHED PARENTHESES".to_string(),
             }
         }
 
         PInParens::IndentEnd(row, col) => {
-            match next_line_starts_with_close_curly(alloc.src_lines, row.saturating_sub(1)) {
+            match next_line_starts_with_close_parenthesis(alloc.src_lines, row.saturating_sub(1)) {
                 Some((curly_row, curly_col)) => {
                     let surroundings =
                         Region::from_rows_cols(start_row, start_col, curly_row, curly_col);
@@ -1947,11 +1903,11 @@ fn to_pattern_in_parens_report<'a>(
 
                     let doc = alloc.stack(vec![
                         alloc.reflow(
-                            "I am partway through parsing a record pattern, but I got stuck here:",
+                            "I am partway through parsing a pattern in parentheses, but I got stuck here:",
                         ),
                         alloc.region_with_subregion(surroundings, region),
                         alloc.concat(vec![
-                            alloc.reflow("I need this curly brace to be indented more. Try adding more spaces before it!"),
+                            alloc.reflow("I need this parenthesis to be indented more. Try adding more spaces before it!"),
                         ]),
                     ]);
 
@@ -1967,13 +1923,13 @@ fn to_pattern_in_parens_report<'a>(
 
                     let doc = alloc.stack(vec![
                         alloc.reflow(
-                            r"I am partway through parsing a record pattern, but I got stuck here:",
+                            r"I am partway through parsing a pattern in parentheses, but I got stuck here:",
                         ),
                         alloc.region_with_subregion(surroundings, region),
                         alloc.concat(vec![
-                            alloc.reflow("I was expecting to see a closing curly "),
+                            alloc.reflow("I was expecting to see a closing parenthesis "),
                             alloc.reflow("brace before this, so try adding a "),
-                            alloc.parser_suggestion("}"),
+                            alloc.parser_suggestion(")"),
                             alloc.reflow(" and see if that helps?"),
                         ]),
                         note_for_record_pattern_indent(alloc),
@@ -1982,7 +1938,7 @@ fn to_pattern_in_parens_report<'a>(
                     Report {
                         filename,
                         doc,
-                        title: "UNFINISHED RECORD PATTERN".to_string(),
+                        title: "UNFINISHED PARENTHESES".to_string(),
                     }
                 }
             }
@@ -3403,11 +3359,12 @@ enum Next<'a> {
 fn what_is_next<'a>(source_lines: &'a [&'a str], row: Row, col: Col) -> Next<'a> {
     let row_index = row as usize;
     let col_index = col as usize;
-    match source_lines.get(row_index) {
+    match dbg!(source_lines.get(row_index)) {
         None => Next::Other(None),
         Some(line) => {
             let chars = &line[col_index..];
             let mut it = chars.chars();
+            println!("line: {}", chars);
 
             match roc_parse::keyword::KEYWORDS
                 .iter()
@@ -3450,6 +3407,20 @@ fn next_line_starts_with_close_curly(source_lines: &[&str], row: Row) -> Option<
             let spaces_dropped = line.trim_start_matches(' ');
             match spaces_dropped.chars().next() {
                 Some('}') => Some((row + 1, (line.len() - spaces_dropped.len()) as u16)),
+                _ => None,
+            }
+        }
+    }
+}
+
+fn next_line_starts_with_close_parenthesis(source_lines: &[&str], row: Row) -> Option<(Row, Col)> {
+    match source_lines.get(row as usize + 1) {
+        None => None,
+
+        Some(line) => {
+            let spaces_dropped = line.trim_start_matches(' ');
+            match spaces_dropped.chars().next() {
+                Some(')') => Some((row + 1, (line.len() - spaces_dropped.len()) as u16)),
                 _ => None,
             }
         }
