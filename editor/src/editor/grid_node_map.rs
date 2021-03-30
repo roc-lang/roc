@@ -1,4 +1,3 @@
-use crate::editor::code_lines::CodeLines;
 use crate::editor::ed_error::EdResult;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::util::index_of;
@@ -72,38 +71,4 @@ impl GridNodeMap {
 
         Ok(caret_pos.column - first_node_index)
     }
-}
-
-// perform updates for both GridNodeMap and CodeLines
-pub fn add_to_line_both(
-    grid_node_map: &mut GridNodeMap,
-    code_lines: &mut CodeLines,
-    line_nr: usize,
-    new_str: &str,
-    node_id: MarkNodeId,
-) -> UIResult<()> {
-    grid_node_map.add_to_line(line_nr, new_str.len(), node_id)?;
-    code_lines.add_to_line(line_nr, new_str)
-}
-
-pub fn insert_between_line_both(
-    grid_node_map: &mut GridNodeMap,
-    code_lines: &mut CodeLines,
-    line_nr: usize,
-    index: usize,
-    new_str: &str,
-    node_id: MarkNodeId,
-) -> UIResult<()> {
-    grid_node_map.insert_between_line(line_nr, index, new_str.len(), node_id)?;
-    code_lines.insert_between_line(line_nr, index, new_str)
-}
-
-pub fn del_at_line_both(
-    grid_node_map: &mut GridNodeMap,
-    code_lines: &mut CodeLines,
-    line_nr: usize,
-    index: usize,
-) -> UIResult<()> {
-    grid_node_map.del_at_line(line_nr, index)?;
-    code_lines.del_at_line(line_nr, index)
 }
