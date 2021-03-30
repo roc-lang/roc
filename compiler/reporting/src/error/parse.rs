@@ -1928,7 +1928,7 @@ fn to_pattern_in_parens_report<'a>(
                         alloc.region_with_subregion(surroundings, region),
                         alloc.concat(vec![
                             alloc.reflow("I was expecting to see a closing parenthesis "),
-                            alloc.reflow("brace before this, so try adding a "),
+                            alloc.reflow("before this, so try adding a "),
                             alloc.parser_suggestion(")"),
                             alloc.reflow(" and see if that helps?"),
                         ]),
@@ -3359,12 +3359,11 @@ enum Next<'a> {
 fn what_is_next<'a>(source_lines: &'a [&'a str], row: Row, col: Col) -> Next<'a> {
     let row_index = row as usize;
     let col_index = col as usize;
-    match dbg!(source_lines.get(row_index)) {
+    match source_lines.get(row_index) {
         None => Next::Other(None),
         Some(line) => {
             let chars = &line[col_index..];
             let mut it = chars.chars();
-            println!("line: {}", chars);
 
             match roc_parse::keyword::KEYWORDS
                 .iter()
@@ -3400,36 +3399,24 @@ pub fn starts_with_keyword(rest_of_line: &str, keyword: &str) -> bool {
 }
 
 fn next_line_starts_with_close_curly(source_lines: &[&str], row: Row) -> Option<(Row, Col)> {
-    match source_lines.get(row as usize + 1) {
-        None => None,
-
-        Some(line) => {
-            let spaces_dropped = line.trim_start_matches(' ');
-            match spaces_dropped.chars().next() {
-                Some('}') => Some((row + 1, (line.len() - spaces_dropped.len()) as u16)),
-                _ => None,
-            }
-        }
-    }
+    next_line_starts_with_char(source_lines, row, '}')
 }
 
 fn next_line_starts_with_close_parenthesis(source_lines: &[&str], row: Row) -> Option<(Row, Col)> {
-    match source_lines.get(row as usize + 1) {
-        None => None,
-
-        Some(line) => {
-            let spaces_dropped = line.trim_start_matches(' ');
-            match spaces_dropped.chars().next() {
-                Some(')') => Some((row + 1, (line.len() - spaces_dropped.len()) as u16)),
-                _ => None,
-            }
-        }
-    }
+    next_line_starts_with_char(source_lines, row, ')')
 }
 
 fn next_line_starts_with_close_square_bracket(
     source_lines: &[&str],
     row: Row,
+) -> Option<(Row, Col)> {
+    next_line_starts_with_char(source_lines, row, ']')
+}
+
+fn next_line_starts_with_char(
+    source_lines: &[&str],
+    row: Row,
+    character: char,
 ) -> Option<(Row, Col)> {
     match source_lines.get(row as usize + 1) {
         None => None,
@@ -3437,7 +3424,9 @@ fn next_line_starts_with_close_square_bracket(
         Some(line) => {
             let spaces_dropped = line.trim_start_matches(' ');
             match spaces_dropped.chars().next() {
-                Some(']') => Some((row + 1, (line.len() - spaces_dropped.len()) as u16)),
+                Some(c) if c == character => {
+                    Some((row + 1, (line.len() - spaces_dropped.len()) as u16))
+                }
                 _ => None,
             }
         }
