@@ -441,7 +441,7 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                         structure,
                         index,
                         field_layouts,
-                        ..
+                        wrapped,
                     } => {
                         let entry = env
                             .alias_map
@@ -449,6 +449,15 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                             .or_insert_with(MutMap::default);
 
                         entry.insert(*index, symbol);
+
+                        // fixes https://github.com/rtfeldman/roc/issues/1099
+                        if matches!(
+                            wrapped,
+                            Wrapped::SingleElementRecord | Wrapped::RecordOrSingleTagUnion
+                        ) {
+                            env.layout_map
+                                .insert(*structure, Layout::Struct(field_layouts));
+                        }
 
                         // if the field is a struct, we know its constructor too!
                         let field_layout = &field_layouts[*index as usize];
