@@ -247,6 +247,12 @@ lazy_static! {
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ModuleId(u32);
 
+impl From<ModuleId> for u32 {
+    fn from(module_id: ModuleId) -> u32 {
+        module_id.0
+    }
+}
+
 impl ModuleId {
     // NOTE: the define_builtins! macro adds a bunch of constants to this impl,
     //

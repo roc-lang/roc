@@ -1,5 +1,5 @@
 use crate::expr::constrain_decls;
-use roc_builtins::std::{Mode, StdLib};
+use roc_builtins::std::StdLib;
 use roc_can::constraint::{Constraint, LetConstraint};
 use roc_can::module::ModuleOutput;
 use roc_collections::all::{MutMap, MutSet, SendMap};
@@ -22,15 +22,7 @@ pub struct ConstrainedModule {
     pub constraint: Constraint,
 }
 
-pub fn constrain_module(
-    module: &ModuleOutput,
-    home: ModuleId,
-    mode: Mode,
-    // TODO remove parameter
-    _var_store: &mut VarStore,
-) -> Constraint {
-    use Mode::*;
-
+pub fn constrain_module(module: &ModuleOutput, home: ModuleId) -> Constraint {
     let mut send_aliases = SendMap::default();
 
     for (symbol, alias) in module.aliases.iter() {
@@ -39,10 +31,7 @@ pub fn constrain_module(
 
     let decls = &module.declarations;
 
-    match mode {
-        Standard => constrain_decls(home, decls),
-        Uniqueness => constrain_decls(home, decls),
-    }
+    constrain_decls(home, decls)
 }
 
 #[derive(Debug, Clone)]

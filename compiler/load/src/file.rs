@@ -4,7 +4,7 @@ use crossbeam::channel::{bounded, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
-use roc_builtins::std::{Mode, StdLib};
+use roc_builtins::std::StdLib;
 use roc_can::constraint::Constraint;
 use roc_can::def::{Declaration, Def};
 use roc_can::module::{canonicalize_module_defs, Module};
@@ -395,39 +395,50 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 .flatten()
                 .collect();
         }
-        None => match phase {
-            Phase::LoadHeader => {
-                // this is fine, mark header loading as pending
-                state
-                    .dependencies
-                    .status
-                    .insert(Job::Step(module_id, Phase::LoadHeader), Status::Pending);
+        None => {
+            match phase {
+                Phase::LoadHeader => {
+                    // this is fine, mark header loading as pending
+                    state
+                        .dependencies
+                        .status
+                        .insert(Job::Step(module_id, Phase::LoadHeader), Status::Pending);
+                }
+                _ => unreachable!(
+                    "Pair {:?} is not in dependencies.status, that should never happen!",
+                    (module_id, phase)
+                ),
             }
-            _ => unreachable!(
-                "Pair {:?} is not in dependencies.status, that should never happen!",
-                (module_id, phase)
-            ),
-        },
+        }
     }
 
     let task = {
         match phase {
             Phase::LoadHeader => {
-                let dep_name = state
-                    .module_cache
-                    .module_names
-                    .get(&module_id)
-                    .expect("module id is present")
-                    .clone();
+                if module_id.is_builtin() {
+                    BuildTask::LoadBuiltinModule {
+                        module_id,
+                        // Provide mutexes of ModuleIds and IdentIds by module,
+                        // so other modules can populate them as they load.
+                        module_ids: Arc::clone(&state.arc_modules),
+                        ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
+                    }
+                } else {
+                    let dep_name = state
+                        .module_cache
+                        .module_names
+                        .get(&module_id)
+                        .expect("module id is present")
+                        .clone();
 
-                BuildTask::LoadModule {
-                    module_name: dep_name,
-                    // Provide mutexes of ModuleIds and IdentIds by module,
-                    // so other modules can populate them as they load.
-                    module_ids: Arc::clone(&state.arc_modules),
-                    shorthands: Arc::clone(&state.arc_shorthands),
-                    ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
-                    mode: state.stdlib.mode,
+                    BuildTask::LoadModule {
+                        module_name: dep_name,
+                        // Provide mutexes of ModuleIds and IdentIds by module,
+                        // so other modules can populate them as they load.
+                        module_ids: Arc::clone(&state.arc_modules),
+                        shorthands: Arc::clone(&state.arc_shorthands),
+                        ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
+                    }
                 }
             }
             Phase::Parse => {
@@ -504,7 +515,6 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                     dep_idents,
                     exposed_symbols,
                     module_ids,
-                    mode: state.stdlib.mode,
                     aliases,
                 }
             }
@@ -946,7 +956,11 @@ enum BuildTask<'a> {
         module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
         shorthands: Arc<Mutex<MutMap<&'a str, PackageOrPath<'a>>>>,
         ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
-        mode: Mode,
+    },
+    LoadBuiltinModule {
+        module_id: ModuleId,
+        module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
+        ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     },
     Parse {
         header: ModuleHeader<'a>,
@@ -955,7 +969,6 @@ enum BuildTask<'a> {
         parsed: ParsedModule<'a>,
         module_ids: ModuleIds,
         dep_idents: MutMap<ModuleId, IdentIds>,
-        mode: Mode,
         exposed_symbols: MutSet<Symbol>,
         aliases: MutMap<Symbol, Alias>,
     },
@@ -1052,7 +1065,7 @@ where
 {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename, stdlib.mode)?;
+    let load_start = LoadStart::from_path(arena, filename)?;
 
     match load(
         arena,
@@ -1083,7 +1096,7 @@ where
 {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename, stdlib.mode)?;
+    let load_start = LoadStart::from_path(arena, filename)?;
 
     match load(
         arena,
@@ -1116,7 +1129,7 @@ where
 {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_str(arena, filename, src, stdlib.mode)?;
+    let load_start = LoadStart::from_str(arena, filename, src)?;
 
     match load(
         arena,
@@ -1141,11 +1154,7 @@ struct LoadStart<'a> {
 }
 
 impl<'a> LoadStart<'a> {
-    pub fn from_path(
-        arena: &'a Bump,
-        filename: PathBuf,
-        mode: Mode,
-    ) -> Result<Self, LoadingProblem<'a>> {
+    pub fn from_path(arena: &'a Bump, filename: PathBuf) -> Result<Self, LoadingProblem<'a>> {
         let arc_modules = Arc::new(Mutex::new(PackageModuleIds::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
         let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
@@ -1162,7 +1171,6 @@ impl<'a> LoadStart<'a> {
                 Arc::clone(&arc_modules),
                 Arc::clone(&ident_ids_by_module),
                 root_start_time,
-                mode,
             )?
         };
 
@@ -1178,7 +1186,6 @@ impl<'a> LoadStart<'a> {
         arena: &'a Bump,
         filename: PathBuf,
         src: &'a str,
-        mode: Mode,
     ) -> Result<Self, LoadingProblem<'a>> {
         let arc_modules = Arc::new(Mutex::new(PackageModuleIds::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
@@ -1195,7 +1202,6 @@ impl<'a> LoadStart<'a> {
                 Arc::clone(&arc_modules),
                 Arc::clone(&ident_ids_by_module),
                 root_start_time,
-                mode,
             )?
         };
 
@@ -2223,7 +2229,6 @@ fn load_pkg_config<'a>(
     app_module_id: ModuleId,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
-    mode: Mode,
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let module_start_time = SystemTime::now();
 
@@ -2289,7 +2294,6 @@ fn load_pkg_config<'a>(
                         header.effects.effect_shortname,
                         module_ids,
                         ident_ids_by_module,
-                        mode,
                         header,
                         effect_module_timing,
                     )
@@ -2310,6 +2314,17 @@ fn load_pkg_config<'a>(
     }
 }
 
+fn load_builtin_module<'a>(
+    arena: &'a Bump,
+    module_id: ModuleId,
+    module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
+) -> Msg<'a> {
+    let module_start_time = SystemTime::now();
+
+    todo!()
+}
+
 /// Load a module by its module name, rather than by its filename
 fn load_module<'a>(
     arena: &'a Bump,
@@ -2318,7 +2333,6 @@ fn load_module<'a>(
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageOrPath<'a>>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
-    mode: Mode,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let module_start_time = SystemTime::now();
     let mut filename = PathBuf::new();
@@ -2327,14 +2341,14 @@ fn load_module<'a>(
 
     let opt_shorthand;
     match module_name {
-        PQModuleName::Unqualified(name) => {
+        PQModuleName::Unqualified(ref name) => {
             opt_shorthand = None;
             // Convert dots in module name to directories
             for part in name.split(MODULE_SEPARATOR) {
                 filename.push(part);
             }
         }
-        PQModuleName::Qualified(shorthand, name) => {
+        PQModuleName::Qualified(shorthand, ref name) => {
             opt_shorthand = Some(shorthand);
             let shorthands = arc_shorthands.lock();
 
@@ -2364,10 +2378,9 @@ fn load_module<'a>(
         filename,
         false,
         opt_shorthand,
-        module_ids,
+        module_ids.clone(),
         ident_ids_by_module,
         module_start_time,
-        mode,
     )
 }
 
@@ -2406,7 +2419,6 @@ fn parse_header<'a>(
     opt_shorthand: Option<&'a str>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
-    mode: Mode,
     src_bytes: &'a [u8],
     start_time: SystemTime,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
@@ -2526,7 +2538,6 @@ fn parse_header<'a>(
                                             module_id,
                                             module_ids,
                                             ident_ids_by_module,
-                                            mode,
                                         )?;
 
                                         Ok((
@@ -2565,7 +2576,6 @@ fn parse_header<'a>(
             &"",
             module_ids,
             ident_ids_by_module,
-            mode,
             header,
             module_timing,
         )),
@@ -2585,7 +2595,6 @@ fn load_filename<'a>(
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_start_time: SystemTime,
-    mode: Mode,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let file_io_start = SystemTime::now();
     let file = fs::read(&filename);
@@ -2600,7 +2609,6 @@ fn load_filename<'a>(
             opt_shorthand,
             module_ids,
             ident_ids_by_module,
-            mode,
             arena.alloc(bytes),
             module_start_time,
         ),
@@ -2621,7 +2629,6 @@ fn load_from_str<'a>(
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_start_time: SystemTime,
-    mode: Mode,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let file_io_start = SystemTime::now();
     let file_io_duration = file_io_start.elapsed().unwrap();
@@ -2634,7 +2641,6 @@ fn load_from_str<'a>(
         None,
         module_ids,
         ident_ids_by_module,
-        mode,
         src.as_bytes(),
         module_start_time,
     )
@@ -2694,6 +2700,13 @@ fn send_header<'a>(
         }
     };
 
+    let name = match opt_shorthand {
+        Some(shorthand) => {
+            PQModuleName::Qualified(&shorthand, declared_name.as_inline_str().clone())
+        }
+        None => PQModuleName::Unqualified(declared_name.as_inline_str().clone()),
+    };
+
     let mut imported: Vec<(QualifiedModuleName, Vec<Ident>, Region)> =
         Vec::with_capacity(imports.len());
     let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
@@ -2723,12 +2736,6 @@ fn send_header<'a>(
         let mut module_ids = (*module_ids).lock();
         let mut ident_ids_by_module = (*ident_ids_by_module).lock();
 
-        let name = match opt_shorthand {
-            Some(shorthand) => {
-                PQModuleName::Qualified(&shorthand, declared_name.as_inline_str().clone())
-            }
-            None => PQModuleName::Unqualified(declared_name.as_inline_str().clone()),
-        };
         home = module_ids.get_or_insert(&name);
 
         // Ensure this module has an entry in the exposed_ident_ids map.
@@ -3266,7 +3273,6 @@ fn fabricate_effects_module<'a>(
     shorthand: &'a str,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
-    mode: Mode,
     header: PlatformHeader<'a>,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
@@ -3467,7 +3473,7 @@ fn fabricate_effects_module<'a>(
         references: MutSet::default(),
     };
 
-    let constraint = constrain_module(&module_output, module_id, mode, &mut var_store);
+    let constraint = constrain_module(&module_output, module_id);
 
     let module = Module {
         module_id,
@@ -3547,7 +3553,6 @@ fn canonicalize_and_constrain<'a, F>(
     dep_idents: MutMap<ModuleId, IdentIds>,
     exposed_symbols: MutSet<Symbol>,
     aliases: MutMap<Symbol, Alias>,
-    mode: Mode,
     parsed: ParsedModule<'a>,
     look_up_builtins: F,
 ) -> Result<Msg<'a>, LoadingProblem<'a>>
@@ -3599,7 +3604,7 @@ where
 
     match canonicalized {
         Ok(module_output) => {
-            let constraint = constrain_module(&module_output, module_id, mode, &mut var_store);
+            let constraint = constrain_module(&module_output, module_id);
 
             let module = Module {
                 module_id,
@@ -4041,7 +4046,6 @@ where
             module_ids,
             shorthands,
             ident_ids_by_module,
-            mode,
         } => load_module(
             arena,
             src_dir,
@@ -4049,15 +4053,23 @@ where
             module_ids,
             shorthands,
             ident_ids_by_module,
-            mode,
         )
         .map(|(_, msg)| msg),
+        LoadBuiltinModule {
+            module_id,
+            module_ids,
+            ident_ids_by_module,
+        } => Ok(load_builtin_module(
+            arena,
+            module_id,
+            module_ids,
+            ident_ids_by_module,
+        )),
         Parse { header } => parse(arena, header),
         CanonicalizeAndConstrain {
             parsed,
             module_ids,
             dep_idents,
-            mode,
             exposed_symbols,
             aliases,
         } => canonicalize_and_constrain(
@@ -4066,7 +4078,6 @@ where
             dep_idents,
             exposed_symbols,
             aliases,
-            mode,
             parsed,
             look_up_builtins,
         ),
