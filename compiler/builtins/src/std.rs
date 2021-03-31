@@ -771,6 +771,34 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         ),
     );
 
+    fn until_type(content: SolvedType) -> SolvedType {
+        // [ LT, EQ, GT ]
+        SolvedType::TagUnion(
+            vec![
+                (TagName::Global("Continue".into()), vec![content.clone()]),
+                (TagName::Global("Stop".into()), vec![content]),
+            ],
+            Box::new(SolvedType::EmptyTagUnion),
+        )
+    }
+
+    // walkUntil : List elem, (elem -> accum -> [ Continue accum, Stop accum ]), accum -> accum
+    add_type(
+        Symbol::LIST_WALK_UNTIL,
+        top_level_function(
+            vec![
+                list_type(flex(TVAR1)),
+                closure(
+                    vec![flex(TVAR1), flex(TVAR2)],
+                    TVAR3,
+                    Box::new(until_type(flex(TVAR2))),
+                ),
+                flex(TVAR2),
+            ],
+            Box::new(flex(TVAR2)),
+        ),
+    );
+
     // keepIf : List elem, (elem -> Bool) -> List elem
     add_type(
         Symbol::LIST_KEEP_IF,
