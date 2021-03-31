@@ -305,8 +305,9 @@ pub fn gen_and_eval<'a>(
 }
 
 fn promote_expr_to_module(src: &str) -> String {
-    let mut buffer =
-        String::from("app \"app\" provides [ replOutput ] to \"./platform\"\n\nreplOutput =\n");
+    let mut buffer = String::from(
+        "app \"app\" imports [ Num ] provides [ replOutput ] to \"./platform\"\n\nreplOutput =\n",
+    );
 
     for line in src.lines() {
         // indent the body!

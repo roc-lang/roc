@@ -116,7 +116,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         SET_REMOVE => set_remove,
         SET_CONTAINS => set_contains,
         SET_WALK=> set_walk,
-        NUM_ADD => num_add,
+        // NUM_ADD => num_add,
         NUM_ADD_CHECKED => num_add_checked,
         NUM_ADD_WRAP => num_add_wrap,
         NUM_SUB => num_sub,

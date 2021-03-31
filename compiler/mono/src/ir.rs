@@ -735,7 +735,7 @@ impl<'a, 'i> Env<'a, 'i> {
     }
 
     pub fn is_imported_symbol(&self, symbol: Symbol) -> bool {
-        symbol.module_id() != self.home && !symbol.is_builtin()
+        symbol.module_id() != self.home && (!symbol.is_builtin() || symbol == Symbol::NUM_ADD)
     }
 }
 
@@ -5453,7 +5453,7 @@ fn handle_variable_aliasing<'a>(
 ) -> Stmt<'a> {
     let is_imported = left.module_id() != right.module_id();
     // builtins are currently (re)defined in each module, so not really imported
-    let is_builtin = right.is_builtin();
+    let is_builtin = right.is_builtin() && right != Symbol::NUM_ADD;
 
     if is_imported && !is_builtin {
         // if this is an imported symbol, then we must make sure it is
@@ -6075,10 +6075,7 @@ fn call_by_name<'a>(
                 // exactly once.
                 match &mut procs.pending_specializations {
                     Some(pending_specializations) => {
-                        let is_imported = assigned.module_id() != proc_name.module_id();
-                        // builtins are currently (re)defined in each module, so not really imported
-                        let is_builtin = proc_name.is_builtin();
-                        if is_imported && !is_builtin {
+                        if env.is_imported_symbol(proc_name) {
                             add_needed_external(procs, env, original_fn_var, proc_name);
                         } else {
                             // register the pending specialization, so this gets code genned later

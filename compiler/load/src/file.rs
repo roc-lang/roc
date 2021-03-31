@@ -420,7 +420,6 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                         module_id,
                         // Provide mutexes of ModuleIds and IdentIds by module,
                         // so other modules can populate them as they load.
-                        module_ids: Arc::clone(&state.arc_modules),
                         ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
                     }
                 } else {
@@ -752,6 +751,12 @@ enum Msg<'a> {
         canonicalization_problems: Vec<roc_problem::can::Problem>,
         module_docs: ModuleDocumentation,
     },
+    MadeBuiltinModule {
+        module_id: ModuleId,
+        constrained_module: ConstrainedModule,
+        exposed_symbols: MutSet<Symbol>,
+        package_qualified_imported_modules: MutSet<PackageQualified<'a, ModuleId>>,
+    },
     SolvedTypes {
         module_id: ModuleId,
         ident_ids: IdentIds,
@@ -959,7 +964,6 @@ enum BuildTask<'a> {
     },
     LoadBuiltinModule {
         module_id: ModuleId,
-        module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
         ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     },
     Parse {
@@ -1827,6 +1831,57 @@ fn update<'a>(
 
             Ok(state)
         }
+        MadeBuiltinModule {
+            module_id,
+            constrained_module,
+            exposed_symbols,
+            package_qualified_imported_modules,
+        } => {
+            state
+                .exposed_symbols_by_module
+                .insert(module_id, exposed_symbols);
+
+            state
+                .module_cache
+                .aliases
+                .insert(module_id, constrained_module.module.aliases.clone());
+
+            state
+                .module_cache
+                .imports
+                .entry(module_id)
+                .or_default()
+                .extend(
+                    package_qualified_imported_modules
+                        .iter()
+                        .map(|x| *x.as_inner()),
+                );
+
+            state
+                .module_cache
+                .constrained
+                .insert(module_id, constrained_module);
+
+            let mut work = state.dependencies.add_module(
+                module_id,
+                &package_qualified_imported_modules,
+                state.goal_phase,
+            );
+
+            work.extend(state.dependencies.notify(module_id, Phase::LoadHeader));
+
+            work.extend(state.dependencies.notify(module_id, Phase::Parse));
+
+            work.extend(
+                state
+                    .dependencies
+                    .notify(module_id, Phase::CanonicalizeAndConstrain),
+            );
+
+            start_tasks(work, &mut state, &injector, worker_listeners)?;
+
+            Ok(state)
+        }
         SolvedTypes {
             module_id,
             ident_ids,
@@ -2314,15 +2369,147 @@ fn load_pkg_config<'a>(
     }
 }
 
-fn load_builtin_module<'a>(
-    arena: &'a Bump,
+fn load_builtin_module(
+    arena: &Bump,
     module_id: ModuleId,
-    module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
-) -> Msg<'a> {
+) -> Msg {
     let module_start_time = SystemTime::now();
+    let module_timing = ModuleTiming::new(module_start_time);
 
-    todo!()
+    let mut exposed_symbols = MutSet::default();
+    exposed_symbols.insert(Symbol::NUM_ADD);
+
+    let package_qualified_imported_modules = MutSet::default();
+
+    let mut var_store = VarStore::default();
+    let imported_modules = MutMap::default();
+
+    let ident_ids = {
+        let ident_ids = (*ident_ids_by_module).lock();
+
+        ident_ids.get(&module_id).unwrap().clone()
+    };
+
+    let add_decl = {
+        // magic
+        use roc_can::expr::Expr;
+        use roc_can::pattern::Pattern::*;
+
+        let op = roc_module::low_level::LowLevel::NumAdd;
+
+        let num_var = var_store.fresh();
+        let body = Expr::RunLowLevel {
+            op,
+            args: vec![
+                (num_var, Expr::Var(Symbol::ARG_1)),
+                (num_var, Expr::Var(Symbol::ARG_2)),
+            ],
+            ret_var: num_var,
+        };
+
+        let args = vec![(num_var, Symbol::ARG_1), (num_var, Symbol::ARG_2)];
+
+        let closure_args = args
+            .into_iter()
+            .map(|(var, symbol)| (var, Located::at_zero(Identifier(symbol))))
+            .collect();
+
+        let expr = Expr::Closure {
+            function_type: var_store.fresh(),
+            closure_type: var_store.fresh(),
+            closure_ext_var: var_store.fresh(),
+            return_type: num_var,
+            name: Symbol::NUM_ADD,
+            captured_symbols: Vec::new(),
+            recursive: roc_can::expr::Recursive::NotRecursive,
+            arguments: closure_args,
+            loc_body: Box::new(Located::at_zero(body)),
+        };
+
+        // pub struct Annotation {
+        //     pub signature: Type,
+        //     pub introduced_variables: IntroducedVariables,
+        //     pub aliases: SendMap<Symbol, Alias>,
+        //     pub region: Region,
+        // }
+
+        let introduced_variables = roc_can::annotation::IntroducedVariables::default();
+
+        let def_closure_var = var_store.fresh();
+
+        let typ = {
+            Type::Function(
+                vec![Type::Variable(num_var), Type::Variable(num_var)],
+                Box::new(Type::Variable(def_closure_var)),
+                Box::new(Type::Variable(num_var)),
+            )
+        };
+
+        let annotation = roc_can::def::Annotation {
+            signature: typ,
+            introduced_variables,
+            aliases: Default::default(),
+            region: Region::zero(),
+        };
+
+        let def = Def {
+            loc_pattern: Located {
+                region: Region::zero(),
+                value: Identifier(Symbol::NUM_ADD),
+            },
+            loc_expr: Located {
+                region: Region::zero(),
+                value: expr,
+            },
+            expr_var: var_store.fresh(),
+            pattern_vars: roc_collections::all::SendMap::default(),
+            annotation: None,
+        };
+
+        Declaration::Declare(def)
+    };
+
+    let module_output = roc_can::module::ModuleOutput {
+        aliases: MutMap::default(),
+        rigid_variables: MutMap::default(),
+        declarations: vec![add_decl],
+        exposed_imports: MutMap::default(),
+        lookups: vec![],
+        problems: vec![],
+        ident_ids,
+        references: MutSet::default(),
+    };
+
+    let constraint = constrain_module(&module_output, module_id);
+
+    let module = Module {
+        module_id,
+        exposed_imports: module_output.exposed_imports,
+        exposed_symbols,
+        references: module_output.references,
+        aliases: module_output.aliases,
+        rigid_variables: module_output.rigid_variables,
+    };
+
+    let exposed_symbols = module.exposed_symbols.clone();
+
+    let constrained_module = ConstrainedModule {
+        module,
+        declarations: module_output.declarations,
+        imported_modules,
+        var_store,
+        constraint,
+        ident_ids: module_output.ident_ids,
+        module_timing,
+    };
+
+    Msg::MadeBuiltinModule {
+        module_id,
+        constrained_module,
+        exposed_symbols,
+        package_qualified_imported_modules,
+    }
 }
 
 /// Load a module by its module name, rather than by its filename
@@ -4057,14 +4244,8 @@ where
         .map(|(_, msg)| msg),
         LoadBuiltinModule {
             module_id,
-            module_ids,
             ident_ids_by_module,
-        } => Ok(load_builtin_module(
-            arena,
-            module_id,
-            module_ids,
-            ident_ids_by_module,
-        )),
+        } => Ok(load_builtin_module(arena, module_id, ident_ids_by_module)),
         Parse { header } => parse(arena, header),
         CanonicalizeAndConstrain {
             parsed,
