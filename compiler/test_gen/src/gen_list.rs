@@ -321,6 +321,32 @@ fn list_walk_substraction() {
 }
 
 #[test]
+fn list_walk_until_sum() {
+    assert_evals_to!(
+        r#"List.walkUntil [ 1, 2 ] (\a,b -> Continue (a + b)) 0"#,
+        3,
+        i64
+    );
+}
+
+#[test]
+fn list_walk_until_even_prefix_sum() {
+    assert_evals_to!(
+        r#"
+        helper = \a, b ->
+            if Num.isEven a then
+                Continue (a + b)
+
+            else
+                Stop b
+
+        List.walkUntil [ 2, 4, 8, 9 ] helper 0"#,
+        2 + 4 + 8,
+        i64
+    );
+}
+
+#[test]
 fn list_keep_if_empty_list_of_int() {
     assert_evals_to!(
         indoc!(

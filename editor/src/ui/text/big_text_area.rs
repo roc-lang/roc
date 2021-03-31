@@ -119,7 +119,7 @@ impl Lines for BigTextArea {
 }
 
 impl SelectableLines for BigTextArea {
-    fn get_caret(self) -> TextPos {
+    fn get_caret(&self) -> TextPos {
         self.caret_w_select.caret_pos
     }
 

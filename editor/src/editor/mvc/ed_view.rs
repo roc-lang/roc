@@ -1,9 +1,7 @@
 use super::ed_model::EdModel;
-use crate::editor::code_lines::CodeLines;
 use crate::editor::config::Config;
 use crate::editor::ed_error::EdResult;
 use crate::editor::render_ast::build_code_graphics;
-use crate::editor::slow_pool::SlowPool;
 use crate::graphics::primitives::rect::Rect;
 use crate::ui::text::caret_w_select::make_caret_rect;
 use crate::ui::text::caret_w_select::CaretWSelect;
@@ -12,32 +10,29 @@ use cgmath::Vector2;
 use snafu::OptionExt;
 use winit::dpi::PhysicalSize;
 
+#[derive(Debug)]
+pub struct RenderedWgpu {
+    pub text: glyph_brush::OwnedSection,
+    pub rects: Vec<Rect>,
+}
+
 // create text and rectangles based on EdModel's markup_root
 pub fn model_to_wgpu<'a>(
     ed_model: &'a mut EdModel,
     size: &PhysicalSize<u32>,
     txt_coords: Vector2<f32>,
     config: &Config,
-    markup_node_pool: &'a SlowPool,
-) -> EdResult<(wgpu_glyph::Section<'a>, Vec<Rect>)> {
+) -> EdResult<RenderedWgpu> {
     let glyph_dim_rect = ed_model.glyph_dim_rect_opt.context(MissingGlyphDims {})?;
 
     let (section, mut rects) = build_code_graphics(
-        markup_node_pool.get(ed_model.markup_root_id),
+        ed_model.markup_node_pool.get(ed_model.markup_root_id),
         size,
         txt_coords,
         config,
         glyph_dim_rect,
-        markup_node_pool,
+        &ed_model.markup_node_pool,
     )?;
-
-    let mut all_code_string = String::new();
-
-    for txt in section.text.iter() {
-        all_code_string.push_str(txt.text);
-    }
-
-    ed_model.code_lines = CodeLines::from_str(&all_code_string);
 
     let caret_w_sel_vec = ed_model
         .caret_w_select_vec
@@ -50,7 +45,10 @@ pub fn model_to_wgpu<'a>(
 
     rects.append(&mut sel_rects);
 
-    Ok((section, rects))
+    Ok(RenderedWgpu {
+        text: section,
+        rects,
+    })
 }
 
 pub fn build_selection_graphics(
@@ -69,7 +67,7 @@ pub fn build_selection_graphics(
 
         let top_left_x = txt_coords.x + caret_col * char_width;
 
-        let top_left_y = txt_coords.y + caret_row * char_height;
+        let top_left_y = txt_coords.y + caret_row * char_height + 0.1 * char_height;
 
         rects.push(make_caret_rect(
             top_left_x,

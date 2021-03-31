@@ -4,7 +4,7 @@ use crate::llvm::bitcode::{
     call_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
-    allocate_with_refcount_help, build_num_binop, cast_basic_basic, complex_bitcast, Env, InPlace,
+    allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, InPlace,
 };
 use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type};
 use crate::llvm::refcounting::{
@@ -713,206 +713,47 @@ pub fn list_len<'ctx>(
         .into_int_value()
 }
 
-/// List.sum : List (Num a) -> Num a
-pub fn list_sum<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    list: BasicValueEnum<'ctx>,
-    default_layout: &Layout<'a>,
-) -> BasicValueEnum<'ctx> {
-    let ctx = env.context;
-    let builder = env.builder;
-
-    let list_wrapper = list.into_struct_value();
-    let len = list_len(env.builder, list_wrapper);
-
-    let accum_type = basic_type_from_layout(env.arena, ctx, default_layout, env.ptr_bytes);
-    let accum_alloca = builder.build_alloca(accum_type, "alloca_walk_right_accum");
-
-    let default: BasicValueEnum = match accum_type {
-        BasicTypeEnum::IntType(int_type) => int_type.const_zero().into(),
-        BasicTypeEnum::FloatType(float_type) => float_type.const_zero().into(),
-        _ => unreachable!(""),
-    };
-
-    builder.build_store(accum_alloca, default);
-
-    let then_block = ctx.append_basic_block(parent, "then");
-    let cont_block = ctx.append_basic_block(parent, "branchcont");
-
-    let condition = builder.build_int_compare(
-        IntPredicate::UGT,
-        len,
-        ctx.i64_type().const_zero(),
-        "list_non_empty",
-    );
-
-    builder.build_conditional_branch(condition, then_block, cont_block);
-
-    builder.position_at_end(then_block);
-
-    let elem_ptr_type = get_ptr_type(&accum_type, AddressSpace::Generic);
-    let list_ptr = load_list_ptr(builder, list_wrapper, elem_ptr_type);
-
-    let walk_right_loop = |_, elem: BasicValueEnum<'ctx>| {
-        // load current accumulator
-        let current = builder.build_load(accum_alloca, "retrieve_accum");
-
-        let new_current = build_num_binop(
-            env,
-            parent,
-            current,
-            default_layout,
-            elem,
-            default_layout,
-            roc_module::low_level::LowLevel::NumAdd,
-        );
-
-        builder.build_store(accum_alloca, new_current);
-    };
-
-    incrementing_elem_loop(
-        builder,
-        ctx,
-        parent,
-        list_ptr,
-        len,
-        "#index",
-        walk_right_loop,
-    );
-
-    builder.build_unconditional_branch(cont_block);
-
-    builder.position_at_end(cont_block);
-
-    builder.build_load(accum_alloca, "load_final_acum")
+pub enum ListWalk {
+    Walk,
+    WalkBackwards,
+    WalkUntil,
+    WalkBackwardsUntil,
 }
 
-/// List.product : List (Num a) -> Num a
-pub fn list_product<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    list: BasicValueEnum<'ctx>,
-    default_layout: &Layout<'a>,
-) -> BasicValueEnum<'ctx> {
-    let ctx = env.context;
-    let builder = env.builder;
-
-    let list_wrapper = list.into_struct_value();
-    let len = list_len(env.builder, list_wrapper);
-
-    let accum_type = basic_type_from_layout(env.arena, ctx, default_layout, env.ptr_bytes);
-    let accum_alloca = builder.build_alloca(accum_type, "alloca_walk_right_accum");
-
-    let default: BasicValueEnum = match accum_type {
-        BasicTypeEnum::IntType(int_type) => int_type.const_int(1, false).into(),
-        BasicTypeEnum::FloatType(float_type) => float_type.const_float(1.0).into(),
-        _ => unreachable!(""),
-    };
-
-    builder.build_store(accum_alloca, default);
-
-    let then_block = ctx.append_basic_block(parent, "then");
-    let cont_block = ctx.append_basic_block(parent, "branchcont");
-
-    let condition = builder.build_int_compare(
-        IntPredicate::UGT,
-        len,
-        ctx.i64_type().const_zero(),
-        "list_non_empty",
-    );
-
-    builder.build_conditional_branch(condition, then_block, cont_block);
-
-    builder.position_at_end(then_block);
-
-    let elem_ptr_type = get_ptr_type(&accum_type, AddressSpace::Generic);
-    let list_ptr = load_list_ptr(builder, list_wrapper, elem_ptr_type);
-
-    let walk_right_loop = |_, elem: BasicValueEnum<'ctx>| {
-        // load current accumulator
-        let current = builder.build_load(accum_alloca, "retrieve_accum");
-
-        let new_current = build_num_binop(
-            env,
-            parent,
-            current,
-            default_layout,
-            elem,
-            default_layout,
-            roc_module::low_level::LowLevel::NumMul,
-        );
-
-        builder.build_store(accum_alloca, new_current);
-    };
-
-    incrementing_elem_loop(
-        builder,
-        ctx,
-        parent,
-        list_ptr,
-        len,
-        "#index",
-        walk_right_loop,
-    );
-
-    builder.build_unconditional_branch(cont_block);
-
-    builder.position_at_end(cont_block);
-
-    builder.build_load(accum_alloca, "load_final_acum")
-}
-
-/// List.walk : List elem, (elem -> accum -> accum), accum -> accum
-pub fn list_walk<'a, 'ctx, 'env>(
+pub fn list_walk_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
+    scope: &crate::llvm::build::Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
-    list: BasicValueEnum<'ctx>,
-    element_layout: &Layout<'a>,
-    func: BasicValueEnum<'ctx>,
-    func_layout: &Layout<'a>,
-    default: BasicValueEnum<'ctx>,
-    default_layout: &Layout<'a>,
+    args: &[roc_module::symbol::Symbol],
+    variant: ListWalk,
 ) -> BasicValueEnum<'ctx> {
-    list_walk_generic(
-        env,
-        layout_ids,
-        parent,
-        list,
-        element_layout,
-        func,
-        func_layout,
-        default,
-        default_layout,
-        &bitcode::LIST_WALK,
-    )
-}
+    use crate::llvm::build::load_symbol_and_layout;
 
-/// List.walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
-pub fn list_walk_backwards<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    parent: FunctionValue<'ctx>,
-    list: BasicValueEnum<'ctx>,
-    element_layout: &Layout<'a>,
-    func: BasicValueEnum<'ctx>,
-    func_layout: &Layout<'a>,
-    default: BasicValueEnum<'ctx>,
-    default_layout: &Layout<'a>,
-) -> BasicValueEnum<'ctx> {
-    list_walk_generic(
-        env,
-        layout_ids,
-        parent,
-        list,
-        element_layout,
-        func,
-        func_layout,
-        default,
-        default_layout,
-        &bitcode::LIST_WALK_BACKWARDS,
-    )
+    debug_assert_eq!(args.len(), 3);
+
+    let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+
+    let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
+
+    let (default, default_layout) = load_symbol_and_layout(scope, &args[2]);
+
+    match list_layout {
+        Layout::Builtin(Builtin::EmptyList) => default,
+        Layout::Builtin(Builtin::List(_, element_layout)) => list_walk_generic(
+            env,
+            layout_ids,
+            parent,
+            list,
+            element_layout,
+            func,
+            func_layout,
+            default,
+            default_layout,
+            variant,
+        ),
+        _ => unreachable!("invalid list layout"),
+    }
 }
 
 fn list_walk_generic<'a, 'ctx, 'env>(
@@ -925,9 +766,16 @@ fn list_walk_generic<'a, 'ctx, 'env>(
     func_layout: &Layout<'a>,
     default: BasicValueEnum<'ctx>,
     default_layout: &Layout<'a>,
-    zig_function: &str,
+    variant: ListWalk,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
+
+    let zig_function = match variant {
+        ListWalk::Walk => bitcode::LIST_WALK,
+        ListWalk::WalkBackwards => bitcode::LIST_WALK_BACKWARDS,
+        ListWalk::WalkUntil => bitcode::LIST_WALK_UNTIL,
+        ListWalk::WalkBackwardsUntil => todo!(),
+    };
 
     let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
@@ -961,21 +809,44 @@ fn list_walk_generic<'a, 'ctx, 'env>(
 
     let result_ptr = env.builder.build_alloca(default.get_type(), "result");
 
-    call_void_bitcode_fn(
-        env,
-        &[
-            list_i128,
-            env.builder
-                .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
-            stepper_caller.into(),
-            env.builder.build_bitcast(default_ptr, u8_ptr, "to_u8_ptr"),
-            alignment_iv.into(),
-            element_width.into(),
-            default_width.into(),
-            env.builder.build_bitcast(result_ptr, u8_ptr, "to_opaque"),
-        ],
-        zig_function,
-    );
+    match variant {
+        ListWalk::Walk | ListWalk::WalkBackwards => {
+            call_void_bitcode_fn(
+                env,
+                &[
+                    list_i128,
+                    env.builder
+                        .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+                    stepper_caller.into(),
+                    env.builder.build_bitcast(default_ptr, u8_ptr, "to_u8_ptr"),
+                    alignment_iv.into(),
+                    element_width.into(),
+                    default_width.into(),
+                    env.builder.build_bitcast(result_ptr, u8_ptr, "to_opaque"),
+                ],
+                zig_function,
+            );
+        }
+        ListWalk::WalkUntil | ListWalk::WalkBackwardsUntil => {
+            let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
+            call_void_bitcode_fn(
+                env,
+                &[
+                    list_i128,
+                    env.builder
+                        .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+                    stepper_caller.into(),
+                    env.builder.build_bitcast(default_ptr, u8_ptr, "to_u8_ptr"),
+                    alignment_iv.into(),
+                    element_width.into(),
+                    default_width.into(),
+                    dec_element_fn.as_global_value().as_pointer_value().into(),
+                    env.builder.build_bitcast(result_ptr, u8_ptr, "to_opaque"),
+                ],
+                zig_function,
+            );
+        }
+    }
 
     env.builder.build_load(result_ptr, "load_result")
 }

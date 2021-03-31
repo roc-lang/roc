@@ -567,6 +567,107 @@ mod solve_expr {
     }
 
     #[test]
+    fn applied_tag() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.map [ "a", "b" ] \elem -> Foo elem
+                "#
+            ),
+            "List [ Foo Str ]*",
+        )
+    }
+
+    // Tests (TagUnion, Func)
+    #[test]
+    fn applied_tag_function() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                foo = Foo
+
+                foo "hi"
+                "#
+            ),
+            "[ Foo Str ]*",
+        )
+    }
+
+    // Tests (TagUnion, Func)
+    #[test]
+    fn applied_tag_function_list_map() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                List.map [ "a", "b" ] Foo
+                "#
+            ),
+            "List [ Foo Str ]*",
+        )
+    }
+
+    // Tests (TagUnion, Func)
+    #[test]
+    fn applied_tag_function_list() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                [ \x -> Bar x, Foo ]
+                "#
+            ),
+            "List (a -> [ Bar a, Foo a ]*)",
+        )
+    }
+
+    // Tests (Func, TagUnion)
+    #[test]
+    fn applied_tag_function_list_other_way() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                [ Foo, \x -> Bar x ]
+                "#
+            ),
+            "List (a -> [ Bar a, Foo a ]*)",
+        )
+    }
+
+    // Tests (Func, TagUnion)
+    #[test]
+    fn applied_tag_function_record() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                foo = Foo
+
+                {
+                    x: [ foo, Foo ],
+                    y: [ foo, \x -> Foo x ],
+                    z: [ foo, \x,y  -> Foo x y ]
+                }
+                "#
+            ),
+            "{ x : List [ Foo ]*, y : List (a -> [ Foo a ]*), z : List (b, c -> [ Foo b c ]*) }",
+        )
+    }
+
+    // Tests (TagUnion, Func)
+    #[test]
+    fn applied_tag_function_with_annotation() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                x : List [ Foo I64 ]
+                x = List.map [ 1, 2 ] Foo
+
+                x
+                "#
+            ),
+            "List [ Foo I64 ]",
+        )
+    }
+
+    #[test]
     fn def_2_arg_closure() {
         infer_eq(
             indoc!(

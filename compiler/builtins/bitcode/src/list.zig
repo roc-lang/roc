@@ -4,6 +4,8 @@ const RocResult = utils.RocResult;
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
+const TAG_WIDTH = 8;
+
 const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
 const Opaque = ?[*]u8;
 
@@ -497,6 +499,49 @@ pub fn listWalkBackwards(list: RocList, stepper: Opaque, stepper_caller: Caller2
 
     @memcpy(output orelse unreachable, b2, accum_width);
     std.heap.c_allocator.free(alloc[0..accum_width]);
+
+    const data_bytes = list.len() * element_width;
+    utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
+}
+
+pub fn listWalkUntil(list: RocList, stepper: Opaque, stepper_caller: Caller2, accum: Opaque, alignment: usize, element_width: usize, accum_width: usize, dec: Dec, output: Opaque) callconv(.C) void {
+    // [ Continue a, Stop a ]
+    const CONTINUE: usize = 0;
+
+    if (accum_width == 0) {
+        return;
+    }
+
+    if (list.isEmpty()) {
+        @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
+        return;
+    }
+
+    const alloc: [*]u8 = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, TAG_WIDTH + accum_width) catch unreachable);
+
+    @memcpy(alloc + TAG_WIDTH, accum orelse unreachable, accum_width);
+
+    if (list.bytes) |source_ptr| {
+        var i: usize = 0;
+        const size = list.len();
+        while (i < size) : (i += 1) {
+            const element = source_ptr + i * element_width;
+            stepper_caller(stepper, element, alloc + TAG_WIDTH, alloc);
+
+            const usizes: [*]usize = @ptrCast([*]usize, @alignCast(8, alloc));
+            if (usizes[0] != 0) {
+                // decrement refcount of the remaining items
+                i += 1;
+                while (i < size) : (i += 1) {
+                    dec(source_ptr + i * element_width);
+                }
+                break;
+            }
+        }
+    }
+
+    @memcpy(output orelse unreachable, alloc + TAG_WIDTH, accum_width);
+    std.heap.c_allocator.free(alloc[0 .. TAG_WIDTH + accum_width]);
 
     const data_bytes = list.len() * element_width;
     utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);

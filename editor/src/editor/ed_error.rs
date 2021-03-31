@@ -1,4 +1,4 @@
-use crate::editor::slow_pool::SlowNodeId;
+use crate::editor::slow_pool::MarkNodeId;
 use colored::*;
 use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
 
@@ -15,7 +15,7 @@ pub enum EdError {
         node_id
     ))]
     CaretNotFound {
-        node_id: SlowNodeId,
+        node_id: MarkNodeId,
         backtrace: Backtrace,
     },
 
@@ -31,8 +31,30 @@ pub enum EdError {
     ))]
     ClipboardInitFailed { err_msg: String },
 
+    #[snafu(display(
+        "ExpectedTextNode: the function {} expected a Text node, got {} instead.",
+        function_name,
+        node_type
+    ))]
+    ExpectedTextNode {
+        function_name: String,
+        node_type: String,
+        backtrace: Backtrace,
+    },
+
     #[snafu(display("GetContentOnNestedNode: tried to get string content from Nested MarkupNode. Can only get content from Text or Blank nodes."))]
     GetContentOnNestedNode { backtrace: Backtrace },
+
+    #[snafu(display(
+        "IndexOfFailed: Element {} was not found in collection {}.",
+        elt_str,
+        collection_str
+    ))]
+    IndexOfFailed {
+        elt_str: String,
+        collection_str: String,
+        backtrace: Backtrace,
+    },
 
     #[snafu(display("KeyNotFound: key {} was not found in HashMap.", key_str,))]
     KeyNotFound {
@@ -40,16 +62,34 @@ pub enum EdError {
         backtrace: Backtrace,
     },
 
-    #[snafu(display("NestedNodeWithoutChildren: tried to retrieve child from Nested MarkupNode with id {} but it had no children.", node_id))]
-    NestedNodeWithoutChildren {
-        node_id: SlowNodeId,
+    #[snafu(display(
+        "MissingParent: MarkupNode with id {} should have a parent but there was none.",
+        node_id
+    ))]
+    MissingParent {
+        node_id: MarkNodeId,
         backtrace: Backtrace,
     },
 
     #[snafu(display("NestedNodeMissingChild: expected to find child with id {} in Nested MarkupNode, but it was missing. Id's of the children are {:?}.", node_id, children_ids))]
     NestedNodeMissingChild {
-        node_id: SlowNodeId,
-        children_ids: Vec<SlowNodeId>,
+        node_id: MarkNodeId,
+        children_ids: Vec<MarkNodeId>,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display(
+        "NestedNodeRequired: required a Nested node at this position, node was a {}.",
+        node_type
+    ))]
+    NestedNodeRequired {
+        node_type: String,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display("NestedNodeWithoutChildren: tried to retrieve child from Nested MarkupNode with id {} but it had no children.", node_id))]
+    NestedNodeWithoutChildren {
+        node_id: MarkNodeId,
         backtrace: Backtrace,
     },
 
@@ -71,6 +111,9 @@ pub enum EdError {
 
     #[snafu(display("ParseError: Failed to parse AST: SyntaxError: {}.", syntax_err))]
     ParseError { syntax_err: String },
+
+    #[snafu(display("RecordWithoutFields: expected record to have at least one field because it is not an EmpyRecord."))]
+    RecordWithoutFields { backtrace: Backtrace },
 
     #[snafu(display("UIError: {}", msg))]
     UIErrorBacktrace { msg: String, backtrace: Backtrace },

@@ -915,7 +915,10 @@ define_builtins! {
         24 LIST_MAP2: "map2"
         25 LIST_MAP3: "map3"
         26 LIST_PRODUCT: "product"
-        27 LIST_RANGE: "range"
+        27 LIST_SUM_ADD: "#sumadd"
+        28 LIST_PRODUCT_MUL: "#productmul"
+        29 LIST_WALK_UNTIL: "walkUntil"
+        30 LIST_RANGE: "range"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

@@ -2276,3 +2276,23 @@ fn function_malformed_pattern() {
         i64
     );
 }
+
+#[test]
+#[should_panic(expected = "Hit an erroneous type when creating a layout for")]
+fn call_invalid_layout() {
+    assert_llvm_evals_to!(
+        indoc!(
+            r#"
+                f : I64 -> I64
+                f = \x -> x
+
+                f {}
+            "#
+        ),
+        3,
+        i64,
+        |x| x,
+        false,
+        true
+    );
+}

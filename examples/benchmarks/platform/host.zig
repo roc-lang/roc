@@ -103,6 +103,16 @@ fn call_the_closure(function_pointer: *const u8, closure_data_pointer: [*]u8) vo
     }
 }
 
+pub export fn roc_fx_putInt(int: i64) i64 {
+    const stdout = std.io.getStdOut().writer();
+
+    stdout.print("{d}", .{int}) catch unreachable;
+
+    stdout.print("\n", .{}) catch unreachable;
+
+    return 0;
+}
+
 pub export fn roc_fx_putLine(rocPath: str.RocStr) i64 {
     const stdout = std.io.getStdOut().writer();
 
