@@ -19,13 +19,6 @@ impl CodeLines {
         }
     }
 
-    pub fn add_to_line(&mut self, line_nr: usize, new_str: &str) -> UIResult<()> {
-        let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
-        line_ref.push_str(new_str);
-
-        Ok(())
-    }
-
     pub fn insert_between_line(
         &mut self,
         line_nr: usize,
@@ -36,6 +29,8 @@ impl CodeLines {
 
         line_ref.insert_str(index, new_str);
 
+        self.nr_of_chars += new_str.len();
+
         Ok(())
     }
 
@@ -43,6 +38,8 @@ impl CodeLines {
         let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
 
         line_ref.remove(index);
+
+        self.nr_of_chars -= 1;
 
         Ok(())
     }
