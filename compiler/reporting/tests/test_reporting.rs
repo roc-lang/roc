@@ -4502,12 +4502,14 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── BAD TYPE VARIABLE ───────────────────────────────────────────────────────────
+                ── UNFINISHED TYPE ─────────────────────────────────────────────────────────────
 
-                I am expecting a type variable, but I got stuck here:
+                I just started parsing a type, but I got stuck here:
 
                 1│  f : (
                          ^
+
+                I am expecting a type next, like Bool or List a.
             "#
             ),
         )
@@ -4610,9 +4612,7 @@ mod test_reporting {
     }
 
     #[test]
-    #[ignore]
     fn type_apply_stray_dot() {
-        // TODO good message
         report_problem_as(
             indoc!(
                 r#"
@@ -4621,16 +4621,14 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── UNFINISHED PARENTHESES ──────────────────────────────────────────────────────
+                ── UNFINISHED TYPE ─────────────────────────────────────────────────────────────
 
-                I am partway through parsing a type in parentheses, but I got stuck
-                here:
+                I just started parsing a type, but I got stuck here:
 
-                1│  f : ( I64
-                             ^
+                1│  f : .
+                        ^
 
-                I was expecting to see a closing parenthesis before this, so try
-                adding a ) and see if that helps?
+                I am expecting a type next, like Bool or List a.
             "#
             ),
         )
@@ -6082,6 +6080,131 @@ mod test_reporting {
 
                     List [ Foo Str ]
                 "#
+            ),
+        )
+    }
+
+    #[test]
+    fn pattern_in_parens_open() {
+        report_problem_as(
+            indoc!(
+                r#"
+                \( a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED PARENTHESES ──────────────────────────────────────────────────────
+
+                I am partway through parsing a pattern in parentheses, but I got stuck
+                here:
+
+                1│  \( a
+                        ^
+
+                I was expecting to see a closing parenthesis before this, so try
+                adding a ) and see if that helps?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn pattern_in_parens_end_comma() {
+        report_problem_as(
+            indoc!(
+                r#"
+                \( a,
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED PARENTHESES ──────────────────────────────────────────────────────
+
+                I am partway through parsing a pattern in parentheses, but I got stuck
+                here:
+
+                1│  \( a,
+                        ^
+
+                I was expecting to see a closing parenthesis before this, so try
+                adding a ) and see if that helps?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn pattern_in_parens_end() {
+        report_problem_as(
+            indoc!(
+                r#"
+                \( a
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED PARENTHESES ──────────────────────────────────────────────────────
+
+                I am partway through parsing a pattern in parentheses, but I got stuck
+                here:
+
+                1│  \( a
+                        ^
+
+                I was expecting to see a closing parenthesis before this, so try
+                adding a ) and see if that helps?
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn pattern_in_parens_indent_end() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x = \( a
+                )
+                "#
+            ),
+            indoc!(
+                r#"
+                ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
+
+                I am partway through parsing a pattern in parentheses, but I got stuck
+                here:
+
+                1│  x = \( a
+                2│  )
+                    ^
+
+                I need this parenthesis to be indented more. Try adding more spaces
+                before it!
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn pattern_in_parens_indent_open() {
+        report_problem_as(
+            indoc!(
+                r#"
+                \(
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED PATTERN ──────────────────────────────────────────────────────────
+
+                I just started parsing a pattern, but I got stuck here:
+
+                1│  \(
+                      ^
+
+                Note: I may be confused by indentation
+            "#
             ),
         )
     }
