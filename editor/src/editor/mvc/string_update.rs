@@ -41,10 +41,7 @@ pub fn update_small_string(
         curr_mark_node_id,
     )?;
 
-    // update ast
-    let ch_size = std::mem::size_of::<char>();
-
-    if (ch_size as u8) + old_array_str.len() <= ArrString::capacity() {
+    if old_array_str.len() < ArrString::capacity() {
         if let Expr2::SmallStr(ref mut mut_array_str) =
             ed_model.module.env.pool.get_mut(ast_node_id)
         {
