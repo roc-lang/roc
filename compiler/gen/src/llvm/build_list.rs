@@ -851,6 +851,79 @@ fn list_walk_generic<'a, 'ctx, 'env>(
     env.builder.build_load(result_ptr, "load_result")
 }
 
+#[allow(dead_code)]
+#[repr(u8)]
+enum IntWidth {
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    Usize,
+}
+
+impl From<roc_mono::layout::Builtin<'_>> for IntWidth {
+    fn from(builtin: Builtin) -> Self {
+        use IntWidth::*;
+
+        match builtin {
+            Builtin::Int128 => I128,
+            Builtin::Int64 => I64,
+            Builtin::Int32 => I32,
+            Builtin::Int16 => I16,
+            Builtin::Int8 => I8,
+            Builtin::Usize => Usize,
+            _ => unreachable!(),
+        }
+    }
+}
+
+/// List.range : Int a, Int a -> List (Int a)
+pub fn list_range<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    builtin: Builtin<'a>,
+    low: IntValue<'ctx>,
+    high: IntValue<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let low_ptr = builder.build_alloca(low.get_type(), "low_ptr");
+    env.builder.build_store(low_ptr, low);
+
+    let high_ptr = builder.build_alloca(high.get_type(), "high_ptr");
+    env.builder.build_store(high_ptr, high);
+
+    let int_width = env
+        .context
+        .i8_type()
+        .const_int(IntWidth::from(builtin) as u64, false)
+        .into();
+
+    let output = call_bitcode_fn(
+        env,
+        &[
+            int_width,
+            env.builder.build_bitcast(low_ptr, u8_ptr, "to_u8_ptr"),
+            env.builder.build_bitcast(high_ptr, u8_ptr, "to_u8_ptr"),
+        ],
+        &bitcode::LIST_RANGE,
+    );
+
+    complex_bitcast(
+        env.builder,
+        output,
+        collection(env.context, env.ptr_bytes).into(),
+        "from_i128",
+    )
+}
+
 /// List.contains : List elem, elem -> Bool
 pub fn list_contains<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

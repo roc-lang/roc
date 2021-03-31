@@ -87,6 +87,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_KEEP_IF => list_keep_if,
         LIST_KEEP_OKS => list_keep_oks,
         LIST_KEEP_ERRS=> list_keep_errs,
+        LIST_RANGE => list_range,
         LIST_WALK => list_walk,
         LIST_WALK_BACKWARDS => list_walk_backwards,
         LIST_WALK_UNTIL => list_walk_until,
@@ -2090,6 +2091,11 @@ fn list_keep_oks(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.keepErrs: List before, (before -> Result * after) -> List after
 fn list_keep_errs(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListKeepErrs, var_store)
+}
+
+/// List.keepErrs: List before, (before -> Result * after) -> List after
+fn list_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::ListRange, var_store)
 }
 
 /// List.map : List before, (before -> after) -> List after
