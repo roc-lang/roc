@@ -98,7 +98,8 @@ pub enum Expr2 {
     /// string literals of length 31B or more
     Str(PoolStr), // 8B
     // Lookups
-    Var(Symbol), // 8B
+    Var(Symbol),            // 8B
+    InvalidLookup(PoolStr), // 8B
 
     List {
         list_var: Variable,    // 4B - required for uniqueness of the list

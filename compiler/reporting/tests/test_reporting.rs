@@ -4613,7 +4613,6 @@ mod test_reporting {
 
     #[test]
     fn type_apply_stray_dot() {
-        // TODO good message
         report_problem_as(
             indoc!(
                 r#"
@@ -6048,6 +6047,39 @@ mod test_reporting {
 
                 Are there any missing commas? Or missing parentheses?
             "#
+            ),
+        )
+    }
+
+    #[test]
+    fn applied_tag_function() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x : List [ Foo Str ]
+                x = List.map [ 1, 2 ] Foo
+
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `x` definition:
+
+                1│  x : List [ Foo Str ]
+                2│  x = List.map [ 1, 2 ] Foo
+                        ^^^^^^^^^^^^^^^^^^^^^
+
+                This `map` call produces:
+
+                    List [ Foo Num a ]
+
+                But the type annotation on `x` says it should be:
+
+                    List [ Foo Str ]
+                "#
             ),
         )
     }

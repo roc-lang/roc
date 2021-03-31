@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate pretty_assertions;
+
 use roc_docs::{documentation_to_template_data, files_to_documentations, ModuleEntry};
 use std::path::PathBuf;
 
@@ -20,6 +23,10 @@ mod test_docs {
         };
 
         let expected_entries = vec![
+            ModuleEntry {
+                name: "Block".to_string(),
+                docs: "<p>This is a block</p>\n".to_string(),
+            },
             ModuleEntry {
                 name: "singleline".to_string(),
                 docs: "<p>Single line documentation.</p>\n".to_string(),

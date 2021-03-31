@@ -111,12 +111,16 @@ fn generate_module_doc<'a>(
         },
 
         Alias {
-            name: _,
+            name,
             vars: _,
             ann: _,
-        } =>
-        // TODO
-        {
+        } => {
+            let entry = DocEntry {
+                name: name.value.to_string(),
+                docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
+            };
+            acc.push(entry);
+
             (acc, None)
         }
 
@@ -139,7 +143,9 @@ fn comments_or_new_lines_to_docs<'a>(
                 docs.push_str(doc_str);
                 docs.push('\n');
             }
-            Newline | LineComment(_) => {}
+            Newline | LineComment(_) => {
+                docs = String::new();
+            }
         }
     }
     if docs.is_empty() {
