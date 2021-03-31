@@ -1,19 +1,20 @@
 use crate::editor::code_lines::CodeLines;
 use crate::editor::ed_error::EdResult;
 use crate::editor::grid_node_map::GridNodeMap;
-use crate::editor::markup::attribute::Attributes;
 use crate::editor::markup::nodes;
 use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::record_update::start_new_record;
+use crate::editor::mvc::record_update::update_new_record;
 use crate::editor::mvc::record_update::update_record_colon;
 use crate::editor::mvc::record_update::update_record_field;
+use crate::editor::mvc::string_update::start_new_string;
+use crate::editor::mvc::string_update::update_small_string;
+use crate::editor::mvc::string_update::update_string;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
-use crate::editor::syntax_highlight::HighlightStyle;
-use crate::editor::util::index_of;
 use crate::lang::ast::Expr2;
-use crate::lang::pool::{NodeId, PoolStr, PoolVec};
+use crate::lang::pool::NodeId;
 use crate::ui::text::caret_w_select::CaretWSelect;
 use crate::ui::text::lines::MoveCaretFun;
 use crate::ui::text::selection::validate_raw_sel;
@@ -33,6 +34,8 @@ impl<'a> EdModel<'a> {
         move_fun: MoveCaretFun<CodeLines>,
         modifiers: &Modifiers,
     ) -> UIResult<()> {
+        self.dirty = true;
+
         for caret_tup in self.caret_w_select_vec.iter_mut() {
             caret_tup.0 = move_fun(&self.code_lines, caret_tup.0, modifiers)?;
             caret_tup.1 = None;
@@ -41,7 +44,6 @@ impl<'a> EdModel<'a> {
         Ok(())
     }
 
-    // TODO delete once we use `GridNodeMap` for everything that now uses `CodeLines`.
     // disregards EdModel.code_lines because the caller knows the resulting caret position will be valid.
     // allows us to prevent multiple updates to EdModel.code_lines
     pub fn simple_move_carets_right(&mut self) {
@@ -113,6 +115,25 @@ impl<'a> EdModel<'a> {
         }
 
         Ok(())
+    }
+
+    // updates grid_node_map and code_lines but nothing else.
+    pub fn insert_between_line(
+        &mut self,
+        line_nr: usize,
+        index: usize,
+        new_str: &str,
+        node_id: MarkNodeId,
+    ) -> UIResult<()> {
+        self.grid_node_map
+            .insert_between_line(line_nr, index, new_str.len(), node_id)?;
+        self.code_lines.insert_between_line(line_nr, index, new_str)
+    }
+
+    // updates grid_node_map and code_lines but nothing else.
+    pub fn del_at_line(&mut self, line_nr: usize, index: usize) -> UIResult<()> {
+        self.grid_node_map.del_at_line(line_nr, index)?;
+        self.code_lines.del_at_line(line_nr, index)
     }
 }
 
@@ -306,6 +327,10 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
             update_record_colon(ed_model)?;
         }
+        '"' => {
+
+            start_new_string(ed_model)?;
+        }
         '\u{8}' | '\u{7f}' => {
             // On Linux, '\u{8}' is backspace,
             // On macOS '\u{7f}'.
@@ -328,90 +353,69 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
         }
         ch => {
             let old_caret_pos = ed_model.get_caret();
-            let curr_mark_node_id = ed_model.grid_node_map.get_id_at_row_col(ed_model.get_caret())?;
+            let curr_mark_node_id = ed_model.grid_node_map.get_id_at_row_col(old_caret_pos)?;
             let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
-            let parent_id_opt = curr_mark_node.get_parent_id_opt();
+
+            let prev_mark_node_id_opt =
+                if old_caret_pos.column > 0 {
+                    let prev_mark_node_id = ed_model.grid_node_map.get_id_at_row_col(
+                        TextPos {
+                            line: old_caret_pos.line,
+                            column: old_caret_pos.column - 1,
+                        }
+                    )?;
+
+                    Some(prev_mark_node_id)
+                } else {
+                    None
+                };
+
             let ast_node_id = curr_mark_node.get_ast_node_id();
+
+
 
             let ast_node_ref = ed_model.module.env.pool.get(ast_node_id);
 
-            if let Some(parent_id) = parent_id_opt {
-                let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
+            match ast_node_ref {
+                Expr2::EmptyRecord => {
 
-                let new_child_index = index_of(curr_mark_node_id, &sibling_ids)? + 1;
+                    let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
 
-                match ast_node_ref {
-                    Expr2::EmptyRecord => {
-                        if curr_mark_node.get_content()? == nodes::LEFT_ACCOLADE {
+                    update_new_record(&ch.to_string(), prev_mark_node_id_opt, sibling_ids, ed_model)?;
+                },
+                Expr2::Record { record_var:_, fields } => {
+                    if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
+                        let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
+                        let prev_node_content = prev_mark_node.get_content()?;
 
-                            // update Markup
-                            let record_field_str = &ch.to_string();
-
-                            let record_field_node = MarkupNode::Text {
-                                content: record_field_str.to_owned(),
-                                ast_node_id,
-                                syn_high_style: HighlightStyle::RecordField,
-                                attributes: Attributes::new(),
-                                parent_id_opt: Some(parent_id),
+                        let node_to_update_id =
+                            if prev_node_content == nodes::LEFT_ACCOLADE {
+                                curr_mark_node_id
+                            } else {
+                                // caret is already past field so we need the previous MarkupNode
+                                prev_mark_node_id
                             };
 
-                            let record_field_node_id = ed_model.markup_node_pool.add(record_field_node);
-
-                            let parent = ed_model.markup_node_pool.get_mut(parent_id);
-                            parent.add_child_at_index(new_child_index, record_field_node_id)?;
-
-                            // update caret
-                            ed_model.simple_move_carets_right();
-
-                            // update GridNodeMap
-                            ed_model.grid_node_map.insert_between_line(
-                                old_caret_pos.line,
-                                old_caret_pos.column + 1,
-                                record_field_str.len(),
-                                record_field_node_id,
-                            )?;
-
-                            // update AST
-                            let record_var = ed_model.module.env.var_store.fresh();
-                            let field_name = PoolStr::new(record_field_str, &mut ed_model.module.env.pool);
-                            let field_var = ed_model.module.env.var_store.fresh();
-                            //TODO actually check if field_str belongs to a previously defined variable
-                            let field_val = Expr2::InvalidLookup(
-                                                PoolStr::new(record_field_str, ed_model.module.env.pool)
-                                            );
-                            let field_val_id = ed_model.module.env.pool.add(field_val);
-                            let first_field = (field_name, field_var, field_val_id);
-
-                            let fields = PoolVec::new(
-                                vec![first_field].into_iter(),
-                                &mut ed_model.module.env.pool,
-                            );
-
-                            let new_ast_node =
-                                Expr2::Record {
-                                    record_var,
-                                    fields,
-                                };
-
-                            ed_model.module.env.pool.set(ast_node_id, new_ast_node);
-                        } else {
-                            unimplemented!("TODO handle this else")
-                        }
-                    },
-                    Expr2::Record { record_var:_, fields } => {
                         update_record_field(
                             &ch.to_string(),
                             old_caret_pos,
-                            curr_mark_node_id,
-                            new_child_index,
+                            node_to_update_id,
                             fields,
                             ed_model,
                         )?;
-                    },
-                    other => {
-                        unimplemented!("TODO implement updating of Expr2 {:?}.", other)
-                    },
-                }
+                    }
+                },
+                Expr2::SmallStr(array_str) => {
+
+                    update_small_string(ch, array_str, ed_model)?;
+                },
+                Expr2::Str(old_pool_str) => {
+
+                    update_string(&ch.to_string(), old_pool_str, ed_model)?;
+                },
+                other => {
+                    unimplemented!("TODO implement updating of Expr2 {:?}.", other)
+                },
             }
         }
     }
