@@ -602,3 +602,89 @@ pub fn listAppend(list: RocList, alignment: usize, element: Opaque, element_widt
 
     return output;
 }
+
+pub fn listRange(width: utils.IntWidth, low: Opaque, high: Opaque) callconv(.C) RocList {
+    const allocator = std.heap.c_allocator;
+    const IntWidth = utils.IntWidth;
+
+    switch (width) {
+        IntWidth.U8 => {
+            return helper1(allocator, u8, low, high);
+        },
+        IntWidth.U16 => {
+            return helper1(allocator, u16, low, high);
+        },
+        IntWidth.U32 => {
+            return helper1(allocator, u32, low, high);
+        },
+        IntWidth.U64 => {
+            return helper1(allocator, u64, low, high);
+        },
+        IntWidth.U128 => {
+            return helper1(allocator, u128, low, high);
+        },
+        IntWidth.I8 => {
+            return helper1(allocator, i8, low, high);
+        },
+        IntWidth.I16 => {
+            return helper1(allocator, i16, low, high);
+        },
+        IntWidth.I32 => {
+            return helper1(allocator, i32, low, high);
+        },
+        IntWidth.I64 => {
+            return helper1(allocator, i64, low, high);
+        },
+        IntWidth.I128 => {
+            return helper1(allocator, i128, low, high);
+        },
+        IntWidth.Usize => {
+            return helper1(allocator, usize, low, high);
+        },
+    }
+}
+
+fn helper1(allocator: *Allocator, comptime T: type, low: Opaque, high: Opaque) RocList {
+    const ptr1 = @ptrCast(*T, @alignCast(@alignOf(T), low));
+    const ptr2 = @ptrCast(*T, @alignCast(@alignOf(T), high));
+
+    return listRangeHelp(allocator, T, ptr1.*, ptr2.*);
+}
+
+fn listRangeHelp(allocator: *Allocator, comptime T: type, low: T, high: T) RocList {
+    const Order = std.math.Order;
+
+    switch (std.math.order(low, high)) {
+        Order.gt => {
+            return RocList.empty();
+        },
+
+        Order.eq => {
+            const list = RocList.allocate(allocator, @alignOf(usize), 1, @sizeOf(T));
+            const buffer = @ptrCast([*]T, @alignCast(@alignOf(T), list.bytes orelse unreachable));
+
+            buffer[0] = low;
+
+            return list;
+        },
+
+        Order.lt => {
+            const length: usize = @intCast(usize, high - low);
+            const list = RocList.allocate(allocator, @alignOf(usize), length, @sizeOf(T));
+
+            const buffer = @ptrCast([*]T, @alignCast(@alignOf(T), list.bytes orelse unreachable));
+
+            var i: usize = 0;
+            var current = low;
+
+            while (i < length) {
+                buffer[i] = current;
+
+                i += 1;
+                current += 1;
+            }
+
+            return list;
+        },
+    }
+}

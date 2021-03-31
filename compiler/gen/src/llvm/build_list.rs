@@ -4,7 +4,7 @@ use crate::llvm::bitcode::{
     call_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
-    allocate_with_refcount_help, build_num_binop, cast_basic_basic, complex_bitcast, Env, InPlace,
+    allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, InPlace,
 };
 use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type};
 use crate::llvm::refcounting::{
@@ -713,156 +713,6 @@ pub fn list_len<'ctx>(
         .into_int_value()
 }
 
-/// List.sum : List (Num a) -> Num a
-pub fn list_sum<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    list: BasicValueEnum<'ctx>,
-    default_layout: &Layout<'a>,
-) -> BasicValueEnum<'ctx> {
-    let ctx = env.context;
-    let builder = env.builder;
-
-    let list_wrapper = list.into_struct_value();
-    let len = list_len(env.builder, list_wrapper);
-
-    let accum_type = basic_type_from_layout(env.arena, ctx, default_layout, env.ptr_bytes);
-    let accum_alloca = builder.build_alloca(accum_type, "alloca_walk_right_accum");
-
-    let default: BasicValueEnum = match accum_type {
-        BasicTypeEnum::IntType(int_type) => int_type.const_zero().into(),
-        BasicTypeEnum::FloatType(float_type) => float_type.const_zero().into(),
-        _ => unreachable!(""),
-    };
-
-    builder.build_store(accum_alloca, default);
-
-    let then_block = ctx.append_basic_block(parent, "then");
-    let cont_block = ctx.append_basic_block(parent, "branchcont");
-
-    let condition = builder.build_int_compare(
-        IntPredicate::UGT,
-        len,
-        ctx.i64_type().const_zero(),
-        "list_non_empty",
-    );
-
-    builder.build_conditional_branch(condition, then_block, cont_block);
-
-    builder.position_at_end(then_block);
-
-    let elem_ptr_type = get_ptr_type(&accum_type, AddressSpace::Generic);
-    let list_ptr = load_list_ptr(builder, list_wrapper, elem_ptr_type);
-
-    let walk_right_loop = |_, elem: BasicValueEnum<'ctx>| {
-        // load current accumulator
-        let current = builder.build_load(accum_alloca, "retrieve_accum");
-
-        let new_current = build_num_binop(
-            env,
-            parent,
-            current,
-            default_layout,
-            elem,
-            default_layout,
-            roc_module::low_level::LowLevel::NumAdd,
-        );
-
-        builder.build_store(accum_alloca, new_current);
-    };
-
-    incrementing_elem_loop(
-        builder,
-        ctx,
-        parent,
-        list_ptr,
-        len,
-        "#index",
-        walk_right_loop,
-    );
-
-    builder.build_unconditional_branch(cont_block);
-
-    builder.position_at_end(cont_block);
-
-    builder.build_load(accum_alloca, "load_final_acum")
-}
-
-/// List.product : List (Num a) -> Num a
-pub fn list_product<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    list: BasicValueEnum<'ctx>,
-    default_layout: &Layout<'a>,
-) -> BasicValueEnum<'ctx> {
-    let ctx = env.context;
-    let builder = env.builder;
-
-    let list_wrapper = list.into_struct_value();
-    let len = list_len(env.builder, list_wrapper);
-
-    let accum_type = basic_type_from_layout(env.arena, ctx, default_layout, env.ptr_bytes);
-    let accum_alloca = builder.build_alloca(accum_type, "alloca_walk_right_accum");
-
-    let default: BasicValueEnum = match accum_type {
-        BasicTypeEnum::IntType(int_type) => int_type.const_int(1, false).into(),
-        BasicTypeEnum::FloatType(float_type) => float_type.const_float(1.0).into(),
-        _ => unreachable!(""),
-    };
-
-    builder.build_store(accum_alloca, default);
-
-    let then_block = ctx.append_basic_block(parent, "then");
-    let cont_block = ctx.append_basic_block(parent, "branchcont");
-
-    let condition = builder.build_int_compare(
-        IntPredicate::UGT,
-        len,
-        ctx.i64_type().const_zero(),
-        "list_non_empty",
-    );
-
-    builder.build_conditional_branch(condition, then_block, cont_block);
-
-    builder.position_at_end(then_block);
-
-    let elem_ptr_type = get_ptr_type(&accum_type, AddressSpace::Generic);
-    let list_ptr = load_list_ptr(builder, list_wrapper, elem_ptr_type);
-
-    let walk_right_loop = |_, elem: BasicValueEnum<'ctx>| {
-        // load current accumulator
-        let current = builder.build_load(accum_alloca, "retrieve_accum");
-
-        let new_current = build_num_binop(
-            env,
-            parent,
-            current,
-            default_layout,
-            elem,
-            default_layout,
-            roc_module::low_level::LowLevel::NumMul,
-        );
-
-        builder.build_store(accum_alloca, new_current);
-    };
-
-    incrementing_elem_loop(
-        builder,
-        ctx,
-        parent,
-        list_ptr,
-        len,
-        "#index",
-        walk_right_loop,
-    );
-
-    builder.build_unconditional_branch(cont_block);
-
-    builder.position_at_end(cont_block);
-
-    builder.build_load(accum_alloca, "load_final_acum")
-}
-
 pub enum ListWalk {
     Walk,
     WalkBackwards,
@@ -999,6 +849,79 @@ fn list_walk_generic<'a, 'ctx, 'env>(
     }
 
     env.builder.build_load(result_ptr, "load_result")
+}
+
+#[allow(dead_code)]
+#[repr(u8)]
+enum IntWidth {
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    Usize,
+}
+
+impl From<roc_mono::layout::Builtin<'_>> for IntWidth {
+    fn from(builtin: Builtin) -> Self {
+        use IntWidth::*;
+
+        match builtin {
+            Builtin::Int128 => I128,
+            Builtin::Int64 => I64,
+            Builtin::Int32 => I32,
+            Builtin::Int16 => I16,
+            Builtin::Int8 => I8,
+            Builtin::Usize => Usize,
+            _ => unreachable!(),
+        }
+    }
+}
+
+/// List.range : Int a, Int a -> List (Int a)
+pub fn list_range<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    builtin: Builtin<'a>,
+    low: IntValue<'ctx>,
+    high: IntValue<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let low_ptr = builder.build_alloca(low.get_type(), "low_ptr");
+    env.builder.build_store(low_ptr, low);
+
+    let high_ptr = builder.build_alloca(high.get_type(), "high_ptr");
+    env.builder.build_store(high_ptr, high);
+
+    let int_width = env
+        .context
+        .i8_type()
+        .const_int(IntWidth::from(builtin) as u64, false)
+        .into();
+
+    let output = call_bitcode_fn(
+        env,
+        &[
+            int_width,
+            env.builder.build_bitcast(low_ptr, u8_ptr, "to_u8_ptr"),
+            env.builder.build_bitcast(high_ptr, u8_ptr, "to_u8_ptr"),
+        ],
+        &bitcode::LIST_RANGE,
+    );
+
+    complex_bitcast(
+        env.builder,
+        output,
+        collection(env.context, env.ptr_bytes).into(),
+        "from_i128",
+    )
 }
 
 /// List.contains : List elem, elem -> Bool

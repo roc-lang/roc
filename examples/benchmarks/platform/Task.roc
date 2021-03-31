@@ -1,5 +1,5 @@
 interface Task
-    exposes [ Task, succeed, fail, after, map, putLine, getInt ]
+    exposes [ Task, succeed, fail, after, map, putLine, putInt, getInt ]
     imports [ fx.Effect ]
 
 
@@ -31,6 +31,9 @@ map = \effect, transform ->
 
 putLine : Str -> Task {} *
 putLine = \line -> Effect.map (Effect.putLine line) (\_ -> Ok {})
+
+putInt : I64 -> Task {} *
+putInt = \line -> Effect.map (Effect.putInt line) (\_ -> Ok {})
 
 getInt : Task I64 []
 getInt =
