@@ -1559,6 +1559,9 @@ fn to_pattern_report<'a>(
         EPattern::Record(record, row, col) => {
             to_precord_report(alloc, filename, &record, *row, *col)
         }
+        EPattern::PInParens(inparens, row, col) => {
+            to_pattern_in_parens_report(alloc, filename, &inparens, *row, *col)
+        }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }
@@ -1808,6 +1811,143 @@ fn to_precord_report<'a>(
     }
 }
 
+fn to_pattern_in_parens_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    filename: PathBuf,
+    parse_problem: &roc_parse::parser::PInParens<'a>,
+    start_row: Row,
+    start_col: Col,
+) -> Report<'a> {
+    use roc_parse::parser::PInParens;
+
+    match *parse_problem {
+        PInParens::Open(row, col) => {
+            // `Open` case is for exhaustiveness, this case shouldn not be reachable practically.
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(
+                    r"I just started parsing a pattern in parentheses, but I got stuck here:",
+                ),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(r"A pattern in parentheses looks like "),
+                    alloc.parser_suggestion("(Ok 32)"),
+                    alloc.reflow(r" or "),
+                    alloc.parser_suggestion("(\"hello\")"),
+                    alloc.reflow(" so I was expecting to see an expression next."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED PARENTHESES".to_string(),
+            }
+        }
+
+        PInParens::End(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow("I am partway through parsing a pattern in parentheses, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow(
+                        r"I was expecting to see a closing parenthesis before this, so try adding a ",
+                    ),
+                    alloc.parser_suggestion(")"),
+                    alloc.reflow(" and see if that helps?"),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED PARENTHESES".to_string(),
+            }
+        }
+
+        PInParens::Pattern(pattern, row, col) => {
+            to_pattern_report(alloc, filename, pattern, row, col)
+        }
+
+        PInParens::IndentOpen(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(
+                    r"I just started parsing a pattern in parentheses, but I got stuck here:",
+                ),
+                alloc.region_with_subregion(surroundings, region),
+                record_patterns_look_like(alloc),
+                note_for_record_pattern_indent(alloc),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNFINISHED PARENTHESES".to_string(),
+            }
+        }
+
+        PInParens::IndentEnd(row, col) => {
+            match next_line_starts_with_close_parenthesis(alloc.src_lines, row.saturating_sub(1)) {
+                Some((curly_row, curly_col)) => {
+                    let surroundings =
+                        Region::from_rows_cols(start_row, start_col, curly_row, curly_col);
+                    let region = Region::from_row_col(curly_row, curly_col);
+
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            "I am partway through parsing a pattern in parentheses, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow("I need this parenthesis to be indented more. Try adding more spaces before it!"),
+                        ]),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "NEED MORE INDENTATION".to_string(),
+                    }
+                }
+                None => {
+                    let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+                    let region = Region::from_row_col(row, col);
+
+                    let doc = alloc.stack(vec![
+                        alloc.reflow(
+                            r"I am partway through parsing a pattern in parentheses, but I got stuck here:",
+                        ),
+                        alloc.region_with_subregion(surroundings, region),
+                        alloc.concat(vec![
+                            alloc.reflow("I was expecting to see a closing parenthesis "),
+                            alloc.reflow("before this, so try adding a "),
+                            alloc.parser_suggestion(")"),
+                            alloc.reflow(" and see if that helps?"),
+                        ]),
+                        note_for_record_pattern_indent(alloc),
+                    ]);
+
+                    Report {
+                        filename,
+                        doc,
+                        title: "UNFINISHED PARENTHESES".to_string(),
+                    }
+                }
+            }
+        }
+
+        PInParens::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
+    }
+}
+
 fn to_type_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     filename: PathBuf,
@@ -1854,7 +1994,13 @@ fn to_type_report<'a>(
             let doc = alloc.stack(vec![
                 alloc.reflow(r"I just started parsing a type, but I got stuck here:"),
                 alloc.region_with_subregion(surroundings, region),
-                alloc.note("I may be confused by indentation"),
+                alloc.concat(vec![
+                    alloc.reflow(r"I am expecting a type next, like "),
+                    alloc.parser_suggestion("Bool"),
+                    alloc.reflow(r" or "),
+                    alloc.parser_suggestion("List a"),
+                    alloc.reflow("."),
+                ]),
             ]);
 
             Report {
@@ -3253,22 +3399,24 @@ pub fn starts_with_keyword(rest_of_line: &str, keyword: &str) -> bool {
 }
 
 fn next_line_starts_with_close_curly(source_lines: &[&str], row: Row) -> Option<(Row, Col)> {
-    match source_lines.get(row as usize + 1) {
-        None => None,
+    next_line_starts_with_char(source_lines, row, '}')
+}
 
-        Some(line) => {
-            let spaces_dropped = line.trim_start_matches(' ');
-            match spaces_dropped.chars().next() {
-                Some('}') => Some((row + 1, (line.len() - spaces_dropped.len()) as u16)),
-                _ => None,
-            }
-        }
-    }
+fn next_line_starts_with_close_parenthesis(source_lines: &[&str], row: Row) -> Option<(Row, Col)> {
+    next_line_starts_with_char(source_lines, row, ')')
 }
 
 fn next_line_starts_with_close_square_bracket(
     source_lines: &[&str],
     row: Row,
+) -> Option<(Row, Col)> {
+    next_line_starts_with_char(source_lines, row, ']')
+}
+
+fn next_line_starts_with_char(
+    source_lines: &[&str],
+    row: Row,
+    character: char,
 ) -> Option<(Row, Col)> {
     match source_lines.get(row as usize + 1) {
         None => None,
@@ -3276,7 +3424,9 @@ fn next_line_starts_with_close_square_bracket(
         Some(line) => {
             let spaces_dropped = line.trim_start_matches(' ');
             match spaces_dropped.chars().next() {
-                Some(']') => Some((row + 1, (line.len() - spaces_dropped.len()) as u16)),
+                Some(c) if c == character => {
+                    Some((row + 1, (line.len() - spaces_dropped.len()) as u16))
+                }
                 _ => None,
             }
         }
