@@ -1,6 +1,7 @@
 use crate::ui::text::lines::Lines;
 use crate::ui::ui_error::UIResult;
 use crate::ui::util::slice_get;
+use crate::ui::util::slice_get_mut;
 use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
 
@@ -16,6 +17,34 @@ impl CodeLines {
             lines: split_inclusive(code_str),
             nr_of_chars: code_str.len(),
         }
+    }
+
+    pub fn add_to_line(&mut self, line_nr: usize, new_str: &str) -> UIResult<()> {
+        let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
+        line_ref.push_str(new_str);
+
+        Ok(())
+    }
+
+    pub fn insert_between_line(
+        &mut self,
+        line_nr: usize,
+        index: usize,
+        new_str: &str,
+    ) -> UIResult<()> {
+        let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
+
+        line_ref.insert_str(index, new_str);
+
+        Ok(())
+    }
+
+    pub fn del_at_line(&mut self, line_nr: usize, index: usize) -> UIResult<()> {
+        let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
+
+        line_ref.remove(index);
+
+        Ok(())
     }
 }
 
@@ -68,6 +97,10 @@ impl Lines for CodeLines {
         }
 
         lines
+    }
+
+    fn is_last_line(&self, line_nr: usize) -> bool {
+        line_nr == self.nr_of_lines() - 1
     }
 
     fn last_char(&self, line_nr: usize) -> UIResult<Option<char>> {
