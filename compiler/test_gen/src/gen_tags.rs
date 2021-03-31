@@ -3,6 +3,7 @@
 use crate::assert_evals_to;
 use crate::assert_llvm_evals_to;
 use indoc::indoc;
+use roc_std::{RocList, RocStr};
 
 #[test]
 fn applied_tag_nothing_ir() {
@@ -972,5 +973,63 @@ fn newtype_wrapper() {
         42,
         &i64,
         |x: &i64| *x
+    );
+}
+
+#[test]
+fn applied_tag_function() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : List [ Foo Str ]
+            x = List.map [ "a", "b" ] Foo
+
+            x
+            "#
+        ),
+        RocList::from_slice(&[
+            RocStr::from_slice("a".as_bytes()),
+            RocStr::from_slice("b".as_bytes())
+        ]),
+        RocList<RocStr>
+    );
+}
+
+#[test]
+fn applied_tag_function_result() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : List (Result Str *)
+            x = List.map [ "a", "b" ] Ok
+
+            x
+            "#
+        ),
+        RocList::from_slice(&[
+            (1, RocStr::from_slice("a".as_bytes())),
+            (1, RocStr::from_slice("b".as_bytes()))
+        ]),
+        RocList<(i64, RocStr)>
+    );
+}
+
+#[test]
+fn applied_tag_function_linked_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            ConsList a : [ Nil, Cons a (ConsList a) ]
+
+            x : List (ConsList Str)
+            x = List.map2 [ "a", "b" ] [ Nil, Cons "c" Nil ] Cons
+
+            when List.first x is
+                Ok (Cons "a" Nil) -> 1
+                _ -> 0
+            "#
+        ),
+        1,
+        i64
     );
 }
