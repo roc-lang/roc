@@ -45,6 +45,10 @@ fn tag_union_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, TT
     }
 }
 
+fn fail_type_start<'a, T: 'a>() -> impl Parser<'a, T, Type<'a>> {
+    |_arena, state: State<'a>| Err((NoProgress, Type::TStart(state.line, state.column), state))
+}
+
 fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, Type<'a>> {
     map_with_arena!(
         and!(
@@ -54,7 +58,8 @@ fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, Typ
                 loc!(specialize(Type::TRecord, record_type(min_indent))),
                 loc!(specialize(Type::TTagUnion, tag_union_type(min_indent))),
                 loc!(applied_type(min_indent)),
-                loc!(parse_type_variable)
+                loc!(parse_type_variable),
+                fail_type_start(),
             ),
             // Inline alias notation, e.g. [ Nil, Cons a (List a) ] as List a
             one_of![

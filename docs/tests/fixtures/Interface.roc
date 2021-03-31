@@ -2,6 +2,9 @@ interface Test
     exposes [ singleline, multiline, multiparagraph, codeblock ]
     imports []
 
+## This is a block
+Block : [ @Block ]
+
 ## Single line documentation.
 singleline : Bool -> Bool
 
