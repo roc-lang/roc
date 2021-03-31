@@ -917,6 +917,7 @@ define_builtins! {
         26 LIST_PRODUCT: "product"
         27 LIST_SUM_ADD: "#sumadd"
         28 LIST_PRODUCT_MUL: "#productmul"
+        29 LIST_WALK_UNTIL: "walkUntil"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

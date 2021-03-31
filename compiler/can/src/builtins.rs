@@ -89,6 +89,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_KEEP_ERRS=> list_keep_errs,
         LIST_WALK => list_walk,
         LIST_WALK_BACKWARDS => list_walk_backwards,
+        LIST_WALK_UNTIL => list_walk_until,
         DICT_TEST_HASH => dict_hash_test_only,
         DICT_LEN => dict_len,
         DICT_EMPTY => dict_empty,
@@ -1956,60 +1957,17 @@ fn list_join(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// List.walk : List elem, (elem -> accum -> accum), accum -> accum
 fn list_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_var = var_store.fresh();
-    let func_var = var_store.fresh();
-    let accum_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::ListWalk,
-        args: vec![
-            (list_var, Var(Symbol::ARG_1)),
-            (func_var, Var(Symbol::ARG_2)),
-            (accum_var, Var(Symbol::ARG_3)),
-        ],
-        ret_var: accum_var,
-    };
-
-    defn(
-        symbol,
-        vec![
-            (list_var, Symbol::ARG_1),
-            (func_var, Symbol::ARG_2),
-            (accum_var, Symbol::ARG_3),
-        ],
-        var_store,
-        body,
-        accum_var,
-    )
+    lowlevel_3(symbol, LowLevel::ListWalk, var_store)
 }
 
 /// List.walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
 fn list_walk_backwards(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_var = var_store.fresh();
-    let func_var = var_store.fresh();
-    let accum_var = var_store.fresh();
+    lowlevel_3(symbol, LowLevel::ListWalkBackwards, var_store)
+}
 
-    let body = RunLowLevel {
-        op: LowLevel::ListWalkBackwards,
-        args: vec![
-            (list_var, Var(Symbol::ARG_1)),
-            (func_var, Var(Symbol::ARG_2)),
-            (accum_var, Var(Symbol::ARG_3)),
-        ],
-        ret_var: accum_var,
-    };
-
-    defn(
-        symbol,
-        vec![
-            (list_var, Symbol::ARG_1),
-            (func_var, Symbol::ARG_2),
-            (accum_var, Symbol::ARG_3),
-        ],
-        var_store,
-        body,
-        accum_var,
-    )
+/// List.walkUntil : List elem, (elem, accum -> [ Continue accum, Stop accum ]), accum -> accum
+fn list_walk_until(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_3(symbol, LowLevel::ListWalkUntil, var_store)
 }
 
 /// List.sum : List (Num a) -> Num a

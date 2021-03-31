@@ -32,6 +32,7 @@ pub enum LowLevel {
     ListMapWithIndex,
     ListKeepIf,
     ListWalk,
+    ListWalkUntil,
     ListWalkBackwards,
     ListKeepOks,
     ListKeepErrs,

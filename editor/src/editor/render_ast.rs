@@ -15,7 +15,7 @@ pub fn build_code_graphics<'a>(
     config: &Config,
     glyph_dim_rect: Rect,
     markup_node_pool: &'a SlowPool,
-) -> EdResult<(wgpu_glyph::Section<'a>, Vec<Rect>)> {
+) -> EdResult<(glyph_brush::OwnedSection, Vec<Rect>)> {
     let area_bounds = (size.width as f32, size.height as f32);
     let layout = wgpu_glyph::Layout::default().h_align(wgpu_glyph::HorizontalAlign::Left);
 
@@ -47,8 +47,8 @@ fn markup_to_wgpu<'a>(
     markup_node: &'a MarkupNode,
     code_style: &CodeStyle,
     markup_node_pool: &'a SlowPool,
-) -> EdResult<(Vec<wgpu_glyph::Text<'a>>, Vec<Rect>)> {
-    let mut wgpu_texts: Vec<wgpu_glyph::Text<'a>> = Vec::new();
+) -> EdResult<(Vec<glyph_brush::OwnedText>, Vec<Rect>)> {
+    let mut wgpu_texts: Vec<glyph_brush::OwnedText> = Vec::new();
     let mut rects: Vec<Rect> = Vec::new();
 
     let mut txt_row_col = (0, 0);
@@ -68,7 +68,7 @@ fn markup_to_wgpu<'a>(
 // TODO use text_row
 fn markup_to_wgpu_helper<'a>(
     markup_node: &'a MarkupNode,
-    wgpu_texts: &mut Vec<wgpu_glyph::Text<'a>>,
+    wgpu_texts: &mut Vec<glyph_brush::OwnedText>,
     rects: &mut Vec<Rect>,
     code_style: &CodeStyle,
     txt_row_col: &mut (usize, usize),
@@ -101,7 +101,7 @@ fn markup_to_wgpu_helper<'a>(
         } => {
             let highlight_color = map_get(&code_style.ed_theme.syntax_high_map, &syn_high_style)?;
 
-            let glyph_text = wgpu_glyph::Text::new(&content)
+            let glyph_text = glyph_brush::OwnedText::new(content)
                 .with_color(colors::to_slice(*highlight_color))
                 .with_scale(code_style.font_size);
 
@@ -114,22 +114,25 @@ fn markup_to_wgpu_helper<'a>(
             syn_high_style,
             parent_id_opt: _,
         } => {
-            let glyph_text = wgpu_glyph::Text::new(BLANK_PLACEHOLDER)
+            let glyph_text = glyph_brush::OwnedText::new(BLANK_PLACEHOLDER)
                 .with_color(colors::to_slice(colors::WHITE))
                 .with_scale(code_style.font_size);
 
             let highlight_color = map_get(&code_style.ed_theme.syntax_high_map, &syn_high_style)?;
 
+            let char_width = code_style.glyph_dim_rect.width;
+            let char_height = code_style.glyph_dim_rect.height;
+
             let hole_rect = Rect {
                 top_left_coords: (
-                    code_style.txt_coords.x
-                        + (txt_row_col.0 as f32) * code_style.glyph_dim_rect.height,
+                    code_style.txt_coords.x + (txt_row_col.1 as f32) * char_width,
                     code_style.txt_coords.y
-                        + (txt_row_col.1 as f32) * code_style.glyph_dim_rect.width,
+                        + (txt_row_col.0 as f32) * char_height
+                        + 0.1 * char_height,
                 )
                     .into(),
-                width: code_style.glyph_dim_rect.width,
-                height: code_style.glyph_dim_rect.height,
+                width: char_width,
+                height: char_height,
                 color: *highlight_color,
             };
             rects.push(hole_rect);

@@ -1,4 +1,5 @@
 use super::app_model::AppModel;
+use super::ed_update;
 use crate::editor::ed_error::EdResult;
 use crate::ui::text::lines::SelectableLines;
 use crate::window::keyboard_input::from_winit;
@@ -50,10 +51,10 @@ pub fn pass_keydown_to_focused(
     Ok(())
 }
 
-pub fn handle_new_char(_received_char: &char, app_model: &mut AppModel) -> EdResult<()> {
+pub fn handle_new_char(received_char: &char, app_model: &mut AppModel) -> EdResult<()> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            unimplemented!("TODO");
+            ed_update::handle_new_char(received_char, ed_model)?;
         }
     }
 
