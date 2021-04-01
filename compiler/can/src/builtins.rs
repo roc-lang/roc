@@ -2119,7 +2119,7 @@ fn list_map3(symbol: Symbol, var_store: &mut VarStore) -> Def {
 }
 
 /// Dict.hashTestOnly : k, v -> Nat
-pub fn dict_hash_test_only(symbol: Symbol, var_store: &mut VarStore) -> Def {
+fn dict_hash_test_only(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::Hash, var_store)
 }
 
