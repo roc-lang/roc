@@ -43,7 +43,6 @@ pub fn helper<'a>(
     use roc_gen::llvm::build::{build_proc, build_proc_header, Scope};
     use std::path::{Path, PathBuf};
 
-    let stdlib_mode = stdlib.mode;
     let filename = PathBuf::from("Test.roc");
     let src_dir = Path::new("fake/test/path");
 
@@ -273,12 +272,7 @@ pub fn helper<'a>(
         if fn_val.verify(true) {
             function_pass.run_on(&fn_val);
         } else {
-            use roc_builtins::std::Mode;
-
-            let mode = match stdlib_mode {
-                Mode::Uniqueness => "OPTIMIZED",
-                Mode::Standard => "NON-OPTIMIZED",
-            };
+            let mode = "NON-OPTIMIZED";
 
             eprintln!(
                 "\n\nFunction {:?} failed LLVM verification in {} build. Its content was:\n",

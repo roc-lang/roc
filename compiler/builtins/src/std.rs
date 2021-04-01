@@ -34,22 +34,14 @@ macro_rules! let_tvars {
     };
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum Mode {
-    Standard,
-    Uniqueness,
-}
-
 #[derive(Debug, Clone)]
 pub struct StdLib {
-    pub mode: Mode,
     pub types: MutMap<Symbol, (SolvedType, Region)>,
     pub applies: MutSet<Symbol>,
 }
 
 pub fn standard_stdlib() -> StdLib {
     StdLib {
-        mode: Mode::Standard,
         types: types(),
         applies: vec![
             Symbol::LIST_LIST,
