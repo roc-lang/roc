@@ -200,12 +200,12 @@ pub fn update_record_field(
 
     let mut new_field_name = String::new();
 
+    // -push old field name
     new_field_name.push_str(first_field.0.as_str(ed_model.module.env.pool));
-
-    // clone to prevent borrow issues
-    let field_val_id = first_field.2;
-
     new_field_name.push_str(new_input);
+
+    // -clone to prevent borrow issues
+    let field_val_id = first_field.2;
 
     let new_pool_str = PoolStr::new(&new_field_name, &mut ed_model.module.env.pool);
 
@@ -222,6 +222,7 @@ pub fn update_record_field(
         .next()
         .with_context(|| RecordWithoutFields {})?;
 
+    // -update field name
     first_field_mut.0 = new_pool_str;
 
     Ok(())
