@@ -118,6 +118,31 @@ const Caller1 = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller2 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller3 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 
+pub fn listReverse(list: RocList, alignment: usize, element_width: usize) callconv(.C) RocList {
+    if (list.bytes) |source_ptr| {
+        const size = list.len();
+
+        var i: usize = 0;
+        var end: usize = size - 1;
+
+        const output = RocList.allocate(std.heap.c_allocator, alignment, size, element_width);
+
+        const target_ptr = output.bytes orelse unreachable;
+
+        while (i < size) : (i += 1) {
+            const source_position = end - i;
+
+            @memcpy(target_ptr + (i * element_width), source_ptr + (source_position * element_width), element_width);
+        }
+
+        utils.decref(std.heap.c_allocator, alignment, list.bytes, size * element_width);
+
+        return output;
+    } else {
+        return RocList.empty();
+    }
+}
+
 pub fn listMap(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, old_element_width: usize, new_element_width: usize) callconv(.C) RocList {
     if (list.bytes) |source_ptr| {
         const size = list.len();
