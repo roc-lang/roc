@@ -12,7 +12,6 @@ use crate::llvm::refcounting::{
 };
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use inkwell::types::BasicType;
 use inkwell::types::{BasicTypeEnum, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
@@ -411,19 +410,20 @@ pub fn list_reverse_help<'a, 'ctx, 'env>(
     builder.position_at_end(cont_bb);
 }
 
+// let low_ptr = builder.build_alloca(low.get_type(), "low_ptr");
+// env.builder.build_store(low_ptr, low);
+
+// let high_ptr = builder.build_alloca(high.get_type(), "high_ptr");
+// env.builder.build_store(high_ptr, high);
+
 /// List.reverse : List elem -> List elem
 pub fn list_reverse<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    output_inplace: InPlace,
+    _output_inplace: InPlace,
     list: BasicValueEnum<'ctx>,
     list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-    let ctx = env.context;
-
-    let wrapper_struct = list.into_struct_value();
-    let (input_inplace, element_layout) = match *list_layout {
+    let (_, element_layout) = match *list_layout {
         Layout::Builtin(Builtin::EmptyList) => (
             InPlace::InPlace,
             // this pointer will never actually be dereferenced
@@ -440,74 +440,27 @@ pub fn list_reverse<'a, 'ctx, 'env>(
         _ => unreachable!("Invalid layout {:?} in List.reverse", list_layout),
     };
 
-    let list_type = basic_type_from_layout(env.arena, env.context, &element_layout, env.ptr_bytes);
-    let ptr_type = list_type.ptr_type(AddressSpace::Generic);
+    let list_i128 = complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128");
 
-    let list_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
-    let length = list_len(builder, list.into_struct_value());
+    let element_width = env
+        .ptr_int()
+        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
 
-    match input_inplace {
-        InPlace::InPlace => {
-            list_reverse_help(env, parent, input_inplace, length, list_ptr, list_ptr);
+    let alignment = element_layout.alignment_bytes(env.ptr_bytes);
+    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
 
-            list
-        }
+    let output = call_bitcode_fn(
+        env,
+        &[list_i128, alignment_iv.into(), element_width.into()],
+        &bitcode::LIST_REVERSE,
+    );
 
-        InPlace::Clone => {
-            let len_0_block = ctx.append_basic_block(parent, "len_0_block");
-            let len_1_block = ctx.append_basic_block(parent, "len_1_block");
-            let len_n_block = ctx.append_basic_block(parent, "len_n_block");
-            let cont_block = ctx.append_basic_block(parent, "cont_block");
-
-            let one = ctx.i64_type().const_int(1, false);
-            let zero = ctx.i64_type().const_zero();
-
-            let result = builder.build_alloca(ptr_type, "result");
-
-            builder.build_switch(
-                length,
-                len_n_block,
-                &[(zero, len_0_block), (one, len_1_block)],
-            );
-
-            // build block for length 0
-            {
-                builder.position_at_end(len_0_block);
-
-                // store NULL pointer there
-                builder.build_store(result, ptr_type.const_zero());
-                builder.build_unconditional_branch(cont_block);
-            }
-
-            // build block for length 1
-            {
-                builder.position_at_end(len_1_block);
-
-                let new_list_ptr = clone_list(env, output_inplace, &element_layout, one, list_ptr);
-
-                builder.build_store(result, new_list_ptr);
-                builder.build_unconditional_branch(cont_block);
-            }
-
-            // build block for length > 1
-            {
-                builder.position_at_end(len_n_block);
-
-                let new_list_ptr = allocate_list(env, output_inplace, &element_layout, length);
-
-                list_reverse_help(env, parent, InPlace::Clone, length, list_ptr, new_list_ptr);
-
-                // store new list pointer there
-                builder.build_store(result, new_list_ptr);
-                builder.build_unconditional_branch(cont_block);
-            }
-
-            builder.position_at_end(cont_block);
-            let new_list_ptr = builder.build_load(result, "result").into_pointer_value();
-
-            store_list(env, new_list_ptr, length)
-        }
-    }
+    complex_bitcast(
+        env.builder,
+        output,
+        collection(env.context, env.ptr_bytes).into(),
+        "from_i128",
+    )
 }
 
 pub fn list_get_unsafe<'a, 'ctx, 'env>(
