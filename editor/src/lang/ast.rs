@@ -368,7 +368,7 @@ fn expr2_to_string_helper(
             out_string.push_str(&format!("{}]\n", get_spacing(indent_level + 1)));
         }
         Expr2::InvalidLookup(pool_str) => {
-            out_string.push_str(&format!("InvalidLookup({})", pool_str.as_str(pool),));
+            out_string.push_str(&format!("InvalidLookup({})", pool_str.as_str(pool)));
         }
         other => todo!("Implement for {:?}", other),
     }

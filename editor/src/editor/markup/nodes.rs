@@ -12,6 +12,7 @@ use crate::lang::{
     pool::{NodeId, PoolStr},
 };
 use bumpalo::Bump;
+use std::fmt;
 
 #[derive(Debug)]
 pub enum MarkupNode {
@@ -343,16 +344,23 @@ pub fn set_parent_for_all_helper(
     }
 }
 
+impl fmt::Display for MarkupNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "{} ({})",
+            self.node_type_as_string(),
+            self.get_content().unwrap_or_else(|_| "".to_string())
+        )
+    }
+}
+
 pub fn tree_as_string(root_node_id: MarkNodeId, mark_node_pool: &SlowPool) -> String {
     let mut full_string = "\n\n(mark_node_tree)\n".to_owned();
 
     let node = mark_node_pool.get(root_node_id);
 
-    full_string.push_str(&format!(
-        "{} ({})\n",
-        node.node_type_as_string(),
-        node.get_content().unwrap_or_else(|_| "".to_string())
-    ));
+    full_string.push_str(&format!("{}", node));
 
     tree_as_string_helper(node, 1, &mut full_string, mark_node_pool);
 
@@ -374,11 +382,7 @@ fn tree_as_string_helper(
 
         let child = mark_node_pool.get(child_id);
 
-        full_str.push_str(&format!(
-            "{} ({})\n",
-            child.node_type_as_string(),
-            child.get_content().unwrap_or_else(|_| "".to_string())
-        ));
+        full_str.push_str(&format!("{}", child));
 
         tree_string.push_str(&full_str);
 
