@@ -328,11 +328,14 @@ fn expr2_to_string_helper(
     out_string.push_str(&get_spacing(indent_level));
 
     match expr2 {
-        Expr2::SmallStr(arr_string) => {
-            out_string.push_str(&format!("{}{}{}", "SmallStr(", arr_string.as_str(), ")",))
-        }
+        Expr2::SmallStr(arr_string) => out_string.push_str(&format!(
+            "{}{}{}",
+            "SmallStr(\"",
+            arr_string.as_str(),
+            "\")",
+        )),
         Expr2::Str(pool_str) => {
-            out_string.push_str(&format!("{}{}{}", "Str(", pool_str.as_str(pool), ")",))
+            out_string.push_str(&format!("{}{}{}", "Str(\"", pool_str.as_str(pool), "\")",))
         }
         Expr2::Blank => out_string.push_str("Blank"),
         Expr2::EmptyRecord => out_string.push_str("EmptyRecord"),
