@@ -1,8 +1,8 @@
-use crate::editor::render_debug::build_debug_graphics;
 use super::ed_model::EdModel;
 use crate::editor::config::Config;
 use crate::editor::ed_error::EdResult;
 use crate::editor::render_ast::build_code_graphics;
+use crate::editor::render_debug::build_debug_graphics;
 use crate::graphics::primitives::rect::Rect;
 use crate::ui::text::caret_w_select::make_caret_rect;
 use crate::ui::text::caret_w_select::CaretWSelect;
@@ -51,9 +51,7 @@ pub fn model_to_wgpu<'a>(
     rects.append(&mut sel_rects);
 
     if ed_model.show_debug_view {
-        all_text_sections.push(
-            build_debug_graphics(size, txt_coords, config, ed_model)?
-        );
+        all_text_sections.push(build_debug_graphics(size, txt_coords, config, ed_model)?);
     }
 
     Ok(RenderedWgpu {

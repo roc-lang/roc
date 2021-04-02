@@ -77,8 +77,7 @@ impl GridNodeMap {
 impl fmt::Display for GridNodeMap {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for row in &self.lines {
-            let row_str = 
-                row
+            let row_str = row
                 .iter()
                 .map(|mark_node_id| format!(" {} ", mark_node_id))
                 .collect::<Vec<String>>()

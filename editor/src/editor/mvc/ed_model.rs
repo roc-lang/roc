@@ -11,7 +11,7 @@ use crate::editor::{
 use crate::graphics::primitives::rect::Rect;
 use crate::lang::ast::Expr2;
 use crate::lang::expr::{str_to_expr2, Env};
-use crate::lang::pool::{NodeId};
+use crate::lang::pool::NodeId;
 use crate::lang::scope::Scope;
 use crate::ui::text::caret_w_select::CaretWSelect;
 use bumpalo::collections::String as BumpString;

@@ -41,9 +41,9 @@ impl fmt::Display for SlowPool {
         write!(f, "\n\n(mark_node_pool)\n")?;
 
         for (index, node) in self.nodes.iter().enumerate() {
-            write!(
+            writeln!(
                 f,
-                "{}: {} ({})\n",
+                "{}: {} ({})",
                 index,
                 node.node_type_as_string(),
                 node.get_content().unwrap_or_else(|_| "".to_string()),

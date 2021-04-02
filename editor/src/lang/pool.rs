@@ -44,7 +44,7 @@ pub const NODE_BYTES: usize = 32;
 
 #[derive(Debug, Eq)]
 pub struct NodeId<T> {
-    index: u32,
+    pub index: u32,
     _phantom: PhantomData<T>,
 }
 
@@ -205,7 +205,7 @@ impl Drop for Pool {
 }
 
 /// A string containing at most 2^32 pool-allocated bytes.
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct PoolStr {
     first_node_id: NodeId<()>,
     len: u32,

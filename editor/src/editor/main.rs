@@ -19,7 +19,7 @@ use crate::graphics::{
     primitives::text::{build_glyph_brush, example_code_glyph_rect, queue_text_draw, Text},
 };
 use crate::lang::expr::Env;
-use crate::lang::pool::{Pool};
+use crate::lang::pool::Pool;
 use crate::ui::ui_error::UIError::FileOpenFailed;
 use crate::ui::util::slice_get;
 use bumpalo::collections::String as BumpString;
@@ -312,7 +312,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
                             glyph_brush.queue(borrowed_text);
                         }
-                        
+
                         draw_all_rects(
                             &rendered_wgpu.rects,
                             &mut encoder,

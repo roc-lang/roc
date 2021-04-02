@@ -109,8 +109,7 @@ impl Lines for CodeLines {
 impl fmt::Display for CodeLines {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for row in &self.lines {
-            let row_str = 
-                row
+            let row_str = row
                 .chars()
                 .map(|code_char| format!("'{}'", code_char))
                 .collect::<Vec<String>>()
