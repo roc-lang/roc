@@ -7,8 +7,8 @@ use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
     list_get_unsafe, list_join, list_keep_errs, list_keep_if, list_keep_oks, list_len, list_map,
-    list_map2, list_map3, list_map_with_index, list_prepend, list_product, list_repeat,
-    list_reverse, list_set, list_single, list_sum, list_walk_help,
+    list_map2, list_map3, list_map_with_index, list_prepend, list_range, list_repeat, list_reverse,
+    list_set, list_single, list_walk_help,
 };
 use crate::llvm::build_str::{
     str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_from_utf8,
@@ -3879,6 +3879,20 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_contains(env, layout_ids, elem, elem_layout, list)
         }
+        ListRange => {
+            // List.contains : List elem, elem -> Bool
+            debug_assert_eq!(args.len(), 2);
+
+            let (low, low_layout) = load_symbol_and_layout(scope, &args[0]);
+            let high = load_symbol(scope, &args[1]);
+
+            let builtin = match low_layout {
+                Layout::Builtin(builtin) => builtin,
+                _ => unreachable!(),
+            };
+
+            list_range(env, *builtin, low.into_int_value(), high.into_int_value())
+        }
         ListWalk => list_walk_help(
             env,
             layout_ids,
@@ -3903,20 +3917,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             args,
             crate::llvm::build_list::ListWalk::WalkBackwards,
         ),
-        ListSum => {
-            debug_assert_eq!(args.len(), 1);
-
-            let list = load_symbol(scope, &args[0]);
-
-            list_sum(env, parent, list, layout)
-        }
-        ListProduct => {
-            debug_assert_eq!(args.len(), 1);
-
-            let list = load_symbol(scope, &args[0]);
-
-            list_product(env, parent, list, layout)
-        }
         ListAppend => {
             // List.append : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);

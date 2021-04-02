@@ -34,22 +34,14 @@ macro_rules! let_tvars {
     };
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum Mode {
-    Standard,
-    Uniqueness,
-}
-
 #[derive(Debug, Clone)]
 pub struct StdLib {
-    pub mode: Mode,
     pub types: MutMap<Symbol, (SolvedType, Region)>,
     pub applies: MutSet<Symbol>,
 }
 
 pub fn standard_stdlib() -> StdLib {
     StdLib {
-        mode: Mode::Standard,
         types: types(),
         applies: vec![
             Symbol::LIST_LIST,
@@ -827,7 +819,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // keepOks : List before, (before -> Result * after) -> List after
+    // keepErrs: List before, (before -> Result * after) -> List after
     add_type(Symbol::LIST_KEEP_ERRS, {
         let_tvars! { star, cvar, before, after};
         top_level_function(
@@ -840,6 +832,14 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 ),
             ],
             Box::new(list_type(flex(after))),
+        )
+    });
+
+    // range : Int a, Int a -> List (Int a)
+    add_type(Symbol::LIST_RANGE, {
+        top_level_function(
+            vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+            Box::new(list_type(int_type(flex(TVAR1)))),
         )
     });
 

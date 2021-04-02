@@ -1,5 +1,5 @@
 use crate::annotation::IntroducedVariables;
-use crate::builtins::builtin_defs;
+use crate::builtins::builtin_defs_map;
 use crate::def::{can_defs_with_return, Def};
 use crate::env::Env;
 use crate::num::{
@@ -1380,7 +1380,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             let (fn_var, loc_expr, closure_var, expr_var) = *boxed_tuple;
 
             match loc_expr.value {
-                Var(symbol) if symbol.is_builtin() => match builtin_defs(var_store).get(&symbol) {
+                Var(symbol) if symbol.is_builtin() => match builtin_defs_map(symbol, var_store) {
                     Some(Def {
                         loc_expr:
                             Located {
@@ -1395,7 +1395,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                             },
                         ..
                     }) => {
-                        debug_assert_eq!(*recursive, Recursive::NotRecursive);
+                        debug_assert_eq!(recursive, Recursive::NotRecursive);
 
                         // Since this is a canonicalized Expr, we should have
                         // already detected any arity mismatches and replaced this
@@ -1403,7 +1403,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                         debug_assert_eq!(params.len(), args.len());
 
                         // Start with the function's body as the answer.
-                        let mut loc_answer = *boxed_body.clone();
+                        let mut loc_answer = *boxed_body;
 
                         // Wrap the body in one LetNonRec for each argument,
                         // such that at the end we have all the arguments in
