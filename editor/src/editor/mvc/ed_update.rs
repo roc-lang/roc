@@ -14,7 +14,7 @@ use crate::editor::mvc::string_update::update_string;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::lang::ast::Expr2;
-use crate::lang::pool::{NodeId};
+use crate::lang::pool::NodeId;
 use crate::ui::text::caret_w_select::CaretWSelect;
 use crate::ui::text::lines::MoveCaretFun;
 use crate::ui::text::selection::validate_raw_sel;
@@ -285,7 +285,7 @@ impl<'a> SelectableLines for EdModel<'a> {
                 self.show_debug_view = !self.show_debug_view;
                 self.dirty = true;
                 Ok(())
-            },
+            }
             _ => Ok(()),
         }
     }
