@@ -4,6 +4,7 @@ use crate::ui::util::slice_get;
 use crate::ui::util::slice_get_mut;
 use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
+use std::fmt;
 
 #[derive(Debug)]
 pub struct CodeLines {
@@ -102,5 +103,24 @@ impl Lines for CodeLines {
 
     fn last_char(&self, line_nr: usize) -> UIResult<Option<char>> {
         Ok(self.get_line(line_nr)?.chars().last())
+    }
+}
+
+impl fmt::Display for CodeLines {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for row in &self.lines {
+            let row_str = 
+                row
+                .chars()
+                .map(|code_char| format!("'{}'", code_char))
+                .collect::<Vec<String>>()
+                .join(", ");
+
+            write!(f, "\n{}", row_str)?;
+        }
+
+        write!(f, "      (code_lines)")?;
+
+        Ok(())
     }
 }

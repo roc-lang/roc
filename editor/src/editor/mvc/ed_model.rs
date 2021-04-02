@@ -11,7 +11,7 @@ use crate::editor::{
 use crate::graphics::primitives::rect::Rect;
 use crate::lang::ast::Expr2;
 use crate::lang::expr::{str_to_expr2, Env};
-use crate::lang::pool::NodeId;
+use crate::lang::pool::{NodeId};
 use crate::lang::scope::Scope;
 use crate::ui::text::caret_w_select::CaretWSelect;
 use bumpalo::collections::String as BumpString;
@@ -34,6 +34,7 @@ pub struct EdModel<'a> {
     pub has_focus: bool,
     // Option<MarkNodeId>: MarkupNode that corresponds to caret position, Option because this MarkNodeId is only calculated when it needs to be used.
     pub caret_w_select_vec: NonEmpty<(CaretWSelect, Option<MarkNodeId>)>,
+    pub show_debug_view: bool,
     // EdModel is dirty if it has changed since the previous render.
     pub dirty: bool,
 }
@@ -83,6 +84,7 @@ pub fn init_model<'a>(
         glyph_dim_rect_opt: None,
         has_focus: true,
         caret_w_select_vec: NonEmpty::new((CaretWSelect::default(), None)),
+        show_debug_view: false,
         dirty: true,
     })
 }

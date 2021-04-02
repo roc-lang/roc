@@ -1,3 +1,4 @@
+use crate::editor::render_debug::build_debug_graphics;
 use super::ed_model::EdModel;
 use crate::editor::config::Config;
 use crate::editor::ed_error::EdResult;
@@ -12,7 +13,7 @@ use winit::dpi::PhysicalSize;
 
 #[derive(Debug)]
 pub struct RenderedWgpu {
-    pub text: glyph_brush::OwnedSection,
+    pub text_sections: Vec<glyph_brush::OwnedSection>,
     pub rects: Vec<Rect>,
 }
 
@@ -25,7 +26,9 @@ pub fn model_to_wgpu<'a>(
 ) -> EdResult<RenderedWgpu> {
     let glyph_dim_rect = ed_model.glyph_dim_rect_opt.context(MissingGlyphDims {})?;
 
-    let (section, mut rects) = build_code_graphics(
+    let mut all_text_sections = Vec::new();
+
+    let (code_section, mut rects) = build_code_graphics(
         ed_model.markup_node_pool.get(ed_model.markup_root_id),
         size,
         txt_coords,
@@ -33,6 +36,8 @@ pub fn model_to_wgpu<'a>(
         glyph_dim_rect,
         &ed_model.markup_node_pool,
     )?;
+
+    all_text_sections.push(code_section);
 
     let caret_w_sel_vec = ed_model
         .caret_w_select_vec
@@ -45,8 +50,14 @@ pub fn model_to_wgpu<'a>(
 
     rects.append(&mut sel_rects);
 
+    if ed_model.show_debug_view {
+        all_text_sections.push(
+            build_debug_graphics(size, txt_coords, config, ed_model)?
+        );
+    }
+
     Ok(RenderedWgpu {
-        text: section,
+        text_sections: all_text_sections,
         rects,
     })
 }

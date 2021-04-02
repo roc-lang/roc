@@ -7,6 +7,7 @@ pub mod main;
 mod markup;
 mod mvc;
 mod render_ast;
+mod render_debug;
 mod resources;
 mod slow_pool;
 mod style;
