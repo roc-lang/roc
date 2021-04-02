@@ -8,7 +8,7 @@ use crate::editor::mvc::ed_update::NodeContext;
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::lang::ast::ArrString;
 use crate::lang::ast::Expr2;
-use crate::lang::pool::PoolStr;
+use crate::lang::pool::{PoolStr};
 
 pub fn update_small_string(
     new_char: &char,

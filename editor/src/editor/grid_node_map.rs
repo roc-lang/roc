@@ -4,6 +4,7 @@ use crate::editor::util::index_of;
 use crate::ui::text::text_pos::TextPos;
 use crate::ui::ui_error::UIResult;
 use crate::ui::util::{slice_get, slice_get_mut};
+use std::fmt;
 
 #[derive(Debug)]
 pub struct GridNodeMap {
@@ -70,5 +71,24 @@ impl GridNodeMap {
         let first_node_index = index_of(node_id, line)?;
 
         Ok(caret_pos.column - first_node_index)
+    }
+}
+
+impl fmt::Display for GridNodeMap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for row in &self.lines {
+            let row_str = 
+                row
+                .iter()
+                .map(|mark_node_id| format!(" {} ", mark_node_id))
+                .collect::<Vec<String>>()
+                .join(", ");
+
+            write!(f, "{}", row_str)?;
+        }
+
+        write!(f, "      (grid_node_map)")?;
+
+        Ok(())
     }
 }
