@@ -396,7 +396,7 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let symbol = Symbol::COMPARE_REF;
+    let symbol = Symbol::GENERIC_COMPARE_REF;
     let fn_name = layout_ids
         .get(symbol, &layout)
         .to_symbol_string(symbol, &env.interns);
