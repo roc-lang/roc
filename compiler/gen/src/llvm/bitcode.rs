@@ -463,7 +463,7 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
                 &[value1, value2],
                 "call_user_defined_function",
             );
-            // call.set_call_convention(user_defined_function.get_call_conventions());
+
             let result = call.try_as_basic_value().left().unwrap();
 
             // IMPORTANT! we call a user function, so it has the fast calling convention

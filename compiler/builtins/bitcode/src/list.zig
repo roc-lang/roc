@@ -690,6 +690,12 @@ fn listRangeHelp(allocator: *Allocator, comptime T: type, low: T, high: T) RocLi
     }
 }
 
+inline fn swapHelp(width: usize, temporary: [*]u8, ptr1: [*]u8, ptr2: [*]u8) void {
+    @memcpy(temporary, ptr1, width);
+    @memcpy(ptr1, ptr2, width);
+    @memcpy(ptr2, temporary, width);
+}
+
 fn swap(source_ptr: [*]u8, element_width_initial: usize, index_1: usize, index_2: usize) void {
     const threshold: comptime usize = 64;
 
@@ -703,26 +709,10 @@ fn swap(source_ptr: [*]u8, element_width_initial: usize, index_1: usize, index_2
 
     while (true) {
         if (element_width < threshold) {
-
-            // Store I Element in temp
-            @memcpy(buffer, element_at_i, element_width);
-
-            // Swap I Element with J Element
-            @memcpy(element_at_i, element_at_j, element_width);
-
-            // Swap J Element with buffer
-            @memcpy(element_at_j, buffer, element_width);
-
+            swapHelp(element_width, buffer, element_at_i, element_at_j);
             return;
         } else {
-            // Store I Element in temp
-            @memcpy(buffer, element_at_i, threshold);
-
-            // Swap I Element with J Element
-            @memcpy(element_at_i, element_at_j, threshold);
-
-            // Swap J Element with buffer
-            @memcpy(element_at_j, buffer, threshold);
+            swapHelp(threshold, buffer, element_at_i, element_at_j);
 
             element_at_i += threshold;
             element_at_j += threshold;
@@ -744,12 +734,12 @@ fn partition(source_ptr: [*]u8, transform: Opaque, wrapper: CompareFn, element_w
         const order = @intToEnum(utils.Ordering, ordering);
 
         switch (order) {
-            utils.Ordering.LT, utils.Ordering.EQ => {
+            utils.Ordering.LT => {
                 // the current element is smaller than the pivot; swap it
                 i += 1;
                 swap(source_ptr, element_width, @intCast(usize, i), @intCast(usize, j));
             },
-            utils.Ordering.GT => {},
+            utils.Ordering.EQ, utils.Ordering.GT => {},
         }
     }
     swap(source_ptr, element_width, @intCast(usize, i + 1), @intCast(usize, high));
@@ -761,8 +751,8 @@ fn quicksort(source_ptr: [*]u8, transform: Opaque, wrapper: CompareFn, element_w
         // partition index
         const pi = partition(source_ptr, transform, wrapper, element_width, low, high);
 
-        const _unused1 = quicksort(source_ptr, transform, wrapper, element_width, low, pi - 1); // before pi
-        const _unused2 = quicksort(source_ptr, transform, wrapper, element_width, pi + 1, high); // after pi
+        _ = quicksort(source_ptr, transform, wrapper, element_width, low, pi - 1); // before pi
+        _ = quicksort(source_ptr, transform, wrapper, element_width, pi + 1, high); // after pi
     }
 }
 
