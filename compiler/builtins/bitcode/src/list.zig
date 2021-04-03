@@ -690,6 +690,56 @@ fn listRangeHelp(allocator: *Allocator, comptime T: type, low: T, high: T) RocLi
     }
 }
 
-pub fn listSortWith(list: RocList, transform: Opaque, wrapper: CompareFn, alignment: usize, element_width: usize) callconv(.C) RocList {
+fn swap(source_ptr: [*]u8, element_width: usize, index_1: usize, index_2: usize) void {
+    const temp: [*]u8 = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, element_width) catch unreachable);
+
+    const element_at_i = source_ptr + (index_1 * element_width);
+    const element_at_j = source_ptr + (index_2 * element_width);
+    // Store I Element in temp
+    @memcpy(temp, element_at_i, element_width);
+
+    // Swap I Element with J Element
+    @memcpy(element_at_i, element_at_j, element_width);
+
+    // Swap J Element with temp
+    @memcpy(element_at_j, temp, element_width);
+
+    std.heap.c_allocator.free(temp[0..element_width]);
+}
+
+fn partition(source_ptr: [*]u8, transform: Opaque, wrapper: CompareFn, element_width: usize, low: usize, high: usize) usize {
+    const pivot = source_ptr + (high * element_width);
+    var i = (low - 1); // Index of smaller element and indicates the right position of pivot found so far
+    var j = low;
+
+    while (j <= high - 1) : (j += 1) {
+        const current_elem = source_ptr + (j * element_width);
+        const ordering = wrapper(transform, current_elem, pivot);
+        const order = @intToEnum(utils.Ordering, ordering);
+        // If current element is smaller than the pivot
+        if (order == utils.Ordering.LT) {
+            i += 1; // increment index of smaller element
+            swap(source_ptr, element_width, i, j);
+        }
+    }
+    swap(source_ptr, element_width, (i + 1), high);
+    return (i + 1);
+}
+
+fn quicksort(list: RocList, transform: Opaque, wrapper: CompareFn, element_width: usize, low: usize, high: usize) RocList {
+    if (list.bytes) |source_ptr| {
+        if (low < high) {
+            const pi = partition(source_ptr, transform, wrapper, element_width, low, high);
+
+            const _unused1 = quicksort(list, transform, wrapper, element_width, low, pi - 1); // before pi
+            const _unused2 = quicksort(list, transform, wrapper, element_width, pi + 1, high); // after pi
+        }
+    }
     return list;
+}
+
+pub fn listSortWith(list: RocList, transform: Opaque, wrapper: CompareFn, alignment: usize, element_width: usize) callconv(.C) RocList {
+    const low = 0;
+    const high = list.len() - 1;
+    return quicksort(list, transform, wrapper, element_width, low, high);
 }
