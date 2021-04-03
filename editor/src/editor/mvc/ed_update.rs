@@ -281,6 +281,11 @@ impl<'a> SelectableLines for EdModel<'a> {
             }
             Home => self.move_caret_home(modifiers),
             End => self.move_caret_end(modifiers),
+            F11 => {
+                self.show_debug_view = !self.show_debug_view;
+                self.dirty = true;
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -371,9 +376,6 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                 };
 
             let ast_node_id = curr_mark_node.get_ast_node_id();
-
-
-
             let ast_node_ref = ed_model.module.env.pool.get(ast_node_id);
 
             match ast_node_ref {

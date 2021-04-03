@@ -34,6 +34,7 @@ pub struct EdModel<'a> {
     pub has_focus: bool,
     // Option<MarkNodeId>: MarkupNode that corresponds to caret position, Option because this MarkNodeId is only calculated when it needs to be used.
     pub caret_w_select_vec: NonEmpty<(CaretWSelect, Option<MarkNodeId>)>,
+    pub show_debug_view: bool,
     // EdModel is dirty if it has changed since the previous render.
     pub dirty: bool,
 }
@@ -83,6 +84,7 @@ pub fn init_model<'a>(
         glyph_dim_rect_opt: None,
         has_focus: true,
         caret_w_select_vec: NonEmpty::new((CaretWSelect::default(), None)),
+        show_debug_view: false,
         dirty: true,
     })
 }

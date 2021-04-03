@@ -307,9 +307,11 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     }
 
                     if let Some(ref rendered_wgpu) = rendered_wgpu_opt {
-                        let borrowed_text = rendered_wgpu.text.to_borrowed();
+                        for text_section in &rendered_wgpu.text_sections {
+                            let borrowed_text = text_section.to_borrowed();
 
-                        glyph_brush.queue(borrowed_text);
+                            glyph_brush.queue(borrowed_text);
+                        }
 
                         draw_all_rects(
                             &rendered_wgpu.rects,
