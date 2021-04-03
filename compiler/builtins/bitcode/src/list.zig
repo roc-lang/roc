@@ -125,19 +125,47 @@ pub fn listReverse(list: RocList, alignment: usize, element_width: usize) callco
         var i: usize = 0;
         var end: usize = size - 1;
 
-        const output = RocList.allocate(std.heap.c_allocator, alignment, size, element_width);
+        if (list.isUnique()) {
+            const temp: [*]u8 = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, element_width) catch unreachable);
 
-        const target_ptr = output.bytes orelse unreachable;
+            // Working from the front and back so
+            // we only need to go ~(n / 2) iterations.
+            // If the length is an odd number the middle
+            // element stays in the same place anyways.
+            while (i < (end - i)) : (i += 1) {
+                const last_position = end - i;
 
-        while (i < size) : (i += 1) {
-            const source_position = end - i;
+                const last_element = source_ptr + (last_position * element_width);
+                const first_element = source_ptr + (i * element_width);
 
-            @memcpy(target_ptr + (i * element_width), source_ptr + (source_position * element_width), element_width);
+                // Store Last Element in temp
+                @memcpy(temp, last_element, element_width);
+
+                // Swap Last Element with First Element
+                @memcpy(last_element, first_element, element_width);
+
+                // Swap First Element with temp
+                @memcpy(first_element, temp, element_width);
+            }
+
+            std.heap.c_allocator.free(temp[0..element_width]);
+
+            return list;
+        } else {
+            const output = RocList.allocate(std.heap.c_allocator, alignment, size, element_width);
+
+            const target_ptr = output.bytes orelse unreachable;
+
+            while (i < size) : (i += 1) {
+                const last_position = end - i;
+
+                @memcpy(target_ptr + (i * element_width), source_ptr + (last_position * element_width), element_width);
+            }
+
+            utils.decref(std.heap.c_allocator, alignment, list.bytes, size * element_width);
+
+            return output;
         }
-
-        utils.decref(std.heap.c_allocator, alignment, list.bytes, size * element_width);
-
-        return output;
     } else {
         return RocList.empty();
     }
