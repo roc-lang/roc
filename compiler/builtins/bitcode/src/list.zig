@@ -690,21 +690,46 @@ fn listRangeHelp(allocator: *Allocator, comptime T: type, low: T, high: T) RocLi
     }
 }
 
-fn swap(source_ptr: [*]u8, element_width: usize, index_1: usize, index_2: usize) void {
-    const temp: [*]u8 = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, element_width) catch unreachable);
+fn swap(source_ptr: [*]u8, element_width_initial: usize, index_1: usize, index_2: usize) void {
+    const threshold: comptime usize = 64;
 
-    const element_at_i = source_ptr + (index_1 * element_width);
-    const element_at_j = source_ptr + (index_2 * element_width);
-    // Store I Element in temp
-    @memcpy(temp, element_at_i, element_width);
+    var element_width = element_width_initial;
 
-    // Swap I Element with J Element
-    @memcpy(element_at_i, element_at_j, element_width);
+    var buffer_actual: [threshold]u8 = undefined;
+    var buffer: [*]u8 = buffer_actual[0..];
 
-    // Swap J Element with temp
-    @memcpy(element_at_j, temp, element_width);
+    var element_at_i = source_ptr + (index_1 * element_width);
+    var element_at_j = source_ptr + (index_2 * element_width);
 
-    std.heap.c_allocator.free(temp[0..element_width]);
+    while (true) {
+        if (element_width < threshold) {
+
+            // Store I Element in temp
+            @memcpy(buffer, element_at_i, element_width);
+
+            // Swap I Element with J Element
+            @memcpy(element_at_i, element_at_j, element_width);
+
+            // Swap J Element with buffer
+            @memcpy(element_at_j, buffer, element_width);
+
+            return;
+        } else {
+            // Store I Element in temp
+            @memcpy(buffer, element_at_i, threshold);
+
+            // Swap I Element with J Element
+            @memcpy(element_at_i, element_at_j, threshold);
+
+            // Swap J Element with buffer
+            @memcpy(element_at_j, buffer, threshold);
+
+            element_at_i += threshold;
+            element_at_j += threshold;
+
+            element_width -= threshold;
+        }
+    }
 }
 
 fn partition(source_ptr: [*]u8, transform: Opaque, wrapper: CompareFn, element_width: usize, low: isize, high: isize) isize {
@@ -718,30 +743,37 @@ fn partition(source_ptr: [*]u8, transform: Opaque, wrapper: CompareFn, element_w
         const ordering = wrapper(transform, current_elem, pivot);
         const order = @intToEnum(utils.Ordering, ordering);
 
-        // If current element is smaller than the pivot
-        if (order == utils.Ordering.LT or order == utils.Ordering.EQ) {
-            i += 1; // increment index of smaller element
-            swap(source_ptr, element_width, @intCast(usize, i), @intCast(usize, j));
+        switch (order) {
+            utils.Ordering.LT, utils.Ordering.EQ => {
+                // the current element is smaller than the pivot; swap it
+                i += 1;
+                swap(source_ptr, element_width, @intCast(usize, i), @intCast(usize, j));
+            },
+            utils.Ordering.GT => {},
         }
     }
     swap(source_ptr, element_width, @intCast(usize, i + 1), @intCast(usize, high));
     return (i + 1);
 }
 
-fn quicksort(list: RocList, transform: Opaque, wrapper: CompareFn, element_width: usize, low: isize, high: isize) RocList {
-    if (list.bytes) |source_ptr| {
-        if (low < high) {
-            const pi = partition(source_ptr, transform, wrapper, element_width, low, high);
+fn quicksort(source_ptr: [*]u8, transform: Opaque, wrapper: CompareFn, element_width: usize, low: isize, high: isize) void {
+    if (low < high) {
+        // partition index
+        const pi = partition(source_ptr, transform, wrapper, element_width, low, high);
 
-            const _unused1 = quicksort(list, transform, wrapper, element_width, low, pi - 1); // before pi
-            const _unused2 = quicksort(list, transform, wrapper, element_width, pi + 1, high); // after pi
-        }
+        const _unused1 = quicksort(source_ptr, transform, wrapper, element_width, low, pi - 1); // before pi
+        const _unused2 = quicksort(source_ptr, transform, wrapper, element_width, pi + 1, high); // after pi
     }
-    return list;
 }
 
-pub fn listSortWith(list: RocList, transform: Opaque, wrapper: CompareFn, alignment: usize, element_width: usize) callconv(.C) RocList {
-    const low = 0;
-    const high: isize = @intCast(isize, list.len()) - 1;
-    return quicksort(list, transform, wrapper, element_width, low, high);
+pub fn listSortWith(input: RocList, transform: Opaque, wrapper: CompareFn, alignment: usize, element_width: usize) callconv(.C) RocList {
+    var list = input.makeUnique(std.heap.c_allocator, alignment, element_width);
+
+    if (list.bytes) |source_ptr| {
+        const low = 0;
+        const high: isize = @intCast(isize, list.len()) - 1;
+        quicksort(source_ptr, transform, wrapper, element_width, low, high);
+    }
+
+    return list;
 }
