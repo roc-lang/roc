@@ -1137,12 +1137,9 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     transform: BasicValueEnum<'ctx>,
-    transform_layout: &Layout<'a>,
     list: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
     let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
     let list_i128 = complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128");

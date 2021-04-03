@@ -1,16 +1,12 @@
+/// Helpers for interacting with the zig that generates bitcode
 use crate::debug_info_init;
 use crate::llvm::build::{set_name, Env, FAST_CALL_CONV};
 use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::{decrement_refcount_layout, increment_refcount_layout, Mode};
-use either::Either;
-/// Helpers for interacting with the zig that generates bitcode
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, CallSiteValue, FunctionValue, InstructionValue};
 use inkwell::AddressSpace;
-use inkwell::{
-    attributes::{Attribute, AttributeLoc},
-    values::PointerValue,
-};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Layout, LayoutIds};
 

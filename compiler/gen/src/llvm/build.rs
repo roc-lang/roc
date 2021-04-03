@@ -3955,12 +3955,12 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
+            let func = load_symbol(scope, &args[1]);
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
                 Layout::Builtin(Builtin::List(_, element_layout)) => {
-                    list_sort_with(env, layout_ids, func, func_layout, list, element_layout)
+                    list_sort_with(env, layout_ids, func, list, element_layout)
                 }
                 _ => unreachable!("invalid list layout"),
             }
