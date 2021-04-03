@@ -756,6 +756,8 @@ define_builtins! {
 
         // A caller (wrapper) that we pass to zig for it to be able to call Roc functions
         20 ZIG_FUNCTION_CALLER: "#zig_function_caller"
+
+        21 COMPARE_REF: "#compare_ref" // TODO: <- a nice comment
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias

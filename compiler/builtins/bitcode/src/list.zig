@@ -7,6 +7,7 @@ const Allocator = mem.Allocator;
 const TAG_WIDTH = 8;
 
 const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
+const CompareFn = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) u8;
 const Opaque = ?[*]u8;
 
 const Inc = fn (?[*]u8) callconv(.C) void;
@@ -687,4 +688,8 @@ fn listRangeHelp(allocator: *Allocator, comptime T: type, low: T, high: T) RocLi
             return list;
         },
     }
+}
+
+pub fn listSortWith(list: RocList, transform: Opaque, wrapper: CompareFn, alignment: usize, element_width: usize) callconv(.C) RocList {
+    return list;
 }
