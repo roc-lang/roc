@@ -1147,8 +1147,7 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
 
     let list_i128 = complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128");
 
-    let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
-    env.builder.build_store(transform_ptr, transform);
+    let transform_ptr = transform.into_pointer_value();
 
     let compare_wrapper = build_compare_wrapper(env, layout_ids, element_layout)
         .as_global_value()

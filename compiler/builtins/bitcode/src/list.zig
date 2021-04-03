@@ -707,26 +707,28 @@ fn swap(source_ptr: [*]u8, element_width: usize, index_1: usize, index_2: usize)
     std.heap.c_allocator.free(temp[0..element_width]);
 }
 
-fn partition(source_ptr: [*]u8, transform: Opaque, wrapper: CompareFn, element_width: usize, low: usize, high: usize) usize {
-    const pivot = source_ptr + (high * element_width);
+fn partition(source_ptr: [*]u8, transform: Opaque, wrapper: CompareFn, element_width: usize, low: isize, high: isize) isize {
+    const pivot = source_ptr + (@intCast(usize, high) * element_width);
     var i = (low - 1); // Index of smaller element and indicates the right position of pivot found so far
     var j = low;
 
     while (j <= high - 1) : (j += 1) {
-        const current_elem = source_ptr + (j * element_width);
+        const current_elem = source_ptr + (@intCast(usize, j) * element_width);
+
         const ordering = wrapper(transform, current_elem, pivot);
         const order = @intToEnum(utils.Ordering, ordering);
+
         // If current element is smaller than the pivot
-        if (order == utils.Ordering.LT) {
+        if (order == utils.Ordering.LT or order == utils.Ordering.EQ) {
             i += 1; // increment index of smaller element
-            swap(source_ptr, element_width, i, j);
+            swap(source_ptr, element_width, @intCast(usize, i), @intCast(usize, j));
         }
     }
-    swap(source_ptr, element_width, (i + 1), high);
+    swap(source_ptr, element_width, @intCast(usize, i + 1), @intCast(usize, high));
     return (i + 1);
 }
 
-fn quicksort(list: RocList, transform: Opaque, wrapper: CompareFn, element_width: usize, low: usize, high: usize) RocList {
+fn quicksort(list: RocList, transform: Opaque, wrapper: CompareFn, element_width: usize, low: isize, high: isize) RocList {
     if (list.bytes) |source_ptr| {
         if (low < high) {
             const pi = partition(source_ptr, transform, wrapper, element_width, low, high);
@@ -740,6 +742,6 @@ fn quicksort(list: RocList, transform: Opaque, wrapper: CompareFn, element_width
 
 pub fn listSortWith(list: RocList, transform: Opaque, wrapper: CompareFn, alignment: usize, element_width: usize) callconv(.C) RocList {
     const low = 0;
-    const high = list.len() - 1;
+    const high: isize = @intCast(isize, list.len()) - 1;
     return quicksort(list, transform, wrapper, element_width, low, high);
 }
