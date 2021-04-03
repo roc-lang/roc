@@ -26,11 +26,13 @@ pub trait Lines {
 
     fn all_lines<'a>(&self, arena: &'a Bump) -> BumpString<'a>;
 
+    fn is_last_line(&self, line_nr: usize) -> bool;
+
     fn last_char(&self, line_nr: usize) -> UIResult<Option<char>>;
 }
 
 pub trait SelectableLines {
-    fn get_caret(self) -> TextPos;
+    fn get_caret(&self) -> TextPos;
 
     fn set_caret(&mut self, caret_pos: TextPos);
 
@@ -175,20 +177,17 @@ pub fn move_caret_right<T: Lines>(
             None => unreachable!(),
         }
     } else {
-        let curr_line = lines.get_line(old_line_nr)?;
+        let curr_line_len = lines.line_len(old_line_nr)?;
+        let is_last_line = lines.is_last_line(old_line_nr);
 
-        if let Some(last_char) = curr_line.chars().last() {
-            if is_newline(&last_char) {
-                if old_col_nr + 1 > curr_line.len() - 1 {
-                    (old_line_nr + 1, 0)
-                } else {
-                    (old_line_nr, old_col_nr + 1)
-                }
-            } else if old_col_nr < curr_line.len() {
-                (old_line_nr, old_col_nr + 1)
+        if !is_last_line {
+            if old_col_nr + 1 > curr_line_len - 1 {
+                (old_line_nr + 1, 0)
             } else {
-                (old_line_nr, old_col_nr)
+                (old_line_nr, old_col_nr + 1)
             }
+        } else if old_col_nr < curr_line_len {
+            (old_line_nr, old_col_nr + 1)
         } else {
             (old_line_nr, old_col_nr)
         }
@@ -322,17 +321,15 @@ pub fn move_caret_down<T: Lines>(
 
         (old_line_nr, curr_line_len)
     } else {
-        let next_line = lines.get_line(old_line_nr + 1)?;
+        let next_line_index = old_line_nr + 1;
+        let next_line_len = lines.line_len(next_line_index)?;
+        let is_last_line = lines.is_last_line(next_line_index);
 
-        if next_line.len() <= old_col_nr {
-            if let Some(last_char) = next_line.chars().last() {
-                if is_newline(&last_char) {
-                    (old_line_nr + 1, next_line.len() - 1)
-                } else {
-                    (old_line_nr + 1, next_line.len())
-                }
+        if next_line_len <= old_col_nr {
+            if !is_last_line {
+                (old_line_nr + 1, next_line_len - 1)
             } else {
-                (old_line_nr + 1, 0)
+                (old_line_nr + 1, next_line_len)
             }
         } else {
             (old_line_nr + 1, old_col_nr)

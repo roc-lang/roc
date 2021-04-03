@@ -1,7 +1,7 @@
 use libloading::Library;
 use roc_build::link::module_to_dylib;
 use roc_build::program::FunctionIterator;
-use roc_can::builtins::{builtin_defs_map, dict_hash_test_only};
+use roc_can::builtins::builtin_defs_map;
 use roc_can::def::Def;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::Symbol;
@@ -20,13 +20,7 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 pub fn test_builtin_defs(symbol: Symbol, var_store: &mut VarStore) -> Option<Def> {
-    match builtin_defs_map(symbol, var_store) {
-        Some(def) => Some(def),
-        None => match symbol {
-            Symbol::DICT_TEST_HASH => Some(dict_hash_test_only(symbol, var_store)),
-            _ => None,
-        },
-    }
+    builtin_defs_map(symbol, var_store)
 }
 
 // this is not actually dead code, but only used by cfg_test modules
@@ -43,7 +37,6 @@ pub fn helper<'a>(
     use roc_gen::llvm::build::{build_proc, build_proc_header, Scope};
     use std::path::{Path, PathBuf};
 
-    let stdlib_mode = stdlib.mode;
     let filename = PathBuf::from("Test.roc");
     let src_dir = Path::new("fake/test/path");
 
@@ -273,12 +266,7 @@ pub fn helper<'a>(
         if fn_val.verify(true) {
             function_pass.run_on(&fn_val);
         } else {
-            use roc_builtins::std::Mode;
-
-            let mode = match stdlib_mode {
-                Mode::Uniqueness => "OPTIMIZED",
-                Mode::Standard => "NON-OPTIMIZED",
-            };
+            let mode = "NON-OPTIMIZED";
 
             eprintln!(
                 "\n\nFunction {:?} failed LLVM verification in {} build. Its content was:\n",

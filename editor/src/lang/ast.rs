@@ -1,4 +1,5 @@
 use crate::lang::pattern::{Pattern2, PatternId};
+use crate::lang::pool::Pool;
 use crate::lang::pool::{NodeId, PoolStr, PoolVec, ShallowClone};
 use crate::lang::types::{Type2, TypeId};
 use arraystring::{typenum::U30, ArrayString};
@@ -58,6 +59,8 @@ fn size_of_intval() {
     assert_eq!(std::mem::size_of::<IntVal>(), 16);
 }
 
+pub type ArrString = ArrayString<U30>;
+
 /// An Expr that fits in 32B.
 /// It has a 1B discriminant and variants which hold payloads of at most 31B.
 #[derive(Debug)]
@@ -94,11 +97,12 @@ pub enum Expr2 {
         text: PoolStr,    // 8B
     },
     /// string literals of length up to 30B
-    SmallStr(ArrayString<U30>), // 31B
+    SmallStr(ArrString), // 31B
     /// string literals of length 31B or more
     Str(PoolStr), // 8B
     // Lookups
-    Var(Symbol), // 8B
+    Var(Symbol),            // 8B
+    InvalidLookup(PoolStr), // 8B
 
     List {
         list_var: Variable,    // 4B - required for uniqueness of the list
@@ -297,6 +301,83 @@ pub struct WhenBranch {
 }
 
 pub type ExprId = NodeId<Expr2>;
+
+pub fn expr2_to_string(node_id: NodeId<Expr2>, pool: &Pool) -> String {
+    let mut full_string = String::new();
+
+    expr2_to_string_helper(node_id, 0, pool, &mut full_string);
+
+    full_string
+}
+
+fn get_spacing(indent_level: usize) -> String {
+    std::iter::repeat("    ")
+        .take(indent_level)
+        .collect::<Vec<&str>>()
+        .join("")
+}
+
+fn expr2_to_string_helper(
+    node_id: NodeId<Expr2>,
+    indent_level: usize,
+    pool: &Pool,
+    out_string: &mut String,
+) {
+    let expr2 = pool.get(node_id);
+
+    out_string.push_str(&get_spacing(indent_level));
+
+    match expr2 {
+        Expr2::SmallStr(arr_string) => out_string.push_str(&format!(
+            "{}{}{}",
+            "SmallStr(\"",
+            arr_string.as_str(),
+            "\")",
+        )),
+        Expr2::Str(pool_str) => {
+            out_string.push_str(&format!("{}{}{}", "Str(\"", pool_str.as_str(pool), "\")",))
+        }
+        Expr2::Blank => out_string.push_str("Blank"),
+        Expr2::EmptyRecord => out_string.push_str("EmptyRecord"),
+        Expr2::Record { record_var, fields } => {
+            out_string.push_str("Record:\n");
+            out_string.push_str(&format!(
+                "{}Var({:?})\n",
+                get_spacing(indent_level + 1),
+                record_var
+            ));
+
+            out_string.push_str(&format!("{}fields: [\n", get_spacing(indent_level + 1)));
+
+            let mut first_child = true;
+            for (pool_str, var, val_node_id) in fields.iter(pool) {
+                if !first_child {
+                    out_string.push_str(", ")
+                } else {
+                    first_child = false;
+                }
+
+                out_string.push_str(&format!(
+                    "{}({}, Var({:?}), Expr2(\n",
+                    get_spacing(indent_level + 2),
+                    pool_str.as_str(pool),
+                    var,
+                ));
+
+                expr2_to_string_helper(*val_node_id, indent_level + 3, pool, out_string);
+                out_string.push_str(&format!("{})\n", get_spacing(indent_level + 2)));
+            }
+
+            out_string.push_str(&format!("{}]\n", get_spacing(indent_level + 1)));
+        }
+        Expr2::InvalidLookup(pool_str) => {
+            out_string.push_str(&format!("InvalidLookup({})", pool_str.as_str(pool)));
+        }
+        other => todo!("Implement for {:?}", other),
+    }
+
+    out_string.push('\n');
+}
 
 #[test]
 fn size_of_expr() {

@@ -29,7 +29,6 @@ pub fn helper<'a>(
 ) -> (String, Vec<roc_problem::can::Problem>, Library) {
     use std::path::{Path, PathBuf};
 
-    //let stdlib_mode = stdlib.mode;
     let dir = tempdir().unwrap();
     let filename = PathBuf::from("Test.roc");
     let src_dir = Path::new("fake/test/path");

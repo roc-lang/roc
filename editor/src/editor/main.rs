@@ -1,8 +1,9 @@
 use super::keyboard_input;
 use super::style::CODE_TXT_XY;
 use crate::editor::ed_error::print_ui_err;
+use crate::editor::mvc::ed_view;
+use crate::editor::mvc::ed_view::RenderedWgpu;
 use crate::editor::resources::strings::NOTHING_OPENED;
-use crate::editor::slow_pool::SlowPool;
 use crate::editor::{
     config::Config,
     ed_error::print_err,
@@ -132,7 +133,6 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let mut env_pool = Pool::with_capacity(1024);
     let env_arena = Bump::new();
     let code_arena = Bump::new();
-    let mut markup_node_pool = SlowPool::new();
 
     let mut var_store = VarStore::default();
     let dep_idents = IdentIds::exposed_builtins(8);
@@ -173,13 +173,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     };
 
     let ed_model_opt = {
-        let ed_model_res = ed_model::init_model(
-            &code_str,
-            file_path,
-            env,
-            &code_arena,
-            &mut markup_node_pool,
-        );
+        let ed_model_res = ed_model::init_model(&code_str, file_path, env, &code_arena);
 
         match ed_model_res {
             Ok(mut ed_model) => {
@@ -193,6 +187,8 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
             }
         }
     };
+
+    let mut rendered_wgpu_opt: Option<RenderedWgpu> = None;
 
     let mut app_model = AppModel::init(ed_model_opt);
 
@@ -298,29 +294,33 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     .output;
 
                 if let Some(ref mut ed_model) = app_model.ed_model_opt {
-                    // TODO only calculate if markup_root has changed
-                    let text_and_rects_res = super::mvc::ed_view::model_to_wgpu(
-                        ed_model,
-                        &size,
-                        CODE_TXT_XY.into(),
-                        &config,
-                        &markup_node_pool,
-                    );
+                    if rendered_wgpu_opt.is_none() || ed_model.dirty {
+                        let rendered_wgpu_res =
+                            ed_view::model_to_wgpu(ed_model, &size, CODE_TXT_XY.into(), &config);
 
-                    match text_and_rects_res {
-                        Ok((text_section, rects)) => {
-                            glyph_brush.queue(text_section);
-
-                            draw_all_rects(
-                                &rects,
-                                &mut encoder,
-                                &frame.view,
-                                &gpu_device,
-                                &rect_resources,
-                                &ed_theme,
-                            )
+                        match rendered_wgpu_res {
+                            Ok(rendered_wgpu) => rendered_wgpu_opt = Some(rendered_wgpu),
+                            Err(e) => print_err(&e),
                         }
-                        Err(e) => print_err(&e),
+
+                        ed_model.dirty = false;
+                    }
+
+                    if let Some(ref rendered_wgpu) = rendered_wgpu_opt {
+                        for text_section in &rendered_wgpu.text_sections {
+                            let borrowed_text = text_section.to_borrowed();
+
+                            glyph_brush.queue(borrowed_text);
+                        }
+
+                        draw_all_rects(
+                            &rendered_wgpu.rects,
+                            &mut encoder,
+                            &frame.view,
+                            &gpu_device,
+                            &rect_resources,
+                            &ed_theme,
+                        )
                     }
                 } else {
                     queue_no_file_text(

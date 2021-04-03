@@ -113,13 +113,17 @@ impl Lines for BigTextArea {
         lines
     }
 
+    fn is_last_line(&self, line_nr: usize) -> bool {
+        line_nr == self.nr_of_lines() - 1
+    }
+
     fn last_char(&self, line_nr: usize) -> UIResult<Option<char>> {
         Ok(self.get_line(line_nr)?.chars().last())
     }
 }
 
 impl SelectableLines for BigTextArea {
-    fn get_caret(self) -> TextPos {
+    fn get_caret(&self) -> TextPos {
         self.caret_w_select.caret_pos
     }
 

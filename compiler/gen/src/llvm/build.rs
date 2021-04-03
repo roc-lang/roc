@@ -7,8 +7,8 @@ use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
     list_get_unsafe, list_join, list_keep_errs, list_keep_if, list_keep_oks, list_len, list_map,
-    list_map2, list_map3, list_map_with_index, list_prepend, list_product, list_repeat,
-    list_reverse, list_set, list_single, list_sort_with, list_sum, list_walk, list_walk_backwards,
+    list_map2, list_map3, list_map_with_index, list_prepend, list_repeat, list_reverse, list_set,
+    list_single, list_sort_with,
 };
 use crate::llvm::build_str::{
     str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_from_utf8,
@@ -3879,71 +3879,44 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_contains(env, layout_ids, elem, elem_layout, list)
         }
-        ListWalk => {
-            debug_assert_eq!(args.len(), 3);
+        ListRange => {
+            // List.contains : List elem, elem -> Bool
+            debug_assert_eq!(args.len(), 2);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (low, low_layout) = load_symbol_and_layout(scope, &args[0]);
+            let high = load_symbol(scope, &args[1]);
 
-            let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
+            let builtin = match low_layout {
+                Layout::Builtin(builtin) => builtin,
+                _ => unreachable!(),
+            };
 
-            let (default, default_layout) = load_symbol_and_layout(scope, &args[2]);
-
-            match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => default,
-                Layout::Builtin(Builtin::List(_, element_layout)) => list_walk(
-                    env,
-                    layout_ids,
-                    parent,
-                    list,
-                    element_layout,
-                    func,
-                    func_layout,
-                    default,
-                    default_layout,
-                ),
-                _ => unreachable!("invalid list layout"),
-            }
+            list_range(env, *builtin, low.into_int_value(), high.into_int_value())
         }
-        ListWalkBackwards => {
-            // List.walkBackwards : List elem, (elem -> accum -> accum), accum -> accum
-            debug_assert_eq!(args.len(), 3);
-
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
-
-            let (default, default_layout) = load_symbol_and_layout(scope, &args[2]);
-
-            match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => default,
-                Layout::Builtin(Builtin::List(_, element_layout)) => list_walk_backwards(
-                    env,
-                    layout_ids,
-                    parent,
-                    list,
-                    element_layout,
-                    func,
-                    func_layout,
-                    default,
-                    default_layout,
-                ),
-                _ => unreachable!("invalid list layout"),
-            }
-        }
-        ListSum => {
-            debug_assert_eq!(args.len(), 1);
-
-            let list = load_symbol(scope, &args[0]);
-
-            list_sum(env, parent, list, layout)
-        }
-        ListProduct => {
-            debug_assert_eq!(args.len(), 1);
-
-            let list = load_symbol(scope, &args[0]);
-
-            list_product(env, parent, list, layout)
-        }
+        ListWalk => list_walk_help(
+            env,
+            layout_ids,
+            scope,
+            parent,
+            args,
+            crate::llvm::build_list::ListWalk::Walk,
+        ),
+        ListWalkUntil => list_walk_help(
+            env,
+            layout_ids,
+            scope,
+            parent,
+            args,
+            crate::llvm::build_list::ListWalk::WalkUntil,
+        ),
+        ListWalkBackwards => list_walk_help(
+            env,
+            layout_ids,
+            scope,
+            parent,
+            args,
+            crate::llvm::build_list::ListWalk::WalkBackwards,
+        ),
         ListAppend => {
             // List.append : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);

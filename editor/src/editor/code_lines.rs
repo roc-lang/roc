@@ -1,8 +1,10 @@
 use crate::ui::text::lines::Lines;
 use crate::ui::ui_error::UIResult;
 use crate::ui::util::slice_get;
+use crate::ui::util::slice_get_mut;
 use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
+use std::fmt;
 
 #[derive(Debug)]
 pub struct CodeLines {
@@ -16,6 +18,31 @@ impl CodeLines {
             lines: split_inclusive(code_str),
             nr_of_chars: code_str.len(),
         }
+    }
+
+    pub fn insert_between_line(
+        &mut self,
+        line_nr: usize,
+        index: usize,
+        new_str: &str,
+    ) -> UIResult<()> {
+        let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
+
+        line_ref.insert_str(index, new_str);
+
+        self.nr_of_chars += new_str.len();
+
+        Ok(())
+    }
+
+    pub fn del_at_line(&mut self, line_nr: usize, index: usize) -> UIResult<()> {
+        let line_ref = slice_get_mut(line_nr, &mut self.lines)?;
+
+        line_ref.remove(index);
+
+        self.nr_of_chars -= 1;
+
+        Ok(())
     }
 }
 
@@ -70,7 +97,29 @@ impl Lines for CodeLines {
         lines
     }
 
+    fn is_last_line(&self, line_nr: usize) -> bool {
+        line_nr == self.nr_of_lines() - 1
+    }
+
     fn last_char(&self, line_nr: usize) -> UIResult<Option<char>> {
         Ok(self.get_line(line_nr)?.chars().last())
+    }
+}
+
+impl fmt::Display for CodeLines {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for row in &self.lines {
+            let row_str = row
+                .chars()
+                .map(|code_char| format!("'{}'", code_char))
+                .collect::<Vec<String>>()
+                .join(", ");
+
+            write!(f, "\n{}", row_str)?;
+        }
+
+        write!(f, "      (code_lines)")?;
+
+        Ok(())
     }
 }

@@ -35,7 +35,6 @@ pub fn gen_and_eval<'a>(
     let src_str: &str = unsafe { from_utf8_unchecked(src) };
 
     let stdlib = roc_builtins::std::standard_stdlib();
-    let stdlib_mode = stdlib.mode;
     let filename = PathBuf::from("REPL.roc");
     let src_dir = Path::new("fake/test/path");
 
@@ -219,12 +218,7 @@ pub fn gen_and_eval<'a>(
             if fn_val.verify(true) {
                 function_pass.run_on(&fn_val);
             } else {
-                use roc_builtins::std::Mode;
-
-                let mode = match stdlib_mode {
-                    Mode::Uniqueness => "OPTIMIZED",
-                    Mode::Standard => "NON-OPTIMIZED",
-                };
+                let mode = "NON-OPTIMIZED";
 
                 eprintln!(
                     "\n\nFunction {:?} failed LLVM verification in {} build. Its content was:\n",

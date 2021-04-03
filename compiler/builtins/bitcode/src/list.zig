@@ -4,6 +4,8 @@ const RocResult = utils.RocResult;
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
+const TAG_WIDTH = 8;
+
 const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
 const Opaque = ?[*]u8;
 
@@ -502,6 +504,49 @@ pub fn listWalkBackwards(list: RocList, stepper: Opaque, stepper_caller: Caller2
     utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
 }
 
+pub fn listWalkUntil(list: RocList, stepper: Opaque, stepper_caller: Caller2, accum: Opaque, alignment: usize, element_width: usize, accum_width: usize, dec: Dec, output: Opaque) callconv(.C) void {
+    // [ Continue a, Stop a ]
+    const CONTINUE: usize = 0;
+
+    if (accum_width == 0) {
+        return;
+    }
+
+    if (list.isEmpty()) {
+        @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
+        return;
+    }
+
+    const alloc: [*]u8 = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, TAG_WIDTH + accum_width) catch unreachable);
+
+    @memcpy(alloc + TAG_WIDTH, accum orelse unreachable, accum_width);
+
+    if (list.bytes) |source_ptr| {
+        var i: usize = 0;
+        const size = list.len();
+        while (i < size) : (i += 1) {
+            const element = source_ptr + i * element_width;
+            stepper_caller(stepper, element, alloc + TAG_WIDTH, alloc);
+
+            const usizes: [*]usize = @ptrCast([*]usize, @alignCast(8, alloc));
+            if (usizes[0] != 0) {
+                // decrement refcount of the remaining items
+                i += 1;
+                while (i < size) : (i += 1) {
+                    dec(source_ptr + i * element_width);
+                }
+                break;
+            }
+        }
+    }
+
+    @memcpy(output orelse unreachable, alloc + TAG_WIDTH, accum_width);
+    std.heap.c_allocator.free(alloc[0 .. TAG_WIDTH + accum_width]);
+
+    const data_bytes = list.len() * element_width;
+    utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
+}
+
 // List.contains : List k, k -> Bool
 pub fn listContains(list: RocList, key: Opaque, key_width: usize, is_eq: EqFn) callconv(.C) bool {
     if (list.bytes) |source_ptr| {
@@ -556,4 +601,90 @@ pub fn listAppend(list: RocList, alignment: usize, element: Opaque, element_widt
     }
 
     return output;
+}
+
+pub fn listRange(width: utils.IntWidth, low: Opaque, high: Opaque) callconv(.C) RocList {
+    const allocator = std.heap.c_allocator;
+    const IntWidth = utils.IntWidth;
+
+    switch (width) {
+        IntWidth.U8 => {
+            return helper1(allocator, u8, low, high);
+        },
+        IntWidth.U16 => {
+            return helper1(allocator, u16, low, high);
+        },
+        IntWidth.U32 => {
+            return helper1(allocator, u32, low, high);
+        },
+        IntWidth.U64 => {
+            return helper1(allocator, u64, low, high);
+        },
+        IntWidth.U128 => {
+            return helper1(allocator, u128, low, high);
+        },
+        IntWidth.I8 => {
+            return helper1(allocator, i8, low, high);
+        },
+        IntWidth.I16 => {
+            return helper1(allocator, i16, low, high);
+        },
+        IntWidth.I32 => {
+            return helper1(allocator, i32, low, high);
+        },
+        IntWidth.I64 => {
+            return helper1(allocator, i64, low, high);
+        },
+        IntWidth.I128 => {
+            return helper1(allocator, i128, low, high);
+        },
+        IntWidth.Usize => {
+            return helper1(allocator, usize, low, high);
+        },
+    }
+}
+
+fn helper1(allocator: *Allocator, comptime T: type, low: Opaque, high: Opaque) RocList {
+    const ptr1 = @ptrCast(*T, @alignCast(@alignOf(T), low));
+    const ptr2 = @ptrCast(*T, @alignCast(@alignOf(T), high));
+
+    return listRangeHelp(allocator, T, ptr1.*, ptr2.*);
+}
+
+fn listRangeHelp(allocator: *Allocator, comptime T: type, low: T, high: T) RocList {
+    const Order = std.math.Order;
+
+    switch (std.math.order(low, high)) {
+        Order.gt => {
+            return RocList.empty();
+        },
+
+        Order.eq => {
+            const list = RocList.allocate(allocator, @alignOf(usize), 1, @sizeOf(T));
+            const buffer = @ptrCast([*]T, @alignCast(@alignOf(T), list.bytes orelse unreachable));
+
+            buffer[0] = low;
+
+            return list;
+        },
+
+        Order.lt => {
+            const length: usize = @intCast(usize, high - low);
+            const list = RocList.allocate(allocator, @alignOf(usize), length, @sizeOf(T));
+
+            const buffer = @ptrCast([*]T, @alignCast(@alignOf(T), list.bytes orelse unreachable));
+
+            var i: usize = 0;
+            var current = low;
+
+            while (i < length) {
+                buffer[i] = current;
+
+                i += 1;
+                current += 1;
+            }
+
+            return list;
+        },
+    }
 }
