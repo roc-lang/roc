@@ -1,6 +1,6 @@
 /// Helpers for interacting with the zig that generates bitcode
 use crate::debug_info_init;
-use crate::llvm::build::{set_name, Env, FAST_CALL_CONV};
+use crate::llvm::build::{set_name, Env, C_CALL_CONV, FAST_CALL_CONV};
 use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::{decrement_refcount_layout, increment_refcount_layout, Mode};
 use inkwell::attributes::{Attribute, AttributeLoc};
@@ -409,6 +409,9 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
                 &[arg_type.into(), arg_type.into(), arg_type.into()],
             );
 
+            // we expose this function to zig; must use c calling convention
+            function_value.set_call_conventions(C_CALL_CONV);
+
             let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
             debug_assert!(kind_id > 0);
             let attr = env.context.create_enum_attribute(kind_id, 1);
@@ -462,6 +465,9 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
             );
             // call.set_call_convention(user_defined_function.get_call_conventions());
             let result = call.try_as_basic_value().left().unwrap();
+
+            // IMPORTANT! we call a user function, so it has the fast calling convention
+            call.set_call_convention(FAST_CALL_CONV);
 
             env.builder.build_return(Some(&result));
 
