@@ -433,10 +433,7 @@ pub fn listKeepResult(list: RocList, is_good_constructor: fn (RocResult) bool, t
         var output = RocList.allocate(std.heap.c_allocator, alignment, list.len(), list.len() * after_width);
         const target_ptr = output.bytes orelse unreachable;
 
-        const threshold: comptime usize = 64;
-        var buffer: [threshold]u8 = undefined;
-        const buffer_allocator = &std.heap.FixedBufferAllocator.init(&buffer).allocator;
-        var temporary = @ptrCast([*]u8, buffer_allocator.alloc(u8, result_width) catch unreachable);
+        var temporary = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, result_width) catch unreachable);
 
         var kept: usize = 0;
         while (i < size) : (i += 1) {
@@ -456,7 +453,7 @@ pub fn listKeepResult(list: RocList, is_good_constructor: fn (RocResult) bool, t
         }
 
         utils.decref(std.heap.c_allocator, alignment, list.bytes, size * before_width);
-        buffer_allocator.free(temporary[0..result_width]);
+        std.heap.c_allocator.free(temporary[0..result_width]);
 
         if (kept == 0) {
             utils.decref(std.heap.c_allocator, alignment, output.bytes, size * after_width);
@@ -480,11 +477,7 @@ pub fn listWalk(list: RocList, stepper: Opaque, stepper_caller: Caller2, accum: 
         return;
     }
 
-    const threshold: comptime usize = 64;
-    var buffer: [threshold]u8 = undefined;
-    const buffer_allocator = &std.heap.FixedBufferAllocator.init(&buffer).allocator;
-
-    const alloc: [*]u8 = @ptrCast([*]u8, buffer_allocator.alloc(u8, accum_width) catch unreachable);
+    const alloc: [*]u8 = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, accum_width) catch unreachable);
     var b1 = output orelse unreachable;
     var b2 = alloc;
 
@@ -504,7 +497,7 @@ pub fn listWalk(list: RocList, stepper: Opaque, stepper_caller: Caller2, accum: 
     }
 
     @memcpy(output orelse unreachable, b2, accum_width);
-    buffer_allocator.free(alloc[0..accum_width]);
+    std.heap.c_allocator.free(alloc[0..accum_width]);
 
     const data_bytes = list.len() * element_width;
     utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
@@ -520,11 +513,7 @@ pub fn listWalkBackwards(list: RocList, stepper: Opaque, stepper_caller: Caller2
         return;
     }
 
-    const threshold: comptime usize = 64;
-    var buffer: [threshold]u8 = undefined;
-    const buffer_allocator = &std.heap.FixedBufferAllocator.init(&buffer).allocator;
-
-    const alloc: [*]u8 = @ptrCast([*]u8, buffer_allocator.alloc(u8, accum_width) catch unreachable);
+    const alloc: [*]u8 = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, accum_width) catch unreachable);
     var b1 = output orelse unreachable;
     var b2 = alloc;
 
@@ -548,7 +537,7 @@ pub fn listWalkBackwards(list: RocList, stepper: Opaque, stepper_caller: Caller2
     }
 
     @memcpy(output orelse unreachable, b2, accum_width);
-    buffer_allocator.free(alloc[0..accum_width]);
+    std.heap.c_allocator.free(alloc[0..accum_width]);
 
     const data_bytes = list.len() * element_width;
     utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
@@ -567,11 +556,7 @@ pub fn listWalkUntil(list: RocList, stepper: Opaque, stepper_caller: Caller2, ac
         return;
     }
 
-    const threshold: comptime usize = 64;
-    var buffer: [threshold]u8 = undefined;
-    const buffer_allocator = &std.heap.FixedBufferAllocator.init(&buffer).allocator;
-
-    const alloc: [*]u8 = @ptrCast([*]u8, buffer_allocator.alloc(u8, TAG_WIDTH + accum_width) catch unreachable);
+    const alloc: [*]u8 = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, TAG_WIDTH + accum_width) catch unreachable);
 
     @memcpy(alloc + TAG_WIDTH, accum orelse unreachable, accum_width);
 
@@ -595,7 +580,7 @@ pub fn listWalkUntil(list: RocList, stepper: Opaque, stepper_caller: Caller2, ac
     }
 
     @memcpy(output orelse unreachable, alloc + TAG_WIDTH, accum_width);
-    buffer_allocator.free(alloc[0 .. TAG_WIDTH + accum_width]);
+    std.heap.c_allocator.free(alloc[0 .. TAG_WIDTH + accum_width]);
 
     const data_bytes = list.len() * element_width;
     utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
