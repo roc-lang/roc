@@ -4,8 +4,8 @@ const mem = std.mem;
 const Builder = std.build.Builder;
 
 pub fn build(b: *Builder) void {
-    b.setPreferredReleaseMode(builtin.Mode.Debug);
-    // b.setPreferredReleaseMode(builtin.Mode.ReleaseFast);
+    // b.setPreferredReleaseMode(builtin.Mode.Debug);
+    b.setPreferredReleaseMode(builtin.Mode.ReleaseFast);
     const mode = b.standardReleaseOptions();
 
     // Options
