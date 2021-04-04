@@ -3693,7 +3693,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let inplace = get_inplace_from_layout(layout);
 
-            list_reverse(env, parent, inplace, list, list_layout)
+            list_reverse(env, inplace, list, list_layout)
         }
         ListConcat => {
             debug_assert_eq!(args.len(), 2);
