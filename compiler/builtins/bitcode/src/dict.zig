@@ -763,9 +763,8 @@ const StepperCaller = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) v
 pub fn dictWalk(dict: RocDict, stepper: Opaque, stepper_caller: StepperCaller, accum: Opaque, alignment: Alignment, key_width: usize, value_width: usize, accum_width: usize, inc_key: Inc, inc_value: Inc, output: Opaque) callconv(.C) void {
     // allocate space to write the result of the stepper into
     // experimentally aliasing the accum and output pointers is not a good idea
-    const threshold: comptime usize = 64;
-    var buffer: [threshold]u8 = undefined;
-    const buffer_allocator = &std.heap.FixedBufferAllocator.init(&buffer).allocator;
+    const threshold: comptime usize = 512;
+    const buffer_allocator = &utils.stackFallback(threshold, std.heap.c_allocator).allocator;
 
     const alloc: [*]u8 = @ptrCast([*]u8, buffer_allocator.alloc(u8, accum_width) catch unreachable);
     var b1 = output orelse unreachable;
