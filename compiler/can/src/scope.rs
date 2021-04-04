@@ -49,7 +49,6 @@ impl Scope {
                 typ,
                 hidden_variables: MutSet::default(),
                 vars: variables,
-                uniqueness: None,
             };
 
             aliases.insert(symbol, alias);
@@ -186,7 +185,6 @@ impl Scope {
             region,
             vars,
             hidden_variables,
-            uniqueness: None,
             typ,
         };
 

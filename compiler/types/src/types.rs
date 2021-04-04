@@ -1,4 +1,3 @@
-use crate::boolean_algebra;
 use crate::pretty_print::Parens;
 use crate::subs::{Subs, VarStore, Variable};
 use inlinable_string::InlinableString;
@@ -152,8 +151,6 @@ pub enum Type {
     RecursiveTagUnion(Variable, Vec<(TagName, Vec<Type>)>, Box<Type>),
     /// Applying a type to some arguments (e.g. Dict.Dict String Int)
     Apply(Symbol, Vec<Type>),
-    /// Boolean type used in uniqueness inference
-    Boolean(boolean_algebra::Bool),
     Variable(Variable),
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
@@ -353,7 +350,6 @@ impl fmt::Debug for Type {
 
                 write!(f, " as <{:?}>", rec)
             }
-            Type::Boolean(b) => write!(f, "{:?}", b),
         }
     }
 }
@@ -440,15 +436,6 @@ impl Type {
                     arg.substitute(substitutions);
                 }
             }
-            Boolean(b) => {
-                let mut mapper = |var| match substitutions.get(&var) {
-                    Some(Type::Variable(new_var)) => *new_var,
-                    Some(_) => panic!("cannot substitute boolean var for Type"),
-                    None => var,
-                };
-
-                *b = b.map_variables(&mut mapper)
-            }
 
             EmptyRec | EmptyTagUnion | Erroneous(_) => {}
         }
@@ -503,7 +490,7 @@ impl Type {
                     arg.substitute_alias(rep_symbol, actual);
                 }
             }
-            EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => {}
+            EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) => {}
         }
     }
 
@@ -537,7 +524,7 @@ impl Type {
             }
             Apply(symbol, _) if *symbol == rep_symbol => true,
             Apply(_, args) => args.iter().any(|arg| arg.contains_symbol(rep_symbol)),
-            EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => false,
+            EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) => false,
         }
     }
 
@@ -569,7 +556,7 @@ impl Type {
             Alias(_, _, actual_type) => actual_type.contains_variable(rep_variable),
             HostExposedAlias { actual, .. } => actual.contains_variable(rep_variable),
             Apply(_, args) => args.iter().any(|arg| arg.contains_variable(rep_variable)),
-            EmptyRec | EmptyTagUnion | Erroneous(_) | Boolean(_) => false,
+            EmptyRec | EmptyTagUnion | Erroneous(_) => false,
         }
     }
 
@@ -632,35 +619,6 @@ impl Type {
 
                 actual_type.instantiate_aliases(region, aliases, var_store, introduced);
             }
-            Apply(Symbol::ATTR_ATTR, attr_args) => {
-                use boolean_algebra::Bool;
-
-                debug_assert_eq!(attr_args.len(), 2);
-                let mut it = attr_args.iter_mut();
-                let uniqueness_type = it.next().unwrap();
-                let base_type = it.next().unwrap();
-
-                // instantiate the rest
-                base_type.instantiate_aliases(region, aliases, var_store, introduced);
-
-                // correct uniqueness type
-                // if this attr contains an alias of a recursive tag union, then the uniqueness
-                // attribute on the recursion variable must match the uniqueness of the whole tag
-                // union. We enforce that here.
-
-                if let Some(Bool::Container(unbound_cvar, mvars1)) =
-                    find_rec_var_uniqueness(base_type, aliases)
-                {
-                    if let Type::Boolean(Bool::Container(bound_cvar, mvars2)) = uniqueness_type {
-                        debug_assert!(mvars1.is_empty());
-                        debug_assert!(mvars2.is_empty());
-
-                        let mut substitution = ImMap::default();
-                        substitution.insert(unbound_cvar, Type::Variable(*bound_cvar));
-                        base_type.substitute(&substitution);
-                    }
-                }
-            }
             Apply(symbol, args) => {
                 if let Some(alias) = aliases.get(symbol) {
                     if args.len() != alias.vars.len() {
@@ -693,8 +651,6 @@ impl Type {
                         substitution.insert(*placeholder, filler);
                     }
 
-                    use boolean_algebra::Bool;
-
                     // Instantiate "hidden" uniqueness variables
                     //
                     // Aliases can hide uniqueness variables: e.g. in
@@ -725,12 +681,6 @@ impl Type {
                             //
                             // And now we must make sure the `a`s stay the same variable, i.e.
                             // don't re-instantiate it here.
-                            if let Some(Bool::Container(unbound_cvar, _)) = alias.uniqueness {
-                                if variable == unbound_cvar {
-                                    introduced.insert(variable);
-                                    continue;
-                                }
-                            }
                             let var = var_store.fresh();
                             substitution.insert(variable, Type::Variable(var));
 
@@ -767,7 +717,7 @@ impl Type {
                     }
                 }
             }
-            EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => {}
+            EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) => {}
         }
     }
 }
@@ -813,7 +763,7 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
             accum.insert(*symbol);
             args.iter().for_each(|arg| symbols_help(arg, accum));
         }
-        EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) | Boolean(_) => {}
+        EmptyRec | EmptyTagUnion | Erroneous(_) | Variable(_) => {}
     }
 }
 
@@ -822,11 +772,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
 
     match tipe {
         EmptyRec | EmptyTagUnion | Erroneous(_) => (),
-        Boolean(b) => {
-            for v in b.variables() {
-                accum.insert(v);
-            }
-        }
+
         Variable(v) => {
             accum.insert(*v);
         }
@@ -891,34 +837,6 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
                 variables_help(x, accum);
             }
         }
-    }
-}
-
-/// We're looking for an alias whose actual type is a recursive tag union
-/// if `base_type` is one, return the uniqueness variable of the alias.
-fn find_rec_var_uniqueness(
-    base_type: &Type,
-    aliases: &ImMap<Symbol, Alias>,
-) -> Option<boolean_algebra::Bool> {
-    use Type::*;
-
-    if let Alias(symbol, _, actual) = base_type {
-        match **actual {
-            Alias(_, _, _) => find_rec_var_uniqueness(actual, aliases),
-            RecursiveTagUnion(_, _, _) => {
-                if let Some(alias) = aliases.get(symbol) {
-                    // alias with a recursive tag union must have its uniqueness set
-                    debug_assert!(alias.uniqueness.is_some());
-
-                    alias.uniqueness.clone()
-                } else {
-                    unreachable!("aliases must be defined in the set of aliases!")
-                }
-            }
-            _ => None,
-        }
-    } else {
-        None
     }
 }
 
@@ -1049,7 +967,6 @@ pub struct Alias {
     /// hidden type variables, like the closure variable in `a -> b`
     pub hidden_variables: MutSet<Variable>,
 
-    pub uniqueness: Option<boolean_algebra::Bool>,
     pub typ: Type,
 }
 
@@ -1090,7 +1007,6 @@ pub enum ErrorType {
     RecursiveTagUnion(Box<ErrorType>, SendMap<TagName, Vec<ErrorType>>, TypeExt),
     Function(Vec<ErrorType>, Box<ErrorType>, Box<ErrorType>),
     Alias(Symbol, Vec<(Lowercase, ErrorType)>, Box<ErrorType>),
-    Boolean(boolean_algebra::Bool),
     Error,
 }
 
@@ -1415,11 +1331,6 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             buf.push_str(" as ");
 
             write_debug_error_type_help(*rec, buf, Parens::Unnecessary);
-        }
-
-        Boolean(boolean_algebra::Bool::Shared) => buf.push_str("Shared"),
-        Boolean(boolean_algebra::Bool::Container(mvar, cvars)) => {
-            buf.push_str(&format!("Container({:?}, {:?})", mvar, cvars))
         }
     }
 }

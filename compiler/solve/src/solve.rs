@@ -4,7 +4,6 @@ use roc_collections::all::{ImMap, MutMap};
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
-use roc_types::boolean_algebra::{self, Bool};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
 use roc_types::types::Type::{self, *};
@@ -659,12 +658,6 @@ fn type_to_variable(
         EmptyTagUnion => Variable::EMPTY_TAG_UNION,
 
         // This case is important for the rank of boolean variables
-        Boolean(boolean_algebra::Bool::Container(cvar, mvars)) if mvars.is_empty() => *cvar,
-        Boolean(b) => {
-            let content = Content::Structure(FlatType::Boolean(b.clone()));
-
-            register(subs, rank, pools, content)
-        }
         Function(args, closure_type, ret_type) => {
             let mut arg_vars = Vec::with_capacity(args.len());
 
@@ -972,28 +965,6 @@ fn check_for_infinite_type(
                     _ => circular_error(subs, problems, symbol, &loc_var),
                 }
             }
-            Content::Structure(FlatType::Boolean(Bool::Container(_cvar, _mvars))) => {
-                // We have a loop in boolean attributes. The attributes can be seen as constraints
-                // too, so if we have
-                //
-                // Container( u1, { u2, u3 } )
-                //
-                // That means u1 >= u2 and u1 >= u3
-                //
-                // Now if u1 occurs in the definition of u2, then that's like saying u1 >= u2 >= u1,
-                // which can only be true if u1 == u2. So that's what we do with unify.
-                for var in chain {
-                    if let Content::Structure(FlatType::Boolean(_)) =
-                        subs.get_without_compacting(var).content
-                    {
-                        // this unify just makes new pools. is that bad?
-                        let outcome = unify(subs, recursive, var);
-                        debug_assert!(matches!(outcome, roc_unify::unify::Unified::Success(_)));
-                    }
-                }
-
-                boolean_algebra::flatten(subs, recursive);
-            }
 
             _other => circular_error(subs, problems, symbol, &loc_var),
         }
@@ -1285,18 +1256,6 @@ fn adjust_rank_content(
                     rank
                 }
 
-                Boolean(Bool::Shared) => Rank::toplevel(),
-                Boolean(Bool::Container(cvar, mvars)) => {
-                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *cvar);
-
-                    for var in mvars {
-                        rank =
-                            rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
-                    }
-
-                    rank
-                }
-
                 Erroneous(_) => group_rank,
             }
         }
@@ -1472,12 +1431,6 @@ fn instantiate_rigids_help(
                         new_tags,
                         instantiate_rigids_help(subs, max_rank, pools, ext_var),
                     )
-                }
-
-                Boolean(b) => {
-                    let mut mapper = |var| instantiate_rigids_help(subs, max_rank, pools, var);
-
-                    Boolean(b.map_variables(&mut mapper))
                 }
             };
 
@@ -1664,12 +1617,6 @@ fn deep_copy_var_help(
                         new_tags,
                         deep_copy_var_help(subs, max_rank, pools, ext_var),
                     )
-                }
-
-                Boolean(b) => {
-                    let mut mapper = |var| deep_copy_var_help(subs, max_rank, pools, var);
-
-                    Boolean(b.map_variables(&mut mapper))
                 }
             };
 

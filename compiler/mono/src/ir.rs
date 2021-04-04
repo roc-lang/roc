@@ -3469,7 +3469,7 @@ pub fn with_hole<'a>(
         }
 
         List {
-            list_var,
+            list_var: _,
             elem_var,
             loc_elems,
         } => {
@@ -3488,7 +3488,7 @@ pub fn with_hole<'a>(
                 elems: arg_symbols,
             };
 
-            let mode = crate::layout::mode_from_var(list_var, env.subs);
+            let mode = MemoryMode::Refcounted;
 
             let stmt = Stmt::Let(
                 assigned,

@@ -1,4 +1,3 @@
-use crate::boolean_algebra;
 use crate::types::{name_type_var, ErrorType, Problem, RecordField, TypeExt};
 use roc_collections::all::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
@@ -561,14 +560,6 @@ impl Content {
         )
     }
 
-    pub fn is_unique(&self, subs: &Subs) -> bool {
-        match self {
-            Content::Structure(FlatType::Boolean(boolean)) => boolean.is_unique(subs),
-            Content::FlexVar(_) => true,
-            _ => false,
-        }
-    }
-
     #[cfg(debug_assertions)]
     #[allow(dead_code)]
     pub fn dbg(self, subs: &Subs) -> Self {
@@ -597,7 +588,6 @@ pub enum FlatType {
     Erroneous(Problem),
     EmptyRecord,
     EmptyTagUnion,
-    Boolean(boolean_algebra::Bool),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
@@ -654,15 +644,6 @@ fn occurs(
                         // TODO rec_var is excluded here, verify that this is correct
                         let it = once(&ext_var).chain(tags.values().flatten());
                         short_circuit(subs, root_var, &new_seen, it)
-                    }
-                    Boolean(b) => {
-                        for var in b.variables().iter() {
-                            if let Some((v, mut vec)) = occurs(subs, &new_seen, *var) {
-                                vec.push(root_var);
-                                return Some((v, vec));
-                            }
-                        }
-                        None
                     }
                     EmptyRecord | EmptyTagUnion | Erroneous(_) => None,
                 }
@@ -783,8 +764,7 @@ fn explicit_substitute(
                             subs.set_content(in_var, Structure(Record(vars_by_field, new_ext_var)));
                         }
 
-                        // NOTE assume we never substitute into a Boolean
-                        EmptyRecord | EmptyTagUnion | Boolean(_) | Erroneous(_) => {}
+                        EmptyRecord | EmptyTagUnion | Erroneous(_) => {}
                     }
 
                     in_var
@@ -901,12 +881,6 @@ fn get_var_names(
 
                     taken_names
                 }
-                FlatType::Boolean(b) => b
-                    .variables()
-                    .into_iter()
-                    .fold(taken_names, |answer, arg_var| {
-                        get_var_names(subs, arg_var, answer)
-                    }),
             },
         }
     }
@@ -1184,8 +1158,6 @@ fn flat_type_to_err_type(
             }
         }
 
-        Boolean(b) => ErrorType::Boolean(b),
-
         Erroneous(problem) => {
             state.problems.push(problem);
 
@@ -1252,11 +1224,6 @@ fn restore_content(subs: &mut Subs, content: &Content) {
                 subs.restore(*rec_var);
             }
 
-            Boolean(b) => {
-                for var in b.variables() {
-                    subs.restore(var);
-                }
-            }
             Erroneous(_) => (),
         },
         Alias(_, args, var) => {

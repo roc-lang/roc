@@ -1,4 +1,3 @@
-use crate::boolean_algebra::Bool;
 use crate::subs::{Content, FlatType, Subs, Variable};
 use crate::types::{name_type_var, RecordField};
 use roc_collections::all::{MutMap, MutSet};
@@ -98,9 +97,6 @@ fn find_names_needed(
                 let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, ext_var);
                 subs.set_content(recursive, Content::Structure(flat_type));
             }
-            Content::Structure(FlatType::Boolean(Bool::Container(_cvar, _mvars))) => {
-                crate::boolean_algebra::flatten(subs, recursive);
-            }
             _ => panic!(
                 "unfixable recursive type in roc_types::pretty_print {:?} {:?} {:?}",
                 recursive, variable, content
@@ -199,16 +195,6 @@ fn find_names_needed(
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
             find_names_needed(rec_var, subs, roots, root_appearances, names_taken);
         }
-        Structure(Boolean(b)) => match b {
-            Bool::Shared => {}
-            Bool::Container(cvar, mvars) => {
-                find_names_needed(cvar, subs, roots, root_appearances, names_taken);
-
-                for var in mvars {
-                    find_names_needed(var, subs, roots, root_appearances, names_taken);
-                }
-            }
-        },
         Alias(symbol, args, _actual) => {
             if let Symbol::ATTR_ATTR = symbol {
                 find_names_needed(args[0].1, subs, roots, root_appearances, names_taken);
@@ -590,9 +576,6 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
                 parens,
             )
         }
-        Boolean(b) => {
-            write_boolean(env, b, subs, buf, Parens::InTypeParam);
-        }
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));
         }
@@ -652,65 +635,6 @@ pub fn chase_ext_record(
         Alias(_, _, var) => chase_ext_record(subs, var, fields),
 
         content => Err((var, content)),
-    }
-}
-
-fn write_boolean(env: &Env, boolean: Bool, subs: &Subs, buf: &mut String, parens: Parens) {
-    use crate::boolean_algebra::var_is_shared;
-
-    match boolean.simplify(subs) {
-        Bool::Shared => {
-            buf.push_str("Shared");
-        }
-        Bool::Container(cvar, mvars) if mvars.iter().all(|v| var_is_shared(subs, *v)) => {
-            debug_assert!(!var_is_shared(subs, cvar));
-
-            write_content(
-                env,
-                subs.get_without_compacting(cvar).content,
-                subs,
-                buf,
-                Parens::Unnecessary,
-            );
-        }
-        Bool::Container(cvar, mvars) => {
-            debug_assert!(!var_is_shared(subs, cvar));
-
-            let mut buffers = Vec::with_capacity(mvars.len());
-            for v in mvars {
-                // don't print shared in a container
-                if var_is_shared(subs, v) {
-                    continue;
-                }
-
-                let mut inner_buf: String = "".to_string();
-                write_content(
-                    env,
-                    subs.get_without_compacting(v).content,
-                    subs,
-                    &mut inner_buf,
-                    parens,
-                );
-                buffers.push(inner_buf);
-            }
-
-            // sort type variables alphabetically
-            buffers.sort();
-
-            let combined = buffers.join(" | ");
-
-            buf.push('(');
-            write_content(
-                env,
-                subs.get_without_compacting(cvar).content,
-                subs,
-                buf,
-                Parens::Unnecessary,
-            );
-            buf.push_str(" | ");
-            buf.push_str(&combined);
-            buf.push(')');
-        }
     }
 }
 

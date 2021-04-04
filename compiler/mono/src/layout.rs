@@ -1090,31 +1090,6 @@ fn layout_from_flat_type<'a>(
                 Symbol::STR_STR => Ok(Layout::Builtin(Builtin::Str)),
                 Symbol::LIST_LIST => list_layout_from_elem(env, args[0]),
                 Symbol::DICT_DICT => dict_layout_from_key_value(env, args[0], args[1]),
-                Symbol::ATTR_ATTR => {
-                    debug_assert_eq!(args.len(), 2);
-
-                    // The first argument is the uniqueness info;
-                    // second is the base type
-                    let wrapped_var = args[1];
-
-                    // correct the memory mode of unique lists
-                    match Layout::from_var(env, wrapped_var)? {
-                        Layout::Builtin(Builtin::List(_ignored, elem_layout)) => {
-                            let uniqueness_var = args[0];
-                            let uniqueness_content =
-                                subs.get_without_compacting(uniqueness_var).content;
-
-                            let mode = if uniqueness_content.is_unique(subs) {
-                                MemoryMode::Unique
-                            } else {
-                                MemoryMode::Refcounted
-                            };
-
-                            Ok(Layout::Builtin(Builtin::List(mode, elem_layout)))
-                        }
-                        other => Ok(other),
-                    }
-                }
                 Symbol::SET_SET => dict_layout_from_key_value(env, args[0], Variable::EMPTY_RECORD),
                 _ => {
                     panic!("TODO layout_from_flat_type for {:?}", Apply(symbol, args));
@@ -1269,9 +1244,6 @@ fn layout_from_flat_type<'a>(
         }
         EmptyTagUnion => {
             panic!("TODO make Layout for empty Tag Union");
-        }
-        Boolean(_) => {
-            panic!("TODO make Layout for Boolean");
         }
         Erroneous(_) => Err(LayoutProblem::Erroneous),
         EmptyRecord => Ok(Layout::Struct(&[])),
@@ -1996,24 +1968,6 @@ pub fn list_layout_from_elem<'a>(
                 env.arena.alloc(elem_layout),
             )))
         }
-    }
-}
-
-pub fn mode_from_var(var: Variable, subs: &Subs) -> MemoryMode {
-    match subs.get_without_compacting(var).content {
-        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
-            debug_assert_eq!(args.len(), 2);
-
-            let uvar = *args.get(0).unwrap();
-            let content = subs.get_without_compacting(uvar).content;
-
-            if content.is_unique(subs) {
-                MemoryMode::Unique
-            } else {
-                MemoryMode::Refcounted
-            }
-        }
-        _ => MemoryMode::Refcounted,
     }
 }
 

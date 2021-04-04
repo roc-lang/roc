@@ -1479,7 +1479,6 @@ pub fn to_doc<'b>(
                 ext_to_doc(alloc, ext),
             )
         }
-        Boolean(b) => alloc.string(format!("{:?}", b)),
     }
 }
 
@@ -2476,7 +2475,6 @@ fn type_problem_to_pretty<'b>(
                         alloc.reflow(" value"),
                     ]),
                 ),
-                Boolean(_) => bad_rigid_var(x, alloc.reflow("a uniqueness attribute value")),
             }
         }
         IntFloat => alloc.tip().append(alloc.concat(vec![

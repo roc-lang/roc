@@ -1,4 +1,3 @@
-use crate::boolean_algebra::{self, Bool};
 use crate::subs::{FlatType, Subs, VarId, VarStore, Variable};
 use crate::types::{Problem, RecordField, Type};
 use roc_collections::all::{ImMap, MutSet, SendMap};
@@ -85,7 +84,6 @@ fn hash_solved_type_help<H: Hasher>(
         }
         Rigid(name) => name.hash(state),
         Erroneous(problem) => problem.hash(state),
-        Boolean(solved_bool) => solved_bool.hash(state),
 
         Record { fields, ext } => {
             for (name, x) in fields {
@@ -189,42 +187,8 @@ pub enum SolvedType {
         actual: Box<SolvedType>,
     },
 
-    /// a boolean algebra Bool
-    Boolean(SolvedBool),
-
     /// A type error
     Error,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SolvedBool {
-    SolvedShared,
-    SolvedContainer(VarId, Vec<VarId>),
-}
-
-impl SolvedBool {
-    pub fn from_bool(boolean: &boolean_algebra::Bool, subs: &Subs) -> Self {
-        match boolean {
-            Bool::Shared => SolvedBool::SolvedShared,
-            Bool::Container(cvar, mvars) => {
-                match subs.get_without_compacting(*cvar).content {
-                    crate::subs::Content::FlexVar(_) => {}
-                    crate::subs::Content::Structure(FlatType::Boolean(Bool::Shared)) => {
-                        return SolvedBool::SolvedShared;
-                    }
-                    other => panic!("Container var is not flex but {:?}", other),
-                }
-
-                SolvedBool::SolvedContainer(
-                    VarId::from_var(*cvar, subs),
-                    mvars
-                        .iter()
-                        .map(|mvar| VarId::from_var(*mvar, subs))
-                        .collect(),
-                )
-            }
-        }
-    }
 }
 
 impl SolvedType {
@@ -350,7 +314,6 @@ impl SolvedType {
                     actual: Box::new(solved_type),
                 }
             }
-            Boolean(val) => SolvedType::Boolean(SolvedBool::from_bool(&val, solved_subs.inner())),
             Variable(var) => Self::from_var(solved_subs.inner(), *var),
         }
     }
@@ -485,7 +448,6 @@ impl SolvedType {
             }
             EmptyRecord => SolvedType::EmptyRecord,
             EmptyTagUnion => SolvedType::EmptyTagUnion,
-            Boolean(val) => SolvedType::Boolean(SolvedBool::from_bool(&val, subs)),
             Erroneous(problem) => SolvedType::Erroneous(problem),
         }
     }
@@ -623,16 +585,6 @@ pub fn to_type(
                 new_tags,
                 Box::new(to_type(ext, free_vars, var_store)),
             )
-        }
-        Boolean(SolvedBool::SolvedShared) => Type::Boolean(Bool::Shared),
-        Boolean(SolvedBool::SolvedContainer(solved_cvar, solved_mvars)) => {
-            let cvar = var_id_to_flex_var(*solved_cvar, free_vars, var_store);
-
-            let mvars = solved_mvars
-                .iter()
-                .map(|var_id| var_id_to_flex_var(*var_id, free_vars, var_store));
-
-            Type::Boolean(Bool::container(cvar, mvars))
         }
         Alias(symbol, solved_type_variables, solved_actual) => {
             let mut type_variables = Vec::with_capacity(solved_type_variables.len());
