@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 use crate::llvm::bitcode::{
-    build_dec_wrapper, build_eq_wrapper, build_inc_wrapper, build_transform_caller,
-    call_bitcode_fn, call_void_bitcode_fn,
+    build_compare_wrapper, build_dec_wrapper, build_eq_wrapper, build_inc_wrapper,
+    build_transform_caller, call_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
     allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, InPlace,
@@ -995,6 +995,52 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
             dec_result_fn.as_global_value().as_pointer_value().into(),
         ],
         op,
+    );
+
+    complex_bitcast(
+        env.builder,
+        output,
+        collection(env.context, env.ptr_bytes).into(),
+        "from_i128",
+    )
+}
+
+/// List.sortWith : List a, (a, a -> Ordering) -> List a
+pub fn list_sort_with<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    transform: BasicValueEnum<'ctx>,
+    list: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let list_i128 = complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128");
+
+    let transform_ptr = transform.into_pointer_value();
+
+    let compare_wrapper = build_compare_wrapper(env, layout_ids, element_layout)
+        .as_global_value()
+        .as_pointer_value();
+
+    let element_width = env
+        .ptr_int()
+        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let alignment = element_layout.alignment_bytes(env.ptr_bytes);
+    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
+
+    let output = call_bitcode_fn(
+        env,
+        &[
+            list_i128,
+            env.builder
+                .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+            compare_wrapper.into(),
+            alignment_iv.into(),
+            element_width.into(),
+        ],
+        bitcode::LIST_SORT_WITH,
     );
 
     complex_bitcast(

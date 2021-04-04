@@ -1839,19 +1839,30 @@ fn cleanup_because_exception() {
 
 #[test]
 fn list_range() {
+    assert_evals_to!("List.range 0 -1", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!("List.range 0 0", RocList::from_slice(&[0]), RocList<i64>);
     assert_evals_to!(
-        indoc!("List.range 0 -1"),
+        "List.range 0 5",
+        RocList::from_slice(&[0, 1, 2, 3, 4]),
+        RocList<i64>
+    );
+}
+
+#[test]
+fn list_sort_with() {
+    assert_evals_to!(
+        "List.sortWith [] Num.compare",
         RocList::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
-        indoc!("List.range 0 0"),
-        RocList::from_slice(&[0]),
+        "List.sortWith [ 4,3,2,1 ] Num.compare",
+        RocList::from_slice(&[1, 2, 3, 4]),
         RocList<i64>
     );
     assert_evals_to!(
-        indoc!("List.range 0 5"),
-        RocList::from_slice(&[0, 1, 2, 3, 4]),
+        "List.sortWith [ 1,2,3,4] (\\a,b -> Num.compare b a)",
+        RocList::from_slice(&[4, 3, 2, 1]),
         RocList<i64>
     );
 }

@@ -7,6 +7,7 @@ const Allocator = mem.Allocator;
 const TAG_WIDTH = 8;
 
 const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
+const CompareFn = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) u8;
 const Opaque = ?[*]u8;
 
 const Inc = fn (?[*]u8) callconv(.C) void;
@@ -740,4 +741,82 @@ fn listRangeHelp(allocator: *Allocator, comptime T: type, low: T, high: T) RocLi
             return list;
         },
     }
+}
+
+inline fn swapHelp(width: usize, temporary: [*]u8, ptr1: [*]u8, ptr2: [*]u8) void {
+    @memcpy(temporary, ptr1, width);
+    @memcpy(ptr1, ptr2, width);
+    @memcpy(ptr2, temporary, width);
+}
+
+fn swap(source_ptr: [*]u8, element_width_initial: usize, index_1: usize, index_2: usize) void {
+    const threshold: comptime usize = 64;
+
+    var element_width = element_width_initial;
+
+    var buffer_actual: [threshold]u8 = undefined;
+    var buffer: [*]u8 = buffer_actual[0..];
+
+    var element_at_i = source_ptr + (index_1 * element_width);
+    var element_at_j = source_ptr + (index_2 * element_width);
+
+    while (true) {
+        if (element_width < threshold) {
+            swapHelp(element_width, buffer, element_at_i, element_at_j);
+            return;
+        } else {
+            swapHelp(threshold, buffer, element_at_i, element_at_j);
+
+            element_at_i += threshold;
+            element_at_j += threshold;
+
+            element_width -= threshold;
+        }
+    }
+}
+
+fn partition(source_ptr: [*]u8, transform: Opaque, wrapper: CompareFn, element_width: usize, low: isize, high: isize) isize {
+    const pivot = source_ptr + (@intCast(usize, high) * element_width);
+    var i = (low - 1); // Index of smaller element and indicates the right position of pivot found so far
+    var j = low;
+
+    while (j <= high - 1) : (j += 1) {
+        const current_elem = source_ptr + (@intCast(usize, j) * element_width);
+
+        const ordering = wrapper(transform, current_elem, pivot);
+        const order = @intToEnum(utils.Ordering, ordering);
+
+        switch (order) {
+            utils.Ordering.LT => {
+                // the current element is smaller than the pivot; swap it
+                i += 1;
+                swap(source_ptr, element_width, @intCast(usize, i), @intCast(usize, j));
+            },
+            utils.Ordering.EQ, utils.Ordering.GT => {},
+        }
+    }
+    swap(source_ptr, element_width, @intCast(usize, i + 1), @intCast(usize, high));
+    return (i + 1);
+}
+
+fn quicksort(source_ptr: [*]u8, transform: Opaque, wrapper: CompareFn, element_width: usize, low: isize, high: isize) void {
+    if (low < high) {
+        // partition index
+        const pi = partition(source_ptr, transform, wrapper, element_width, low, high);
+
+        _ = quicksort(source_ptr, transform, wrapper, element_width, low, pi - 1); // before pi
+        _ = quicksort(source_ptr, transform, wrapper, element_width, pi + 1, high); // after pi
+    }
+}
+
+pub fn listSortWith(input: RocList, transform: Opaque, wrapper: CompareFn, alignment: usize, element_width: usize) callconv(.C) RocList {
+    var list = input.makeUnique(std.heap.c_allocator, alignment, element_width);
+
+    if (list.bytes) |source_ptr| {
+        const low = 0;
+        const high: isize = @intCast(isize, list.len()) - 1;
+        quicksort(source_ptr, transform, wrapper, element_width, low, high);
+    }
+
+    return list;
 }
