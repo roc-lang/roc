@@ -124,32 +124,17 @@ pub fn listReverse(list: RocList, alignment: usize, element_width: usize) callco
         const size = list.len();
 
         var i: usize = 0;
-        var end: usize = size - 1;
+        const end: usize = size - 1;
 
         if (list.isUnique()) {
-            const temp: [*]u8 = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, element_width) catch unreachable);
 
             // Working from the front and back so
             // we only need to go ~(n / 2) iterations.
             // If the length is an odd number the middle
             // element stays in the same place anyways.
             while (i < (end - i)) : (i += 1) {
-                const last_position = end - i;
-
-                const last_element = source_ptr + (last_position * element_width);
-                const first_element = source_ptr + (i * element_width);
-
-                // Store Last Element in temp
-                @memcpy(temp, last_element, element_width);
-
-                // Swap Last Element with First Element
-                @memcpy(last_element, first_element, element_width);
-
-                // Swap First Element with temp
-                @memcpy(first_element, temp, element_width);
+                swapElements(source_ptr, element_width, i, end - i);
             }
-
-            std.heap.c_allocator.free(temp[0..element_width]);
 
             return list;
         } else {
@@ -743,38 +728,6 @@ fn listRangeHelp(allocator: *Allocator, comptime T: type, low: T, high: T) RocLi
     }
 }
 
-inline fn swapHelp(width: usize, temporary: [*]u8, ptr1: [*]u8, ptr2: [*]u8) void {
-    @memcpy(temporary, ptr1, width);
-    @memcpy(ptr1, ptr2, width);
-    @memcpy(ptr2, temporary, width);
-}
-
-fn swap(source_ptr: [*]u8, element_width_initial: usize, index_1: usize, index_2: usize) void {
-    const threshold: comptime usize = 64;
-
-    var element_width = element_width_initial;
-
-    var buffer_actual: [threshold]u8 = undefined;
-    var buffer: [*]u8 = buffer_actual[0..];
-
-    var element_at_i = source_ptr + (index_1 * element_width);
-    var element_at_j = source_ptr + (index_2 * element_width);
-
-    while (true) {
-        if (element_width < threshold) {
-            swapHelp(element_width, buffer, element_at_i, element_at_j);
-            return;
-        } else {
-            swapHelp(threshold, buffer, element_at_i, element_at_j);
-
-            element_at_i += threshold;
-            element_at_j += threshold;
-
-            element_width -= threshold;
-        }
-    }
-}
-
 fn partition(source_ptr: [*]u8, transform: Opaque, wrapper: CompareFn, element_width: usize, low: isize, high: isize) isize {
     const pivot = source_ptr + (@intCast(usize, high) * element_width);
     var i = (low - 1); // Index of smaller element and indicates the right position of pivot found so far
@@ -790,12 +743,12 @@ fn partition(source_ptr: [*]u8, transform: Opaque, wrapper: CompareFn, element_w
             utils.Ordering.LT => {
                 // the current element is smaller than the pivot; swap it
                 i += 1;
-                swap(source_ptr, element_width, @intCast(usize, i), @intCast(usize, j));
+                swapElements(source_ptr, element_width, @intCast(usize, i), @intCast(usize, j));
             },
             utils.Ordering.EQ, utils.Ordering.GT => {},
         }
     }
-    swap(source_ptr, element_width, @intCast(usize, i + 1), @intCast(usize, high));
+    swapElements(source_ptr, element_width, @intCast(usize, i + 1), @intCast(usize, high));
     return (i + 1);
 }
 
@@ -819,4 +772,50 @@ pub fn listSortWith(input: RocList, transform: Opaque, wrapper: CompareFn, align
     }
 
     return list;
+}
+
+// SWAP ELEMENTS
+
+inline fn swapHelp(width: usize, temporary: [*]u8, ptr1: [*]u8, ptr2: [*]u8) void {
+    @memcpy(temporary, ptr1, width);
+    @memcpy(ptr1, ptr2, width);
+    @memcpy(ptr2, temporary, width);
+}
+
+fn swap(width_initial: usize, p1: [*]u8, p2: [*]u8) void {
+    const threshold: comptime usize = 64;
+
+    var width = width_initial;
+
+    var ptr1 = p1;
+    var ptr2 = p2;
+
+    var buffer_actual: [threshold]u8 = undefined;
+    var buffer: [*]u8 = buffer_actual[0..];
+
+    while (true) {
+        if (width < threshold) {
+            swapHelp(width, buffer, ptr1, ptr2);
+            return;
+        } else {
+            swapHelp(threshold, buffer, ptr1, ptr2);
+
+            ptr1 += threshold;
+            ptr2 += threshold;
+
+            width -= threshold;
+        }
+    }
+}
+
+fn swapElements(source_ptr: [*]u8, element_width: usize, index_1: usize, index_2: usize) void {
+    const threshold: comptime usize = 64;
+
+    var buffer_actual: [threshold]u8 = undefined;
+    var buffer: [*]u8 = buffer_actual[0..];
+
+    var element_at_i = source_ptr + (index_1 * element_width);
+    var element_at_j = source_ptr + (index_2 * element_width);
+
+    return swap(element_width, element_at_i, element_at_j);
 }
