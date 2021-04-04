@@ -20,6 +20,7 @@ comptime {
     exportListFn(list.listRepeat, "repeat");
     exportListFn(list.listAppend, "append");
     exportListFn(list.listRange, "range");
+    exportListFn(list.listReverse, "reverse");
     exportListFn(list.listSortWith, "sort_with");
 }
 

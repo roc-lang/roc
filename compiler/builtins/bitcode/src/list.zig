@@ -119,6 +119,59 @@ const Caller1 = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller2 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller3 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 
+pub fn listReverse(list: RocList, alignment: usize, element_width: usize) callconv(.C) RocList {
+    if (list.bytes) |source_ptr| {
+        const size = list.len();
+
+        var i: usize = 0;
+        var end: usize = size - 1;
+
+        if (list.isUnique()) {
+            const temp: [*]u8 = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, element_width) catch unreachable);
+
+            // Working from the front and back so
+            // we only need to go ~(n / 2) iterations.
+            // If the length is an odd number the middle
+            // element stays in the same place anyways.
+            while (i < (end - i)) : (i += 1) {
+                const last_position = end - i;
+
+                const last_element = source_ptr + (last_position * element_width);
+                const first_element = source_ptr + (i * element_width);
+
+                // Store Last Element in temp
+                @memcpy(temp, last_element, element_width);
+
+                // Swap Last Element with First Element
+                @memcpy(last_element, first_element, element_width);
+
+                // Swap First Element with temp
+                @memcpy(first_element, temp, element_width);
+            }
+
+            std.heap.c_allocator.free(temp[0..element_width]);
+
+            return list;
+        } else {
+            const output = RocList.allocate(std.heap.c_allocator, alignment, size, element_width);
+
+            const target_ptr = output.bytes orelse unreachable;
+
+            while (i < size) : (i += 1) {
+                const last_position = end - i;
+
+                @memcpy(target_ptr + (i * element_width), source_ptr + (last_position * element_width), element_width);
+            }
+
+            utils.decref(std.heap.c_allocator, alignment, list.bytes, size * element_width);
+
+            return output;
+        }
+    } else {
+        return RocList.empty();
+    }
+}
+
 pub fn listMap(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, old_element_width: usize, new_element_width: usize) callconv(.C) RocList {
     if (list.bytes) |source_ptr| {
         const size = list.len();

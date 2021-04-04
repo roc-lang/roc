@@ -76,4 +76,5 @@ pub const LIST_CONTAINS: &str = "roc_builtins.list.contains";
 pub const LIST_REPEAT: &str = "roc_builtins.list.repeat";
 pub const LIST_APPEND: &str = "roc_builtins.list.append";
 pub const LIST_RANGE: &str = "roc_builtins.list.range";
+pub const LIST_REVERSE: &str = "roc_builtins.list.reverse";
 pub const LIST_SORT_WITH: &str = "roc_builtins.list.sort_with";
