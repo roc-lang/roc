@@ -23,6 +23,22 @@ For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir).
 MacOS systems should already have `libunwind`, but other systems will need to install it (On Ubuntu, this can be donw with `sudo apt-get install libunwind-dev`).
 Some systems may already have `libc++-dev` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `sudo apt-get install libc++-dev`.)
 
+### libcxb libraries
+
+You may see an error like this during builds:
+
+```
+/usr/bin/ld: cannot find -lxcb-render
+/usr/bin/ld: cannot find -lxcb-shape
+/usr/bin/ld: cannot find -lxcb-xfixes
+```
+
+If so, you can fix it like so:
+
+```
+sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+```
+
 ### Zig
 **version: 0.7.x**
 
