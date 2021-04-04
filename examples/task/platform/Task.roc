@@ -1,5 +1,5 @@
 interface Task
-    exposes [ Task, succeed, fail, after, map, putLine ]
+    exposes [ Task, succeed, fail, await, map, putLine ]
     imports [ fx.Effect ]
 
 
@@ -16,8 +16,8 @@ fail = \val ->
     Effect.always (Err val)
 
 
-after : Task a err, (a -> Task b err) -> Task b err
-after = \effect, transform ->
+await : Task a err, (a -> Task b err) -> Task b err
+await = \effect, transform ->
     Effect.after effect \result ->
         when result is
             Ok a -> transform a
