@@ -1,7 +1,6 @@
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{ImMap, MutMap};
-use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::solved_types::Solved;
@@ -872,151 +871,44 @@ fn check_for_infinite_type(
 ) {
     let var = loc_var.value;
 
-    let is_uniq_infer = matches!(
-        subs.get_ref(var).content,
-        Content::Alias(Symbol::ATTR_ATTR, _, _)
-    );
-
-    while let Some((recursive, chain)) = subs.occurs(var) {
+    while let Some((recursive, _chain)) = subs.occurs(var) {
         let description = subs.get(recursive);
         let content = description.content;
 
         // try to make a tag union recursive, see if that helps
         match content {
             Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                if !is_uniq_infer {
-                    let rec_var = subs.fresh_unnamed_flex_var();
-                    subs.set_rank(rec_var, description.rank);
-                    subs.set_content(
-                        rec_var,
-                        Content::RecursionVar {
-                            opt_name: None,
-                            structure: recursive,
-                        },
-                    );
+                let rec_var = subs.fresh_unnamed_flex_var();
+                subs.set_rank(rec_var, description.rank);
+                subs.set_content(
+                    rec_var,
+                    Content::RecursionVar {
+                        opt_name: None,
+                        structure: recursive,
+                    },
+                );
 
-                    let mut new_tags = MutMap::default();
+                let mut new_tags = MutMap::default();
 
-                    for (label, args) in &tags {
-                        let new_args: Vec<_> = args
-                            .iter()
-                            .map(|var| subs.explicit_substitute(recursive, rec_var, *var))
-                            .collect();
+                for (label, args) in &tags {
+                    let new_args: Vec<_> = args
+                        .iter()
+                        .map(|var| subs.explicit_substitute(recursive, rec_var, *var))
+                        .collect();
 
-                        new_tags.insert(label.clone(), new_args);
-                    }
-
-                    let new_ext_var = subs.explicit_substitute(recursive, rec_var, ext_var);
-
-                    let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
-
-                    subs.set_content(recursive, Content::Structure(flat_type));
-                } else {
-                    // Sometimes, the recursion "starts" at the tag-union, not an `Attr`. Here we
-                    // We use the path that `occurs` took to find the recursion to go one step
-                    // forward in the recursion and find the `Attr` there.
-                    let index = 0;
-                    match subs.get(chain[index]).content {
-                        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
-                            debug_assert!(args.len() == 2);
-                            debug_assert!(
-                                subs.get_root_key_without_compacting(recursive)
-                                    == subs.get_root_key_without_compacting(args[1])
-                            );
-
-                            // NOTE this ensures we use the same uniqueness var for the whole spine
-                            // that might add too much uniqueness restriction.
-                            // using `subs.fresh_unnamed_flex_var()` loosens it.
-                            let uniq_var = args[0];
-                            let tag_union_var = recursive;
-                            let recursive = chain[index];
-
-                            correct_recursive_attr(
-                                subs,
-                                recursive,
-                                uniq_var,
-                                tag_union_var,
-                                ext_var,
-                                description.rank,
-                                &tags,
-                            );
-                        }
-                        _ => circular_error(subs, problems, symbol, &loc_var),
-                    }
+                    new_tags.insert(label.clone(), new_args);
                 }
-            }
-            Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
-                debug_assert!(args.len() == 2);
-                let uniq_var = args[0];
-                let tag_union_var = args[1];
-                let nested_description = subs.get(tag_union_var);
-                match nested_description.content {
-                    Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                        correct_recursive_attr(
-                            subs,
-                            recursive,
-                            uniq_var,
-                            tag_union_var,
-                            ext_var,
-                            description.rank,
-                            &tags,
-                        );
-                    }
-                    _ => circular_error(subs, problems, symbol, &loc_var),
-                }
+
+                let new_ext_var = subs.explicit_substitute(recursive, rec_var, ext_var);
+
+                let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
+
+                subs.set_content(recursive, Content::Structure(flat_type));
             }
 
             _other => circular_error(subs, problems, symbol, &loc_var),
         }
     }
-}
-
-fn content_attr(u: Variable, a: Variable) -> Content {
-    Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, vec![u, a]))
-}
-
-fn correct_recursive_attr(
-    subs: &mut Subs,
-    recursive: Variable,
-    uniq_var: Variable,
-    tag_union_var: Variable,
-    ext_var: Variable,
-    recursion_var_rank: Rank,
-    tags: &MutMap<TagName, Vec<Variable>>,
-) {
-    let rec_var = subs.fresh_unnamed_flex_var();
-    let attr_var = subs.fresh_unnamed_flex_var();
-
-    let content = content_attr(uniq_var, rec_var);
-    subs.set_content(attr_var, content);
-
-    subs.set_rank(rec_var, recursion_var_rank);
-    subs.set_content(
-        rec_var,
-        Content::RecursionVar {
-            opt_name: None,
-            structure: recursive,
-        },
-    );
-
-    let mut new_tags = MutMap::default();
-
-    let new_ext_var = subs.explicit_substitute(recursive, attr_var, ext_var);
-    for (label, args) in tags {
-        let new_args: Vec<_> = args
-            .iter()
-            .map(|var| subs.explicit_substitute(recursive, attr_var, *var))
-            .collect();
-
-        new_tags.insert(label.clone(), new_args);
-    }
-
-    let new_tag_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
-    subs.set_content(tag_union_var, Content::Structure(new_tag_type));
-
-    let new_recursive = content_attr(uniq_var, tag_union_var);
-
-    subs.set_content(recursive, new_recursive);
 }
 
 fn circular_error(

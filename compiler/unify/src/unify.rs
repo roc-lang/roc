@@ -704,7 +704,6 @@ fn unify_tag_union_not_recursive_recursive(
 fn is_structure(var: Variable, subs: &mut Subs) -> bool {
     match subs.get(var).content {
         Content::Alias(_, _, actual) => is_structure(actual, subs),
-        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => is_structure(args[1], subs),
         Content::Structure(_) => true,
         _ => false,
     }

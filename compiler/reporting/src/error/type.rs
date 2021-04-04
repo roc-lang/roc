@@ -823,7 +823,6 @@ fn count_arguments(tipe: &ErrorType) -> usize {
 
     match tipe {
         Function(args, _, _) => args.len(),
-        Type(Symbol::ATTR_ATTR, args) => count_arguments(&args[1]),
         Alias(_, _, actual) => count_arguments(actual),
         _ => 0,
     }

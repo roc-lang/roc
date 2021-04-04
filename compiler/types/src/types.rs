@@ -363,11 +363,7 @@ impl Type {
         }
     }
     pub fn is_recursive(&self) -> bool {
-        match self {
-            Type::RecursiveTagUnion(_, _, _) => true,
-            Type::Alias(Symbol::ATTR_ATTR, _, actual) => actual.is_recursive(),
-            _ => false,
-        }
+        matches!(self, Type::RecursiveTagUnion(_, _, _))
     }
 
     pub fn variables(&self) -> ImSet<Variable> {

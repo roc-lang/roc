@@ -140,11 +140,6 @@ fn find_names_needed(
             // We must not accidentally generate names that collide with them!
             names_taken.insert(name);
         }
-        Structure(Apply(Symbol::ATTR_ATTR, args)) => {
-            // assign uniqueness var names based on when they occur in the base type
-            find_names_needed(args[1], subs, roots, root_appearances, names_taken);
-            find_names_needed(args[0], subs, roots, root_appearances, names_taken);
-        }
         Structure(Apply(_, args)) => {
             for var in args {
                 find_names_needed(var, subs, roots, root_appearances, names_taken);
@@ -195,17 +190,12 @@ fn find_names_needed(
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
             find_names_needed(rec_var, subs, roots, root_appearances, names_taken);
         }
-        Alias(symbol, args, _actual) => {
-            if let Symbol::ATTR_ATTR = symbol {
-                find_names_needed(args[0].1, subs, roots, root_appearances, names_taken);
-                find_names_needed(args[1].1, subs, roots, root_appearances, names_taken);
-            } else {
-                for (_, var) in args {
-                    find_names_needed(var, subs, roots, root_appearances, names_taken);
-                }
-                // TODO should we also look in the actual variable?
-                // find_names_needed(_actual, subs, roots, root_appearances, names_taken);
+        Alias(_symbol, args, _actual) => {
+            for (_, var) in args {
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
+            // TODO should we also look in the actual variable?
+            // find_names_needed(_actual, subs, roots, root_appearances, names_taken);
         }
         Error | Structure(Erroneous(_)) | Structure(EmptyRecord) | Structure(EmptyTagUnion) => {
             // Errors and empty records don't need names.
@@ -324,24 +314,6 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
                                 write_content(env, content, subs, buf, parens);
                             }),
                         },
-
-                        Structure(FlatType::Apply(Symbol::ATTR_ATTR, nested_args)) => {
-                            let attr_content = subs.get_without_compacting(nested_args[1]).content;
-                            match &attr_content {
-                                Alias(nested, _, _) => match *nested {
-                                    Symbol::NUM_INTEGER => buf.push_str("I64"),
-                                    Symbol::NUM_FLOATINGPOINT => buf.push_str("F64"),
-                                    _ => write_parens!(write_parens, buf, {
-                                        buf.push_str("Num ");
-                                        write_content(env, content, subs, buf, parens);
-                                    }),
-                                },
-                                _ => write_parens!(write_parens, buf, {
-                                    buf.push_str("Num ");
-                                    write_content(env, content, subs, buf, parens);
-                                }),
-                            }
-                        }
 
                         _ => write_parens!(write_parens, buf, {
                             buf.push_str("Num ");
@@ -598,11 +570,6 @@ pub fn chase_ext_tag_union(
 
             chase_ext_tag_union(subs, ext_var, fields)
         }
-        Content::Structure(Apply(Symbol::ATTR_ATTR, arguments)) => {
-            debug_assert_eq!(arguments.len(), 2);
-
-            chase_ext_tag_union(subs, arguments[1], fields)
-        }
         Content::Alias(_, _, var) => chase_ext_tag_union(subs, var, fields),
 
         content => Err((var, content)),
@@ -625,12 +592,6 @@ pub fn chase_ext_record(
         }
 
         Structure(EmptyRecord) => Ok(()),
-
-        Content::Structure(Apply(Symbol::ATTR_ATTR, arguments)) => {
-            debug_assert_eq!(arguments.len(), 2);
-
-            chase_ext_record(subs, arguments[1], fields)
-        }
 
         Alias(_, _, var) => chase_ext_record(subs, var, fields),
 
@@ -683,25 +644,6 @@ fn write_apply(
                     Symbol::NUM_FLOATINGPOINT if nested_args.len() == 1 => {
                         buf.push_str("F64");
                     }
-                    Symbol::ATTR_ATTR => match nested_args
-                        .get(1)
-                        .map(|v| subs.get_without_compacting(*v).content)
-                    {
-                        Some(Content::Structure(FlatType::Apply(
-                            double_nested_symbol,
-                            double_nested_args,
-                        ))) => match double_nested_symbol {
-                            Symbol::NUM_INTEGER if double_nested_args.len() == 1 => {
-                                buf.push_str("I64");
-                            }
-                            Symbol::NUM_FLOATINGPOINT if double_nested_args.len() == 1 => {
-                                buf.push_str("F64");
-                            }
-                            _ => default_case(subs, arg_content),
-                        },
-
-                        _other => default_case(subs, arg_content),
-                    },
                     _ => default_case(subs, arg_content),
                 },
                 _ => default_case(subs, arg_content),
