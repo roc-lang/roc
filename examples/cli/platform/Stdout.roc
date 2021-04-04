@@ -1,6 +1,6 @@
 interface Stdout
     exposes [ line ]
-    imports [ Effect, Task ] # TODO FIXME Task.{ Task }
+    imports [ fx.Effect, Task ] # TODO FIXME Task.{ Task }
 
 line : Str -> Task.Task {} *
 line = \str -> Effect.map (Effect.putLine str) (\_ -> Ok {})

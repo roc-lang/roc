@@ -1,10 +1,10 @@
-platform folkertdev/foo
-    requires { main : ThisIsTotallyIgnoredApparently } # TODO FIXME
+platform rtfeldman/roc-cli
+    requires { main : Task.Task {} * } # TODO FIXME
     exposes [] # TODO FIXME actually expose modules
     packages {}
     imports [ Task ] # TODO FIXME Task.{ Task }
     provides [ mainForHost ]
-    effects Effect
+    effects fx.Effect
         {
             putChar : I64 -> Effect {},
             putLine : Str -> Effect {},
