@@ -993,7 +993,6 @@ pub enum Reason {
 #[derive(PartialEq, Debug, Clone)]
 pub enum Category {
     Lookup(Symbol),
-    Foreign(Symbol),
     CallResult(Option<Symbol>),
     LowLevelOpResult(LowLevel),
     ForeignCall,

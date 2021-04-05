@@ -885,12 +885,6 @@ fn add_category<'b>(
             alloc.text(" value is a:"),
         ]),
 
-        Foreign(name) => alloc.concat(vec![
-            alloc.text("This "),
-            alloc.symbol_foreign_qualified(*name),
-            alloc.text(" value is a:"),
-        ]),
-
         If => alloc.concat(vec![
             alloc.text("This "),
             alloc.keyword("if"),

@@ -6,15 +6,8 @@ use roc_types::subs::Variable;
 use roc_types::types::{Category, PatternCategory, Type};
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Annotation {
-    pub rigid_vars: Vec<Variable>,
-    pub typ: Type,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub enum Constraint {
     Eq(Type, Expected<Type>, Category, Region),
-    Foreign(Symbol, Annotation, Expected<Type>, Region),
     Store(Type, Variable, &'static str, u32),
     Lookup(Symbol, Expected<Type>, Region),
     Pattern(Region, PatternCategory, Type, PExpected<Type>),
