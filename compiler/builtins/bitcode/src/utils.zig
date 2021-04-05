@@ -157,3 +157,9 @@ pub const RocResult = extern struct {
         return !self.isOk();
     }
 };
+
+pub const Ordering = packed enum(u8) {
+    EQ = 0,
+    GT = 1,
+    LT = 2,
+};

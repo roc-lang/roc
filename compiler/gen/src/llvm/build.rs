@@ -8,7 +8,7 @@ use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
     list_get_unsafe, list_join, list_keep_errs, list_keep_if, list_keep_oks, list_len, list_map,
     list_map2, list_map3, list_map_with_index, list_prepend, list_range, list_repeat, list_reverse,
-    list_set, list_single, list_walk_help,
+    list_set, list_single, list_sort_with, list_walk_help,
 };
 use crate::llvm::build_str::{
     str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_from_utf8,
@@ -3693,7 +3693,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let inplace = get_inplace_from_layout(layout);
 
-            list_reverse(env, parent, inplace, list, list_layout)
+            list_reverse(env, inplace, list, list_layout)
         }
         ListConcat => {
             debug_assert_eq!(args.len(), 2);
@@ -3948,6 +3948,22 @@ fn run_low_level<'a, 'ctx, 'env>(
             let inplace = get_inplace_from_layout(layout);
 
             list_join(env, inplace, parent, list, outer_list_layout)
+        }
+        ListSortWith => {
+            // List.sortWith : List a, (a, a -> Ordering) -> List a
+            debug_assert_eq!(args.len(), 2);
+
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            let func = load_symbol(scope, &args[1]);
+
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::List(_, element_layout)) => {
+                    list_sort_with(env, layout_ids, func, list, element_layout)
+                }
+                _ => unreachable!("invalid list layout"),
+            }
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumLogUnchecked | NumSin | NumCos
         | NumCeiling | NumFloor | NumToFloat | NumIsFinite | NumAtan | NumAcos | NumAsin => {

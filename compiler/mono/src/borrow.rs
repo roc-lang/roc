@@ -659,6 +659,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListWalk | ListWalkUntil | ListWalkBackwards => {
             arena.alloc_slice_copy(&[owned, irrelevant, owned])
         }
+        ListSortWith => arena.alloc_slice_copy(&[owned, irrelevant]),
 
         // TODO when we have lists with capacity (if ever)
         // List.append should own its first argument

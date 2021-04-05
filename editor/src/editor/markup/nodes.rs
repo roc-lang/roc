@@ -12,6 +12,7 @@ use crate::lang::{
     pool::{NodeId, PoolStr},
 };
 use bumpalo::Bump;
+use std::fmt;
 
 #[derive(Debug)]
 pub enum MarkupNode {
@@ -340,5 +341,51 @@ pub fn set_parent_for_all_helper(
         }
         MarkupNode::Text { parent_id_opt, .. } => *parent_id_opt = Some(parent_node_id),
         MarkupNode::Blank { parent_id_opt, .. } => *parent_id_opt = Some(parent_node_id),
+    }
+}
+
+impl fmt::Display for MarkupNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "{} ({})",
+            self.node_type_as_string(),
+            self.get_content().unwrap_or_else(|_| "".to_string())
+        )
+    }
+}
+
+pub fn tree_as_string(root_node_id: MarkNodeId, mark_node_pool: &SlowPool) -> String {
+    let mut full_string = "\n\n(mark_node_tree)\n".to_owned();
+
+    let node = mark_node_pool.get(root_node_id);
+
+    full_string.push_str(&format!("{}", node));
+
+    tree_as_string_helper(node, 1, &mut full_string, mark_node_pool);
+
+    full_string
+}
+
+fn tree_as_string_helper(
+    node: &MarkupNode,
+    level: usize,
+    tree_string: &mut String,
+    mark_node_pool: &SlowPool,
+) {
+    for child_id in node.get_children_ids() {
+        let mut full_str = std::iter::repeat("|--- ")
+            .take(level)
+            .collect::<Vec<&str>>()
+            .join("")
+            .to_owned();
+
+        let child = mark_node_pool.get(child_id);
+
+        full_str.push_str(&format!("{}", child));
+
+        tree_string.push_str(&full_str);
+
+        tree_as_string_helper(child, level + 1, tree_string, mark_node_pool);
     }
 }

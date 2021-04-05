@@ -11,9 +11,7 @@ use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::editor::util::index_of;
 use crate::lang::ast::Expr2;
-use crate::lang::pool::NodeId;
-use crate::lang::pool::PoolStr;
-use crate::lang::pool::PoolVec;
+use crate::lang::pool::{NodeId, PoolStr, PoolVec};
 use crate::ui::text::text_pos::TextPos;
 use roc_types::subs::Variable;
 use snafu::OptionExt;
@@ -202,17 +200,29 @@ pub fn update_record_field(
 
     let mut new_field_name = String::new();
 
-    first_field.0.as_str(ed_model.module.env.pool).to_string();
-
+    // -push old field name
+    new_field_name.push_str(first_field.0.as_str(ed_model.module.env.pool));
     new_field_name.push_str(new_input);
 
+    // -clone to prevent borrow issues
+    let field_val_id = first_field.2;
+
     let new_pool_str = PoolStr::new(&new_field_name, &mut ed_model.module.env.pool);
+
+    if let Expr2::InvalidLookup(_) = ed_model.module.env.pool.get(field_val_id) {
+        ed_model
+            .module
+            .env
+            .pool
+            .set(field_val_id, Expr2::InvalidLookup(new_pool_str));
+    }
 
     let first_field_mut = record_fields
         .iter_mut(ed_model.module.env.pool)
         .next()
         .with_context(|| RecordWithoutFields {})?;
 
+    // -update field name
     first_field_mut.0 = new_pool_str;
 
     Ok(())
@@ -239,6 +249,17 @@ pub fn update_record_colon(ed_model: &mut EdModel) -> EdResult<()> {
                 record_var: _,
                 fields,
             } => {
+                // update AST node
+                let new_field_val = Expr2::Blank;
+                let new_field_val_id = ed_model.module.env.pool.add(new_field_val);
+
+                let first_field_mut = fields
+                    .iter_mut(ed_model.module.env.pool)
+                    .next()
+                    .with_context(|| RecordWithoutFields {})?;
+
+                first_field_mut.2 = new_field_val_id;
+
                 // update Markup
                 let record_colon = nodes::COLON;
 
@@ -257,7 +278,7 @@ pub fn update_record_colon(ed_model: &mut EdModel) -> EdResult<()> {
                     .add_child_at_index(new_child_index, record_colon_node_id)?;
 
                 let record_blank_node = MarkupNode::Blank {
-                    ast_node_id,
+                    ast_node_id: new_field_val_id,
                     syn_high_style: HighlightStyle::Blank,
                     attributes: Attributes::new(),
                     parent_id_opt: Some(parent_id),
@@ -288,17 +309,6 @@ pub fn update_record_colon(ed_model: &mut EdModel) -> EdResult<()> {
                     nodes::BLANK_PLACEHOLDER,
                     record_blank_node_id,
                 )?;
-
-                // update AST node
-                let new_field_val = Expr2::Blank;
-                let new_field_val_id = ed_model.module.env.pool.add(new_field_val);
-
-                let first_field_mut = fields
-                    .iter_mut(ed_model.module.env.pool)
-                    .next()
-                    .with_context(|| RecordWithoutFields {})?;
-
-                first_field_mut.2 = new_field_val_id;
             }
             other => unimplemented!("TODO implement updating of Expr2 {:?}.", other),
         }

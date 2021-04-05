@@ -958,6 +958,22 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         top_level_function(vec![list_type(flex(TVAR1))], Box::new(bool_type())),
     );
 
+    // sortWith : List a, (a, a -> Ordering) -> List a
+    add_type(
+        Symbol::LIST_SORT_WITH,
+        top_level_function(
+            vec![
+                list_type(flex(TVAR1)),
+                closure(
+                    vec![flex(TVAR1), flex(TVAR1)],
+                    TVAR2,
+                    Box::new(ordering_type()),
+                ),
+            ],
+            Box::new(list_type(flex(TVAR1))),
+        ),
+    );
+
     // Dict module
 
     // Dict.hashTestOnly : Nat, v -> Nat
