@@ -326,6 +326,8 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                         )
                     }
                 } else {
+                    begin_render_pass(&mut encoder, &frame.view, &ed_theme);
+
                     queue_no_file_text(
                         &size,
                         NOTHING_OPENED,
