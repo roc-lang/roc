@@ -6,8 +6,8 @@ extern crate pulldown_cmark;
 extern crate serde_json;
 use roc_builtins::std::StdLib;
 use roc_can::builtins::builtin_defs_map;
-use roc_load::docs::Documentation;
 use roc_load::docs::ModuleDocumentation;
+use roc_load::docs::{DocTypeAnnotation, Documentation};
 use roc_load::file::LoadingProblem;
 
 use std::fs;
@@ -29,6 +29,8 @@ pub struct Template {
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct ModuleEntry {
     pub name: String,
+    pub type_vars: Vec<String>,
+    pub type_annotation: String,
     pub docs: String,
 }
 
@@ -147,6 +149,19 @@ pub fn documentation_to_template_data(
             .into_iter()
             .map(|entry| ModuleEntry {
                 name: entry.name.clone(),
+                type_vars: entry.type_vars,
+                type_annotation: match entry.type_annotation {
+                    None => String::new(),
+                    Some(type_ann) => {
+                        let type_ann_html = &mut String::new();
+
+                        type_ann_html.push_str(" : ");
+
+                        type_annotation_to_html(0, type_ann_html, &type_ann);
+
+                        type_ann_html.to_string()
+                    }
+                },
                 docs: match entry.docs {
                     Some(docs) => markdown_to_html(docs),
                     None => String::new(),
@@ -168,6 +183,78 @@ pub fn documentation_to_template_data(
                     .collect(),
             })
             .collect(),
+    }
+}
+
+const INDENT: &str = "&nbsp;&nbsp;&nbsp;&nbsp;";
+
+fn indent(buf: &mut String, times: usize) {
+    for _ in 0..times {
+        buf.push_str(INDENT);
+    }
+}
+
+fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &DocTypeAnnotation) {
+    match type_ann {
+        DocTypeAnnotation::TagUnion { tags, extension } => {
+            buf.push_str("<br>");
+
+            let tag_union_indent = indent_level + 1;
+            indent(buf, tag_union_indent);
+            buf.push_str("[");
+            buf.push_str("<br>");
+
+            let mut index = 0;
+            let next_indent_level = tag_union_indent + 1;
+            let tags_len = tags.len();
+            while index < tags_len {
+                let tag = &tags[index];
+
+                indent(buf, next_indent_level);
+                buf.push_str(tag.name.as_str());
+
+                let mut tag_value_index = 0;
+                while tag_value_index < tag.values.len() {
+                    let type_value = &tag.values[tag_value_index];
+
+                    buf.push_str(" ");
+                    type_annotation_to_html(next_indent_level, buf, type_value);
+
+                    tag_value_index = tag_value_index + 1;
+                }
+
+                if index < (tags_len - 1) {
+                    buf.push_str(",");
+                }
+
+                buf.push_str("<br>");
+
+                index = index + 1;
+            }
+
+            indent(buf, tag_union_indent);
+            buf.push_str("]");
+
+            if let Some(ext) = extension {
+                type_annotation_to_html(indent_level, buf, ext);
+            }
+        }
+        DocTypeAnnotation::BoundVariable(var_name) => {
+            buf.push_str(var_name);
+        }
+        DocTypeAnnotation::Apply { name, parts } => {
+            if parts.is_empty() {
+                buf.push_str(name);
+            } else {
+                buf.push('(');
+                buf.push_str(name);
+                for part in parts {
+                    buf.push(' ');
+                    type_annotation_to_html(indent_level, buf, part);
+                }
+                buf.push(')');
+            }
+        }
     }
 }
 
