@@ -1,3 +1,4 @@
+use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::code_lines::CodeLines;
 use crate::editor::ed_error::EdResult;
 use crate::editor::grid_node_map::GridNodeMap;
@@ -317,110 +318,115 @@ pub fn get_node_context<'a>(ed_model: &'a EdModel) -> EdResult<NodeContext<'a>> 
     })
 }
 
-pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult<()> {
+pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     // TODO set all selections to none
     // TODO nested records
 
-    ed_model.dirty = true;
-
-    match received_char {
-        '{' => {
-            start_new_record(ed_model)?;
-        }
-        ':' => {
-            // TODO set up Dict if previous char is '{'
-
-            update_record_colon(ed_model)?;
-        }
-        '"' => {
-
-            start_new_string(ed_model)?;
-        }
-        '\u{8}' | '\u{7f}' => {
-            // On Linux, '\u{8}' is backspace,
-            // On macOS '\u{7f}'.
-
-            unimplemented!("TODO implement backspace");
-        }
-        ch if is_newline(ch) => {
-            unimplemented!("TODO implement newline");
-        }
-        '\u{1}' // Ctrl + A
-        | '\u{3}' // Ctrl + C
-        | '\u{16}' // Ctrl + V
-        | '\u{18}' // Ctrl + X
-        | '\u{e000}'..='\u{f8ff}' // http://www.unicode.org/faq/private_use.html
-        | '\u{f0000}'..='\u{ffffd}' // ^
-        | '\u{100000}'..='\u{10fffd}' // ^
-        => {
-            // chars that can be ignored
-            ed_model.dirty = false;
-        }
-        ch => {
-            let old_caret_pos = ed_model.get_caret();
-            let curr_mark_node_id = ed_model.grid_node_map.get_id_at_row_col(old_caret_pos)?;
-            let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
-
-            let prev_mark_node_id_opt =
-                if old_caret_pos.column > 0 {
-                    let prev_mark_node_id = ed_model.grid_node_map.get_id_at_row_col(
-                        TextPos {
-                            line: old_caret_pos.line,
-                            column: old_caret_pos.column - 1,
-                        }
-                    )?;
-
-                    Some(prev_mark_node_id)
-                } else {
-                    None
-                };
-
-            let ast_node_id = curr_mark_node.get_ast_node_id();
-            let ast_node_ref = ed_model.module.env.pool.get(ast_node_id);
-
-            match ast_node_ref {
-                Expr2::EmptyRecord => {
-
-                    let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
-
-                    update_new_record(&ch.to_string(), prev_mark_node_id_opt, sibling_ids, ed_model)?;
-                },
-                Expr2::Record { record_var:_, fields } => {
-                    if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
-                        let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
-                        let prev_node_content = prev_mark_node.get_content()?;
-
-                        let node_to_update_id =
-                            if prev_node_content == nodes::LEFT_ACCOLADE {
-                                curr_mark_node_id
-                            } else {
-                                // caret is already past field so we need the previous MarkupNode
-                                prev_mark_node_id
-                            };
-
-                        update_record_field(
-                            &ch.to_string(),
-                            old_caret_pos,
-                            node_to_update_id,
-                            fields,
-                            ed_model,
-                        )?;
-                    }
-                },
-                Expr2::SmallStr(array_str) => {
-
-                    update_small_string(ch, array_str, ed_model)?;
-                },
-                Expr2::Str(old_pool_str) => {
-
-                    update_string(&ch.to_string(), old_pool_str, ed_model)?;
-                },
-                other => {
-                    unimplemented!("TODO implement updating of Expr2 {:?}.", other)
-                },
+    let input_outcome = 
+        match received_char {
+            '{' => {
+                start_new_record(ed_model)?
             }
-        }
+            ':' => {
+                // TODO set up Dict if previous char is '{'
+
+                update_record_colon(ed_model)?
+            }
+            '"' => {
+
+                start_new_string(ed_model)?
+            }
+            '\u{8}' | '\u{7f}' => {
+                // On Linux, '\u{8}' is backspace,
+                // On macOS '\u{7f}'.
+
+                unimplemented!("TODO implement backspace");
+            }
+            ch if is_newline(ch) => {
+                unimplemented!("TODO implement newline");
+            }
+            '\u{1}' // Ctrl + A
+            | '\u{3}' // Ctrl + C
+            | '\u{16}' // Ctrl + V
+            | '\u{18}' // Ctrl + X
+            | '\u{e000}'..='\u{f8ff}' // http://www.unicode.org/faq/private_use.html
+            | '\u{f0000}'..='\u{ffffd}' // ^
+            | '\u{100000}'..='\u{10fffd}' // ^
+            => {
+                // chars that can be ignored
+                InputOutcome::Ignored
+            }
+            ch => {
+                let old_caret_pos = ed_model.get_caret();
+                let curr_mark_node_id = ed_model.grid_node_map.get_id_at_row_col(old_caret_pos)?;
+                let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
+
+                let prev_mark_node_id_opt =
+                    if old_caret_pos.column > 0 {
+                        let prev_mark_node_id = ed_model.grid_node_map.get_id_at_row_col(
+                            TextPos {
+                                line: old_caret_pos.line,
+                                column: old_caret_pos.column - 1,
+                            }
+                        )?;
+
+                        Some(prev_mark_node_id)
+                    } else {
+                        None
+                    };
+
+                let ast_node_id = curr_mark_node.get_ast_node_id();
+                let ast_node_ref = ed_model.module.env.pool.get(ast_node_id);
+
+                match ast_node_ref {
+                    Expr2::EmptyRecord => {
+
+                        let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
+
+                        update_new_record(&ch.to_string(), prev_mark_node_id_opt, sibling_ids, ed_model)?
+                    },
+                    Expr2::Record { record_var:_, fields } => {
+                        if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
+                            let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
+                            let prev_node_content = prev_mark_node.get_content()?;
+
+                            let node_to_update_id =
+                                if prev_node_content == nodes::LEFT_ACCOLADE {
+                                    curr_mark_node_id
+                                } else {
+                                    // caret is already past field so we need the previous MarkupNode
+                                    prev_mark_node_id
+                                };
+
+                            update_record_field(
+                                &ch.to_string(),
+                                old_caret_pos,
+                                node_to_update_id,
+                                fields,
+                                ed_model,
+                            )?
+                        } else {
+                            InputOutcome::Ignored
+                        }
+                    },
+                    Expr2::SmallStr(array_str) => {
+
+                        update_small_string(ch, array_str, ed_model)?
+                    },
+                    Expr2::Str(old_pool_str) => {
+
+                        update_string(&ch.to_string(), old_pool_str, ed_model)?
+                    },
+                    other => {
+                        unimplemented!("TODO implement updating of Expr2 {:?}.", other)
+                    },
+                }
+            }
+        };
+
+    if let InputOutcome::Accepted = input_outcome {
+        ed_model.dirty = true;
     }
 
-    Ok(())
+    Ok(input_outcome)
 }

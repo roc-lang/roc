@@ -51,14 +51,19 @@ pub fn pass_keydown_to_focused(
     Ok(())
 }
 
-pub fn handle_new_char(received_char: &char, app_model: &mut AppModel) -> EdResult<()> {
+pub enum InputOutcome {
+    Accepted,
+    Ignored
+}
+
+pub fn handle_new_char(received_char: &char, app_model: &mut AppModel) -> EdResult<InputOutcome> {
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            ed_update::handle_new_char(received_char, ed_model)?;
+            return ed_update::handle_new_char(received_char, ed_model)
         }
     }
 
-    Ok(())
+    Ok(InputOutcome::Ignored)
 }
 
 /*

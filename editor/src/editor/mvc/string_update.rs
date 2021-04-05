@@ -1,3 +1,4 @@
+use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::ed_error::EdResult;
 use crate::editor::markup::attribute::Attributes;
 use crate::editor::markup::nodes;
@@ -10,11 +11,12 @@ use crate::lang::ast::ArrString;
 use crate::lang::ast::Expr2;
 use crate::lang::pool::PoolStr;
 
+
 pub fn update_small_string(
     new_char: &char,
     old_array_str: &ArrString,
     ed_model: &mut EdModel,
-) -> EdResult<()> {
+) -> EdResult<InputOutcome> {
     let NodeContext {
         old_caret_pos,
         curr_mark_node_id,
@@ -31,49 +33,54 @@ pub fn update_small_string(
     let node_caret_offset = ed_model
         .grid_node_map
         .get_offset_to_node_id(old_caret_pos, curr_mark_node_id)?;
-    content_str_mut.insert_str(node_caret_offset, new_input);
 
-    // update GridNodeMap and CodeLines
-    ed_model.insert_between_line(
-        old_caret_pos.line,
-        old_caret_pos.column,
-        new_input,
-        curr_mark_node_id,
-    )?;
+    if node_caret_offset != 0 && node_caret_offset < content_str_mut.len() {
+        content_str_mut.insert_str(node_caret_offset, new_input);
 
-    if old_array_str.len() < ArrString::capacity() {
-        if let Expr2::SmallStr(ref mut mut_array_str) =
-            ed_model.module.env.pool.get_mut(ast_node_id)
-        {
-            // safe because we checked the length
-            unsafe {
-                mut_array_str.push_unchecked(*new_char);
+        // update GridNodeMap and CodeLines
+        ed_model.insert_between_line(
+            old_caret_pos.line,
+            old_caret_pos.column,
+            new_input,
+            curr_mark_node_id,
+        )?;
+
+        if old_array_str.len() < ArrString::capacity() {
+            if let Expr2::SmallStr(ref mut mut_array_str) =
+                ed_model.module.env.pool.get_mut(ast_node_id)
+            {
+                // safe because we checked the length
+                unsafe {
+                    mut_array_str.push_unchecked(*new_char);
+                }
+            } else {
+                unreachable!()
             }
         } else {
-            unreachable!()
+            let mut new_str = old_array_str.as_str().to_owned();
+            new_str.push(*new_char);
+
+            let new_ast_node = Expr2::Str(PoolStr::new(&new_str, ed_model.module.env.pool));
+
+            ed_model.module.env.pool.set(ast_node_id, new_ast_node);
         }
+
+        // update caret
+        for _ in 0..new_input.len() {
+            ed_model.simple_move_carets_right();
+        }
+
+        Ok(InputOutcome::Accepted)
     } else {
-        let mut new_str = old_array_str.as_str().to_owned();
-        new_str.push(*new_char);
-
-        let new_ast_node = Expr2::Str(PoolStr::new(&new_str, ed_model.module.env.pool));
-
-        ed_model.module.env.pool.set(ast_node_id, new_ast_node);
+        Ok(InputOutcome::Ignored)
     }
-
-    // update caret
-    for _ in 0..new_input.len() {
-        ed_model.simple_move_carets_right();
-    }
-
-    Ok(())
 }
 
 pub fn update_string(
     new_input: &str,
     old_pool_str: &PoolStr,
     ed_model: &mut EdModel,
-) -> EdResult<()> {
+) -> EdResult<InputOutcome> {
     let NodeContext {
         old_caret_pos,
         curr_mark_node_id,
@@ -88,32 +95,38 @@ pub fn update_string(
     let node_caret_offset = ed_model
         .grid_node_map
         .get_offset_to_node_id(old_caret_pos, curr_mark_node_id)?;
-    content_str_mut.insert_str(node_caret_offset, new_input);
 
-    // update GridNodeMap and CodeLines
-    ed_model.insert_between_line(
-        old_caret_pos.line,
-        old_caret_pos.column,
-        new_input,
-        curr_mark_node_id,
-    )?;
+    if node_caret_offset != 0 && node_caret_offset < content_str_mut.len() {
+        content_str_mut.insert_str(node_caret_offset, new_input);
 
-    // update ast
-    let mut new_string = old_pool_str.as_str(ed_model.module.env.pool).to_owned();
-    new_string.push_str(new_input);
+        // update GridNodeMap and CodeLines
+        ed_model.insert_between_line(
+            old_caret_pos.line,
+            old_caret_pos.column,
+            new_input,
+            curr_mark_node_id,
+        )?;
 
-    let new_pool_str = PoolStr::new(&new_string, &mut ed_model.module.env.pool);
-    let new_ast_node = Expr2::Str(new_pool_str);
+        // update ast
+        let mut new_string = old_pool_str.as_str(ed_model.module.env.pool).to_owned();
+        new_string.push_str(new_input);
 
-    ed_model.module.env.pool.set(ast_node_id, new_ast_node);
+        let new_pool_str = PoolStr::new(&new_string, &mut ed_model.module.env.pool);
+        let new_ast_node = Expr2::Str(new_pool_str);
 
-    // update caret
-    ed_model.simple_move_carets_right();
+        ed_model.module.env.pool.set(ast_node_id, new_ast_node);
 
-    Ok(())
+        // update caret
+        ed_model.simple_move_carets_right();
+
+
+        Ok(InputOutcome::Accepted)
+    } else {
+        Ok(InputOutcome::Ignored)
+    }
 }
 
-pub fn start_new_string(ed_model: &mut EdModel) -> EdResult<()> {
+pub fn start_new_string(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     let NodeContext {
         old_caret_pos,
         curr_mark_node_id,
@@ -151,7 +164,9 @@ pub fn start_new_string(ed_model: &mut EdModel) -> EdResult<()> {
         )?;
 
         ed_model.simple_move_carets_right();
-    }
 
-    Ok(())
+        Ok(InputOutcome::Accepted)
+    } else {
+        Ok(InputOutcome::Ignored)
+    }
 }

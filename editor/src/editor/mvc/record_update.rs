@@ -1,3 +1,4 @@
+use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::MissingParent;
 use crate::editor::ed_error::RecordWithoutFields;
@@ -16,7 +17,7 @@ use crate::ui::text::text_pos::TextPos;
 use roc_types::subs::Variable;
 use snafu::OptionExt;
 
-pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<()> {
+pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     let NodeContext {
         old_caret_pos,
         curr_mark_node_id,
@@ -84,9 +85,11 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<()> {
             nodes::RIGHT_ACCOLADE,
             right_bracket_node_id,
         )?;
-    }
 
-    Ok(())
+        Ok(InputOutcome::Accepted)
+    } else {
+        Ok(InputOutcome::Ignored)
+    }
 }
 
 pub fn update_new_record(
@@ -94,7 +97,7 @@ pub fn update_new_record(
     prev_mark_node_id_opt: Option<MarkNodeId>,
     sibling_ids: Vec<MarkNodeId>,
     ed_model: &mut EdModel,
-) -> EdResult<()> {
+) -> EdResult<InputOutcome> {
     let prev_mark_node_opt = prev_mark_node_id_opt
         .map(|prev_mark_node_id| ed_model.markup_node_pool.get(prev_mark_node_id));
 
@@ -158,10 +161,14 @@ pub fn update_new_record(
             let new_ast_node = Expr2::Record { record_var, fields };
 
             ed_model.module.env.pool.set(ast_node_id, new_ast_node);
-        }
-    }
 
-    Ok(())
+            Ok(InputOutcome::Accepted)
+        } else {
+            Ok(InputOutcome::Ignored)
+        }
+    } else {
+        Ok(InputOutcome::Ignored)
+    }
 }
 
 pub fn update_record_field(
@@ -170,7 +177,7 @@ pub fn update_record_field(
     curr_mark_node_id: MarkNodeId,
     record_fields: &PoolVec<(PoolStr, Variable, NodeId<Expr2>)>,
     ed_model: &mut EdModel,
-) -> EdResult<()> {
+) -> EdResult<InputOutcome> {
     // update MarkupNode
     let curr_mark_node_mut = ed_model.markup_node_pool.get_mut(curr_mark_node_id);
     let content_str_mut = curr_mark_node_mut.get_content_mut()?;
@@ -225,10 +232,10 @@ pub fn update_record_field(
     // -update field name
     first_field_mut.0 = new_pool_str;
 
-    Ok(())
+    Ok(InputOutcome::Accepted)
 }
 
-pub fn update_record_colon(ed_model: &mut EdModel) -> EdResult<()> {
+pub fn update_record_colon(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     let NodeContext {
         old_caret_pos,
         curr_mark_node_id,
@@ -309,11 +316,11 @@ pub fn update_record_colon(ed_model: &mut EdModel) -> EdResult<()> {
                     nodes::BLANK_PLACEHOLDER,
                     record_blank_node_id,
                 )?;
+
+                Ok(InputOutcome::Accepted)
             }
             other => unimplemented!("TODO implement updating of Expr2 {:?}.", other),
         }
-
-        Ok(())
     } else {
         MissingParent {
             node_id: curr_mark_node_id,
