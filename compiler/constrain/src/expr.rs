@@ -52,7 +52,6 @@ pub struct Env {
     /// for example `a` in the annotation `identity : a -> a`, we add it to this
     /// map so that expressions within that annotation can share these vars.
     pub rigids: ImMap<Lowercase, Variable>,
-    pub home: ModuleId,
 }
 
 fn constrain_untyped_args(
@@ -675,7 +674,6 @@ pub fn constrain_expr(
 
             let constraint = constrain_expr(
                 &Env {
-                    home: env.home,
                     rigids: ImMap::default(),
                 },
                 region,
@@ -1000,11 +998,10 @@ fn constrain_empty_record(region: Region, expected: Expected<Type>) -> Constrain
 
 /// Constrain top-level module declarations
 #[inline(always)]
-pub fn constrain_decls(home: ModuleId, decls: &[Declaration]) -> Constraint {
+pub fn constrain_decls(_home: ModuleId, decls: &[Declaration]) -> Constraint {
     let mut constraint = Constraint::SaveTheEnvironment;
 
     let mut env = Env {
-        home,
         rigids: ImMap::default(),
     };
 
@@ -1082,10 +1079,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                 &mut def_pattern_state.headers,
             );
 
-            let env = &Env {
-                home: env.home,
-                rigids: ftv,
-            };
+            let env = &Env { rigids: ftv };
 
             let annotation_expected = FromAnnotation(
                 def.loc_pattern.clone(),
