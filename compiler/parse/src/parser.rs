@@ -1300,6 +1300,15 @@ macro_rules! collection_trailing_sep_e {
 }
 
 #[macro_export]
+macro_rules! succeed {
+    ($value:expr) => {
+        move |_arena: &'a bumpalo::Bump, state: $crate::parser::State<'a>| {
+            Ok((NoProgress, $value, state))
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! and {
     ($p1:expr, $p2:expr) => {
         move |arena: &'a bumpalo::Bump, state: $crate::parser::State<'a>| {

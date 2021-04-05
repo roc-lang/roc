@@ -1,7 +1,7 @@
 use crate::ast::CommentOrNewline;
 use crate::ast::Spaceable;
 use crate::parser::{
-    self, and, BadInputError, Col, Parser,
+    self, and, backtrackable, BadInputError, Col, Parser,
     Progress::{self, *},
     Row, State,
 };
@@ -28,7 +28,10 @@ where
             space0_e(min_indent, space_problem, indent_before_problem),
             and(
                 parser,
-                space0_e(min_indent, space_problem, indent_after_problem),
+                one_of![
+                    backtrackable(space0_e(min_indent, space_problem, indent_after_problem)),
+                    succeed!(&[] as &[_]),
+                ],
             ),
         ),
         move |arena: &'a Bump,

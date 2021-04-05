@@ -1750,7 +1750,7 @@ fn to_precord_report<'a>(
         }
 
         PRecord::IndentEnd(row, col) => {
-            match next_line_starts_with_close_curly(alloc.src_lines, row.saturating_sub(1)) {
+            match next_line_starts_with_close_curly(alloc.src_lines, row) {
                 Some((curly_row, curly_col)) => {
                     let surroundings =
                         Region::from_rows_cols(start_row, start_col, curly_row, curly_col);
@@ -1895,7 +1895,7 @@ fn to_pattern_in_parens_report<'a>(
         }
 
         PInParens::IndentEnd(row, col) => {
-            match next_line_starts_with_close_parenthesis(alloc.src_lines, row.saturating_sub(1)) {
+            match next_line_starts_with_close_parenthesis(alloc.src_lines, row) {
                 Some((curly_row, curly_col)) => {
                     let surroundings =
                         Region::from_rows_cols(start_row, start_col, curly_row, curly_col);
@@ -2257,7 +2257,7 @@ fn to_trecord_report<'a>(
         }
 
         TRecord::IndentEnd(row, col) => {
-            match next_line_starts_with_close_curly(alloc.src_lines, row.saturating_sub(1)) {
+            match next_line_starts_with_close_curly(alloc.src_lines, row) {
                 Some((curly_row, curly_col)) => {
                     let surroundings =
                         Region::from_rows_cols(start_row, start_col, curly_row, curly_col);
@@ -2478,7 +2478,7 @@ fn to_ttag_union_report<'a>(
         }
 
         TTagUnion::IndentEnd(row, col) => {
-            match next_line_starts_with_close_square_bracket(alloc.src_lines, row - 1) {
+            match next_line_starts_with_close_square_bracket(alloc.src_lines, row) {
                 Some((curly_row, curly_col)) => {
                     let surroundings =
                         Region::from_rows_cols(start_row, start_col, curly_row, curly_col);
@@ -2682,7 +2682,7 @@ fn to_tinparens_report<'a>(
         }
 
         TInParens::IndentEnd(row, col) => {
-            match next_line_starts_with_close_square_bracket(alloc.src_lines, row - 1) {
+            match next_line_starts_with_close_parenthesis(alloc.src_lines, row) {
                 Some((curly_row, curly_col)) => {
                     let surroundings =
                         Region::from_rows_cols(start_row, start_col, curly_row, curly_col);
