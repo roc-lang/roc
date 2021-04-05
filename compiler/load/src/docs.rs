@@ -139,7 +139,7 @@ fn generate_module_doc<'a>(
         Alias { name, vars, ann } => {
             let mut type_vars = Vec::new();
 
-            for var in vars.into_iter() {
+            for var in vars.iter() {
                 if let Pattern::Identifier(ident_name) = var.value {
                     type_vars.push(ident_name.to_string());
                 }
@@ -162,7 +162,7 @@ fn generate_module_doc<'a>(
     }
 }
 
-fn type_to_docs<'a>(type_annotation: TypeAnnotation) -> Option<DocTypeAnnotation> {
+fn type_to_docs(type_annotation: TypeAnnotation) -> Option<DocTypeAnnotation> {
     match type_annotation {
         TypeAnnotation::TagUnion {
             tags,
@@ -187,7 +187,7 @@ fn type_to_docs<'a>(type_annotation: TypeAnnotation) -> Option<DocTypeAnnotation
                     }
                 }
 
-                index = index + 1;
+                index += 1;
             }
 
             if any_tags_are_private {
@@ -210,7 +210,7 @@ fn type_to_docs<'a>(type_annotation: TypeAnnotation) -> Option<DocTypeAnnotation
 
             if !module_name.is_empty() {
                 name.push_str(module_name);
-                name.push_str(".");
+                name.push('.');
             }
 
             name.push_str(type_name);
@@ -251,7 +251,7 @@ fn tag_to_doc(tag: Tag) -> Option<DocTag> {
                         type_vars.push(type_var);
                     }
 
-                    index = index + 1;
+                    index += 1;
                 }
 
                 type_vars

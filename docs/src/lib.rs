@@ -201,7 +201,7 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Doc
 
             let tag_union_indent = indent_level + 1;
             indent(buf, tag_union_indent);
-            buf.push_str("[");
+            buf.push('[');
             buf.push_str("<br>");
 
             let mut index = 0;
@@ -217,23 +217,23 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Doc
                 while tag_value_index < tag.values.len() {
                     let type_value = &tag.values[tag_value_index];
 
-                    buf.push_str(" ");
+                    buf.push(' ');
                     type_annotation_to_html(next_indent_level, buf, type_value);
 
-                    tag_value_index = tag_value_index + 1;
+                    tag_value_index += 1;
                 }
 
                 if index < (tags_len - 1) {
-                    buf.push_str(",");
+                    buf.push(',');
                 }
 
                 buf.push_str("<br>");
 
-                index = index + 1;
+                index += 1;
             }
 
             indent(buf, tag_union_indent);
-            buf.push_str("]");
+            buf.push(']');
 
             if let Some(ext) = extension {
                 type_annotation_to_html(indent_level, buf, ext);
