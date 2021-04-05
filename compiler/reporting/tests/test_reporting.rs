@@ -4526,15 +4526,17 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED PARENTHESES ──────────────────────────────────────────────────────
-
+                
                 I am partway through parsing a type in parentheses, but I got stuck
                 here:
-
+                
                 1│  f : ( I64
                              ^
-
-                I was expecting to see a closing parenthesis before this, so try
-                adding a ) and see if that helps?
+                
+                I was expecting to see a parenthesis before this, so try adding a )
+                and see if that helps?
+                
+                Note: I may be confused by indentation
             "#
             ),
         )
@@ -6256,16 +6258,16 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
-
-                I am partway through parsing a tag union type, but I got stuck here:
-
-                1│  Box item : [
-                2│      Box item,
-                3│      Items item item
-                4│  ]
+                
+                I am partway through parsing a type in parentheses, but I got stuck
+                here:
+                
+                1│  Box : (
+                2│      Str
+                3│  )
                     ^
-
-                I need this square bracket to be indented more. Try adding more spaces
+                
+                I need this parenthesis to be indented more. Try adding more spaces
                 before it!
             "#
             ),

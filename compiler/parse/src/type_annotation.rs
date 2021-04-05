@@ -147,7 +147,7 @@ fn loc_type_in_parens<'a>(
             TInParens::IndentOpen,
             TInParens::IndentEnd,
         ),
-        word1(b')', TInParens::End)
+        word1(b')', TInParens::IndentEnd)
     )
 }
 

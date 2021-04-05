@@ -2694,7 +2694,7 @@ fn to_tinparens_report<'a>(
                         ),
                         alloc.region_with_subregion(surroundings, region),
                         alloc.concat(vec![
-                            alloc.reflow("I need this square bracket to be indented more. Try adding more spaces before it!"),
+                            alloc.reflow("I need this parenthesis to be indented more. Try adding more spaces before it!"),
                         ]),
                     ]);
 
@@ -2714,9 +2714,9 @@ fn to_tinparens_report<'a>(
                         ),
                         alloc.region_with_subregion(surroundings, region),
                         alloc.concat(vec![
-                            alloc.reflow("I was expecting to see a closing square "),
-                            alloc.reflow("bracket before this, so try adding a "),
-                            alloc.parser_suggestion("]"),
+                            alloc.reflow("I was expecting to see a parenthesis "),
+                            alloc.reflow("before this, so try adding a "),
+                            alloc.parser_suggestion(")"),
                             alloc.reflow(" and see if that helps?"),
                         ]),
                         note_for_tag_union_type_indent(alloc),
