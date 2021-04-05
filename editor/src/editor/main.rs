@@ -67,7 +67,7 @@ pub fn launch(filepaths: &[&Path]) -> io::Result<()> {
 }
 
 fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
-    env_logger::init();
+    wgpu_subscriber::initialize_default_subscriber(None);
 
     // Open window and create a surface
     let mut event_loop = winit::event_loop::EventLoop::new();
@@ -174,7 +174,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
         Path::new("")
     };
 
-    let ed_model_opt = {
+    /*let ed_model_opt = {
         let ed_model_res = ed_model::init_model(&code_str, file_path, env, &code_arena);
 
         match ed_model_res {
@@ -188,7 +188,8 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 None
             }
         }
-    };
+    };*/
+    let ed_model_opt = None;
 
     let mut rendered_wgpu_opt: Option<RenderedWgpu> = None;
 

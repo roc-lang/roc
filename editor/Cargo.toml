@@ -49,6 +49,7 @@ confy = { git = 'https://github.com/rust-cli/confy', features = [
 ], default-features = false }
 serde = { version = "1.0.123", features = ["derive"] }
 nonempty = "0.6.0"
+wgpu-subscriber = "0.1.0"
 
 [dependencies.bytemuck]
 version = "1.4"
