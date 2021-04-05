@@ -205,7 +205,7 @@ impl Drop for Pool {
 }
 
 /// A string containing at most 2^32 pool-allocated bytes.
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct PoolStr {
     first_node_id: NodeId<()>,
     len: u32,
