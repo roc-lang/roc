@@ -1,3 +1,4 @@
+use roc_can::constraint::Annotation;
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{ImMap, MutMap};
@@ -213,6 +214,45 @@ fn solve(
                     let problem = TypeError::BadExpr(
                         *region,
                         category.clone(),
+                        actual_type,
+                        expectation.clone().replace(expected_type),
+                    );
+
+                    problems.push(problem);
+
+                    state
+                }
+                BadType(vars, problem) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    problems.push(TypeError::BadType(problem));
+
+                    state
+                }
+            }
+        }
+        Foreign(name, annotation, expectation, region) => {
+            let actual = annotation_to_var(subs, rank, pools, cached_aliases, annotation);
+            let expected = type_to_var(
+                subs,
+                rank,
+                pools,
+                cached_aliases,
+                expectation.get_type_ref(),
+            );
+
+            match unify(subs, actual, expected) {
+                Success(vars) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    state
+                }
+                Failure(vars, actual_type, expected_type) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    let problem = TypeError::BadExpr(
+                        *region,
+                        Category::Foreign(*name),
                         actual_type,
                         expectation.clone().replace(expected_type),
                     );
@@ -612,6 +652,16 @@ fn solve(
             }
         }
     }
+}
+
+fn annotation_to_var(
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    cached: &mut MutMap<Symbol, Variable>,
+    annotation: &Annotation,
+) -> Variable {
+    type_to_variable(subs, rank, pools, cached, &annotation.typ)
 }
 
 fn type_to_var(
