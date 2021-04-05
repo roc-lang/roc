@@ -4979,12 +4979,12 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED PATTERN ──────────────────────────────────────────────────────────
-                
+
                 I just started parsing a pattern, but I got stuck here:
-                
+
                 2│      Just 4 | ->
                                  ^
-                
+
                 Note: I may be confused by indentation
                 "#
             ),
@@ -5125,13 +5125,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-                
+
                 I got stuck here:
-                
+
                 1│  when 4 is
                 2│      5 -> 2
                               ^
-                
+
                 Whatever I am running into is confusing me a lot! Normally I can give
                 fairly specific hints, but something is really tripping me up this
                 time.
@@ -5176,13 +5176,13 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-                
+
                 I got stuck here:
-                
+
                 1│  when 4 is
                 2│      5 -> 2
                               ^
-                
+
                 Whatever I am running into is confusing me a lot! Normally I can give
                 fairly specific hints, but something is really tripping me up this
                 time.
@@ -5204,26 +5204,26 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNEXPECTED ARROW ────────────────────────────────────────────────────────────
-                
+
                 I am parsing a `when` expression right now, but this arrow is confusing
                 me:
-                
+
                 3│       2 -> 2
                            ^^
-                
+
                 It makes sense to see arrows around here, so I suspect it is something
                 earlier.Maybe this pattern is indented a bit farther from the previous
                 patterns?
-                
+
                 Note: Here is an example of a valid `when` expression for reference.
-                
+
                     when List.first plants is
                       Ok n ->
                         n
-                
+
                       Err _ ->
                         200
-                
+
                 Notice the indentation. All patterns are aligned, and each branch is
                 indented a bit more than the corresponding pattern. That is important!
             "#
@@ -5876,14 +5876,14 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNKNOWN OPERATOR ────────────────────────────────────────────────────────────
-                
+
                 This looks like an operator, but it's not one I recognize!
-                
+
                 1│  main = 5 -> 3
                              ^^
-                
+
                 The arrow -> is only used to define cases in a `when`.
-                
+
                     when color is
                         Red -> "stop!"
                         Green -> "go!"
@@ -6204,6 +6204,99 @@ mod test_reporting {
                       ^
 
                 Note: I may be confused by indentation
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn outdented_alias() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Box item : [
+                    Box item,
+                    Items item item
+                ]
+
+                4
+                "#
+            ),
+            indoc!(
+                r#"
+                ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
+
+                I am partway through parsing a tag union type, but I got stuck here:
+
+                1│  Box item : [
+                2│      Box item,
+                3│      Items item item
+                4│  ]
+                    ^
+
+                I need this square bracket to be indented more. Try adding more spaces
+                before it!
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn outdented_in_parens() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Box : (
+                    Str
+                )
+
+                4
+                "#
+            ),
+            indoc!(
+                r#"
+                ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
+
+                I am partway through parsing a tag union type, but I got stuck here:
+
+                1│  Box item : [
+                2│      Box item,
+                3│      Items item item
+                4│  ]
+                    ^
+
+                I need this square bracket to be indented more. Try adding more spaces
+                before it!
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn outdented_record() {
+        report_problem_as(
+            indoc!(
+                r#"
+                Box : {
+                    id: Str
+                }
+
+                4
+                "#
+            ),
+            indoc!(
+                r#"
+                ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
+
+                I am partway through parsing a record type, but I got stuck here:
+
+                1│  Box : {
+                2│      id: Str
+                3│  }
+                    ^
+
+                I need this curly brace to be indented more. Try adding more spaces
+                before it!
             "#
             ),
         )
