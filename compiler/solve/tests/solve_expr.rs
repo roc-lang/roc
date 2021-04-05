@@ -4372,16 +4372,15 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore]
     fn pattern_rigid_problem() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
 
-                balance : k, RBTree k -> RBTree k
+                balance : a, RBTree a -> RBTree a
                 balance = \key, left ->
                       when left is
                         Node _ _ lRight ->
@@ -4391,12 +4390,12 @@ mod solve_expr {
                             Empty
 
 
-                main : RBTree I64
+                main : RBTree {}
                 main =
-                    balance 0 Empty
+                    balance {} Empty
                 "#
             ),
-            "RBTree I64",
+            "RBTree {}",
         );
     }
 

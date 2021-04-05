@@ -1110,7 +1110,7 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content
         RigidVar(_) | RecursionVar { .. } | Structure(_) | Alias(_, _, _) => {
             // Type mismatch! Rigid can only unify with flex, even if the
             // rigid names are the same.
-            mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
+            mismatch!("Rigid {:?} {:?} with {:?}", name, ctx.first, &other)
         }
         Error => {
             // Error propagates.
