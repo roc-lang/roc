@@ -6208,4 +6208,43 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn foobarbaz() {
+        report_problem_as(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
+
+                balance : a, RBTree a -> RBTree a
+                balance = \key, left ->
+                      when left is
+                        Node _ _ lRight ->
+                            Node key lRight Empty
+
+                        _ ->
+                            Empty
+
+
+                main : RBTree {}
+                main =
+                    balance {} Empty
+                "#
+            ),
+            indoc!(
+                r#"
+                ── UNFINISHED PATTERN ──────────────────────────────────────────────────────────
+
+                I just started parsing a pattern, but I got stuck here:
+
+                1│  \(
+                      ^
+
+                Note: I may be confused by indentation
+            "#
+            ),
+        )
+    }
 }

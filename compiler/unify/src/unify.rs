@@ -935,7 +935,7 @@ fn unify_flat_type(
         }
 
         (RecursiveTagUnion(recursion_var, tags1, ext1), TagUnion(tags2, ext2)) => {
-            debug_assert!(is_recursion_var(subs, *recursion_var));
+            // debug_assert!(is_recursion_var(subs, *recursion_var));
             // this never happens in type-correct programs, but may happen if there is a type error
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
@@ -951,7 +951,7 @@ fn unify_flat_type(
         }
 
         (TagUnion(tags1, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
-            debug_assert!(is_recursion_var(subs, *recursion_var));
+            //  debug_assert!(is_recursion_var(subs, *recursion_var));
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
 
@@ -959,8 +959,8 @@ fn unify_flat_type(
         }
 
         (RecursiveTagUnion(rec1, tags1, ext1), RecursiveTagUnion(rec2, tags2, ext2)) => {
-            debug_assert!(is_recursion_var(subs, *rec1));
-            debug_assert!(is_recursion_var(subs, *rec2));
+            // debug_assert!(is_recursion_var(subs, *rec1));
+            // debug_assert!(is_recursion_var(subs, *rec2));
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
 

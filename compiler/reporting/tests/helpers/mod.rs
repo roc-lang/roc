@@ -154,7 +154,6 @@ pub fn can_expr_with<'a>(
     let constraint = constrain_expr(
         &roc_constrain::expr::Env {
             rigids: ImMap::default(),
-            home,
         },
         loc_expr.region,
         &loc_expr.value,
