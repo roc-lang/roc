@@ -21,7 +21,7 @@
         <a class="sidebar-module-link" href="{{link.href}}">{{link.name}}</a>
         <div class="sidebar-sub-entries">
           {{#each link.entries as |entry| ~}}
-          <a class="{{link.classes}}" href="{{link.href}}#{{entry.name}}">{{entry.name}}</a></li>
+          <a class="{{link.classes}}" href="{{link.href}}#{{entry.name}}">{{entry.name}}</a>
           {{/each~}}
         </div>
       </div>
@@ -52,7 +52,14 @@
     <h2 class="module-name"><a href="#">{{module_name}}</a></h2>
     {{{module_docs}}}
     {{#each module_entries as |entry| ~}}
-    <h3 id="{{entry.name}}"><a href="#{{entry.name}}">{{entry.name}}</a></h3>
+    <h3 id="{{entry.name}}">
+        <a href="#{{entry.name}}">{{entry.name}}</a>
+        {{#each entry.type_vars as |type_var| ~}}
+            {{type_var}}
+        {{/each~}}
+        {{{entry.type_annotation}}}
+    </h3>
+
     {{{entry.docs}}}
     {{/each~}}
   </main>

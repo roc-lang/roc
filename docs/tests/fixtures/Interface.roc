@@ -3,7 +3,7 @@ interface Test
     imports []
 
 ## This is a block
-Block : [ @Block ]
+Block elem : [ Block elem ]
 
 ## Single line documentation.
 singleline : Bool -> Bool
