@@ -233,7 +233,11 @@ fn can_annotation_help(
                     // make sure hidden variables are freshly instantiated
                     for var in alias.hidden_variables.iter() {
                         let new = var_store.fresh();
-                        panic!("this variable must be introduced!");
+
+                        // TODO hacky make sure this new variable is introduced
+                        // maybe add `introduced_variables.hidden_variables`?
+                        introduced_variables.recursion_variables.push(new);
+
                         substitutions.insert(*var, Type::Variable(new));
                     }
 

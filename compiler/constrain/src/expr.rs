@@ -1559,6 +1559,16 @@ pub fn rec_defs_help(
 
                         vars.push(*fn_var);
 
+                        // NOTE this seems to be the place to introduce them that works
+                        // this is not based on any deep thinking
+                        state.vars.extend(
+                            annotation
+                                .introduced_variables
+                                .recursion_variables
+                                .iter()
+                                .copied(),
+                        );
+
                         let def_con = exists(
                             vars,
                             And(vec![

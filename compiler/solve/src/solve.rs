@@ -150,7 +150,6 @@ pub fn run_in_place(
     subs: &mut Subs,
     constraint: &Constraint,
 ) -> Env {
-    dbg!(&constraint);
     let mut pools = Pools::default();
     let state = State {
         env: env.clone(),
@@ -283,12 +282,6 @@ fn solve(
                     // then we copy from that module's Subs into our own. If the value
                     // is being looked up in this module, then we use our Subs as both
                     // the source and destination.
-                    println!(
-                        "Copy of: {:?} {:?} {:?}",
-                        symbol,
-                        var,
-                        subs.get_without_compacting(*var).content
-                    );
                     let actual = deep_copy_var(subs, rank, pools, *var);
 
                     let expected = type_to_var(
@@ -559,7 +552,6 @@ fn solve(
                     // pop pool
                     generalize(subs, young_mark, visit_mark, next_rank, next_pools);
 
-                    dbg!(&rigid_vars);
                     for var in rigid_vars {
                         debug_assert_eq!(subs.get_without_compacting(*var).rank, Rank::NONE);
                     }
@@ -1115,13 +1107,8 @@ fn generalize(
             let desc_rank = subs.get_rank(var);
 
             if desc_rank < young_rank {
-                println!(
-                    "not generalized {:?}: {:?} < {:?}",
-                    var, desc_rank, young_rank
-                );
                 pools.get_mut(desc_rank).push(var);
             } else {
-                println!("generalized {:?}", var);
                 subs.set_rank(var, Rank::NONE);
             }
         }
@@ -1566,7 +1553,6 @@ fn deep_copy_var_help(
     if let Some(copy) = desc.copy.into_variable() {
         return copy;
     } else if desc.rank != Rank::NONE {
-        dbg!(var, &desc);
         return var;
     }
 
@@ -1744,8 +1730,6 @@ fn register(subs: &mut Subs, rank: Rank, pools: &mut Pools, content: Content) ->
         mark: Mark::NONE,
         copy: OptVariable::NONE,
     });
-
-    println!("I {:?} {:?}", var, rank);
 
     pools.get_mut(rank).push(var);
 

@@ -310,7 +310,6 @@ pub fn constrain_pattern(
                 constrain_pattern(env, &loc_pattern.value, loc_pattern.region, expected, state);
             }
 
-            /*
             let whole_con = Constraint::Eq(
                 Type::Variable(*whole_var),
                 Expected::NoExpectation(Type::TagUnion(
@@ -320,7 +319,6 @@ pub fn constrain_pattern(
                 Category::Storage(std::file!(), std::line!()),
                 region,
             );
-            */
 
             let tag_con = Constraint::Pattern(
                 region,
