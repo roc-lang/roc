@@ -1273,7 +1273,7 @@ macro_rules! collection_trailing_sep_e {
                                     and!(
                                         $crate::parser::trailing_sep_by0(
                                             $delimiter,
-                                            $crate::blankspace::space0_around_ee(
+                                            $crate::blankspace::space0_before_optional_after(
                                                 $elem,
                                                 $min_indent,
                                                 $space_problem,
@@ -1296,6 +1296,15 @@ macro_rules! collection_trailing_sep_e {
                 }
             )
         )
+    };
+}
+
+#[macro_export]
+macro_rules! succeed {
+    ($value:expr) => {
+        move |_arena: &'a bumpalo::Bump, state: $crate::parser::State<'a>| {
+            Ok((NoProgress, $value, state))
+        }
     };
 }
 
