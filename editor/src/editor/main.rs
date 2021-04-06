@@ -142,6 +142,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let exposed_ident_ids = IdentIds::default();
     let mut module_ids = ModuleIds::default();
     let mod_id = module_ids.get_or_insert(&"ModId123".into());
+    let mut counter = 1;
 
     let env = Env::new(
         mod_id,
@@ -309,22 +310,36 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                     }
 
                     if let Some(ref rendered_wgpu) = rendered_wgpu_opt {
-                        for text_section in &rendered_wgpu.text_sections {
+                        /*for text_section in &rendered_wgpu.text_sections {
                             let borrowed_text = text_section.to_borrowed();
 
                             glyph_brush.queue(borrowed_text);
-                        }
-                        // TODO remove me
-                        begin_render_pass(&mut encoder, &frame.view, &ed_theme);
+                        }*/
+                        // -----------------
+                        let area_bounds = (size.width as f32, size.height as f32).into();
 
-                        /*draw_all_rects(
+                        let code_text = Text {
+                            position: CODE_TXT_XY.into(),
+                            area_bounds,
+                            color: config.ed_theme.ui_theme.text,
+                            text: &counter.to_string(),
+                            size: config.code_font_size,
+                            ..Default::default()
+                        };
+
+                        counter += 1;
+                    
+                        queue_text_draw(&code_text, &mut glyph_brush);
+                        // ---------------
+
+                        draw_all_rects(
                             &rendered_wgpu.rects,
                             &mut encoder,
                             &frame.view,
                             &gpu_device,
                             &rect_resources,
                             &ed_theme,
-                        )*/
+                        )
                     }
                 } else {
                     begin_render_pass(&mut encoder, &frame.view, &ed_theme);
