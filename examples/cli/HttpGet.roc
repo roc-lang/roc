@@ -9,7 +9,7 @@ main =
 
     url <- await Stdin.line
 
-    {} <- await (Stdout.line "The contents of \(url) are: ")
+    {} <- await (Stdout.line "The contents of \(url) are:\n")
 
     contents <- await (Http.getUtf8 url)
 
