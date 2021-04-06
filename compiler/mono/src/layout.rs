@@ -1090,31 +1090,6 @@ fn layout_from_flat_type<'a>(
                 Symbol::STR_STR => Ok(Layout::Builtin(Builtin::Str)),
                 Symbol::LIST_LIST => list_layout_from_elem(env, args[0]),
                 Symbol::DICT_DICT => dict_layout_from_key_value(env, args[0], args[1]),
-                Symbol::ATTR_ATTR => {
-                    debug_assert_eq!(args.len(), 2);
-
-                    // The first argument is the uniqueness info;
-                    // second is the base type
-                    let wrapped_var = args[1];
-
-                    // correct the memory mode of unique lists
-                    match Layout::from_var(env, wrapped_var)? {
-                        Layout::Builtin(Builtin::List(_ignored, elem_layout)) => {
-                            let uniqueness_var = args[0];
-                            let uniqueness_content =
-                                subs.get_without_compacting(uniqueness_var).content;
-
-                            let mode = if uniqueness_content.is_unique(subs) {
-                                MemoryMode::Unique
-                            } else {
-                                MemoryMode::Refcounted
-                            };
-
-                            Ok(Layout::Builtin(Builtin::List(mode, elem_layout)))
-                        }
-                        other => Ok(other),
-                    }
-                }
                 Symbol::SET_SET => dict_layout_from_key_value(env, args[0], Variable::EMPTY_RECORD),
                 _ => {
                     panic!("TODO layout_from_flat_type for {:?}", Apply(symbol, args));
@@ -1269,9 +1244,6 @@ fn layout_from_flat_type<'a>(
         }
         EmptyTagUnion => {
             panic!("TODO make Layout for empty Tag Union");
-        }
-        Boolean(_) => {
-            panic!("TODO make Layout for Boolean");
         }
         Erroneous(_) => Err(LayoutProblem::Erroneous),
         EmptyRecord => Ok(Layout::Struct(&[])),
@@ -1482,9 +1454,6 @@ pub fn union_sorted_tags<'a>(
 fn get_recursion_var(subs: &Subs, var: Variable) -> Option<Variable> {
     match subs.get_without_compacting(var).content {
         Content::Structure(FlatType::RecursiveTagUnion(rec_var, _, _)) => Some(rec_var),
-        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
-            get_recursion_var(subs, args[1])
-        }
         Content::Alias(_, _, actual) => get_recursion_var(subs, actual),
         _ => None,
     }
@@ -1848,18 +1817,6 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutPro
 
 fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutProblem> {
     match subs.get_without_compacting(var).content {
-        Content::Structure(flat_type) => match flat_type {
-            FlatType::Apply(Symbol::ATTR_ATTR, args) => {
-                debug_assert_eq!(args.len(), 2);
-
-                let arg_var = args.get(1).unwrap();
-
-                unwrap_num_tag(subs, *arg_var)
-            }
-            _ => {
-                todo!("TODO handle Num.@Num flat_type {:?}", flat_type);
-            }
-        },
         Content::Alias(Symbol::NUM_INTEGER, args, _) => {
             debug_assert!(args.len() == 1);
 
@@ -1936,37 +1893,20 @@ fn dict_layout_from_key_value<'a>(
     value_var: Variable,
 ) -> Result<Layout<'a>, LayoutProblem> {
     match env.subs.get_without_compacting(key_var).content {
-        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, key_args)) => {
-            debug_assert_eq!(key_args.len(), 2);
-
-            let var = *key_args.get(1).unwrap();
-
-            dict_layout_from_key_value(env, var, value_var)
-        }
         Content::FlexVar(_) | Content::RigidVar(_) => {
             // If this was still a (Dict * *) then it must have been an empty dict
             Ok(Layout::Builtin(Builtin::EmptyDict))
         }
         key_content => {
-            match env.subs.get_without_compacting(value_var).content {
-                Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, value_args)) => {
-                    debug_assert_eq!(value_args.len(), 2);
+            let value_content = env.subs.get_without_compacting(value_var).content;
+            let key_layout = Layout::new_help(env, key_var, key_content)?;
+            let value_layout = Layout::new_help(env, value_var, value_content)?;
 
-                    let var = *value_args.get(1).unwrap();
-
-                    dict_layout_from_key_value(env, key_var, var)
-                }
-                value_content => {
-                    let key_layout = Layout::new_help(env, key_var, key_content)?;
-                    let value_layout = Layout::new_help(env, value_var, value_content)?;
-
-                    // This is a normal list.
-                    Ok(Layout::Builtin(Builtin::Dict(
-                        env.arena.alloc(key_layout),
-                        env.arena.alloc(value_layout),
-                    )))
-                }
-            }
+            // This is a normal list.
+            Ok(Layout::Builtin(Builtin::Dict(
+                env.arena.alloc(key_layout),
+                env.arena.alloc(value_layout),
+            )))
         }
     }
 }
@@ -1976,13 +1916,6 @@ pub fn list_layout_from_elem<'a>(
     elem_var: Variable,
 ) -> Result<Layout<'a>, LayoutProblem> {
     match env.subs.get_without_compacting(elem_var).content {
-        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
-            debug_assert_eq!(args.len(), 2);
-
-            let var = *args.get(1).unwrap();
-
-            list_layout_from_elem(env, var)
-        }
         Content::FlexVar(_) | Content::RigidVar(_) => {
             // If this was still a (List *) then it must have been an empty list
             Ok(Layout::Builtin(Builtin::EmptyList))
@@ -1996,24 +1929,6 @@ pub fn list_layout_from_elem<'a>(
                 env.arena.alloc(elem_layout),
             )))
         }
-    }
-}
-
-pub fn mode_from_var(var: Variable, subs: &Subs) -> MemoryMode {
-    match subs.get_without_compacting(var).content {
-        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => {
-            debug_assert_eq!(args.len(), 2);
-
-            let uvar = *args.get(0).unwrap();
-            let content = subs.get_without_compacting(uvar).content;
-
-            if content.is_unique(subs) {
-                MemoryMode::Unique
-            } else {
-                MemoryMode::Refcounted
-            }
-        }
-        _ => MemoryMode::Refcounted,
     }
 }
 

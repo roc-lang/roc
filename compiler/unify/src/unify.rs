@@ -1,9 +1,6 @@
-use roc_collections::all::{
-    default_hasher, get_shared, relative_complement, union, MutMap, SendSet,
-};
+use roc_collections::all::{default_hasher, get_shared, relative_complement, union, MutMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_types::boolean_algebra::Bool;
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
 use roc_types::types::{gather_fields, ErrorType, Mismatch, RecordField, RecordStructure};
@@ -707,7 +704,6 @@ fn unify_tag_union_not_recursive_recursive(
 fn is_structure(var: Variable, subs: &mut Subs) -> bool {
     match subs.get(var).content {
         Content::Alias(_, _, actual) => is_structure(actual, subs),
-        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args)) => is_structure(args[1], subs),
         Content::Structure(_) => true,
         _ => false,
     }
@@ -969,75 +965,6 @@ fn unify_flat_type(
             problems.extend(unify_pool(subs, pool, *rec1, *rec2));
 
             problems
-        }
-
-        (Boolean(b1), Boolean(b2)) => {
-            use Bool::*;
-
-            let b1 = b1.simplify(subs);
-            let b2 = b2.simplify(subs);
-
-            match (&b1, &b2) {
-                (Shared, Shared) => merge(subs, ctx, Structure(left.clone())),
-                (Shared, Container(cvar, mvars)) => {
-                    let mut outcome = vec![];
-                    // unify everything with shared
-                    outcome.extend(unify_pool(subs, pool, ctx.first, *cvar));
-
-                    for mvar in mvars {
-                        outcome.extend(unify_pool(subs, pool, ctx.first, *mvar));
-                    }
-
-                    // set the first and second variables to Shared
-                    let content = Content::Structure(FlatType::Boolean(Bool::Shared));
-                    outcome.extend(merge(subs, ctx, content));
-
-                    outcome
-                }
-                (Container(cvar, mvars), Shared) => {
-                    let mut outcome = vec![];
-                    // unify everything with shared
-                    outcome.extend(unify_pool(subs, pool, ctx.second, *cvar));
-
-                    for mvar in mvars {
-                        outcome.extend(unify_pool(subs, pool, ctx.second, *mvar));
-                    }
-
-                    // set the first and second variables to Shared
-                    let content = Content::Structure(FlatType::Boolean(Bool::Shared));
-                    outcome.extend(merge(subs, ctx, content));
-
-                    outcome
-                }
-                (Container(cvar1, mvars1), Container(cvar2, mvars2)) => {
-                    let mut outcome = vec![];
-
-                    // unify cvar1 and cvar2?
-                    outcome.extend(unify_pool(subs, pool, *cvar1, *cvar2));
-
-                    let mvars: SendSet<Variable> = mvars1
-                        .into_iter()
-                        .chain(mvars2.into_iter())
-                        .copied()
-                        .filter_map(|v| {
-                            let root = subs.get_root_key(v);
-
-                            if roc_types::boolean_algebra::var_is_shared(subs, root) {
-                                None
-                            } else {
-                                Some(root)
-                            }
-                        })
-                        .collect();
-
-                    let content =
-                        Content::Structure(FlatType::Boolean(Bool::Container(*cvar1, mvars)));
-
-                    outcome.extend(merge(subs, ctx, content));
-
-                    outcome
-                }
-            }
         }
 
         (Apply(l_symbol, l_args), Apply(r_symbol, r_args)) if l_symbol == r_symbol => {
