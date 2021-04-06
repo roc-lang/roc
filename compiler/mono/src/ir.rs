@@ -2103,17 +2103,6 @@ fn build_specialized_proc_from_var<'a>(
                         ret_var,
                     )
                 }
-                Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, args))
-                    if !pattern_symbols.is_empty() =>
-                {
-                    build_specialized_proc_from_var(
-                        env,
-                        layout_cache,
-                        proc_name,
-                        pattern_symbols,
-                        args[1],
-                    )
-                }
                 Content::Alias(_, _, actual) => build_specialized_proc_from_var(
                     env,
                     layout_cache,
@@ -3469,7 +3458,7 @@ pub fn with_hole<'a>(
         }
 
         List {
-            list_var,
+            list_var: _,
             elem_var,
             loc_elems,
         } => {
@@ -3488,7 +3477,7 @@ pub fn with_hole<'a>(
                 elems: arg_symbols,
             };
 
-            let mode = crate::layout::mode_from_var(list_var, env.subs);
+            let mode = MemoryMode::Refcounted;
 
             let stmt = Stmt::Let(
                 assigned,
@@ -7141,12 +7130,6 @@ pub fn num_argument_to_int_or_float(
         | Content::Alias(Symbol::NUM_UNSIGNED8, _, _)
         | Content::Alias(Symbol::NUM_AT_UNSIGNED8, _, _) => {
             IntOrFloat::UnsignedIntType(IntPrecision::I8)
-        }
-        Content::Structure(FlatType::Apply(Symbol::ATTR_ATTR, attr_args)) => {
-            debug_assert!(attr_args.len() == 2);
-
-            // Recurse on the second argument
-            num_argument_to_int_or_float(subs, ptr_bytes, attr_args[1], false)
         }
         Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _)  => {
             debug_assert!(args.len() == 1);

@@ -25,20 +25,30 @@ mod test_docs {
         let expected_entries = vec![
             ModuleEntry {
                 name: "Block".to_string(),
+                type_vars: vec![ "elem".to_string() ],
+                type_annotation:  " : <br>&nbsp;&nbsp;&nbsp;&nbsp;[<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Block elem<br>&nbsp;&nbsp;&nbsp;&nbsp;]".to_string(),
                 docs: "<p>This is a block</p>\n".to_string(),
             },
             ModuleEntry {
                 name: "singleline".to_string(),
+                type_vars: vec![],
+                type_annotation: "".to_string(),
                 docs: "<p>Single line documentation.</p>\n".to_string(),
             },
             ModuleEntry {
                 name: "multiline".to_string(),
+                type_vars: vec![],
+                type_annotation: "".to_string(),
                 docs: "<p>Multiline documentation.\nWithout any complex syntax yet!</p>\n".to_string(),
             }, ModuleEntry {
                 name: "multiparagraph".to_string(),
+                type_vars: vec![],
+                type_annotation: "".to_string(),
                 docs: "<p>Multiparagraph documentation.</p>\n<p>Without any complex syntax yet!</p>\n".to_string(),
             }, ModuleEntry {
                 name: "codeblock".to_string(),
+                type_vars: vec![],
+                type_annotation: "".to_string(),
                 docs: "<p>Turns &gt;&gt;&gt; into code block for now.</p>\n<pre><code class=\"language-roc\">codeblock</code></pre>\n".to_string(),
             },
         ];

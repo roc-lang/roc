@@ -1,7 +1,7 @@
 use crate::ast::CommentOrNewline;
 use crate::ast::Spaceable;
 use crate::parser::{
-    self, and, BadInputError, Col, Parser,
+    self, and, backtrackable, BadInputError, Col, Parser,
     Progress::{self, *},
     Row, State,
 };
@@ -31,36 +31,73 @@ where
                 space0_e(min_indent, space_problem, indent_after_problem),
             ),
         ),
-        move |arena: &'a Bump,
-              tuples: (
-            &'a [CommentOrNewline<'a>],
-            (Located<S>, &'a [CommentOrNewline<'a>]),
-        )| {
-            let (spaces_before, (loc_val, spaces_after)) = tuples;
-
-            if spaces_before.is_empty() {
-                if spaces_after.is_empty() {
-                    loc_val
-                } else {
-                    arena
-                        .alloc(loc_val.value)
-                        .with_spaces_after(spaces_after, loc_val.region)
-                }
-            } else if spaces_after.is_empty() {
-                arena
-                    .alloc(loc_val.value)
-                    .with_spaces_before(spaces_before, loc_val.region)
-            } else {
-                let wrapped_expr = arena
-                    .alloc(loc_val.value)
-                    .with_spaces_after(spaces_after, loc_val.region);
-
-                arena
-                    .alloc(wrapped_expr.value)
-                    .with_spaces_before(spaces_before, wrapped_expr.region)
-            }
-        },
+        spaces_around_help,
     )
+}
+
+pub fn space0_before_optional_after<'a, P, S, E>(
+    parser: P,
+    min_indent: u16,
+    space_problem: fn(BadInputError, Row, Col) -> E,
+    indent_before_problem: fn(Row, Col) -> E,
+    indent_after_problem: fn(Row, Col) -> E,
+) -> impl Parser<'a, Located<S>, E>
+where
+    S: Spaceable<'a>,
+    S: 'a,
+    P: Parser<'a, Located<S>, E>,
+    P: 'a,
+    E: 'a,
+{
+    parser::map_with_arena(
+        and(
+            space0_e(min_indent, space_problem, indent_before_problem),
+            and(
+                parser,
+                one_of![
+                    backtrackable(space0_e(min_indent, space_problem, indent_after_problem)),
+                    succeed!(&[] as &[_]),
+                ],
+            ),
+        ),
+        spaces_around_help,
+    )
+}
+
+fn spaces_around_help<'a, S>(
+    arena: &'a Bump,
+    tuples: (
+        &'a [CommentOrNewline<'a>],
+        (Located<S>, &'a [CommentOrNewline<'a>]),
+    ),
+) -> Located<S>
+where
+    S: Spaceable<'a>,
+    S: 'a,
+{
+    let (spaces_before, (loc_val, spaces_after)) = tuples;
+
+    if spaces_before.is_empty() {
+        if spaces_after.is_empty() {
+            loc_val
+        } else {
+            arena
+                .alloc(loc_val.value)
+                .with_spaces_after(spaces_after, loc_val.region)
+        }
+    } else if spaces_after.is_empty() {
+        arena
+            .alloc(loc_val.value)
+            .with_spaces_before(spaces_before, loc_val.region)
+    } else {
+        let wrapped_expr = arena
+            .alloc(loc_val.value)
+            .with_spaces_after(spaces_after, loc_val.region);
+
+        arena
+            .alloc(wrapped_expr.value)
+            .with_spaces_before(spaces_before, wrapped_expr.region)
+    }
 }
 
 pub fn space0_before_e<'a, P, S, E>(
