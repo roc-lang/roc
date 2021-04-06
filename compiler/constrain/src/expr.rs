@@ -1139,6 +1139,14 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                     vars.push(closure_var);
                     vars.push(closure_ext_var);
 
+                    vars.extend(
+                        annotation
+                            .introduced_variables
+                            .recursion_variables
+                            .iter()
+                            .copied(),
+                    );
+
                     let it = arguments.iter().zip(arg_types.iter()).enumerate();
                     for (index, ((pattern_var, loc_pattern), loc_ann)) in it {
                         {
@@ -1222,9 +1230,9 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                                 defs_constraint,
                                 ret_constraint,
                             })),
-                            // Store(signature.clone(), *fn_var, std::file!(), std::line!()),
-                            // Store(signature, expr_var, std::file!(), std::line!()),
-                            // Store(ret_type, ret_var, std::file!(), std::line!()),
+                            Store(signature.clone(), *fn_var, std::file!(), std::line!()),
+                            Store(signature, expr_var, std::file!(), std::line!()),
+                            Store(ret_type, ret_var, std::file!(), std::line!()),
                             closure_constraint,
                         ]),
                     )
@@ -1245,7 +1253,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                             ret_constraint,
                         })),
                         // Store type into AST vars. We use Store so errors aren't reported twice
-                        // Store(signature, expr_var, std::file!(), std::line!()),
+                        Store(signature, expr_var, std::file!(), std::line!()),
                     ])
                 }
             }
@@ -1564,9 +1572,9 @@ pub fn rec_defs_help(
                                 Eq(fn_type.clone(), expected.clone(), Category::Lambda, region),
                                 // "fn_var is equal to the closure's type" - fn_var is used in code gen
                                 // Store type into AST vars. We use Store so errors aren't reported twice
-                                // Store(signature.clone(), *fn_var, std::file!(), std::line!()),
-                                // Store(signature, expr_var, std::file!(), std::line!()),
-                                // Store(ret_type, ret_var, std::file!(), std::line!()),
+                                Store(signature.clone(), *fn_var, std::file!(), std::line!()),
+                                Store(signature, expr_var, std::file!(), std::line!()),
+                                Store(ret_type, ret_var, std::file!(), std::line!()),
                                 closure_constraint,
                             ]),
                         );

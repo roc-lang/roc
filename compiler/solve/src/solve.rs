@@ -291,10 +291,6 @@ fn solve(
                     );
                     let actual = deep_copy_var(subs, rank, pools, *var);
 
-                    //                    if format!("{:?}", symbol).contains("balance") {
-                    //                        dbg!(symbol, actual, &subs);
-                    //                    }
-
                     let expected = type_to_var(
                         subs,
                         rank,
@@ -1176,18 +1172,6 @@ fn adjust_rank(
 
         let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, &content);
 
-        //        println!(
-        //            "Adjust rank of {:?} to max {:?} {:?}",
-        //            var, max_rank, &content
-        //        );
-
-        /*
-        if format!("{:?}", var).contains("53") {
-            dbg!(&content, &subs);
-            panic!();
-        }
-        */
-
         subs.set(
             var,
             Descriptor {
@@ -1761,7 +1745,7 @@ fn register(subs: &mut Subs, rank: Rank, pools: &mut Pools, content: Content) ->
         copy: OptVariable::NONE,
     });
 
-    println!("{:?} {:?}", var, rank);
+    println!("I {:?} {:?}", var, rank);
 
     pools.get_mut(rank).push(var);
 

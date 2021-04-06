@@ -331,7 +331,7 @@ pub fn constrain_pattern(
 
             state.vars.push(*whole_var);
             state.vars.push(*ext_var);
-            // state.constraints.push(whole_con);
+            state.constraints.push(whole_con);
             state.constraints.push(tag_con);
         }
     }

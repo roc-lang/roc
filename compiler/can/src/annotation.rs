@@ -29,6 +29,7 @@ pub struct IntroducedVariables {
     // but a variable can only have one name. Therefore
     // `ftv : SendMap<Variable, Lowercase>`.
     pub wildcards: Vec<Variable>,
+    pub recursion_variables: Vec<Variable>,
     pub var_by_name: SendMap<Lowercase, Variable>,
     pub name_by_var: SendMap<Variable, Lowercase>,
     pub host_exposed_aliases: MutMap<Symbol, Variable>,
@@ -50,6 +51,8 @@ impl IntroducedVariables {
 
     pub fn union(&mut self, other: &Self) {
         self.wildcards.extend(other.wildcards.iter().cloned());
+        self.recursion_variables
+            .extend(other.recursion_variables.iter().cloned());
         self.var_by_name.extend(other.var_by_name.clone());
         self.name_by_var.extend(other.name_by_var.clone());
         self.host_exposed_aliases
@@ -222,13 +225,16 @@ fn can_annotation_help(
                     // make sure the recursion variable is freshly instantiated
                     if let Type::RecursiveTagUnion(rvar, _, _) = &mut actual {
                         let new = var_store.fresh();
+                        introduced_variables.recursion_variables.push(new);
                         substitutions.insert(*rvar, Type::Variable(new));
                         *rvar = new;
                     }
 
                     // make sure hidden variables are freshly instantiated
                     for var in alias.hidden_variables.iter() {
-                        substitutions.insert(*var, Type::Variable(var_store.fresh()));
+                        let new = var_store.fresh();
+                        panic!("this variable must be introduced!");
+                        substitutions.insert(*var, Type::Variable(new));
                     }
 
                     // instantiate variables
