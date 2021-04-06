@@ -11,4 +11,4 @@ main =
 
     {} <- await (Stdout.line "The contents of \(url) are:")
 
-    Http.getStr url
+    Http.getUtf8 url

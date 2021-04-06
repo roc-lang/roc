@@ -47,7 +47,7 @@ pub fn roc_fx_putLine(line: RocStr) -> () {
 }
 
 #[no_mangle]
-pub fn roc_fx_httpGetStr(url: RocStr) -> RocStr {
+pub fn roc_fx_httpGetUtf8(url: RocStr) -> RocStr {
     println!("TODO: read from this URL {:?}", url);
 
     RocStr::from_slice("url!!!".as_bytes())
