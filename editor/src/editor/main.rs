@@ -142,7 +142,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let exposed_ident_ids = IdentIds::default();
     let mut module_ids = ModuleIds::default();
     let mod_id = module_ids.get_or_insert(&"ModId123".into());
-    let mut counter = 1;
+    let mut counter: usize = 9876543210;
 
     let env = Env::new(
         mod_id,
@@ -327,7 +327,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                             ..Default::default()
                         };
 
-                        counter += 1;
+                        counter -= 1;
                     
                         queue_text_draw(&code_text, &mut glyph_brush);
                         // ---------------
