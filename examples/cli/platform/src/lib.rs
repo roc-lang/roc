@@ -48,11 +48,12 @@ pub fn roc_fx_putLine(line: RocStr) -> () {
 
 #[no_mangle]
 pub fn roc_fx_httpGetUtf8(url: RocStr) -> RocStr {
-    let body = reqwest::blocking::get(unsafe { url.as_str() })
+    let body = ureq::get(unsafe { url.as_str() })
+        .call()
         .unwrap_or_else(|err| todo!("Report this HTTP error: {:?}", err));
 
     let str = body
-        .text()
+        .into_string()
         .unwrap_or_else(|err| todo!("Report this body.text() error: {:?}", err));
 
     RocStr::from_slice(str.as_bytes())
