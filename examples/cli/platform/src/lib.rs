@@ -15,12 +15,13 @@ extern "C" {
 
     #[link_name = "roc__mainForHost_1_Fx_caller"]
     fn call_Fx(
-        flags: &(),
+        flags: &'static u8,
         function_pointer: *const u8,
         closure_data: *const u8,
         output: *mut u8,
     ) -> ();
 
+    #[allow(dead_code)]
     #[link_name = "roc__mainForHost_1_Fx_size"]
     fn size_Fx() -> i64;
 
@@ -70,7 +71,7 @@ unsafe fn call_the_closure(function_pointer: *const u8, closure_data_ptr: *const
         let buffer: *mut u8 = buffer as *mut u8;
 
         call_Fx(
-            &(),
+            &0,
             function_pointer,
             closure_data_ptr as *const u8,
             buffer as *mut u8,
