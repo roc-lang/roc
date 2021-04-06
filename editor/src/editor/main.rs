@@ -314,15 +314,17 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
                             glyph_brush.queue(borrowed_text);
                         }
+                        // TODO remove me
+                        begin_render_pass(&mut encoder, &frame.view, &ed_theme);
 
-                        draw_all_rects(
+                        /*draw_all_rects(
                             &rendered_wgpu.rects,
                             &mut encoder,
                             &frame.view,
                             &gpu_device,
                             &rect_resources,
                             &ed_theme,
-                        )
+                        )*/
                     }
                 } else {
                     begin_render_pass(&mut encoder, &frame.view, &ed_theme);
