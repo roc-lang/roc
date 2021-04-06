@@ -1373,7 +1373,7 @@ fn rbtree_balance_3() {
 
 #[test]
 #[ignore]
-fn rbtree_layout_issue() {
+fn rbtree_layout_issue_no_type_annotation() {
     // there is a flex var in here somewhere that blows up layout creation
     assert_non_opt_evals_to!(
         indoc!(
@@ -1384,7 +1384,47 @@ fn rbtree_layout_issue() {
 
             RedBlackTree k v : [ Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty ]
 
+            # the type annotation in question
             # balance : NodeColor, k, v, RedBlackTree k v -> RedBlackTree k v
+            balance = \color, key, value, right ->
+              when right is
+                Node Red _ _ rLeft rRight ->
+                    Node color key value rLeft rRight
+
+
+                _ ->
+                    Empty
+
+            show : RedBlackTree * * -> Str
+            show = \tree ->
+                when tree is
+                    Empty -> "Empty"
+                    Node _ _ _ _ _ -> "Node"
+
+            zero : I64
+            zero = 0
+
+            main : Str
+            main = show (balance Red zero zero Empty)
+            "#
+        ),
+        RocStr::from_slice("Empty".as_bytes()),
+        RocStr
+    );
+}
+
+#[test]
+fn rbtree_layout_issue_with_type_annotation() {
+    assert_non_opt_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            NodeColor : [ Red, Black ]
+
+            RedBlackTree k v : [ Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty ]
+
+            balance : NodeColor, k, v, RedBlackTree k v -> RedBlackTree k v
             balance = \color, key, value, right ->
               when right is
                 Node Red _ _ rLeft rRight ->
