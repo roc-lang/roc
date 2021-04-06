@@ -9,5 +9,7 @@ crate-type = ["staticlib"]
 
 [dependencies]
 roc_std = { path = "../../../roc_std" }
+openssl = { version = "0.10", features = ["vendored"] }
+reqwest = { version = "0.11", features = ["blocking", "json"] }
 
 [workspace]
