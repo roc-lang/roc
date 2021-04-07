@@ -1,5 +1,3 @@
-use crate::ui::text::text_pos::TextPos;
-use crate::ui::ui_error::UIResult;
 use crate::editor::code_lines::CodeLines;
 use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::slow_pool::{MarkNodeId, SlowPool};
@@ -10,13 +8,15 @@ use crate::editor::{
     markup::attribute::{Attributes, Caret},
     markup::nodes::{expr2_to_markup, set_parent_for_all, MarkupNode},
 };
-use crate::ui::text::lines::SelectableLines;
 use crate::graphics::primitives::rect::Rect;
 use crate::lang::ast::Expr2;
 use crate::lang::expr::{str_to_expr2, Env};
 use crate::lang::pool::NodeId;
 use crate::lang::scope::Scope;
 use crate::ui::text::caret_w_select::CaretWSelect;
+use crate::ui::text::lines::SelectableLines;
+use crate::ui::text::text_pos::TextPos;
+use crate::ui::ui_error::UIResult;
 use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
 use nonempty::NonEmpty;
@@ -98,21 +98,14 @@ impl<'a> EdModel<'a> {
         self.grid_node_map.get_id_at_row_col(caret_pos)
     }
 
-    pub fn get_curr_mark_node(&self) -> UIResult<&MarkupNode> {
-        let curr_mark_node_id = self.get_curr_mark_node_id()?;
-        Ok(self.markup_node_pool.get(curr_mark_node_id))
-    }
-
     pub fn get_prev_mark_node_id(&self) -> UIResult<Option<MarkNodeId>> {
         let caret_pos = self.get_caret();
-        
+
         let prev_id_opt = if caret_pos.column > 0 {
-            let prev_mark_node_id = self.grid_node_map.get_id_at_row_col(
-                TextPos {
-                    line: caret_pos.line,
-                    column: caret_pos.column - 1,
-                }
-            )?;
+            let prev_mark_node_id = self.grid_node_map.get_id_at_row_col(TextPos {
+                line: caret_pos.line,
+                column: caret_pos.column - 1,
+            })?;
 
             Some(prev_mark_node_id)
         } else {
@@ -120,10 +113,6 @@ impl<'a> EdModel<'a> {
         };
 
         Ok(prev_id_opt)
-    }
-
-    pub fn get_ast_node(&self, ast_node_id: NodeId<Expr2>) -> &Expr2 {
-        self.module.env.pool.get(ast_node_id)
     }
 }
 

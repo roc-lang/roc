@@ -96,6 +96,13 @@ impl MarkupNode {
         }
     }
 
+    pub fn is_all_alphanumeric(&self) -> EdResult<bool> {
+        Ok(self
+            .get_content()?
+            .chars()
+            .all(|chr| chr.is_ascii_alphanumeric()))
+    }
+
     pub fn add_child_at_index(&mut self, index: usize, child_id: MarkNodeId) -> EdResult<()> {
         if let MarkupNode::Nested { children_ids, .. } = self {
             children_ids.splice(index..index, vec![child_id]);

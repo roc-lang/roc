@@ -1,8 +1,8 @@
-use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::ed_error::EdResult;
 use crate::editor::markup::attribute::Attributes;
 use crate::editor::markup::nodes;
 use crate::editor::markup::nodes::MarkupNode;
+use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_update::get_node_context;
 use crate::editor::mvc::ed_update::NodeContext;
@@ -10,7 +10,6 @@ use crate::editor::syntax_highlight::HighlightStyle;
 use crate::lang::ast::ArrString;
 use crate::lang::ast::Expr2;
 use crate::lang::pool::PoolStr;
-
 
 pub fn update_small_string(
     new_char: &char,
@@ -35,16 +34,6 @@ pub fn update_small_string(
         .get_offset_to_node_id(old_caret_pos, curr_mark_node_id)?;
 
     if node_caret_offset != 0 && node_caret_offset < content_str_mut.len() {
-        content_str_mut.insert_str(node_caret_offset, new_input);
-
-        // update GridNodeMap and CodeLines
-        ed_model.insert_between_line(
-            old_caret_pos.line,
-            old_caret_pos.column,
-            new_input,
-            curr_mark_node_id,
-        )?;
-
         if old_array_str.len() < ArrString::capacity() {
             if let Expr2::SmallStr(ref mut mut_array_str) =
                 ed_model.module.env.pool.get_mut(ast_node_id)
@@ -57,13 +46,25 @@ pub fn update_small_string(
                 unreachable!()
             }
         } else {
-            let mut new_str = old_array_str.as_str().to_owned();
+            return Ok(InputOutcome::Ignored);
+            // TODO reenable when #1138 is fixed
+            /*let mut new_str = old_array_str.as_str().to_owned();
             new_str.push(*new_char);
 
             let new_ast_node = Expr2::Str(PoolStr::new(&new_str, ed_model.module.env.pool));
 
-            ed_model.module.env.pool.set(ast_node_id, new_ast_node);
+            ed_model.module.env.pool.set(ast_node_id, new_ast_node);*/
         }
+
+        content_str_mut.insert_str(node_caret_offset, new_input);
+
+        // update GridNodeMap and CodeLines
+        ed_model.insert_between_line(
+            old_caret_pos.line,
+            old_caret_pos.column,
+            new_input,
+            curr_mark_node_id,
+        )?;
 
         // update caret
         for _ in 0..new_input.len() {
@@ -118,7 +119,6 @@ pub fn update_string(
 
         // update caret
         ed_model.simple_move_carets_right();
-
 
         Ok(InputOutcome::Accepted)
     } else {

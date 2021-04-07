@@ -1,6 +1,6 @@
-use std::borrow::Cow;
 use super::ortho::{init_ortho, OrthoResources};
 use super::vertex::Vertex;
+use std::borrow::Cow;
 
 pub struct RectResources {
     pub pipeline: wgpu::RenderPipeline,
