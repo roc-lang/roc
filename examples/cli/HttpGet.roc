@@ -9,8 +9,8 @@ main =
 
     url <- await Stdin.line
 
-    {} <- await (Stdout.line "The contents of \(url) are:\n")
+    result <- Task.attempt (Http.getUtf8 url)
 
-    contents <- await (Http.getUtf8 url)
-
-    Stdout.line contents
+    when result is
+        Ok contents -> Stdout.line "The contents of \(url) are:\n\(contents)"
+        Err err -> Stdout.line "Error retrieving \(url) - error was: \(err)"
