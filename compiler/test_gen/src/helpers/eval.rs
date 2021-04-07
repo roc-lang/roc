@@ -26,6 +26,7 @@ pub fn test_builtin_defs(symbol: Symbol, var_store: &mut VarStore) -> Option<Def
 // this is not actually dead code, but only used by cfg_test modules
 // so "normally" it is dead, only at testing time is it used
 #[allow(dead_code)]
+#[inline(never)]
 pub fn helper<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,

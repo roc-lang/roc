@@ -2,6 +2,7 @@ interface File
     exposes [ FileReadErr, FileOpenErr, FileWriteErr, DirReadErr, readUtf8 ]
     imports [ Task.{ Task }, fx.Effect.{ after }, Path ]
 
+# TODO FIXME should be able to import this as Path.{ Path }, but there's a bug.
 Path : Path.Path
 
 # These various file errors come from the POSIX errno values - see

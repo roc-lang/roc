@@ -756,6 +756,9 @@ define_builtins! {
 
         // A caller (wrapper) that we pass to zig for it to be able to call Roc functions
         20 ZIG_FUNCTION_CALLER: "#zig_function_caller"
+
+        // a caller (wrapper) for comparison
+        21 GENERIC_COMPARE_REF: "#generic_compare_ref"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -919,6 +922,7 @@ define_builtins! {
         28 LIST_PRODUCT_MUL: "#productmul"
         29 LIST_WALK_UNTIL: "walkUntil"
         30 LIST_RANGE: "range"
+        31 LIST_SORT_WITH: "sortWith"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

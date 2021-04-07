@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 use crate::llvm::bitcode::{
-    build_dec_wrapper, build_eq_wrapper, build_inc_wrapper, build_transform_caller,
-    call_bitcode_fn, call_void_bitcode_fn,
+    build_compare_wrapper, build_dec_wrapper, build_eq_wrapper, build_inc_wrapper,
+    build_transform_caller, call_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
     allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, InPlace,
@@ -12,7 +12,6 @@ use crate::llvm::refcounting::{
 };
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use inkwell::types::BasicType;
 use inkwell::types::{BasicTypeEnum, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
@@ -338,92 +337,13 @@ pub fn list_join<'a, 'ctx, 'env>(
 }
 
 /// List.reverse : List elem -> List elem
-pub fn list_reverse_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    inplace: InPlace,
-    length: IntValue<'ctx>,
-    source_ptr: PointerValue<'ctx>,
-    dest_ptr: PointerValue<'ctx>,
-) {
-    let builder = env.builder;
-    let ctx = env.context;
-
-    // constant 1i64
-    let one = ctx.i64_type().const_int(1, false);
-
-    let low_alloca = builder.build_alloca(ctx.i64_type(), "low");
-    let high_alloca = builder.build_alloca(ctx.i64_type(), "high");
-
-    let high_val = builder.build_int_sub(length, one, "subtract 1");
-
-    builder.build_store(low_alloca, ctx.i64_type().const_zero());
-    builder.build_store(high_alloca, high_val);
-
-    // while (high > low)
-    let condition_bb = ctx.append_basic_block(parent, "condition");
-    builder.build_unconditional_branch(condition_bb);
-    builder.position_at_end(condition_bb);
-
-    let high = builder.build_load(high_alloca, "high").into_int_value();
-    let low = builder.build_load(low_alloca, "low").into_int_value();
-
-    // if updating in-place, then the "middle element" can be left untouched
-    // otherwise, the middle element needs to be copied over from the source to the target
-    let predicate = match inplace {
-        InPlace::InPlace => IntPredicate::SGT,
-        InPlace::Clone => IntPredicate::SGE,
-    };
-
-    let condition = builder.build_int_compare(predicate, high, low, "loopcond");
-
-    let body_bb = ctx.append_basic_block(parent, "body");
-    let cont_bb = ctx.append_basic_block(parent, "cont");
-    builder.build_conditional_branch(condition, body_bb, cont_bb);
-
-    // loop body
-    builder.position_at_end(body_bb);
-
-    // assumption: calculating pointer offsets for both the source and target is
-
-    let mut low_ptr = unsafe { builder.build_in_bounds_gep(source_ptr, &[low], "low_ptr") };
-    let mut high_ptr = unsafe { builder.build_in_bounds_gep(source_ptr, &[high], "high_ptr") };
-
-    // TODO use memmove?
-    let low_value = builder.build_load(low_ptr, "load_low");
-    let high_value = builder.build_load(high_ptr, "load_high");
-
-    // swap the two values
-    if let InPlace::Clone = inplace {
-        low_ptr = unsafe { builder.build_in_bounds_gep(dest_ptr, &[low], "low_ptr") };
-        high_ptr = unsafe { builder.build_in_bounds_gep(dest_ptr, &[high], "high_ptr") };
-    }
-
-    builder.build_store(high_ptr, low_value);
-    builder.build_store(low_ptr, high_value);
-
-    builder.build_store(low_alloca, builder.build_int_add(low, one, "increment"));
-    builder.build_store(high_alloca, builder.build_int_sub(high, one, "decrement"));
-
-    builder.build_unconditional_branch(condition_bb);
-
-    // continuation
-    builder.position_at_end(cont_bb);
-}
-
-/// List.reverse : List elem -> List elem
 pub fn list_reverse<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    output_inplace: InPlace,
+    _output_inplace: InPlace,
     list: BasicValueEnum<'ctx>,
     list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-    let ctx = env.context;
-
-    let wrapper_struct = list.into_struct_value();
-    let (input_inplace, element_layout) = match *list_layout {
+    let (_, element_layout) = match *list_layout {
         Layout::Builtin(Builtin::EmptyList) => (
             InPlace::InPlace,
             // this pointer will never actually be dereferenced
@@ -440,74 +360,27 @@ pub fn list_reverse<'a, 'ctx, 'env>(
         _ => unreachable!("Invalid layout {:?} in List.reverse", list_layout),
     };
 
-    let list_type = basic_type_from_layout(env.arena, env.context, &element_layout, env.ptr_bytes);
-    let ptr_type = list_type.ptr_type(AddressSpace::Generic);
+    let list_i128 = complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128");
 
-    let list_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
-    let length = list_len(builder, list.into_struct_value());
+    let element_width = env
+        .ptr_int()
+        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
 
-    match input_inplace {
-        InPlace::InPlace => {
-            list_reverse_help(env, parent, input_inplace, length, list_ptr, list_ptr);
+    let alignment = element_layout.alignment_bytes(env.ptr_bytes);
+    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
 
-            list
-        }
+    let output = call_bitcode_fn(
+        env,
+        &[list_i128, alignment_iv.into(), element_width.into()],
+        &bitcode::LIST_REVERSE,
+    );
 
-        InPlace::Clone => {
-            let len_0_block = ctx.append_basic_block(parent, "len_0_block");
-            let len_1_block = ctx.append_basic_block(parent, "len_1_block");
-            let len_n_block = ctx.append_basic_block(parent, "len_n_block");
-            let cont_block = ctx.append_basic_block(parent, "cont_block");
-
-            let one = ctx.i64_type().const_int(1, false);
-            let zero = ctx.i64_type().const_zero();
-
-            let result = builder.build_alloca(ptr_type, "result");
-
-            builder.build_switch(
-                length,
-                len_n_block,
-                &[(zero, len_0_block), (one, len_1_block)],
-            );
-
-            // build block for length 0
-            {
-                builder.position_at_end(len_0_block);
-
-                // store NULL pointer there
-                builder.build_store(result, ptr_type.const_zero());
-                builder.build_unconditional_branch(cont_block);
-            }
-
-            // build block for length 1
-            {
-                builder.position_at_end(len_1_block);
-
-                let new_list_ptr = clone_list(env, output_inplace, &element_layout, one, list_ptr);
-
-                builder.build_store(result, new_list_ptr);
-                builder.build_unconditional_branch(cont_block);
-            }
-
-            // build block for length > 1
-            {
-                builder.position_at_end(len_n_block);
-
-                let new_list_ptr = allocate_list(env, output_inplace, &element_layout, length);
-
-                list_reverse_help(env, parent, InPlace::Clone, length, list_ptr, new_list_ptr);
-
-                // store new list pointer there
-                builder.build_store(result, new_list_ptr);
-                builder.build_unconditional_branch(cont_block);
-            }
-
-            builder.position_at_end(cont_block);
-            let new_list_ptr = builder.build_load(result, "result").into_pointer_value();
-
-            store_list(env, new_list_ptr, length)
-        }
-    }
+    complex_bitcast(
+        env.builder,
+        output,
+        collection(env.context, env.ptr_bytes).into(),
+        "from_i128",
+    )
 }
 
 pub fn list_get_unsafe<'a, 'ctx, 'env>(
@@ -1122,6 +995,52 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
             dec_result_fn.as_global_value().as_pointer_value().into(),
         ],
         op,
+    );
+
+    complex_bitcast(
+        env.builder,
+        output,
+        collection(env.context, env.ptr_bytes).into(),
+        "from_i128",
+    )
+}
+
+/// List.sortWith : List a, (a, a -> Ordering) -> List a
+pub fn list_sort_with<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    transform: BasicValueEnum<'ctx>,
+    list: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let list_i128 = complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128");
+
+    let transform_ptr = transform.into_pointer_value();
+
+    let compare_wrapper = build_compare_wrapper(env, layout_ids, element_layout)
+        .as_global_value()
+        .as_pointer_value();
+
+    let element_width = env
+        .ptr_int()
+        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
+
+    let alignment = element_layout.alignment_bytes(env.ptr_bytes);
+    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
+
+    let output = call_bitcode_fn(
+        env,
+        &[
+            list_i128,
+            env.builder
+                .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+            compare_wrapper.into(),
+            alignment_iv.into(),
+            element_width.into(),
+        ],
+        bitcode::LIST_SORT_WITH,
     );
 
     complex_bitcast(

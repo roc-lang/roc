@@ -1,7 +1,8 @@
+use crate::docs::DocTypeAnnotation::{Apply, BoundVariable, TagUnion};
 use inlinable_string::InlinableString;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::IdentIds;
-use roc_parse::ast::Def;
+use roc_parse::ast::{Def, Tag, TypeAnnotation};
 use roc_region::all::Located;
 
 // Documentation generation requirements
@@ -24,7 +25,28 @@ pub struct ModuleDocumentation {
 #[derive(Debug, Clone)]
 pub struct DocEntry {
     pub name: String,
+    pub type_vars: Vec<String>,
+    pub type_annotation: Option<DocTypeAnnotation>,
     pub docs: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum DocTypeAnnotation {
+    TagUnion {
+        tags: Vec<DocTag>,
+        extension: Option<Box<DocTypeAnnotation>>,
+    },
+    BoundVariable(String),
+    Apply {
+        name: String,
+        parts: Vec<DocTypeAnnotation>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct DocTag {
+    pub name: String,
+    pub values: Vec<DocTypeAnnotation>,
 }
 
 pub fn generate_module_docs<'a>(
@@ -82,6 +104,8 @@ fn generate_module_doc<'a>(
                 {
                     let entry = DocEntry {
                         name: identifier.to_string(),
+                        type_annotation: None,
+                        type_vars: Vec::new(),
                         docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
                     };
                     acc.push(entry);
@@ -100,6 +124,8 @@ fn generate_module_doc<'a>(
                 {
                     let entry = DocEntry {
                         name: identifier.to_string(),
+                        type_annotation: None,
+                        type_vars: Vec::new(),
                         docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
                     };
                     acc.push(entry);
@@ -110,13 +136,19 @@ fn generate_module_doc<'a>(
             _ => (acc, None),
         },
 
-        Alias {
-            name,
-            vars: _,
-            ann: _,
-        } => {
+        Alias { name, vars, ann } => {
+            let mut type_vars = Vec::new();
+
+            for var in vars.iter() {
+                if let Pattern::Identifier(ident_name) = var.value {
+                    type_vars.push(ident_name.to_string());
+                }
+            }
+
             let entry = DocEntry {
                 name: name.value.to_string(),
+                type_annotation: type_to_docs(ann.value),
+                type_vars,
                 docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
             };
             acc.push(entry);
@@ -127,6 +159,108 @@ fn generate_module_doc<'a>(
         Body(_, _) => (acc, None),
 
         NotYetImplemented(s) => todo!("{}", s),
+    }
+}
+
+fn type_to_docs(type_annotation: TypeAnnotation) -> Option<DocTypeAnnotation> {
+    match type_annotation {
+        TypeAnnotation::TagUnion {
+            tags,
+            ext,
+            final_comments: _,
+        } => {
+            let mut tags_to_render: Vec<DocTag> = Vec::new();
+
+            let mut any_tags_are_private = false;
+
+            let mut index = 0;
+
+            while index < tags.len() && !any_tags_are_private {
+                let tag = tags[index];
+
+                match tag_to_doc(tag.value) {
+                    None => {
+                        any_tags_are_private = true;
+                    }
+                    Some(tag_ann) => {
+                        tags_to_render.push(tag_ann);
+                    }
+                }
+
+                index += 1;
+            }
+
+            if any_tags_are_private {
+                None
+            } else {
+                let extension = match ext {
+                    None => None,
+                    Some(ext_type_ann) => type_to_docs(ext_type_ann.value).map(Box::new),
+                };
+
+                Some(TagUnion {
+                    tags: tags_to_render,
+                    extension,
+                })
+            }
+        }
+        TypeAnnotation::BoundVariable(var_name) => Some(BoundVariable(var_name.to_string())),
+        TypeAnnotation::Apply(module_name, type_name, type_ann_parts) => {
+            let mut name = String::new();
+
+            if !module_name.is_empty() {
+                name.push_str(module_name);
+                name.push('.');
+            }
+
+            name.push_str(type_name);
+
+            let mut parts: Vec<DocTypeAnnotation> = Vec::new();
+
+            for type_ann_part in type_ann_parts {
+                if let Some(part) = type_to_docs(type_ann_part.value) {
+                    parts.push(part);
+                }
+            }
+
+            Some(Apply { name, parts })
+        }
+        _ => {
+            // TODO "Implement type to docs")
+
+            None
+        }
+    }
+}
+
+// The Option here represents if it is private. Private tags
+// evaluate to `None`.
+fn tag_to_doc(tag: Tag) -> Option<DocTag> {
+    match tag {
+        Tag::Global { name, args } => Some(DocTag {
+            name: name.value.to_string(),
+            values: {
+                let mut type_vars = Vec::new();
+
+                let mut index = 0;
+
+                while index < args.len() {
+                    let arg = args[index];
+
+                    if let Some(type_var) = type_to_docs(arg.value) {
+                        type_vars.push(type_var);
+                    }
+
+                    index += 1;
+                }
+
+                type_vars
+            },
+        }),
+        Tag::Private { .. } => None,
+        Tag::SpaceBefore(&sub_tag, _) => tag_to_doc(sub_tag),
+        Tag::SpaceAfter(&sub_tag, _) => tag_to_doc(sub_tag),
+        Tag::Malformed(_) => None,
     }
 }
 
