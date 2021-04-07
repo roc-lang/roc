@@ -72,23 +72,6 @@ impl GridNodeMap {
 
         Ok(caret_pos.column - first_node_index)
     }
-
-    pub fn is_between_nodes(
-        &self,
-        caret_pos: TextPos,
-    ) -> bool {
-        if let Ok(line) = slice_get(caret_pos.line, &self.lines) {
-            if let Ok(elt) = slice_get(caret_pos.column, line) {
-                if caret_pos.column > 0 {
-                    if let Ok(prev_elt) = slice_get(caret_pos.column - 1, line) {
-                        return prev_elt != elt
-                    }
-                }
-            }
-        }
-
-        false
-    }
 }
 
 impl fmt::Display for GridNodeMap {

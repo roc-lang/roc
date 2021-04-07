@@ -1,3 +1,4 @@
+use crate::editor::mvc::record_update::update_empty_record;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::code_lines::CodeLines;
 use crate::editor::ed_error::EdResult;
@@ -6,7 +7,6 @@ use crate::editor::markup::nodes;
 use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::record_update::start_new_record;
-use crate::editor::mvc::record_update::update_new_record;
 use crate::editor::mvc::record_update::update_record_colon;
 use crate::editor::mvc::record_update::update_record_field;
 use crate::editor::mvc::string_update::start_new_string;
@@ -324,27 +324,6 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
     let input_outcome = 
         match received_char {
-            '{' => {
-                start_new_record(ed_model)?
-            }
-            ':' => {
-                // TODO set up Dict if previous char is '{'
-
-                update_record_colon(ed_model)?
-            }
-            '"' => {
-
-                start_new_string(ed_model)?
-            }
-            '\u{8}' | '\u{7f}' => {
-                // On Linux, '\u{8}' is backspace,
-                // On macOS '\u{7f}'.
-
-                unimplemented!("TODO implement backspace");
-            }
-            ch if is_newline(ch) => {
-                unimplemented!("TODO implement newline");
-            }
             '\u{1}' // Ctrl + A
             | '\u{3}' // Ctrl + C
             | '\u{16}' // Ctrl + V
@@ -358,27 +337,73 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
             }
             ch => {
                 let old_caret_pos = ed_model.get_caret();
-                let curr_mark_node_id = ed_model.grid_node_map.get_id_at_row_col(old_caret_pos)?;
-                let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
 
-                let prev_mark_node_id_opt =
-                    if old_caret_pos.column > 0 {
-                        let prev_mark_node_id = ed_model.grid_node_map.get_id_at_row_col(
-                            TextPos {
-                                line: old_caret_pos.line,
-                                column: old_caret_pos.column - 1,
+                let curr_mark_node_id_res = ed_model.get_curr_mark_node_id();
+
+                if let Ok(curr_mark_node_id) = curr_mark_node_id_res {
+                    let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
+                    let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
+    
+                    let ast_node_id = curr_mark_node.get_ast_node_id();
+                    let ast_node_ref = ed_model.module.env.pool.get(ast_node_id);
+
+                    if let Expr2::Blank {..} = ast_node_ref {
+                        match ch {
+                            '"' => {
+                                start_new_string(ed_model)?
+                            },
+                            '{' => {
+                                start_new_record(ed_model)?
                             }
-                        )?;
+                            _ => InputOutcome::Ignored
+                        }
+                    } else if let Some(prev_mark_node_id) = prev_mark_node_id_opt{
+                        if prev_mark_node_id == curr_mark_node_id {
+                            match ast_node_ref {
+                                Expr2::SmallStr(old_arr_str) => {
+                                    update_small_string(
+                                        &ch, old_arr_str, ed_model
+                                    )?
+                                }
+                                Expr2::Str(old_pool_str) => {
+                                    update_string(
+                                        &ch.to_string(), old_pool_str, ed_model
+                                    )?
+                                }
+                                Expr2::EmptyRecord => {
+                                    // prev_mark_node_id and curr_mark_node_id should be different to allow creating field at current caret position
+                                    InputOutcome::Ignored
+                                }
+                                other => unimplemented!("TODO implement updating of Expr2 {:?}.", other)
+                            }
+                        } else if ch.is_ascii_alphanumeric() {
+                                match ast_node_ref {
+                                    Expr2::EmptyRecord => {
+                                        let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
 
-                        Some(prev_mark_node_id)
+                                        update_empty_record(
+                                            &ch.to_string(),
+                                            prev_mark_node_id,
+                                            sibling_ids,
+                                            ed_model
+                                        )?
+                                    }
+                                    other => unimplemented!("TODO implement updating of Expr2 {:?}.", other)
+                                }
+                        } else {
+                            InputOutcome::Ignored
+                        }
+                        
                     } else {
-                        None
-                    };
+                        // Not supporting any Expr2 right now that would allow prepending at the start
+                        InputOutcome::Ignored
+                    }
+                    
+                } else {
+                    InputOutcome::Ignored
+                }
 
-                let ast_node_id = curr_mark_node.get_ast_node_id();
-                let ast_node_ref = ed_model.module.env.pool.get(ast_node_id);
-
-                match ast_node_ref {
+                /*match ast_node_ref {
                     Expr2::EmptyRecord => {
 
                         let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
@@ -420,7 +445,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                     other => {
                         unimplemented!("TODO implement updating of Expr2 {:?}.", other)
                     },
-                }
+                }*/
             }
         };
 

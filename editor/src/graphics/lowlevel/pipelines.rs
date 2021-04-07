@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use super::ortho::{init_ortho, OrthoResources};
 use super::vertex::Vertex;
 
@@ -21,8 +22,11 @@ pub fn make_rect_pipeline(
         &gpu_device,
         &pipeline_layout,
         swap_chain_descr.format,
-        &wgpu::include_spirv!("../shaders/rect.vert.spv"),
-        &wgpu::include_spirv!("../shaders/rect.frag.spv"),
+        &wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("../shaders/shader.wgsl"))),
+            flags: wgpu::ShaderFlags::all(),
+        },
     );
 
     RectResources { pipeline, ortho }
@@ -32,23 +36,21 @@ pub fn create_render_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     color_format: wgpu::TextureFormat,
-    vs_src: &wgpu::ShaderModuleDescriptor,
-    fs_src: &wgpu::ShaderModuleDescriptor,
+    shader_module_desc: &wgpu::ShaderModuleDescriptor,
 ) -> wgpu::RenderPipeline {
-    let vs_module = device.create_shader_module(vs_src);
-    let fs_module = device.create_shader_module(fs_src);
+    let shader = device.create_shader_module(shader_module_desc);
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Render pipeline"),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
-            module: &vs_module,
-            entry_point: "main",
+            module: &shader,
+            entry_point: "vs_main",
             buffers: &[Vertex::DESC],
         },
         fragment: Some(wgpu::FragmentState {
-            module: &fs_module,
-            entry_point: "main",
+            module: &shader,
+            entry_point: "fs_main",
             targets: &[wgpu::ColorTargetState {
                 format: color_format,
                 color_blend: wgpu::BlendState::REPLACE,
