@@ -1,5 +1,5 @@
 interface Task
-    exposes [ Task, succeed, fail, await, map, putLine ]
+    exposes [ Task, succeed, fail, await, map ]
     imports [ fx.Effect ]
 
 
@@ -29,6 +29,3 @@ map = \effect, transform ->
         when result is
             Ok a -> Task.succeed (transform a)
             Err err -> Task.fail err
-
-putLine : Str -> Task {} *
-putLine = \line -> Effect.map (Effect.putLine line) (\_ -> Ok {})

@@ -15,12 +15,13 @@ extern "C" {
 
     #[link_name = "roc__mainForHost_1_Fx_caller"]
     fn call_Fx(
-        flags: &(),
+        flags: &'static u8,
         function_pointer: *const u8,
         closure_data: *const u8,
         output: *mut u8,
     ) -> ();
 
+    #[allow(dead_code)]
     #[link_name = "roc__mainForHost_1_Fx_size"]
     fn size_Fx() -> i64;
 
@@ -46,6 +47,19 @@ pub fn roc_fx_putLine(line: RocStr) -> () {
 }
 
 #[no_mangle]
+pub fn roc_fx_httpGetUtf8(url: RocStr) -> RocStr {
+    let body = ureq::get(unsafe { url.as_str() })
+        .call()
+        .unwrap_or_else(|err| todo!("Report this HTTP error: {:?}", err));
+
+    let str = body
+        .into_string()
+        .unwrap_or_else(|err| todo!("Report this body.text() error: {:?}", err));
+
+    RocStr::from_slice(str.as_bytes())
+}
+
+#[no_mangle]
 pub fn roc_fx_getLine() -> RocStr {
     use std::io::{self, BufRead};
 
@@ -63,7 +77,7 @@ unsafe fn call_the_closure(function_pointer: *const u8, closure_data_ptr: *const
         let buffer: *mut u8 = buffer as *mut u8;
 
         call_Fx(
-            &(),
+            &0,
             function_pointer,
             closure_data_ptr as *const u8,
             buffer as *mut u8,

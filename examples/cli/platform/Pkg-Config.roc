@@ -8,6 +8,7 @@ platform rtfeldman/roc-cli
         {
             putChar : I64 -> Effect {},
             putLine : Str -> Effect {},
+            httpGetUtf8 : Str -> Effect Str,
             getLine : Effect Str
         }
 
