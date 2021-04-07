@@ -47,9 +47,9 @@ impl<'a> EdModel<'a> {
 
     // disregards EdModel.code_lines because the caller knows the resulting caret position will be valid.
     // allows us to prevent multiple updates to EdModel.code_lines
-    pub fn simple_move_carets_right(&mut self) {
+    pub fn simple_move_carets_right(&mut self, repeat: usize) {
         for caret_tup in self.caret_w_select_vec.iter_mut() {
-            caret_tup.0.caret_pos.column += 1;
+            caret_tup.0.caret_pos.column += repeat;
             caret_tup.1 = None;
         }
     }
@@ -469,7 +469,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                         }
 
                     } else {
-                        // Not supporting any Expr2 right now that would allow prepending at the start
+                        // Not supporting any Expr2 right now that would allow prepending at the start of a line
                         InputOutcome::Ignored
                     }
 

@@ -67,9 +67,7 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
         // remove data corresponding to Blank node
         ed_model.del_at_line(old_caret_pos.line, old_caret_pos.column)?;
 
-        for _ in 0..nodes::LEFT_ACCOLADE.len() {
-            ed_model.simple_move_carets_right();
-        }
+        ed_model.simple_move_carets_right(nodes::LEFT_ACCOLADE.len());
 
         // update GridNodeMap and CodeLines
         ed_model.insert_between_line(
@@ -152,7 +150,7 @@ pub fn update_empty_record(
         }
 
         // update caret
-        ed_model.simple_move_carets_right();
+        ed_model.simple_move_carets_right(1);
 
         // update GridNodeMap and CodeLines
         ed_model.insert_between_line(
@@ -234,9 +232,7 @@ pub fn update_record_colon(
                     .add_child_at_index(new_child_index + 1, record_blank_node_id)?;
 
                 // update caret
-                for _ in 0..record_colon.len() {
-                    ed_model.simple_move_carets_right();
-                }
+                ed_model.simple_move_carets_right(record_colon.len());
 
                 // update GridNodeMap and CodeLines
                 ed_model.insert_between_line(
@@ -281,9 +277,7 @@ pub fn update_record_field(
     content_str_mut.insert_str(node_caret_offset, new_input);
 
     // update caret
-    for _ in 0..new_input.len() {
-        ed_model.simple_move_carets_right();
-    }
+    ed_model.simple_move_carets_right(new_input.len());
 
     // update GridNodeMap and CodeLines
     ed_model.insert_between_line(

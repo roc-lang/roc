@@ -41,9 +41,7 @@ pub fn update_invalid_lookup(
         content_str_mut.insert_str(caret_offset, input_str);
 
         // update caret
-        for _ in 0..input_str.len() {
-            ed_model.simple_move_carets_right();
-        }
+        ed_model.simple_move_carets_right(input_str.len());
 
         // update GridNodeMap and CodeLines
         ed_model.insert_between_line(

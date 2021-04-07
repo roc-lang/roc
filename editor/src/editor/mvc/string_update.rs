@@ -67,9 +67,7 @@ pub fn update_small_string(
         )?;
 
         // update caret
-        for _ in 0..new_input.len() {
-            ed_model.simple_move_carets_right();
-        }
+        ed_model.simple_move_carets_right(new_input.len());
 
         Ok(InputOutcome::Accepted)
     } else {
@@ -118,7 +116,7 @@ pub fn update_string(
         ed_model.module.env.pool.set(ast_node_id, new_ast_node);
 
         // update caret
-        ed_model.simple_move_carets_right();
+        ed_model.simple_move_carets_right(1);
 
         Ok(InputOutcome::Accepted)
     } else {
@@ -163,7 +161,7 @@ pub fn start_new_string(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
             curr_mark_node_id,
         )?;
 
-        ed_model.simple_move_carets_right();
+        ed_model.simple_move_carets_right(1);
 
         Ok(InputOutcome::Accepted)
     } else {
