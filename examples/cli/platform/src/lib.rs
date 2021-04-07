@@ -1,8 +1,6 @@
 #![allow(non_snake_case)]
 
-use roc_std::alloca;
-use roc_std::RocCallResult;
-use roc_std::RocStr;
+use roc_std::{alloca, RocCallResult, RocResult, RocStr};
 use std::alloc::Layout;
 use std::time::SystemTime;
 
