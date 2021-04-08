@@ -3,9 +3,11 @@ use crate::editor::ed_error::EdResult;
 use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::markup::nodes;
 use crate::editor::markup::nodes::MarkupNode;
+use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
+use crate::editor::mvc::lookup_update::update_invalid_lookup;
 use crate::editor::mvc::record_update::start_new_record;
-use crate::editor::mvc::record_update::update_new_record;
+use crate::editor::mvc::record_update::update_empty_record;
 use crate::editor::mvc::record_update::update_record_colon;
 use crate::editor::mvc::record_update::update_record_field;
 use crate::editor::mvc::string_update::start_new_string;
@@ -23,7 +25,6 @@ use crate::ui::text::selection::Selection;
 use crate::ui::text::text_pos::TextPos;
 use crate::ui::text::{lines, lines::Lines, lines::SelectableLines};
 use crate::ui::ui_error::UIResult;
-use crate::ui::util::is_newline;
 use crate::window::keyboard_input::Modifiers;
 use winit::event::VirtualKeyCode;
 use VirtualKeyCode::*;
@@ -46,9 +47,9 @@ impl<'a> EdModel<'a> {
 
     // disregards EdModel.code_lines because the caller knows the resulting caret position will be valid.
     // allows us to prevent multiple updates to EdModel.code_lines
-    pub fn simple_move_carets_right(&mut self) {
+    pub fn simple_move_carets_right(&mut self, repeat: usize) {
         for caret_tup in self.caret_w_select_vec.iter_mut() {
-            caret_tup.0.caret_pos.column += 1;
+            caret_tup.0.caret_pos.column += repeat;
             caret_tup.1 = None;
         }
     }
@@ -317,110 +318,170 @@ pub fn get_node_context<'a>(ed_model: &'a EdModel) -> EdResult<NodeContext<'a>> 
     })
 }
 
-pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult<()> {
+pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     // TODO set all selections to none
     // TODO nested records
 
-    ed_model.dirty = true;
-
-    match received_char {
-        '{' => {
-            start_new_record(ed_model)?;
-        }
-        ':' => {
-            // TODO set up Dict if previous char is '{'
-
-            update_record_colon(ed_model)?;
-        }
-        '"' => {
-
-            start_new_string(ed_model)?;
-        }
-        '\u{8}' | '\u{7f}' => {
-            // On Linux, '\u{8}' is backspace,
-            // On macOS '\u{7f}'.
-
-            unimplemented!("TODO implement backspace");
-        }
-        ch if is_newline(ch) => {
-            unimplemented!("TODO implement newline");
-        }
-        '\u{1}' // Ctrl + A
-        | '\u{3}' // Ctrl + C
-        | '\u{16}' // Ctrl + V
-        | '\u{18}' // Ctrl + X
-        | '\u{e000}'..='\u{f8ff}' // http://www.unicode.org/faq/private_use.html
-        | '\u{f0000}'..='\u{ffffd}' // ^
-        | '\u{100000}'..='\u{10fffd}' // ^
-        => {
-            // chars that can be ignored
-            ed_model.dirty = false;
-        }
-        ch => {
-            let old_caret_pos = ed_model.get_caret();
-            let curr_mark_node_id = ed_model.grid_node_map.get_id_at_row_col(old_caret_pos)?;
-            let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
-
-            let prev_mark_node_id_opt =
-                if old_caret_pos.column > 0 {
-                    let prev_mark_node_id = ed_model.grid_node_map.get_id_at_row_col(
-                        TextPos {
-                            line: old_caret_pos.line,
-                            column: old_caret_pos.column - 1,
-                        }
-                    )?;
-
-                    Some(prev_mark_node_id)
-                } else {
-                    None
-                };
-
-            let ast_node_id = curr_mark_node.get_ast_node_id();
-            let ast_node_ref = ed_model.module.env.pool.get(ast_node_id);
-
-            match ast_node_ref {
-                Expr2::EmptyRecord => {
-
-                    let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
-
-                    update_new_record(&ch.to_string(), prev_mark_node_id_opt, sibling_ids, ed_model)?;
-                },
-                Expr2::Record { record_var:_, fields } => {
-                    if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
-                        let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
-                        let prev_node_content = prev_mark_node.get_content()?;
-
-                        let node_to_update_id =
-                            if prev_node_content == nodes::LEFT_ACCOLADE {
-                                curr_mark_node_id
-                            } else {
-                                // caret is already past field so we need the previous MarkupNode
-                                prev_mark_node_id
-                            };
-
-                        update_record_field(
-                            &ch.to_string(),
-                            old_caret_pos,
-                            node_to_update_id,
-                            fields,
-                            ed_model,
-                        )?;
-                    }
-                },
-                Expr2::SmallStr(array_str) => {
-
-                    update_small_string(ch, array_str, ed_model)?;
-                },
-                Expr2::Str(old_pool_str) => {
-
-                    update_string(&ch.to_string(), old_pool_str, ed_model)?;
-                },
-                other => {
-                    unimplemented!("TODO implement updating of Expr2 {:?}.", other)
-                },
+    let input_outcome = match received_char {
+            '\u{1}' // Ctrl + A
+            | '\u{3}' // Ctrl + C
+            | '\u{16}' // Ctrl + V
+            | '\u{18}' // Ctrl + X
+            | '\u{e000}'..='\u{f8ff}' // http://www.unicode.org/faq/private_use.html
+            | '\u{f0000}'..='\u{ffffd}' // ^
+            | '\u{100000}'..='\u{10fffd}' // ^
+            => {
+                // chars that can be ignored
+                InputOutcome::Ignored
             }
-        }
+            ch => {
+                let curr_mark_node_id_res = ed_model.get_curr_mark_node_id();
+
+                if let Ok(curr_mark_node_id) = curr_mark_node_id_res {
+                    let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
+                    let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
+
+                    let ast_node_id = curr_mark_node.get_ast_node_id();
+                    let ast_node_ref = ed_model.module.env.pool.get(ast_node_id);
+
+                    if let Expr2::Blank {..} = ast_node_ref {
+                        match ch {
+                            '"' => {
+                                start_new_string(ed_model)?
+                            },
+                            '{' => {
+                                start_new_record(ed_model)?
+                            }
+                            _ => InputOutcome::Ignored
+                        }
+                    } else if let Some(prev_mark_node_id) = prev_mark_node_id_opt{
+                        if prev_mark_node_id == curr_mark_node_id {
+                            match ast_node_ref {
+                                Expr2::SmallStr(old_arr_str) => {
+                                    update_small_string(
+                                        &ch, old_arr_str, ed_model
+                                    )?
+                                }
+                                Expr2::Str(old_pool_str) => {
+                                    update_string(
+                                        &ch.to_string(), old_pool_str, ed_model
+                                    )?
+                                }
+                                Expr2::InvalidLookup(old_pool_str) => {
+                                    update_invalid_lookup(
+                                        &ch.to_string(),
+                                        old_pool_str,
+                                        curr_mark_node_id,
+                                        ast_node_id,
+                                        ed_model
+                                    )?
+                                }
+                                Expr2::EmptyRecord => {
+                                    // prev_mark_node_id and curr_mark_node_id should be different to allow creating field at current caret position
+                                    InputOutcome::Ignored
+                                }
+                                Expr2::Record{ record_var:_, fields } => {
+                                    if curr_mark_node.get_content()?.chars().all(|chr| chr.is_ascii_alphanumeric()){
+                                        update_record_field(
+                                            &ch.to_string(),
+                                            ed_model.get_caret(),
+                                            curr_mark_node_id,
+                                            fields,
+                                            ed_model,
+                                        )?
+                                    } else {
+                                        InputOutcome::Ignored
+                                    }
+                                }
+                                _ => InputOutcome::Ignored
+                            }
+                        } else if ch.is_ascii_alphanumeric() { // prev_mark_node_id != curr_mark_node_id
+                            let prev_ast_node_id =
+                                ed_model
+                                .markup_node_pool
+                                .get(prev_mark_node_id)
+                                .get_ast_node_id();
+
+                            let prev_node_ref = ed_model.module.env.pool.get(prev_ast_node_id);
+
+                            match prev_node_ref {
+                                Expr2::InvalidLookup(old_pool_str) => {
+                                    update_invalid_lookup(
+                                        &ch.to_string(),
+                                        old_pool_str,
+                                        prev_mark_node_id,
+                                        prev_ast_node_id,
+                                        ed_model
+                                    )?
+                                }
+                                Expr2::Record{ record_var:_, fields } => {
+                                    let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
+
+                                    if (curr_mark_node.get_content()? == nodes::RIGHT_ACCOLADE || curr_mark_node.get_content()? == nodes::COLON) &&
+                                        prev_mark_node.is_all_alphanumeric()? {
+                                        update_record_field(
+                                            &ch.to_string(),
+                                            ed_model.get_caret(),
+                                            prev_mark_node_id,
+                                            fields,
+                                            ed_model,
+                                        )?
+                                    } else if prev_mark_node.get_content()? == nodes::LEFT_ACCOLADE && curr_mark_node.is_all_alphanumeric()? {
+                                        update_record_field(
+                                            &ch.to_string(),
+                                            ed_model.get_caret(),
+                                            curr_mark_node_id,
+                                            fields,
+                                            ed_model,
+                                        )?
+                                    } else {
+                                        InputOutcome::Ignored
+                                    }
+                                }
+                                _ => {
+                                    match ast_node_ref {
+                                        Expr2::EmptyRecord => {
+                                            let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
+
+                                            update_empty_record(
+                                                &ch.to_string(),
+                                                prev_mark_node_id,
+                                                sibling_ids,
+                                                ed_model
+                                            )?
+                                        }
+                                        _ => InputOutcome::Ignored
+                                    }
+                                }
+                            }
+                        } else if *ch == ':' {
+                            let mark_parent_id_opt = curr_mark_node.get_parent_id_opt();
+
+                            if let Some(mark_parent_id) = mark_parent_id_opt {
+                                let parent_ast_id = ed_model.markup_node_pool.get(mark_parent_id).get_ast_node_id();
+
+                                update_record_colon(ed_model, parent_ast_id)?
+                            } else {
+                                InputOutcome::Ignored
+                            }
+                        } else {
+                            InputOutcome::Ignored
+                        }
+
+                    } else {
+                        // Not supporting any Expr2 right now that would allow prepending at the start of a line
+                        InputOutcome::Ignored
+                    }
+
+                } else {
+                    InputOutcome::Ignored
+                }
+            }
+        };
+
+    if let InputOutcome::Accepted = input_outcome {
+        ed_model.dirty = true;
     }
 
-    Ok(())
+    Ok(input_outcome)
 }

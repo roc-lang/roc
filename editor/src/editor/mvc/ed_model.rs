@@ -14,6 +14,9 @@ use crate::lang::expr::{str_to_expr2, Env};
 use crate::lang::pool::NodeId;
 use crate::lang::scope::Scope;
 use crate::ui::text::caret_w_select::CaretWSelect;
+use crate::ui::text::lines::SelectableLines;
+use crate::ui::text::text_pos::TextPos;
+use crate::ui::ui_error::UIResult;
 use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
 use nonempty::NonEmpty;
@@ -87,6 +90,30 @@ pub fn init_model<'a>(
         show_debug_view: false,
         dirty: true,
     })
+}
+
+impl<'a> EdModel<'a> {
+    pub fn get_curr_mark_node_id(&self) -> UIResult<MarkNodeId> {
+        let caret_pos = self.get_caret();
+        self.grid_node_map.get_id_at_row_col(caret_pos)
+    }
+
+    pub fn get_prev_mark_node_id(&self) -> UIResult<Option<MarkNodeId>> {
+        let caret_pos = self.get_caret();
+
+        let prev_id_opt = if caret_pos.column > 0 {
+            let prev_mark_node_id = self.grid_node_map.get_id_at_row_col(TextPos {
+                line: caret_pos.line,
+                column: caret_pos.column - 1,
+            })?;
+
+            Some(prev_mark_node_id)
+        } else {
+            None
+        };
+
+        Ok(prev_id_opt)
+    }
 }
 
 #[derive(Debug)]

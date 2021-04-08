@@ -7,7 +7,7 @@ use crate::editor::resources::strings::NOTHING_OPENED;
 use crate::editor::{
     config::Config,
     ed_error::print_err,
-    mvc::{app_model::AppModel, app_update, ed_model},
+    mvc::{app_model::AppModel, app_update, app_update::InputOutcome, ed_model},
     theme::EdTheme,
 };
 use crate::graphics::{
@@ -247,8 +247,11 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                 event: event::WindowEvent::ReceivedCharacter(ch),
                 ..
             } => {
-                if let Err(e) = app_update::handle_new_char(&ch, &mut app_model) {
+                let input_outcome_res = app_update::handle_new_char(&ch, &mut app_model);
+                if let Err(e) = input_outcome_res {
                     print_err(&e)
+                } else if let Ok(InputOutcome::Ignored) = input_outcome_res {
+                    println!("Input '{}' ignored!", ch);
                 }
             }
             //Keyboard Input
