@@ -485,3 +485,110 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
     Ok(input_outcome)
 }
+
+#[cfg(test)]
+pub mod test_ed_update {
+    use crate::ui::ui_error::UIResult;
+    use crate::editor::mvc::ed_model::test_ed_model::ed_model_to_dsl;
+    use crate::editor::mvc::ed_update::EdResult;
+    use crate::editor::mvc::ed_update::handle_new_char;
+    use crate::editor::mvc::ed_model::test_ed_model::ed_model_from_dsl;
+    use bumpalo::Bump;
+    use bumpalo::collections::String as BumpString;
+    use crate::editor::mvc::ed_model::test_ed_model::init_model_refs;
+
+    fn ed_res_to_res<T>(ed_res: EdResult<T>) -> Result<T, String> {
+        match ed_res {
+            Ok(t) => Ok(t),
+            Err(e) => Err(e.to_string())
+        }
+    }
+
+    fn ui_res_to_res<T>(ed_res: UIResult<T>) -> Result<T, String> {
+        match ed_res {
+            Ok(t) => Ok(t),
+            Err(e) => Err(e.to_string())
+        }
+    }
+
+    pub fn assert_insert(
+        pre_lines: &[&str],
+        expected_post_lines: &[&str],
+        new_char: char,
+    ) -> Result<(), String> {
+
+        let test_arena = Bump::new();
+        let code_str = BumpString::from_str_in(
+            &pre_lines.join("").replace("|", ""),
+            &test_arena
+        );
+
+        let mut model_refs = init_model_refs();
+
+        let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
+
+        ed_res_to_res(handle_new_char(&new_char, &mut ed_model))?;
+
+        let post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
+
+        assert_eq!(post_lines, expected_post_lines);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_string() -> Result<(), String> {
+        assert_insert(&["|"], &["\"|\""], '"')?;
+        assert_insert(&["\"|\""], &["\"a|\""], 'a')?;
+        assert_insert(&["\"|\""], &["\"{|\""], '{')?;
+        assert_insert(&["\"|\""], &["\"}|\""], '}')?;
+        assert_insert(&["\"|\""], &["\"[|\""], '[')?;
+        assert_insert(&["\"|\""], &["\"]|\""], ']')?;
+        assert_insert(&["\"|\""], &["\"-|\""], '-')?;
+        assert_insert(&["\"|-\""], &["\"<|-\""], '<')?;
+        assert_insert(&["\"-|\""], &["\"->|\""], '>')?;
+
+        assert_insert(&["\"a|\""], &["\"ab|\""], 'b')?;
+        assert_insert(&["\"ab|\""], &["\"abc|\""], 'c')?;
+        assert_insert(&["\"|a\""], &["\"z|a\""], 'z')?;
+        assert_insert(&["\"|a\""], &["\" |a\""], ' ')?;
+        assert_insert(&["\"a|b\""], &["\"az|b\""], 'z')?;
+        assert_insert(&["\"a|b\""], &["\"a |b\""], ' ')?;
+
+        assert_insert(&["\"ab |\""], &["\"ab {|\""], '{')?;
+        assert_insert(&["\"ab |\""], &["\"ab }|\""], '}')?;
+        assert_insert(&["\"{ str: 4|}\""], &["\"{ str: 44|}\""], '4')?;
+        assert_insert(&["\"|ello, hello, hello\""], &["\"h|ello, hello, hello\""], 'h')?;
+        assert_insert(&["\"hello| hello, hello\""], &["\"hello,| hello, hello\""], ',')?;
+        assert_insert(&["\"hello, hello, hello|\""], &["\"hello, hello, hello.|\""], '.')?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_record() -> Result<(), String> {
+        assert_insert(&["|"], &["{ | }"], '{')?;
+        assert_insert(&["{ | }"], &["{ a| }"], 'a')?;
+        assert_insert(&["{ a| }"], &["{ ab| }"], 'b')?;
+        assert_insert(&["{ ab| }"], &["{ abc| }"], 'c')?;
+        assert_insert(&["{ |ab }"], &["{ z|abc }"], 'z')?;
+        assert_insert(&["{ a|b }"], &["{ az|b }"], 'z')?;
+
+        assert_insert(&["{ a| }"], &["{ a: | }"], ':')?;
+        assert_insert(&["{ abc| }"], &["{ abc: | }"], ':')?;
+        assert_insert(&["{ aBc| }"], &["{ aBc: | }"], ':')?;
+
+        // TODO rest
+        
+        Ok(())
+    }
+
+    #[test]
+    fn test_ignore_input() -> Result<(), String> {
+        // TODO
+        
+        Ok(())
+    }
+}
+
+
