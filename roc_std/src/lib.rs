@@ -493,6 +493,16 @@ impl Drop for RocStr {
     }
 }
 
+/// Like a Rust Result, but with Roc's fixed discriminant size of u64, and
+/// with Roc's Err = 0, Ok = 1 discriminant numbers.
+///
+/// Using Rust's Result instead of this will not work properly with Roc code!
+#[repr(u64)]
+pub enum RocResult<Ok, Err> {
+    Err(Err),
+    Ok(Ok),
+}
+
 #[allow(non_camel_case_types)]
 type c_char = u8;
 

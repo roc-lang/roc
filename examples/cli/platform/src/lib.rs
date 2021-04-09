@@ -1,8 +1,6 @@
 #![allow(non_snake_case)]
 
-use roc_std::alloca;
-use roc_std::RocCallResult;
-use roc_std::RocStr;
+use roc_std::{alloca, RocCallResult, RocResult, RocStr};
 use std::alloc::Layout;
 use std::time::SystemTime;
 
@@ -47,16 +45,16 @@ pub fn roc_fx_putLine(line: RocStr) -> () {
 }
 
 #[no_mangle]
-pub fn roc_fx_httpGetUtf8(url: RocStr) -> RocStr {
-    let body = ureq::get(unsafe { url.as_str() })
-        .call()
-        .unwrap_or_else(|err| todo!("Report this HTTP error: {:?}", err));
-
-    let str = body
-        .into_string()
-        .unwrap_or_else(|err| todo!("Report this body.text() error: {:?}", err));
-
-    RocStr::from_slice(str.as_bytes())
+pub fn roc_fx_httpGetUtf8(url: RocStr) -> RocResult<RocStr, RocStr> {
+    match ureq::get(unsafe { url.as_str() }).call() {
+        Ok(resp) => match resp.into_string() {
+            Ok(contents) => RocResult::Ok(RocStr::from_slice(contents.as_bytes())), // TODO make roc::Result!
+            // TODO turn this error into an enum!
+            Err(err) => RocResult::Err(RocStr::from_slice(format!("{:?}", err).as_bytes())),
+        },
+        // TODO turn this error into an enum!
+        Err(err) => RocResult::Err(RocStr::from_slice(format!("{:?}", err).as_bytes())),
+    }
 }
 
 #[no_mangle]
