@@ -530,7 +530,7 @@ pub fn sort_can_defs(
 
                 if is_invalid_cycle {
                     // We want to show the entire cycle in the error message, so expand it out.
-                    let mut loc_symbols = Vec::new();
+                    let mut entries = Vec::new();
 
                     for symbol in &cycle {
                         match refs_by_symbol.get(symbol) {
@@ -539,33 +539,22 @@ pub fn sort_can_defs(
                                 symbol, refs_by_symbol
                             ),
                             Some((region, _)) => {
-                                loc_symbols.push(Located::at(*region, symbol));
+                                let expr_region =
+                                    can_defs_by_symbol.get(&symbol).unwrap().loc_expr.region;
+
+                                let entry = CycleEntry {
+                                    symbol: *symbol,
+                                    symbol_region: *region,
+                                    expr_region,
+                                };
+
+                                entries.push(entry);
                             }
                         }
                     }
 
-                    let mut regions = Vec::with_capacity(can_defs_by_symbol.len());
-                    for def in can_defs_by_symbol.values() {
-                        regions.push((def.loc_pattern.region, def.loc_expr.region));
-                    }
-
                     // Sort them by line number to make the report more helpful.
-                    loc_symbols.sort();
-                    regions.sort();
-
-                    debug_assert_eq!(loc_symbols.len(), regions.len());
-
-                    let mut entries = Vec::with_capacity(loc_symbols.len());
-
-                    for (loc_symbol, (symbol_region, expr_region)) in
-                        loc_symbols.iter().zip(regions)
-                    {
-                        entries.push(CycleEntry {
-                            symbol: *loc_symbol.value,
-                            symbol_region,
-                            expr_region,
-                        })
-                    }
+                    entries.sort_by_key(|entry| entry.symbol_region);
 
                     problems.push(Problem::RuntimeError(RuntimeError::CircularDef(
                         entries.clone(),
