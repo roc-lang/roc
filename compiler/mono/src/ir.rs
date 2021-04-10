@@ -5974,6 +5974,7 @@ fn call_by_name<'a>(
 ) -> Stmt<'a> {
     let original_fn_var = fn_var;
 
+
     // Register a pending_specialization for this function
     match layout_cache.from_var(env.arena, fn_var, env.subs) {
         Err(LayoutProblem::UnresolvedTypeVar(var)) => {
