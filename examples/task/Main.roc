@@ -3,13 +3,21 @@ app "task-example"
     imports [ base.Task.{ Task }, base.File, base.Path ]
     provides [ main ] to base
 
-main : Task.Task {} (File.FileReadErr [ BadUtf8 Str.Utf8ByteProblem Nat ])
+main : Task.Task {} []
 main =
-    when Path.fromStr "Cargo.toml" is
+    when Path.fromStr "vendor" is
         Ok path ->
             {} <- Task.await (Task.putLine "Our Cargo.toml:")
 
-            line <- Task.await (File.readUtf8 path)
+            result <- Task.attempt (File.readUtf8 path)
 
-            Task.putLine line
+            # pathStr = Path.toStr path
+
+            when result is
+                Ok contents -> Task.putLine contents
+                Err (FileNotFound _) -> Task.putLine "file not found"
+                Err (BadUtf8 _ _) -> Task.putLine "bad utf8"
+                Err (FileWasDir _) -> Task.putLine "file was dir"
+                Err _ -> Task.putLine "Error retrieving file - error"
+
         _ -> Task.putLine "invalid path"

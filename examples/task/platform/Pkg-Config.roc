@@ -1,8 +1,8 @@
 platform folkertdev/foo
-    requires { main : Task {} * }
+    requires { main : Task {} [] }
     exposes []
     packages {}
-    imports [ Task, File ]
+    imports [ Task ]
     provides [ mainForHost ]
     effects fx.Effect
         {
@@ -11,5 +11,5 @@ platform folkertdev/foo
             putLine : Str -> Effect {}
         }
 
-mainForHost : Task.Task {} (File.FileReadErr [ BadUtf8 Str.Utf8ByteProblem Nat ]) as Fx
+mainForHost : Task.Task {} [] as Fx
 mainForHost = main
