@@ -238,6 +238,30 @@ pub fn expr2_to_markup<'a, 'b>(
 
             markup_node_pool.add(list_node)
         }
+        Expr2::EmptyRecord => {
+            let children_ids = vec![
+                new_markup_node(
+                    LEFT_ACCOLADE.to_string(),
+                    expr2_node_id,
+                    HighlightStyle::Bracket,
+                    markup_node_pool,
+                ),
+                new_markup_node(
+                    RIGHT_ACCOLADE.to_string(),
+                    expr2_node_id,
+                    HighlightStyle::Bracket,
+                    markup_node_pool,
+                ),
+            ];
+
+            let record_node = MarkupNode::Nested {
+                ast_node_id: expr2_node_id,
+                children_ids,
+                parent_id_opt: None,
+            };
+
+            markup_node_pool.add(record_node)
+        }
         Expr2::Record { fields, .. } => {
             let mut children_ids = vec![new_markup_node(
                 LEFT_ACCOLADE.to_string(),

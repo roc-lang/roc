@@ -567,19 +567,23 @@ pub mod test_ed_update {
 
     #[test]
     fn test_record() -> Result<(), String> {
-        assert_insert(&["|"], &["{ | }"], '{')?;
-        assert_insert(&["{ | }"], &["{ a| }"], 'a')?;
-        assert_insert(&["{ a| }"], &["{ ab| }"], 'b')?;
-        assert_insert(&["{ ab| }"], &["{ abc| }"], 'c')?;
-        assert_insert(&["{ |ab }"], &["{ z|abc }"], 'z')?;
-        assert_insert(&["{ a|b }"], &["{ az|b }"], 'z')?;
+        // assert_insert(&["|"], &["{ | }"], '{')?;
+        // assert_insert(&["{ | }"], &["{ a| }"], 'a')?;
+        // assert_insert(&["{ a| }"], &["{ ab| }"], 'b')?;
+        // assert_insert(&["{ ab| }"], &["{ abc| }"], 'c')?;
+        // assert_insert(&["{ |ab }"], &["{ z|abc }"], 'z')?;
+        // assert_insert(&["{ a|b }"], &["{ az|b }"], 'z')?;
 
         assert_insert(&["{ a| }"], &["{ a: | }"], ':')?;
-        assert_insert(&["{ abc| }"], &["{ abc: | }"], ':')?;
-        assert_insert(&["{ aBc| }"], &["{ aBc: | }"], ':')?;
+        // assert_insert(&["{ abc| }"], &["{ abc: | }"], ':')?;
+        // assert_insert(&["{ aBc| }"], &["{ aBc: | }"], ':')?;
 
-        // TODO rest
-        
+        // assert_insert(&["{ a: | }"], &["{ a: \"|\" }"], '"')?;
+        // assert_insert(&["{ abc: | }"], &["{ abc: \"|\" }"], '"')?;
+
+        // assert_insert(&["{ a: | }"], &["{ a: { | }"], '{')?;
+        // assert_insert(&["{ abc: | }"], &["{ abc: { | }"], '{')?;
+
         Ok(())
     }
 
