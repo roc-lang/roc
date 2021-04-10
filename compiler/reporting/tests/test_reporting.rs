@@ -6302,4 +6302,36 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn backpassing_type_error() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x <- List.map [ "a", "b" ]
+
+                x + 1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd argument to `map` is not what I expect:
+
+                1│>  x <- List.map [ "a", "b" ]
+                2│>
+                3│>  x + 1
+
+                This argument is an anonymous function of type:
+
+                    Num a -> Num a
+
+                But `map` needs the 2nd argument to be:
+
+                    Str -> Num a
+            "#
+            ),
+        )
+    }
 }
