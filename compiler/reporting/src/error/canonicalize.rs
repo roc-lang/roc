@@ -29,35 +29,30 @@ pub fn can_problem<'b>(
                     .append(alloc.reflow(line)),
             ])
         }
-        Problem::UnusedImport(module_id, region) =>  {
-            alloc.stack(vec![
-                alloc.concat(vec![
-                    alloc.reflow("Nothing from "),
-                    alloc.module(module_id),
-                    alloc.reflow(" is used in this module."),
-                ]),
-                alloc.region(region),
-                alloc.concat(vec![
-                    alloc.reflow("Since "),
-                    alloc.module(module_id),
-                    alloc.reflow(" isn't used, you don't need to import it."),
-                ])
-            ])
-
-        }
-        Problem::ExposedButNotDefined(symbol) => {
-            alloc.stack(vec![
-                alloc
-                    .symbol_unqualified(symbol)
-                    .append(alloc.reflow(" is listed as exposed, but it isn't defined in this module.")),
-                alloc
-                    .reflow("You can fix this by adding a definition for ")
-                    .append(alloc.symbol_unqualified(symbol))
-                    .append(alloc.reflow(", or by removing it from "))
-                    .append(alloc.keyword("exposes"))
-                    .append(alloc.reflow("."))
-            ])
-        }
+        Problem::UnusedImport(module_id, region) => alloc.stack(vec![
+            alloc.concat(vec![
+                alloc.reflow("Nothing from "),
+                alloc.module(module_id),
+                alloc.reflow(" is used in this module."),
+            ]),
+            alloc.region(region),
+            alloc.concat(vec![
+                alloc.reflow("Since "),
+                alloc.module(module_id),
+                alloc.reflow(" isn't used, you don't need to import it."),
+            ]),
+        ]),
+        Problem::ExposedButNotDefined(symbol) => alloc.stack(vec![
+            alloc.symbol_unqualified(symbol).append(
+                alloc.reflow(" is listed as exposed, but it isn't defined in this module."),
+            ),
+            alloc
+                .reflow("You can fix this by adding a definition for ")
+                .append(alloc.symbol_unqualified(symbol))
+                .append(alloc.reflow(", or by removing it from "))
+                .append(alloc.keyword("exposes"))
+                .append(alloc.reflow(".")),
+        ]),
         Problem::UnusedArgument(closure_symbol, argument_symbol, region) => {
             let line = "\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used.";
 
@@ -79,7 +74,7 @@ pub fn can_problem<'b>(
                     alloc.reflow(", prefix it with an underscore, like this: \"_"),
                     alloc.symbol_unqualified(argument_symbol),
                     alloc.reflow(line),
-                ])
+                ]),
             ])
         }
         Problem::PrecedenceProblem(BothNonAssociative(region, left_bin_op, right_bin_op)) => alloc
@@ -191,7 +186,7 @@ pub fn can_problem<'b>(
                 field_region,
                 Annotation::Error,
             ),
-            alloc.reflow("In the rest of the program, I will only use the latter definition:"),
+            alloc.reflow(r"In the rest of the program, I will only use the latter definition:"),
             alloc.region_all_the_things(
                 record_region,
                 field_region,
@@ -220,8 +215,11 @@ pub fn can_problem<'b>(
                 field_region,
                 Annotation::Error,
             ),
-            alloc.reflow("You can only use optional values in record destructuring, for example in affectation:"),
-            alloc.reflow("{ answer ? 42, otherField } = myRecord").indent(4),
+            alloc.reflow(r"You can only use optional values in record destructuring, "),
+            alloc.reflow("for example in affectation:"),
+            alloc
+                .reflow(r"{ answer ? 42, otherField } = myRecord")
+                .indent(4),
         ]),
         Problem::DuplicateRecordFieldType {
             field_name,
