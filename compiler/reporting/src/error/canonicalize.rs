@@ -1,4 +1,5 @@
 use roc_collections::all::MutSet;
+use roc_module::ident::Lowercase;
 use roc_parse::parser::{Col, Row};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{FloatErrorKind, IntErrorKind, Problem, RuntimeError};
@@ -169,6 +170,7 @@ pub fn can_problem<'b>(
                 read the guide section on phantom data.",
             )),
         ]),
+        Problem::BadRecursion(entries) => to_circular_def_doc(alloc, &entries),
         Problem::DuplicateRecordFieldValue {
             field_name,
             field_region,
@@ -203,24 +205,15 @@ pub fn can_problem<'b>(
             field_name,
             field_region,
             record_region,
-        } => alloc.stack(vec![
-            alloc.concat(vec![
-                alloc.reflow("This record uses an optional value for the "),
-                alloc.record_field(field_name),
-                alloc.reflow(" field in an incorrect context!"),
-            ]),
-            alloc.region_all_the_things(
+        } => {
+            return to_invalid_optional_value_report(
+                alloc,
+                filename,
+                field_name,
+                field_region,
                 record_region,
-                field_region,
-                field_region,
-                Annotation::Error,
-            ),
-            alloc.reflow(r"You can only use optional values in record destructuring, "),
-            alloc.reflow("for example in affectation:"),
-            alloc
-                .reflow(r"{ answer ? 42, otherField } = myRecord")
-                .indent(4),
-        ]),
+            );
+        }
         Problem::DuplicateRecordFieldType {
             field_name,
             field_region,
@@ -341,6 +334,42 @@ pub fn can_problem<'b>(
         filename,
         doc,
     }
+}
+
+fn to_invalid_optional_value_report<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    filename: PathBuf,
+    field_name: Lowercase,
+    field_region: Region,
+    record_region: Region,
+) -> Report {
+    let doc = to_invalid_optional_value_report_help(alloc, field_name, field_region, record_region);
+
+    Report {
+        title: "BAD OPTIONAL VALUE".to_string(),
+        filename,
+        doc,
+    }
+}
+
+fn to_invalid_optional_value_report_help<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    field_name: Lowercase,
+    field_region: Region,
+    record_region: Region,
+) -> RocDocBuilder<'b> {
+    alloc.stack(vec![
+        alloc.concat(vec![
+            alloc.reflow("This record uses an optional value for the "),
+            alloc.record_field(field_name),
+            alloc.reflow(" field in an incorrect context!"),
+        ]),
+        alloc.region_all_the_things(record_region, field_region, field_region, Annotation::Error),
+        alloc.reflow(r"You can only use optional values in record destructuring, like:"),
+        alloc
+            .reflow(r"{ answer ? 42, otherField } = myRecord")
+            .indent(4),
+    ])
 }
 
 fn to_bad_ident_expr_report<'b>(
@@ -670,46 +699,7 @@ fn pretty_runtime_error<'b>(
         RuntimeError::LookupNotInScope(loc_name, options) => {
             not_found(alloc, loc_name.region, &loc_name.value, "value", options)
         }
-        RuntimeError::CircularDef(mut symbols, regions) => {
-            let first = symbols.remove(0);
-
-            if symbols.is_empty() {
-                alloc
-                    .reflow("The ")
-                    .append(alloc.symbol_unqualified(first))
-                    .append(alloc.reflow(
-                        " value is defined directly in terms of itself, causing an infinite loop.",
-                    ))
-            // TODO "are you trying to mutate a variable?
-            // TODO tip?
-            } else {
-                alloc.stack(vec![
-                    alloc
-                        .reflow("The ")
-                        .append(alloc.symbol_unqualified(first))
-                        .append(
-                            alloc.reflow(" definition is causing a very tricky infinite loop:"),
-                        ),
-                    alloc.region(regions[0].0),
-                    alloc
-                        .reflow("The ")
-                        .append(alloc.symbol_unqualified(first))
-                        .append(alloc.reflow(
-                            " value depends on itself through the following chain of definitions:",
-                        )),
-                    crate::report::cycle(
-                        alloc,
-                        4,
-                        alloc.symbol_unqualified(first),
-                        symbols
-                            .into_iter()
-                            .map(|s| alloc.symbol_unqualified(s))
-                            .collect::<Vec<_>>(),
-                    ),
-                    // TODO tip?
-                ])
-            }
-        }
+        RuntimeError::CircularDef(entries) => to_circular_def_doc(alloc, &entries),
         RuntimeError::MalformedPattern(problem, region) => {
             use roc_parse::ast::Base;
             use roc_problem::can::MalformedPatternProblem::*;
@@ -721,7 +711,9 @@ fn pretty_runtime_error<'b>(
                 MalformedBase(Base::Binary) => " binary integer ",
                 MalformedBase(Base::Octal) => " octal integer ",
                 MalformedBase(Base::Decimal) => " integer ",
-                BadIdent(bad_ident) => return to_bad_ident_pattern_report(alloc, bad_ident, region),
+                BadIdent(bad_ident) => {
+                    return to_bad_ident_pattern_report(alloc, bad_ident, region)
+                }
                 Unknown => " ",
                 QualifiedIdentifier => " qualified ",
             };
@@ -749,19 +741,20 @@ fn pretty_runtime_error<'b>(
         RuntimeError::UnsupportedPattern(_) => {
             todo!("unsupported patterns are currently not parsed!")
         }
-        RuntimeError::ValueNotExposed { module_name, ident, region } => {
-            alloc.stack(vec![
-                alloc.concat(vec![
-                    alloc.reflow("The "),
-                    alloc.module_name(module_name),
-                    alloc.reflow(" module does not expose a "),
-                    alloc.string(ident.to_string()),
-                    alloc.reflow(" value:"),
-                ]),
-                alloc.region(region),
-            ])
-        }
-
+        RuntimeError::ValueNotExposed {
+            module_name,
+            ident,
+            region,
+        } => alloc.stack(vec![
+            alloc.concat(vec![
+                alloc.reflow("The "),
+                alloc.module_name(module_name),
+                alloc.reflow(" module does not expose a "),
+                alloc.string(ident.to_string()),
+                alloc.reflow(" value:"),
+            ]),
+            alloc.region(region),
+        ]),
 
         RuntimeError::ModuleNotImported {
             module_name,
@@ -775,20 +768,18 @@ fn pretty_runtime_error<'b>(
         RuntimeError::MalformedIdentifier(_box_str, bad_ident, surroundings) => {
             to_bad_ident_expr_report(alloc, bad_ident, surroundings)
         }
-        RuntimeError::MalformedTypeName(_box_str, surroundings) => {
-            alloc.stack(vec![
-                alloc.reflow(r"I am confused by this type name:"),
-                alloc.region(surroundings),
-                alloc.concat(vec![
-                    alloc.reflow("Type names start with an uppercase letter, "),
-                    alloc.reflow("and can optionally be qualified by a module name, like "),
-                    alloc.parser_suggestion("Bool"),
-                    alloc.reflow(" or "),
-                    alloc.parser_suggestion("Http.Request.Request"),
-                    alloc.reflow("."),
-                ]),
-            ])
-        }
+        RuntimeError::MalformedTypeName(_box_str, surroundings) => alloc.stack(vec![
+            alloc.reflow(r"I am confused by this type name:"),
+            alloc.region(surroundings),
+            alloc.concat(vec![
+                alloc.reflow("Type names start with an uppercase letter, "),
+                alloc.reflow("and can optionally be qualified by a module name, like "),
+                alloc.parser_suggestion("Bool"),
+                alloc.reflow(" or "),
+                alloc.parser_suggestion("Http.Request.Request"),
+                alloc.reflow("."),
+            ]),
+        ]),
         RuntimeError::MalformedClosure(_) => todo!(""),
         RuntimeError::InvalidFloat(sign @ FloatErrorKind::PositiveInfinity, region, _raw_str)
         | RuntimeError::InvalidFloat(sign @ FloatErrorKind::NegativeInfinity, region, _raw_str) => {
@@ -810,7 +801,8 @@ fn pretty_runtime_error<'b>(
                 ]),
                 alloc.region(region),
                 alloc.concat(vec![
-                    alloc.reflow("Roc uses signed 64-bit floating points, allowing values between "),
+                    alloc
+                        .reflow("Roc uses signed 64-bit floating points, allowing values between "),
                     alloc.text(format!("{:e}", f64::MIN)),
                     alloc.reflow(" and "),
                     alloc.text(format!("{:e}", f64::MAX)),
@@ -920,21 +912,7 @@ fn pretty_runtime_error<'b>(
             field_name,
             field_region,
             record_region,
-        } => alloc.stack(vec![
-            alloc.concat(vec![
-                alloc.reflow("This record uses an optional value for the "),
-                alloc.record_field(field_name),
-                alloc.reflow(" field in an incorrect context!"),
-            ]),
-            alloc.region_all_the_things(
-                record_region,
-                field_region,
-                field_region,
-                Annotation::Error,
-            ),
-            alloc.reflow("You can only use optional values in record destructuring, for exemple in affectation:"),
-            alloc.reflow("{ answer ? 42, otherField } = myRecord"),
-        ]),
+        } => to_invalid_optional_value_report_help(alloc, field_name, field_region, record_region),
         RuntimeError::InvalidRecordUpdate { region } => alloc.stack(vec![
             alloc.concat(vec![
                 alloc.reflow("This expression cannot be updated"),
@@ -961,17 +939,59 @@ fn pretty_runtime_error<'b>(
                 region
             );
         }
-        RuntimeError::NoImplementation | RuntimeError::NoImplementationNamed { .. }  => todo!("no implementation, unreachable"),
+        RuntimeError::NoImplementation | RuntimeError::NoImplementationNamed { .. } => {
+            todo!("no implementation, unreachable")
+        }
         RuntimeError::NonExhaustivePattern => {
             unreachable!("not currently reported (but can blow up at runtime)")
         }
-        RuntimeError::ExposedButNotDefined(symbol) => alloc.stack(vec![
-            alloc
-                .symbol_unqualified(symbol)
-                .append(alloc.reflow(" was listed as exposed in "))
-                .append(alloc.module(symbol.module_id()))
-                .append(alloc.reflow(", but it was not defined anywhere in that module.")),
-        ]),
+        RuntimeError::ExposedButNotDefined(symbol) => alloc.stack(vec![alloc
+            .symbol_unqualified(symbol)
+            .append(alloc.reflow(" was listed as exposed in "))
+            .append(alloc.module(symbol.module_id()))
+            .append(alloc.reflow(", but it was not defined anywhere in that module."))]),
+    }
+}
+
+fn to_circular_def_doc<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    entries: &[roc_problem::can::CycleEntry],
+) -> RocDocBuilder<'b> {
+    // TODO "are you trying to mutate a variable?
+    // TODO tip?
+    match entries {
+        [] => unreachable!(),
+        [first] => alloc
+            .reflow("The ")
+            .append(alloc.symbol_unqualified(first.symbol))
+            .append(alloc.reflow(
+                " value is defined directly in terms of itself, causing an infinite loop.",
+            )),
+        [first, others @ ..] => {
+            alloc.stack(vec![
+                alloc
+                    .reflow("The ")
+                    .append(alloc.symbol_unqualified(first.symbol))
+                    .append(alloc.reflow(" definition is causing a very tricky infinite loop:")),
+                alloc.region(first.symbol_region),
+                alloc
+                    .reflow("The ")
+                    .append(alloc.symbol_unqualified(first.symbol))
+                    .append(alloc.reflow(
+                        " value depends on itself through the following chain of definitions:",
+                    )),
+                crate::report::cycle(
+                    alloc,
+                    4,
+                    alloc.symbol_unqualified(first.symbol),
+                    others
+                        .iter()
+                        .map(|s| alloc.symbol_unqualified(s.symbol))
+                        .collect::<Vec<_>>(),
+                ),
+                // TODO tip?
+            ])
+        }
     }
 }
 
