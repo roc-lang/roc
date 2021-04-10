@@ -146,7 +146,7 @@ pub mod test_caret_w_select {
             for elt in line.into_inner() {
                 match elt.as_rule() {
                     Rule::optCaret => {
-                        if elt.as_span().as_str() == "|" {
+                        if elt.as_span().as_str() == "┃" {
                             if caret_opt.is_some() {
                                 return Err(
                                     "Multiple carets found, there should be only one".to_owned()
@@ -158,19 +158,19 @@ pub mod test_caret_w_select {
                     }
                     Rule::optSelStart => {
                         if sel_start_opt.is_some() {
-                            if elt.as_span().as_str() == "[" {
+                            if elt.as_span().as_str() == "❮" {
                                 return Err("Found start of selection more than once, there should be only one".to_owned());
                             }
-                        } else if elt.as_span().as_str() == "[" {
+                        } else if elt.as_span().as_str() == "❮" {
                             sel_start_opt = Some((line_nr, col_nr));
                         }
                     }
                     Rule::optSelEnd => {
                         if sel_end_opt.is_some() {
-                            if elt.as_span().as_str() == "]" {
+                            if elt.as_span().as_str() == "❯" {
                                 return Err("Found end of selection more than once, there should be only one".to_owned());
                             }
-                        } else if elt.as_span().as_str() == "]" {
+                        } else if elt.as_span().as_str() == "❯" {
                             sel_end_opt = Some((line_nr, col_nr));
                         }
                     }
@@ -219,10 +219,10 @@ pub mod test_caret_w_select {
                         ),
                     ))
                 } else {
-                    Err("Selection end ']' was not found, but selection start '[' was. Bad input string.".to_owned())
+                    Err("Selection end '❯' was not found, but selection start '❮' was. Bad input string.".to_owned())
                 }
             } else {
-                Err("Selection start '[' was not found, but selection end ']' was. Bad input string.".to_owned())
+                Err("Selection start '❮' was not found, but selection end '❯' was. Bad input string.".to_owned())
             }
         } else {
             Err("No caret was found in lines.".to_owned())
@@ -239,9 +239,9 @@ pub mod test_caret_w_select {
         let mut mut_lines = lines;
 
         if let Some(sel) = selection_opt {
-            let mut to_insert = vec![(sel.start_pos, '['), (sel.end_pos, ']'), (caret_pos, '|')];
+            let mut to_insert = vec![(sel.start_pos, '❮'), (sel.end_pos, '❯'), (caret_pos, '┃')];
             let symbol_map: HashMap<char, usize> =
-                [('[', 2), (']', 0), ('|', 1)].iter().cloned().collect();
+                [('❮', 2), ('❯', 0), ('┃', 1)].iter().cloned().collect();
 
             // sort for nice printing
             to_insert.sort_by(|a, b| {
@@ -269,7 +269,7 @@ pub mod test_caret_w_select {
                 }
             }
         } else {
-            insert_at_pos(&mut mut_lines, caret_pos, '|')?;
+            insert_at_pos(&mut mut_lines, caret_pos, '┃')?;
         }
 
         Ok(mut_lines)

@@ -54,6 +54,13 @@ pub enum FloatVal {
     F32(f32),
 }
 
+#[derive(Debug)]
+pub enum RecordField {
+    InvalidLabelOnly(PoolStr, Variable),
+    LabelOnly(PoolStr, Variable, Symbol),
+    LabeledValue(PoolStr, Variable, NodeId<Expr2>)
+}
+
 #[test]
 fn size_of_intval() {
     assert_eq!(std::mem::size_of::<IntVal>(), 16);
@@ -160,7 +167,7 @@ pub enum Expr2 {
     // Product Types
     Record {
         record_var: Variable,                                // 4B
-        fields: PoolVec<(PoolStr, Variable, NodeId<Expr2>)>, // 8B
+        fields: PoolVec<RecordField>, // TODO ??B
     },
     /// Empty record constant
     EmptyRecord,
@@ -184,7 +191,7 @@ pub enum Expr2 {
     },
     Update {
         symbol: Symbol,                                // 8B
-        updates: PoolVec<(PoolStr, Variable, ExprId)>, // 8B
+        updates: PoolVec<RecordField>, // 8B
         record_var: Variable,                          // 4B
         ext_var: Variable,                             // 4B
     },
@@ -302,6 +309,42 @@ pub struct WhenBranch {
 
 pub type ExprId = NodeId<Expr2>;
 
+use RecordField::*;
+impl RecordField {
+
+    pub fn get_record_field_var(&self) -> &Variable {
+        match self {
+            InvalidLabelOnly(_, var) => var,
+            LabelOnly(_, var, _) => var,
+            LabeledValue(_, var, _) => var,
+        }
+    }
+    
+    pub fn get_record_field_pool_str(&self) -> &PoolStr {
+        match self {
+            InvalidLabelOnly(pool_str, _) => pool_str,
+            LabelOnly(pool_str, _, _) => pool_str,
+            LabeledValue(pool_str, _, _) => pool_str,
+        }
+    }
+    
+    pub fn get_record_field_pool_str_mut(&mut self) -> &mut PoolStr {
+        match self {
+            InvalidLabelOnly(pool_str, _) => pool_str,
+            LabelOnly(pool_str, _, _) => pool_str,
+            LabeledValue(pool_str, _, _) => pool_str,
+        }
+    }
+    
+    pub fn get_record_field_val_node_id(&self) -> Option<NodeId<Expr2>> {
+        match self {
+            InvalidLabelOnly(_, _) => None,
+            LabelOnly(_, _, _) => None,
+            LabeledValue(_, _, field_val_id) => Some(*field_val_id),
+        }
+    }
+}
+
 pub fn expr2_to_string(node_id: NodeId<Expr2>, pool: &Pool) -> String {
     let mut full_string = String::new();
 
@@ -350,22 +393,44 @@ fn expr2_to_string_helper(
             out_string.push_str(&format!("{}fields: [\n", get_spacing(indent_level + 1)));
 
             let mut first_child = true;
-            for (pool_str, var, val_node_id) in fields.iter(pool) {
+            //for (pool_str, var, val_node_id) in fields.iter(pool) {
+            for field in fields.iter(pool) {
                 if !first_child {
                     out_string.push_str(", ")
                 } else {
                     first_child = false;
                 }
 
-                out_string.push_str(&format!(
-                    "{}({}, Var({:?}), Expr2(\n",
-                    get_spacing(indent_level + 2),
-                    pool_str.as_str(pool),
-                    var,
-                ));
+                match field {
+                    RecordField::InvalidLabelOnly(pool_str, var) => {
+                        out_string.push_str(&format!(
+                            "{}({}, Var({:?})",
+                            get_spacing(indent_level + 2),
+                            pool_str.as_str(pool),
+                            var,
+                        ));
+                    },
+                    RecordField::LabelOnly(pool_str, var, symbol) => {
+                        out_string.push_str(&format!(
+                            "{}({}, Var({:?}), Symbol({:?})",
+                            get_spacing(indent_level + 2),
+                            pool_str.as_str(pool),
+                            var,
+                            symbol
+                        ));
+                    },
+                    RecordField::LabeledValue(pool_str, var, val_node_id) => {
+                        out_string.push_str(&format!(
+                            "{}({}, Var({:?}), Expr2(\n",
+                            get_spacing(indent_level + 2),
+                            pool_str.as_str(pool),
+                            var,
+                        ));
 
-                expr2_to_string_helper(*val_node_id, indent_level + 3, pool, out_string);
-                out_string.push_str(&format!("{})\n", get_spacing(indent_level + 2)));
+                        expr2_to_string_helper(*val_node_id, indent_level + 3, pool, out_string);
+                        out_string.push_str(&format!("{})\n", get_spacing(indent_level + 2)));
+                    }
+                }
             }
 
             out_string.push_str(&format!("{}]\n", get_spacing(indent_level + 1)));

@@ -517,6 +517,19 @@ pub mod test_ed_update {
         new_char: char,
     ) -> Result<(), String> {
 
+        assert_insert_char_seq(
+            pre_lines,
+            expected_post_lines,
+            &new_char.to_string()
+        )
+    }
+
+    pub fn assert_insert_char_seq(
+        pre_lines: &[&str],
+        expected_post_lines: &[&str],
+        new_char_seq: &str,
+    ) -> Result<(), String> {
+
         let test_arena = Bump::new();
         let code_str = BumpString::from_str_in(
             &pre_lines.join("").replace("|", ""),
@@ -527,7 +540,9 @@ pub mod test_ed_update {
 
         let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
 
-        ed_res_to_res(handle_new_char(&new_char, &mut ed_model))?;
+        for input_char in new_char_seq.chars() {
+            ed_res_to_res(handle_new_char(&input_char, &mut ed_model))?;
+        }
 
         let post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
 
@@ -645,7 +660,7 @@ pub mod test_ed_update {
     fn test_record() -> Result<(), String> {
         // assert_insert(&["|"], &["{ | }"], '{')?;
         // assert_insert(&["{ | }"], &["{ a| }"], 'a')?;
-        assert_insert(&["{ a| }"], &["{ ab| }"], 'b')?;
+        // assert_insert(&["{ a| }"], &["{ ab| }"], 'b')?;
         // assert_insert(&["{ ab| }"], &["{ abc| }"], 'c')?;
         // assert_insert(&["{ |ab }"], &["{ z|abc }"], 'z')?;
         // assert_insert(&["{ a|b }"], &["{ az|b }"], 'z')?;
@@ -654,11 +669,66 @@ pub mod test_ed_update {
         // assert_insert(&["{ abc| }"], &["{ abc: | }"], ':')?;
         // assert_insert(&["{ aBc| }"], &["{ aBc: | }"], ':')?;
 
+        // TODO use assert_insert_char_seq here
         // assert_insert(&["{ a: | }"], &["{ a: \"|\" }"], '"')?;
         // assert_insert(&["{ abc: | }"], &["{ abc: \"|\" }"], '"')?;
 
         // assert_insert(&["{ a: | }"], &["{ a: { | }"], '{')?;
         // assert_insert(&["{ abc: | }"], &["{ abc: { | }"], '{')?;
+
+        assert_insert(&["{ a: \"|\" }"], &["{ a: \"a|\" }"], 'a')?;
+        assert_insert(&["{ a: \"a|\" }"], &["{ a: \"ab|\" }"], 'b')?;
+        assert_insert(&["{ a: \"a|b\" }"], &["{ a: \"az|b\" }"], 'z')?;
+        assert_insert(&["{ a: \"|ab\" }"], &["{ a: \"z|ab\" }"], 'z')?;
+
+        assert_insert(&["{ camelCase: \"|\" }"], &["{ camelCase: \"a|\" }"], 'a')?;
+        assert_insert(&["{ camelCase: \"a|\" }"], &["{ camelCase: \"ab|\" }"], 'b')?;
+
+        assert_insert(&["{ a|: \"\" }"], &["{ ab|: \"\" }"], 'b')?;
+        assert_insert(&["{ |a: \"\" }"], &["{ z|a: \"\" }"], 'z')?;
+        assert_insert(&["{ ab|: \"\" }"], &["{ abc|: \"\" }"], 'c')?;
+        assert_insert(&["{ |ab: \"\" }"], &["{ z|ab: \"\" }"], 'z')?;
+        assert_insert(&["{ camelCase|: \"hello\" }"], &["{ camelCaseB|: \"hello\" }"], 'B')?;
+        assert_insert(&["{ camel|Case: \"hello\" }"], &["{ camelZ|Case: \"hello\" }"], 'Z')?;
+        assert_insert(&["{ |camelCase: \"hello\" }"], &["{ z|camelCase: \"hello\" }"], 'z')?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_record() -> Result<(), String> {
+        // TODO construct nested record
+
+        assert_insert_char_seq(&["{ | }"], &["{ a: { | } }"], "a:{")?;
+        assert_insert_char_seq(&["{ | }"], &["{ abc: { | } }"], "abc:{")?;
+        assert_insert_char_seq(&["{ | }"], &["{ camelCase: { | } }"], "camelCase:{")?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ignore_record() -> Result<(), String> {
+        assert_insert(&["|{  }"], &["|{  }"], 'a')?;
+        assert_insert(&["|{  }"], &["|{  }"], '{')?;
+        assert_insert(&["|{  }"], &["|{  }"], '"')?;
+        assert_insert(&["|{  }"], &["|{  }"], '5')?;
+
+        assert_insert(&["{  }|"], &["{  }|"], 'a')?;
+        assert_insert(&["{  }|"], &["{  }|"], '{')?;
+        assert_insert(&["{  }|"], &["{  }|"], '"')?;
+        assert_insert(&["{  }|"], &["{  }|"], '5')?;
+
+        assert_insert(&["{|  }"], &["{|  }"], 'a')?;
+        assert_insert(&["{|  }"], &["{|  }"], '{')?;
+        assert_insert(&["{|  }"], &["{|  }"], '"')?;
+        assert_insert(&["{|  }"], &["{|  }"], '5')?;
+
+        assert_insert(&["{  |}"], &["{  |}"], 'a')?;
+        assert_insert(&["{  |}"], &["{  |}"], '{')?;
+        assert_insert(&["{  |}"], &["{  |}"], '"')?;
+        assert_insert(&["{  |}"], &["{  |}"], '5')?;
+
+        // TODO non-empty records
 
         Ok(())
     }

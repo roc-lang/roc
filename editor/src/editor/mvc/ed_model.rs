@@ -123,6 +123,9 @@ pub struct EdModule<'a> {
     pub ast_root_id: NodeId<Expr2>,
 }
 
+// for debugging
+// use crate::lang::ast::expr2_to_string;
+
 impl<'a> EdModule<'a> {
     pub fn new(code_str: &'a str, mut env: Env<'a>, ast_arena: &'a Bump) -> EdResult<EdModule<'a>> {
         if !code_str.is_empty() {
@@ -135,6 +138,10 @@ impl<'a> EdModule<'a> {
             match expr2_result {
                 Ok((expr2, _output)) => {
                     let ast_root_id = env.pool.add(expr2);
+
+                    // for debugging
+                    // let expr2_str = expr2_to_string(ast_root_id, env.pool);
+                    // println!("expr2_string: {}", expr2_str);
 
                     Ok(EdModule { env, ast_root_id })
                 }

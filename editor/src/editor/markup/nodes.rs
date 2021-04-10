@@ -1,3 +1,4 @@
+use crate::lang::ast::{RecordField};
 use super::attribute::Attributes;
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::ExpectedTextNode;
@@ -271,14 +272,13 @@ pub fn expr2_to_markup<'a, 'b>(
             )];
 
             for (idx, field_node_id) in fields.iter_node_ids().enumerate() {
-                let (pool_field_name, _, sub_expr2_node_id) = env.pool.get(field_node_id);
+                // let (pool_field_name, _, sub_expr2_node_id) = env.pool.get(field_node_id);
+                let record_field = env.pool.get(field_node_id);
 
-                let field_name = pool_field_name.as_str(env.pool);
-
-                let sub_expr2 = env.pool.get(*sub_expr2_node_id);
+                let field_name = record_field.get_record_field_pool_str();                
 
                 children_ids.push(new_markup_node(
-                    field_name.to_string(),
+                    field_name.as_str(env.pool).to_owned(),
                     expr2_node_id,
                     HighlightStyle::RecordField,
                     markup_node_pool,
@@ -291,7 +291,14 @@ pub fn expr2_to_markup<'a, 'b>(
                     markup_node_pool,
                 ));
 
-                children_ids.push(expr2_to_markup(arena, env, sub_expr2, *sub_expr2_node_id, markup_node_pool));
+                match record_field {
+                    RecordField::InvalidLabelOnly(_, _) => (),
+                    RecordField::LabelOnly(_, _, _) => (),
+                    RecordField::LabeledValue(_, _, sub_expr2_node_id) => {
+                        let sub_expr2 = env.pool.get(*sub_expr2_node_id);
+                        children_ids.push(expr2_to_markup(arena, env, sub_expr2, *sub_expr2_node_id, markup_node_pool));
+                    },
+                }
 
                 if idx + 1 < fields.len() {
                     children_ids.push(new_markup_node(

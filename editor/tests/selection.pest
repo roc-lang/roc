@@ -1,10 +1,10 @@
 text = { (ASCII_ALPHANUMERIC | " " | "\t" | "\n" | "{" | "}" | "," | "." | "[" | "]" | ":" | "<" | ">" | "-" | "\"" )* }
 
-caret = {"|"}
+caret = {"┃"}
 
-optSelStart = { "["{0,1} }
+optSelStart = { "❮"{0,1} }
 
-optSelEnd = { "]"{0,1} }
+optSelEnd = { "❯"{0,1} }
 
 optCaret = { caret{0,1} }
 

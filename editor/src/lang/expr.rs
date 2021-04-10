@@ -1,6 +1,7 @@
 #![allow(clippy::all)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
+use crate::lang::ast::RecordField;
 use crate::lang::ast::{ClosureExtra, Expr2, ExprId, FloatVal, IntStyle, IntVal, WhenBranch};
 use crate::lang::def::References;
 use crate::lang::pattern::to_pattern2;
@@ -1017,7 +1018,7 @@ fn canonicalize_fields<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     fields: &'a [Located<roc_parse::ast::AssignedField<'a, roc_parse::ast::Expr<'a>>>],
-) -> Result<(PoolVec<(PoolStr, Variable, ExprId)>, Output), CanonicalizeRecordProblem> {
+) -> Result<(PoolVec<RecordField>, Output), CanonicalizeRecordProblem> {
     let mut can_fields: MutMap<&'a str, (Variable, ExprId)> = MutMap::default();
     let mut output = Output::default();
 
@@ -1063,7 +1064,7 @@ fn canonicalize_fields<'a>(
     for (node_id, (string, (var, expr_id))) in pool_vec.iter_node_ids().zip(can_fields.into_iter())
     {
         let name = PoolStr::new(string, env.pool);
-        env.pool[node_id] = (name, var, expr_id);
+        env.pool[node_id] = RecordField::LabeledValue(name, var, expr_id);
     }
 
     Ok((pool_vec, output))
