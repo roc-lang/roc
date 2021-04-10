@@ -223,7 +223,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
 
             let desugared_ret = desugar_expr(arena, loc_ret);
             let closure = Expr::Closure(loc_patterns, desugared_ret);
-            let loc_closure = Located::at_zero(closure);
+            let loc_closure = Located::at(loc_expr.region, closure);
 
             match &desugared_body.value {
                 Expr::Apply(function, arguments, called_via) => {
