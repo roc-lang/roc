@@ -60,13 +60,16 @@ FileWriteErr a :
 #    Effect.readBytes (Path.toStr path)
 
 ## Read a file's bytes and interpret them as UTF-8 encoded text.
-readUtf8 : Path -> Task.Task Str (FileReadErr [ BadUtf8 ]*)
+readUtf8 : Path -> Task.Task Str (FileReadErr [ BadUtf8 Str.Utf8ByteProblem Nat ]*)
 readUtf8 = \path ->
     Effect.map (Effect.readAllUtf8 (Path.toStr path)) \answer ->
         # errno values - see
         # https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/errno.h.html
         when answer.errno is
-            0 -> Ok answer.bytes # TODO use Str.fromUtf8 to validate a byte list as UTF-8 and return (Err BadUtf8) if validation fails
+            0 ->
+                when Str.fromUtf8 answer.bytes is
+                    Ok str -> Ok str
+                    Err (BadUtf8 problem index) -> Err (BadUtf8 problem index)
             1 -> Err (PermissionDenied path)
             2 -> Err (FileNotFound path)
             19 -> Err (FileWasDir path)

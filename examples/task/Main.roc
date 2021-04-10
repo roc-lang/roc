@@ -3,7 +3,7 @@ app "task-example"
     imports [ base.Task.{ Task }, base.File, base.Path ]
     provides [ main ] to base
 
-main : Task.Task {} (File.FileReadErr [BadUtf8])
+main : Task.Task {} (File.FileReadErr [ BadUtf8 Str.Utf8ByteProblem Nat ])
 main =
     when Path.fromStr "Cargo.toml" is
         Ok path ->
