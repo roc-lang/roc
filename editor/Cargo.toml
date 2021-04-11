@@ -1,10 +1,10 @@
 [package]
 name = "roc_editor"
 version = "0.1.0"
-authors = ["Richard Feldman <oss@rtfeldman.com>"]
+authors = ["The Roc Contributors"]
+license = "Apache-2.0"
 edition = "2018"
 description = "An editor for Roc"
-license = "Apache-2.0"
 exclude = ["src/shaders/*.spv"]
 
 [dependencies]
