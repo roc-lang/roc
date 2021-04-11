@@ -3827,8 +3827,9 @@ fn build_pending_specializations<'a>(
                     )
                 }
             }
-            InvalidCycle(_loc_idents, _regions) => {
-                todo!("TODO handle InvalidCycle");
+            InvalidCycle(_entries) => {
+                // do nothing?
+                // this may mean the loc_symbols are not defined during codegen; is that a problem?
             }
         }
     }

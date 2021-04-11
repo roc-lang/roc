@@ -1159,7 +1159,7 @@ pub fn sort_can_defs(
         }
         Err((mut groups, nodes_in_cycle)) => {
             let mut declarations = Vec::new();
-            let mut problems = Vec::new();
+            let problems = Vec::new();
 
             // nodes_in_cycle are symbols that form a syntactic cycle. That isn't always a problem,
             // and in general it's impossible to decide whether it is. So we use a crude heuristic:
@@ -1211,7 +1211,7 @@ pub fn sort_can_defs(
                     }
 
                     // TODO we don't store those regions any more!
-                    let regions = Vec::with_capacity(can_defs_by_symbol.len());
+                    // let regions = Vec::with_capacity(can_defs_by_symbol.len());
                     // for def in can_defs_by_symbol.values() {
                     //     regions.push((def.loc_pattern.region, def.loc_expr.region));
                     // }
@@ -1220,15 +1220,16 @@ pub fn sort_can_defs(
                     // loc_symbols.sort();
                     // regions.sort();
 
-                    let symbols_in_cycle: Vec<Symbol> =
-                        loc_symbols.into_iter().map(|s| s.value).collect();
-
-                    problems.push(Problem::RuntimeError(RuntimeError::CircularDef(
-                        symbols_in_cycle.clone(),
-                        regions.clone(),
-                    )));
-
-                    declarations.push(Declaration::InvalidCycle(symbols_in_cycle, regions));
+                    // let symbols_in_cycle: Vec<Symbol> =
+                    //     loc_symbols.into_iter().map(|s| s.value).collect();
+                    //
+                    // problems.push(Problem::RuntimeError(RuntimeError::CircularDef(
+                    //     symbols_in_cycle.clone(),
+                    //     regions.clone(),
+                    // )));
+                    //
+                    // declarations.push(Declaration::InvalidCycle(symbols_in_cycle, regions));
+                    panic!("Invalid Cycle");
                 } else {
                     // slightly inefficient, because we know this becomes exactly one DeclareRec already
                     groups.push(cycle);
