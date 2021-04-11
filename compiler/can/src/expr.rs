@@ -409,6 +409,10 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::Var { module_name, ident } => {
             canonicalize_lookup(env, scope, module_name, ident, region)
         }
+        ast::Expr::Underscore(_) => {
+            // we parse underscored, but they are not valid expression syntax
+            todo!("todo")
+        }
         ast::Expr::Defs(loc_defs, loc_ret) => {
             can_defs_with_return(
                 env,
