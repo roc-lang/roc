@@ -57,16 +57,37 @@ fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
 
     one_of![
         map!(
-            skip_first!(keyword_e("app", EHeader::Start), app_header()),
-            |header| { Module::App { header } }
+            and!(
+                space0_e(0, EHeader::Space, EHeader::IndentStart),
+                skip_first!(keyword_e("app", EHeader::Start), app_header())
+            ),
+            |(spaces, mut header): (&'a [CommentOrNewline], AppHeader<'a>)| {
+                header.before_header = spaces;
+
+                Module::App { header }
+            }
         ),
         map!(
-            skip_first!(keyword_e("platform", EHeader::Start), platform_header()),
-            |header| { Module::Platform { header } }
+            and!(
+                space0_e(0, EHeader::Space, EHeader::IndentStart),
+                skip_first!(keyword_e("platform", EHeader::Start), platform_header())
+            ),
+            |(spaces, mut header): (&'a [CommentOrNewline], PlatformHeader<'a>)| {
+                header.before_header = spaces;
+
+                Module::Platform { header }
+            }
         ),
         map!(
-            skip_first!(keyword_e("interface", EHeader::Start), interface_header()),
-            |header| { Module::Interface { header } }
+            and!(
+                space0_e(0, EHeader::Space, EHeader::IndentStart),
+                skip_first!(keyword_e("interface", EHeader::Start), interface_header())
+            ),
+            |(spaces, mut header): (&'a [CommentOrNewline], InterfaceHeader<'a>)| {
+                header.before_header = spaces;
+
+                Module::Interface { header }
+            }
         )
     ]
 }
@@ -89,6 +110,7 @@ fn interface_header<'a>() -> impl Parser<'a, InterfaceHeader<'a>, EHeader<'a>> {
             name,
             exposes,
             imports,
+            before_header: &[] as &[_],
             after_interface_keyword,
             before_exposes,
             after_exposes,
@@ -210,6 +232,7 @@ fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
             imports,
             provides: provides.entries,
             to: provides.to,
+            before_header: &[] as &[_],
             after_app_keyword,
             before_packages,
             after_packages,
@@ -259,6 +282,7 @@ fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
             imports,
             provides,
             effects,
+            before_header: &[] as &[_],
             after_platform_keyword,
             before_requires,
             after_requires,
