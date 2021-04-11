@@ -15,10 +15,10 @@ jobs:
     steps:
       - uses: actions/checkout@v2
         with:
-          clean: "true"
+          clean: "false"
 
       - name: Earthly version
         run: earthly --version
 
       - name: install dependencies, build, run zig tests, rustfmt, clippy, cargo test --release
-        run: earthly --no-cache +test-all
+        run: earthly +test-all
