@@ -531,9 +531,6 @@ pub fn listWalkBackwards(list: RocList, stepper: Opaque, stepper_caller: Caller2
             b2 = b1;
             b1 = temp;
         }
-
-        const data_bytes = list.len() * element_width;
-        utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
     }
 
     @memcpy(output orelse unreachable, b2, accum_width);
