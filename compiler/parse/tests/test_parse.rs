@@ -3391,12 +3391,12 @@ mod test_parse {
         let parser = module_defs();
         let parsed = parser.parse(arena, state);
         match parsed {
-            Ok((_, _, state)) => {
-                dbg!(state);
+            Ok((_, _, _state)) => {
+                // dbg!(_state);
                 return;
             }
             Err((_, _fail, _state)) => {
-                dbg!(_fail, _state);
+                // dbg!(_fail, _state);
                 assert!(false);
             }
         }

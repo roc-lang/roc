@@ -2,6 +2,9 @@ use std::ffi::CString;
 use std::os::raw::c_char;
 use RocCallResult::*;
 
+/// This must have the same size as the repr() of RocCallResult!
+pub const ROC_CALL_RESULT_DISCRIMINANT_SIZE: usize = std::mem::size_of::<u64>();
+
 #[repr(u64)]
 pub enum RocCallResult<T> {
     Success(T),
@@ -83,7 +86,8 @@ macro_rules! run_jit_function_dynamic_type {
                 .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
                 .expect("errored");
 
-            let layout = std::alloc::Layout::array::<u8>($bytes).unwrap();
+            let size = roc_gen::run_roc::ROC_CALL_RESULT_DISCRIMINANT_SIZE + $bytes;
+            let layout = std::alloc::Layout::array::<u8>(size).unwrap();
             let result = std::alloc::alloc(layout);
             main(result);
 
