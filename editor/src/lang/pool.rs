@@ -254,9 +254,9 @@ impl PoolStr {
 
     pub fn as_str(&self, pool: &Pool) -> &str {
         unsafe {
-            let node_ptr = pool.nodes.offset(self.first_node_id.index as isize);
+            let node_ptr = pool.nodes.offset(self.first_node_id.index as isize) as *const u8;
 
-            let node_slice: &[u8] = &*node_ptr;
+            let node_slice: &[u8] = std::slice::from_raw_parts(node_ptr, self.len as usize);
 
             std::str::from_utf8_unchecked(&node_slice[0..self.len as usize])
         }
