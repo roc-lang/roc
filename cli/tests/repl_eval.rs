@@ -17,8 +17,8 @@ mod repl_eval {
         // relies on this size
         let value: i64 = 1234;
         assert_eq!(
-            std::mem::size_of_val(RocCallResult::Success(value)),
-            RocCallResult::size_of_discriminant() + std::mem::size_of_val(value)
+            std::mem::size_of_val(&RocCallResult::Success(value)),
+            roc_gen::run_roc::ROC_CALL_RESULT_DISCRIMINANT_SIZE + std::mem::size_of_val(&value)
         )
     }
 
