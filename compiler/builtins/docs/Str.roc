@@ -1,5 +1,5 @@
 interface Str
-    exposes [ Str, decimal, split, isEmpty, startsWith, endsWith, contains, anyGraphemes, allGraphemes, join, joinWith, padGraphemesStart, padGraphemesEnd, graphemes, reverseGraphemes, isCaseInsensitiveEq, isCaseInsensitiveNeq, walkGraphemes, isCapitalized, isAllUppercase, isAllLowercase, toUtf8, toUtf16, toUtf32, walkUtf8, walkUtf16, walkUtf32, walkRevUtf8, walkRevUtf16, walkRevUtf32 ]
+    exposes [ Str, decimal, split, isEmpty, startsWith, endsWith, contains, anyGraphemes, allGraphemes, join, joinWith, padGraphemesStart, padGraphemesEnd, graphemes, reverseGraphemes, isCaseInsensitiveEq, isCaseInsensitiveNeq, walkGraphemes, isCapitalized, isAllUppercase, isAllLowercase, toUtf8, toUtf16, toUtf32, trim, walkUtf8, walkUtf16, walkUtf32, walkRevUtf8, walkRevUtf16, walkRevUtf32 ]
     imports []
 ## # Types
 
@@ -342,6 +342,10 @@ toUtf16 : Str -> List U16
 ## For a more flexible function that walks through each of these #U32 code units
 ## without creating a #List, see #Str.walkUtf32 and #Str.walkRevUtf32.
 toUtf32 : Str -> List U32
+
+## Return the string with any blank spaces removed from both the beginning
+## as well as the end.
+trim : Str -> Str
 
 ## Walk through the string's #U8 UTF-8 [code units](https://unicode.org/glossary/#code_unit)
 ## to build up a state.

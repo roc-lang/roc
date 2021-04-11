@@ -1,7 +1,7 @@
 [package]
 name = "roc_module"
 version = "0.1.0"
-authors = ["Richard Feldman <oss@rtfeldman.com>"]
+authors = ["The Roc Contributors"]
 edition = "2018"
 license = "Apache-2.0"
 
