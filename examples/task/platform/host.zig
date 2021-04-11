@@ -108,12 +108,17 @@ pub const ReadResult = extern struct {
 
 pub export fn roc_fx_readAllUtf8(rocPath: RocStr) callconv(.C) ReadResult {
     var dir = std.fs.cwd();
-    var content = dir.readFileAlloc(testing.allocator, rocPath.asSlice(), 1024) catch unreachable;
+
+    var content = dir.readFileAlloc(testing.allocator, rocPath.asSlice(), 1024) catch |e| switch (e) {
+        error.FileNotFound => return .{ .bytes = RocStr.empty(), .errno = 2 },
+        error.IsDir => return .{ .bytes = RocStr.empty(), .errno = 19 },
+        else => return .{ .bytes = RocStr.empty(), .errno = 9999 },
+    };
 
     var str_ptr = @ptrCast([*]u8, content);
     var roc_str3 = RocStr.init(testing.allocator, str_ptr, content.len);
 
-    return ReadResult{ .bytes = roc_str3, .errno = 0 };
+    return .{ .bytes = roc_str3, .errno = 0 };
 }
 
 pub fn roc_fx_readAllUtf8_that_does_not_work(rocPath: *RocStr) ReadResult {
