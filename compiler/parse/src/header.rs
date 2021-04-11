@@ -71,6 +71,7 @@ pub struct InterfaceHeader<'a> {
     pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
 
     // Potential comments and newlines - these will typically all be empty.
+    pub before_header: &'a [CommentOrNewline<'a>],
     pub after_interface_keyword: &'a [CommentOrNewline<'a>],
     pub before_exposes: &'a [CommentOrNewline<'a>],
     pub after_exposes: &'a [CommentOrNewline<'a>],
@@ -93,6 +94,7 @@ pub struct AppHeader<'a> {
     pub to: Loc<To<'a>>,
 
     // Potential comments and newlines - these will typically all be empty.
+    pub before_header: &'a [CommentOrNewline<'a>],
     pub after_app_keyword: &'a [CommentOrNewline<'a>],
     pub before_packages: &'a [CommentOrNewline<'a>],
     pub after_packages: &'a [CommentOrNewline<'a>],
@@ -112,6 +114,7 @@ pub struct PackageHeader<'a> {
     pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
 
     // Potential comments and newlines - these will typically all be empty.
+    pub before_header: &'a [CommentOrNewline<'a>],
     pub after_package_keyword: &'a [CommentOrNewline<'a>],
     pub before_exposes: &'a [CommentOrNewline<'a>],
     pub after_exposes: &'a [CommentOrNewline<'a>],
@@ -132,6 +135,7 @@ pub struct PlatformHeader<'a> {
     pub effects: Effects<'a>,
 
     // Potential comments and newlines - these will typically all be empty.
+    pub before_header: &'a [CommentOrNewline<'a>],
     pub after_platform_keyword: &'a [CommentOrNewline<'a>],
     pub before_requires: &'a [CommentOrNewline<'a>],
     pub after_requires: &'a [CommentOrNewline<'a>],
