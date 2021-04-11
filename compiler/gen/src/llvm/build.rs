@@ -2648,7 +2648,6 @@ fn build_switch_ir<'a, 'ctx, 'env>(
             }
 
             _ => {
-                dbg!(branches);
                 unreachable!()
             }
         }
