@@ -409,9 +409,17 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::Var { module_name, ident } => {
             canonicalize_lookup(env, scope, module_name, ident, region)
         }
-        ast::Expr::Underscore(_) => {
-            // we parse underscored, but they are not valid expression syntax
-            todo!("todo")
+        ast::Expr::Underscore(name) => {
+            // we parse underscores, but they are not valid expression syntax
+            let problem = roc_problem::can::RuntimeError::MalformedIdentifier(
+                (*name).into(),
+                roc_parse::ident::BadIdent::Underscore(region.start_line, region.start_col),
+                region,
+            );
+
+            env.problem(Problem::RuntimeError(problem.clone()));
+
+            (RuntimeError(problem), Output::default())
         }
         ast::Expr::Defs(loc_defs, loc_ret) => {
             can_defs_with_return(
