@@ -59,7 +59,7 @@ pub fn can_problem<'b>(
             ])
         }
         Problem::UnusedArgument(closure_symbol, argument_symbol, region) => {
-            let line = "\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used.";
+            let line = ", rename it to an underscore, like this: `_`. Using an underscore instead of a variable name is a way of saying that the variable is not used.";
 
             alloc.stack(vec![
                 alloc.concat(vec![
@@ -76,8 +76,6 @@ pub fn can_problem<'b>(
                     alloc.symbol_unqualified(argument_symbol),
                     alloc.reflow(" as an argument of "),
                     alloc.symbol_unqualified(closure_symbol),
-                    alloc.reflow(", prefix it with an underscore, like this: \"_"),
-                    alloc.symbol_unqualified(argument_symbol),
                     alloc.reflow(line),
                 ])
             ])

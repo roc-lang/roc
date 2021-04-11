@@ -597,7 +597,7 @@ mod test_reporting {
     //
     //             3│ box = \class, htmlChildren ->
     //
-    //             If you don't need htmlChildren, then you can just remove it. However, if you really do need htmlChildren as an argument of box, prefix it with an underscore, like this: "_htmlChildren". Adding an underscore at the start of a variable name is a way of saying that the variable is not used."#
+    //             If you don't need htmlChildren, then you can just remove it. However, if you really do need htmlChildren as an argument of box, rename it to an underscore, like this: `_`. Using an underscore instead of a variable name is a way of saying that the variable is not used."#
     //         ),
     //     );
     // }
@@ -4040,8 +4040,8 @@ mod test_reporting {
                      ^^^
 
             If you don't need `foo`, then you can just remove it. However, if you
-            really do need `foo` as an argument of `f`, prefix it with an underscore,
-            like this: "_`foo`". Adding an underscore at the start of a variable
+            really do need `foo` as an argument of `f`, rename it to an underscore,
+            like this: `_`. Using an underscore instead of a variable
             name is a way of saying that the variable is not used.
             "#
             ),
