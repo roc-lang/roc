@@ -14,7 +14,7 @@ use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
 use roc_parse::pattern::PatternType;
-use roc_problem::can::{Problem, RuntimeError};
+use roc_problem::can::{CycleEntry, Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{Alias, Type};
@@ -90,7 +90,7 @@ pub enum Declaration {
     Declare(Def),
     DeclareRec(Vec<Def>),
     Builtin(Def),
-    InvalidCycle(Vec<Symbol>, Vec<(Region /* pattern */, Region /* expr */)>),
+    InvalidCycle(Vec<CycleEntry>),
 }
 
 impl Declaration {
@@ -99,7 +99,7 @@ impl Declaration {
         match self {
             Declare(_) => 1,
             DeclareRec(defs) => defs.len(),
-            InvalidCycle(_, _) => 0,
+            InvalidCycle { .. } => 0,
             Builtin(_) => 0,
         }
     }
@@ -530,38 +530,41 @@ pub fn sort_can_defs(
 
                 if is_invalid_cycle {
                     // We want to show the entire cycle in the error message, so expand it out.
-                    let mut loc_symbols = Vec::new();
+                    let mut entries = Vec::new();
 
-                    for symbol in cycle {
-                        match refs_by_symbol.get(&symbol) {
+                    for symbol in &cycle {
+                        match refs_by_symbol.get(symbol) {
                             None => unreachable!(
                                 r#"Symbol `{:?}` not found in refs_by_symbol! refs_by_symbol was: {:?}"#,
                                 symbol, refs_by_symbol
                             ),
                             Some((region, _)) => {
-                                loc_symbols.push(Located::at(*region, symbol));
+                                let expr_region =
+                                    can_defs_by_symbol.get(&symbol).unwrap().loc_expr.region;
+
+                                let entry = CycleEntry {
+                                    symbol: *symbol,
+                                    symbol_region: *region,
+                                    expr_region,
+                                };
+
+                                entries.push(entry);
                             }
                         }
                     }
 
-                    let mut regions = Vec::with_capacity(can_defs_by_symbol.len());
-                    for def in can_defs_by_symbol.values() {
-                        regions.push((def.loc_pattern.region, def.loc_expr.region));
-                    }
-
                     // Sort them by line number to make the report more helpful.
-                    loc_symbols.sort();
-                    regions.sort();
-
-                    let symbols_in_cycle: Vec<Symbol> =
-                        loc_symbols.into_iter().map(|s| s.value).collect();
+                    entries.sort_by_key(|entry| entry.symbol_region);
 
                     problems.push(Problem::RuntimeError(RuntimeError::CircularDef(
-                        symbols_in_cycle.clone(),
-                        regions.clone(),
+                        entries.clone(),
                     )));
 
-                    declarations.push(Declaration::InvalidCycle(symbols_in_cycle, regions));
+                    declarations.push(Declaration::InvalidCycle(entries));
+
+                    // other groups may depend on the symbols defined here, so
+                    // also push this cycle onto the groups
+                    groups.push(cycle);
                 } else {
                     // slightly inefficient, because we know this becomes exactly one DeclareRec already
                     groups.push(cycle);
@@ -590,7 +593,12 @@ pub fn sort_can_defs(
                     // find its successors
                     for succ in all_successors_without_self(symbol) {
                         // and add its group to the result
-                        result.insert(symbol_to_group_index[&succ]);
+                        match symbol_to_group_index.get(&succ) {
+                            Some(index) => {
+                                result.insert(*index);
+                            }
+                            None => unreachable!("no index for symbol {:?}", succ),
+                        }
                     }
                 }
 
@@ -1297,8 +1305,8 @@ fn decl_to_let(var_store: &mut VarStore, decl: Declaration, loc_ret: Located<Exp
             Expr::LetNonRec(Box::new(def), Box::new(loc_ret), var_store.fresh())
         }
         Declaration::DeclareRec(defs) => Expr::LetRec(defs, Box::new(loc_ret), var_store.fresh()),
-        Declaration::InvalidCycle(symbols, regions) => {
-            Expr::RuntimeError(RuntimeError::CircularDef(symbols, regions))
+        Declaration::InvalidCycle(entries) => {
+            Expr::RuntimeError(RuntimeError::CircularDef(entries))
         }
         Declaration::Builtin(_) => {
             // Builtins should only be added to top-level decls, not to let-exprs!

@@ -16,7 +16,7 @@ mod test_can {
     use bumpalo::Bump;
     use roc_can::expr::Expr::{self, *};
     use roc_can::expr::Recursive;
-    use roc_problem::can::{FloatErrorKind, IntErrorKind, Problem, RuntimeError};
+    use roc_problem::can::{CycleEntry, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
     use roc_region::all::Region;
     use std::{f64, i64};
 
@@ -907,8 +907,7 @@ mod test_can {
 
         assert_eq!(problems, Vec::new());
 
-        let is_circular_def = if let RuntimeError(RuntimeError::CircularDef(_, _)) = loc_expr.value
-        {
+        let is_circular_def = if let RuntimeError(RuntimeError::CircularDef(_)) = loc_expr.value {
             true
         } else {
             false
@@ -936,17 +935,17 @@ mod test_can {
             ..
         } = can_expr_with(&arena, home, src);
 
-        let is_circular_def = if let RuntimeError(RuntimeError::CircularDef(_, _)) = loc_expr.value
-        {
+        let is_circular_def = if let RuntimeError(RuntimeError::CircularDef(_)) = loc_expr.value {
             true
         } else {
             false
         };
 
-        let problem = Problem::RuntimeError(RuntimeError::CircularDef(
-            vec![interns.symbol(home, "x".into())],
-            vec![(Region::new(0, 0, 0, 1), Region::new(0, 0, 4, 5))],
-        ));
+        let problem = Problem::RuntimeError(RuntimeError::CircularDef(vec![CycleEntry {
+            symbol: interns.symbol(home, "x".into()),
+            symbol_region: Region::new(0, 0, 0, 1),
+            expr_region: Region::new(0, 0, 4, 5),
+        }]));
 
         assert_eq!(is_circular_def, true);
         assert_eq!(problems, vec![problem]);
@@ -972,23 +971,28 @@ mod test_can {
             ..
         } = can_expr_with(&arena, home, src);
 
-        let problem = Problem::RuntimeError(RuntimeError::CircularDef(
-            vec![
-                interns.symbol(home, "x".into()),
-                interns.symbol(home, "y".into()),
-                interns.symbol(home, "z".into()),
-            ],
-            vec![
-                (Region::new(0, 0, 0, 1), Region::new(0, 0, 4, 5)),
-                (Region::new(1, 1, 0, 1), Region::new(1, 1, 4, 5)),
-                (Region::new(2, 2, 0, 1), Region::new(2, 2, 4, 5)),
-            ],
-        ));
+        let problem = Problem::RuntimeError(RuntimeError::CircularDef(vec![
+            CycleEntry {
+                symbol: interns.symbol(home, "x".into()),
+                symbol_region: Region::new(0, 0, 0, 1),
+                expr_region: Region::new(0, 0, 4, 5),
+            },
+            CycleEntry {
+                symbol: interns.symbol(home, "y".into()),
+                symbol_region: Region::new(1, 1, 0, 1),
+                expr_region: Region::new(1, 1, 4, 5),
+            },
+            CycleEntry {
+                symbol: interns.symbol(home, "z".into()),
+                symbol_region: Region::new(2, 2, 0, 1),
+                expr_region: Region::new(2, 2, 4, 5),
+            },
+        ]));
 
         assert_eq!(problems, vec![problem]);
 
         match loc_expr.value {
-            RuntimeError(RuntimeError::CircularDef(_, _)) => (),
+            RuntimeError(RuntimeError::CircularDef(_)) => (),
             actual => {
                 panic!("Expected a CircularDef runtime error, but got {:?}", actual);
             }
