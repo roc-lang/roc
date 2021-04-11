@@ -217,8 +217,8 @@ where
                         }
                     }
 
-                    InvalidCycle(identifiers, _) => {
-                        panic!("TODO gracefully handle potentially attempting to expose invalid cyclic defs {:?}" , identifiers);
+                    InvalidCycle(entries) => {
+                        env.problems.push(Problem::BadRecursion(entries.to_vec()));
                     }
                     Builtin(def) => {
                         // Builtins cannot be exposed in module declarations.
@@ -289,7 +289,7 @@ where
                     DeclareRec(defs) => {
                         fix_values_captured_in_closure_defs(defs, &mut MutSet::default())
                     }
-                    InvalidCycle(_, _) | Builtin(_) => {}
+                    InvalidCycle(_) | Builtin(_) => {}
                 }
             }
 

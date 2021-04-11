@@ -7,6 +7,13 @@ use roc_parse::ast::Base;
 use roc_parse::pattern::PatternType;
 use roc_region::all::{Located, Region};
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CycleEntry {
+    pub symbol: Symbol,
+    pub symbol_region: Region,
+    pub expr_region: Region,
+}
+
 /// Problems that can occur in the course of canonicalization.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Problem {
@@ -24,6 +31,7 @@ pub enum Problem {
         shadow: Located<Ident>,
     },
     CyclicAlias(Symbol, Region, Vec<Symbol>),
+    BadRecursion(Vec<CycleEntry>),
     PhantomTypeArgument {
         alias: Symbol,
         variable_region: Region,
@@ -141,7 +149,7 @@ pub enum RuntimeError {
     },
     InvalidFloat(FloatErrorKind, Region, Box<str>),
     InvalidInt(IntErrorKind, Base, Region, Box<str>),
-    CircularDef(Vec<Symbol>, Vec<(Region /* pattern */, Region /* expr */)>),
+    CircularDef(Vec<CycleEntry>),
 
     NonExhaustivePattern,
 

@@ -1020,7 +1020,7 @@ pub fn constrain_decls(home: ModuleId, decls: &[Declaration]) -> Constraint {
             Declaration::DeclareRec(defs) => {
                 constraint = constrain_recursive_defs(&env, defs, constraint);
             }
-            Declaration::InvalidCycle(_, _) => {
+            Declaration::InvalidCycle(_) => {
                 // invalid cycles give a canonicalization error. we skip them here.
                 continue;
             }
@@ -1586,7 +1586,35 @@ pub fn rec_defs_help(
                         })));
                         rigid_info.def_types.extend(def_pattern_state.headers);
                     }
-                    _ => todo!(),
+                    _ => {
+                        let expected = annotation_expected;
+
+                        let ret_constraint =
+                            constrain_expr(env, def.loc_expr.region, &def.loc_expr.value, expected);
+
+                        let def_con = And(vec![
+                            Let(Box::new(LetConstraint {
+                                rigid_vars: Vec::new(),
+                                flex_vars: vec![],
+                                def_types: SendMap::default(),
+                                defs_constraint: True,
+                                ret_constraint,
+                            })),
+                            // Store type into AST vars. We use Store so errors aren't reported twice
+                            Store(signature, expr_var, std::file!(), std::line!()),
+                        ]);
+
+                        rigid_info.vars.extend(&new_rigids);
+
+                        rigid_info.constraints.push(Let(Box::new(LetConstraint {
+                            rigid_vars: new_rigids,
+                            flex_vars: def_pattern_state.vars,
+                            def_types: SendMap::default(), // no headers introduced (at this level)
+                            defs_constraint: def_con,
+                            ret_constraint: True,
+                        })));
+                        rigid_info.def_types.extend(def_pattern_state.headers);
+                    }
                 }
             }
         }

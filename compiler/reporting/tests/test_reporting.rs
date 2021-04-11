@@ -3938,7 +3938,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── BAD OPTIONAL VALUE ──────────────────────────────────────────────────────────
 
                 This record uses an optional value for the `.y` field in an incorrect
                 context!
@@ -3946,8 +3946,7 @@ mod test_reporting {
                 1│  { x: 5, y ? 42 }
                             ^^^^^^
 
-                You can only use optional values in record destructuring, for example
-                in affectation:
+                You can only use optional values in record destructuring, like:
 
                     { answer ? 42, otherField } = myRecord
                 "#
