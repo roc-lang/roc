@@ -29,7 +29,6 @@ pub fn gen_and_eval<'a>(
         can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
     };
 
-    let empty_ctx = Context::create(); // We need an empty Context in this scope later on.
     let arena = Bump::new();
 
     // SAFETY: we've already verified that this is valid UTF-8 during parsing.
@@ -169,7 +168,7 @@ pub fn gen_and_eval<'a>(
         let (dibuilder, compile_unit) = roc_gen::llvm::build::Env::new_debug_info(module);
 
         // Compile and add all the Procs before adding main
-        let mut env = roc_gen::llvm::build::Env {
+        let env = roc_gen::llvm::build::Env {
             arena: &arena,
             builder: &builder,
             dibuilder: &dibuilder,
@@ -291,31 +290,6 @@ pub fn gen_and_eval<'a>(
                 expr.push_str("<function>");
             }
         }
-
-        /////////////////////////////////////////////////////////////////////////
-        // BEGIN HACK to work around https://github.com/rtfeldman/roc/issues/1176
-        /////////////////////////////////////////////////////////////////////////
-        if cfg!(target_os = "macos") {
-            // The goal of this hack is to intentionally leak `Context`, because
-            // when its destructor runs on macOS, it sometimes segfaults.
-            // See https://github.com/rtfeldman/roc/issues/1176 for details.
-            //
-            // All the code before the `std::mem::forget(context)` exists to
-            // prevent borrow checker errors around that call.
-            drop(scope);
-
-            std::mem::swap(&mut env.context, &mut &empty_ctx);
-
-            drop(dibuilder);
-            drop(module_pass);
-            drop(function_pass);
-            drop(builder);
-
-            std::mem::forget(context);
-        }
-        //////////////
-        // END HACK //
-        //////////////
 
         Ok(ReplOutput::NoProblems {
             expr: expr.into_bump_str().to_string(),
