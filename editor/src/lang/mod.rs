@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod constrain;
 mod def;
 pub mod expr;
 mod module;
@@ -6,4 +7,4 @@ mod pattern;
 pub mod pool;
 pub mod roc_file;
 pub mod scope;
-mod types;
+pub mod types;
