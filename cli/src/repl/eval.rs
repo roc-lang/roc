@@ -204,6 +204,7 @@ fn jit_to_ast_help<'a>(
                                         // skip forward to the start of the first element, ignoring the tag id
                                         let ptr = ptr.offset(8);
 
+                                        dbg!(&variables, &arg_layouts);
                                         let it = variables.iter().copied().zip(&arg_layouts[1..]);
                                         let output = sequence_of_expr(env, ptr, it);
                                         let output = output.into_bump_slice();

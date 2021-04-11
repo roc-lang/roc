@@ -9,6 +9,18 @@ mod helpers;
 #[cfg(test)]
 mod repl_eval {
     use crate::helpers;
+    use roc_gen::run_roc::RocCallResult;
+
+    #[test]
+    fn check_discriminant_size() {
+        // tells us if the size of the discriminant has changed. Lots of other code
+        // relies on this size
+        let value: i64 = 1234;
+        assert_eq!(
+            std::mem::size_of_val(RocCallResult::Success(value)),
+            RocCallResult::size_of_discriminant() + std::mem::size_of_val(value)
+        )
+    }
 
     const ERROR_MESSAGE_START: char = '─';
 

@@ -26,6 +26,12 @@ impl<T: Sized> From<RocCallResult<T>> for Result<T, String> {
     }
 }
 
+impl<T> RocCallResult<T> {
+    const fn size_of_discriminant() -> usize {
+        std::mem::size_of::<u64>()
+    }
+}
+
 #[macro_export]
 macro_rules! run_jit_function {
     ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr) => {{
@@ -83,7 +89,8 @@ macro_rules! run_jit_function_dynamic_type {
                 .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
                 .expect("errored");
 
-            let layout = std::alloc::Layout::array::<u8>($bytes).unwrap();
+            let size = RocCallResult::size_of_discriminant() + $bytes;
+            let layout = std::alloc::Layout::array::<u8>(size).unwrap();
             let result = std::alloc::alloc(layout);
             main(result);
 
