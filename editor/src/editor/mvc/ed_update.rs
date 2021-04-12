@@ -532,7 +532,7 @@ pub mod test_ed_update {
 
         let test_arena = Bump::new();
         let code_str = BumpString::from_str_in(
-            &pre_lines.join("").replace("|", ""),
+            &pre_lines.join("").replace("┃", ""),
             &test_arena
         );
 
@@ -554,143 +554,143 @@ pub mod test_ed_update {
     #[test]
     fn test_ignore_basic() -> Result<(), String> {
         // space is added because Blank is inserted
-        assert_insert(&["|"], &["| "], 'a')?;
-        assert_insert(&["|"], &["| "], ';')?;
-        assert_insert(&["|"], &["| "], '5')?;
-        assert_insert(&["|"], &["| "], '-')?;
-        assert_insert(&["|"], &["| "], '_')?;
+        assert_insert(&["┃"], &["┃ "], 'a')?;
+        assert_insert(&["┃"], &["┃ "], ';')?;
+        assert_insert(&["┃"], &["┃ "], '5')?;
+        assert_insert(&["┃"], &["┃ "], '-')?;
+        assert_insert(&["┃"], &["┃ "], '_')?;
 
         Ok(())
     }
 
     #[test]
     fn test_string() -> Result<(), String> {
-        assert_insert(&["|"], &["\"|\""], '"')?;
-        assert_insert(&["\"|\""], &["\"a|\""], 'a')?;
-        assert_insert(&["\"|\""], &["\"{|\""], '{')?;
-        assert_insert(&["\"|\""], &["\"}|\""], '}')?;
-        assert_insert(&["\"|\""], &["\"[|\""], '[')?;
-        assert_insert(&["\"|\""], &["\"]|\""], ']')?;
-        assert_insert(&["\"|\""], &["\"-|\""], '-')?;
-        assert_insert(&["\"|-\""], &["\"<|-\""], '<')?;
-        assert_insert(&["\"-|\""], &["\"->|\""], '>')?;
+        assert_insert(&["┃"], &["\"┃\""], '"')?;
+        assert_insert(&["\"┃\""], &["\"a┃\""], 'a')?;
+        assert_insert(&["\"┃\""], &["\"{┃\""], '{')?;
+        assert_insert(&["\"┃\""], &["\"}┃\""], '}')?;
+        assert_insert(&["\"┃\""], &["\"[┃\""], '[')?;
+        assert_insert(&["\"┃\""], &["\"]┃\""], ']')?;
+        assert_insert(&["\"┃\""], &["\"-┃\""], '-')?;
+        assert_insert(&["\"┃-\""], &["\"<┃-\""], '<')?;
+        assert_insert(&["\"-┃\""], &["\"->┃\""], '>')?;
 
-        assert_insert(&["\"a|\""], &["\"ab|\""], 'b')?;
-        assert_insert(&["\"ab|\""], &["\"abc|\""], 'c')?;
-        assert_insert(&["\"|a\""], &["\"z|a\""], 'z')?;
-        assert_insert(&["\"|a\""], &["\" |a\""], ' ')?;
-        assert_insert(&["\"a|b\""], &["\"az|b\""], 'z')?;
-        assert_insert(&["\"a|b\""], &["\"a |b\""], ' ')?;
+        assert_insert(&["\"a┃\""], &["\"ab┃\""], 'b')?;
+        assert_insert(&["\"ab┃\""], &["\"abc┃\""], 'c')?;
+        assert_insert(&["\"┃a\""], &["\"z┃a\""], 'z')?;
+        assert_insert(&["\"┃a\""], &["\" ┃a\""], ' ')?;
+        assert_insert(&["\"a┃b\""], &["\"az┃b\""], 'z')?;
+        assert_insert(&["\"a┃b\""], &["\"a ┃b\""], ' ')?;
 
-        assert_insert(&["\"ab |\""], &["\"ab {|\""], '{')?;
-        assert_insert(&["\"ab |\""], &["\"ab }|\""], '}')?;
-        assert_insert(&["\"{ str: 4|}\""], &["\"{ str: 44|}\""], '4')?;
-        assert_insert(&["\"|ello, hello, hello\""], &["\"h|ello, hello, hello\""], 'h')?;
-        assert_insert(&["\"hello| hello, hello\""], &["\"hello,| hello, hello\""], ',')?;
-        assert_insert(&["\"hello, hello, hello|\""], &["\"hello, hello, hello.|\""], '.')?;
+        assert_insert(&["\"ab ┃\""], &["\"ab {┃\""], '{')?;
+        assert_insert(&["\"ab ┃\""], &["\"ab }┃\""], '}')?;
+        assert_insert(&["\"{ str: 4┃}\""], &["\"{ str: 44┃}\""], '4')?;
+        assert_insert(&["\"┃ello, hello, hello\""], &["\"h┃ello, hello, hello\""], 'h')?;
+        assert_insert(&["\"hello┃ hello, hello\""], &["\"hello,┃ hello, hello\""], ',')?;
+        assert_insert(&["\"hello, hello, hello┃\""], &["\"hello, hello, hello.┃\""], '.')?;
 
         Ok(())
     }
 
     #[test]
     fn test_ignore_string() -> Result<(), String> {
-        assert_insert(&["|\"\""], &["|\"\""], 'a')?;
-        assert_insert(&["|\"\""], &["|\"\""], 'A')?;
-        assert_insert(&["|\"\""], &["|\"\""], '"')?;
-        assert_insert(&["|\"\""], &["|\"\""], '{')?;
-        assert_insert(&["|\"\""], &["|\"\""], '[')?;
-        assert_insert(&["|\"\""], &["|\"\""], '}')?;
-        assert_insert(&["|\"\""], &["|\"\""], ']')?;
-        assert_insert(&["|\"\""], &["|\"\""], '-')?;
+        assert_insert(&["┃\"\""], &["┃\"\""], 'a')?;
+        assert_insert(&["┃\"\""], &["┃\"\""], 'A')?;
+        assert_insert(&["┃\"\""], &["┃\"\""], '"')?;
+        assert_insert(&["┃\"\""], &["┃\"\""], '{')?;
+        assert_insert(&["┃\"\""], &["┃\"\""], '[')?;
+        assert_insert(&["┃\"\""], &["┃\"\""], '}')?;
+        assert_insert(&["┃\"\""], &["┃\"\""], ']')?;
+        assert_insert(&["┃\"\""], &["┃\"\""], '-')?;
 
-        assert_insert(&["\"\"|"], &["\"\"|"], 'a')?;
-        assert_insert(&["\"\"|"], &["\"\"|"], 'A')?;
-        assert_insert(&["\"\"|"], &["\"\"|"], '"')?;
-        assert_insert(&["\"\"|"], &["\"\"|"], '{')?;
-        assert_insert(&["\"\"|"], &["\"\"|"], '[')?;
-        assert_insert(&["\"\"|"], &["\"\"|"], '}')?;
-        assert_insert(&["\"\"|"], &["\"\"|"], ']')?;
-        assert_insert(&["\"\"|"], &["\"\"|"], '-')?;
+        assert_insert(&["\"\"┃"], &["\"\"┃"], 'a')?;
+        assert_insert(&["\"\"┃"], &["\"\"┃"], 'A')?;
+        assert_insert(&["\"\"┃"], &["\"\"┃"], '"')?;
+        assert_insert(&["\"\"┃"], &["\"\"┃"], '{')?;
+        assert_insert(&["\"\"┃"], &["\"\"┃"], '[')?;
+        assert_insert(&["\"\"┃"], &["\"\"┃"], '}')?;
+        assert_insert(&["\"\"┃"], &["\"\"┃"], ']')?;
+        assert_insert(&["\"\"┃"], &["\"\"┃"], '-')?;
 
-        assert_insert(&["|\"a\""], &["|\"a\""], 'a')?;
-        assert_insert(&["|\"a\""], &["|\"a\""], 'A')?;
-        assert_insert(&["|\"a\""], &["|\"a\""], '"')?;
-        assert_insert(&["|\"a\""], &["|\"a\""], '{')?;
-        assert_insert(&["|\"a\""], &["|\"a\""], '[')?;
-        assert_insert(&["|\"a\""], &["|\"a\""], '}')?;
-        assert_insert(&["|\"a\""], &["|\"a\""], ']')?;
-        assert_insert(&["|\"a\""], &["|\"a\""], '-')?;
+        assert_insert(&["┃\"a\""], &["┃\"a\""], 'a')?;
+        assert_insert(&["┃\"a\""], &["┃\"a\""], 'A')?;
+        assert_insert(&["┃\"a\""], &["┃\"a\""], '"')?;
+        assert_insert(&["┃\"a\""], &["┃\"a\""], '{')?;
+        assert_insert(&["┃\"a\""], &["┃\"a\""], '[')?;
+        assert_insert(&["┃\"a\""], &["┃\"a\""], '}')?;
+        assert_insert(&["┃\"a\""], &["┃\"a\""], ']')?;
+        assert_insert(&["┃\"a\""], &["┃\"a\""], '-')?;
 
-        assert_insert(&["\"a\"|"], &["\"a\"|"], 'a')?;
-        assert_insert(&["\"a\"|"], &["\"a\"|"], 'A')?;
-        assert_insert(&["\"a\"|"], &["\"a\"|"], '"')?;
-        assert_insert(&["\"a\"|"], &["\"a\"|"], '{')?;
-        assert_insert(&["\"a\"|"], &["\"a\"|"], '[')?;
-        assert_insert(&["\"a\"|"], &["\"a\"|"], '}')?;
-        assert_insert(&["\"a\"|"], &["\"a\"|"], ']')?;
-        assert_insert(&["\"a\"|"], &["\"a\"|"], '-')?;
+        assert_insert(&["\"a\"┃"], &["\"a\"┃"], 'a')?;
+        assert_insert(&["\"a\"┃"], &["\"a\"┃"], 'A')?;
+        assert_insert(&["\"a\"┃"], &["\"a\"┃"], '"')?;
+        assert_insert(&["\"a\"┃"], &["\"a\"┃"], '{')?;
+        assert_insert(&["\"a\"┃"], &["\"a\"┃"], '[')?;
+        assert_insert(&["\"a\"┃"], &["\"a\"┃"], '}')?;
+        assert_insert(&["\"a\"┃"], &["\"a\"┃"], ']')?;
+        assert_insert(&["\"a\"┃"], &["\"a\"┃"], '-')?;
 
-        assert_insert(&["|\"{  }\""], &["|\"{  }\""], 'a')?;
-        assert_insert(&["|\"{  }\""], &["|\"{  }\""], 'A')?;
-        assert_insert(&["|\"{  }\""], &["|\"{  }\""], '"')?;
-        assert_insert(&["|\"{  }\""], &["|\"{  }\""], '{')?;
-        assert_insert(&["|\"{  }\""], &["|\"{  }\""], '[')?;
-        assert_insert(&["|\"{  }\""], &["|\"{  }\""], '}')?;
-        assert_insert(&["|\"{  }\""], &["|\"{  }\""], ']')?;
-        assert_insert(&["|\"{  }\""], &["|\"{  }\""], '-')?;
+        assert_insert(&["┃\"{  }\""], &["┃\"{  }\""], 'a')?;
+        assert_insert(&["┃\"{  }\""], &["┃\"{  }\""], 'A')?;
+        assert_insert(&["┃\"{  }\""], &["┃\"{  }\""], '"')?;
+        assert_insert(&["┃\"{  }\""], &["┃\"{  }\""], '{')?;
+        assert_insert(&["┃\"{  }\""], &["┃\"{  }\""], '[')?;
+        assert_insert(&["┃\"{  }\""], &["┃\"{  }\""], '}')?;
+        assert_insert(&["┃\"{  }\""], &["┃\"{  }\""], ']')?;
+        assert_insert(&["┃\"{  }\""], &["┃\"{  }\""], '-')?;
 
-        assert_insert(&["\"{  }\"|"], &["\"{  }\"|"], 'a')?;
-        assert_insert(&["\"{  }\"|"], &["\"{  }\"|"], 'A')?;
-        assert_insert(&["\"{  }\"|"], &["\"{  }\"|"], '"')?;
-        assert_insert(&["\"{  }\"|"], &["\"{  }\"|"], '{')?;
-        assert_insert(&["\"{  }\"|"], &["\"{  }\"|"], '[')?;
-        assert_insert(&["\"{  }\"|"], &["\"{  }\"|"], '}')?;
-        assert_insert(&["\"{  }\"|"], &["\"{  }\"|"], ']')?;
-        assert_insert(&["\"{  }\"|"], &["\"{  }\"|"], '-')?;
+        assert_insert(&["\"{  }\"┃"], &["\"{  }\"┃"], 'a')?;
+        assert_insert(&["\"{  }\"┃"], &["\"{  }\"┃"], 'A')?;
+        assert_insert(&["\"{  }\"┃"], &["\"{  }\"┃"], '"')?;
+        assert_insert(&["\"{  }\"┃"], &["\"{  }\"┃"], '{')?;
+        assert_insert(&["\"{  }\"┃"], &["\"{  }\"┃"], '[')?;
+        assert_insert(&["\"{  }\"┃"], &["\"{  }\"┃"], '}')?;
+        assert_insert(&["\"{  }\"┃"], &["\"{  }\"┃"], ']')?;
+        assert_insert(&["\"{  }\"┃"], &["\"{  }\"┃"], '-')?;
 
-        assert_insert(&["\"[ 1, 2, 3 ]\"|"], &["\"[ 1, 2, 3 ]\"|"], '{')?;
-        assert_insert(&["|\"[ 1, 2, 3 ]\""], &["|\"[ 1, 2, 3 ]\""], '{')?;
-        assert_insert(&["\"hello, hello, hello\"|"], &["\"hello, hello, hello\"|"], '.')?;
-        assert_insert(&["|\"hello, hello, hello\""], &["|\"hello, hello, hello\""], '.')?;
+        assert_insert(&["\"[ 1, 2, 3 ]\"┃"], &["\"[ 1, 2, 3 ]\"┃"], '{')?;
+        assert_insert(&["┃\"[ 1, 2, 3 ]\""], &["┃\"[ 1, 2, 3 ]\""], '{')?;
+        assert_insert(&["\"hello, hello, hello\"┃"], &["\"hello, hello, hello\"┃"], '.')?;
+        assert_insert(&["┃\"hello, hello, hello\""], &["┃\"hello, hello, hello\""], '.')?;
 
         Ok(())
     }
 
     #[test]
     fn test_record() -> Result<(), String> {
-        // assert_insert(&["|"], &["{ | }"], '{')?;
-        // assert_insert(&["{ | }"], &["{ a| }"], 'a')?;
-        // assert_insert(&["{ a| }"], &["{ ab| }"], 'b')?;
-        // assert_insert(&["{ ab| }"], &["{ abc| }"], 'c')?;
-        // assert_insert(&["{ |ab }"], &["{ z|abc }"], 'z')?;
-        // assert_insert(&["{ a|b }"], &["{ az|b }"], 'z')?;
+        // assert_insert(&["┃"], &["{ ┃ }"], '{')?;
+        // assert_insert(&["{ ┃ }"], &["{ a┃ }"], 'a')?;
+        // assert_insert(&["{ a┃ }"], &["{ ab┃ }"], 'b')?;
+        // assert_insert(&["{ ab┃ }"], &["{ abc┃ }"], 'c')?;
+        // assert_insert(&["{ ┃ab }"], &["{ z┃abc }"], 'z')?;
+        // assert_insert(&["{ a┃b }"], &["{ az┃b }"], 'z')?;
 
-        // assert_insert(&["{ a| }"], &["{ a: | }"], ':')?;
-        // assert_insert(&["{ abc| }"], &["{ abc: | }"], ':')?;
-        // assert_insert(&["{ aBc| }"], &["{ aBc: | }"], ':')?;
+        // assert_insert(&["{ a┃ }"], &["{ a: ┃ }"], ':')?;
+        // assert_insert(&["{ abc┃ }"], &["{ abc: ┃ }"], ':')?;
+        // assert_insert(&["{ aBc┃ }"], &["{ aBc: ┃ }"], ':')?;
 
         // TODO use assert_insert_char_seq here
-        // assert_insert(&["{ a: | }"], &["{ a: \"|\" }"], '"')?;
-        // assert_insert(&["{ abc: | }"], &["{ abc: \"|\" }"], '"')?;
+        // assert_insert(&["{ a: ┃ }"], &["{ a: \"┃\" }"], '"')?;
+        // assert_insert(&["{ abc: ┃ }"], &["{ abc: \"┃\" }"], '"')?;
 
-        // assert_insert(&["{ a: | }"], &["{ a: { | }"], '{')?;
-        // assert_insert(&["{ abc: | }"], &["{ abc: { | }"], '{')?;
+        // assert_insert(&["{ a: ┃ }"], &["{ a: { ┃ }"], '{')?;
+        // assert_insert(&["{ abc: ┃ }"], &["{ abc: { ┃ }"], '{')?;
 
-        assert_insert(&["{ a: \"|\" }"], &["{ a: \"a|\" }"], 'a')?;
-        assert_insert(&["{ a: \"a|\" }"], &["{ a: \"ab|\" }"], 'b')?;
-        assert_insert(&["{ a: \"a|b\" }"], &["{ a: \"az|b\" }"], 'z')?;
-        assert_insert(&["{ a: \"|ab\" }"], &["{ a: \"z|ab\" }"], 'z')?;
+        assert_insert(&["{ a: \"┃\" }"], &["{ a: \"a┃\" }"], 'a')?;
+        assert_insert(&["{ a: \"a┃\" }"], &["{ a: \"ab┃\" }"], 'b')?;
+        assert_insert(&["{ a: \"a┃b\" }"], &["{ a: \"az┃b\" }"], 'z')?;
+        assert_insert(&["{ a: \"┃ab\" }"], &["{ a: \"z┃ab\" }"], 'z')?;
 
-        assert_insert(&["{ camelCase: \"|\" }"], &["{ camelCase: \"a|\" }"], 'a')?;
-        assert_insert(&["{ camelCase: \"a|\" }"], &["{ camelCase: \"ab|\" }"], 'b')?;
+        assert_insert(&["{ camelCase: \"┃\" }"], &["{ camelCase: \"a┃\" }"], 'a')?;
+        assert_insert(&["{ camelCase: \"a┃\" }"], &["{ camelCase: \"ab┃\" }"], 'b')?;
 
-        assert_insert(&["{ a|: \"\" }"], &["{ ab|: \"\" }"], 'b')?;
-        assert_insert(&["{ |a: \"\" }"], &["{ z|a: \"\" }"], 'z')?;
-        assert_insert(&["{ ab|: \"\" }"], &["{ abc|: \"\" }"], 'c')?;
-        assert_insert(&["{ |ab: \"\" }"], &["{ z|ab: \"\" }"], 'z')?;
-        assert_insert(&["{ camelCase|: \"hello\" }"], &["{ camelCaseB|: \"hello\" }"], 'B')?;
-        assert_insert(&["{ camel|Case: \"hello\" }"], &["{ camelZ|Case: \"hello\" }"], 'Z')?;
-        assert_insert(&["{ |camelCase: \"hello\" }"], &["{ z|camelCase: \"hello\" }"], 'z')?;
+        assert_insert(&["{ a┃: \"\" }"], &["{ ab┃: \"\" }"], 'b')?;
+        assert_insert(&["{ ┃a: \"\" }"], &["{ z┃a: \"\" }"], 'z')?;
+        assert_insert(&["{ ab┃: \"\" }"], &["{ abc┃: \"\" }"], 'c')?;
+        assert_insert(&["{ ┃ab: \"\" }"], &["{ z┃ab: \"\" }"], 'z')?;
+        assert_insert(&["{ camelCase┃: \"hello\" }"], &["{ camelCaseB┃: \"hello\" }"], 'B')?;
+        assert_insert(&["{ camel┃Case: \"hello\" }"], &["{ camelZ┃Case: \"hello\" }"], 'Z')?;
+        assert_insert(&["{ ┃camelCase: \"hello\" }"], &["{ z┃camelCase: \"hello\" }"], 'z')?;
 
         Ok(())
     }
@@ -699,34 +699,34 @@ pub mod test_ed_update {
     fn test_nested_record() -> Result<(), String> {
         // TODO construct nested record
 
-        assert_insert_char_seq(&["{ | }"], &["{ a: { | } }"], "a:{")?;
-        assert_insert_char_seq(&["{ | }"], &["{ abc: { | } }"], "abc:{")?;
-        assert_insert_char_seq(&["{ | }"], &["{ camelCase: { | } }"], "camelCase:{")?;
+        assert_insert_char_seq(&["{ ┃ }"], &["{ a: { ┃ } }"], "a:{")?;
+        assert_insert_char_seq(&["{ ┃ }"], &["{ abc: { ┃ } }"], "abc:{")?;
+        assert_insert_char_seq(&["{ ┃ }"], &["{ camelCase: { ┃ } }"], "camelCase:{")?;
 
         Ok(())
     }
 
     #[test]
     fn test_ignore_record() -> Result<(), String> {
-        assert_insert(&["|{  }"], &["|{  }"], 'a')?;
-        assert_insert(&["|{  }"], &["|{  }"], '{')?;
-        assert_insert(&["|{  }"], &["|{  }"], '"')?;
-        assert_insert(&["|{  }"], &["|{  }"], '5')?;
+        assert_insert(&["┃{  }"], &["┃{  }"], 'a')?;
+        assert_insert(&["┃{  }"], &["┃{  }"], '{')?;
+        assert_insert(&["┃{  }"], &["┃{  }"], '"')?;
+        assert_insert(&["┃{  }"], &["┃{  }"], '5')?;
 
-        assert_insert(&["{  }|"], &["{  }|"], 'a')?;
-        assert_insert(&["{  }|"], &["{  }|"], '{')?;
-        assert_insert(&["{  }|"], &["{  }|"], '"')?;
-        assert_insert(&["{  }|"], &["{  }|"], '5')?;
+        assert_insert(&["{  }┃"], &["{  }┃"], 'a')?;
+        assert_insert(&["{  }┃"], &["{  }┃"], '{')?;
+        assert_insert(&["{  }┃"], &["{  }┃"], '"')?;
+        assert_insert(&["{  }┃"], &["{  }┃"], '5')?;
 
-        assert_insert(&["{|  }"], &["{|  }"], 'a')?;
-        assert_insert(&["{|  }"], &["{|  }"], '{')?;
-        assert_insert(&["{|  }"], &["{|  }"], '"')?;
-        assert_insert(&["{|  }"], &["{|  }"], '5')?;
+        assert_insert(&["{┃  }"], &["{┃  }"], 'a')?;
+        assert_insert(&["{┃  }"], &["{┃  }"], '{')?;
+        assert_insert(&["{┃  }"], &["{┃  }"], '"')?;
+        assert_insert(&["{┃  }"], &["{┃  }"], '5')?;
 
-        assert_insert(&["{  |}"], &["{  |}"], 'a')?;
-        assert_insert(&["{  |}"], &["{  |}"], '{')?;
-        assert_insert(&["{  |}"], &["{  |}"], '"')?;
-        assert_insert(&["{  |}"], &["{  |}"], '5')?;
+        assert_insert(&["{  ┃}"], &["{  ┃}"], 'a')?;
+        assert_insert(&["{  ┃}"], &["{  ┃}"], '{')?;
+        assert_insert(&["{  ┃}"], &["{  ┃}"], '"')?;
+        assert_insert(&["{  ┃}"], &["{  ┃}"], '5')?;
 
         // TODO non-empty records
 

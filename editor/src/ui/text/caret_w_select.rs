@@ -277,7 +277,11 @@ pub mod test_caret_w_select {
 
     fn insert_at_pos(lines: &mut [String], pos: TextPos, insert_char: char) -> UIResult<()> {
         let line = get_mut_res(pos.line, lines)?;
-        line.insert(pos.column, insert_char);
+        
+        let mut chars: Vec<char> = line.chars().collect();
+        chars.insert(pos.column, insert_char);
+
+        *line = chars.into_iter().collect::<String>();
 
         Ok(())
     }
