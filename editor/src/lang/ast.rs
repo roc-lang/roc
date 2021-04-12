@@ -167,7 +167,7 @@ pub enum Expr2 {
     // Product Types
     Record {
         record_var: Variable,         // 4B
-        fields: PoolVec<RecordField>, // TODO ??B
+        fields: PoolVec<RecordField>, // 8B
     },
     /// Empty record constant
     EmptyRecord,
