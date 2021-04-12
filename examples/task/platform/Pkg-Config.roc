@@ -1,15 +1,15 @@
 platform folkertdev/foo
-    requires { main : Task {} * }
+    requires { main : Task {} [] }
     exposes []
     packages {}
-    imports [ Task, File ]
+    imports [ Task ]
     provides [ mainForHost ]
     effects fx.Effect
         {
-            # TODO change sig to Effect { errno : I32, bytes : List U8 }
-            readAllUtf8 : Str -> Effect { errno : I64, bytes : Str },
+            # TODO change errno to I32
+            readAllUtf8 : Str -> Effect { errno : I64, bytes : List U8 },
             putLine : Str -> Effect {}
         }
 
-mainForHost : Task.Task {} (File.FileReadErr [BadUtf8]) as Fx
+mainForHost : Task.Task {} [] as Fx
 mainForHost = main
