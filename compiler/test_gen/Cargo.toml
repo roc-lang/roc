@@ -1,9 +1,9 @@
 [package]
 name = "test_gen"
 version = "0.1.0"
-authors = ["Richard Feldman <oss@rtfeldman.com>"]
-edition = "2018"
+authors = ["The Roc Contributors"]
 license = "Apache-2.0"
+edition = "2018"
 
 [dependencies]
 roc_gen = { path = "../gen" }
@@ -59,4 +59,3 @@ quickcheck = "0.8"
 quickcheck_macros = "0.8"
 tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded"] }
 bumpalo = { version = "3.2", features = ["collections"] }
-

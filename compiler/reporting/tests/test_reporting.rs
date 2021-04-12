@@ -3938,7 +3938,7 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                ── BAD OPTIONAL VALUE ──────────────────────────────────────────────────────────
 
                 This record uses an optional value for the `.y` field in an incorrect
                 context!
@@ -3946,8 +3946,7 @@ mod test_reporting {
                 1│  { x: 5, y ? 42 }
                             ^^^^^^
 
-                You can only use optional values in record destructuring, for example
-                in affectation:
+                You can only use optional values in record destructuring, like:
 
                     { answer ? 42, otherField } = myRecord
                 "#
@@ -4526,16 +4525,16 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── UNFINISHED PARENTHESES ──────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a type in parentheses, but I got stuck
                 here:
-                
+
                 1│  f : ( I64
                              ^
-                
+
                 I was expecting to see a parenthesis before this, so try adding a )
                 and see if that helps?
-                
+
                 Note: I may be confused by indentation
             "#
             ),
@@ -6258,15 +6257,15 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── NEED MORE INDENTATION ───────────────────────────────────────────────────────
-                
+
                 I am partway through parsing a type in parentheses, but I got stuck
                 here:
-                
+
                 1│  Box : (
                 2│      Str
                 3│  )
                     ^
-                
+
                 I need this parenthesis to be indented more. Try adding more spaces
                 before it!
             "#
@@ -6299,6 +6298,38 @@ mod test_reporting {
 
                 I need this curly brace to be indented more. Try adding more spaces
                 before it!
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn backpassing_type_error() {
+        report_problem_as(
+            indoc!(
+                r#"
+                x <- List.map [ "a", "b" ]
+
+                x + 1
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd argument to `map` is not what I expect:
+
+                1│>  x <- List.map [ "a", "b" ]
+                2│>
+                3│>  x + 1
+
+                This argument is an anonymous function of type:
+
+                    Num a -> Num a
+
+                But `map` needs the 2nd argument to be:
+
+                    Str -> Num a
             "#
             ),
         )

@@ -1,9 +1,9 @@
 [package]
 name = "roc_problem"
 version = "0.1.0"
-authors = ["Richard Feldman <oss@rtfeldman.com>"]
-edition = "2018"
+authors = ["The Roc Contributors"]
 license = "Apache-2.0"
+edition = "2018"
 
 [dependencies]
 roc_collections = { path = "../collections" }

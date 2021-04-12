@@ -2947,6 +2947,7 @@ mod test_parse {
             imports,
             provides,
             to: Located::new(0, 0, 53, 57, To::ExistingPackage("blah")),
+            before_header: &[],
             after_app_keyword: &[],
             before_packages: &[],
             after_packages: &[],
@@ -2981,6 +2982,7 @@ mod test_parse {
         let provides = Vec::new_in(&arena);
         let module_name = StrLiteral::PlainLine("test-app");
         let header = AppHeader {
+            before_header: &[],
             name: Located::new(0, 0, 4, 14, module_name),
             packages,
             imports,
@@ -3033,6 +3035,7 @@ mod test_parse {
         let module_name = StrLiteral::PlainLine("quicksort");
 
         let header = AppHeader {
+            before_header: &[],
             name: Located::new(0, 0, 4, 15, module_name),
             packages,
             imports,
@@ -3082,6 +3085,7 @@ mod test_parse {
             spaces_after_type_name: &[],
         };
         let header = PlatformHeader {
+            before_header: &[],
             name: Located::new(0, 0, 9, 23, pkg_name),
             requires: Vec::new_in(&arena),
             exposes: Vec::new_in(&arena),
@@ -3141,6 +3145,7 @@ mod test_parse {
             spaces_after_type_name: &[],
         };
         let header = PlatformHeader {
+            before_header: &[],
             name: Located::new(0, 0, 9, 19, pkg_name),
             requires: Vec::new_in(&arena),
             exposes: Vec::new_in(&arena),
@@ -3187,6 +3192,7 @@ mod test_parse {
         let imports = Vec::new_in(&arena);
         let module_name = ModuleName::new("Foo");
         let header = InterfaceHeader {
+            before_header: &[],
             name: Located::new(0, 0, 10, 13, module_name),
             exposes,
             imports,
@@ -3218,6 +3224,7 @@ mod test_parse {
         let imports = Vec::new_in(&arena);
         let module_name = ModuleName::new("Foo.Bar.Baz");
         let header = InterfaceHeader {
+            before_header: &[],
             name: Located::new(0, 0, 10, 21, module_name),
             exposes,
             imports,
@@ -3391,12 +3398,12 @@ mod test_parse {
         let parser = module_defs();
         let parsed = parser.parse(arena, state);
         match parsed {
-            Ok((_, _, state)) => {
-                dbg!(state);
+            Ok((_, _, _state)) => {
+                // dbg!(_state);
                 return;
             }
             Err((_, _fail, _state)) => {
-                dbg!(_fail, _state);
+                // dbg!(_fail, _state);
                 assert!(false);
             }
         }

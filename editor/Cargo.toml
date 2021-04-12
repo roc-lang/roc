@@ -1,10 +1,10 @@
 [package]
 name = "roc_editor"
 version = "0.1.0"
-authors = ["Richard Feldman <oss@rtfeldman.com>"]
+authors = ["The Roc Contributors"]
+license = "Apache-2.0"
 edition = "2018"
 description = "An editor for Roc"
-license = "Apache-2.0"
 exclude = ["src/shaders/*.spv"]
 
 [dependencies]
@@ -17,9 +17,10 @@ roc_problem = { path = "../compiler/problem" }
 roc_types = { path = "../compiler/types" }
 roc_fmt = { path = "../compiler/fmt" }
 roc_reporting = { path = "../compiler/reporting" }
+roc_solve = { path = "../compiler/solve" }
 # TODO switch to clap 3.0.0 once it's out. Tried adding clap = "~3.0.0-beta.1" and cargo wouldn't accept it
 ven_graph = { path = "../vendor/pathfinding" }
-im    = "15" # im and im-rc should always have the same version!
+im = "15" # im and im-rc should always have the same version!
 im-rc = "15" # im and im-rc should always have the same version!
 bumpalo = { version = "3.2", features = ["collections"] }
 inlinable_string = "0.1"
@@ -69,4 +70,3 @@ harness = false
 [[bench]]
 name = "edit_benchmark"
 harness = false
-
