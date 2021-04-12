@@ -5,16 +5,22 @@ extern crate indoc;
 
 use bumpalo::Bump;
 use roc_can::expected::Expected;
+use roc_collections::all::MutMap;
+use roc_editor::lang::solve;
 use roc_editor::lang::{
     constrain::constrain_expr,
+    constrain::Constraint,
     expr::{str_to_expr2, Env},
     pool::Pool,
     scope::Scope,
     types::Type2,
 };
+use roc_module::ident::{Lowercase, TagName};
+use roc_module::symbol::Symbol;
 use roc_module::symbol::{IdentIds, ModuleIds};
 use roc_region::all::Region;
-use roc_solve::module::run_solve;
+use roc_types::solved_types::Solved;
+use roc_types::subs::{Subs, Variable};
 use roc_types::{pretty_print::content_to_string, subs::VarStore, types::Type};
 
 fn ed_constraint_to_can_constraint(
@@ -44,6 +50,33 @@ fn type2_to_type(typ: &Type2) -> Type {
         Type2::Variable(var) => Type::Variable(*var),
         _ => todo!("{:?}", typ),
     }
+}
+
+fn run_solve(
+    aliases: MutMap<Symbol, roc_types::types::Alias>,
+    rigid_variables: MutMap<Variable, Lowercase>,
+    constraint: Constraint,
+    var_store: VarStore,
+) -> (Solved<Subs>, solve::Env, Vec<solve::TypeError>) {
+    let env = solve::Env {
+        vars_by_symbol: MutMap::default(),
+        aliases,
+    };
+
+    let mut subs = Subs::new(var_store.into());
+
+    for (var, name) in rigid_variables {
+        subs.rigid_var(var, name);
+    }
+
+    // Now that the module is parsed, canonicalized, and constrained,
+    // we need to type check it.
+    let mut problems = Vec::new();
+
+    // Run the solver to populate Subs.
+    let (solved_subs, solved_env) = solve::run(&env, &mut problems, subs, &constraint);
+
+    (solved_subs, solved_env, problems)
 }
 
 fn infer_eq(actual: &str, expected_str: &str) {
@@ -82,8 +115,6 @@ fn infer_eq(actual: &str, expected_str: &str) {
                 &expr,
                 Expected::NoExpectation(Type2::Variable(var)),
             );
-
-            let constraint = ed_constraint_to_can_constraint(constraint);
 
             let (mut solved, _, _) = run_solve(
                 Default::default(),
