@@ -283,7 +283,6 @@ pub fn expr2_to_markup<'a, 'b>(
             )];
 
             for (idx, field_node_id) in fields.iter_node_ids().enumerate() {
-                // let (pool_field_name, _, sub_expr2_node_id) = env.pool.get(field_node_id);
                 let record_field = env.pool.get(field_node_id);
 
                 let field_name = record_field.get_record_field_pool_str();
