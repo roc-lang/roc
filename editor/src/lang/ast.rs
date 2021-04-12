@@ -392,7 +392,7 @@ fn expr2_to_string_helper(
             out_string.push_str(&format!("{}fields: [\n", get_spacing(indent_level + 1)));
 
             let mut first_child = true;
-            //for (pool_str, var, val_node_id) in fields.iter(pool) {
+            
             for field in fields.iter(pool) {
                 if !first_child {
                     out_string.push_str(", ")
