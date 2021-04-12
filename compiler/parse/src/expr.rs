@@ -192,7 +192,9 @@ fn record_field_access<'a>() -> impl Parser<'a, &'a str, EExpr<'a>> {
     )
 }
 
-fn parse_loc_term<'a>(
+/// In some contexts we want to parse the `_` as an expression, so it can then be turned into a
+/// pattern later
+fn parse_loc_term_or_underscore<'a>(
     min_indent: u16,
     options: ExprParseOptions,
     arena: &'a Bump,
@@ -204,6 +206,27 @@ fn parse_loc_term<'a>(
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
         loc!(specialize(EExpr::Lambda, closure_help(min_indent, options))),
         loc!(underscore_expression()),
+        loc!(record_literal_help(min_indent)),
+        loc!(specialize(EExpr::List, list_literal_help(min_indent))),
+        loc!(map_with_arena!(
+            assign_or_destructure_identifier(),
+            ident_to_expr
+        )),
+    )
+    .parse(arena, state)
+}
+
+fn parse_loc_term<'a>(
+    min_indent: u16,
+    options: ExprParseOptions,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
+    one_of!(
+        loc_expr_in_parens_etc_help(min_indent),
+        loc!(specialize(EExpr::Str, string_literal_help())),
+        loc!(specialize(EExpr::Number, positive_number_literal_help())),
+        loc!(specialize(EExpr::Lambda, closure_help(min_indent, options))),
         loc!(record_literal_help(min_indent)),
         loc!(specialize(EExpr::List, list_literal_help(min_indent))),
         loc!(map_with_arena!(
@@ -264,10 +287,7 @@ fn loc_possibly_negative_or_negated_term<'a>(
                 )
             }
         )),
-        |arena, state| {
-            // TODO use parse_loc_term_better
-            parse_loc_term(min_indent, options, arena, state)
-        }
+        |arena, state| { parse_loc_term_or_underscore(min_indent, options, arena, state) }
     ]
 }
 

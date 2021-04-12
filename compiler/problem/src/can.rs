@@ -14,6 +14,12 @@ pub struct CycleEntry {
     pub expr_region: Region,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum BadPattern {
+    UnderscoreInDef,
+    Unsupported(PatternType),
+}
+
 /// Problems that can occur in the course of canonicalization.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Problem {
@@ -25,7 +31,7 @@ pub enum Problem {
     UnusedArgument(Symbol, Symbol, Region),
     PrecedenceProblem(PrecedenceProblem),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
-    UnsupportedPattern(PatternType, Region),
+    UnsupportedPattern(BadPattern, Region),
     ShadowingInAnnotation {
         original_region: Region,
         shadow: Located<Ident>,

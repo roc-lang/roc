@@ -198,7 +198,7 @@ pub fn canonicalize_pattern<'a>(
 
         Underscore(_) => match pattern_type {
             WhenBranch | FunctionArg => Pattern::Underscore,
-            ptype => unsupported_pattern(env, ptype, region),
+            TopLevelDef | DefExpr => bad_underscore(env, region),
         },
 
         NumLiteral(string) => match pattern_type {
@@ -402,7 +402,21 @@ pub fn canonicalize_pattern<'a>(
 /// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't
 /// assign to Int patterns), report it to Env and return an UnsupportedPattern runtime error pattern.
 fn unsupported_pattern(env: &mut Env, pattern_type: PatternType, region: Region) -> Pattern {
-    env.problem(Problem::UnsupportedPattern(pattern_type, region));
+    use roc_problem::can::BadPattern;
+    env.problem(Problem::UnsupportedPattern(
+        BadPattern::Unsupported(pattern_type),
+        region,
+    ));
+
+    Pattern::UnsupportedPattern(region)
+}
+
+fn bad_underscore(env: &mut Env, region: Region) -> Pattern {
+    use roc_problem::can::BadPattern;
+    env.problem(Problem::UnsupportedPattern(
+        BadPattern::UnderscoreInDef,
+        region,
+    ));
 
     Pattern::UnsupportedPattern(region)
 }
