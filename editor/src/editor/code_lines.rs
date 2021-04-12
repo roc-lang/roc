@@ -15,7 +15,10 @@ pub struct CodeLines {
 impl CodeLines {
     pub fn from_str(code_str: &str) -> CodeLines {
         CodeLines {
-            lines: code_str.split_inclusive('\n').map(|s| s.to_owned()).collect(),
+            lines: code_str
+                .split_inclusive('\n')
+                .map(|s| s.to_owned())
+                .collect(),
             nr_of_chars: code_str.len(),
         }
     }

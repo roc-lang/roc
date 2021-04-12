@@ -58,7 +58,7 @@ pub enum FloatVal {
 pub enum RecordField {
     InvalidLabelOnly(PoolStr, Variable),
     LabelOnly(PoolStr, Variable, Symbol),
-    LabeledValue(PoolStr, Variable, NodeId<Expr2>)
+    LabeledValue(PoolStr, Variable, NodeId<Expr2>),
 }
 
 #[test]
@@ -166,7 +166,7 @@ pub enum Expr2 {
     },
     // Product Types
     Record {
-        record_var: Variable,                                // 4B
+        record_var: Variable,         // 4B
         fields: PoolVec<RecordField>, // TODO ??B
     },
     /// Empty record constant
@@ -190,10 +190,10 @@ pub enum Expr2 {
         field_var: Variable,    // 4B
     },
     Update {
-        symbol: Symbol,                                // 8B
+        symbol: Symbol,                // 8B
         updates: PoolVec<RecordField>, // 8B
-        record_var: Variable,                          // 4B
-        ext_var: Variable,                             // 4B
+        record_var: Variable,          // 4B
+        ext_var: Variable,             // 4B
     },
 
     // Sum Types
@@ -311,7 +311,6 @@ pub type ExprId = NodeId<Expr2>;
 
 use RecordField::*;
 impl RecordField {
-
     pub fn get_record_field_var(&self) -> &Variable {
         match self {
             InvalidLabelOnly(_, var) => var,
@@ -319,7 +318,7 @@ impl RecordField {
             LabeledValue(_, var, _) => var,
         }
     }
-    
+
     pub fn get_record_field_pool_str(&self) -> &PoolStr {
         match self {
             InvalidLabelOnly(pool_str, _) => pool_str,
@@ -327,7 +326,7 @@ impl RecordField {
             LabeledValue(pool_str, _, _) => pool_str,
         }
     }
-    
+
     pub fn get_record_field_pool_str_mut(&mut self) -> &mut PoolStr {
         match self {
             InvalidLabelOnly(pool_str, _) => pool_str,
@@ -335,7 +334,7 @@ impl RecordField {
             LabeledValue(pool_str, _, _) => pool_str,
         }
     }
-    
+
     pub fn get_record_field_val_node_id(&self) -> Option<NodeId<Expr2>> {
         match self {
             InvalidLabelOnly(_, _) => None,
@@ -409,7 +408,7 @@ fn expr2_to_string_helper(
                             pool_str.as_str(pool),
                             var,
                         ));
-                    },
+                    }
                     RecordField::LabelOnly(pool_str, var, symbol) => {
                         out_string.push_str(&format!(
                             "{}({}, Var({:?}), Symbol({:?})",
@@ -418,7 +417,7 @@ fn expr2_to_string_helper(
                             var,
                             symbol
                         ));
-                    },
+                    }
                     RecordField::LabeledValue(pool_str, var, val_node_id) => {
                         out_string.push_str(&format!(
                             "{}({}, Var({:?}), Expr2(\n",

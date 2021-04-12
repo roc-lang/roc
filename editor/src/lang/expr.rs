@@ -1,6 +1,7 @@
 #![allow(clippy::all)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
+use crate::lang::ast::expr2_to_string;
 use crate::lang::ast::RecordField;
 use crate::lang::ast::{ClosureExtra, Expr2, ExprId, FloatVal, IntStyle, IntVal, WhenBranch};
 use crate::lang::def::References;
@@ -1014,32 +1015,57 @@ enum CanonicalizeRecordProblem {
         record_region: Region,
     },
 }
+
+enum FieldVar {
+    VarAndExprId(Variable, ExprId),
+    OnlyVar(Variable),
+}
+
 fn canonicalize_fields<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     fields: &'a [Located<roc_parse::ast::AssignedField<'a, roc_parse::ast::Expr<'a>>>],
 ) -> Result<(PoolVec<RecordField>, Output), CanonicalizeRecordProblem> {
-    let mut can_fields: MutMap<&'a str, (Variable, ExprId)> = MutMap::default();
+    let mut can_fields: MutMap<&'a str, FieldVar> = MutMap::default();
     let mut output = Output::default();
 
     for loc_field in fields.iter() {
         match canonicalize_field(env, scope, &loc_field.value) {
-            Ok((label, field_expr, field_out, field_var)) => {
-                let expr_id = env.pool.add(field_expr);
-                let replaced = can_fields.insert(label, (field_var, expr_id));
+            Ok(can_field) => {
+                match can_field {
+                    CanonicalField::LabelAndValue {
+                        label,
+                        value_expr,
+                        value_output,
+                        var,
+                    } => {
+                        let expr_id = env.pool.add(value_expr);
 
-                if let Some(_old) = replaced {
-                    //                    env.problems.push(Problem::DuplicateRecordFieldValue {
-                    //                        field_name: label,
-                    //                        field_region: loc_field.region,
-                    //                        record_region: region,
-                    //                        replaced_region: old.region,
-                    //                    });
-                    todo!()
+                        let replaced =
+                            can_fields.insert(label, FieldVar::VarAndExprId(var, expr_id));
+
+                        if let Some(_old) = replaced {
+                            //                    env.problems.push(Problem::DuplicateRecordFieldValue {
+                            //                        field_name: label,
+                            //                        field_region: loc_field.region,
+                            //                        record_region: region,
+                            //                        replaced_region: old.region,
+                            //                    });
+                            todo!()
+                        }
+
+                        output.references.union_mut(value_output.references);
+                    }
+                    CanonicalField::InvalidLabelOnly { label, var } => {
+                        let replaced = can_fields.insert(label, FieldVar::OnlyVar(var));
+
+                        if let Some(_old) = replaced {
+                            todo!()
+                        }
+                    }
                 }
-
-                output.references.union_mut(field_out.references);
             }
+
             Err(CanonicalizeFieldProblem::InvalidOptionalValue {
                 field_name: _,
                 field_region: _,
@@ -1061,10 +1087,17 @@ fn canonicalize_fields<'a>(
 
     let pool_vec = PoolVec::with_capacity(can_fields.len() as u32, env.pool);
 
-    for (node_id, (string, (var, expr_id))) in pool_vec.iter_node_ids().zip(can_fields.into_iter())
-    {
+    for (node_id, (string, field_var)) in pool_vec.iter_node_ids().zip(can_fields.into_iter()) {
         let name = PoolStr::new(string, env.pool);
-        env.pool[node_id] = RecordField::LabeledValue(name, var, expr_id);
+
+        match field_var {
+            FieldVar::VarAndExprId(var, expr_id) => {
+                env.pool[node_id] = RecordField::LabeledValue(name, var, expr_id);
+            }
+            FieldVar::OnlyVar(var) => {
+                env.pool[node_id] = RecordField::InvalidLabelOnly(name, var);
+            } // TODO RecordField::LabelOnly
+        }
     }
 
     Ok((pool_vec, output))
@@ -1076,11 +1109,23 @@ enum CanonicalizeFieldProblem {
         field_region: Region,
     },
 }
+enum CanonicalField<'a> {
+    LabelAndValue {
+        label: &'a str,
+        value_expr: Expr2,
+        value_output: Output,
+        var: Variable,
+    },
+    InvalidLabelOnly {
+        label: &'a str,
+        var: Variable,
+    }, // TODO make ValidLabelOnly
+}
 fn canonicalize_field<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     field: &'a roc_parse::ast::AssignedField<'a, roc_parse::ast::Expr<'a>>,
-) -> Result<(&'a str, Expr2, Output, Variable), CanonicalizeFieldProblem> {
+) -> Result<CanonicalField<'a>, CanonicalizeFieldProblem> {
     use roc_parse::ast::AssignedField::*;
 
     match field {
@@ -1089,7 +1134,12 @@ fn canonicalize_field<'a>(
             let field_var = env.var_store.fresh();
             let (loc_can_expr, output) = to_expr2(env, scope, &loc_expr.value, loc_expr.region);
 
-            Ok((label.value, loc_can_expr, output, field_var))
+            Ok(CanonicalField::LabelAndValue {
+                label: label.value,
+                value_expr: loc_can_expr,
+                value_output: output,
+                var: field_var,
+            })
         }
 
         OptionalValue(label, _, loc_expr) => Err(CanonicalizeFieldProblem::InvalidOptionalValue {
@@ -1098,8 +1148,13 @@ fn canonicalize_field<'a>(
         }),
 
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
-        LabelOnly(_) => {
-            panic!("Somehow a LabelOnly record field was not desugared!");
+        LabelOnly(label) => {
+            let field_var = env.var_store.fresh();
+            // TODO return ValidLabel if label points to in scope variable
+            Ok(CanonicalField::InvalidLabelOnly {
+                label: label.value,
+                var: field_var,
+            })
         }
 
         SpaceBefore(sub_field, _) | SpaceAfter(sub_field, _) => {

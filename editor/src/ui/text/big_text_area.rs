@@ -423,8 +423,8 @@ impl fmt::Debug for BigTextArea {
 
 #[cfg(test)]
 pub mod test_big_sel_text {
-    use crate::ui::text::caret_w_select::test_caret_w_select::convert_selection_to_dsl;
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_dsl_to_selection;
+    use crate::ui::text::caret_w_select::test_caret_w_select::convert_selection_to_dsl;
     use crate::ui::text::{
         big_text_area::from_str,
         big_text_area::BigTextArea,
@@ -434,7 +434,7 @@ pub mod test_big_sel_text {
     use crate::ui::ui_error::{OutOfBounds, UIResult};
     use crate::window::keyboard_input::{no_mods, Modifiers};
     use snafu::OptionExt;
-    use std::{slice::SliceIndex};
+    use std::slice::SliceIndex;
 
     fn shift_pressed() -> Modifiers {
         Modifiers {
@@ -508,8 +508,7 @@ pub mod test_big_sel_text {
         }
 
         let actual_lines = all_lines_vec(&big_text);
-        let dsl_slice =
-            convert_selection_to_dsl(big_text.caret_w_select, actual_lines).unwrap();
+        let dsl_slice = convert_selection_to_dsl(big_text.caret_w_select, actual_lines).unwrap();
         assert_eq!(dsl_slice, expected_post_lines_str);
 
         Ok(())
@@ -632,8 +631,7 @@ pub mod test_big_sel_text {
         big_text.select_all().unwrap();
 
         let big_text_lines = all_lines_vec(&big_text);
-        let post_lines_str =
-            convert_selection_to_dsl(big_text.caret_w_select, big_text_lines)?;
+        let post_lines_str = convert_selection_to_dsl(big_text.caret_w_select, big_text_lines)?;
 
         assert_eq!(post_lines_str, expected_post_lines_str);
 

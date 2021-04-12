@@ -114,16 +114,16 @@ pub fn make_caret_rect(
 
 #[cfg(test)]
 pub mod test_caret_w_select {
-    use crate::ui::ui_error::OutOfBounds;
-    use crate::ui::util::slice_get;
-    use crate::ui::ui_error::UIResult;
+    use crate::ui::text::caret_w_select::CaretWSelect;
     use crate::ui::text::selection::validate_selection;
     use crate::ui::text::text_pos::TextPos;
-    use crate::ui::text::caret_w_select::CaretWSelect;
+    use crate::ui::ui_error::OutOfBounds;
+    use crate::ui::ui_error::UIResult;
+    use crate::ui::util::slice_get;
     use core::cmp::Ordering;
     use pest::Parser;
-    use std::{collections::HashMap, slice::SliceIndex};
     use snafu::OptionExt;
+    use std::{collections::HashMap, slice::SliceIndex};
 
     #[derive(Parser)]
     #[grammar = "../tests/selection.pest"]
@@ -277,7 +277,7 @@ pub mod test_caret_w_select {
 
     fn insert_at_pos(lines: &mut [String], pos: TextPos, insert_char: char) -> UIResult<()> {
         let line = get_mut_res(pos.line, lines)?;
-        
+
         let mut chars: Vec<char> = line.chars().collect();
         chars.insert(pos.column, insert_char);
 
