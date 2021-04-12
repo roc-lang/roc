@@ -672,7 +672,6 @@ pub mod test_ed_update {
             '.',
         )?;
 
-        // TODO char_seq
         Ok(())
     }
 
