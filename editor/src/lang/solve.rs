@@ -1,12 +1,14 @@
+#![allow(clippy::all)]
+#![allow(dead_code)]
 use crate::lang::constrain::Constraint::{self, *};
+use crate::lang::pool::Pool;
 use crate::lang::types::Type2;
 use roc_can::expected::{Expected, PExpected};
-use roc_collections::all::{ImMap, MutMap};
+use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
-use roc_types::types::Type;
 use roc_types::types::{Alias, Category, ErrorType, PatternCategory, RecordField};
 use roc_unify::unify::unify;
 use roc_unify::unify::Unified::*;
@@ -132,18 +134,20 @@ struct State {
 }
 
 pub fn run(
+    mempool: &mut Pool,
     env: &Env,
     problems: &mut Vec<TypeError>,
     mut subs: Subs,
     constraint: &Constraint,
 ) -> (Solved<Subs>, Env) {
-    let env = run_in_place(env, problems, &mut subs, constraint);
+    let env = run_in_place(mempool, env, problems, &mut subs, constraint);
 
     (Solved(subs), env)
 }
 
 /// Modify an existing subs in-place instead
 pub fn run_in_place(
+    mempool: &mut Pool,
     env: &Env,
     problems: &mut Vec<TypeError>,
     subs: &mut Subs,
@@ -156,6 +160,7 @@ pub fn run_in_place(
     };
     let rank = Rank::toplevel();
     let state = solve(
+        mempool,
         env,
         state,
         rank,
@@ -171,7 +176,8 @@ pub fn run_in_place(
 
 #[allow(clippy::too_many_arguments)]
 fn solve(
-    env: &Env,
+    mempool: &mut Pool,
+    _env: &Env,
     state: State,
     rank: Rank,
     pools: &mut Pools,
@@ -191,8 +197,9 @@ fn solve(
         //            copy
         //        }
         Eq(typ, expectation, category, region) => {
-            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+            let actual = type_to_var(mempool, subs, rank, pools, cached_aliases, typ);
             let expected = type_to_var(
+                mempool,
                 subs,
                 rank,
                 pools,
@@ -613,26 +620,28 @@ fn solve(
 }
 
 fn type_to_var(
+    mempool: &mut Pool,
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
     cached: &mut MutMap<Symbol, Variable>,
     typ: &Type2,
 ) -> Variable {
-    type_to_variable(subs, rank, pools, cached, typ)
+    type_to_variable(mempool, subs, rank, pools, cached, typ)
 }
 
 /// Abusing existing functions for our purposes
 /// this is to put a solved type back into subs
-pub fn insert_type_into_subs(subs: &mut Subs, typ: &Type2) -> Variable {
+pub fn insert_type_into_subs(mempool: &mut Pool, subs: &mut Subs, typ: &Type2) -> Variable {
     let rank = Rank::NONE;
     let mut pools = Pools::default();
     let mut cached = MutMap::default();
 
-    type_to_variable(subs, rank, &mut pools, &mut cached, typ)
+    type_to_variable(mempool, subs, rank, &mut pools, &mut cached, typ)
 }
 
 fn type_to_variable(
+    mempool: &mut Pool,
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
@@ -645,10 +654,10 @@ fn type_to_variable(
         Variable(var) => *var,
         Apply(symbol, args) => {
             let mut arg_vars = Vec::with_capacity(args.len());
-
-            //            for arg in args {
-            //                arg_vars.push(type_to_variable(subs, rank, pools, cached, arg))
-            //            }
+            for var_id in args.iter_node_ids() {
+                let arg = mempool.get(var_id);
+                arg_vars.push(type_to_variable(mempool, subs, rank, pools, cached, arg))
+            }
 
             let flat_type = FlatType::Apply(*symbol, arg_vars);
             let content = Content::Structure(flat_type);
@@ -656,9 +665,49 @@ fn type_to_variable(
             register(subs, rank, pools, content)
         }
 
+        EmptyRec => roc_types::subs::Variable::EMPTY_RECORD,
+        EmptyTagUnion => roc_types::subs::Variable::EMPTY_TAG_UNION,
+
+        Record(fields, ext_id) => {
+            let mut field_vars = MutMap::default();
+
+            for node_id in fields.iter_node_ids() {
+                use RecordField::*;
+
+                let (field, field_type) = mempool.get(node_id);
+
+                let field_var = match field_type {
+                    Required(typ) => {
+                        Required(type_to_variable(mempool, subs, rank, pools, cached, typ))
+                    }
+                    Optional(typ) => {
+                        Optional(type_to_variable(mempool, subs, rank, pools, cached, typ))
+                    }
+                    Demanded(typ) => {
+                        Demanded(type_to_variable(mempool, subs, rank, pools, cached, typ))
+                    }
+                };
+
+                field_vars.insert(field.as_str(mempool).into(), field_var);
+            }
+
+            let ext = mempool.get(*ext_id);
+            let temp_ext_var = type_to_variable(mempool, subs, rank, pools, cached, ext);
+            let new_ext_var = match roc_types::pretty_print::chase_ext_record(
+                subs,
+                temp_ext_var,
+                &mut field_vars,
+            ) {
+                Ok(()) => roc_types::subs::Variable::EMPTY_RECORD,
+                Err((new, _)) => new,
+            };
+
+            let content = Content::Structure(FlatType::Record(field_vars, new_ext_var));
+
+            register(subs, rank, pools, content)
+        }
+
         other => todo!("not implemented {:?}", &other),
-        //        EmptyRec => Variable::EMPTY_RECORD,
-        //        EmptyTagUnion => Variable::EMPTY_TAG_UNION,
         //
         //        // This case is important for the rank of boolean variables
         //        Function(args, closure_type, ret_type) => {
@@ -671,35 +720,6 @@ fn type_to_variable(
         //            let ret_var = type_to_variable(subs, rank, pools, cached, ret_type);
         //            let closure_var = type_to_variable(subs, rank, pools, cached, closure_type);
         //            let content = Content::Structure(FlatType::Func(arg_vars, closure_var, ret_var));
-        //
-        //            register(subs, rank, pools, content)
-        //        }
-        //        Record(fields, ext) => {
-        //            let mut field_vars = MutMap::default();
-        //
-        //            for (field, field_type) in fields {
-        //                use RecordField::*;
-        //
-        //                let field_var = match field_type {
-        //                    Required(typ) => Required(type_to_variable(subs, rank, pools, cached, typ)),
-        //                    Optional(typ) => Optional(type_to_variable(subs, rank, pools, cached, typ)),
-        //                    Demanded(typ) => Demanded(type_to_variable(subs, rank, pools, cached, typ)),
-        //                };
-        //
-        //                field_vars.insert(field.clone(), field_var);
-        //            }
-        //
-        //            let temp_ext_var = type_to_variable(subs, rank, pools, cached, ext);
-        //            let new_ext_var = match roc_types::pretty_print::chase_ext_record(
-        //                subs,
-        //                temp_ext_var,
-        //                &mut field_vars,
-        //            ) {
-        //                Ok(()) => Variable::EMPTY_RECORD,
-        //                Err((new, _)) => new,
-        //            };
-        //
-        //            let content = Content::Structure(FlatType::Record(field_vars, new_ext_var));
         //
         //            register(subs, rank, pools, content)
         //        }

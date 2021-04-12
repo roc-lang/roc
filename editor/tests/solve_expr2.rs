@@ -15,44 +15,16 @@ use roc_editor::lang::{
     scope::Scope,
     types::Type2,
 };
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_module::symbol::{IdentIds, ModuleIds};
 use roc_region::all::Region;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, Variable};
-use roc_types::{pretty_print::content_to_string, subs::VarStore, types::Type};
-
-fn ed_constraint_to_can_constraint(
-    constraint: roc_editor::lang::constrain::Constraint,
-) -> roc_can::constraint::Constraint {
-    match constraint {
-        roc_editor::lang::constrain::Constraint::Eq(typ, expected, category, region) => {
-            let new_typ = type2_to_type(&typ);
-            let expected_typ = expected.get_type_ref();
-
-            let expected_typ = type2_to_type(expected_typ);
-
-            roc_can::constraint::Constraint::Eq(
-                new_typ,
-                expected.replace(expected_typ),
-                category,
-                region,
-            )
-        }
-        _ => todo!("{:?}", constraint),
-    }
-}
-
-fn type2_to_type(typ: &Type2) -> Type {
-    match typ {
-        Type2::Apply(symbol, _) => Type::Apply(*symbol, Vec::new()),
-        Type2::Variable(var) => Type::Variable(*var),
-        _ => todo!("{:?}", typ),
-    }
-}
+use roc_types::{pretty_print::content_to_string, subs::VarStore};
 
 fn run_solve(
+    mempool: &mut Pool,
     aliases: MutMap<Symbol, roc_types::types::Alias>,
     rigid_variables: MutMap<Variable, Lowercase>,
     constraint: Constraint,
@@ -74,7 +46,7 @@ fn run_solve(
     let mut problems = Vec::new();
 
     // Run the solver to populate Subs.
-    let (solved_subs, solved_env) = solve::run(&env, &mut problems, subs, &constraint);
+    let (solved_subs, solved_env) = solve::run(mempool, &env, &mut problems, subs, &constraint);
 
     (solved_subs, solved_env, problems)
 }
@@ -116,18 +88,29 @@ fn infer_eq(actual: &str, expected_str: &str) {
                 Expected::NoExpectation(Type2::Variable(var)),
             );
 
+            let Env {
+                pool,
+                var_store: ref_var_store,
+                ..
+            } = env;
+
+            // extract the var_store out of the env again
+            let mut var_store = VarStore::default();
+            std::mem::swap(ref_var_store, &mut var_store);
+
             let (mut solved, _, _) = run_solve(
+                pool,
                 Default::default(),
                 Default::default(),
                 constraint,
                 var_store,
             );
 
-            let mut subs = solved.inner_mut();
+            let subs = solved.inner_mut();
 
             let content = subs.get(var).content;
 
-            let actual_str = content_to_string(content, &mut subs, mod_id, &Default::default());
+            let actual_str = content_to_string(content, &subs, mod_id, &Default::default());
 
             assert_eq!(actual_str, expected_str);
         }
