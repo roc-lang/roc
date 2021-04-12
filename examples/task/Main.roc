@@ -5,19 +5,15 @@ app "task-example"
 
 main : Task.Task {} []
 main =
-    when Path.fromStr "vendor" is
+    when Path.fromStr "thing.txt" is
         Ok path ->
-            {} <- Task.await (Task.putLine "Our Cargo.toml:")
+            {} <- Task.await (Task.putLine "Writing to file")
 
-            result <- Task.attempt (File.readUtf8 path)
-
-            # pathStr = Path.toStr path
+            result <- Task.attempt (File.writeUtf8 path "zig is awesome")
 
             when result is
-                Ok contents -> Task.putLine contents
-                Err (FileNotFound _) -> Task.putLine "file not found"
-                Err (BadUtf8 _ _) -> Task.putLine "bad utf8"
-                Err (FileWasDir _) -> Task.putLine "file was dir"
-                Err _ -> Task.putLine "Error retrieving file - error"
+                Ok _ -> Task.putLine "successfully wrote to file"
+                Err BadThing -> Task.putLine "error writing to file"
+                Err _ -> Task.putLine "something worse"
 
         _ -> Task.putLine "invalid path"
