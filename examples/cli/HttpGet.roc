@@ -5,7 +5,7 @@ app "http-get"
 
 main : Task.Task {} *
 main =
-    {} <- await (Stdout.line "What URL should I get?")
+    _ <- await (Stdout.line "What URL should I get?")
 
     url <- await Stdin.line
 
