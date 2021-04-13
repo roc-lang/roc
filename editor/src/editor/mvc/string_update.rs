@@ -46,14 +46,12 @@ pub fn update_small_string(
                 unreachable!()
             }
         } else {
-            return Ok(InputOutcome::Ignored);
-            // TODO reenable when #1138 is fixed
-            /*let mut new_str = old_array_str.as_str().to_owned();
+            let mut new_str = old_array_str.as_str().to_owned();
             new_str.push(*new_char);
 
             let new_ast_node = Expr2::Str(PoolStr::new(&new_str, ed_model.module.env.pool));
 
-            ed_model.module.env.pool.set(ast_node_id, new_ast_node);*/
+            ed_model.module.env.pool.set(ast_node_id, new_ast_node);
         }
 
         content_str_mut.insert_str(node_caret_offset, new_input);
