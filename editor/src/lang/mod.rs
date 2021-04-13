@@ -7,4 +7,5 @@ mod pattern;
 pub mod pool;
 pub mod roc_file;
 pub mod scope;
+pub mod solve;
 pub mod types;
