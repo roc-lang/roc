@@ -67,8 +67,13 @@ pub fn init_model<'a>(
     } else {
         let ast_root = &module.env.pool.get(ast_root_id);
 
-        let temp_markup_root_id =
-            expr2_to_markup(code_arena, &mut module.env, ast_root, &mut markup_node_pool);
+        let temp_markup_root_id = expr2_to_markup(
+            code_arena,
+            &mut module.env,
+            ast_root,
+            ast_root_id,
+            &mut markup_node_pool,
+        );
         set_parent_for_all(temp_markup_root_id, &mut markup_node_pool);
 
         temp_markup_root_id
@@ -122,6 +127,9 @@ pub struct EdModule<'a> {
     pub ast_root_id: NodeId<Expr2>,
 }
 
+// for debugging
+// use crate::lang::ast::expr2_to_string;
+
 impl<'a> EdModule<'a> {
     pub fn new(code_str: &'a str, mut env: Env<'a>, ast_arena: &'a Bump) -> EdResult<EdModule<'a>> {
         if !code_str.is_empty() {
@@ -135,6 +143,10 @@ impl<'a> EdModule<'a> {
                 Ok((expr2, _output)) => {
                     let ast_root_id = env.pool.add(expr2);
 
+                    // for debugging
+                    // let expr2_str = expr2_to_string(ast_root_id, env.pool);
+                    // println!("expr2_string: {}", expr2_str);
+
                     Ok(EdModule { env, ast_root_id })
                 }
                 Err(err) => Err(ParseError {
@@ -146,5 +158,87 @@ impl<'a> EdModule<'a> {
 
             Ok(EdModule { env, ast_root_id })
         }
+    }
+}
+
+#[cfg(test)]
+pub mod test_ed_model {
+    use crate::editor::ed_error::EdResult;
+    use crate::editor::mvc::ed_model;
+    use crate::lang::expr::Env;
+    use crate::lang::pool::Pool;
+    use crate::ui::text::caret_w_select::test_caret_w_select::convert_dsl_to_selection;
+    use crate::ui::text::caret_w_select::test_caret_w_select::convert_selection_to_dsl;
+    use crate::ui::text::lines::SelectableLines;
+    use crate::ui::ui_error::UIResult;
+    use bumpalo::collections::String as BumpString;
+    use bumpalo::Bump;
+    use ed_model::EdModel;
+    use roc_module::symbol::{IdentIds, ModuleIds};
+    use roc_types::subs::VarStore;
+    use std::path::Path;
+
+    pub fn init_dummy_model<'a>(
+        code_str: &'a BumpString,
+        ed_model_refs: &'a mut EdModelRefs,
+    ) -> EdResult<EdModel<'a>> {
+        let file_path = Path::new("");
+
+        let dep_idents = IdentIds::exposed_builtins(8);
+
+        let exposed_ident_ids = IdentIds::default();
+        let mod_id = ed_model_refs.module_ids.get_or_insert(&"ModId123".into());
+
+        let env = Env::new(
+            mod_id,
+            &ed_model_refs.env_arena,
+            &mut ed_model_refs.env_pool,
+            &mut ed_model_refs.var_store,
+            dep_idents,
+            &ed_model_refs.module_ids,
+            exposed_ident_ids,
+        );
+
+        ed_model::init_model(&code_str, file_path, env, &ed_model_refs.code_arena)
+    }
+
+    pub struct EdModelRefs {
+        code_arena: Bump,
+        env_arena: Bump,
+        env_pool: Pool,
+        var_store: VarStore,
+        module_ids: ModuleIds,
+    }
+
+    pub fn init_model_refs() -> EdModelRefs {
+        EdModelRefs {
+            code_arena: Bump::new(),
+            env_arena: Bump::new(),
+            env_pool: Pool::with_capacity(1024),
+            var_store: VarStore::default(),
+            module_ids: ModuleIds::default(),
+        }
+    }
+
+    pub fn ed_model_from_dsl<'a>(
+        clean_code_str: &'a BumpString,
+        code_lines: &[&str],
+        ed_model_refs: &'a mut EdModelRefs,
+    ) -> Result<EdModel<'a>, String> {
+        let code_lines_vec: Vec<String> = (*code_lines).iter().map(|s| s.to_string()).collect();
+        let caret_w_select = convert_dsl_to_selection(&code_lines_vec)?;
+
+        let mut ed_model = init_dummy_model(clean_code_str, ed_model_refs)?;
+
+        ed_model.set_caret(caret_w_select.caret_pos);
+
+        Ok(ed_model)
+    }
+
+    pub fn ed_model_to_dsl(ed_model: &EdModel) -> UIResult<Vec<String>> {
+        let caret_w_select = ed_model.caret_w_select_vec.first().0;
+        let code_lines = ed_model.code_lines.lines.clone();
+
+        convert_selection_to_dsl(caret_w_select, code_lines)
     }
 }
