@@ -2,7 +2,7 @@ use roc_collections::all::MutSet;
 use roc_module::ident::Lowercase;
 use roc_parse::parser::{Col, Row};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
-use roc_problem::can::{FloatErrorKind, IntErrorKind, Problem, RuntimeError};
+use roc_problem::can::{BadPattern, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
 use roc_region::all::Region;
 use std::path::PathBuf;
 
@@ -103,7 +103,11 @@ pub fn can_problem<'b>(
                 },
                 alloc.region(region),
             ]),
-        Problem::UnsupportedPattern(pattern_type, region) => {
+        Problem::UnsupportedPattern(BadPattern::UnderscoreInDef, region) => alloc.stack(vec![
+            alloc.reflow("Underscore patterns are not allowed in definitions"),
+            alloc.region(region),
+        ]),
+        Problem::UnsupportedPattern(BadPattern::Unsupported(pattern_type), region) => {
             use roc_parse::pattern::PatternType::*;
 
             let this_thing = match pattern_type {

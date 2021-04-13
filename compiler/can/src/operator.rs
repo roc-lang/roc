@@ -119,6 +119,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
         | Str(_)
         | AccessorFunction(_)
         | Var { .. }
+        | Underscore { .. }
         | MalformedIdent(_, _)
         | MalformedClosure
         | PrecedenceConflict { .. }

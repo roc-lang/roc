@@ -153,7 +153,7 @@ pub fn to_pattern2<'a>(
 
         Underscore(_) => match pattern_type {
             WhenBranch | FunctionArg => Pattern2::Underscore,
-            ptype => unsupported_pattern(env, ptype, region),
+            TopLevelDef | DefExpr => underscore_in_def(env, region),
         },
 
         FloatLiteral(ref string) => match pattern_type {
@@ -521,7 +521,21 @@ fn unsupported_pattern<'a>(
     pattern_type: PatternType,
     region: Region,
 ) -> Pattern2 {
-    env.problem(Problem::UnsupportedPattern(pattern_type, region));
+    use roc_problem::can::BadPattern;
+    env.problem(Problem::UnsupportedPattern(
+        BadPattern::Unsupported(pattern_type),
+        region,
+    ));
+
+    Pattern2::UnsupportedPattern(region)
+}
+
+fn underscore_in_def<'a>(env: &mut Env<'a>, region: Region) -> Pattern2 {
+    use roc_problem::can::BadPattern;
+    env.problem(Problem::UnsupportedPattern(
+        BadPattern::UnderscoreInDef,
+        region,
+    ));
 
     Pattern2::UnsupportedPattern(region)
 }
