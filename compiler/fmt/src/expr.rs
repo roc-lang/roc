@@ -30,6 +30,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
             | Access(_, _)
             | AccessorFunction(_)
             | Var { .. }
+            | Underscore { .. }
             | MalformedIdent(_, _)
             | MalformedClosure
             | GlobalTag(_)
@@ -188,6 +189,10 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 }
 
                 buf.push_str(ident);
+            }
+            Underscore(name) => {
+                buf.push('_');
+                buf.push_str(name);
             }
             Apply(loc_expr, loc_args, _) => {
                 if apply_needs_parens {

@@ -89,4 +89,16 @@ impl<T> Expected<T> {
             }
         }
     }
+
+    pub fn replace_ref<U>(&self, new: U) -> Expected<U> {
+        match self {
+            Expected::NoExpectation(_val) => Expected::NoExpectation(new),
+            Expected::ForReason(reason, _val, region) => {
+                Expected::ForReason(reason.clone(), new, *region)
+            }
+            Expected::FromAnnotation(pattern, size, source, _val) => {
+                Expected::FromAnnotation(pattern.clone(), *size, *source, new)
+            }
+        }
+    }
 }

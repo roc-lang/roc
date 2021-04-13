@@ -411,6 +411,7 @@ pub enum EExpr<'a> {
     If(If<'a>, Row, Col),
 
     Lambda(ELambda<'a>, Row, Col),
+    Underscore(Row, Col),
 
     InParens(EInParens<'a>, Row, Col),
     Record(ERecord<'a>, Row, Col),
