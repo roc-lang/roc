@@ -1146,7 +1146,7 @@ impl<'a> LoadStart<'a> {
         let (root_id, root_msg) = {
             let root_start_time = SystemTime::now();
 
-            load_filename(
+            let res_loaded = load_filename(
                 arena,
                 filename,
                 true,
@@ -1154,7 +1154,26 @@ impl<'a> LoadStart<'a> {
                 Arc::clone(&arc_modules),
                 Arc::clone(&ident_ids_by_module),
                 root_start_time,
-            )?
+            );
+
+            match res_loaded {
+                Ok(good) => good,
+
+                Err(LoadingProblem::ParsingFailed(problem)) => {
+                    let module_ids = Arc::try_unwrap(arc_modules)
+                        .unwrap_or_else(|_| {
+                            panic!("There were still outstanding Arc references to module_ids")
+                        })
+                        .into_inner()
+                        .into_module_ids();
+
+                    // if parsing failed, this module did not add any identifiers
+                    let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+                    let buf = to_parse_problem_report(problem, module_ids, root_exposed_ident_ids);
+                    return Err(LoadingProblem::FormattedReport(buf));
+                }
+                Err(e) => return Err(e),
+            }
         };
 
         Ok(LoadStart {
@@ -3224,7 +3243,7 @@ fn fabricate_pkg_config_module<'a>(
         app_module_id,
         packages: &[],
         provides,
-        requires: header.requires.clone().into_bump_slice(),
+        requires: arena.alloc([header.requires.signature.clone()]),
         imports: header.imports.clone().into_bump_slice(),
     };
 
