@@ -111,3 +111,194 @@ pub fn make_caret_rect(
         color: ui_theme.caret,
     }
 }
+
+#[cfg(test)]
+pub mod test_caret_w_select {
+    use crate::ui::text::caret_w_select::CaretWSelect;
+    use crate::ui::text::selection::validate_selection;
+    use crate::ui::text::text_pos::TextPos;
+    use crate::ui::ui_error::OutOfBounds;
+    use crate::ui::ui_error::UIResult;
+    use crate::ui::util::slice_get;
+    use core::cmp::Ordering;
+    use pest::Parser;
+    use snafu::OptionExt;
+    use std::{collections::HashMap, slice::SliceIndex};
+
+    #[derive(Parser)]
+    #[grammar = "../tests/selection.pest"]
+    pub struct LineParser;
+
+    // Retrieve selection and position from formatted string
+    pub fn convert_dsl_to_selection(lines: &[String]) -> Result<CaretWSelect, String> {
+        let lines_str: String = lines.join("");
+
+        let parsed = LineParser::parse(Rule::linesWithSelect, &lines_str)
+            .expect("Selection test DSL parsing failed");
+
+        let mut caret_opt: Option<(usize, usize)> = None;
+        let mut sel_start_opt: Option<(usize, usize)> = None;
+        let mut sel_end_opt: Option<(usize, usize)> = None;
+        let mut line_nr = 0;
+        let mut col_nr = 0;
+
+        for line in parsed {
+            for elt in line.into_inner() {
+                match elt.as_rule() {
+                    Rule::optCaret => {
+                        if elt.as_span().as_str() == "┃" {
+                            if caret_opt.is_some() {
+                                return Err(
+                                    "Multiple carets found, there should be only one".to_owned()
+                                );
+                            } else {
+                                caret_opt = Some((line_nr, col_nr));
+                            }
+                        }
+                    }
+                    Rule::optSelStart => {
+                        if sel_start_opt.is_some() {
+                            if elt.as_span().as_str() == "❮" {
+                                return Err("Found start of selection more than once, there should be only one".to_owned());
+                            }
+                        } else if elt.as_span().as_str() == "❮" {
+                            sel_start_opt = Some((line_nr, col_nr));
+                        }
+                    }
+                    Rule::optSelEnd => {
+                        if sel_end_opt.is_some() {
+                            if elt.as_span().as_str() == "❯" {
+                                return Err("Found end of selection more than once, there should be only one".to_owned());
+                            }
+                        } else if elt.as_span().as_str() == "❯" {
+                            sel_end_opt = Some((line_nr, col_nr));
+                        }
+                    }
+                    Rule::text => {
+                        let split_str = elt
+                            .as_span()
+                            .as_str()
+                            .split('\n')
+                            .into_iter()
+                            .collect::<Vec<&str>>();
+
+                        if split_str.len() > 1 {
+                            line_nr += split_str.len() - 1;
+                            col_nr = 0
+                        }
+                        if let Some(last_str) = split_str.last() {
+                            col_nr += last_str.len()
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Make sure return makes sense
+        if let Some((line, column)) = caret_opt {
+            let caret_pos = TextPos { line, column };
+            if sel_start_opt.is_none() && sel_end_opt.is_none() {
+                Ok(CaretWSelect::new(caret_pos, None))
+            } else if let Some((start_line, start_column)) = sel_start_opt {
+                if let Some((end_line, end_column)) = sel_end_opt {
+                    Ok(CaretWSelect::new(
+                        caret_pos,
+                        Some(
+                            validate_selection(
+                                TextPos {
+                                    line: start_line,
+                                    column: start_column,
+                                },
+                                TextPos {
+                                    line: end_line,
+                                    column: end_column,
+                                },
+                            )
+                            .unwrap(),
+                        ),
+                    ))
+                } else {
+                    Err("Selection end '❯' was not found, but selection start '❮' was. Bad input string.".to_owned())
+                }
+            } else {
+                Err("Selection start '❮' was not found, but selection end '❯' was. Bad input string.".to_owned())
+            }
+        } else {
+            Err("No caret was found in lines.".to_owned())
+        }
+    }
+
+    // show selection and caret position as symbols in lines for easy testing
+    pub fn convert_selection_to_dsl(
+        caret_w_select: CaretWSelect,
+        lines: Vec<String>,
+    ) -> UIResult<Vec<String>> {
+        let selection_opt = caret_w_select.selection_opt;
+        let caret_pos = caret_w_select.caret_pos;
+        let mut mut_lines = lines;
+
+        if let Some(sel) = selection_opt {
+            let mut to_insert = vec![(sel.start_pos, '❮'), (sel.end_pos, '❯'), (caret_pos, '┃')];
+            let symbol_map: HashMap<char, usize> =
+                [('❮', 2), ('❯', 0), ('┃', 1)].iter().cloned().collect();
+
+            // sort for nice printing
+            to_insert.sort_by(|a, b| {
+                let pos_cmp = a.0.cmp(&b.0);
+                if pos_cmp == Ordering::Equal {
+                    symbol_map.get(&a.1).cmp(&symbol_map.get(&b.1))
+                } else {
+                    pos_cmp
+                }
+            });
+
+            // insert symbols into text lines
+            for i in 0..to_insert.len() {
+                let (pos, insert_char) = *slice_get(i, &to_insert)?;
+
+                insert_at_pos(&mut mut_lines, pos, insert_char)?;
+
+                // shift position of following symbols now that symbol is inserted
+                for j in i..to_insert.len() {
+                    let (old_pos, _) = get_mut_res(j, &mut to_insert)?;
+
+                    if old_pos.line == pos.line {
+                        old_pos.column += 1;
+                    }
+                }
+            }
+        } else {
+            insert_at_pos(&mut mut_lines, caret_pos, '┃')?;
+        }
+
+        Ok(mut_lines)
+    }
+
+    fn insert_at_pos(lines: &mut [String], pos: TextPos, insert_char: char) -> UIResult<()> {
+        let line = get_mut_res(pos.line, lines)?;
+
+        let mut chars: Vec<char> = line.chars().collect();
+        chars.insert(pos.column, insert_char);
+
+        *line = chars.into_iter().collect::<String>();
+
+        Ok(())
+    }
+
+    // It's much nicer to have get_mut return a Result with clear error than an Option
+    fn get_mut_res<T>(
+        index: usize,
+        vec: &mut [T],
+    ) -> UIResult<&mut <usize as SliceIndex<[T]>>::Output> {
+        let vec_len = vec.len();
+
+        let elt_ref = vec.get_mut(index).context(OutOfBounds {
+            index,
+            collection_name: "Slice",
+            len: vec_len,
+        })?;
+
+        Ok(elt_ref)
+    }
+}

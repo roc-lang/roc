@@ -3060,6 +3060,7 @@ dependencies = [
  "roc_reporting",
  "roc_solve",
  "roc_types",
+ "roc_unify",
  "ropey",
  "serde",
  "snafu",

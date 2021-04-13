@@ -192,6 +192,30 @@ fn record_field_access<'a>() -> impl Parser<'a, &'a str, EExpr<'a>> {
     )
 }
 
+/// In some contexts we want to parse the `_` as an expression, so it can then be turned into a
+/// pattern later
+fn parse_loc_term_or_underscore<'a>(
+    min_indent: u16,
+    options: ExprParseOptions,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Located<Expr<'a>>, EExpr<'a>> {
+    one_of!(
+        loc_expr_in_parens_etc_help(min_indent),
+        loc!(specialize(EExpr::Str, string_literal_help())),
+        loc!(specialize(EExpr::Number, positive_number_literal_help())),
+        loc!(specialize(EExpr::Lambda, closure_help(min_indent, options))),
+        loc!(underscore_expression()),
+        loc!(record_literal_help(min_indent)),
+        loc!(specialize(EExpr::List, list_literal_help(min_indent))),
+        loc!(map_with_arena!(
+            assign_or_destructure_identifier(),
+            ident_to_expr
+        )),
+    )
+    .parse(arena, state)
+}
+
 fn parse_loc_term<'a>(
     min_indent: u16,
     options: ExprParseOptions,
@@ -211,6 +235,26 @@ fn parse_loc_term<'a>(
         )),
     )
     .parse(arena, state)
+}
+
+fn underscore_expression<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
+    move |arena: &'a Bump, state: State<'a>| {
+        let (_, _, next_state) = word1(b'_', EExpr::Underscore).parse(arena, state)?;
+
+        let lowercase_ident_expr = {
+            let row = state.line;
+            let col = state.column;
+
+            specialize(move |_, _, _| EExpr::End(row, col), lowercase_ident())
+        };
+
+        let (_, output, final_state) = optional(lowercase_ident_expr).parse(arena, next_state)?;
+
+        match output {
+            Some(name) => Ok((MadeProgress, Expr::Underscore(name), final_state)),
+            None => Ok((MadeProgress, Expr::Underscore(&""), final_state)),
+        }
+    }
 }
 
 fn loc_possibly_negative_or_negated_term<'a>(
@@ -243,10 +287,7 @@ fn loc_possibly_negative_or_negated_term<'a>(
                 )
             }
         )),
-        |arena, state| {
-            // TODO use parse_loc_term_better
-            parse_loc_term(min_indent, options, arena, state)
-        }
+        |arena, state| { parse_loc_term_or_underscore(min_indent, options, arena, state) }
     ]
 }
 
@@ -1316,6 +1357,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
                 Ok(Pattern::QualifiedIdentifier { module_name, ident })
             }
         }
+        Expr::Underscore(opt_name) => Ok(Pattern::Underscore(opt_name)),
         Expr::GlobalTag(value) => Ok(Pattern::GlobalTag(value)),
         Expr::PrivateTag(value) => Ok(Pattern::PrivateTag(value)),
         Expr::Apply(loc_val, loc_args, _) => {

@@ -12,9 +12,9 @@ use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::editor::util::index_of;
 use crate::lang::ast::Expr2;
+use crate::lang::ast::RecordField;
 use crate::lang::pool::{NodeId, PoolStr, PoolVec};
 use crate::ui::text::text_pos::TextPos;
-use roc_types::subs::Variable;
 use snafu::OptionExt;
 
 pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
@@ -114,9 +114,7 @@ pub fn update_empty_record(
         let field_name = PoolStr::new(new_input, &mut ed_model.module.env.pool);
         let field_var = ed_model.module.env.var_store.fresh();
         //TODO actually check if field_str belongs to a previously defined variable
-        let field_val = Expr2::InvalidLookup(PoolStr::new(new_input, ed_model.module.env.pool));
-        let field_val_id = ed_model.module.env.pool.add(field_val);
-        let first_field = (field_name, field_var, field_val_id);
+        let first_field = RecordField::InvalidLabelOnly(field_name, field_var);
 
         let fields = PoolVec::new(vec![first_field].into_iter(), &mut ed_model.module.env.pool);
 
@@ -199,7 +197,11 @@ pub fn update_record_colon(
                     .next()
                     .with_context(|| RecordWithoutFields {})?;
 
-                first_field_mut.2 = new_field_val_id;
+                *first_field_mut = RecordField::LabeledValue(
+                    *first_field_mut.get_record_field_pool_str(),
+                    *first_field_mut.get_record_field_var(),
+                    new_field_val_id,
+                );
 
                 // update Markup
                 let record_colon = nodes::COLON;
@@ -265,7 +267,7 @@ pub fn update_record_field(
     new_input: &str,
     old_caret_pos: TextPos,
     curr_mark_node_id: MarkNodeId,
-    record_fields: &PoolVec<(PoolStr, Variable, NodeId<Expr2>)>,
+    record_fields: &PoolVec<RecordField>,
     ed_model: &mut EdModel,
 ) -> EdResult<InputOutcome> {
     // update MarkupNode
@@ -274,6 +276,17 @@ pub fn update_record_field(
     let node_caret_offset = ed_model
         .grid_node_map
         .get_offset_to_node_id(old_caret_pos, curr_mark_node_id)?;
+
+    if node_caret_offset == 0 {
+        let first_char_opt = new_input.chars().next();
+        let first_char_is_num = first_char_opt.unwrap_or('0').is_ascii_digit();
+
+        // variable name can't start with number
+        if first_char_is_num {
+            return Ok(InputOutcome::Ignored);
+        }
+    }
+
     content_str_mut.insert_str(node_caret_offset, new_input);
 
     // update caret
@@ -293,32 +306,51 @@ pub fn update_record_field(
         .next()
         .with_context(|| RecordWithoutFields {})?;
 
+    let field_pool_str = first_field
+        .get_record_field_pool_str()
+        .as_str(ed_model.module.env.pool);
+
     let mut new_field_name = String::new();
 
     // -push old field name
-    new_field_name.push_str(first_field.0.as_str(ed_model.module.env.pool));
+    new_field_name.push_str(field_pool_str);
     new_field_name.insert_str(node_caret_offset, new_input);
-
-    // -clone to prevent borrow issues
-    let field_val_id = first_field.2;
-
-    let new_pool_str = PoolStr::new(&new_field_name, &mut ed_model.module.env.pool);
-
-    if let Expr2::InvalidLookup(_) = ed_model.module.env.pool.get(field_val_id) {
-        ed_model
-            .module
-            .env
-            .pool
-            .set(field_val_id, Expr2::InvalidLookup(new_pool_str));
-    }
+    let new_field_pool_str = PoolStr::new(&new_field_name, &mut ed_model.module.env.pool);
 
     let first_field_mut = record_fields
         .iter_mut(ed_model.module.env.pool)
         .next()
         .with_context(|| RecordWithoutFields {})?;
 
-    // -update field name
-    first_field_mut.0 = new_pool_str;
+    let field_pool_str_mut = first_field_mut.get_record_field_pool_str_mut();
+    *field_pool_str_mut = new_field_pool_str;
+
+    // because borrow issues
+    let first_field_b = record_fields
+        .iter(ed_model.module.env.pool)
+        .next()
+        .with_context(|| RecordWithoutFields {})?;
+
+    match first_field_b {
+        RecordField::InvalidLabelOnly(_, _) => {
+            // TODO check if label is now valid. If it is, return LabelOnly
+        }
+        RecordField::LabelOnly(_, _, _symbol) => {
+            // TODO check if symbol is still valid. If not, return InvalidLabelOnly
+        }
+        RecordField::LabeledValue(_, _, field_val_id_ref) => {
+            let field_val_id = *field_val_id_ref;
+            let sub_expr2 = ed_model.module.env.pool.get(field_val_id);
+
+            if let Expr2::InvalidLookup(_) = sub_expr2 {
+                ed_model
+                    .module
+                    .env
+                    .pool
+                    .set(field_val_id, Expr2::InvalidLookup(new_field_pool_str));
+            }
+        }
+    }
 
     Ok(InputOutcome::Accepted)
 }

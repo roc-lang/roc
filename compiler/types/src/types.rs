@@ -858,7 +858,7 @@ pub enum PReason {
     OptionalField,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnnotationSource {
     TypedIfBranch { index: Index, num_branches: usize },
     TypedWhenBranch { index: Index },

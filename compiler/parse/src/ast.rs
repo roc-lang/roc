@@ -115,6 +115,8 @@ pub enum Expr<'a> {
         ident: &'a str,
     },
 
+    Underscore(&'a str),
+
     // Tags
     GlobalTag(&'a str),
     PrivateTag(&'a str),
