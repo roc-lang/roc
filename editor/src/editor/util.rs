@@ -31,3 +31,34 @@ pub fn index_of<T: ::std::fmt::Debug + std::cmp::Eq>(elt: T, slice: &[T]) -> EdR
 
     Ok(index)
 }
+
+pub fn first_last_index_of<T: ::std::fmt::Debug + std::cmp::Eq>(elt: T, slice: &[T]) -> EdResult<(usize, usize)> {
+    let mut first_index_opt = None;
+    let mut last_index_opt = None;
+    
+    for (index, list_elt) in slice.iter().enumerate() {
+        if *list_elt == elt {
+            if first_index_opt.is_none() {
+                first_index_opt = Some(index);
+                last_index_opt = Some(index);
+            } else {
+                last_index_opt = Some(index)
+            }
+        } else if last_index_opt.is_some() {
+            break
+        }
+    }
+
+    if let (Some(first_index), Some(last_index)) = (first_index_opt, last_index_opt) {
+        Ok((first_index, last_index))
+    } else {
+        let elt_str = format!("{:?}", elt);
+        let collection_str = format!("{:?}", slice);
+
+        IndexOfFailed {
+            elt_str,
+            collection_str,
+        }.fail()
+    }
+}
+

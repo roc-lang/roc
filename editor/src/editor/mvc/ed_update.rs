@@ -1,3 +1,4 @@
+use crate::editor::markup::attribute::Attributes;
 use crate::editor::code_lines::CodeLines;
 use crate::editor::ed_error::EdResult;
 use crate::editor::grid_node_map::GridNodeMap;
@@ -28,6 +29,7 @@ use crate::ui::ui_error::UIResult;
 use crate::window::keyboard_input::Modifiers;
 use winit::event::VirtualKeyCode;
 use VirtualKeyCode::*;
+use crate::editor::syntax_highlight::HighlightStyle;
 
 impl<'a> EdModel<'a> {
     pub fn move_caret(
@@ -136,6 +138,27 @@ impl<'a> EdModel<'a> {
         self.grid_node_map.del_at_line(line_nr, index)?;
         self.code_lines.del_at_line(line_nr, index)
     }
+
+    pub fn select_expr(&mut self) -> EdResult<()> {
+        if self.is_selection_active() {
+            // TODO
+        } else {
+            let (expr_start_pos, expr_end_pos, ast_node_id) = self.grid_node_map.get_expr_start_end_pos(self.get_caret(), &self.markup_node_pool)?;
+            self.set_raw_sel(
+                RawSelection {
+                    start_pos: expr_start_pos,
+                    end_pos: expr_end_pos, 
+                }
+            )?;
+
+            self.set_caret(expr_start_pos);
+            self.selected_expr2_id = Some(ast_node_id);
+
+            self.dirty = true;
+        }
+
+        Ok(())
+    }
 }
 
 impl<'a> SelectableLines for EdModel<'a> {
@@ -230,6 +253,7 @@ impl<'a> SelectableLines for EdModel<'a> {
 
     fn set_sel_none(&mut self) {
         self.caret_w_select_vec.first_mut().0.selection_opt = None;
+        self.selected_expr2_id = None;
     }
 
     fn set_caret_w_sel(&mut self, caret_w_sel: CaretWSelect) {
@@ -269,7 +293,15 @@ impl<'a> SelectableLines for EdModel<'a> {
     ) -> UIResult<()> {
         match virtual_keycode {
             Left => self.move_caret_left(modifiers),
-            Up => self.move_caret_up(modifiers),
+            Up => {
+                if modifiers.ctrl && modifiers.shift {
+                    // TODO remove unwrap
+                    self.select_expr().unwrap();
+                    Ok(())
+                } else {
+                    self.move_caret_up(modifiers)
+                }
+            },
             Right => self.move_caret_right(modifiers),
             Down => self.move_caret_down(modifiers),
 
@@ -334,152 +366,198 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                 // chars that can be ignored
                 InputOutcome::Ignored
             }
+            '\u{8}' | '\u{7f}' => {
+                // On Linux, '\u{8}' is backspace,
+                // on macOS '\u{7f}'.
+                ed_model.set_sel_none();
+
+                if let Some(sel_expr2_id) = ed_model.selected_expr2_id {
+                    let curr_mark_node_id = ed_model.get_curr_mark_node_id()?;
+
+                    let blank_replacement = MarkupNode::Blank {
+                        ast_node_id: sel_expr2_id,
+                        attributes: Attributes::new(),
+                        syn_high_style: HighlightStyle::Blank,
+                        parent_id_opt: None,
+                    };
+
+                    let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
+
+                    let expr2_level_mark_node =
+                        curr_mark_node.get_expr2_level_node(
+                            curr_mark_node_id,
+                            sel_expr2_id,
+                            ed_model.module.env.pool,
+                        )?;
+
+                    ed_model.markup_node_pool.replace_node(
+                        expr2_level_mark_node,
+                        blank_replacement
+                    );
+
+                    // TODO code_liens grid_node_map
+
+                    ed_model.module.env.pool.set(
+                        sel_expr2_id,
+                        Expr2::Blank,
+                    )
+                }
+
+                InputOutcome::Accepted
+            }
             ch => {
                 let curr_mark_node_id_res = ed_model.get_curr_mark_node_id();
 
-                if let Ok(curr_mark_node_id) = curr_mark_node_id_res {
-                    let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
-                    let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
+                let outcome =
+                    if let Ok(curr_mark_node_id) = curr_mark_node_id_res {
+                        let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
+                        let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
 
-                    let ast_node_id = curr_mark_node.get_ast_node_id();
-                    let ast_node_ref = ed_model.module.env.pool.get(ast_node_id);
+                        let ast_node_id = curr_mark_node.get_ast_node_id();
+                        let ast_node_ref = ed_model.module.env.pool.get(ast_node_id);
 
-                    if let Expr2::Blank {..} = ast_node_ref {
-                        match ch {
-                            '"' => {
-                                start_new_string(ed_model)?
-                            },
-                            '{' => {
-                                start_new_record(ed_model)?
-                            }
-                            _ => InputOutcome::Ignored
-                        }
-                    } else if let Some(prev_mark_node_id) = prev_mark_node_id_opt{
-                        if prev_mark_node_id == curr_mark_node_id {
-                            match ast_node_ref {
-                                Expr2::SmallStr(old_arr_str) => {
-                                    update_small_string(
-                                        &ch, old_arr_str, ed_model
-                                    )?
-                                }
-                                Expr2::Str(old_pool_str) => {
-                                    update_string(
-                                        &ch.to_string(), old_pool_str, ed_model
-                                    )?
-                                }
-                                Expr2::InvalidLookup(old_pool_str) => {
-                                    update_invalid_lookup(
-                                        &ch.to_string(),
-                                        old_pool_str,
-                                        curr_mark_node_id,
-                                        ast_node_id,
-                                        ed_model
-                                    )?
-                                }
-                                Expr2::EmptyRecord => {
-                                    // prev_mark_node_id and curr_mark_node_id should be different to allow creating field at current caret position
-                                    InputOutcome::Ignored
-                                }
-                                Expr2::Record{ record_var:_, fields } => {
-                                    if curr_mark_node.get_content()?.chars().all(|chr| chr.is_ascii_alphanumeric()){
-                                        update_record_field(
-                                            &ch.to_string(),
-                                            ed_model.get_caret(),
-                                            curr_mark_node_id,
-                                            fields,
-                                            ed_model,
-                                        )?
-                                    } else {
-                                        InputOutcome::Ignored
-                                    }
+                        if let Expr2::Blank {..} = ast_node_ref {
+                            match ch {
+                                '"' => {
+                                    start_new_string(ed_model)?
+                                },
+                                '{' => {
+                                    start_new_record(ed_model)?
                                 }
                                 _ => InputOutcome::Ignored
                             }
-                        } else if ch.is_ascii_alphanumeric() { // prev_mark_node_id != curr_mark_node_id
-                            let prev_ast_node_id =
-                                ed_model
-                                .markup_node_pool
-                                .get(prev_mark_node_id)
-                                .get_ast_node_id();
-
-                            let prev_node_ref = ed_model.module.env.pool.get(prev_ast_node_id);
-
-                            match prev_node_ref {
-                                Expr2::InvalidLookup(old_pool_str) => {
-                                    update_invalid_lookup(
-                                        &ch.to_string(),
-                                        old_pool_str,
-                                        prev_mark_node_id,
-                                        prev_ast_node_id,
-                                        ed_model
-                                    )?
-                                }
-                                Expr2::Record{ record_var:_, fields } => {
-                                    let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
-
-                                    if (curr_mark_node.get_content()? == nodes::RIGHT_ACCOLADE || curr_mark_node.get_content()? == nodes::COLON) &&
-                                        prev_mark_node.is_all_alphanumeric()? {
-                                        update_record_field(
-                                            &ch.to_string(),
-                                            ed_model.get_caret(),
-                                            prev_mark_node_id,
-                                            fields,
-                                            ed_model,
+                        } else if let Some(prev_mark_node_id) = prev_mark_node_id_opt{
+                            if prev_mark_node_id == curr_mark_node_id {
+                                match ast_node_ref {
+                                    Expr2::SmallStr(old_arr_str) => {
+                                        update_small_string(
+                                            &ch, old_arr_str, ed_model
                                         )?
-                                    } else if prev_mark_node.get_content()? == nodes::LEFT_ACCOLADE && curr_mark_node.is_all_alphanumeric()? {
-                                        update_record_field(
+                                    }
+                                    Expr2::Str(old_pool_str) => {
+                                        update_string(
+                                            &ch.to_string(), old_pool_str, ed_model
+                                        )?
+                                    }
+                                    Expr2::InvalidLookup(old_pool_str) => {
+                                        update_invalid_lookup(
                                             &ch.to_string(),
-                                            ed_model.get_caret(),
+                                            old_pool_str,
                                             curr_mark_node_id,
-                                            fields,
-                                            ed_model,
+                                            ast_node_id,
+                                            ed_model
                                         )?
-                                    } else {
+                                    }
+                                    Expr2::EmptyRecord => {
+                                        // prev_mark_node_id and curr_mark_node_id should be different to allow creating field at current caret position
                                         InputOutcome::Ignored
                                     }
-                                }
-                                _ => {
-                                    match ast_node_ref {
-                                        Expr2::EmptyRecord => {
-                                            let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
-
-                                            if ch.is_ascii_alphabetic() && ch.is_ascii_lowercase() {
-                                                update_empty_record(
-                                                    &ch.to_string(),
-                                                    prev_mark_node_id,
-                                                    sibling_ids,
-                                                    ed_model
-                                                )?
-                                            } else {
-                                                InputOutcome::Ignored
-                                            }
+                                    Expr2::Record{ record_var:_, fields } => {
+                                        if curr_mark_node.get_content()?.chars().all(|chr| chr.is_ascii_alphanumeric()){
+                                            update_record_field(
+                                                &ch.to_string(),
+                                                ed_model.get_caret(),
+                                                curr_mark_node_id,
+                                                fields,
+                                                ed_model,
+                                            )?
+                                        } else {
+                                            InputOutcome::Ignored
                                         }
-                                        _ => InputOutcome::Ignored
+                                    }
+                                    _ => InputOutcome::Ignored
+                                }
+                            } else if ch.is_ascii_alphanumeric() { // prev_mark_node_id != curr_mark_node_id
+                                let prev_ast_node_id =
+                                    ed_model
+                                    .markup_node_pool
+                                    .get(prev_mark_node_id)
+                                    .get_ast_node_id();
+
+                                let prev_node_ref = ed_model.module.env.pool.get(prev_ast_node_id);
+
+                                match prev_node_ref {
+                                    Expr2::InvalidLookup(old_pool_str) => {
+                                        update_invalid_lookup(
+                                            &ch.to_string(),
+                                            old_pool_str,
+                                            prev_mark_node_id,
+                                            prev_ast_node_id,
+                                            ed_model
+                                        )?
+                                    }
+                                    Expr2::Record{ record_var:_, fields } => {
+                                        let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
+
+                                        if (curr_mark_node.get_content()? == nodes::RIGHT_ACCOLADE || curr_mark_node.get_content()? == nodes::COLON) &&
+                                            prev_mark_node.is_all_alphanumeric()? {
+                                            update_record_field(
+                                                &ch.to_string(),
+                                                ed_model.get_caret(),
+                                                prev_mark_node_id,
+                                                fields,
+                                                ed_model,
+                                            )?
+                                        } else if prev_mark_node.get_content()? == nodes::LEFT_ACCOLADE && curr_mark_node.is_all_alphanumeric()? {
+                                            update_record_field(
+                                                &ch.to_string(),
+                                                ed_model.get_caret(),
+                                                curr_mark_node_id,
+                                                fields,
+                                                ed_model,
+                                            )?
+                                        } else {
+                                            InputOutcome::Ignored
+                                        }
+                                    }
+                                    _ => {
+                                        match ast_node_ref {
+                                            Expr2::EmptyRecord => {
+                                                let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
+
+                                                if ch.is_ascii_alphabetic() && ch.is_ascii_lowercase() {
+                                                    update_empty_record(
+                                                        &ch.to_string(),
+                                                        prev_mark_node_id,
+                                                        sibling_ids,
+                                                        ed_model
+                                                    )?
+                                                } else {
+                                                    InputOutcome::Ignored
+                                                }
+                                            }
+                                            _ => InputOutcome::Ignored
+                                        }
                                     }
                                 }
-                            }
-                        } else if *ch == ':' {
-                            let mark_parent_id_opt = curr_mark_node.get_parent_id_opt();
+                            } else if *ch == ':' {
+                                let mark_parent_id_opt = curr_mark_node.get_parent_id_opt();
 
-                            if let Some(mark_parent_id) = mark_parent_id_opt {
-                                let parent_ast_id = ed_model.markup_node_pool.get(mark_parent_id).get_ast_node_id();
+                                if let Some(mark_parent_id) = mark_parent_id_opt {
+                                    let parent_ast_id = ed_model.markup_node_pool.get(mark_parent_id).get_ast_node_id();
 
-                                update_record_colon(ed_model, parent_ast_id)?
+                                    update_record_colon(ed_model, parent_ast_id)?
+                                } else {
+                                    InputOutcome::Ignored
+                                }
                             } else {
                                 InputOutcome::Ignored
                             }
+
                         } else {
+                            // Not supporting any Expr2 right now that would allow prepending at the start of a line
                             InputOutcome::Ignored
                         }
 
                     } else {
-                        // Not supporting any Expr2 right now that would allow prepending at the start of a line
                         InputOutcome::Ignored
+                    };
+
+                    if let InputOutcome::Accepted = outcome {
+                        ed_model.set_sel_none();
                     }
 
-                } else {
-                    InputOutcome::Ignored
-                }
+                    outcome
             }
         };
 
