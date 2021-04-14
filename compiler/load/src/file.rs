@@ -1401,8 +1401,6 @@ where
                                             look_up_builtins,
                                         );
 
-                                        dbg!(&result);
-
                                         match result {
                                             Ok(()) => {}
                                             Err(LoadingProblem::MsgChannelDied) => {

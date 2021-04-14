@@ -1,5 +1,5 @@
 platform examples/multi-module
-    requires { main : Str }
+    requires {}{ main : Str }
     exposes []
     packages {}
     imports []

@@ -1,5 +1,5 @@
 platform folkertdev/foo
-    requires []{main : Effect {}}
+    requires {model=>Model, msg=>Msg} {main : Effect {}}
     exposes []
     packages {}
     imports [ Task ]

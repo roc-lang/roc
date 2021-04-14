@@ -8,7 +8,6 @@ use crate::parser::{
 use crate::string_literal;
 use bumpalo::collections::Vec;
 use inlinable_string::InlinableString;
-use roc_module::ident::{Lowercase, Uppercase};
 use roc_region::all::Loc;
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]

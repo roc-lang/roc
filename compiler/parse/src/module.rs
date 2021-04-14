@@ -1,5 +1,5 @@
 use crate::ast::{CommentOrNewline, Def, Module};
-use crate::blankspace::{space0_before_e, space0_e};
+use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::header::{
     package_entry, package_name, package_or_path, AppHeader, Effects, ExposesEntry, ImportsEntry,
     InterfaceHeader, ModuleName, PackageEntry, PlatformHeader, PlatformRequires, PlatformRigid, To,
@@ -412,7 +412,7 @@ fn requires<'a>() -> impl Parser<
     ERequires<'a>,
 > {
     let min_indent = 0;
-    debug!(and!(
+    and!(
         spaces_around_keyword(
             min_indent,
             "requires",
@@ -422,17 +422,21 @@ fn requires<'a>() -> impl Parser<
             ERequires::IndentListStart
         ),
         platform_requires()
-    ))
+    )
 }
 
 #[inline(always)]
 fn platform_requires<'a>() -> impl Parser<'a, PlatformRequires<'a>, ERequires<'a>> {
-    map!(and!(requires_rigids(0), requires_typed_ident()), |(
-        rigids,
-        signature,
-    )| {
-        PlatformRequires { rigids, signature }
-    })
+    map!(
+        and!(
+            skip_second!(
+                requires_rigids(0),
+                space0_e(0, ERequires::Space, ERequires::ListStart)
+            ),
+            requires_typed_ident()
+        ),
+        |(rigids, signature)| { PlatformRequires { rigids, signature } }
+    )
 }
 
 #[inline(always)]
@@ -440,10 +444,10 @@ fn requires_rigids<'a>(
     min_indent: u16,
 ) -> impl Parser<'a, Vec<'a, Located<PlatformRigid<'a>>>, ERequires<'a>> {
     collection_e!(
-        word1(b'[', ERequires::ListStart),
+        word1(b'{', ERequires::ListStart),
         specialize(|_, r, c| ERequires::Rigid(r, c), loc!(requires_rigid())),
         word1(b',', ERequires::ListEnd),
-        word1(b']', ERequires::ListEnd),
+        word1(b'}', ERequires::ListEnd),
         min_indent,
         ERequires::Space,
         ERequires::IndentListEnd
@@ -466,7 +470,13 @@ fn requires_typed_ident<'a>() -> impl Parser<'a, Located<TypedIdent<'a>>, ERequi
     skip_first!(
         word1(b'{', ERequires::ListStart),
         skip_second!(
-            specialize(ERequires::TypedIdent, loc!(typed_ident())),
+            space0_around_ee(
+                specialize(ERequires::TypedIdent, loc!(typed_ident()),),
+                0,
+                ERequires::Space,
+                ERequires::ListStart,
+                ERequires::ListEnd
+            ),
             word1(b'}', ERequires::ListStart)
         )
     )
@@ -661,10 +671,10 @@ fn effects<'a>() -> impl Parser<'a, Effects<'a>, EEffects<'a>> {
             .parse(arena, state)?;
 
         // e.g. `fx.`
-        let (_, type_shortname, state) = debug!(skip_second!(
+        let (_, type_shortname, state) = skip_second!(
             specialize(|_, r, c| EEffects::Shorthand(r, c), lowercase_ident()),
             word1(b'.', EEffects::ShorthandDot)
-        ))
+        )
         .parse(arena, state)?;
 
         // the type name, e.g. Effects

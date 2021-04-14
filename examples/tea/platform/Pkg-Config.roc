@@ -1,5 +1,5 @@
 platform folkertdev/foo
-    requires []{foo:Str}
+    requires {}{foo:Str}
     exposes []
     packages {}
     imports [Cmd]
