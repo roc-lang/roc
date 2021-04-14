@@ -118,8 +118,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
         format: render_format,
         width: size.width,
         height: size.height,
-        // TODO go back to Immediate
-        present_mode: wgpu::PresentMode::Fifo,
+        present_mode: wgpu::PresentMode::Immediate,
     };
 
     let mut swap_chain = gpu_device.create_swap_chain(&surface, &swap_chain_descr);
@@ -229,8 +228,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                         format: render_format,
                         width: size.width,
                         height: size.height,
-                        // TODO go back to Immediate
-                        present_mode: wgpu::PresentMode::Fifo,
+                        present_mode: wgpu::PresentMode::Immediate,
                     },
                 );
 
