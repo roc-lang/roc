@@ -5342,7 +5342,7 @@ fn define_global_str_literal<'a, 'ctx, 'env>(
         Some(current) => current,
 
         None => {
-            let size = message.len() + env.ptr_bytes as usize;
+            let size = message.bytes().len() + env.ptr_bytes as usize;
             let mut bytes = Vec::with_capacity_in(size, env.arena);
 
             // insert NULL bytes for the refcount
