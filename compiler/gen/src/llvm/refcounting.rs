@@ -119,19 +119,32 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let builder = env.builder;
         let refcount_type = ptr_int(env.context, env.ptr_bytes);
 
-        let max = builder.build_int_compare(
+        let is_static_allocation = builder.build_int_compare(
             IntPredicate::EQ,
             refcount,
             refcount_type.const_int(REFCOUNT_MAX as u64, false),
             "refcount_max_check",
         );
-        let incremented = builder.build_int_add(refcount, amount, "increment_refcount");
 
-        let new_refcount = builder
-            .build_select(max, refcount, incremented, "select_refcount")
-            .into_int_value();
+        let block = env.builder.get_insert_block().expect("to be in a function");
+        let parent = block.get_parent().unwrap();
 
-        self.set_refcount(env, new_refcount);
+        let modify_block = env.context.append_basic_block(parent, "inc_str_modify");
+        let cont_block = env.context.append_basic_block(parent, "inc_str_cont");
+
+        env.builder
+            .build_conditional_branch(is_static_allocation, cont_block, modify_block);
+
+        {
+            env.builder.position_at_end(modify_block);
+
+            let incremented = builder.build_int_add(refcount, amount, "increment_refcount");
+            self.set_refcount(env, incremented);
+
+            env.builder.build_unconditional_branch(cont_block);
+        }
+
+        env.builder.position_at_end(cont_block);
     }
 
     pub fn decrement<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) {
