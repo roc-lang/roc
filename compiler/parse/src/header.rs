@@ -8,6 +8,7 @@ use crate::parser::{
 use crate::string_literal;
 use bumpalo::collections::Vec;
 use inlinable_string::InlinableString;
+use roc_module::ident::{Lowercase, Uppercase};
 use roc_region::all::Loc;
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
@@ -125,9 +126,33 @@ pub struct PackageHeader<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum PlatformRigid<'a> {
+    Entry { rigid: &'a str, alias: &'a str },
+
+    // Spaces
+    SpaceBefore(&'a PlatformRigid<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a PlatformRigid<'a>, &'a [CommentOrNewline<'a>]),
+}
+
+impl<'a> Spaceable<'a> for PlatformRigid<'a> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        PlatformRigid::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        PlatformRigid::SpaceAfter(self, spaces)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlatformRequires<'a> {
+    pub rigids: Vec<'a, Loc<PlatformRigid<'a>>>,
+    pub signature: Loc<TypedIdent<'a>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct PlatformHeader<'a> {
     pub name: Loc<PackageName<'a>>,
-    pub requires: Vec<'a, Loc<TypedIdent<'a>>>,
+    pub requires: PlatformRequires<'a>,
     pub exposes: Vec<'a, Loc<ExposesEntry<'a, ModuleName<'a>>>>,
     pub packages: Vec<'a, Loc<PackageEntry<'a>>>,
     pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
