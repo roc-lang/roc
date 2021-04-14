@@ -5365,7 +5365,7 @@ fn define_global_str_literal<'a, 'ctx, 'env>(
             // strings are NULL-terminated, which means we can't store the refcount (which is 8
             // NULL bytes)
             global.set_constant(true);
-            global.set_alignment(1);
+            global.set_alignment(env.ptr_bytes);
             global.set_unnamed_addr(true);
             global.set_linkage(inkwell::module::Linkage::Private);
 
