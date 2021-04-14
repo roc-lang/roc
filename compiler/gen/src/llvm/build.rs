@@ -5299,10 +5299,19 @@ fn define_global_str_literal_ptr<'a, 'ctx, 'env>(
 ) -> PointerValue<'ctx> {
     let global = define_global_str_literal(env, message);
 
+    let ptr = env
+        .builder
+        .build_bitcast(
+            global,
+            env.context.i8_type().ptr_type(AddressSpace::Generic),
+            "to_opaque",
+        )
+        .into_pointer_value();
+
     // a pointer to the first actual data (skipping over the refcount)
     let ptr = unsafe {
         env.builder.build_in_bounds_gep(
-            global.as_pointer_value(),
+            ptr,
             &[env.ptr_int().const_int(env.ptr_bytes as u64, false)],
             "get_rc_ptr",
         )
@@ -5336,7 +5345,7 @@ fn define_global_str_literal<'a, 'ctx, 'env>(
             let size = message.len() + env.ptr_bytes as usize;
             let mut bytes = Vec::with_capacity_in(size, env.arena);
 
-            // insert 0 bytes for the refcount
+            // insert NULL bytes for the refcount
             for _ in 0..env.ptr_bytes {
                 bytes.push(env.context.i8_type().const_zero());
             }
