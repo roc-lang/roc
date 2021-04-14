@@ -79,12 +79,8 @@ pub const RocStr = extern struct {
 
     pub fn deinit(self: RocStr, allocator: *Allocator) void {
         if (!self.isSmallStr() and !self.isEmpty()) {
-            const str_bytes_ptr: [*]u8 = self.str_bytes orelse unreachable;
-
-            // include the refcount bytes
-            const refcount_bytes = @sizeOf(usize);
-            const str_bytes: []u8 = (str_bytes_ptr - refcount_bytes)[0 .. self.str_len + refcount_bytes];
-            allocator.free(str_bytes);
+            const alignment = @alignOf(usize);
+            utils.decref(allocator, alignment, self.str_bytes, self.str_len);
         }
     }
 
