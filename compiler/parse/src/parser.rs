@@ -248,6 +248,7 @@ pub enum ERequires<'a> {
     ListStart(Row, Col),
     ListEnd(Row, Col),
     TypedIdent(ETypedIdent<'a>, Row, Col),
+    Rigid(Row, Col),
     Space(BadInputError, Row, Col),
 }
 

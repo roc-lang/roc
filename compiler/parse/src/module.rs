@@ -1,13 +1,14 @@
 use crate::ast::{CommentOrNewline, Def, Module};
-use crate::blankspace::{space0_before_e, space0_e};
+use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::header::{
     package_entry, package_name, package_or_path, AppHeader, Effects, ExposesEntry, ImportsEntry,
-    InterfaceHeader, ModuleName, PackageEntry, PlatformHeader, To, TypedIdent,
+    InterfaceHeader, ModuleName, PackageEntry, PlatformHeader, PlatformRequires, PlatformRigid, To,
+    TypedIdent,
 };
 use crate::ident::{lowercase_ident, unqualified_ident, uppercase_ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, specialize, word1, Col, EEffects, EExposes, EHeader, EImports, EPackages,
+    backtrackable, specialize, word1, word2, Col, EEffects, EExposes, EHeader, EImports, EPackages,
     EProvides, ERequires, ETypedIdent, Parser, Row, State, SyntaxError,
 };
 use crate::string_literal;
@@ -406,11 +407,11 @@ fn requires<'a>() -> impl Parser<
     'a,
     (
         (&'a [CommentOrNewline<'a>], &'a [CommentOrNewline<'a>]),
-        Vec<'a, Located<TypedIdent<'a>>>,
+        PlatformRequires<'a>,
     ),
     ERequires<'a>,
 > {
-    let min_indent = 1;
+    let min_indent = 0;
     and!(
         spaces_around_keyword(
             min_indent,
@@ -420,14 +421,63 @@ fn requires<'a>() -> impl Parser<
             ERequires::IndentRequires,
             ERequires::IndentListStart
         ),
-        collection_e!(
-            word1(b'{', ERequires::ListStart),
-            specialize(ERequires::TypedIdent, loc!(typed_ident())),
-            word1(b',', ERequires::ListEnd),
-            word1(b'}', ERequires::ListEnd),
-            min_indent,
-            ERequires::Space,
-            ERequires::IndentListEnd
+        platform_requires()
+    )
+}
+
+#[inline(always)]
+fn platform_requires<'a>() -> impl Parser<'a, PlatformRequires<'a>, ERequires<'a>> {
+    map!(
+        and!(
+            skip_second!(
+                requires_rigids(0),
+                space0_e(0, ERequires::Space, ERequires::ListStart)
+            ),
+            requires_typed_ident()
+        ),
+        |(rigids, signature)| { PlatformRequires { rigids, signature } }
+    )
+}
+
+#[inline(always)]
+fn requires_rigids<'a>(
+    min_indent: u16,
+) -> impl Parser<'a, Vec<'a, Located<PlatformRigid<'a>>>, ERequires<'a>> {
+    collection_e!(
+        word1(b'{', ERequires::ListStart),
+        specialize(|_, r, c| ERequires::Rigid(r, c), loc!(requires_rigid())),
+        word1(b',', ERequires::ListEnd),
+        word1(b'}', ERequires::ListEnd),
+        min_indent,
+        ERequires::Space,
+        ERequires::IndentListEnd
+    )
+}
+
+#[inline(always)]
+fn requires_rigid<'a>() -> impl Parser<'a, PlatformRigid<'a>, ()> {
+    map!(
+        and!(
+            lowercase_ident(),
+            skip_first!(word2(b'=', b'>', |_, _| ()), uppercase_ident())
+        ),
+        |(rigid, alias)| PlatformRigid::Entry { rigid, alias }
+    )
+}
+
+#[inline(always)]
+fn requires_typed_ident<'a>() -> impl Parser<'a, Located<TypedIdent<'a>>, ERequires<'a>> {
+    skip_first!(
+        word1(b'{', ERequires::ListStart),
+        skip_second!(
+            space0_around_ee(
+                specialize(ERequires::TypedIdent, loc!(typed_ident()),),
+                0,
+                ERequires::Space,
+                ERequires::ListStart,
+                ERequires::ListEnd
+            ),
+            word1(b'}', ERequires::ListStart)
         )
     )
 }

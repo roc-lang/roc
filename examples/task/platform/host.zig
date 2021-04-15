@@ -106,6 +106,10 @@ pub const ReadResult = extern struct {
     errno: i64, // TODO i32 when Roc supports I32
 };
 
+pub const WriteResult = extern struct {
+    errno: i64,
+};
+
 pub export fn roc_fx_readAllUtf8(rocPath: RocStr) callconv(.C) ReadResult {
     var dir = std.fs.cwd();
 
@@ -119,6 +123,16 @@ pub export fn roc_fx_readAllUtf8(rocPath: RocStr) callconv(.C) ReadResult {
     var roc_str3 = RocStr.init(testing.allocator, str_ptr, content.len);
 
     return .{ .bytes = roc_str3, .errno = 0 };
+}
+
+pub export fn roc_fx_writeAllUtf8(filePath: RocStr, content: RocStr) callconv(.C) WriteResult {
+    var dir = std.fs.cwd();
+
+    dir.writeFile(filePath.asSlice(), content.asSlice()) catch |e| switch (e) {
+        else => return .{ .errno = 1 },
+    };
+
+    return .{ .errno = 0 };
 }
 
 pub fn roc_fx_readAllUtf8_that_does_not_work(rocPath: *RocStr) ReadResult {

@@ -12,7 +12,7 @@ use crate::llvm::build_list::{
 };
 use crate::llvm::build_str::{
     str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_from_utf8,
-    str_join_with, str_number_of_bytes, str_split, str_starts_with, str_to_bytes, CHAR_LAYOUT,
+    str_join_with, str_number_of_bytes, str_split, str_starts_with, str_to_bytes,
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
@@ -648,22 +648,6 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                 let number_of_chars = str_literal.len() as u64;
                 let ptr_bytes = env.ptr_bytes;
 
-                let populate_str = |ptr| {
-                    // Copy the elements from the list literal into the array
-                    for (index, character) in str_literal.as_bytes().iter().enumerate() {
-                        let val = env
-                            .context
-                            .i8_type()
-                            .const_int(*character as u64, false)
-                            .as_basic_value_enum();
-                        let index_val = ctx.i64_type().const_int(index as u64, false);
-                        let elem_ptr =
-                            unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
-
-                        builder.build_store(elem_ptr, val);
-                    }
-                };
-
                 if str_literal.len() < env.small_str_bytes() as usize {
                     // TODO support big endian systems
 
@@ -708,7 +692,20 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                         ctx.i8_type().const_int(final_byte as u64, false),
                     );
 
-                    populate_str(array_alloca);
+                    // Copy the elements from the list literal into the array
+                    for (index, character) in str_literal.as_bytes().iter().enumerate() {
+                        let val = env
+                            .context
+                            .i8_type()
+                            .const_int(*character as u64, false)
+                            .as_basic_value_enum();
+                        let index_val = ctx.i64_type().const_int(index as u64, false);
+                        let elem_ptr = unsafe {
+                            builder.build_in_bounds_gep(array_alloca, &[index_val], "index")
+                        };
+
+                        builder.build_store(elem_ptr, val);
+                    }
 
                     builder.build_load(
                         builder
@@ -721,13 +718,10 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                         "small_str_array",
                     )
                 } else {
+                    let ptr = define_global_str_literal_ptr(env, *str_literal);
                     let number_of_elements = env.ptr_int().const_int(number_of_chars, false);
 
-                    // NOTE we rely on CHAR_LAYOUT turning into a `i8`
-                    let ptr = allocate_list(env, InPlace::Clone, &CHAR_LAYOUT, number_of_elements);
                     let struct_type = collection(ctx, ptr_bytes);
-
-                    populate_str(ptr);
 
                     let mut struct_val;
 
@@ -756,7 +750,6 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                         collection(ctx, ptr_bytes),
                         "cast_collection",
                     )
-                    // TODO check if malloc returned null; if so, runtime error for OOM!
                 }
             }
         }
@@ -5300,8 +5293,88 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
         }
     }
 }
+fn define_global_str_literal_ptr<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    message: &str,
+) -> PointerValue<'ctx> {
+    let global = define_global_str_literal(env, message);
 
-fn define_global_str<'a, 'ctx, 'env>(
+    let ptr = env
+        .builder
+        .build_bitcast(
+            global,
+            env.context.i8_type().ptr_type(AddressSpace::Generic),
+            "to_opaque",
+        )
+        .into_pointer_value();
+
+    // a pointer to the first actual data (skipping over the refcount)
+    let ptr = unsafe {
+        env.builder.build_in_bounds_gep(
+            ptr,
+            &[env.ptr_int().const_int(env.ptr_bytes as u64, false)],
+            "get_rc_ptr",
+        )
+    };
+
+    ptr
+}
+
+fn define_global_str_literal<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    message: &str,
+) -> inkwell::values::GlobalValue<'ctx> {
+    let module = env.module;
+
+    // hash the name so we don't re-define existing messages
+    let name = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        message.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        format!("_str_literal_{}", hash)
+    };
+
+    match module.get_global(&name) {
+        Some(current) => current,
+
+        None => {
+            let size = message.bytes().len() + env.ptr_bytes as usize;
+            let mut bytes = Vec::with_capacity_in(size, env.arena);
+
+            // insert NULL bytes for the refcount
+            for _ in 0..env.ptr_bytes {
+                bytes.push(env.context.i8_type().const_zero());
+            }
+
+            // then add the data bytes
+            for b in message.bytes() {
+                bytes.push(env.context.i8_type().const_int(b as u64, false));
+            }
+
+            // use None for the address space (e.g. Const does not work)
+            let typ = env.context.i8_type().array_type(bytes.len() as u32);
+            let global = module.add_global(typ, None, &name);
+
+            global.set_initializer(&env.context.i8_type().const_array(bytes.into_bump_slice()));
+
+            // mimic the `global_string` function; we cannot use it directly because it assumes
+            // strings are NULL-terminated, which means we can't store the refcount (which is 8
+            // NULL bytes)
+            global.set_constant(true);
+            global.set_alignment(env.ptr_bytes);
+            global.set_unnamed_addr(true);
+            global.set_linkage(inkwell::module::Linkage::Private);
+
+            global
+        }
+    }
+}
+
+fn define_global_error_str<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     message: &str,
 ) -> inkwell::values::GlobalValue<'ctx> {
@@ -5342,7 +5415,7 @@ fn throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, message: &str) {
 
         // define the error message as a global
         // (a hash is used such that the same value is not defined repeatedly)
-        let error_msg_global = define_global_str(env, message);
+        let error_msg_global = define_global_error_str(env, message);
 
         // cast this to a void pointer
         let error_msg_ptr =

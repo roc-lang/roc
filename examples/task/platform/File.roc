@@ -1,5 +1,5 @@
 interface File
-    exposes [ FileReadErr, FileOpenErr, FileWriteErr, DirReadErr, readUtf8 ]
+    exposes [ FileReadErr, FileOpenErr, FileWriteErr, DirReadErr, readUtf8, writeUtf8 ]
     imports [ Task.{ Task }, fx.Effect.{ after }, Path ]
 
 # TODO FIXME should be able to import this as Path.{ Path }, but there's a bug.
@@ -75,6 +75,16 @@ readUtf8 = \path ->
             19 -> Err (FileWasDir path)
             # TODO handle other errno scenarios that could come up
             _ -> Err (UnknownError answer.errno path)
+
+writeUtf8 : Path, Str -> Task.Task {} (FileWriteErr [ BadThing ]*)
+writeUtf8 = \path, data ->
+    path
+        |> Path.toStr
+        |> Effect.writeAllUtf8 data
+        |> Effect.map \res ->
+            when res.errno is
+                0 -> Ok {}
+                _ -> Err BadThing
 
 ## Read a file's bytes, one chunk at a time, and use it to build up a state.
 ##
