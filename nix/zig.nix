@@ -21,7 +21,7 @@ if isMacOS then
     src = pkgs.fetchurl {
       inherit sha256;
       name = "${archiveName}.tar.xz";
-      url = "https://ziglang.org/builds/${archiveName}.tar.xz";
+      url = "https://ziglang.org/download/${version}/${archiveName}.tar.xz";
     };
     phases = [ "installPhase" ];
     installPhase = ''
