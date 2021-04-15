@@ -124,10 +124,8 @@ pub fn finish_parsing_float(raw: &str) -> Result<f64, (&str, FloatErrorKind)> {
 /// Integer parsing code taken from the rust libcore,
 /// pulled in so we can give custom error messages
 ///
-/// The Rust Project is dual-licensed under Apache 2.0 and MIT terms.
-/// As roc is Apache licensed, we use this rust code under the apache 2.0 license
-///
-/// Thanks to the rust-lang project and its contributors
+/// The Rust Project is dual-licensed under either Apache 2.0 or MIT,
+/// at the user's choice. Thanks to the Rust project and its contributors!
 
 trait FromStrRadixHelper: PartialOrd + Copy {
     fn min_value() -> Self;
