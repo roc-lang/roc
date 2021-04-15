@@ -2,7 +2,6 @@
 
 use roc_std::{alloca, RocCallResult, RocResult, RocStr};
 use std::alloc::Layout;
-use std::time::SystemTime;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed"]
