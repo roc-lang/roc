@@ -248,6 +248,7 @@ pub enum ERequires<'a> {
     ListStart(Row, Col),
     ListEnd(Row, Col),
     TypedIdent(ETypedIdent<'a>, Row, Col),
+    Rigid(Row, Col),
     Space(BadInputError, Row, Col),
 }
 
@@ -411,6 +412,7 @@ pub enum EExpr<'a> {
     If(If<'a>, Row, Col),
 
     Lambda(ELambda<'a>, Row, Col),
+    Underscore(Row, Col),
 
     InParens(EInParens<'a>, Row, Col),
     Record(ERecord<'a>, Row, Col),

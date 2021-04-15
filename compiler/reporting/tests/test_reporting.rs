@@ -6334,4 +6334,27 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn underscore_let() {
+        report_problem_as(
+            indoc!(
+                r#"
+                _ = 3
+
+                4
+                "#
+            ),
+            indoc!(
+                r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+                
+                Underscore patterns are not allowed in definitions
+                
+                1│  _ = 3
+                    ^
+            "#
+            ),
+        )
+    }
 }

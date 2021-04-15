@@ -15,7 +15,10 @@ pub struct CodeLines {
 impl CodeLines {
     pub fn from_str(code_str: &str) -> CodeLines {
         CodeLines {
-            lines: split_inclusive(code_str),
+            lines: code_str
+                .split_inclusive('\n')
+                .map(|s| s.to_owned())
+                .collect(),
             nr_of_chars: code_str.len(),
         }
     }
@@ -44,28 +47,6 @@ impl CodeLines {
 
         Ok(())
     }
-}
-
-//TODO use rust's split_inclusive once it's no longer unstable
-fn split_inclusive(code_str: &str) -> Vec<String> {
-    let mut split_vec: Vec<String> = Vec::new();
-    let mut temp_str = String::new();
-
-    for token in code_str.chars() {
-        if token != '\n' {
-            temp_str.push(token);
-        } else {
-            split_vec.push(temp_str);
-            temp_str = String::new();
-            temp_str.push(token);
-        }
-    }
-
-    if !temp_str.is_empty() {
-        split_vec.push(temp_str);
-    }
-
-    split_vec
 }
 
 impl Lines for CodeLines {

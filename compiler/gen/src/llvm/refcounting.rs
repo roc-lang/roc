@@ -119,19 +119,32 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let builder = env.builder;
         let refcount_type = ptr_int(env.context, env.ptr_bytes);
 
-        let max = builder.build_int_compare(
+        let is_static_allocation = builder.build_int_compare(
             IntPredicate::EQ,
             refcount,
             refcount_type.const_int(REFCOUNT_MAX as u64, false),
             "refcount_max_check",
         );
-        let incremented = builder.build_int_add(refcount, amount, "increment_refcount");
 
-        let new_refcount = builder
-            .build_select(max, refcount, incremented, "select_refcount")
-            .into_int_value();
+        let block = env.builder.get_insert_block().expect("to be in a function");
+        let parent = block.get_parent().unwrap();
 
-        self.set_refcount(env, new_refcount);
+        let modify_block = env.context.append_basic_block(parent, "inc_str_modify");
+        let cont_block = env.context.append_basic_block(parent, "inc_str_cont");
+
+        env.builder
+            .build_conditional_branch(is_static_allocation, cont_block, modify_block);
+
+        {
+            env.builder.position_at_end(modify_block);
+
+            let incremented = builder.build_int_add(refcount, amount, "increment_refcount");
+            self.set_refcount(env, incremented);
+
+            env.builder.build_unconditional_branch(cont_block);
+        }
+
+        env.builder.position_at_end(cont_block);
     }
 
     pub fn decrement<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) {
@@ -205,35 +218,52 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
         let refcount = refcount_ptr.get_refcount(env);
 
-        let add_with_overflow = env
-            .call_intrinsic(
-                LLVM_SADD_WITH_OVERFLOW_I64,
-                &[
-                    refcount.into(),
-                    refcount_type.const_int(-1_i64 as u64, true).into(),
-                ],
-            )
-            .into_struct_value();
-
-        let has_overflowed = builder
-            .build_extract_value(add_with_overflow, 1, "has_overflowed")
-            .unwrap();
-
-        let has_overflowed_comparison = builder.build_int_compare(
+        let is_static_allocation = builder.build_int_compare(
             IntPredicate::EQ,
-            has_overflowed.into_int_value(),
-            ctx.bool_type().const_int(1_u64, false),
-            "has_overflowed",
+            refcount,
+            env.ptr_int().const_zero(),
+            "is_static_allocation",
         );
 
         // build blocks
+        let branch_block = ctx.append_basic_block(parent, "branch");
         let then_block = ctx.append_basic_block(parent, "then");
         let else_block = ctx.append_basic_block(parent, "else");
+        let return_block = ctx.append_basic_block(parent, "return");
 
-        // TODO what would be most optimial for the branch predictor
-        //
-        // are most refcounts 1 most of the time? or not?
-        builder.build_conditional_branch(has_overflowed_comparison, then_block, else_block);
+        builder.build_conditional_branch(is_static_allocation, return_block, branch_block);
+
+        let add_with_overflow;
+
+        {
+            builder.position_at_end(branch_block);
+
+            add_with_overflow = env
+                .call_intrinsic(
+                    LLVM_SADD_WITH_OVERFLOW_I64,
+                    &[
+                        refcount.into(),
+                        refcount_type.const_int(-1_i64 as u64, true).into(),
+                    ],
+                )
+                .into_struct_value();
+
+            let has_overflowed = builder
+                .build_extract_value(add_with_overflow, 1, "has_overflowed")
+                .unwrap();
+
+            let has_overflowed_comparison = builder.build_int_compare(
+                IntPredicate::EQ,
+                has_overflowed.into_int_value(),
+                ctx.bool_type().const_int(1_u64, false),
+                "has_overflowed",
+            );
+
+            // TODO what would be most optimial for the branch predictor
+            //
+            // are most refcounts 1 most of the time? or not?
+            builder.build_conditional_branch(has_overflowed_comparison, then_block, else_block);
+        }
 
         // build then block
         {
@@ -252,7 +282,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
                     n => unreachable!("invalid extra_bytes {:?}", n),
                 }
             }
-            builder.build_return(None);
+            builder.build_unconditional_branch(return_block);
         }
 
         // build else block
@@ -273,6 +303,11 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
             refcount_ptr.set_refcount(env, selected.into_int_value());
 
+            builder.build_unconditional_branch(return_block);
+        }
+
+        {
+            builder.position_at_end(return_block);
             builder.build_return(None);
         }
     }

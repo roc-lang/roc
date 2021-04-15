@@ -1,5 +1,5 @@
 platform examples/multi-dep-thunk
-    requires { main : Str }
+    requires {}{ main : Str }
     exposes []
     packages {}
     imports []
