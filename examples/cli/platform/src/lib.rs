@@ -91,12 +91,10 @@ unsafe fn call_the_closure(function_pointer: *const u8, closure_data_ptr: *const
 
 #[no_mangle]
 pub fn rust_main() -> isize {
-    println!("Running Roc closure");
-    let start_time = SystemTime::now();
-
     let size = unsafe { roc_main_size() } as usize;
     let layout = Layout::array::<u8>(size).unwrap();
-    let answer = unsafe {
+
+    unsafe {
         let buffer = std::alloc::alloc(layout);
 
         roc_main(buffer);
@@ -129,15 +127,6 @@ pub fn rust_main() -> isize {
             }
         }
     };
-    let end_time = SystemTime::now();
-    let duration = end_time.duration_since(start_time).unwrap();
-
-    println!(
-        "Roc closure took {:.4} ms to compute this answer: {:?}",
-        duration.as_secs_f64() * 1000.0,
-        // truncate the answer, so stdout is not swamped
-        answer
-    );
 
     // Exit code
     0
