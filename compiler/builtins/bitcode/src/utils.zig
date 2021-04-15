@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const REFCOUNT_MAX_ISIZE: comptime isize = 0;
 const REFCOUNT_ONE_ISIZE: comptime isize = std.math.minInt(isize);
 pub const REFCOUNT_ONE: usize = @bitCast(usize, REFCOUNT_ONE_ISIZE);
 

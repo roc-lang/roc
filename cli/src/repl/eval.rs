@@ -884,6 +884,11 @@ fn str_to_ast<'a>(arena: &'a Bump, string: &'a str) -> Expr<'a> {
 
         str_slice_to_ast(arena, arena.alloc(string))
     } else {
+        // Roc string literals are stored inside the constant section of the program
+        // That means this memory is gone when the jit function is done
+        // (as opposed to heap memory, which we can leak and then still use after)
+        // therefore we must make an owned copy of the string here
+        let string = bumpalo::collections::String::from_str_in(string, arena).into_bump_str();
         str_slice_to_ast(arena, string)
     }
 }
