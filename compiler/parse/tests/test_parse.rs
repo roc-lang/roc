@@ -26,7 +26,8 @@ mod test_parse {
     use roc_parse::ast::{self, Def, EscapedChar, Spaceable, TypeAnnotation, WhenBranch};
     use roc_parse::header::{
         AppHeader, Effects, ExposesEntry, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
-        PackageName, PackageOrPath, PlatformHeader, To,
+        PackageName, PackageOrPath, PlatformHeader, PlatformRequires, PlatformRigid, To,
+        TypedIdent,
     };
     use roc_parse::module::module_defs;
     use roc_parse::parser::{Parser, State, SyntaxError};
@@ -3128,10 +3129,35 @@ mod test_parse {
             spaces_after_effects_keyword: &[],
             spaces_after_type_name: &[],
         };
+
+        let requires = {
+            let region1 = Region::new(0, 0, 38, 47);
+            let region2 = Region::new(0, 0, 45, 47);
+
+            PlatformRequires {
+                rigids: Vec::new_in(&arena),
+                signature: Located::at(
+                    region1,
+                    TypedIdent::Entry {
+                        ident: Located::new(0, 0, 38, 42, "main"),
+                        spaces_before_colon: &[],
+                        ann: Located::at(
+                            region2,
+                            TypeAnnotation::Record {
+                                fields: &[],
+                                ext: None,
+                                final_comments: &[],
+                            },
+                        ),
+                    },
+                ),
+            }
+        };
+
         let header = PlatformHeader {
             before_header: &[],
             name: Located::new(0, 0, 9, 23, pkg_name),
-            requires: Vec::new_in(&arena),
+            requires,
             exposes: Vec::new_in(&arena),
             packages: Vec::new_in(&arena),
             imports: Vec::new_in(&arena),
@@ -3152,7 +3178,7 @@ mod test_parse {
 
         let expected = roc_parse::ast::Module::Platform { header };
 
-        let src = "platform rtfeldman/blah requires {} exposes [] packages {} imports [] provides [] effects fx.Blah {}";
+        let src = "platform rtfeldman/blah requires {} { main : {} } exposes [] packages {} imports [] provides [] effects fx.Blah {}";
         let actual = roc_parse::module::parse_header(&arena, State::new(src.as_bytes()))
             .map(|tuple| tuple.0);
 
@@ -3188,10 +3214,36 @@ mod test_parse {
             spaces_after_effects_keyword: &[],
             spaces_after_type_name: &[],
         };
+
+        let requires = {
+            let region1 = Region::new(1, 1, 30, 39);
+            let region2 = Region::new(1, 1, 37, 39);
+            let region3 = Region::new(1, 1, 14, 26);
+
+            PlatformRequires {
+                rigids: bumpalo::vec![ in &arena; Located::at(region3, PlatformRigid::Entry { alias: "Model", rigid: "model" }) ],
+                signature: Located::at(
+                    region1,
+                    TypedIdent::Entry {
+                        ident: Located::new(1, 1, 30, 34, "main"),
+                        spaces_before_colon: &[],
+                        ann: Located::at(
+                            region2,
+                            TypeAnnotation::Record {
+                                fields: &[],
+                                ext: None,
+                                final_comments: &[],
+                            },
+                        ),
+                    },
+                ),
+            }
+        };
+
         let header = PlatformHeader {
             before_header: &[],
             name: Located::new(0, 0, 9, 19, pkg_name),
-            requires: Vec::new_in(&arena),
+            requires,
             exposes: Vec::new_in(&arena),
             packages,
             imports,
@@ -3215,7 +3267,7 @@ mod test_parse {
         let src = indoc!(
             r#"
                 platform foo/barbaz
-                    requires {}
+                    requires {model=>Model} { main : {} }
                     exposes []
                     packages { foo: "./foo" }
                     imports []

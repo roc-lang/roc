@@ -1,5 +1,5 @@
 platform folkertdev/foo
-    requires { main : Task {} [] }
+    requires {}{ main : Task {} [] }
     exposes []
     packages {}
     imports [ Task ]

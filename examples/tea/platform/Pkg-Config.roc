@@ -1,10 +1,10 @@
 platform folkertdev/foo
-    requires { main : {} }
+    requires {}{foo:Str}
     exposes []
     packages {}
     imports [Cmd]
     provides [ mainForHost ]
-    effects Effect
+    effects fx.Effect
         {
             putChar : I64 -> Effect {},
             putLine : Str -> Effect {},

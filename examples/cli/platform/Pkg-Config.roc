@@ -1,5 +1,5 @@
 platform rtfeldman/roc-cli
-    requires { main : Task.Task {} * } # TODO FIXME
+    requires {}{ main : Task.Task {} * } # TODO FIXME
     exposes [] # TODO FIXME actually expose modules
     packages {}
     imports [ Task ] # TODO FIXME Task.{ Task }
