@@ -1,13 +1,8 @@
-extern crate fs_extra;
-extern crate serde;
-#[macro_use]
-extern crate serde_derive;
 extern crate pulldown_cmark;
-extern crate serde_json;
 use roc_builtins::std::StdLib;
 use roc_can::builtins::builtin_defs_map;
+use roc_load::docs::DocTypeAnnotation;
 use roc_load::docs::ModuleDocumentation;
-use roc_load::docs::{DocTypeAnnotation, Documentation};
 use roc_load::file::LoadingProblem;
 
 use std::fs;
@@ -15,37 +10,6 @@ extern crate roc_load;
 use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use std::path::{Path, PathBuf};
-
-#[derive(Serialize)]
-pub struct Template {
-    pub package_name: String,
-    pub package_version: String,
-    pub module_name: String,
-    pub module_docs: String,
-    pub module_entries: Vec<ModuleEntry>,
-    pub module_links: Vec<TemplateLink>,
-}
-
-#[derive(Serialize, Clone, Debug, PartialEq)]
-pub struct ModuleEntry {
-    pub name: String,
-    pub type_vars: Vec<String>,
-    pub type_annotation: String,
-    pub docs: String,
-}
-
-#[derive(Serialize)]
-pub struct TemplateLink {
-    pub name: String,
-    pub href: String,
-    pub classes: String,
-    pub entries: Vec<TemplateLinkEntry>,
-}
-
-#[derive(Serialize)]
-pub struct TemplateLinkEntry {
-    name: String,
-}
 
 pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
     let files_docs = files_to_documentations(filenames, std_lib);
@@ -81,26 +45,211 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
     )
     .expect("TODO gracefully handle failing to make the favicon");
 
-    // Register handlebars template
-    let mut handlebars = handlebars::Handlebars::new();
-    handlebars
-        .register_template_file("page", "./docs/src/templates/page.hbs")
-        .expect("TODO gracefully handle registering template failing");
+    let template_html = include_str!("./static/index.html");
 
     // Write each package's module docs html file
     for module in &package.modules {
-        let template = documentation_to_template_data(&package, module);
+        let mut filename = String::new();
+        filename.push_str(module.name.as_str());
+        filename.push_str(".html");
 
-        let handlebars_data = handlebars::to_json(&template);
-        let filepath = build_dir.join(format!("{}.html", module.name));
-        let mut output_file =
-            fs::File::create(filepath).expect("TODO gracefully handle creating file failing");
-        handlebars
-            .render_to_write("page", &handlebars_data, &mut output_file)
-            .expect("TODO gracefully handle writing file failing");
+        let rendered_module = template_html
+            .replace(
+                "<!-- Module links -->",
+                render_module_links(&package.modules).as_str(),
+            )
+            .replace(
+                "<!-- Package Name and Version -->",
+                render_name_and_version(package.name.as_str(), package.version.as_str()).as_str(),
+            )
+            .replace(
+                "<!-- Module Docs -->",
+                render_main_content(&module).as_str(),
+            );
+
+        fs::write(build_dir.join(filename), rendered_module)
+            .expect("TODO gracefully handle failing to write html");
     }
 
     println!("🎉 Docs generated in {}", build_dir.display());
+}
+
+fn render_main_content(module: &ModuleDocumentation) -> String {
+    let mut buf = String::new();
+
+    buf.push_str(
+        html_node(
+            "h2",
+            vec![("class", "module-name")],
+            html_node("a", vec![("href", "/#")], module.name.as_str()).as_str(),
+        )
+        .as_str(),
+    );
+
+    buf.push_str(markdown_to_html(module.docs.clone()).as_str());
+
+    for entry in &module.entries {
+        let mut href = String::new();
+        href.push('#');
+        href.push_str(entry.name.as_str());
+
+        let name = entry.name.as_str();
+
+        let mut content = String::new();
+
+        content.push_str(html_node("a", vec![("href", href.as_str())], name).as_str());
+
+        for type_var in &entry.type_vars {
+            content.push(' ');
+            content.push_str(type_var.as_str());
+        }
+
+        if let Some(type_ann) = &entry.type_annotation {
+            content.push_str(" : ");
+            type_annotation_to_html(0, &mut content, &type_ann);
+        }
+
+        buf.push_str(html_node("h3", vec![("id", name)], content.as_str()).as_str());
+
+        if let Some(docs) = &entry.docs {
+            buf.push_str(docs.as_str());
+        }
+    }
+
+    buf
+}
+
+fn html_node(tag_name: &str, attrs: Vec<(&str, &str)>, content: &str) -> String {
+    let mut buf = String::new();
+
+    buf.push('<');
+    buf.push_str(tag_name);
+
+    for (key, value) in &attrs {
+        buf.push(' ');
+        buf.push_str(key);
+        buf.push_str("=\"");
+        buf.push_str(value);
+        buf.push('"');
+    }
+
+    if !&attrs.is_empty() {
+        buf.push(' ');
+    }
+
+    buf.push('>');
+
+    buf.push_str(content);
+
+    buf.push_str("</");
+    buf.push_str(tag_name);
+    buf.push('>');
+
+    buf
+}
+
+fn render_name_and_version(name: &str, version: &str) -> String {
+    let mut buf = String::new();
+
+    let mut href = String::new();
+    href.push('/');
+    href.push_str(name);
+
+    buf.push_str(
+        html_node(
+            "h1",
+            vec![("class", "pkg-full-name")],
+            html_node("a", vec![("href", href.as_str())], name).as_str(),
+        )
+        .as_str(),
+    );
+
+    let mut verions_href = String::new();
+
+    verions_href.push('/');
+    verions_href.push_str(name);
+    verions_href.push('/');
+    verions_href.push_str(version);
+
+    buf.push_str(
+        html_node(
+            "a",
+            vec![("class", "version"), ("href", verions_href.as_str())],
+            version,
+        )
+        .as_str(),
+    );
+
+    buf
+}
+
+fn render_module_links(modules: &[ModuleDocumentation]) -> String {
+    let mut buf = String::new();
+
+    for module in modules {
+        let mut sidebar_entry_content = String::new();
+
+        let name = module.name.as_str();
+
+        let href = {
+            let mut href_buf = String::new();
+            href_buf.push_str(name);
+            href_buf.push_str(".html");
+            href_buf
+        };
+
+        sidebar_entry_content.push_str(
+            html_node(
+                "a",
+                vec![("class", "sidebar-module-link"), ("href", href.as_str())],
+                name,
+            )
+            .as_str(),
+        );
+
+        let entries = {
+            let mut entries_buf = String::new();
+
+            for entry in &module.entries {
+                let mut entry_href = String::new();
+
+                entry_href.push_str(href.as_str());
+                entry_href.push('#');
+                entry_href.push_str(entry.name.as_str());
+
+                entries_buf.push_str(
+                    html_node(
+                        "a",
+                        vec![("href", entry_href.as_str())],
+                        entry.name.as_str(),
+                    )
+                    .as_str(),
+                );
+            }
+
+            entries_buf
+        };
+
+        sidebar_entry_content.push_str(
+            html_node(
+                "div",
+                vec![("class", "sidebar-sub-entries")],
+                entries.as_str(),
+            )
+            .as_str(),
+        );
+
+        buf.push_str(
+            html_node(
+                "div",
+                vec![("class", "sidebar-entry")],
+                sidebar_entry_content.as_str(),
+            )
+            .as_str(),
+        );
+    }
+
+    buf
 }
 
 pub fn files_to_documentations(
@@ -132,58 +281,6 @@ pub fn files_to_documentations(
         }
     }
     files_docs
-}
-
-pub fn documentation_to_template_data(
-    doc: &Documentation,
-    module: &ModuleDocumentation,
-) -> Template {
-    Template {
-        package_name: doc.name.clone(),
-        package_version: doc.version.clone(),
-        module_name: module.name.clone(),
-        module_docs: markdown_to_html(module.docs.clone()),
-        module_entries: module
-            .entries
-            .clone()
-            .into_iter()
-            .map(|entry| ModuleEntry {
-                name: entry.name.clone(),
-                type_vars: entry.type_vars,
-                type_annotation: match entry.type_annotation {
-                    None => String::new(),
-                    Some(type_ann) => {
-                        let type_ann_html = &mut String::new();
-
-                        type_ann_html.push_str(" : ");
-
-                        type_annotation_to_html(0, type_ann_html, &type_ann);
-
-                        type_ann_html.to_string()
-                    }
-                },
-                docs: match entry.docs {
-                    Some(docs) => markdown_to_html(docs),
-                    None => String::new(),
-                },
-            })
-            .collect(),
-        module_links: doc
-            .modules
-            .clone()
-            .into_iter()
-            .map(|module_link| TemplateLink {
-                name: module_link.name.clone(),
-                href: format!("./{}.html", module_link.name),
-                classes: "".to_string(),
-                entries: module_link
-                    .entries
-                    .into_iter()
-                    .map(|entry| TemplateLinkEntry { name: entry.name })
-                    .collect(),
-            })
-            .collect(),
-    }
 }
 
 const INDENT: &str = "&nbsp;&nbsp;&nbsp;&nbsp;";
