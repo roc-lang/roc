@@ -1,4 +1,4 @@
-use gr_colors::{from_hsb, RgbaTup};
+use gr_colors::{from_hsba, RgbaTup};
 use serde::{Deserialize, Serialize};
 
 use crate::graphics::colors as gr_colors;
@@ -22,7 +22,7 @@ impl Default for UITheme {
             dark_brand: DARK_BRAND_COL,
             text: gr_colors::WHITE,
             caret: gr_colors::WHITE,
-            select_highlight: from_hsb(240, 55, 100),
+            select_highlight: from_hsba(240, 55, 100, 0.3),
         }
     }
 }
