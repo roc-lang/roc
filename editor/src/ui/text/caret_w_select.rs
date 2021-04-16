@@ -112,7 +112,7 @@ pub fn make_caret_rect(
     }
 }
 
-pub fn make_selection_rect (
+pub fn make_selection_rect(
     sel_rect_x: f32,
     sel_rect_y: f32,
     width: f32,

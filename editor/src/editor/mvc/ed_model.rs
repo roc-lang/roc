@@ -5,7 +5,7 @@ use crate::editor::syntax_highlight::HighlightStyle;
 use crate::editor::{
     ed_error::EdError::ParseError,
     ed_error::EdResult,
-    markup::attribute::{Attributes, Caret},
+    markup::attribute::Attributes,
     markup::nodes::{expr2_to_markup, set_parent_for_all, MarkupNode},
 };
 use crate::graphics::primitives::rect::Rect;

@@ -30,6 +30,12 @@ pub struct Selection {
     pub end_pos: TextPos,
 }
 
+impl Selection {
+    pub fn is_on_same_line(&self) -> bool {
+        self.start_pos.line == self.end_pos.line
+    }
+}
+
 pub fn validate_raw_sel(raw_sel: RawSelection) -> UIResult<Selection> {
     validate_selection(raw_sel.start_pos, raw_sel.end_pos)
 }

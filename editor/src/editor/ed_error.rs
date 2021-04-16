@@ -71,6 +71,11 @@ pub enum EdError {
         backtrace: Backtrace,
     },
 
+    #[snafu(display(
+        "MissingSelection: ed_model.selected_expr2_id was some but ed_model.caret_w_sel_vec did not contain any Some(Selection)."
+    ))]
+    MissingSelection { backtrace: Backtrace },
+
     #[snafu(display("NestedNodeMissingChild: expected to find child with id {} in Nested MarkupNode, but it was missing. Id's of the children are {:?}.", node_id, children_ids))]
     NestedNodeMissingChild {
         node_id: MarkNodeId,
@@ -95,6 +100,15 @@ pub enum EdError {
 
     #[snafu(display("NodeWithoutAttributes: expected to have a node with attributes. This is a Nested MarkupNode, only Text and Blank nodes have attributes."))]
     NodeWithoutAttributes { backtrace: Backtrace },
+
+    #[snafu(display(
+        "NodeIdNotInGridNodeMap: MarkNodeId {} was not found in ed_model.grid_node_map.",
+        node_id
+    ))]
+    NodeIdNotInGridNodeMap {
+        node_id: MarkNodeId,
+        backtrace: Backtrace,
+    },
 
     #[snafu(display(
         "OutOfBounds: index {} was out of bounds for {} with length {}.",

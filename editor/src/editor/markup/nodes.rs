@@ -1,22 +1,22 @@
-use crate::editor::ed_error::MissingParent;
-use crate::lang::pool::Pool;
 use super::attribute::Attributes;
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::ExpectedTextNode;
 use crate::editor::ed_error::GetContentOnNestedNode;
+use crate::editor::ed_error::MissingParent;
 use crate::editor::ed_error::NestedNodeRequired;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::lang::ast::RecordField;
+use crate::lang::pool::Pool;
 use crate::lang::{
     ast::Expr2,
     expr::Env,
     pool::{NodeId, PoolStr},
 };
 use bumpalo::Bump;
-use std::fmt;
 use snafu::OptionExt;
+use std::fmt;
 
 #[derive(Debug)]
 pub enum MarkupNode {
@@ -59,16 +59,27 @@ impl MarkupNode {
         }
     }
 
-    pub fn get_expr2_level_node(&self, curr_mark_node_id: MarkNodeId, ast_node_id: NodeId<Expr2>, pool: &Pool) -> EdResult<MarkNodeId> {
+    pub fn get_expr2_level_node(
+        &self,
+        curr_mark_node_id: MarkNodeId,
+        ast_node_id: NodeId<Expr2>,
+        pool: &Pool,
+    ) -> EdResult<MarkNodeId> {
         let ast_node = pool.get(ast_node_id);
 
         match ast_node {
-            SmallInt{..} | I128{..} | U128{..} | Float{..} | SmallStr(_) | Str(_) | Var(_) | InvalidLookup(_) | Blank => Ok(curr_mark_node_id),
-            _ => {
-                self.get_parent_id_opt().context(MissingParent {
-                    node_id: curr_mark_node_id,
-                })
-            },
+            SmallInt { .. }
+            | I128 { .. }
+            | U128 { .. }
+            | Float { .. }
+            | SmallStr(_)
+            | Str(_)
+            | Var(_)
+            | InvalidLookup(_)
+            | Blank => Ok(curr_mark_node_id),
+            _ => self.get_parent_id_opt().context(MissingParent {
+                node_id: curr_mark_node_id,
+            }),
         }
     }
 

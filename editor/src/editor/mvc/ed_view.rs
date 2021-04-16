@@ -1,5 +1,3 @@
-use crate::ui::text::caret_w_select::make_selection_rect;
-use crate::ui::text::selection::Selection;
 use super::ed_model::EdModel;
 use crate::editor::config::Config;
 use crate::editor::ed_error::EdResult;
@@ -7,7 +5,9 @@ use crate::editor::render_ast::build_code_graphics;
 use crate::editor::render_debug::build_debug_graphics;
 use crate::graphics::primitives::rect::Rect;
 use crate::ui::text::caret_w_select::make_caret_rect;
+use crate::ui::text::caret_w_select::make_selection_rect;
 use crate::ui::text::caret_w_select::CaretWSelect;
+use crate::ui::text::selection::Selection;
 use crate::ui::ui_error::MissingGlyphDims;
 use cgmath::Vector2;
 use snafu::OptionExt;
@@ -73,7 +73,7 @@ pub fn build_selection_graphics(
     let char_height = glyph_dim_rect.height;
 
     let y_offset = 0.1 * char_height;
-    
+
     for caret_w_sel in caret_w_select_vec {
         let caret_row = caret_w_sel.caret_pos.line as f32;
         let caret_col = caret_w_sel.caret_pos.column as f32;
@@ -87,8 +87,8 @@ pub fn build_selection_graphics(
             let sel_rect_x = txt_coords.x + ((start_pos.column as f32) * char_width);
             let sel_rect_y = txt_coords.y + char_height * (start_pos.line as f32) + y_offset;
 
-            let width = ((end_pos.column as f32) * char_width)
-            - ((start_pos.column as f32) * char_width);
+            let width =
+                ((end_pos.column as f32) * char_width) - ((start_pos.column as f32) * char_width);
 
             rects.push(make_selection_rect(
                 sel_rect_x,
@@ -105,7 +105,6 @@ pub fn build_selection_graphics(
             &glyph_dim_rect,
             &config.ed_theme.ui_theme,
         ));
-
     }
 
     Ok(rects)
