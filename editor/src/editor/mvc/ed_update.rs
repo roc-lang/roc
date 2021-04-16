@@ -2,7 +2,6 @@ use crate::editor::code_lines::CodeLines;
 use crate::editor::ed_error::print_ui_err;
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::MissingSelection;
-use crate::editor::ed_error::NestedNodeWithoutChildren;
 use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::markup::attribute::Attributes;
 use crate::editor::markup::nodes;
@@ -160,21 +159,7 @@ impl<'a> EdModel<'a> {
                 let parent_mark_node = self.markup_node_pool.get(parent_id);
                 let ast_node_id = parent_mark_node.get_ast_node_id();
 
-                let all_child_ids = parent_mark_node.get_children_ids();
-                let first_child_id = all_child_ids
-                    .first()
-                    .with_context(|| NestedNodeWithoutChildren { node_id: parent_id })?;
-                let last_child_id = all_child_ids
-                    .last()
-                    .with_context(|| NestedNodeWithoutChildren { node_id: parent_id })?;
-
-                let expr_start_pos = self
-                    .grid_node_map
-                    .get_node_position(*first_child_id, true)?;
-                let expr_end_pos = self
-                    .grid_node_map
-                    .get_node_position(*last_child_id, false)?
-                    .increment_col();
+                let (expr_start_pos, expr_end_pos) = self.grid_node_map.get_nested_start_end_pos(parent_id, self)?;
 
                 self.set_raw_sel(RawSelection {
                     start_pos: expr_start_pos,
@@ -191,7 +176,7 @@ impl<'a> EdModel<'a> {
             if self.grid_node_map.node_exists_at_pos(caret_pos) {
                 let (expr_start_pos, expr_end_pos, ast_node_id) = self
                     .grid_node_map
-                    .get_expr_start_end_pos(self.get_caret(), &self.markup_node_pool)?;
+                    .get_expr_start_end_pos(self.get_caret(), &self)?;
                 self.set_raw_sel(RawSelection {
                     start_pos: expr_start_pos,
                     end_pos: expr_end_pos,

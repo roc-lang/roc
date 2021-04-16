@@ -1,7 +1,8 @@
+use crate::editor::ed_error::NestedNodeWithoutChildren;
+use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::NodeIdNotInGridNodeMap;
 use crate::editor::slow_pool::MarkNodeId;
-use crate::editor::slow_pool::SlowPool;
 use crate::editor::util::first_last_index_of;
 use crate::editor::util::index_of;
 use crate::lang::ast::Expr2;
@@ -11,6 +12,7 @@ use crate::ui::text::text_pos::TextPos;
 use crate::ui::ui_error::UIResult;
 use crate::ui::util::{slice_get, slice_get_mut};
 use std::fmt;
+use snafu::OptionExt;
 
 #[derive(Debug)]
 pub struct GridNodeMap {
@@ -62,7 +64,7 @@ impl GridNodeMap {
 
             line_ref.drain(selection.start_pos.column..selection.end_pos.column);
         } else {
-            // TODO
+            // TODO support multiline
         }
 
         Ok(())
@@ -134,15 +136,21 @@ impl GridNodeMap {
     pub fn get_expr_start_end_pos(
         &self,
         caret_pos: TextPos,
-        mark_node_pool: &SlowPool,
+        ed_model: &EdModel,
     ) -> EdResult<(TextPos, TextPos, NodeId<Expr2>)> {
         let line = slice_get(caret_pos.line, &self.lines)?;
         let node_id = slice_get(caret_pos.column, line)?;
+        let node = ed_model.markup_node_pool.get(*node_id);
 
-        let (first_node_index, last_node_index) = first_last_index_of(*node_id, line)?;
+        if node.is_nested() {
+            let (start_pos, end_pos) = self.get_nested_start_end_pos(*node_id, ed_model)?;
+
+            Ok((start_pos, end_pos, node.get_ast_node_id()))
+        } else {    
+            let (first_node_index, last_node_index) = first_last_index_of(*node_id, line)?;
 
         let curr_node_id = slice_get(first_node_index, line)?;
-        let curr_ast_node_id = mark_node_pool.get(*curr_node_id).get_ast_node_id();
+        let curr_ast_node_id = ed_model.markup_node_pool.get(*curr_node_id).get_ast_node_id();
 
         let mut expr_start_index = first_node_index;
         let mut expr_end_index = last_node_index;
@@ -152,7 +160,7 @@ impl GridNodeMap {
 
         for i in (0..first_node_index).rev() {
             let prev_pos_node_id = slice_get(i, line)?;
-            let prev_ast_node_id = mark_node_pool.get(*prev_pos_node_id).get_ast_node_id();
+            let prev_ast_node_id = ed_model.markup_node_pool.get(*prev_pos_node_id).get_ast_node_id();
 
             if prev_ast_node_id == curr_ast_node_id {
                 if pos_extra_subtract > 0 {
@@ -171,7 +179,7 @@ impl GridNodeMap {
 
         for i in last_node_index..line.len() {
             let next_pos_node_id = slice_get(i, line)?;
-            let next_ast_node_id = mark_node_pool.get(*next_pos_node_id).get_ast_node_id();
+            let next_ast_node_id = ed_model.markup_node_pool.get(*next_pos_node_id).get_ast_node_id();
 
             if next_ast_node_id == curr_ast_node_id {
                 if pos_extra_add > 0 {
@@ -196,6 +204,29 @@ impl GridNodeMap {
             },
             curr_ast_node_id,
         ))
+        }
+    }
+
+    pub fn get_nested_start_end_pos(&self, nested_node_id: MarkNodeId, ed_model: &EdModel) -> EdResult<(TextPos, TextPos)> {
+        let parent_mark_node = ed_model.markup_node_pool.get(nested_node_id);
+
+        let all_child_ids = parent_mark_node.get_children_ids();
+        let first_child_id = all_child_ids
+            .first()
+            .with_context(|| NestedNodeWithoutChildren { node_id: nested_node_id })?;
+        let last_child_id = all_child_ids
+            .last()
+            .with_context(|| NestedNodeWithoutChildren { node_id: nested_node_id })?;
+
+        let expr_start_pos = ed_model
+            .grid_node_map
+            .get_node_position(*first_child_id, true)?;
+        let expr_end_pos = ed_model
+            .grid_node_map
+            .get_node_position(*last_child_id, false)?
+            .increment_col();
+
+        Ok((expr_start_pos, expr_end_pos))
     }
 }
 
