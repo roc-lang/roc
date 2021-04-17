@@ -1,5 +1,5 @@
 platform folkertdev/foo
-    requires { main : Task {} [] }
+    requires {}{ main : Task {} [] }
     exposes []
     packages {}
     imports [ Task ]
@@ -8,6 +8,7 @@ platform folkertdev/foo
         {
             # TODO change errno to I32
             readAllUtf8 : Str -> Effect { errno : I64, bytes : List U8 },
+            writeAllUtf8 : Str, Str -> Effect { errno: I64 },
             putLine : Str -> Effect {}
         }
 
