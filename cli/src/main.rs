@@ -1,4 +1,7 @@
-use roc_cli::{build, build_app, docs, repl, DIRECTORY_OR_FILES};
+use roc_cli::{
+    build, build_app, docs, repl, BuildConfig, CMD_BUILD, CMD_DOCS, CMD_EDIT, CMD_REPL, CMD_RUN,
+    DIRECTORY_OR_FILES, ROC_FILE,
+};
 use std::io;
 use std::path::{Path, PathBuf};
 use target_lexicon::Triple;
@@ -6,38 +9,58 @@ use target_lexicon::Triple;
 fn main() -> io::Result<()> {
     let matches = build_app().get_matches();
 
-    match matches.subcommand_name() {
-        None => roc_editor::launch(&[]),
-        Some("build") => build(
+    let exit_code = match matches.subcommand_name() {
+        None => {
+            roc_editor::launch(&[])?;
+
+            // rustc couldn't infer the error type here
+            Result::<i32, io::Error>::Ok(0)
+        }
+        Some(CMD_BUILD) => Ok(build(
             &Triple::host(),
-            matches.subcommand_matches("build").unwrap(),
-            false,
-        ),
-        Some("run") => build(
-            &Triple::host(),
-            matches.subcommand_matches("run").unwrap(),
-            true,
-        ),
-        Some("repl") => repl::main(),
-        Some("edit") => {
+            matches.subcommand_matches(CMD_BUILD).unwrap(),
+            BuildConfig::BuildOnly,
+        )?),
+        Some(CMD_RUN) => {
+            let subcmd_matches = matches.subcommand_matches(CMD_RUN).unwrap();
+            let roc_file_arg_index = subcmd_matches.index_of(ROC_FILE).unwrap() + 1; // Not sure why this +1 is necessary, but it is!
+
+            Ok(build(
+                &Triple::host(),
+                subcmd_matches,
+                BuildConfig::BuildAndRun { roc_file_arg_index },
+            )?)
+        }
+        Some(CMD_REPL) => {
+            repl::main()?;
+
+            // Exit 0 if the repl exited normally
+            Ok(0)
+        }
+        Some(CMD_EDIT) => {
             match matches
-                .subcommand_matches("edit")
+                .subcommand_matches(CMD_EDIT)
                 .unwrap()
                 .values_of_os(DIRECTORY_OR_FILES)
             {
-                None => roc_editor::launch(&[]),
+                None => {
+                    roc_editor::launch(&[])?;
+                }
                 Some(values) => {
                     let paths = values
                         .map(|os_str| Path::new(os_str))
                         .collect::<Vec<&Path>>();
 
-                    roc_editor::launch(&paths)
+                    roc_editor::launch(&paths)?;
                 }
             }
+
+            // Exit 0 if the editor exited normally
+            Ok(0)
         }
-        Some("docs") => {
+        Some(CMD_DOCS) => {
             let values = matches
-                .subcommand_matches("docs")
+                .subcommand_matches(CMD_DOCS)
                 .unwrap()
                 .values_of_os(DIRECTORY_OR_FILES)
                 .unwrap();
@@ -48,8 +71,10 @@ fn main() -> io::Result<()> {
 
             docs(paths);
 
-            Ok(())
+            Ok(0)
         }
         _ => unreachable!(),
-    }
+    }?;
+
+    std::process::exit(exit_code);
 }
