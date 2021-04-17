@@ -18,11 +18,17 @@ pub enum Constraint {
           // And(Vec<Constraint>),
 }
 
-pub fn constrain_expr(env: &mut Env, expr: &Expr2, expected: Expected<Type2>) -> Constraint {
+pub fn constrain_expr(
+    env: &mut Env,
+    expr: &Expr2,
+    expected: Expected<Type2>,
+    region: Region,
+) -> Constraint {
     use Constraint::*;
 
     match expr {
-        Expr2::Str(_) => Eq(str_type(env.pool), expected, Category::Str, Region::zero()),
+        Expr2::EmptyRecord => Eq(Type2::EmptyRec, expected, Category::Record, region),
+        Expr2::Str(_) => Eq(str_type(env.pool), expected, Category::Str, region),
         _ => todo!("implement constaints for {:?}", expr),
     }
 }
