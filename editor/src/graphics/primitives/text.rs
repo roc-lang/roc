@@ -7,6 +7,7 @@ use crate::graphics::colors::RgbaTup;
 use crate::graphics::style::DEFAULT_FONT_SIZE;
 use ab_glyph::{FontArc, Glyph, InvalidFont};
 use cgmath::{Vector2, Vector4};
+use glyph_brush::OwnedSection;
 use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, GlyphCruncher, Section};
 
 #[derive(Debug)]
@@ -78,6 +79,23 @@ fn section_from_text<'a>(
     }
     .add_text(
         wgpu_glyph::Text::new(&text.text)
+            .with_color(Vector4::from(text.color))
+            .with_scale(text.size),
+    )
+}
+
+pub fn owned_section_from_text<'a>(
+    text: &'a Text,
+    layout: wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker>,
+) -> OwnedSection {
+    OwnedSection {
+        screen_position: text.position.into(),
+        bounds: text.area_bounds.into(),
+        layout,
+        ..OwnedSection::default()
+    }
+    .add_text(
+        glyph_brush::OwnedText::new(text.text)
             .with_color(Vector4::from(text.color))
             .with_scale(text.size),
     )
