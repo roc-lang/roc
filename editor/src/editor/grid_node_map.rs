@@ -133,11 +133,12 @@ impl GridNodeMap {
         }
     }
 
+    // retruns start and end pos of Expr2, relevant AST node and MarkNodeId of the corresponding MarkupNode
     pub fn get_expr_start_end_pos(
         &self,
         caret_pos: TextPos,
         ed_model: &EdModel,
-    ) -> EdResult<(TextPos, TextPos, NodeId<Expr2>)> {
+    ) -> EdResult<(TextPos, TextPos, NodeId<Expr2>, MarkNodeId)> {
         let line = slice_get(caret_pos.line, &self.lines)?;
         let node_id = slice_get(caret_pos.column, line)?;
         let node = ed_model.markup_node_pool.get(*node_id);
@@ -145,7 +146,7 @@ impl GridNodeMap {
         if node.is_nested() {
             let (start_pos, end_pos) = self.get_nested_start_end_pos(*node_id, ed_model)?;
 
-            Ok((start_pos, end_pos, node.get_ast_node_id()))
+            Ok((start_pos, end_pos, node.get_ast_node_id(), *node_id))
         } else {
             let (first_node_index, last_node_index) = first_last_index_of(*node_id, line)?;
 
@@ -212,6 +213,7 @@ impl GridNodeMap {
                     column: expr_end_index,
                 },
                 curr_ast_node_id,
+                *curr_node_id,
             ))
         }
     }

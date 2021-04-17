@@ -47,7 +47,7 @@ impl<'a> EdModel<'a> {
             caret_tup.0 = move_fun(&self.code_lines, caret_tup.0, modifiers)?;
             caret_tup.1 = None;
         }
-        self.selected_expr2_id = None;
+        self.selected_expr2_tup = None;
 
         Ok(())
     }
@@ -147,16 +147,8 @@ impl<'a> EdModel<'a> {
     // select all MarkupNodes that refer to specific ast node and it's children.
     pub fn select_expr(&mut self) -> EdResult<()> {
         // include parent in selection if an `Expr2` was already selected
-        if let Some(sel_expr2_id) = self.selected_expr2_id {
-            let curr_mark_node_id = self.get_curr_mark_node_id()?;
-            let curr_mark_node = self.markup_node_pool.get(curr_mark_node_id);
-
-            let expr2_level_mark_node_id = curr_mark_node.get_expr2_level_node(
-                curr_mark_node_id,
-                sel_expr2_id,
-                self.module.env.pool,
-            )?;
-            let expr2_level_mark_node = self.markup_node_pool.get(expr2_level_mark_node_id);
+        if let Some((_sel_expr2_id, mark_node_id)) = self.selected_expr2_tup {
+            let expr2_level_mark_node = self.markup_node_pool.get(mark_node_id);
 
             if let Some(parent_id) = expr2_level_mark_node.get_parent_id_opt() {
                 let parent_mark_node = self.markup_node_pool.get(parent_id);
@@ -172,7 +164,7 @@ impl<'a> EdModel<'a> {
                 })?;
 
                 self.set_caret(expr_start_pos);
-                self.selected_expr2_id = Some(ast_node_id);
+                self.selected_expr2_tup = Some((ast_node_id, parent_id));
 
                 self.dirty = true;
             }
@@ -180,7 +172,7 @@ impl<'a> EdModel<'a> {
             // select `Expr2` in which caret is currently positioned
             let caret_pos = self.get_caret();
             if self.grid_node_map.node_exists_at_pos(caret_pos) {
-                let (expr_start_pos, expr_end_pos, ast_node_id) = self
+                let (expr_start_pos, expr_end_pos, ast_node_id, mark_node_id) = self
                     .grid_node_map
                     .get_expr_start_end_pos(self.get_caret(), &self)?;
                 self.set_raw_sel(RawSelection {
@@ -189,7 +181,7 @@ impl<'a> EdModel<'a> {
                 })?;
 
                 self.set_caret(expr_start_pos);
-                self.selected_expr2_id = Some(ast_node_id);
+                self.selected_expr2_tup = Some((ast_node_id, mark_node_id));
 
                 self.dirty = true;
             }
@@ -234,17 +226,8 @@ impl<'a> EdModel<'a> {
     }
 
     fn replace_slected_expr_with_blank(&mut self) -> EdResult<()> {
-        if let Some(sel_expr2_id) = self.selected_expr2_id {
-            let curr_mark_node_id = self.get_curr_mark_node_id()?;
-            let curr_mark_node = self.markup_node_pool.get(curr_mark_node_id);
-
-            let expr2_level_mark_node_id = curr_mark_node.get_expr2_level_node(
-                curr_mark_node_id,
-                sel_expr2_id,
-                self.module.env.pool,
-            )?;
-
-            let expr2_level_mark_node = self.markup_node_pool.get(expr2_level_mark_node_id);
+        if let Some((sel_expr2_id, mark_node_id)) = self.selected_expr2_tup {
+            let expr2_level_mark_node = self.markup_node_pool.get(mark_node_id);
 
             let blank_replacement = MarkupNode::Blank {
                 ast_node_id: sel_expr2_id,
@@ -254,7 +237,7 @@ impl<'a> EdModel<'a> {
             };
 
             self.markup_node_pool
-                .replace_node(expr2_level_mark_node_id, blank_replacement);
+                .replace_node(mark_node_id, blank_replacement);
 
             let active_selection = self.get_selection().context(MissingSelection {})?;
             self.code_lines.del_selection(active_selection)?;
@@ -265,7 +248,7 @@ impl<'a> EdModel<'a> {
                 caret_pos.line,
                 caret_pos.column,
                 nodes::BLANK_PLACEHOLDER,
-                expr2_level_mark_node_id,
+                mark_node_id,
             )?;
 
             self.module.env.pool.set(sel_expr2_id, Expr2::Blank)
@@ -369,7 +352,7 @@ impl<'a> SelectableLines for EdModel<'a> {
 
     fn set_sel_none(&mut self) {
         self.caret_w_select_vec.first_mut().0.selection_opt = None;
-        self.selected_expr2_id = None;
+        self.selected_expr2_tup = None;
     }
 
     fn set_caret_w_sel(&mut self, caret_w_sel: CaretWSelect) {
