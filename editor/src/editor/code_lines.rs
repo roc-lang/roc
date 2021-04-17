@@ -55,7 +55,7 @@ impl CodeLines {
 
             line_ref.drain(selection.start_pos.column..selection.end_pos.column);
         } else {
-            // TODO
+            // TODO support multiline selections
         }
 
         Ok(())

@@ -1,4 +1,5 @@
 use crate::editor::code_lines::CodeLines;
+use crate::editor::ed_error::from_ui_res;
 use crate::editor::ed_error::print_ui_err;
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::MissingSelection;
@@ -143,7 +144,9 @@ impl<'a> EdModel<'a> {
         self.code_lines.del_at_line(line_nr, index)
     }
 
+    // select all MarkupNodes that refer to specific ast node and it's children.
     pub fn select_expr(&mut self) -> EdResult<()> {
+        // include parent in selection if an `Expr2` was already selected
         if let Some(sel_expr2_id) = self.selected_expr2_id {
             let curr_mark_node_id = self.get_curr_mark_node_id()?;
             let curr_mark_node = self.markup_node_pool.get(curr_mark_node_id);
@@ -159,7 +162,9 @@ impl<'a> EdModel<'a> {
                 let parent_mark_node = self.markup_node_pool.get(parent_id);
                 let ast_node_id = parent_mark_node.get_ast_node_id();
 
-                let (expr_start_pos, expr_end_pos) = self.grid_node_map.get_nested_start_end_pos(parent_id, self)?;
+                let (expr_start_pos, expr_end_pos) = self
+                    .grid_node_map
+                    .get_nested_start_end_pos(parent_id, self)?;
 
                 self.set_raw_sel(RawSelection {
                     start_pos: expr_start_pos,
@@ -172,6 +177,7 @@ impl<'a> EdModel<'a> {
                 self.dirty = true;
             }
         } else {
+            // select `Expr2` in which caret is currently positioned
             let caret_pos = self.get_caret();
             if self.grid_node_map.node_exists_at_pos(caret_pos) {
                 let (expr_start_pos, expr_end_pos, ast_node_id) = self
@@ -188,6 +194,84 @@ impl<'a> EdModel<'a> {
                 self.dirty = true;
             }
         }
+
+        Ok(())
+    }
+
+    pub fn ed_handle_key_down(
+        &mut self,
+        modifiers: &Modifiers,
+        virtual_keycode: VirtualKeyCode,
+    ) -> EdResult<()> {
+        match virtual_keycode {
+            Left => from_ui_res(self.move_caret_left(modifiers)),
+            Up => {
+                if modifiers.ctrl && modifiers.shift {
+                    self.select_expr()
+                } else {
+                    from_ui_res(self.move_caret_up(modifiers))
+                }
+            }
+            Right => from_ui_res(self.move_caret_right(modifiers)),
+            Down => from_ui_res(self.move_caret_down(modifiers)),
+
+            A => {
+                if modifiers.ctrl {
+                    from_ui_res(self.select_all())
+                } else {
+                    Ok(())
+                }
+            }
+            Home => from_ui_res(self.move_caret_home(modifiers)),
+            End => from_ui_res(self.move_caret_end(modifiers)),
+            F11 => {
+                self.show_debug_view = !self.show_debug_view;
+                self.dirty = true;
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn replace_slected_expr_with_blank(&mut self) -> EdResult<()> {
+        if let Some(sel_expr2_id) = self.selected_expr2_id {
+            let curr_mark_node_id = self.get_curr_mark_node_id()?;
+            let curr_mark_node = self.markup_node_pool.get(curr_mark_node_id);
+
+            let expr2_level_mark_node_id = curr_mark_node.get_expr2_level_node(
+                curr_mark_node_id,
+                sel_expr2_id,
+                self.module.env.pool,
+            )?;
+
+            let expr2_level_mark_node = self.markup_node_pool.get(expr2_level_mark_node_id);
+
+            let blank_replacement = MarkupNode::Blank {
+                ast_node_id: sel_expr2_id,
+                attributes: Attributes::new(),
+                syn_high_style: HighlightStyle::Blank,
+                parent_id_opt: expr2_level_mark_node.get_parent_id_opt(),
+            };
+
+            self.markup_node_pool
+                .replace_node(expr2_level_mark_node_id, blank_replacement);
+
+            let active_selection = self.get_selection().context(MissingSelection {})?;
+            self.code_lines.del_selection(active_selection)?;
+            self.grid_node_map.del_selection(active_selection)?;
+
+            let caret_pos = self.get_caret();
+            self.insert_between_line(
+                caret_pos.line,
+                caret_pos.column,
+                nodes::BLANK_PLACEHOLDER,
+                expr2_level_mark_node_id,
+            )?;
+
+            self.module.env.pool.set(sel_expr2_id, Expr2::Blank)
+        }
+
+        self.set_sel_none();
 
         Ok(())
     }
@@ -320,39 +404,10 @@ impl<'a> SelectableLines for EdModel<'a> {
 
     fn handle_key_down(
         &mut self,
-        modifiers: &Modifiers,
-        virtual_keycode: VirtualKeyCode,
+        _modifiers: &Modifiers,
+        _virtual_keycode: VirtualKeyCode,
     ) -> UIResult<()> {
-        match virtual_keycode {
-            Left => self.move_caret_left(modifiers),
-            Up => {
-                if modifiers.ctrl && modifiers.shift {
-                    // TODO remove unwrap
-                    self.select_expr().unwrap();
-                    Ok(())
-                } else {
-                    self.move_caret_up(modifiers)
-                }
-            }
-            Right => self.move_caret_right(modifiers),
-            Down => self.move_caret_down(modifiers),
-
-            A => {
-                if modifiers.ctrl {
-                    self.select_all()
-                } else {
-                    Ok(())
-                }
-            }
-            Home => self.move_caret_home(modifiers),
-            End => self.move_caret_end(modifiers),
-            F11 => {
-                self.show_debug_view = !self.show_debug_view;
-                self.dirty = true;
-                Ok(())
-            }
-            _ => Ok(()),
-        }
+        unreachable!("Use EdModel::ed_handle_key_down instead.")
     }
 }
 
@@ -383,8 +438,6 @@ pub fn get_node_context<'a>(ed_model: &'a EdModel) -> EdResult<NodeContext<'a>> 
 }
 
 pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult<InputOutcome> {
-    // TODO nested records
-
     let input_outcome = match received_char {
             '\u{1}' // Ctrl + A
             | '\u{3}' // Ctrl + C
@@ -401,52 +454,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                 // On Linux, '\u{8}' is backspace,
                 // on macOS '\u{7f}'.
 
-                if let Some(sel_expr2_id) = ed_model.selected_expr2_id {
-                    let curr_mark_node_id = ed_model.get_curr_mark_node_id()?;
-                    let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
-
-                    let expr2_level_mark_node_id =
-                        curr_mark_node.get_expr2_level_node(
-                            curr_mark_node_id,
-                            sel_expr2_id,
-                            ed_model.module.env.pool,
-                        )?;
-
-                    let expr2_level_mark_node = ed_model.markup_node_pool.get(expr2_level_mark_node_id);
-
-                    let blank_replacement = MarkupNode::Blank {
-                        ast_node_id: sel_expr2_id,
-                        attributes: Attributes::new(),
-                        syn_high_style: HighlightStyle::Blank,
-                        parent_id_opt: expr2_level_mark_node.get_parent_id_opt(),
-                    };
-
-                    ed_model.markup_node_pool.replace_node(
-                        expr2_level_mark_node_id,
-                        blank_replacement
-                    );
-
-                    let active_selection = ed_model.get_selection().context(
-                        MissingSelection{}
-                    )?;
-                    ed_model.code_lines.del_selection(active_selection)?;
-                    ed_model.grid_node_map.del_selection(active_selection)?;
-
-                    let caret_pos = ed_model.get_caret();
-                    ed_model.insert_between_line(
-                        caret_pos.line,
-                        caret_pos.column,
-                        nodes::BLANK_PLACEHOLDER,
-                        expr2_level_mark_node_id,
-                    )?;
-
-                    ed_model.module.env.pool.set(
-                        sel_expr2_id,
-                        Expr2::Blank,
-                    )
-                }
-
-                ed_model.set_sel_none();
+                ed_model.replace_slected_expr_with_blank()?;
 
                 InputOutcome::Accepted
             }

@@ -59,6 +59,7 @@ impl MarkupNode {
         }
     }
 
+    // finds the the id of the MarkupNode whose deletion would result in the deletion of all MarkupNodes corresponding to a specific ast node
     pub fn get_expr2_level_node(
         &self,
         curr_mark_node_id: MarkNodeId,

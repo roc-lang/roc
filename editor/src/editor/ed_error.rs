@@ -1,4 +1,5 @@
 use crate::editor::slow_pool::MarkNodeId;
+use crate::ui::ui_error::UIResult;
 use colored::*;
 use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
 
@@ -72,7 +73,7 @@ pub enum EdError {
     },
 
     #[snafu(display(
-        "MissingSelection: ed_model.selected_expr2_id was some but ed_model.caret_w_sel_vec did not contain any Some(Selection)."
+        "MissingSelection: ed_model.selected_expr2_id was Some(NodeId<Expr2>) but ed_model.caret_w_sel_vec did not contain any Some(Selection)."
     ))]
     MissingSelection { backtrace: Backtrace },
 
@@ -207,5 +208,12 @@ impl From<UIError> for EdError {
         // hack to handle EdError derive
         let dummy_res: Result<(), NoneError> = Err(NoneError {});
         dummy_res.context(UIErrorBacktrace { msg }).unwrap_err()
+    }
+}
+
+pub fn from_ui_res<T>(ui_res: UIResult<T>) -> EdResult<T> {
+    match ui_res {
+        Ok(t) => Ok(t),
+        Err(ui_err) => Err(EdError::from(ui_err)),
     }
 }
