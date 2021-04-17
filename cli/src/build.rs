@@ -7,7 +7,6 @@ use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
 use roc_gen::llvm::build::OptLevel;
 use roc_load::file::LoadingProblem;
-use std::env;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
@@ -21,6 +20,18 @@ fn report_timing(buf: &mut String, label: &str, duration: Duration) {
     ));
 }
 
+pub enum BuildOutcome {
+    NoProblems,
+    OnlyWarnings,
+    Errors,
+}
+
+pub struct BuiltFile {
+    pub binary_path: PathBuf,
+    pub outcome: BuildOutcome,
+    pub total_time: Duration,
+}
+
 pub fn build_file<'a>(
     arena: &'a Bump,
     target: &Triple,
@@ -29,7 +40,7 @@ pub fn build_file<'a>(
     opt_level: OptLevel,
     emit_debug_info: bool,
     link_type: LinkType,
-) -> Result<PathBuf, LoadingProblem<'a>> {
+) -> Result<BuiltFile, LoadingProblem<'a>> {
     let compilation_start = SystemTime::now();
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
 
@@ -184,26 +195,23 @@ pub fn build_file<'a>(
         todo!("gracefully handle error after `rustc` spawned");
     });
 
-    let link_end = link_start.elapsed().unwrap();
+    let linking_time = link_start.elapsed().unwrap();
+
     if emit_debug_info {
-        println!("Finished linking in {} ms\n", link_end.as_millis());
+        println!("Finished linking in {} ms\n", linking_time.as_millis());
     }
+
+    let total_time = compilation_start.elapsed().unwrap();
 
     // If the cmd errored out, return the Err.
     cmd_result?;
 
-    // If possible, report the generated executable name relative to the current dir.
-    let generated_filename = binary_path
-        .strip_prefix(env::current_dir().unwrap())
-        .unwrap_or(&binary_path);
+    // TODO change this to report whether there were errors or warnings!
+    let outcome = BuildOutcome::NoProblems;
 
-    let total_end = compilation_start.elapsed().unwrap();
-
-    println!(
-        "🎉 Built {} in {} ms",
-        generated_filename.to_str().unwrap(),
-        total_end.as_millis()
-    );
-
-    Ok(binary_path)
+    Ok(BuiltFile {
+        binary_path,
+        total_time,
+        outcome,
+    })
 }
