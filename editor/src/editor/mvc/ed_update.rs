@@ -144,7 +144,7 @@ impl<'a> EdModel<'a> {
         self.code_lines.del_at_line(line_nr, index)
     }
 
-    // select all MarkupNodes that refer to specific ast node and it's children.
+    // select all MarkupNodes that refer to specific ast node and its children.
     pub fn select_expr(&mut self) -> EdResult<()> {
         // include parent in selection if an `Expr2` was already selected
         if let Some((_sel_expr2_id, mark_node_id)) = self.selected_expr2_tup {
