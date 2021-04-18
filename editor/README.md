@@ -8,7 +8,7 @@ sudo apt install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 - Run the following from the roc folder:
 
 ```
-cargo run edit examples/hello-world/Hello.roc
+cargo run edit
 ```
 
 ## Troubleshooting

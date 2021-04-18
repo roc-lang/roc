@@ -112,6 +112,21 @@ pub fn make_caret_rect(
     }
 }
 
+pub fn make_selection_rect(
+    sel_rect_x: f32,
+    sel_rect_y: f32,
+    width: f32,
+    glyph_dim_rect: &Rect,
+    ui_theme: &UITheme,
+) -> Rect {
+    Rect {
+        top_left_coords: (sel_rect_x, sel_rect_y).into(),
+        height: glyph_dim_rect.height,
+        width,
+        color: ui_theme.select_highlight,
+    }
+}
+
 #[cfg(test)]
 pub mod test_caret_w_select {
     use crate::ui::text::caret_w_select::CaretWSelect;
