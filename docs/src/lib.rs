@@ -1,8 +1,8 @@
 extern crate pulldown_cmark;
 use roc_builtins::std::StdLib;
 use roc_can::builtins::builtin_defs_map;
-use roc_load::docs::DocTypeAnnotation;
 use roc_load::docs::ModuleDocumentation;
+use roc_load::docs::TypeAnnotation;
 use roc_load::file::LoadingProblem;
 
 use std::fs;
@@ -291,9 +291,9 @@ fn indent(buf: &mut String, times: usize) {
     }
 }
 
-fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &DocTypeAnnotation) {
+fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &TypeAnnotation) {
     match type_ann {
-        DocTypeAnnotation::TagUnion { tags, extension } => {
+        TypeAnnotation::TagUnion { tags, extension } => {
             buf.push_str("<br>");
 
             let tag_union_indent = indent_level + 1;
@@ -336,10 +336,10 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Doc
                 type_annotation_to_html(indent_level, buf, ext);
             }
         }
-        DocTypeAnnotation::BoundVariable(var_name) => {
+        TypeAnnotation::BoundVariable(var_name) => {
             buf.push_str(var_name);
         }
-        DocTypeAnnotation::Apply { name, parts } => {
+        TypeAnnotation::Apply { name, parts } => {
             if parts.is_empty() {
                 buf.push_str(name);
             } else {
