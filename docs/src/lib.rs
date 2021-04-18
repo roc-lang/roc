@@ -361,7 +361,7 @@ fn markdown_to_html(markdown: String) -> String {
     use pulldown_cmark::Event::*;
     use pulldown_cmark::Tag::*;
 
-    let markdown_options = pulldown_cmark::Options::all();
+    let markdown_options = pulldown_cmark::Options::empty();
     let mut docs_parser = vec![];
     let (_, _) = pulldown_cmark::Parser::new_ext(&markdown, markdown_options).fold(
         (0, 0),
