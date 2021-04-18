@@ -112,7 +112,7 @@ fn render_main_content(module: &ModuleDocumentation) -> String {
         buf.push_str(html_node("h3", vec![("id", name)], content.as_str()).as_str());
 
         if let Some(docs) = &entry.docs {
-            buf.push_str(docs.as_str());
+            buf.push_str(markdown_to_html(docs.to_string()).as_str());
         }
     }
 
@@ -415,7 +415,9 @@ fn markdown_to_html(markdown: String) -> String {
             }
         },
     );
+
     let mut docs_html = String::new();
     pulldown_cmark::html::push_html(&mut docs_html, docs_parser.into_iter());
+
     docs_html
 }
