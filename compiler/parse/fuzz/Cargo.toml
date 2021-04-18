@@ -11,7 +11,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.3"
-bumpalo = { version = "3.2", features = ["collections"] }
+bumpalo = { version = "3.6.1", features = ["collections"] }
 
 [dependencies.roc_parse]
 path = ".."

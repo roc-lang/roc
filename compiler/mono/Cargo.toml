@@ -15,7 +15,7 @@ roc_unify = { path = "../unify" }
 roc_solve = { path = "../solve" }
 roc_problem = { path = "../problem" }
 ven_pretty = { path = "../../vendor/pretty" }
-bumpalo = { version = "3.2", features = ["collections"] }
+bumpalo = { version = "3.6.1", features = ["collections"] }
 ven_ena = { path = "../../vendor/ena" }
 linked-hash-map = "0.5.4"
 
