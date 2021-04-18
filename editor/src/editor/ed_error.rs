@@ -1,4 +1,5 @@
 use crate::editor::slow_pool::MarkNodeId;
+use crate::ui::ui_error::UIResult;
 use colored::*;
 use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
 
@@ -71,6 +72,11 @@ pub enum EdError {
         backtrace: Backtrace,
     },
 
+    #[snafu(display(
+        "MissingSelection: ed_model.selected_expr2_id was Some(NodeId<Expr2>) but ed_model.caret_w_sel_vec did not contain any Some(Selection)."
+    ))]
+    MissingSelection { backtrace: Backtrace },
+
     #[snafu(display("NestedNodeMissingChild: expected to find child with id {} in Nested MarkupNode, but it was missing. Id's of the children are {:?}.", node_id, children_ids))]
     NestedNodeMissingChild {
         node_id: MarkNodeId,
@@ -95,6 +101,15 @@ pub enum EdError {
 
     #[snafu(display("NodeWithoutAttributes: expected to have a node with attributes. This is a Nested MarkupNode, only Text and Blank nodes have attributes."))]
     NodeWithoutAttributes { backtrace: Backtrace },
+
+    #[snafu(display(
+        "NodeIdNotInGridNodeMap: MarkNodeId {} was not found in ed_model.grid_node_map.",
+        node_id
+    ))]
+    NodeIdNotInGridNodeMap {
+        node_id: MarkNodeId,
+        backtrace: Backtrace,
+    },
 
     #[snafu(display(
         "OutOfBounds: index {} was out of bounds for {} with length {}.",
@@ -193,5 +208,12 @@ impl From<UIError> for EdError {
         // hack to handle EdError derive
         let dummy_res: Result<(), NoneError> = Err(NoneError {});
         dummy_res.context(UIErrorBacktrace { msg }).unwrap_err()
+    }
+}
+
+pub fn from_ui_res<T>(ui_res: UIResult<T>) -> EdResult<T> {
+    match ui_res {
+        Ok(t) => Ok(t),
+        Err(ui_err) => Err(EdError::from(ui_err)),
     }
 }

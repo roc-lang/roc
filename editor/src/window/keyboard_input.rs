@@ -1,3 +1,4 @@
+#[derive(Debug)]
 pub struct Modifiers {
     pub shift: bool,
     pub ctrl: bool,

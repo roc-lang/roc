@@ -6,6 +6,15 @@ pub struct TextPos {
     pub column: usize,
 }
 
+impl TextPos {
+    pub fn increment_col(&self) -> TextPos {
+        TextPos {
+            line: self.line,
+            column: self.column + 1,
+        }
+    }
+}
+
 impl Ord for TextPos {
     fn cmp(&self, other: &Self) -> Ordering {
         (self.line, self.column).cmp(&(other.line, other.column))

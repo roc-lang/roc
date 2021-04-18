@@ -1,3 +1,5 @@
+#!/usr/bin/env roc run
+
 app "echo"
     packages { base: "platform" }
     imports [ base.Task.{ await }, base.Stdout, base.Stdin ]
