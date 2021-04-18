@@ -235,387 +235,389 @@ fn solve(
                     state
                 }
             }
-        } //        Store(source, target, _filename, _linenr) => {
-          //            // a special version of Eq that is used to store types in the AST.
-          //            // IT DOES NOT REPORT ERRORS!
-          //            let actual = type_to_var(subs, rank, pools, cached_aliases, source);
-          //            let target = *target;
-          //
-          //            match unify(subs, actual, target) {
-          //                Success(vars) => {
-          //                    introduce(subs, rank, pools, &vars);
-          //
-          //                    state
-          //                }
-          //                Failure(vars, _actual_type, _expected_type) => {
-          //                    introduce(subs, rank, pools, &vars);
-          //
-          //                    // ERROR NOT REPORTED
-          //
-          //                    state
-          //                }
-          //                BadType(vars, _problem) => {
-          //                    introduce(subs, rank, pools, &vars);
-          //
-          //                    // ERROR NOT REPORTED
-          //
-          //                    state
-          //                }
-          //            }
-          //        }
-          //        Lookup(symbol, expectation, region) => {
-          //            match env.vars_by_symbol.get(&symbol) {
-          //                Some(var) => {
-          //                    // Deep copy the vars associated with this symbol before unifying them.
-          //                    // Otherwise, suppose we have this:
-          //                    //
-          //                    // identity = \a -> a
-          //                    //
-          //                    // x = identity 5
-          //                    //
-          //                    // When we call (identity 5), it's important that we not unify
-          //                    // on identity's original vars. If we do, the type of `identity` will be
-          //                    // mutated to be `Int -> Int` instead of `a -> `, which would be incorrect;
-          //                    // the type of `identity` is more general than that!
-          //                    //
-          //                    // Instead, we want to unify on a *copy* of its vars. If the copy unifies
-          //                    // successfully (in this case, to `Int -> Int`), we can use that to
-          //                    // infer the type of this lookup (in this case, `Int`) without ever
-          //                    // having mutated the original.
-          //                    //
-          //                    // If this Lookup is targeting a value in another module,
-          //                    // then we copy from that module's Subs into our own. If the value
-          //                    // is being looked up in this module, then we use our Subs as both
-          //                    // the source and destination.
-          //                    let actual = deep_copy_var(subs, rank, pools, *var);
-          //                    let expected = type_to_var(
-          //                        subs,
-          //                        rank,
-          //                        pools,
-          //                        cached_aliases,
-          //                        expectation.get_type_ref(),
-          //                    );
-          //                    match unify(subs, actual, expected) {
-          //                        Success(vars) => {
-          //                            introduce(subs, rank, pools, &vars);
-          //
-          //                            state
-          //                        }
-          //
-          //                        Failure(vars, actual_type, expected_type) => {
-          //                            introduce(subs, rank, pools, &vars);
-          //
-          //                            let problem = TypeError::BadExpr(
-          //                                *region,
-          //                                Category::Lookup(*symbol),
-          //                                actual_type,
-          //                                expectation.clone().replace(expected_type),
-          //                            );
-          //
-          //                            problems.push(problem);
-          //
-          //                            state
-          //                        }
-          //                        BadType(vars, problem) => {
-          //                            introduce(subs, rank, pools, &vars);
-          //
-          //                            problems.push(TypeError::BadType(problem));
-          //
-          //                            state
-          //                        }
-          //                    }
-          //                }
-          //                None => {
-          //                    problems.push(TypeError::UnexposedLookup(*symbol));
-          //
-          //                    state
-          //                }
-          //            }
-          //        }
-          //        And(sub_constraints) => {
-          //            let mut state = state;
-          //
-          //            for sub_constraint in sub_constraints.iter() {
-          //                state = solve(
-          //                    env,
-          //                    state,
-          //                    rank,
-          //                    pools,
-          //                    problems,
-          //                    cached_aliases,
-          //                    subs,
-          //                    sub_constraint,
-          //                );
-          //            }
-          //
-          //            state
-          //        }
-          //        Pattern(region, category, typ, expectation) => {
-          //            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
-          //            let expected = type_to_var(
-          //                subs,
-          //                rank,
-          //                pools,
-          //                cached_aliases,
-          //                expectation.get_type_ref(),
-          //            );
-          //
-          //            match unify(subs, actual, expected) {
-          //                Success(vars) => {
-          //                    introduce(subs, rank, pools, &vars);
-          //
-          //                    state
-          //                }
-          //                Failure(vars, actual_type, expected_type) => {
-          //                    introduce(subs, rank, pools, &vars);
-          //
-          //                    let problem = TypeError::BadPattern(
-          //                        *region,
-          //                        category.clone(),
-          //                        actual_type,
-          //                        expectation.clone().replace(expected_type),
-          //                    );
-          //
-          //                    problems.push(problem);
-          //
-          //                    state
-          //                }
-          //                BadType(vars, problem) => {
-          //                    introduce(subs, rank, pools, &vars);
-          //
-          //                    problems.push(TypeError::BadType(problem));
-          //
-          //                    state
-          //                }
-          //            }
-          //        }
-          //        Let(let_con) => {
-          //            match &let_con.ret_constraint {
-          //                True if let_con.rigid_vars.is_empty() => {
-          //                    introduce(subs, rank, pools, &let_con.flex_vars);
-          //
-          //                    // If the return expression is guaranteed to solve,
-          //                    // solve the assignments themselves and move on.
-          //                    solve(
-          //                        &env,
-          //                        state,
-          //                        rank,
-          //                        pools,
-          //                        problems,
-          //                        cached_aliases,
-          //                        subs,
-          //                        &let_con.defs_constraint,
-          //                    )
-          //                }
-          //                ret_con if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() => {
-          //                    let state = solve(
-          //                        env,
-          //                        state,
-          //                        rank,
-          //                        pools,
-          //                        problems,
-          //                        cached_aliases,
-          //                        subs,
-          //                        &let_con.defs_constraint,
-          //                    );
-          //
-          //                    // Add a variable for each def to new_vars_by_env.
-          //                    let mut local_def_vars = ImMap::default();
-          //
-          //                    for (symbol, loc_type) in let_con.def_types.iter() {
-          //                        let var = type_to_var(subs, rank, pools, cached_aliases, &loc_type.value);
-          //
-          //                        local_def_vars.insert(
-          //                            *symbol,
-          //                            Located {
-          //                                value: var,
-          //                                region: loc_type.region,
-          //                            },
-          //                        );
-          //                    }
-          //
-          //                    let mut new_env = env.clone();
-          //                    for (symbol, loc_var) in local_def_vars.iter() {
-          //                        if !new_env.vars_by_symbol.contains_key(&symbol) {
-          //                            new_env.vars_by_symbol.insert(*symbol, loc_var.value);
-          //                        }
-          //                    }
-          //
-          //                    let new_state = solve(
-          //                        &new_env,
-          //                        state,
-          //                        rank,
-          //                        pools,
-          //                        problems,
-          //                        cached_aliases,
-          //                        subs,
-          //                        ret_con,
-          //                    );
-          //
-          //                    for (symbol, loc_var) in local_def_vars {
-          //                        check_for_infinite_type(subs, problems, symbol, loc_var);
-          //                    }
-          //
-          //                    new_state
-          //                }
-          //                ret_con => {
-          //                    let rigid_vars = &let_con.rigid_vars;
-          //                    let flex_vars = &let_con.flex_vars;
-          //
-          //                    // work in the next pool to localize header
-          //                    let next_rank = rank.next();
-          //
-          //                    // introduce variables
-          //                    for &var in rigid_vars.iter().chain(flex_vars.iter()) {
-          //                        subs.set_rank(var, next_rank);
-          //                    }
-          //
-          //                    // determine the next pool
-          //                    let next_pools;
-          //                    if next_rank.into_usize() < pools.len() {
-          //                        next_pools = pools
-          //                    } else {
-          //                        // we should be off by one at this point
-          //                        debug_assert_eq!(next_rank.into_usize(), 1 + pools.len());
-          //                        pools.extend_to(next_rank.into_usize());
-          //                        next_pools = pools;
-          //                    }
-          //
-          //                    let pool: &mut Vec<Variable> = next_pools.get_mut(next_rank);
-          //
-          //                    // Replace the contents of this pool with rigid_vars and flex_vars
-          //                    pool.clear();
-          //                    pool.reserve(rigid_vars.len() + flex_vars.len());
-          //                    pool.extend(rigid_vars.iter());
-          //                    pool.extend(flex_vars.iter());
-          //
-          //                    // run solver in next pool
-          //
-          //                    // Add a variable for each def to local_def_vars.
-          //                    let mut local_def_vars = ImMap::default();
-          //
-          //                    for (symbol, loc_type) in let_con.def_types.iter() {
-          //                        let def_type = &loc_type.value;
-          //
-          //                        let var =
-          //                            type_to_var(subs, next_rank, next_pools, cached_aliases, def_type);
-          //
-          //                        local_def_vars.insert(
-          //                            *symbol,
-          //                            Located {
-          //                                value: var,
-          //                                region: loc_type.region,
-          //                            },
-          //                        );
-          //                    }
-          //
-          //                    // Solve the assignments' constraints first.
-          //                    let State {
-          //                        env: saved_env,
-          //                        mark,
-          //                    } = solve(
-          //                        &env,
-          //                        state,
-          //                        next_rank,
-          //                        next_pools,
-          //                        problems,
-          //                        cached_aliases,
-          //                        subs,
-          //                        &let_con.defs_constraint,
-          //                    );
-          //
-          //                    let young_mark = mark;
-          //                    let visit_mark = young_mark.next();
-          //                    let final_mark = visit_mark.next();
-          //
-          //                    debug_assert_eq!(
-          //                        {
-          //                            let offenders = next_pools
-          //                                .get(next_rank)
-          //                                .iter()
-          //                                .filter(|var| {
-          //                                    let current = subs.get_without_compacting(
-          //                                        roc_types::subs::Variable::clone(var),
-          //                                    );
-          //
-          //                                    current.rank.into_usize() > next_rank.into_usize()
-          //                                })
-          //                                .collect::<Vec<_>>();
-          //
-          //                            let result = offenders.len();
-          //
-          //                            if result > 0 {
-          //                                dbg!(&subs, &offenders, &let_con.def_types);
-          //                            }
-          //
-          //                            result
-          //                        },
-          //                        0
-          //                    );
-          //
-          //                    // pop pool
-          //                    generalize(subs, young_mark, visit_mark, next_rank, next_pools);
-          //
-          //                    next_pools.get_mut(next_rank).clear();
-          //
-          //                    // check that things went well
-          //                    debug_assert!({
-          //                        // NOTE the `subs.redundant` check is added for the uniqueness
-          //                        // inference, and does not come from elm. It's unclear whether this is
-          //                        // a bug with uniqueness inference (something is redundant that
-          //                        // shouldn't be) or that it just never came up in elm.
-          //                        let failing: Vec<_> = rigid_vars
-          //                            .iter()
-          //                            .filter(|&var| {
-          //                                !subs.redundant(*var)
-          //                                    && subs.get_without_compacting(*var).rank != Rank::NONE
-          //                            })
-          //                            .collect();
-          //
-          //                        if !failing.is_empty() {
-          //                            println!("Rigids {:?}", &rigid_vars);
-          //                            println!("Failing {:?}", failing);
-          //                        }
-          //
-          //                        failing.is_empty()
-          //                    });
-          //
-          //                    let mut new_env = env.clone();
-          //                    for (symbol, loc_var) in local_def_vars.iter() {
-          //                        // when there are duplicates, keep the one from `env`
-          //                        if !new_env.vars_by_symbol.contains_key(&symbol) {
-          //                            new_env.vars_by_symbol.insert(*symbol, loc_var.value);
-          //                        }
-          //                    }
-          //
-          //                    // Note that this vars_by_symbol is the one returned by the
-          //                    // previous call to solve()
-          //                    let temp_state = State {
-          //                        env: saved_env,
-          //                        mark: final_mark,
-          //                    };
-          //
-          //                    // Now solve the body, using the new vars_by_symbol which includes
-          //                    // the assignments' name-to-variable mappings.
-          //                    let new_state = solve(
-          //                        &new_env,
-          //                        temp_state,
-          //                        rank,
-          //                        next_pools,
-          //                        problems,
-          //                        cached_aliases,
-          //                        subs,
-          //                        &ret_con,
-          //                    );
-          //
-          //                    for (symbol, loc_var) in local_def_vars {
-          //                        check_for_infinite_type(subs, problems, symbol, loc_var);
-          //                    }
-          //
-          //                    new_state
-          //                }
-          //            }
-          //        }
+        }
+        //        Store(source, target, _filename, _linenr) => {
+        //            // a special version of Eq that is used to store types in the AST.
+        //            // IT DOES NOT REPORT ERRORS!
+        //            let actual = type_to_var(subs, rank, pools, cached_aliases, source);
+        //            let target = *target;
+        //
+        //            match unify(subs, actual, target) {
+        //                Success(vars) => {
+        //                    introduce(subs, rank, pools, &vars);
+        //
+        //                    state
+        //                }
+        //                Failure(vars, _actual_type, _expected_type) => {
+        //                    introduce(subs, rank, pools, &vars);
+        //
+        //                    // ERROR NOT REPORTED
+        //
+        //                    state
+        //                }
+        //                BadType(vars, _problem) => {
+        //                    introduce(subs, rank, pools, &vars);
+        //
+        //                    // ERROR NOT REPORTED
+        //
+        //                    state
+        //                }
+        //            }
+        //        }
+        //        Lookup(symbol, expectation, region) => {
+        //            match env.vars_by_symbol.get(&symbol) {
+        //                Some(var) => {
+        //                    // Deep copy the vars associated with this symbol before unifying them.
+        //                    // Otherwise, suppose we have this:
+        //                    //
+        //                    // identity = \a -> a
+        //                    //
+        //                    // x = identity 5
+        //                    //
+        //                    // When we call (identity 5), it's important that we not unify
+        //                    // on identity's original vars. If we do, the type of `identity` will be
+        //                    // mutated to be `Int -> Int` instead of `a -> `, which would be incorrect;
+        //                    // the type of `identity` is more general than that!
+        //                    //
+        //                    // Instead, we want to unify on a *copy* of its vars. If the copy unifies
+        //                    // successfully (in this case, to `Int -> Int`), we can use that to
+        //                    // infer the type of this lookup (in this case, `Int`) without ever
+        //                    // having mutated the original.
+        //                    //
+        //                    // If this Lookup is targeting a value in another module,
+        //                    // then we copy from that module's Subs into our own. If the value
+        //                    // is being looked up in this module, then we use our Subs as both
+        //                    // the source and destination.
+        //                    let actual = deep_copy_var(subs, rank, pools, *var);
+        //                    let expected = type_to_var(
+        //                        subs,
+        //                        rank,
+        //                        pools,
+        //                        cached_aliases,
+        //                        expectation.get_type_ref(),
+        //                    );
+        //                    match unify(subs, actual, expected) {
+        //                        Success(vars) => {
+        //                            introduce(subs, rank, pools, &vars);
+        //
+        //                            state
+        //                        }
+        //
+        //                        Failure(vars, actual_type, expected_type) => {
+        //                            introduce(subs, rank, pools, &vars);
+        //
+        //                            let problem = TypeError::BadExpr(
+        //                                *region,
+        //                                Category::Lookup(*symbol),
+        //                                actual_type,
+        //                                expectation.clone().replace(expected_type),
+        //                            );
+        //
+        //                            problems.push(problem);
+        //
+        //                            state
+        //                        }
+        //                        BadType(vars, problem) => {
+        //                            introduce(subs, rank, pools, &vars);
+        //
+        //                            problems.push(TypeError::BadType(problem));
+        //
+        //                            state
+        //                        }
+        //                    }
+        //                }
+        //                None => {
+        //                    problems.push(TypeError::UnexposedLookup(*symbol));
+        //
+        //                    state
+        //                }
+        //            }
+        //        }
+        //        And(sub_constraints) => {
+        //            let mut state = state;
+        //
+        //            for sub_constraint in sub_constraints.iter() {
+        //                state = solve(
+        //                    env,
+        //                    state,
+        //                    rank,
+        //                    pools,
+        //                    problems,
+        //                    cached_aliases,
+        //                    subs,
+        //                    sub_constraint,
+        //                );
+        //            }
+        //
+        //            state
+        //        }
+        //        Pattern(region, category, typ, expectation) => {
+        //            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
+        //            let expected = type_to_var(
+        //                subs,
+        //                rank,
+        //                pools,
+        //                cached_aliases,
+        //                expectation.get_type_ref(),
+        //            );
+        //
+        //            match unify(subs, actual, expected) {
+        //                Success(vars) => {
+        //                    introduce(subs, rank, pools, &vars);
+        //
+        //                    state
+        //                }
+        //                Failure(vars, actual_type, expected_type) => {
+        //                    introduce(subs, rank, pools, &vars);
+        //
+        //                    let problem = TypeError::BadPattern(
+        //                        *region,
+        //                        category.clone(),
+        //                        actual_type,
+        //                        expectation.clone().replace(expected_type),
+        //                    );
+        //
+        //                    problems.push(problem);
+        //
+        //                    state
+        //                }
+        //                BadType(vars, problem) => {
+        //                    introduce(subs, rank, pools, &vars);
+        //
+        //                    problems.push(TypeError::BadType(problem));
+        //
+        //                    state
+        //                }
+        //            }
+        //        }
+        //        Let(let_con) => {
+        //            match &let_con.ret_constraint {
+        //                True if let_con.rigid_vars.is_empty() => {
+        //                    introduce(subs, rank, pools, &let_con.flex_vars);
+        //
+        //                    // If the return expression is guaranteed to solve,
+        //                    // solve the assignments themselves and move on.
+        //                    solve(
+        //                        &env,
+        //                        state,
+        //                        rank,
+        //                        pools,
+        //                        problems,
+        //                        cached_aliases,
+        //                        subs,
+        //                        &let_con.defs_constraint,
+        //                    )
+        //                }
+        //                ret_con if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() => {
+        //                    let state = solve(
+        //                        env,
+        //                        state,
+        //                        rank,
+        //                        pools,
+        //                        problems,
+        //                        cached_aliases,
+        //                        subs,
+        //                        &let_con.defs_constraint,
+        //                    );
+        //
+        //                    // Add a variable for each def to new_vars_by_env.
+        //                    let mut local_def_vars = ImMap::default();
+        //
+        //                    for (symbol, loc_type) in let_con.def_types.iter() {
+        //                        let var = type_to_var(subs, rank, pools, cached_aliases, &loc_type.value);
+        //
+        //                        local_def_vars.insert(
+        //                            *symbol,
+        //                            Located {
+        //                                value: var,
+        //                                region: loc_type.region,
+        //                            },
+        //                        );
+        //                    }
+        //
+        //                    let mut new_env = env.clone();
+        //                    for (symbol, loc_var) in local_def_vars.iter() {
+        //                        if !new_env.vars_by_symbol.contains_key(&symbol) {
+        //                            new_env.vars_by_symbol.insert(*symbol, loc_var.value);
+        //                        }
+        //                    }
+        //
+        //                    let new_state = solve(
+        //                        &new_env,
+        //                        state,
+        //                        rank,
+        //                        pools,
+        //                        problems,
+        //                        cached_aliases,
+        //                        subs,
+        //                        ret_con,
+        //                    );
+        //
+        //                    for (symbol, loc_var) in local_def_vars {
+        //                        check_for_infinite_type(subs, problems, symbol, loc_var);
+        //                    }
+        //
+        //                    new_state
+        //                }
+        //                ret_con => {
+        //                    let rigid_vars = &let_con.rigid_vars;
+        //                    let flex_vars = &let_con.flex_vars;
+        //
+        //                    // work in the next pool to localize header
+        //                    let next_rank = rank.next();
+        //
+        //                    // introduce variables
+        //                    for &var in rigid_vars.iter().chain(flex_vars.iter()) {
+        //                        subs.set_rank(var, next_rank);
+        //                    }
+        //
+        //                    // determine the next pool
+        //                    let next_pools;
+        //                    if next_rank.into_usize() < pools.len() {
+        //                        next_pools = pools
+        //                    } else {
+        //                        // we should be off by one at this point
+        //                        debug_assert_eq!(next_rank.into_usize(), 1 + pools.len());
+        //                        pools.extend_to(next_rank.into_usize());
+        //                        next_pools = pools;
+        //                    }
+        //
+        //                    let pool: &mut Vec<Variable> = next_pools.get_mut(next_rank);
+        //
+        //                    // Replace the contents of this pool with rigid_vars and flex_vars
+        //                    pool.clear();
+        //                    pool.reserve(rigid_vars.len() + flex_vars.len());
+        //                    pool.extend(rigid_vars.iter());
+        //                    pool.extend(flex_vars.iter());
+        //
+        //                    // run solver in next pool
+        //
+        //                    // Add a variable for each def to local_def_vars.
+        //                    let mut local_def_vars = ImMap::default();
+        //
+        //                    for (symbol, loc_type) in let_con.def_types.iter() {
+        //                        let def_type = &loc_type.value;
+        //
+        //                        let var =
+        //                            type_to_var(subs, next_rank, next_pools, cached_aliases, def_type);
+        //
+        //                        local_def_vars.insert(
+        //                            *symbol,
+        //                            Located {
+        //                                value: var,
+        //                                region: loc_type.region,
+        //                            },
+        //                        );
+        //                    }
+        //
+        //                    // Solve the assignments' constraints first.
+        //                    let State {
+        //                        env: saved_env,
+        //                        mark,
+        //                    } = solve(
+        //                        &env,
+        //                        state,
+        //                        next_rank,
+        //                        next_pools,
+        //                        problems,
+        //                        cached_aliases,
+        //                        subs,
+        //                        &let_con.defs_constraint,
+        //                    );
+        //
+        //                    let young_mark = mark;
+        //                    let visit_mark = young_mark.next();
+        //                    let final_mark = visit_mark.next();
+        //
+        //                    debug_assert_eq!(
+        //                        {
+        //                            let offenders = next_pools
+        //                                .get(next_rank)
+        //                                .iter()
+        //                                .filter(|var| {
+        //                                    let current = subs.get_without_compacting(
+        //                                        roc_types::subs::Variable::clone(var),
+        //                                    );
+        //
+        //                                    current.rank.into_usize() > next_rank.into_usize()
+        //                                })
+        //                                .collect::<Vec<_>>();
+        //
+        //                            let result = offenders.len();
+        //
+        //                            if result > 0 {
+        //                                dbg!(&subs, &offenders, &let_con.def_types);
+        //                            }
+        //
+        //                            result
+        //                        },
+        //                        0
+        //                    );
+        //
+        //                    // pop pool
+        //                    generalize(subs, young_mark, visit_mark, next_rank, next_pools);
+        //
+        //                    next_pools.get_mut(next_rank).clear();
+        //
+        //                    // check that things went well
+        //                    debug_assert!({
+        //                        // NOTE the `subs.redundant` check is added for the uniqueness
+        //                        // inference, and does not come from elm. It's unclear whether this is
+        //                        // a bug with uniqueness inference (something is redundant that
+        //                        // shouldn't be) or that it just never came up in elm.
+        //                        let failing: Vec<_> = rigid_vars
+        //                            .iter()
+        //                            .filter(|&var| {
+        //                                !subs.redundant(*var)
+        //                                    && subs.get_without_compacting(*var).rank != Rank::NONE
+        //                            })
+        //                            .collect();
+        //
+        //                        if !failing.is_empty() {
+        //                            println!("Rigids {:?}", &rigid_vars);
+        //                            println!("Failing {:?}", failing);
+        //                        }
+        //
+        //                        failing.is_empty()
+        //                    });
+        //
+        //                    let mut new_env = env.clone();
+        //                    for (symbol, loc_var) in local_def_vars.iter() {
+        //                        // when there are duplicates, keep the one from `env`
+        //                        if !new_env.vars_by_symbol.contains_key(&symbol) {
+        //                            new_env.vars_by_symbol.insert(*symbol, loc_var.value);
+        //                        }
+        //                    }
+        //
+        //                    // Note that this vars_by_symbol is the one returned by the
+        //                    // previous call to solve()
+        //                    let temp_state = State {
+        //                        env: saved_env,
+        //                        mark: final_mark,
+        //                    };
+        //
+        //                    // Now solve the body, using the new vars_by_symbol which includes
+        //                    // the assignments' name-to-variable mappings.
+        //                    let new_state = solve(
+        //                        &new_env,
+        //                        temp_state,
+        //                        rank,
+        //                        next_pools,
+        //                        problems,
+        //                        cached_aliases,
+        //                        subs,
+        //                        &ret_con,
+        //                    );
+        //
+        //                    for (symbol, loc_var) in local_def_vars {
+        //                        check_for_infinite_type(subs, problems, symbol, loc_var);
+        //                    }
+        //
+        //                    new_state
+        //                }
+        //            }
+        //        }
+        _ => todo!("implement {:?}", constraint),
     }
 }
 
