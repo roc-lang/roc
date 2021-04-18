@@ -63,6 +63,28 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * [Sourcetrail](https://www.sourcetrail.com/) nice tree-like source explorer.
 * [Unisonweb](https://www.unisonweb.org), definition based [editor](https://twitter.com/shojberg/status/1364666092598288385) as opposed to file based.
 
+### Voice Interaction Related
+
+* We should label as many things as possible and expose jumps to those labels as shortkeys.
+* Update without user interaction. e.g. autosave.
+* Could be efficient way to communicate with smart assistant.
+* You don't have to remember complex keyboard shortcuts if you can describe actions to execute them. Examples:
+    * Add latest datetime package to dependencies.
+    * Generate unit test for this function.
+    * Show edit history for this function.
+    * Adjusting settings: switch to light theme, increase font size...
+* Use (context specific) voice command state machine to assist Machine Learning voice recognition model.
+* Nice special use case: using voice to code while on treadmill desk. 
+
+    
+#### Inspiration
+
+* Voice control and eye tracking with [Talon](https://github.com/Gauteab/talon-tree-sitter-service)
+* [Seminar about programming by voice](https://www.youtube.com/watch?v=G8B71MbA9u4)
+* [Talon voice commands in elm](https://github.com/Gauteab/talon-tree-sitter-service)
+* Mozilla DeepSpeech model runs fast, works pretty well for actions but would need additional training for code input.
+    Possible to reuse [Mozilla common voice](https://github.com/common-voice/common-voice) for creating more "spoken code" data.
+
 ### Productivity features
 
 * When refactoring; 
@@ -81,7 +103,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * File history timeline view. Show timeline with commits that changed this file, the number of lines added and deleted as well as which user made the changes. Arrow navigation should allow you to quickly view different versions of the file.
 * Suggested quick fixes should be directly visible and clickable. Not like in vs code where you put the caret on an error until a lightbulb appears in the margin which you have to click for the fixes to apppear, after which you click to apply the fix you want :( .
 * Regex-like find and substitution based on plain english description and example (replacement). i.e. replace all `[` between double quotes with `{`. [Inspiration](https://alexmoltzau.medium.com/english-to-regex-thanks-to-gpt-3-13f03b68236e).
-
+* Show productivity tips based on behavior. i.e. if the user is scrolling through the error bar and clicking on the next error several times, show a tip with "go to next error" shortcut.
 #### Autocomplete
 
 - Use more space for autocomplete options:
@@ -117,16 +139,6 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
         * A simpler start for this idea without user data gathering: how the user a code snippet that is most similar to what they are currently writing. Snippets can be aggregated from examples, tests, docstrings at zero cost to the package/platform authors.
         * See [codata](https://www.codota.com/code/java/classes/okhttp3.OkHttpClient) for inspiration on a snippet/example finder.
 * Fuzzy natural language based setting adjustment in search bar or with voice input: increase font size, enable autosave, switch to light theme...
-* Voice input:
-    * Good for accessibility.
-    * https://www.youtube.com/watch?v=Ffa3cXM7bjc is interesting for inspiration.
-    * Could be efficient way to communicate with smart assistant.
-    * Describe actions to execute them, examples:
-        * Add latest datetime package to dependencies.
-        * Generate unit test for this function.
-        * Show edit history for this function.
-    * Mozilla DeepSpeech model runs fast, works pretty well for actions but would need additional training for code input.
-    Possible to reuse [Mozilla common voice](https://github.com/common-voice/common-voice) for creating more "spoken code" data.
 * Detect deviation of best practices, example case: alert developer when they are defining a color inline (rgb(30,30,30)) while all colors have been previously imported from a single file. See also [Codota](https://www.codota.com).
 
 
