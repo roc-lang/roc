@@ -40,9 +40,9 @@ use winit::{
 };
 
 // Inspired by:
-// https://github.com/sotrh/learn-wgpu by Benjamin Hansen, licensed under the MIT license
-// https://github.com/cloudhead/rgx by Alexis Sellier, licensed under the MIT license
-
+// https://github.com/sotrh/learn-wgpu by Benjamin Hansen, which is licensed under the MIT license
+// https://github.com/cloudhead/rgx by Alexis Sellier, which is licensed under the MIT license
+//
 // See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,

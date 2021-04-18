@@ -1,5 +1,7 @@
 // Adapted from https://github.com/TheDan64/scoped_alloca
-// by Daniel Kolsoi, licensed under the Apache License 2.0
+// by Daniel Kolsoi - license information can be found in
+// the COPYRIGHT file in the root directory of this distribution.
+//
 // Thank you, Dan!
 
 use std::env;
