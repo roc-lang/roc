@@ -1,7 +1,6 @@
 use super::app_model::AppModel;
 use super::ed_update;
 use crate::editor::ed_error::EdResult;
-use crate::ui::text::lines::SelectableLines;
 use crate::window::keyboard_input::from_winit;
 use winit::event::{ModifiersState, VirtualKeyCode};
 
@@ -44,7 +43,7 @@ pub fn pass_keydown_to_focused(
 
     if let Some(ref mut ed_model) = app_model.ed_model_opt {
         if ed_model.has_focus {
-            ed_model.handle_key_down(&modifiers, virtual_keycode)?;
+            ed_model.ed_handle_key_down(&modifiers, virtual_keycode)?;
         }
     }
 

@@ -40,7 +40,7 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
         ast_node_id,
         syn_high_style: HighlightStyle::Bracket,
         attributes: Attributes::new(),
-        parent_id_opt: Some(curr_mark_node_id), // current node will be replace with nested one
+        parent_id_opt: Some(curr_mark_node_id), // current node will be replaced with nested one
     };
 
     let left_bracket_node_id = mark_node_pool.add(left_bracket_node);
@@ -50,7 +50,7 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
         ast_node_id,
         syn_high_style: HighlightStyle::Bracket,
         attributes: Attributes::new(),
-        parent_id_opt: Some(curr_mark_node_id), // current node will be replace with nested one
+        parent_id_opt: Some(curr_mark_node_id), // current node will be replaced with nested one
     };
 
     let right_bracket_node_id = mark_node_pool.add(right_bracket_node);
