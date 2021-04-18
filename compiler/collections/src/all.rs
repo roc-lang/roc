@@ -28,6 +28,8 @@ pub type SendMap<K, V> = im::hashmap::HashMap<K, V, BuildHasher>;
 
 pub type SendSet<K> = im::hashset::HashSet<K, BuildHasher>;
 
+pub type BumpMap<'a, K, V> = hashbrown::HashMap<K, V, BuildHasher, hashbrown::BumpWrapper<'a>>;
+
 pub fn arena_join<'a, I>(arena: &'a Bump, strings: &mut I, join_str: &str) -> String<'a>
 where
     I: Iterator<Item = &'a str>,
