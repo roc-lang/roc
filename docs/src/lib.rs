@@ -356,9 +356,9 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
 }
 
 fn markdown_to_html(markdown: String) -> String {
-    use pulldown_cmark::CodeBlockKind::*;
-    use pulldown_cmark::CowStr::*;
-    use pulldown_cmark::Event::*;
+    use pulldown_cmark::CodeBlockKind;
+    use pulldown_cmark::CowStr;
+    use pulldown_cmark::Event;
     use pulldown_cmark::Tag::*;
 
     let markdown_options = pulldown_cmark::Options::empty();
@@ -372,16 +372,18 @@ fn markdown_to_html(markdown: String) -> String {
             //     Start(BlockQuote)
             //     Start(Paragraph)
             // For `Start(CodeBlock(Fenced(Borrowed("roc"))))`
-            Start(BlockQuote) => {
+            Event::Start(BlockQuote) => {
                 docs_parser.push(event);
                 (start_quote_count + 1, 0)
             }
-            Start(Paragraph) => {
+            Event::Start(Paragraph) => {
                 if start_quote_count == 3 {
                     docs_parser.pop();
                     docs_parser.pop();
                     docs_parser.pop();
-                    docs_parser.push(Start(CodeBlock(Fenced(Borrowed("roc")))));
+                    docs_parser.push(Event::Start(CodeBlock(CodeBlockKind::Fenced(
+                        CowStr::Borrowed("roc"),
+                    ))));
                 } else {
                     docs_parser.push(event);
                 }
@@ -393,16 +395,18 @@ fn markdown_to_html(markdown: String) -> String {
             //     End(BlockQuote)
             //     End(BlockQuote)
             // For `End(CodeBlock(Fenced(Borrowed("roc"))))`
-            End(Paragraph) => {
+            Event::End(Paragraph) => {
                 docs_parser.push(event);
                 (0, 1)
             }
-            End(BlockQuote) => {
+            Event::End(BlockQuote) => {
                 if end_quote_count == 3 {
                     docs_parser.pop();
                     docs_parser.pop();
                     docs_parser.pop();
-                    docs_parser.push(End(CodeBlock(Fenced(Borrowed("roc")))));
+                    docs_parser.push(Event::End(CodeBlock(CodeBlockKind::Fenced(
+                        CowStr::Borrowed("roc"),
+                    ))));
                     (0, 0)
                 } else {
                     docs_parser.push(event);
