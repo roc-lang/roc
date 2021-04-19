@@ -6,7 +6,7 @@ use crate::layout::{
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::all::{default_hasher, MutMap, MutSet};
+use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -126,8 +126,8 @@ pub struct Proc<'a> {
 pub enum HostExposedLayouts<'a> {
     NotHostExposed,
     HostExposed {
-        rigids: MutMap<Lowercase, Layout<'a>>,
-        aliases: MutMap<Symbol, Layout<'a>>,
+        rigids: BumpMap<'a, Lowercase, Layout<'a>>,
+        aliases: BumpMap<'a, Symbol, Layout<'a>>,
     },
 }
 
@@ -1833,7 +1833,8 @@ fn specialize_external<'a>(
     let host_exposed_layouts = if host_exposed_variables.is_empty() {
         HostExposedLayouts::NotHostExposed
     } else {
-        let mut aliases = MutMap::default();
+        let mut aliases =
+            hashbrown::HashMap::with_hasher_in(default_hasher(), hashbrown::BumpWrapper(env.arena));
 
         for (symbol, variable) in host_exposed_variables {
             let layout = layout_cache
@@ -1843,7 +1844,10 @@ fn specialize_external<'a>(
         }
 
         HostExposedLayouts::HostExposed {
-            rigids: MutMap::default(),
+            rigids: hashbrown::HashMap::with_hasher_in(
+                default_hasher(),
+                hashbrown::BumpWrapper(env.arena),
+            ),
             aliases,
         }
     };

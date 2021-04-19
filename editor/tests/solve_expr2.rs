@@ -86,6 +86,7 @@ fn infer_eq(actual: &str, expected_str: &str) {
                 &mut env,
                 &expr,
                 Expected::NoExpectation(Type2::Variable(var)),
+                Region::zero(),
             );
 
             let Env {
@@ -127,5 +128,17 @@ fn constrain_str() {
             "#
         ),
         "Str",
+    )
+}
+
+#[test]
+fn constrain_empty_record() {
+    infer_eq(
+        indoc!(
+            r#"
+            {}
+            "#
+        ),
+        "{}",
     )
 }

@@ -167,7 +167,7 @@ joinWith : List Str, Str -> Str
 ## >>> Str.padGraphemesStart "0" 5 "12345"
 ##
 ## >>> Str.padGraphemesStart "✈️"" 5 "👩‍👩‍👦‍👦👩‍👩‍👦‍👦👩‍👩‍👦‍👦"
-padGraphemesStart : Str, Int, Str -> Str
+padGraphemesStart : Str, Nat, Str -> Str
 
 ## Add to the end of a string until it has at least the given number of
 ## graphemes.
@@ -179,7 +179,7 @@ padGraphemesStart : Str, Int, Str -> Str
 ## >>> Str.padGraphemesStart "0" 5 "12345"
 ##
 ## >>> Str.padGraphemesStart "✈️"" 5 "👩‍👩‍👦‍👦👩‍👩‍👦‍👦👩‍👩‍👦‍👦"
-padGraphemesEnd : Str, Int, Str -> Str
+padGraphemesEnd : Str, Nat, Str -> Str
 
 ## Graphemes
 
