@@ -168,7 +168,7 @@ impl<'a> EdModel<'a> {
                 self.selected_expr_opt = Some(SelectedExpression {
                     ast_node_id,
                     mark_node_id: parent_id,
-                    type_str: "Todo".to_owned(),
+                    type_str: "Str".to_owned(), // TODO get this String from type inference
                 });
 
                 self.dirty = true;
@@ -189,7 +189,7 @@ impl<'a> EdModel<'a> {
                 self.selected_expr_opt = Some(SelectedExpression {
                     ast_node_id,
                     mark_node_id,
-                    type_str: "Todo".to_owned(),
+                    type_str: "Str".to_owned(), // TODO get this String from type inference
                 });
 
                 self.dirty = true;
@@ -259,7 +259,7 @@ impl<'a> EdModel<'a> {
             None
         };
 
-        // have to split the previous if up to prevent borrowing issues
+        // have to split the previous `if` up to prevent borrowing issues
         if let Some(expr_mark_node_id) = expr_mark_node_id_opt {
             let caret_pos = self.get_caret();
 

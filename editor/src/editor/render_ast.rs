@@ -1,4 +1,5 @@
 use super::markup::nodes::{MarkupNode, BLANK_PLACEHOLDER};
+use crate::editor::mvc::ed_view::RenderedWgpu;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::{ed_error::EdResult, theme::EdTheme, util::map_get};
 use crate::graphics::primitives::rect::Rect;
@@ -15,9 +16,10 @@ pub fn build_code_graphics<'a>(
     config: &Config,
     glyph_dim_rect: Rect,
     markup_node_pool: &'a SlowPool,
-) -> EdResult<(glyph_brush::OwnedSection, Vec<Rect>)> {
+) -> EdResult<RenderedWgpu> {
     let area_bounds = (size.width as f32, size.height as f32);
     let layout = wgpu_glyph::Layout::default().h_align(wgpu_glyph::HorizontalAlign::Left);
+    let mut rendered_wgpu = RenderedWgpu::new();
 
     let (glyph_text_vec, rects) = markup_to_wgpu(
         markup_node,
@@ -33,7 +35,10 @@ pub fn build_code_graphics<'a>(
     let section =
         gr_text::section_from_glyph_text(glyph_text_vec, txt_coords.into(), area_bounds, layout);
 
-    Ok((section, rects))
+    rendered_wgpu.add_rects(rects);
+    rendered_wgpu.add_text(section);
+
+    Ok(rendered_wgpu)
 }
 
 struct CodeStyle<'a> {

@@ -26,7 +26,7 @@ impl Default for UITheme {
             text: gr_colors::WHITE,
             caret: gr_colors::WHITE,
             select_highlight: from_hsba(240, 55, 100, 0.3),
-            tooltip_bg: from_hsb(240, 32, 30),
+            tooltip_bg: from_hsb(240, 60, 50),
             tooltip_text: gr_colors::WHITE,
             default_font_size: 30.0,
         }

@@ -84,8 +84,8 @@ fn section_from_text<'a>(
     )
 }
 
-pub fn owned_section_from_text<'a>(
-    text: &'a Text,
+pub fn owned_section_from_text(
+    text: &Text,
     layout: wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker>,
 ) -> OwnedSection {
     OwnedSection {
