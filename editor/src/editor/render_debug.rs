@@ -47,7 +47,7 @@ pub fn build_debug_graphics(
     .with_color(colors::to_slice(from_hsb(211, 80, 100)))
     .with_scale(config.code_font_size);
 
-    let section = gr_text::section_from_glyph_text(
+    let section = gr_text::owned_section_from_glyph_texts(
         vec![
             grid_node_map_text,
             code_lines_text,
