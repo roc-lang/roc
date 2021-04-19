@@ -30,6 +30,20 @@ extern fn roc__mainForHost_1_Fx_result_size() i64;
 
 const Unit = extern struct {};
 
+
+pub export fn malloc(size: usize) ?*u8 {
+    const stdout = std.io.getStdOut().writer();
+
+    const ns = std.time.nanoTimestamp();
+    stdout.print("{}ns Malloc!\n", .{ns}) catch unreachable;
+
+    const allocator = testing.allocator;
+    const ptr = allocator.alignedAlloc(u8, 16, size) catch unreachable;
+
+    return @ptrCast(?*u8, ptr);
+}
+
+
 pub export fn main() u8 {
     const stdout = std.io.getStdOut().writer();
 
