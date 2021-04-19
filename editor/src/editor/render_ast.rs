@@ -33,7 +33,7 @@ pub fn build_code_graphics<'a>(
     )?;
 
     let section =
-        gr_text::section_from_glyph_text(glyph_text_vec, txt_coords.into(), area_bounds, layout);
+        gr_text::owned_section_from_glyph_texts(glyph_text_vec, txt_coords.into(), area_bounds, layout);
 
     rendered_wgpu.add_rects(rects);
     rendered_wgpu.add_text(section);

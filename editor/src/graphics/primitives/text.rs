@@ -101,7 +101,7 @@ pub fn owned_section_from_text(
     )
 }
 
-pub fn section_from_glyph_text(
+pub fn owned_section_from_glyph_texts(
     text: Vec<glyph_brush::OwnedText>,
     screen_position: (f32, f32),
     area_bounds: (f32, f32),
