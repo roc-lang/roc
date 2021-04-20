@@ -1,3 +1,8 @@
+use crate::lang::pool::Pool;
+use roc_region::all::Region;
+use crate::lang::types::Type2;
+use roc_can::expected::Expected;
+use crate::lang::constrain::constrain_expr;
 use crate::editor::code_lines::CodeLines;
 use crate::editor::ed_error::from_ui_res;
 use crate::editor::ed_error::print_ui_err;
@@ -36,6 +41,16 @@ use crate::window::keyboard_input::Modifiers;
 use snafu::OptionExt;
 use winit::event::VirtualKeyCode;
 use VirtualKeyCode::*;
+use roc_collections::all::MutMap;
+use roc_module::symbol::Symbol;
+use roc_module::ident::Lowercase;
+use roc_types::subs::{Subs, Variable};
+use crate::lang::{
+    constrain::Constraint,
+    solve
+};
+use roc_types::{pretty_print::content_to_string, subs::VarStore};
+use roc_types::solved_types::Solved;
 
 impl<'a> EdModel<'a> {
     pub fn move_caret(
@@ -166,6 +181,9 @@ impl<'a> EdModel<'a> {
                 })?;
 
                 self.set_caret(expr_start_pos);
+
+                //let type_str = self.expr2_to_type(ast_node_id)
+
                 self.selected_expr_opt = Some(SelectedExpression {
                     ast_node_id,
                     mark_node_id: parent_id,
@@ -187,6 +205,9 @@ impl<'a> EdModel<'a> {
                 })?;
 
                 self.set_caret(expr_start_pos);
+
+                //let type_str = self.expr2_to_type(ast_node_id)
+
                 self.selected_expr_opt = Some(SelectedExpression {
                     ast_node_id,
                     mark_node_id,
@@ -198,6 +219,67 @@ impl<'a> EdModel<'a> {
         }
 
         Ok(())
+    }
+
+    fn expr2_to_type(&mut self, expr2_id: NodeId<Expr2>) -> PoolStr {
+        let var = self.module.env.var_store.fresh();
+        let expr = self.module.env.pool.get(expr2_id);
+
+        let constrained = constrain_expr(
+            &mut self.module.env,
+            &expr,
+            Expected::NoExpectation(Type2::Variable(var)),
+            Region::zero(),
+        );
+
+        // extract the var_store out of the env again
+        let mut var_store = VarStore::default();
+        std::mem::swap(self.module.env.var_store, &mut var_store);
+
+        let (mut solved, _, _) = EdModel::run_solve(
+            self.module.env.pool,
+            Default::default(),
+            Default::default(),
+            constrained,
+            var_store,
+        );
+
+        let subs = solved.inner_mut();
+
+        let content = subs.get(var).content;
+
+        PoolStr::new(
+            &content_to_string(content, &subs, self.module.env.home, &Default::default()),
+            self.module.env.pool
+        )
+    }
+
+    fn run_solve(
+        mempool: &mut Pool,
+        aliases: MutMap<Symbol, roc_types::types::Alias>,
+        rigid_variables: MutMap<Variable, Lowercase>,
+        constraint: Constraint,
+        var_store: VarStore,
+    ) -> (Solved<Subs>, solve::Env, Vec<solve::TypeError>) {
+        let env = solve::Env {
+            vars_by_symbol: MutMap::default(),
+            aliases,
+        };
+    
+        let mut subs = Subs::new(var_store.into());
+    
+        for (var, name) in rigid_variables {
+            subs.rigid_var(var, name);
+        }
+    
+        // Now that the module is parsed, canonicalized, and constrained,
+        // we need to type check it.
+        let mut problems = Vec::new();
+    
+        // Run the solver to populate Subs.
+        let (solved_subs, solved_env) = solve::run(mempool, &env, &mut problems, subs, &constraint);
+    
+        (solved_subs, solved_env, problems)
     }
 
     pub fn ed_handle_key_down(
@@ -235,30 +317,33 @@ impl<'a> EdModel<'a> {
         }
     }
 
-    fn replace_slected_expr_with_blank(&mut self) -> EdResult<()> {
-        let expr_mark_node_id_opt = if let Some(sel_expr) = &self.selected_expr_opt {
-            let expr2_level_mark_node = self.markup_node_pool.get(sel_expr.mark_node_id);
+    fn replace_selected_expr_with_blank(&mut self) -> EdResult<()> {
 
-            let blank_replacement = MarkupNode::Blank {
-                ast_node_id: sel_expr.ast_node_id,
-                attributes: Attributes::new(),
-                syn_high_style: HighlightStyle::Blank,
-                parent_id_opt: expr2_level_mark_node.get_parent_id_opt(),
+        let expr_mark_node_id_opt = 
+            if let Some(sel_expr) = &self.selected_expr_opt {
+                let expr2_level_mark_node = self.markup_node_pool.get(sel_expr.mark_node_id);
+
+                let blank_replacement = MarkupNode::Blank {
+                    ast_node_id: sel_expr.ast_node_id,
+                    attributes: Attributes::new(),
+                    syn_high_style: HighlightStyle::Blank,
+                    parent_id_opt: expr2_level_mark_node.get_parent_id_opt(),
+                };
+
+                self.markup_node_pool
+                    .replace_node(sel_expr.mark_node_id, blank_replacement);
+
+                let active_selection = self.get_selection().context(MissingSelection {})?;
+
+                self.code_lines.del_selection(active_selection)?;
+                self.grid_node_map.del_selection(active_selection)?;
+
+                self.module.env.pool.set(sel_expr.ast_node_id, Expr2::Blank);
+
+                Some(sel_expr.mark_node_id)
+            } else {
+                None
             };
-
-            self.markup_node_pool
-                .replace_node(sel_expr.mark_node_id, blank_replacement);
-
-            let active_selection = self.get_selection().context(MissingSelection {})?;
-            self.code_lines.del_selection(active_selection)?;
-            self.grid_node_map.del_selection(active_selection)?;
-
-            self.module.env.pool.set(sel_expr.ast_node_id, Expr2::Blank);
-
-            Some(sel_expr.mark_node_id)
-        } else {
-            None
-        };
 
         // have to split the previous `if` up to prevent borrowing issues
         if let Some(expr_mark_node_id) = expr_mark_node_id_opt {
@@ -455,7 +540,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                 // On Linux, '\u{8}' is backspace,
                 // on macOS '\u{7f}'.
 
-                ed_model.replace_slected_expr_with_blank()?;
+                ed_model.replace_selected_expr_with_blank()?;
 
                 InputOutcome::Accepted
             }

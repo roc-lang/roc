@@ -133,7 +133,7 @@ impl GridNodeMap {
         }
     }
 
-    // retruns start and end pos of Expr2, relevant AST node and MarkNodeId of the corresponding MarkupNode
+    // returns start and end pos of Expr2, relevant AST node and MarkNodeId of the corresponding MarkupNode
     pub fn get_expr_start_end_pos(
         &self,
         caret_pos: TextPos,
@@ -203,6 +203,23 @@ impl GridNodeMap {
                 }
             }
 
+            let correct_mark_node_id =
+                {
+                    let curr_node = ed_model.markup_node_pool.get(*curr_node_id);
+
+                    if let Some(parent_id) = curr_node.get_parent_id_opt() {
+                        let parent = ed_model.markup_node_pool.get(parent_id);
+
+                        if parent.get_ast_node_id() == curr_ast_node_id {
+                            parent_id
+                        } else {
+                            *curr_node_id
+                        }
+                    } else {
+                        *curr_node_id
+                    }
+                };
+
             Ok((
                 TextPos {
                     line: caret_pos.line,
@@ -213,7 +230,7 @@ impl GridNodeMap {
                     column: expr_end_index,
                 },
                 curr_ast_node_id,
-                *curr_node_id,
+                correct_mark_node_id,
             ))
         }
     }
