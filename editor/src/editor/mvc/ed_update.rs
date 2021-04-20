@@ -650,6 +650,8 @@ pub mod test_ed_update {
         }
     }
 
+    // Create ed_model from pre_lines DSL, do handle_new_char() with new_char, check if modified ed_model has expected
+    // string representation of code, caret position and active selection.
     pub fn assert_insert(
         pre_lines: &[&str],
         expected_post_lines: &[&str],
@@ -658,6 +660,8 @@ pub mod test_ed_update {
         assert_insert_seq(pre_lines, expected_post_lines, &new_char.to_string())
     }
 
+    // Create ed_model from pre_lines DSL, do handle_new_char() for every char in new_char_seq, check if modified ed_model has expected
+    // string representation of code, caret position and active selection.
     pub fn assert_insert_seq(
         pre_lines: &[&str],
         expected_post_lines: &[&str],
@@ -1168,6 +1172,8 @@ pub mod test_ed_update {
         Ok(())
     }
 
+    // Create ed_model from pre_lines DSL, do handle_new_char() with new_char_seq, select current Expr2,
+    // check if generated tooltip matches expected_tooltip.
     pub fn assert_type_tooltip_seq(
         pre_lines: &[&str],
         expected_tooltip: &str,
@@ -1196,6 +1202,8 @@ pub mod test_ed_update {
         Ok(())
     }
 
+    // Create ed_model from pre_lines DSL, do handle_new_char() with new_char, select current Expr2,
+    // check if generated tooltip matches expected_tooltip.
     pub fn assert_type_tooltip(
         pre_lines: &[&str],
         expected_tooltip: &str,
