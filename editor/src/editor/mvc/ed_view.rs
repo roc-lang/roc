@@ -132,7 +132,7 @@ pub fn build_selection_graphics(
                 &config.ed_theme.ui_theme,
             ));
 
-            // redner tooltip showing type
+            // render tooltip showing type
             if let Some(selected_expr) = selected_expr_opt {
                 let tooltip = ToolTip {
                     position_x: sel_rect_x,
