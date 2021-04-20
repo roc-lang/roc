@@ -5,6 +5,7 @@ use crate::editor::mvc::ed_model::SelectedExpression;
 use crate::editor::render_ast::build_code_graphics;
 use crate::editor::render_debug::build_debug_graphics;
 use crate::graphics::primitives::rect::Rect;
+use crate::lang::pool::Pool;
 use crate::ui::text::caret_w_select::make_caret_rect;
 use crate::ui::text::caret_w_select::make_selection_rect;
 use crate::ui::text::caret_w_select::CaretWSelect;
@@ -81,6 +82,7 @@ pub fn model_to_wgpu<'a>(
         txt_coords,
         config,
         glyph_dim_rect,
+        ed_model.module.env.pool,
     )?;
 
     all_rendered.extend(rendered_selection);
@@ -98,6 +100,7 @@ pub fn build_selection_graphics(
     txt_coords: Vector2<f32>,
     config: &Config,
     glyph_dim_rect: Rect,
+    pool: &Pool,
 ) -> EdResult<RenderedWgpu> {
     let mut all_rendered = RenderedWgpu::new();
     let char_width = glyph_dim_rect.width;
@@ -134,7 +137,7 @@ pub fn build_selection_graphics(
                 let tooltip = ToolTip {
                     position_x: sel_rect_x,
                     position_y: sel_rect_y - glyph_dim_rect.height,
-                    text: selected_expr.type_str.clone(),
+                    text: selected_expr.type_str.as_str(pool),
                 };
 
                 let (tip_rect, tip_text) =
