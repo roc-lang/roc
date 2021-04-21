@@ -1,8 +1,8 @@
-use crate::docs::DocTypeAnnotation::{Apply, BoundVariable, TagUnion};
+use crate::docs::TypeAnnotation::{Apply, BoundVariable, TagUnion};
 use inlinable_string::InlinableString;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::IdentIds;
-use roc_parse::ast::{Def, Tag, TypeAnnotation};
+use roc_parse::ast;
 use roc_region::all::Located;
 
 // Documentation generation requirements
@@ -26,33 +26,33 @@ pub struct ModuleDocumentation {
 pub struct DocEntry {
     pub name: String,
     pub type_vars: Vec<String>,
-    pub type_annotation: Option<DocTypeAnnotation>,
+    pub type_annotation: Option<TypeAnnotation>,
     pub docs: Option<String>,
 }
 
 #[derive(Debug, Clone)]
-pub enum DocTypeAnnotation {
+pub enum TypeAnnotation {
     TagUnion {
-        tags: Vec<DocTag>,
-        extension: Option<Box<DocTypeAnnotation>>,
+        tags: Vec<Tag>,
+        extension: Option<Box<TypeAnnotation>>,
     },
     BoundVariable(String),
     Apply {
         name: String,
-        parts: Vec<DocTypeAnnotation>,
+        parts: Vec<TypeAnnotation>,
     },
 }
 
 #[derive(Debug, Clone)]
-pub struct DocTag {
+pub struct Tag {
     pub name: String,
-    pub values: Vec<DocTypeAnnotation>,
+    pub values: Vec<TypeAnnotation>,
 }
 
 pub fn generate_module_docs<'a>(
     module_name: ModuleName,
     exposed_ident_ids: &'a IdentIds,
-    parsed_defs: &'a [Located<Def<'a>>],
+    parsed_defs: &'a [Located<ast::Def<'a>>],
 ) -> ModuleDocumentation {
     let (entries, _) =
         parsed_defs
@@ -72,7 +72,7 @@ fn generate_module_doc<'a>(
     exposed_ident_ids: &'a IdentIds,
     mut acc: Vec<DocEntry>,
     before_comments_or_new_lines: Option<&'a [roc_parse::ast::CommentOrNewline<'a>]>,
-    def: &'a Def<'a>,
+    def: &'a ast::Def<'a>,
 ) -> (
     Vec<DocEntry>,
     Option<&'a [roc_parse::ast::CommentOrNewline<'a>]>,
@@ -162,14 +162,14 @@ fn generate_module_doc<'a>(
     }
 }
 
-fn type_to_docs(type_annotation: TypeAnnotation) -> Option<DocTypeAnnotation> {
+fn type_to_docs(type_annotation: ast::TypeAnnotation) -> Option<TypeAnnotation> {
     match type_annotation {
-        TypeAnnotation::TagUnion {
+        ast::TypeAnnotation::TagUnion {
             tags,
             ext,
             final_comments: _,
         } => {
-            let mut tags_to_render: Vec<DocTag> = Vec::new();
+            let mut tags_to_render: Vec<Tag> = Vec::new();
 
             let mut any_tags_are_private = false;
 
@@ -204,8 +204,8 @@ fn type_to_docs(type_annotation: TypeAnnotation) -> Option<DocTypeAnnotation> {
                 })
             }
         }
-        TypeAnnotation::BoundVariable(var_name) => Some(BoundVariable(var_name.to_string())),
-        TypeAnnotation::Apply(module_name, type_name, type_ann_parts) => {
+        ast::TypeAnnotation::BoundVariable(var_name) => Some(BoundVariable(var_name.to_string())),
+        ast::TypeAnnotation::Apply(module_name, type_name, type_ann_parts) => {
             let mut name = String::new();
 
             if !module_name.is_empty() {
@@ -215,7 +215,7 @@ fn type_to_docs(type_annotation: TypeAnnotation) -> Option<DocTypeAnnotation> {
 
             name.push_str(type_name);
 
-            let mut parts: Vec<DocTypeAnnotation> = Vec::new();
+            let mut parts: Vec<TypeAnnotation> = Vec::new();
 
             for type_ann_part in type_ann_parts {
                 if let Some(part) = type_to_docs(type_ann_part.value) {
@@ -235,9 +235,9 @@ fn type_to_docs(type_annotation: TypeAnnotation) -> Option<DocTypeAnnotation> {
 
 // The Option here represents if it is private. Private tags
 // evaluate to `None`.
-fn tag_to_doc(tag: Tag) -> Option<DocTag> {
+fn tag_to_doc(tag: ast::Tag) -> Option<Tag> {
     match tag {
-        Tag::Global { name, args } => Some(DocTag {
+        ast::Tag::Global { name, args } => Some(Tag {
             name: name.value.to_string(),
             values: {
                 let mut type_vars = Vec::new();
@@ -257,10 +257,10 @@ fn tag_to_doc(tag: Tag) -> Option<DocTag> {
                 type_vars
             },
         }),
-        Tag::Private { .. } => None,
-        Tag::SpaceBefore(&sub_tag, _) => tag_to_doc(sub_tag),
-        Tag::SpaceAfter(&sub_tag, _) => tag_to_doc(sub_tag),
-        Tag::Malformed(_) => None,
+        ast::Tag::Private { .. } => None,
+        ast::Tag::SpaceBefore(&sub_tag, _) => tag_to_doc(sub_tag),
+        ast::Tag::SpaceAfter(&sub_tag, _) => tag_to_doc(sub_tag),
+        ast::Tag::Malformed(_) => None,
     }
 }
 
