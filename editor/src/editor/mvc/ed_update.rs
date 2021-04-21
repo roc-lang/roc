@@ -1,8 +1,5 @@
-use crate::lang::pool::Pool;
-use roc_region::all::Region;
-use crate::lang::types::Type2;
-use roc_can::expected::Expected;
-use crate::lang::constrain::constrain_expr;
+#![allow(dead_code)]
+
 use crate::editor::code_lines::CodeLines;
 use crate::editor::ed_error::from_ui_res;
 use crate::editor::ed_error::print_ui_err;
@@ -27,8 +24,12 @@ use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::lang::ast::Expr2;
+use crate::lang::constrain::constrain_expr;
 use crate::lang::pool::NodeId;
+use crate::lang::pool::Pool;
 use crate::lang::pool::PoolStr;
+use crate::lang::types::Type2;
+use crate::lang::{constrain::Constraint, solve};
 use crate::ui::text::caret_w_select::CaretWSelect;
 use crate::ui::text::lines::MoveCaretFun;
 use crate::ui::text::selection::validate_raw_sel;
@@ -38,19 +39,17 @@ use crate::ui::text::text_pos::TextPos;
 use crate::ui::text::{lines, lines::Lines, lines::SelectableLines};
 use crate::ui::ui_error::UIResult;
 use crate::window::keyboard_input::Modifiers;
+use roc_can::expected::Expected;
+use roc_collections::all::MutMap;
+use roc_module::ident::Lowercase;
+use roc_module::symbol::Symbol;
+use roc_region::all::Region;
+use roc_types::solved_types::Solved;
+use roc_types::subs::{Subs, Variable};
+use roc_types::{pretty_print::content_to_string, subs::VarStore};
 use snafu::OptionExt;
 use winit::event::VirtualKeyCode;
 use VirtualKeyCode::*;
-use roc_collections::all::MutMap;
-use roc_module::symbol::Symbol;
-use roc_module::ident::Lowercase;
-use roc_types::subs::{Subs, Variable};
-use crate::lang::{
-    constrain::Constraint,
-    solve
-};
-use roc_types::{pretty_print::content_to_string, subs::VarStore};
-use roc_types::solved_types::Solved;
 
 impl<'a> EdModel<'a> {
     pub fn move_caret(
@@ -182,7 +181,7 @@ impl<'a> EdModel<'a> {
 
                 self.set_caret(expr_start_pos);
 
-                //let type_str = self.expr2_to_type(ast_node_id)
+                //let type_str = self.expr2_to_type(ast_node_id);
 
                 self.selected_expr_opt = Some(SelectedExpression {
                     ast_node_id,
@@ -206,7 +205,7 @@ impl<'a> EdModel<'a> {
 
                 self.set_caret(expr_start_pos);
 
-                //let type_str = self.expr2_to_type(ast_node_id)
+                //let type_str = self.expr2_to_type(ast_node_id);
 
                 self.selected_expr_opt = Some(SelectedExpression {
                     ast_node_id,
@@ -250,7 +249,7 @@ impl<'a> EdModel<'a> {
 
         PoolStr::new(
             &content_to_string(content, &subs, self.module.env.home, &Default::default()),
-            self.module.env.pool
+            self.module.env.pool,
         )
     }
 
@@ -265,20 +264,20 @@ impl<'a> EdModel<'a> {
             vars_by_symbol: MutMap::default(),
             aliases,
         };
-    
+
         let mut subs = Subs::new(var_store.into());
-    
+
         for (var, name) in rigid_variables {
             subs.rigid_var(var, name);
         }
-    
+
         // Now that the module is parsed, canonicalized, and constrained,
         // we need to type check it.
         let mut problems = Vec::new();
-    
+
         // Run the solver to populate Subs.
         let (solved_subs, solved_env) = solve::run(mempool, &env, &mut problems, subs, &constraint);
-    
+
         (solved_subs, solved_env, problems)
     }
 
@@ -318,32 +317,30 @@ impl<'a> EdModel<'a> {
     }
 
     fn replace_selected_expr_with_blank(&mut self) -> EdResult<()> {
+        let expr_mark_node_id_opt = if let Some(sel_expr) = &self.selected_expr_opt {
+            let expr2_level_mark_node = self.markup_node_pool.get(sel_expr.mark_node_id);
 
-        let expr_mark_node_id_opt = 
-            if let Some(sel_expr) = &self.selected_expr_opt {
-                let expr2_level_mark_node = self.markup_node_pool.get(sel_expr.mark_node_id);
-
-                let blank_replacement = MarkupNode::Blank {
-                    ast_node_id: sel_expr.ast_node_id,
-                    attributes: Attributes::new(),
-                    syn_high_style: HighlightStyle::Blank,
-                    parent_id_opt: expr2_level_mark_node.get_parent_id_opt(),
-                };
-
-                self.markup_node_pool
-                    .replace_node(sel_expr.mark_node_id, blank_replacement);
-
-                let active_selection = self.get_selection().context(MissingSelection {})?;
-
-                self.code_lines.del_selection(active_selection)?;
-                self.grid_node_map.del_selection(active_selection)?;
-
-                self.module.env.pool.set(sel_expr.ast_node_id, Expr2::Blank);
-
-                Some(sel_expr.mark_node_id)
-            } else {
-                None
+            let blank_replacement = MarkupNode::Blank {
+                ast_node_id: sel_expr.ast_node_id,
+                attributes: Attributes::new(),
+                syn_high_style: HighlightStyle::Blank,
+                parent_id_opt: expr2_level_mark_node.get_parent_id_opt(),
             };
+
+            self.markup_node_pool
+                .replace_node(sel_expr.mark_node_id, blank_replacement);
+
+            let active_selection = self.get_selection().context(MissingSelection {})?;
+
+            self.code_lines.del_selection(active_selection)?;
+            self.grid_node_map.del_selection(active_selection)?;
+
+            self.module.env.pool.set(sel_expr.ast_node_id, Expr2::Blank);
+
+            Some(sel_expr.mark_node_id)
+        } else {
+            None
+        };
 
         // have to split the previous `if` up to prevent borrowing issues
         if let Some(expr_mark_node_id) = expr_mark_node_id_opt {

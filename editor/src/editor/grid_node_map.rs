@@ -3,6 +3,7 @@ use crate::editor::ed_error::NestedNodeWithoutChildren;
 use crate::editor::ed_error::NodeIdNotInGridNodeMap;
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::slow_pool::MarkNodeId;
+use crate::editor::slow_pool::SlowPool;
 use crate::editor::util::first_last_index_of;
 use crate::editor::util::index_of;
 use crate::lang::ast::Expr2;
@@ -204,21 +205,7 @@ impl GridNodeMap {
             }
 
             let correct_mark_node_id =
-                {
-                    let curr_node = ed_model.markup_node_pool.get(*curr_node_id);
-
-                    if let Some(parent_id) = curr_node.get_parent_id_opt() {
-                        let parent = ed_model.markup_node_pool.get(parent_id);
-
-                        if parent.get_ast_node_id() == curr_ast_node_id {
-                            parent_id
-                        } else {
-                            *curr_node_id
-                        }
-                    } else {
-                        *curr_node_id
-                    }
-                };
+                GridNodeMap::get_top_node_with_expr_id(*curr_node_id, &ed_model.markup_node_pool);
 
             Ok((
                 TextPos {
@@ -232,6 +219,27 @@ impl GridNodeMap {
                 curr_ast_node_id,
                 correct_mark_node_id,
             ))
+        }
+    }
+
+    // A markup node may refer to a bracket `{`, in that case we want the parent, a Nested MarkNode.
+    // `{` is not the entire Expr2
+    fn get_top_node_with_expr_id(
+        curr_node_id: MarkNodeId,
+        markup_node_pool: &SlowPool,
+    ) -> MarkNodeId {
+        let curr_node = markup_node_pool.get(curr_node_id);
+
+        if let Some(parent_id) = curr_node.get_parent_id_opt() {
+            let parent = markup_node_pool.get(parent_id);
+
+            if parent.get_ast_node_id() == curr_node.get_ast_node_id() {
+                parent_id
+            } else {
+                curr_node_id
+            }
+        } else {
+            curr_node_id
         }
     }
 
