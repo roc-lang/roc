@@ -23,6 +23,7 @@ use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::lang::ast::Expr2;
 use crate::lang::pool::NodeId;
+use crate::lang::pool::PoolStr;
 use crate::ui::text::caret_w_select::CaretWSelect;
 use crate::ui::text::lines::MoveCaretFun;
 use crate::ui::text::selection::validate_raw_sel;
@@ -168,7 +169,7 @@ impl<'a> EdModel<'a> {
                 self.selected_expr_opt = Some(SelectedExpression {
                     ast_node_id,
                     mark_node_id: parent_id,
-                    type_str: "Str".to_owned(), // TODO get this String from type inference
+                    type_str: PoolStr::new("{}", self.module.env.pool), // TODO get this PoolStr from type inference
                 });
 
                 self.dirty = true;
@@ -189,7 +190,7 @@ impl<'a> EdModel<'a> {
                 self.selected_expr_opt = Some(SelectedExpression {
                     ast_node_id,
                     mark_node_id,
-                    type_str: "Str".to_owned(), // TODO get this String from type inference
+                    type_str: PoolStr::new("{}", self.module.env.pool), // TODO get this PoolStr from type inference
                 });
 
                 self.dirty = true;
@@ -649,6 +650,8 @@ pub mod test_ed_update {
         }
     }
 
+    // Create ed_model from pre_lines DSL, do handle_new_char() with new_char, check if modified ed_model has expected
+    // string representation of code, caret position and active selection.
     pub fn assert_insert(
         pre_lines: &[&str],
         expected_post_lines: &[&str],
@@ -657,6 +660,8 @@ pub mod test_ed_update {
         assert_insert_seq(pre_lines, expected_post_lines, &new_char.to_string())
     }
 
+    // Create ed_model from pre_lines DSL, do handle_new_char() for every char in new_char_seq, check if modified ed_model has expected
+    // string representation of code, caret position and active selection.
     pub fn assert_insert_seq(
         pre_lines: &[&str],
         expected_post_lines: &[&str],
@@ -1164,6 +1169,53 @@ pub mod test_ed_update {
             &["{ ┃g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }"],
             "2",
         )?;
+        Ok(())
+    }
+
+    // Create ed_model from pre_lines DSL, do handle_new_char() with new_char_seq, select current Expr2,
+    // check if generated tooltip matches expected_tooltip.
+    pub fn assert_type_tooltip_seq(
+        pre_lines: &[&str],
+        expected_tooltip: &str,
+        new_char_seq: &str,
+    ) -> Result<(), String> {
+        let test_arena = Bump::new();
+        let code_str = BumpString::from_str_in(&pre_lines.join("").replace("┃", ""), &test_arena);
+
+        let mut model_refs = init_model_refs();
+
+        let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
+
+        for input_char in new_char_seq.chars() {
+            ed_res_to_res(handle_new_char(&input_char, &mut ed_model))?;
+        }
+
+        ed_model.select_expr()?;
+
+        let created_tooltip = ed_model.selected_expr_opt.unwrap().type_str;
+
+        assert_eq!(
+            created_tooltip.as_str(ed_model.module.env.pool),
+            expected_tooltip
+        );
+
+        Ok(())
+    }
+
+    // Create ed_model from pre_lines DSL, do handle_new_char() with new_char, select current Expr2,
+    // check if generated tooltip matches expected_tooltip.
+    pub fn assert_type_tooltip(
+        pre_lines: &[&str],
+        expected_tooltip: &str,
+        new_char: char,
+    ) -> Result<(), String> {
+        assert_type_tooltip_seq(pre_lines, expected_tooltip, &new_char.to_string())
+    }
+
+    #[test]
+    fn test_type_tooltip_record() -> Result<(), String> {
+        assert_type_tooltip(&["┃"], "{}", '{')?;
+
         Ok(())
     }
 }

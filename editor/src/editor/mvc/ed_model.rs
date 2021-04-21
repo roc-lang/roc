@@ -12,6 +12,7 @@ use crate::graphics::primitives::rect::Rect;
 use crate::lang::ast::Expr2;
 use crate::lang::expr::{str_to_expr2, Env};
 use crate::lang::pool::NodeId;
+use crate::lang::pool::PoolStr;
 use crate::lang::scope::Scope;
 use crate::ui::text::caret_w_select::CaretWSelect;
 use crate::ui::text::lines::SelectableLines;
@@ -35,7 +36,6 @@ pub struct EdModel<'a> {
     // contains single char dimensions, used to calculate line height, column width...
     pub glyph_dim_rect_opt: Option<Rect>,
     pub has_focus: bool,
-    // Option<MarkNodeId>: MarkupNode that corresponds to caret position, Option because this MarkNodeId is only calculated when it needs to be used.
     pub caret_w_select_vec: NonEmpty<(CaretWSelect, Option<MarkNodeId>)>,
     pub selected_expr_opt: Option<SelectedExpression>,
     pub show_debug_view: bool,
@@ -47,7 +47,7 @@ pub struct EdModel<'a> {
 pub struct SelectedExpression {
     pub ast_node_id: NodeId<Expr2>,
     pub mark_node_id: MarkNodeId,
-    pub type_str: String,
+    pub type_str: PoolStr,
 }
 
 pub fn init_model<'a>(

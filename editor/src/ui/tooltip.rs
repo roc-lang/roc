@@ -4,13 +4,13 @@ use crate::graphics::primitives::text::layout_from_text;
 use crate::graphics::primitives::text::Text;
 use crate::ui::theme::UITheme;
 
-pub struct ToolTip {
+pub struct ToolTip<'a> {
     pub position_x: f32,
     pub position_y: f32,
-    pub text: String,
+    pub text: &'a str,
 }
 
-impl ToolTip {
+impl<'a> ToolTip<'a> {
     fn make_tooltip_rect(
         &self,
         width: f32,
@@ -31,13 +31,13 @@ impl ToolTip {
         }
     }
 
-    fn make_tooltip_text<'a>(
-        &'a self,
+    fn make_tooltip_text<'b>(
+        &'b self,
         x_offset: f32,
         y_offset: f32,
         y_margin: f32,
         ui_theme: &UITheme,
-    ) -> Text<'a> {
+    ) -> Text<'b> {
         Text {
             position: (
                 self.position_x + x_offset,
