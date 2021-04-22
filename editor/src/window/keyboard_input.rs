@@ -34,3 +34,17 @@ pub fn from_winit(winit_mods: &winit::event::ModifiersState) -> Modifiers {
         logo: winit_mods.logo(),
     }
 }
+
+#[cfg(test)]
+pub mod test_modifiers {
+    use crate::window::keyboard_input::Modifiers;
+
+    pub fn ctrl_shift() -> Modifiers {
+        Modifiers {
+            shift: true,
+            ctrl: true,
+            alt: false,
+            logo: false,
+        }
+    }
+}

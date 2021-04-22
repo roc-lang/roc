@@ -715,8 +715,10 @@ pub mod test_ed_update {
     use crate::editor::mvc::ed_update::handle_new_char;
     use crate::editor::mvc::ed_update::EdResult;
     use crate::ui::ui_error::UIResult;
+    use crate::window::keyboard_input::test_modifiers::ctrl_shift;
     use bumpalo::collections::String as BumpString;
     use bumpalo::Bump;
+    use winit::event::VirtualKeyCode::*;
 
     fn ed_res_to_res<T>(ed_res: EdResult<T>) -> Result<T, String> {
         match ed_res {
@@ -1251,6 +1253,216 @@ pub mod test_ed_update {
             &["{ ┃g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }"],
             "2",
         )?;
+        Ok(())
+    }
+
+    // Create ed_model from pre_lines DSL, do ctrl+shift+up as many times as repeat.
+    // check if modified ed_model has expected string representation of code, caret position and active selection.
+    pub fn assert_ctrl_shift_up_repeat(
+        pre_lines: &[&str],
+        expected_post_lines: &[&str],
+        repeats: usize,
+    ) -> Result<(), String> {
+        let test_arena = Bump::new();
+        let code_str = BumpString::from_str_in(&pre_lines.join("").replace("┃", ""), &test_arena);
+
+        let mut model_refs = init_model_refs();
+
+        let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
+
+        for _ in 0..repeats {
+            ed_model.ed_handle_key_down(&ctrl_shift(), Up)?;
+        }
+
+        let post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
+
+        assert_eq!(post_lines, expected_post_lines);
+
+        Ok(())
+    }
+
+    pub fn assert_ctrl_shift_up(
+        pre_lines: &[&str],
+        expected_post_lines: &[&str],
+    ) -> Result<(), String> {
+        assert_ctrl_shift_up_repeat(pre_lines, expected_post_lines, 1)
+    }
+
+    #[test]
+    fn test_ctrl_shift_up_blank() -> Result<(), String> {
+        // Blank is auto-inserted
+        assert_ctrl_shift_up(&["┃"], &["┃❮ ❯"])?;
+        assert_ctrl_shift_up_repeat(&["┃"], &["┃❮ ❯"], 4)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ctrl_shift_up_string() -> Result<(), String> {
+        assert_ctrl_shift_up(&["\"┃\""], &["┃❮\"\"❯"])?;
+        assert_ctrl_shift_up(&["┃\"\""], &["┃❮\"\"❯"])?;
+        assert_ctrl_shift_up(&["\"┃0\""], &["┃❮\"0\"❯"])?;
+        assert_ctrl_shift_up(&["\"0┃\""], &["┃❮\"0\"❯"])?;
+        assert_ctrl_shift_up(&["\"abc┃\""], &["┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up(&["\"ab┃c\""], &["┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up(&["\"┃abc\""], &["┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up(&["┃\"abc\""], &["┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up_repeat(&["\"abc┃\""], &["┃❮\"abc\"❯"], 3)?;
+        assert_ctrl_shift_up(
+            &["\"hello, hello.12345ZXY{}[]-><-┃\""],
+            &["┃❮\"hello, hello.12345ZXY{}[]-><-\"❯"],
+        )?;
+
+        assert_ctrl_shift_up(&["\"\"┃"], &["\"\"┃"])?;
+        assert_ctrl_shift_up(&["\"abc\"┃"], &["\"abc\"┃"])?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ctrl_shift_up_record() -> Result<(), String> {
+        assert_ctrl_shift_up(&["{ ┃ }"], &["┃❮{  }❯"])?;
+        assert_ctrl_shift_up(&["{┃  }"], &["┃❮{  }❯"])?;
+        assert_ctrl_shift_up(&["┃{  }"], &["┃❮{  }❯"])?;
+        assert_ctrl_shift_up(&["{  ┃}"], &["┃❮{  }❯"])?;
+        assert_ctrl_shift_up_repeat(&["{ ┃ }"], &["┃❮{  }❯"], 4)?;
+        assert_ctrl_shift_up(&["{  }┃"], &["{  }┃"])?;
+
+        assert_ctrl_shift_up(&["{ pear┃ }"], &["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up(&["{ pea┃r }"], &["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up(&["{ p┃ear }"], &["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up(&["{ ┃pear }"], &["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up(&["{┃ pear }"], &["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up(&["┃{ pear }"], &["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up(&["{ pear ┃}"], &["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up_repeat(&["{ pear┃ }"], &["┃❮{ pear }❯"], 3)?;
+        assert_ctrl_shift_up(&["{ pear }┃"], &["{ pear }┃"])?;
+
+        assert_ctrl_shift_up(&["{ camelCase123┃ }"], &["┃❮{ camelCase123 }❯"])?;
+
+        assert_ctrl_shift_up(&["{ a: \"┃\" }"], &["{ a: ┃❮\"\"❯ }"])?;
+        assert_ctrl_shift_up(&["{ a: ┃\"\" }"], &["{ a: ┃❮\"\"❯ }"])?;
+        assert_ctrl_shift_up(&["{ a: \"\"┃ }"], &["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up(&["{ a: \"\" ┃}"], &["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_repeat(&["{ a: \"\" ┃}"], &["┃❮{ a: \"\" }❯"], 3)?;
+        assert_ctrl_shift_up(&["{ a: \"\" }┃"], &["{ a: \"\" }┃"])?;
+        assert_ctrl_shift_up(&["{ a:┃ \"\" }"], &["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up(&["{ a┃: \"\" }"], &["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up(&["{ ┃a: \"\" }"], &["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up(&["{┃ a: \"\" }"], &["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up(&["┃{ a: \"\" }"], &["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_repeat(&["{ a: \"┃\" }"], &["┃❮{ a: \"\" }❯"], 2)?;
+        assert_ctrl_shift_up_repeat(&["{ a: \"┃\" }"], &["┃❮{ a: \"\" }❯"], 4)?;
+
+        assert_ctrl_shift_up(&["{ abc: \"de┃\" }"], &["{ abc: ┃❮\"de\"❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: \"d┃e\" }"], &["{ abc: ┃❮\"de\"❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: \"┃de\" }"], &["{ abc: ┃❮\"de\"❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: ┃\"de\" }"], &["{ abc: ┃❮\"de\"❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: \"de\"┃ }"], &["┃❮{ abc: \"de\" }❯"])?;
+        assert_ctrl_shift_up_repeat(&["{ abc: \"d┃e\" }"], &["┃❮{ abc: \"de\" }❯"], 2)?;
+        assert_ctrl_shift_up_repeat(&["{ abc: \"d┃e\" }"], &["┃❮{ abc: \"de\" }❯"], 3)?;
+
+        assert_ctrl_shift_up(
+            &["{ camelCase123: \"hello, hello.12┃345ZXY{}[]-><-\" }"],
+            &["{ camelCase123: ┃❮\"hello, hello.12345ZXY{}[]-><-\"❯ }"],
+        )?;
+        assert_ctrl_shift_up(
+            &["{ camel┃Case123: \"hello, hello.12345ZXY{}[]-><-\" }"],
+            &["┃❮{ camelCase123: \"hello, hello.12345ZXY{}[]-><-\" }❯"],
+        )?;
+        assert_ctrl_shift_up_repeat(
+            &["{ camelCase123: \"hello, hello┃.12345ZXY{}[]-><-\" }"],
+            &["┃❮{ camelCase123: \"hello, hello.12345ZXY{}[]-><-\" }❯"],
+            2,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ctrl_shift_up_nested_record() -> Result<(), String> {
+        assert_ctrl_shift_up(&["{ abc: { ┃ } }"], &["{ abc: ┃❮{  }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: {┃  } }"], &["{ abc: ┃❮{  }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: ┃{  } }"], &["{ abc: ┃❮{  }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: {  ┃} }"], &["{ abc: ┃❮{  }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: {  }┃ }"], &["┃❮{ abc: {  } }❯"])?;
+
+        assert_ctrl_shift_up(&["{ abc: { ┃d } }"], &["{ abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: {┃ d } }"], &["{ abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: ┃{ d } }"], &["{ abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: { d ┃} }"], &["{ abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: { d┃e } }"], &["{ abc: ┃❮{ de }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: { d }┃ }"], &["┃❮{ abc: { d } }❯"])?;
+        assert_ctrl_shift_up(&["┃{ abc: { d } }"], &["┃❮{ abc: { d } }❯"])?;
+
+        assert_ctrl_shift_up(&["{ abc: { de: { ┃ } } }"], &["{ abc: { de: ┃❮{  }❯ } }"])?;
+        assert_ctrl_shift_up(&["{ abc: { de: ┃{  } } }"], &["{ abc: { de: ┃❮{  }❯ } }"])?;
+        assert_ctrl_shift_up(&["{ abc: { de: {  }┃ } }"], &["{ abc: ┃❮{ de: {  } }❯ }"])?;
+
+        assert_ctrl_shift_up(&["{ abc: { de: \"┃\" } }"], &["{ abc: { de: ┃❮\"\"❯ } }"])?;
+        assert_ctrl_shift_up(&["{ abc: { de: ┃\"\" } }"], &["{ abc: { de: ┃❮\"\"❯ } }"])?;
+        assert_ctrl_shift_up(&["{ abc: { de: \"\"┃ } }"], &["{ abc: ┃❮{ de: \"\" }❯ }"])?;
+        assert_ctrl_shift_up(
+            &["{ abc: { de: \"f g┃\" } }"],
+            &["{ abc: { de: ┃❮\"f g\"❯ } }"],
+        )?;
+        assert_ctrl_shift_up(
+            &["{ abc: { de┃: \"f g\" } }"],
+            &["{ abc: ┃❮{ de: \"f g\" }❯ }"],
+        )?;
+        assert_ctrl_shift_up(
+            &["{ abc: {┃ de: \"f g\" } }"],
+            &["{ abc: ┃❮{ de: \"f g\" }❯ }"],
+        )?;
+        assert_ctrl_shift_up(
+            &["{ abc: { de: \"f g\" ┃} }"],
+            &["{ abc: ┃❮{ de: \"f g\" }❯ }"],
+        )?;
+        assert_ctrl_shift_up(
+            &["{ abc: { de: \"f g\" }┃ }"],
+            &["┃❮{ abc: { de: \"f g\" } }❯"],
+        )?;
+        assert_ctrl_shift_up(
+            &["┃{ abc: { de: \"f g\" } }"],
+            &["┃❮{ abc: { de: \"f g\" } }❯"],
+        )?;
+        assert_ctrl_shift_up(
+            &["{ abc: { de: \"f g\" } }┃"],
+            &["{ abc: { de: \"f g\" } }┃"],
+        )?;
+
+        assert_ctrl_shift_up_repeat(
+            &["{ abc: { de: \"f g┃\" } }"],
+            &["{ abc: ┃❮{ de: \"f g\" }❯ }"],
+            2,
+        )?;
+        assert_ctrl_shift_up_repeat(
+            &["{ abc: { de: ┃\"f g\" } }"],
+            &["┃❮{ abc: { de: \"f g\" } }❯"],
+            3,
+        )?;
+        assert_ctrl_shift_up_repeat(
+            &["{ abc: { de: ┃\"f g\" } }"],
+            &["┃❮{ abc: { de: \"f g\" } }❯"],
+            4,
+        )?;
+
+        assert_ctrl_shift_up_repeat(
+            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
+            &["{ g: { oi: { ng: { d: ┃❮{ e: { e: { p: { camelCase } } } }❯ } } } }"],
+            4,
+        )?;
+        assert_ctrl_shift_up_repeat(
+            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
+            &["{ g: ┃❮{ oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } }❯ }"],
+            7,
+        )?;
+        assert_ctrl_shift_up_repeat(
+            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
+            &["┃❮{ g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }❯"],
+            9,
+        )?;
+
         Ok(())
     }
 
