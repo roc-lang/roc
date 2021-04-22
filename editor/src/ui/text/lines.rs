@@ -1,4 +1,8 @@
-// Adapted from https://github.com/cessen/ropey by Nathan Vegdahl, licensed under the MIT license
+// Adapted from https://github.com/cessen/ropey
+// by Nathan Vegdahl - license information can be found in the COPYRIGHT
+// file in the root directory of this distribution.
+//
+// Thank you, Nathan!
 
 use crate::ui::text::caret_w_select::CaretWSelect;
 use crate::ui::text::selection::validate_sel_opt;
