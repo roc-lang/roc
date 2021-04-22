@@ -126,7 +126,7 @@ pub fn finish_parsing_float(raw: &str) -> Result<f64, (&str, FloatErrorKind)> {
 ///
 /// The Rust Project is dual-licensed under either Apache 2.0 or MIT,
 /// at the user's choice. License information can be found in
-/// the COPYRIGHT file in the root directory of this distribution.
+/// the COPYRIGHT_DETAILS file in the root directory of this distribution.
 ///
 /// Thanks to the Rust project and its contributors!
 trait FromStrRadixHelper: PartialOrd + Copy {
