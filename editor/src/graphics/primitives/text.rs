@@ -1,5 +1,8 @@
 // Adapted from https://github.com/sotrh/learn-wgpu
-// by Benjamin Hansen, licensed under the MIT license
+// by Benjamin Hansen - license information can be found in the COPYRIGHT
+// file in the root directory of this distribution.
+//
+// Thank you, Benjamin!
 
 use super::rect::Rect;
 use crate::graphics::colors;
@@ -7,6 +10,7 @@ use crate::graphics::colors::RgbaTup;
 use crate::graphics::style::DEFAULT_FONT_SIZE;
 use ab_glyph::{FontArc, Glyph, InvalidFont};
 use cgmath::{Vector2, Vector4};
+use glyph_brush::OwnedSection;
 use wgpu_glyph::{ab_glyph, GlyphBrush, GlyphBrushBuilder, GlyphCruncher, Section};
 
 #[derive(Debug)]
@@ -83,7 +87,24 @@ fn section_from_text<'a>(
     )
 }
 
-pub fn section_from_glyph_text(
+pub fn owned_section_from_text(
+    text: &Text,
+    layout: wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker>,
+) -> OwnedSection {
+    OwnedSection {
+        screen_position: text.position.into(),
+        bounds: text.area_bounds.into(),
+        layout,
+        ..OwnedSection::default()
+    }
+    .add_text(
+        glyph_brush::OwnedText::new(text.text)
+            .with_color(Vector4::from(text.color))
+            .with_scale(text.size),
+    )
+}
+
+pub fn owned_section_from_glyph_texts(
     text: Vec<glyph_brush::OwnedText>,
     screen_position: (f32, f32),
     area_bounds: (f32, f32),

@@ -1,5 +1,8 @@
 // Taken from https://github.com/sotrh/learn-wgpu
-// by Benjamin Hansen, licensed under the MIT license
+// by Benjamin Hansen - license information can be found in the COPYRIGHT
+// file in the root directory of this distribution.
+//
+// Thank you, Benjamin!
 use cgmath::Vector2;
 
 #[derive(Copy, Clone)]

@@ -2,7 +2,7 @@
 name = "roc_fmt"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
-license = "Apache-2.0"
+license = "UPL-1.0"
 edition = "2018"
 
 [dependencies]
@@ -12,7 +12,7 @@ roc_module = { path = "../module" }
 roc_parse = { path = "../parse" }
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
-bumpalo = { version = "3.2", features = ["collections"] }
+bumpalo = { version = "3.6.1", features = ["collections"] }
 inlinable_string = "0.1"
 
 [dev-dependencies]

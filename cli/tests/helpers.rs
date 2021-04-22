@@ -23,7 +23,11 @@ pub struct Out {
 }
 
 pub fn path_to_roc_binary() -> PathBuf {
-    // Adapted from https://github.com/volta-cli/volta/blob/cefdf7436a15af3ce3a38b8fe53bb0cfdb37d3dd/tests/acceptance/support/sandbox.rs#L680 - BSD-2-Clause licensed
+    // Adapted from https://github.com/volta-cli/volta/blob/cefdf7436a15af3ce3a38b8fe53bb0cfdb37d3dd/tests/acceptance/support/sandbox.rs#L680
+    // by the Volta Contributors - license information can be found in
+    // the COPYRIGHT file in the root directory of this distribution.
+    //
+    // Thank you, Volta contributors!
     let mut path = env::var_os("CARGO_BIN_PATH")
             .map(PathBuf::from)
             .or_else(|| {

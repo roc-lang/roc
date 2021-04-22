@@ -7,8 +7,10 @@ use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{AssignedField, Def, WhenBranch};
 use roc_region::all::{Located, Region};
 
-// BinOp precedence logic adapted from Gluon by Markus Westerlind, MIT licensed
-// https://github.com/gluon-lang/gluon
+// BinOp precedence logic adapted from Gluon by Markus Westerlind
+// https://github.com/gluon-lang/gluon - license information can be found in
+// the COPYRIGHT file in the root directory of this distribution.
+//
 // Thank you, Markus!
 
 fn new_op_call_expr<'a>(

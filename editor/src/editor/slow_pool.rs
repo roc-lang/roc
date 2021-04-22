@@ -33,6 +33,9 @@ impl SlowPool {
 
     pub fn replace_node(&mut self, node_id: MarkNodeId, new_node: MarkupNode) {
         self.nodes[node_id] = new_node;
+
+        // TODO delete children of old node, this requires SlowPool to be changed to
+        // make sure the indexes still make sense after removal/compaction
     }
 }
 

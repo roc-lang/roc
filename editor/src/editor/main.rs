@@ -40,9 +40,9 @@ use winit::{
 };
 
 // Inspired by:
-// https://github.com/sotrh/learn-wgpu by Benjamin Hansen, licensed under the MIT license
-// https://github.com/cloudhead/rgx by Alexis Sellier, licensed under the MIT license
-
+// https://github.com/sotrh/learn-wgpu by Benjamin Hansen, which is licensed under the MIT license
+// https://github.com/cloudhead/rgx by Alexis Sellier, which is licensed under the MIT license
+//
 // See this link to learn wgpu: https://sotrh.github.io/learn-wgpu/
 
 /// The editor is actually launched from the CLI if you pass it zero arguments,
@@ -118,7 +118,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
         format: render_format,
         width: size.width,
         height: size.height,
-        present_mode: wgpu::PresentMode::Immediate,
+        present_mode: wgpu::PresentMode::Mailbox,
     };
 
     let mut swap_chain = gpu_device.create_swap_chain(&surface, &swap_chain_descr);
@@ -228,7 +228,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                         format: render_format,
                         width: size.width,
                         height: size.height,
-                        present_mode: wgpu::PresentMode::Immediate,
+                        present_mode: wgpu::PresentMode::Mailbox,
                     },
                 );
 

@@ -1,5 +1,8 @@
 // Adapted from https://github.com/sotrh/learn-wgpu
-// by Benjamin Hansen, licensed under the MIT license
+// by Benjamin Hansen - license information can be found in the COPYRIGHT
+// file in the root directory of this distribution.
+//
+// Thank you, Benjamin!
 use super::vertex::Vertex;
 use crate::graphics::colors::to_slice;
 use crate::graphics::primitives::rect::Rect;
@@ -158,7 +161,10 @@ impl StagingBuffer {
 }
 
 // Taken from https://github.com/sotrh/learn-wgpu
-// by Benjamin Hansen, licensed under the MIT license
+// by Benjamin Hansen - license information can be found in the COPYRIGHT
+// file in the root directory of this distribution.
+//
+// Thank you, Benjamin!
 pub fn size_of_slice<T: Sized>(slice: &[T]) -> usize {
     std::mem::size_of::<T>() * slice.len()
 }

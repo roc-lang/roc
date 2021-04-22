@@ -2,7 +2,7 @@
 name = "roc_load"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
-license = "Apache-2.0"
+license = "UPL-1.0"
 edition = "2018"
 
 [dependencies]
@@ -20,7 +20,7 @@ roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
 roc_reporting = { path = "../reporting" }
 ven_pretty = { path = "../../vendor/pretty" }
-bumpalo = { version = "3.2", features = ["collections"] }
+bumpalo = { version = "3.6.1", features = ["collections"] }
 inlinable_string = "0.1"
 parking_lot = { version = "0.11", features = ["deadlock_detection"] }
 crossbeam = "0.7"

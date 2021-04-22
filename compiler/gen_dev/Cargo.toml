@@ -2,7 +2,7 @@
 name = "roc_gen_dev"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
-license = "Apache-2.0"
+license = "UPL-1.0"
 edition = "2018"
 
 [dependencies]
@@ -19,7 +19,7 @@ roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
-bumpalo = { version = "3.2", features = ["collections"] }
+bumpalo = { version = "3.6.1", features = ["collections"] }
 inlinable_string = "0.1"
 target-lexicon = "0.10"
 libloading = "0.6"
@@ -37,7 +37,7 @@ indoc = "0.3.3"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
 tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded"] }
-bumpalo = { version = "3.2", features = ["collections"] }
+bumpalo = { version = "3.6.1", features = ["collections"] }
 libc = "0.2"
 tempfile = "3.1.0"
 itertools = "0.9"

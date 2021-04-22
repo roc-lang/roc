@@ -2,7 +2,7 @@
 name = "roc_solve"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
-license = "Apache-2.0"
+license = "UPL-1.0"
 edition = "2018"
 
 [dependencies]
@@ -25,4 +25,4 @@ indoc = "0.3.3"
 tempfile = "3.1.0"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
-bumpalo = { version = "3.2", features = ["collections"] }
+bumpalo = { version = "3.6.1", features = ["collections"] }

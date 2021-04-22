@@ -1,4 +1,4 @@
-use gr_colors::{from_hsb, RgbaTup};
+use gr_colors::{from_hsb, from_hsba, RgbaTup};
 use serde::{Deserialize, Serialize};
 
 use crate::graphics::colors as gr_colors;
@@ -13,6 +13,9 @@ pub struct UITheme {
     pub text: RgbaTup,
     pub caret: RgbaTup,
     pub select_highlight: RgbaTup,
+    pub tooltip_bg: RgbaTup,
+    pub tooltip_text: RgbaTup,
+    pub default_font_size: f32,
 }
 
 impl Default for UITheme {
@@ -22,7 +25,10 @@ impl Default for UITheme {
             dark_brand: DARK_BRAND_COL,
             text: gr_colors::WHITE,
             caret: gr_colors::WHITE,
-            select_highlight: from_hsb(240, 55, 100),
+            select_highlight: from_hsba(240, 55, 100, 0.3),
+            tooltip_bg: from_hsb(240, 60, 50),
+            tooltip_text: gr_colors::WHITE,
+            default_font_size: 30.0,
         }
     }
 }

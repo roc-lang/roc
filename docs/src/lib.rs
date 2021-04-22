@@ -1,8 +1,8 @@
 extern crate pulldown_cmark;
 use roc_builtins::std::StdLib;
 use roc_can::builtins::builtin_defs_map;
-use roc_load::docs::DocTypeAnnotation;
 use roc_load::docs::ModuleDocumentation;
+use roc_load::docs::TypeAnnotation;
 use roc_load::file::LoadingProblem;
 
 use std::fs;
@@ -112,7 +112,7 @@ fn render_main_content(module: &ModuleDocumentation) -> String {
         buf.push_str(html_node("h3", vec![("id", name)], content.as_str()).as_str());
 
         if let Some(docs) = &entry.docs {
-            buf.push_str(docs.as_str());
+            buf.push_str(markdown_to_html(docs.to_string()).as_str());
         }
     }
 
@@ -291,9 +291,9 @@ fn indent(buf: &mut String, times: usize) {
     }
 }
 
-fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &DocTypeAnnotation) {
+fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &TypeAnnotation) {
     match type_ann {
-        DocTypeAnnotation::TagUnion { tags, extension } => {
+        TypeAnnotation::TagUnion { tags, extension } => {
             buf.push_str("<br>");
 
             let tag_union_indent = indent_level + 1;
@@ -336,10 +336,10 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Doc
                 type_annotation_to_html(indent_level, buf, ext);
             }
         }
-        DocTypeAnnotation::BoundVariable(var_name) => {
+        TypeAnnotation::BoundVariable(var_name) => {
             buf.push_str(var_name);
         }
-        DocTypeAnnotation::Apply { name, parts } => {
+        TypeAnnotation::Apply { name, parts } => {
             if parts.is_empty() {
                 buf.push_str(name);
             } else {
@@ -356,12 +356,12 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Doc
 }
 
 fn markdown_to_html(markdown: String) -> String {
-    use pulldown_cmark::CodeBlockKind::*;
-    use pulldown_cmark::CowStr::*;
-    use pulldown_cmark::Event::*;
+    use pulldown_cmark::CodeBlockKind;
+    use pulldown_cmark::CowStr;
+    use pulldown_cmark::Event;
     use pulldown_cmark::Tag::*;
 
-    let markdown_options = pulldown_cmark::Options::all();
+    let markdown_options = pulldown_cmark::Options::empty();
     let mut docs_parser = vec![];
     let (_, _) = pulldown_cmark::Parser::new_ext(&markdown, markdown_options).fold(
         (0, 0),
@@ -372,16 +372,18 @@ fn markdown_to_html(markdown: String) -> String {
             //     Start(BlockQuote)
             //     Start(Paragraph)
             // For `Start(CodeBlock(Fenced(Borrowed("roc"))))`
-            Start(BlockQuote) => {
+            Event::Start(BlockQuote) => {
                 docs_parser.push(event);
                 (start_quote_count + 1, 0)
             }
-            Start(Paragraph) => {
+            Event::Start(Paragraph) => {
                 if start_quote_count == 3 {
                     docs_parser.pop();
                     docs_parser.pop();
                     docs_parser.pop();
-                    docs_parser.push(Start(CodeBlock(Fenced(Borrowed("roc")))));
+                    docs_parser.push(Event::Start(CodeBlock(CodeBlockKind::Fenced(
+                        CowStr::Borrowed("roc"),
+                    ))));
                 } else {
                     docs_parser.push(event);
                 }
@@ -393,16 +395,18 @@ fn markdown_to_html(markdown: String) -> String {
             //     End(BlockQuote)
             //     End(BlockQuote)
             // For `End(CodeBlock(Fenced(Borrowed("roc"))))`
-            End(Paragraph) => {
+            Event::End(Paragraph) => {
                 docs_parser.push(event);
                 (0, 1)
             }
-            End(BlockQuote) => {
+            Event::End(BlockQuote) => {
                 if end_quote_count == 3 {
                     docs_parser.pop();
                     docs_parser.pop();
                     docs_parser.pop();
-                    docs_parser.push(End(CodeBlock(Fenced(Borrowed("roc")))));
+                    docs_parser.push(Event::End(CodeBlock(CodeBlockKind::Fenced(
+                        CowStr::Borrowed("roc"),
+                    ))));
                     (0, 0)
                 } else {
                     docs_parser.push(event);
@@ -415,7 +419,9 @@ fn markdown_to_html(markdown: String) -> String {
             }
         },
     );
+
     let mut docs_html = String::new();
     pulldown_cmark::html::push_html(&mut docs_html, docs_parser.into_iter());
+
     docs_html
 }
