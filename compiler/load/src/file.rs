@@ -652,6 +652,8 @@ enum HeaderFor<'a> {
     PkgConfig {
         /// usually `base`
         config_shorthand: &'a str,
+        /// the type scheme of the main function (required by the platform)
+        platform_main_type: TypedIdent<'a>,
     },
     Interface,
 }
@@ -3097,6 +3099,7 @@ fn send_header_two<'a>(
 
     let extra = HeaderFor::PkgConfig {
         config_shorthand: shorthand,
+        platform_main_type: requires[0].value.clone(),
     };
 
     let mut package_qualified_imported_modules = MutSet::default();
