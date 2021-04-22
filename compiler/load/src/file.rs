@@ -2029,16 +2029,10 @@ fn update<'a>(
 
             state.module_cache.mono_problems.insert(module_id, problems);
 
-            let work = state
-                .dependencies
-                .notify(module_id, Phase::MakeSpecializations);
-
             state.procedures.extend(procedures);
             state.timings.insert(module_id, module_timing);
 
             if state.dependencies.solved_all() && state.goal_phase == Phase::MakeSpecializations {
-                debug_assert!(work.is_empty(), "still work remaining {:?}", &work);
-
                 Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 Proc::optimize_refcount_operations(
@@ -2088,6 +2082,10 @@ fn update<'a>(
                 // the originally requested module, we're all done!
                 return Ok(state);
             } else {
+                let work = state
+                    .dependencies
+                    .notify(module_id, Phase::MakeSpecializations);
+
                 state.constrained_ident_ids.insert(module_id, ident_ids);
 
                 for (module_id, requested) in external_specializations_requested {
