@@ -15,7 +15,7 @@ extern crate roc_parse;
 mod test_parse {
     use bumpalo::collections::vec::Vec;
     use bumpalo::{self, Bump};
-    use roc_module::operator::BinOp::*;
+    use roc_module::operator::BinOp::{self, *};
     use roc_module::operator::{CalledVia, UnaryOp};
     use roc_parse::ast::AssignedField::*;
     use roc_parse::ast::CommentOrNewline::*;
@@ -498,6 +498,41 @@ mod test_parse {
         };
 
         let actual = parse_expr_with(&arena, "{x : if True then 1 else 2, y: 3 }");
+        assert_eq!(Ok(expected), actual);
+    }
+
+    // EXPECT
+
+    #[test]
+    fn expect() {
+        let arena = Bump::new();
+
+        let equals = (
+            Located::new(0, 0, 7, 8, Num("1")),
+            Located::new(0, 0, 9, 11, BinOp::Equals),
+        );
+
+        let condition = BinOps(
+            arena.alloc([equals]),
+            arena.alloc(Located::new(0, 0, 12, 13, Num("1"))),
+        );
+        let loc_condition = Located::new(0, 0, 7, 13, condition);
+
+        let continuation = Expr::SpaceBefore(arena.alloc(Num("4")), &[Newline, Newline]);
+        let loc_continuation = Located::new(2, 2, 0, 1, continuation);
+
+        let expected = Expect(arena.alloc(loc_condition), arena.alloc(loc_continuation));
+
+        let actual = parse_expr_with(
+            &arena,
+            indoc!(
+                r#"
+            expect 1 == 1
+
+            4
+            "#
+            ),
+        );
         assert_eq!(Ok(expected), actual);
     }
 

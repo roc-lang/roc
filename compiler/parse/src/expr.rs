@@ -5,7 +5,7 @@ use crate::keyword;
 use crate::parser::{
     self, backtrackable, optional, sep_by1, sep_by1_e, specialize, specialize_ref, then,
     trailing_sep_by0, word1, word2, EExpr, EInParens, ELambda, EPattern, ERecord, EString, Either,
-    If, List, Number, ParseResult, Parser, State, Type, When,
+    Expect, If, List, Number, ParseResult, Parser, State, Type, When,
 };
 use crate::pattern::loc_closure_param;
 use crate::type_annotation;
@@ -338,6 +338,7 @@ fn parse_expr_start<'a>(
             EExpr::When,
             when::expr_help(min_indent, options)
         )),
+        loc!(specialize(EExpr::Expect, expect_help(min_indent, options))),
         loc!(specialize(EExpr::Lambda, closure_help(min_indent, options))),
         loc!(move |a, s| parse_expr_operator_chain(min_indent, options, start, a, s)),
         fail_expr_start_e()
@@ -710,6 +711,29 @@ fn append_annotation_definition<'a>(
     }
 }
 
+fn append_expect_definition<'a>(
+    arena: &'a Bump,
+    defs: &mut Vec<'a, &'a Located<Def<'a>>>,
+    start: Position,
+    spaces: &'a [CommentOrNewline<'a>],
+    loc_expect_body: Located<Expr<'a>>,
+) {
+    let def = Def::Expect(arena.alloc(loc_expect_body));
+
+    let end = loc_expect_body.region.end();
+    let region = Region::between(start, end);
+
+    let mut loc_def = Located::at(region, def);
+
+    if !spaces.is_empty() {
+        loc_def = arena
+            .alloc(loc_def.value)
+            .with_spaces_before(spaces, loc_def.region);
+    }
+
+    defs.push(arena.alloc(loc_def));
+}
+
 fn append_alias_definition<'a>(
     arena: &'a Bump,
     defs: &mut Vec<'a, &'a Located<Def<'a>>>,
@@ -774,7 +798,39 @@ fn parse_defs_end<'a>(
     )
     .parse(arena, state)
     {
-        Err((_, _, _)) => {
+        Err((NoProgress, _, _)) => {
+            let start = state.get_position();
+
+            match crate::parser::keyword_e(crate::keyword::EXPECT, Expect::Expect)
+                .parse(arena, state)
+            {
+                Err((_, _, _)) => {
+                    // a hacky way to get expression-based error messages. TODO fix this
+                    Ok((NoProgress, def_state, initial))
+                }
+                Ok((_, _, state)) => {
+                    let parse_def_expr = space0_before_e(
+                        move |a, s| parse_loc_expr(min_indent + 1, a, s),
+                        min_indent,
+                        EExpr::Space,
+                        EExpr::IndentEnd,
+                    );
+
+                    let (_, loc_def_expr, state) = parse_def_expr.parse(arena, state)?;
+
+                    append_expect_definition(
+                        arena,
+                        &mut def_state.defs,
+                        start,
+                        def_state.spaces_after,
+                        loc_def_expr,
+                    );
+
+                    parse_defs_end(options, start, def_state, arena, state)
+                }
+            }
+        }
+        Err((MadeProgress, _, _)) => {
             // a hacky way to get expression-based error messages. TODO fix this
             Ok((NoProgress, def_state, initial))
         }
@@ -1427,6 +1483,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::Defs(_, _)
         | Expr::If(_, _)
         | Expr::When(_, _)
+        | Expr::Expect(_, _)
         | Expr::MalformedClosure
         | Expr::PrecedenceConflict { .. }
         | Expr::RecordUpdate { .. }
@@ -1926,6 +1983,45 @@ fn if_branch<'a>(
             .map_err(|(_, f, s)| (MadeProgress, f, s))?;
 
         Ok((MadeProgress, (cond, then_branch), state))
+    }
+}
+
+fn expect_help<'a>(
+    min_indent: u16,
+    options: ExprParseOptions,
+) -> impl Parser<'a, Expr<'a>, Expect<'a>> {
+    move |arena: &'a Bump, state: State<'a>| {
+        let start = state.get_position();
+
+        let (_, _, state) =
+            parser::keyword_e(keyword::EXPECT, Expect::Expect).parse(arena, state)?;
+
+        let (_, condition, state) = space0_before_e(
+            specialize_ref(Expect::Condition, move |arena, state| {
+                parse_loc_expr_with_options(start.col + 1, options, arena, state)
+            }),
+            start.col + 1,
+            Expect::Space,
+            Expect::IndentCondition,
+        )
+        .parse(arena, state)
+        .map_err(|(_, f, s)| (MadeProgress, f, s))?;
+
+        let parse_cont = specialize_ref(
+            Expect::Continuation,
+            space0_before_e(
+                move |a, s| parse_loc_expr(min_indent, a, s),
+                min_indent,
+                EExpr::Space,
+                EExpr::IndentEnd,
+            ),
+        );
+
+        let (_, loc_cont, state) = parse_cont.parse(arena, state)?;
+
+        let expr = Expr::Expect(arena.alloc(condition), arena.alloc(loc_cont));
+
+        Ok((MadeProgress, expr, state))
     }
 }
 
