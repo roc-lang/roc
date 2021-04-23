@@ -39,6 +39,7 @@ use crate::ui::text::text_pos::TextPos;
 use crate::ui::text::{lines, lines::Lines, lines::SelectableLines};
 use crate::ui::ui_error::UIResult;
 use crate::window::keyboard_input::Modifiers;
+use bumpalo::Bump;
 use roc_can::expected::Expected;
 use roc_collections::all::MutMap;
 use roc_module::ident::Lowercase;
@@ -223,8 +224,10 @@ impl<'a> EdModel<'a> {
     fn expr2_to_type(&mut self, expr2_id: NodeId<Expr2>) -> PoolStr {
         let var = self.module.env.var_store.fresh();
         let expr = self.module.env.pool.get(expr2_id);
+        let arena = Bump::new();
 
         let constrained = constrain_expr(
+            &arena,
             &mut self.module.env,
             &expr,
             Expected::NoExpectation(Type2::Variable(var)),

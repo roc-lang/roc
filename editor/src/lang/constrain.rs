@@ -1,10 +1,15 @@
 use bumpalo::{collections::Vec as BumpVec, Bump};
 
-use crate::lang::pool::{Pool, PoolVec};
-use crate::lang::{ast::Expr2, expr::Env, types::Type2};
+use crate::lang::pool::{Pool, PoolStr, PoolVec};
+use crate::lang::{
+    ast::Expr2,
+    expr::Env,
+    types::{Type2, TypeId},
+};
 
 use roc_can::expected::Expected;
 use roc_collections::all::SendMap;
+use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::{
@@ -53,19 +58,11 @@ pub fn constrain_expr<'a>(
 
             flex_vars.push(*var);
 
-            let num_type = Type2::Variable(*var);
+            let range_type_id = env.pool.add(Type2::Variable(*var));
 
             and_constraints.push(Eq(
-                num_type,
-                Expected::ForReason(
-                    Reason::IntLiteral,
-                    Type2::Alias(
-                        Symbol::NUM_INT,
-                        PoolVec::empty(env.pool),
-                        env.pool.add(Type2::EmptyRec),
-                    ),
-                    region,
-                ),
+                Type2::Variable(*var),
+                Expected::ForReason(Reason::IntLiteral, num_int(env.pool, range_type_id), region),
                 Category::Int,
                 region,
             ));
@@ -90,4 +87,84 @@ pub fn constrain_expr<'a>(
 
 fn str_type(pool: &mut Pool) -> Type2 {
     Type2::Apply(Symbol::STR_STR, PoolVec::empty(pool))
+}
+
+fn num_int(pool: &mut Pool, range: TypeId) -> Type2 {
+    let num_integer_type = num_integer(pool, range);
+    let num_integer_id = pool.add(num_integer_type);
+
+    let num_num_type = num_num(pool, num_integer_id);
+    let num_num_id = pool.add(num_num_type);
+
+    Type2::Alias(
+        Symbol::NUM_INT,
+        PoolVec::new(vec![(PoolStr::new("range", pool), range)].into_iter(), pool),
+        num_num_id,
+    )
+}
+
+fn num_signed64(pool: &mut Pool) -> Type2 {
+    let alias_content = Type2::TagUnion(
+        PoolVec::new(
+            // TagName::Private(Symbol::NUM_AT_SIGNED64)
+            vec![(PoolStr::new("Num.@Signed64", pool), PoolVec::empty(pool))].into_iter(),
+            pool,
+        ),
+        pool.add(Type2::EmptyTagUnion),
+    );
+
+    Type2::Alias(
+        Symbol::NUM_SIGNED64,
+        PoolVec::empty(pool),
+        pool.add(alias_content),
+    )
+}
+
+fn num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
+    let range_type = pool.get(range);
+
+    let alias_content = Type2::TagUnion(
+        PoolVec::new(
+            vec![(
+                // TagName::Private(Symbol::NUM_AT_INTEGER)
+                PoolStr::new("Num.@Integer", pool),
+                PoolVec::new(vec![*range_type].into_iter(), pool),
+            )]
+            .into_iter(),
+            pool,
+        ),
+        pool.add(Type2::EmptyTagUnion),
+    );
+
+    Type2::Alias(
+        Symbol::NUM_INTEGER,
+        PoolVec::new(vec![(PoolStr::new("range", pool), range)].into_iter(), pool),
+        pool.add(alias_content),
+    )
+}
+
+fn num_num(pool: &mut Pool, type_id: TypeId) -> Type2 {
+    let range_type = pool.get(type_id);
+
+    let alias_content = Type2::TagUnion(
+        PoolVec::new(
+            vec![(
+                // TagName::Private(Symbol::NUM_AT_NUM)
+                PoolStr::new("Num.@Num", pool),
+                PoolVec::new(vec![*range_type].into_iter(), pool),
+            )]
+            .into_iter(),
+            pool,
+        ),
+        pool.add(Type2::EmptyTagUnion),
+    );
+
+    Type2::Alias(
+        Symbol::NUM_NUM,
+        PoolVec::new(
+            vec![(PoolStr::new("range", pool), type_id)].into_iter(),
+            pool,
+        ),
+        pool.add(alias_content),
+    )
 }
