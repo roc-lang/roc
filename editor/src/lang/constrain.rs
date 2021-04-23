@@ -1,6 +1,6 @@
 use bumpalo::{collections::Vec as BumpVec, Bump};
 
-use crate::lang::pool::{Pool, PoolStr, PoolVec};
+use crate::lang::pool::{Pool, PoolStr, PoolVec, ShallowClone};
 use crate::lang::{
     ast::Expr2,
     expr::Env,
@@ -9,7 +9,6 @@ use crate::lang::{
 
 use roc_can::expected::Expected;
 use roc_collections::all::SendMap;
-use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::{
@@ -56,18 +55,20 @@ pub fn constrain_expr<'a>(
 
             let mut and_constraints = BumpVec::with_capacity_in(2, arena);
 
+            let num_type = Type2::Variable(*var);
+
             flex_vars.push(*var);
 
             let range_type_id = env.pool.add(Type2::Variable(*var));
 
             and_constraints.push(Eq(
-                Type2::Variable(*var),
+                num_type.shallow_clone(),
                 Expected::ForReason(Reason::IntLiteral, num_int(env.pool, range_type_id), region),
                 Category::Int,
                 region,
             ));
 
-            and_constraints.push(Eq(Type2::Variable(*var), expected, Category::Int, region));
+            and_constraints.push(Eq(num_type, expected, Category::Int, region));
 
             let defs_constraint = And(and_constraints);
 
@@ -121,8 +122,6 @@ fn num_signed64(pool: &mut Pool) -> Type2 {
 }
 
 fn num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
-    use crate::lang::pool::ShallowClone;
-
     let range_type = pool.get(range);
 
     let alias_content = Type2::TagUnion(
@@ -146,8 +145,6 @@ fn num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
 }
 
 fn num_num(pool: &mut Pool, type_id: TypeId) -> Type2 {
-    use crate::lang::pool::ShallowClone;
-
     let range_type = pool.get(type_id);
 
     let alias_content = Type2::TagUnion(
