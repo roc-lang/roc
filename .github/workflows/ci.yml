@@ -9,16 +9,16 @@ jobs:
   prep-dependency-container:
     name: fmt, clippy, test --release
     runs-on: self-hosted
-    timeout-minutes: 60
+    timeout-minutes: 80
     env:
       FORCE_COLOR: 1
     steps:
       - uses: actions/checkout@v2
         with:
-          clean: "false"
+          clean: "true"
 
       - name: Earthly version
         run: earthly --version
 
       - name: install dependencies, build, run zig tests, rustfmt, clippy, cargo test --release
-        run: earthly +test-all
+        run: earthly --no-cache +test-all
