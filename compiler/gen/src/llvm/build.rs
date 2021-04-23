@@ -11,13 +11,13 @@ use crate::llvm::build_list::{
     list_set, list_single, list_sort_with, list_walk_help,
 };
 use crate::llvm::build_str::{
-    str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int, str_from_utf8,
-    str_join_with, str_number_of_bytes, str_split, str_starts_with, str_to_bytes,
+    empty_str, str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int,
+    str_from_utf8, str_join_with, str_number_of_bytes, str_split, str_starts_with, str_to_bytes,
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
     basic_type_from_builtin, basic_type_from_layout, block_of_memory, block_of_memory_slices,
-    collection, get_fn_type, get_ptr_type, ptr_int,
+    get_fn_type, get_ptr_type, ptr_int,
 };
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_refcount_layout, refcount_is_one_comparison,
@@ -641,12 +641,13 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Str(str_literal) => {
             if str_literal.is_empty() {
-                empty_list(env)
+                empty_str(env)
             } else {
                 let ctx = env.context;
                 let builder = env.builder;
                 let number_of_chars = str_literal.len() as u64;
-                let ptr_bytes = env.ptr_bytes;
+
+                let str_type = super::convert::zig_str_type(env);
 
                 if str_literal.len() < env.small_str_bytes() as usize {
                     // TODO support big endian systems
@@ -711,7 +712,7 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                         builder
                             .build_bitcast(
                                 array_alloca,
-                                collection(ctx, ptr_bytes).ptr_type(AddressSpace::Generic),
+                                str_type.ptr_type(AddressSpace::Generic),
                                 "cast_collection",
                             )
                             .into_pointer_value(),
@@ -721,7 +722,7 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                     let ptr = define_global_str_literal_ptr(env, *str_literal);
                     let number_of_elements = env.ptr_int().const_int(number_of_chars, false);
 
-                    let struct_type = collection(ctx, ptr_bytes);
+                    let struct_type = str_type;
 
                     let mut struct_val;
 
@@ -747,7 +748,7 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
 
                     builder.build_bitcast(
                         struct_val.into_struct_value(),
-                        collection(ctx, ptr_bytes),
+                        str_type,
                         "cast_collection",
                     )
                 }
@@ -1849,12 +1850,10 @@ fn list_literal<'a, 'ctx, 'env>(
         builder.build_store(elem_ptr, val);
     }
 
-    let ptr_bytes = env.ptr_bytes;
-
     let u8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
     let generic_ptr = builder.build_bitcast(ptr, u8_ptr_type, "to_generic_ptr");
 
-    let struct_type = collection(ctx, ptr_bytes);
+    let struct_type = super::convert::zig_list_type(env);
     let len = BasicValueEnum::IntValue(env.ptr_int().const_int(len_u64, false));
     let mut struct_val;
 
@@ -1876,7 +1875,7 @@ fn list_literal<'a, 'ctx, 'env>(
     // Bitcast to an array of raw bytes
     builder.build_bitcast(
         struct_val.into_struct_value(),
-        collection(ctx, ptr_bytes),
+        super::convert::zig_list_type(env),
         "cast_collection",
     )
 }

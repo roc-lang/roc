@@ -6,7 +6,7 @@ use crate::llvm::bitcode::{
 use crate::llvm::build::{
     complex_bitcast, load_symbol, load_symbol_and_layout, set_name, Env, Scope,
 };
-use crate::llvm::convert::{as_const_zero, basic_type_from_layout, collection};
+use crate::llvm::convert::{as_const_zero, basic_type_from_layout};
 use crate::llvm::refcounting::Mode;
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::types::BasicType;
@@ -463,7 +463,7 @@ pub fn dict_keys<'a, 'ctx, 'env>(
         .builder
         .build_bitcast(
             list_ptr,
-            collection(env.context, env.ptr_bytes).ptr_type(AddressSpace::Generic),
+            super::convert::zig_list_type(env).ptr_type(AddressSpace::Generic),
             "to_roc_list",
         )
         .into_pointer_value();
@@ -715,8 +715,8 @@ pub fn dict_values<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
-    let zig_list_type = env.module.get_struct_type("list.RocList").unwrap();
+    let zig_dict_type = super::convert::zig_dict_type(env);
+    let zig_list_type = super::convert::zig_list_type(env);
 
     let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
     env.builder.build_store(dict_ptr, dict);
@@ -753,7 +753,7 @@ pub fn dict_values<'a, 'ctx, 'env>(
         .builder
         .build_bitcast(
             list_ptr,
-            collection(env.context, env.ptr_bytes).ptr_type(AddressSpace::Generic),
+            super::convert::zig_list_type(env).ptr_type(AddressSpace::Generic),
             "to_roc_list",
         )
         .into_pointer_value();

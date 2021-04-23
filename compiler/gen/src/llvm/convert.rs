@@ -164,8 +164,6 @@ pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
 ) -> BasicTypeEnum<'ctx> {
     use Builtin::*;
 
-    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
-
     let context = env.context;
     let ptr_bytes = env.ptr_bytes;
 
@@ -181,10 +179,10 @@ pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
         Float64 => context.f64_type().as_basic_type_enum(),
         Float32 => context.f32_type().as_basic_type_enum(),
         Float16 => context.f16_type().as_basic_type_enum(),
-        Dict(_, _) | EmptyDict => zig_dict_type.into(),
-        Set(_) | EmptySet => zig_dict_type.into(),
-        List(_, _) | Str | EmptyStr => collection(context, ptr_bytes).into(),
-        EmptyList => BasicTypeEnum::StructType(collection(context, ptr_bytes)),
+        Dict(_, _) | EmptyDict => zig_dict_type(env).into(),
+        Set(_) | EmptySet => zig_dict_type(env).into(),
+        List(_, _) | EmptyList => zig_list_type(env).into(),
+        Str | EmptyStr => zig_str_type(env).into(),
     }
 }
 
@@ -245,17 +243,6 @@ fn block_of_memory_help(context: &Context, union_size: u32) -> BasicTypeEnum<'_>
     }
 }
 
-/// Two usize values. Could be a wrapper for a List or a Str.
-///
-/// This way, we always initialize it to (*mut u8, usize), and may have to cast the pointer type
-/// for lists.
-pub fn collection(ctx: &Context, ptr_bytes: u32) -> StructType<'_> {
-    let usize_type = ptr_int(ctx, ptr_bytes);
-    let u8_ptr = ctx.i8_type().ptr_type(AddressSpace::Generic);
-
-    ctx.struct_type(&[u8_ptr.into(), usize_type.into()], false)
-}
-
 pub fn ptr_int(ctx: &Context, ptr_bytes: u32) -> IntType<'_> {
     match ptr_bytes {
         1 => ctx.i8_type(),
@@ -267,4 +254,22 @@ pub fn ptr_int(ctx: &Context, ptr_bytes: u32) -> IntType<'_> {
             ptr_bytes * 8
         ),
     }
+}
+
+pub fn zig_dict_type<'a, 'ctx, 'env>(
+    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
+) -> StructType<'ctx> {
+    env.module.get_struct_type("dict.RocDict").unwrap()
+}
+
+pub fn zig_list_type<'a, 'ctx, 'env>(
+    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
+) -> StructType<'ctx> {
+    env.module.get_struct_type("list.RocList").unwrap()
+}
+
+pub fn zig_str_type<'a, 'ctx, 'env>(
+    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
+) -> StructType<'ctx> {
+    env.module.get_struct_type("str.RocStr").unwrap()
 }

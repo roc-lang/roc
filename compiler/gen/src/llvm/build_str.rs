@@ -1,9 +1,7 @@
 use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
 use crate::llvm::build::{complex_bitcast, Env, InPlace, Scope};
 use crate::llvm::build_list::{allocate_list, store_list};
-use crate::llvm::convert::collection;
 use inkwell::builder::Builder;
-use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
@@ -90,41 +88,6 @@ pub fn str_to_i128<'a, 'ctx, 'env>(
         .into_int_value()
 }
 
-fn zig_str_to_struct<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    zig_str: StructValue<'ctx>,
-) -> StructValue<'ctx> {
-    let builder = env.builder;
-
-    // get the RocStr type defined by zig
-    let zig_str_type = env.module.get_struct_type("str.RocStr").unwrap();
-
-    let ret_type = BasicTypeEnum::StructType(collection(env.context, env.ptr_bytes));
-
-    // a roundabout way of casting (LLVM does not accept a standard bitcast)
-    let allocation = builder.build_alloca(zig_str_type, "zig_result");
-
-    builder.build_store(allocation, zig_str);
-
-    let ptr3 = builder
-        .build_bitcast(
-            allocation,
-            env.context.i128_type().ptr_type(AddressSpace::Generic),
-            "cast",
-        )
-        .into_pointer_value();
-
-    let ptr4 = builder
-        .build_bitcast(
-            ptr3,
-            ret_type.into_struct_type().ptr_type(AddressSpace::Generic),
-            "cast",
-        )
-        .into_pointer_value();
-
-    builder.build_load(ptr4, "load").into_struct_value()
-}
-
 pub fn destructure<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
@@ -155,7 +118,7 @@ pub fn str_concat<'a, 'ctx, 'env>(
     let str1_i128 = str_symbol_to_i128(env, scope, str1_symbol);
     let str2_i128 = str_symbol_to_i128(env, scope, str2_symbol);
 
-    let zig_result = call_bitcode_fn(
+    call_bitcode_fn(
         env,
         &[
             env.context
@@ -167,9 +130,6 @@ pub fn str_concat<'a, 'ctx, 'env>(
         ],
         &bitcode::STR_CONCAT,
     )
-    .into_struct_value();
-
-    zig_str_to_struct(env, zig_result).into()
 }
 
 /// Str.join : List Str, Str -> Str
@@ -185,14 +145,11 @@ pub fn str_join_with<'a, 'ctx, 'env>(
     let list_i128 = str_symbol_to_i128(env, scope, list_symbol);
     let str_i128 = str_symbol_to_i128(env, scope, str_symbol);
 
-    let zig_result = call_bitcode_fn(
+    call_bitcode_fn(
         env,
         &[list_i128.into(), str_i128.into()],
         &bitcode::STR_JOIN_WITH,
     )
-    .into_struct_value();
-
-    zig_str_to_struct(env, zig_result).into()
 }
 
 pub fn str_number_of_bytes<'a, 'ctx, 'env>(
@@ -268,9 +225,7 @@ pub fn str_from_int<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let int = load_symbol(scope, &int_symbol);
 
-    let zig_result = call_bitcode_fn(env, &[int], &bitcode::STR_FROM_INT).into_struct_value();
-
-    zig_str_to_struct(env, zig_result).into()
+    call_bitcode_fn(env, &[int], &bitcode::STR_FROM_INT)
 }
 
 /// Str.toBytes : Str -> List U8
@@ -290,7 +245,7 @@ pub fn str_to_bytes<'a, 'ctx, 'env>(
     complex_bitcast(
         env.builder,
         zig_result,
-        collection(env.context, env.ptr_bytes).into(),
+        super::convert::zig_list_type(env).into(),
         "to_bytes",
     )
 }
@@ -324,7 +279,7 @@ pub fn str_from_utf8<'a, 'ctx, 'env>(
     let record_type = env.context.struct_type(
         &[
             env.ptr_int().into(),
-            collection(env.context, env.ptr_bytes).into(),
+            super::convert::zig_str_type(env).into(),
             env.context.bool_type().into(),
             ctx.i8_type().into(),
         ],
@@ -351,9 +306,7 @@ pub fn str_from_float<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let float = load_symbol(scope, &int_symbol);
 
-    let zig_result = call_bitcode_fn(env, &[float], &bitcode::STR_FROM_FLOAT).into_struct_value();
-
-    zig_str_to_struct(env, zig_result).into()
+    call_bitcode_fn(env, &[float], &bitcode::STR_FROM_FLOAT)
 }
 
 /// Str.equal : Str, Str -> Bool
@@ -370,4 +323,13 @@ pub fn str_equal<'a, 'ctx, 'env>(
         &[str1_i128.into(), str2_i128.into()],
         &bitcode::STR_EQUAL,
     )
+}
+
+// TODO investigate: does this cause problems when the layout is known? this value is now not refcounted!
+pub fn empty_str<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
+    let struct_type = super::convert::zig_str_type(env);
+
+    // The pointer should be null (aka zero) and the length should be zero,
+    // so the whole struct should be a const_zero
+    BasicValueEnum::StructValue(struct_type.const_zero())
 }
