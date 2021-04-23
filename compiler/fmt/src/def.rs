@@ -3,6 +3,7 @@ use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_spaces, newline, INDENT};
 use bumpalo::collections::String;
 use roc_parse::ast::{Def, Expr, Pattern};
+use roc_region::all::Located;
 
 /// A Located formattable value is also formattable
 impl<'a> Formattable<'a> for Def<'a> {
@@ -16,6 +17,7 @@ impl<'a> Formattable<'a> for Def<'a> {
             }
             Body(loc_pattern, loc_expr) => loc_pattern.is_multiline() || loc_expr.is_multiline(),
             AnnotatedBody { .. } => true,
+            Expect(loc_expr) => loc_expr.is_multiline(),
             SpaceBefore(sub_def, spaces) | SpaceAfter(sub_def, spaces) => {
                 spaces.iter().any(|s| s.is_comment()) || sub_def.is_multiline()
             }
@@ -72,6 +74,7 @@ impl<'a> Formattable<'a> for Def<'a> {
             Body(loc_pattern, loc_expr) => {
                 fmt_body(buf, &loc_pattern.value, &loc_expr.value, indent);
             }
+            Expect(condition) => fmt_expect(buf, condition, self.is_multiline(), indent),
             AnnotatedBody {
                 ann_pattern,
                 ann_type,
@@ -101,6 +104,22 @@ impl<'a> Formattable<'a> for Def<'a> {
             NotYetImplemented(s) => todo!("{}", s),
         }
     }
+}
+
+fn fmt_expect<'a>(
+    buf: &mut String<'a>,
+    condition: &'a Located<Expr<'a>>,
+    is_multiline: bool,
+    indent: u16,
+) {
+    let return_indent = if is_multiline {
+        indent + INDENT
+    } else {
+        indent
+    };
+
+    buf.push_str("expect");
+    condition.format(buf, return_indent);
 }
 
 pub fn fmt_def<'a>(buf: &mut String<'a>, def: &Def<'a>, indent: u16) {

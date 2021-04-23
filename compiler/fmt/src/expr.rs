@@ -59,6 +59,10 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 loc_expr.is_multiline() || args.iter().any(|loc_arg| loc_arg.is_multiline())
             }
 
+            Expect(condition, continuation) => {
+                condition.is_multiline() || continuation.is_multiline()
+            }
+
             If(branches, final_else) => {
                 final_else.is_multiline()
                     || branches
@@ -279,6 +283,9 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 // Even if there were no defs, which theoretically should never happen,
                 // still print the return value.
                 ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+            }
+            Expect(condition, continuation) => {
+                fmt_expect(buf, condition, continuation, self.is_multiline(), indent);
             }
             If(branches, final_else) => {
                 fmt_if(buf, branches, final_else, self.is_multiline(), indent);
@@ -627,6 +634,25 @@ fn fmt_when<'a>(
             buf.push('\n');
         }
     }
+}
+
+fn fmt_expect<'a>(
+    buf: &mut String<'a>,
+    condition: &'a Located<Expr<'a>>,
+    continuation: &'a Located<Expr<'a>>,
+    is_multiline: bool,
+    indent: u16,
+) {
+    let return_indent = if is_multiline {
+        indent + INDENT
+    } else {
+        indent
+    };
+
+    buf.push_str("expect");
+    condition.format(buf, return_indent);
+    buf.push('\n');
+    continuation.format(buf, return_indent);
 }
 
 fn fmt_if<'a>(
