@@ -649,6 +649,7 @@ pub fn canonicalize_expr<'a>(
                 Output::default(),
             )
         }
+        ast::Expr::Expect(_condition, _continuation) => todo!(),
         ast::Expr::If(if_thens, final_else_branch) => {
             let mut branches = Vec::with_capacity(1);
             let mut output = Output::default();

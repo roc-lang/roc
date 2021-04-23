@@ -411,6 +411,8 @@ pub enum EExpr<'a> {
     When(When<'a>, Row, Col),
     If(If<'a>, Row, Col),
 
+    Expect(Expect<'a>, Row, Col),
+
     Lambda(ELambda<'a>, Row, Col),
     Underscore(Row, Col),
 
@@ -551,6 +553,15 @@ pub enum If<'a> {
     IndentElseToken(Row, Col),
     IndentThenBranch(Row, Col),
     IndentElseBranch(Row, Col),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Expect<'a> {
+    Space(BadInputError, Row, Col),
+    Expect(Row, Col),
+    Condition(&'a EExpr<'a>, Row, Col),
+    Continuation(&'a EExpr<'a>, Row, Col),
+    IndentCondition(Row, Col),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

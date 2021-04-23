@@ -126,6 +126,7 @@ pub enum Expr<'a> {
     /// Multiple defs in a row
     Defs(&'a [&'a Loc<Def<'a>>], &'a Loc<Expr<'a>>),
     Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
+    Expect(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
 
     // Application
     /// To apply by name, do Apply(Var(...), ...)
@@ -200,6 +201,8 @@ pub enum Def<'a> {
         body_pattern: &'a Loc<Pattern<'a>>,
         body_expr: &'a Loc<Expr<'a>>,
     },
+
+    Expect(&'a Loc<Expr<'a>>),
 
     // Blank Space (e.g. comments, spaces, newlines) before or after a def.
     // We preserve this for the formatter; canonicalization ignores it.

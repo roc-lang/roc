@@ -107,6 +107,10 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
             body_pattern: *body_pattern,
             body_expr: desugar_expr(arena, body_expr),
         },
+        Expect(condition) => {
+            let desugared_condition = &*arena.alloc(desugar_expr(arena, condition));
+            Expect(desugared_condition)
+        }
         NotYetImplemented(s) => todo!("{}", s),
     }
 }
@@ -353,6 +357,14 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
 
             arena.alloc(Located {
                 value: If(desugared_if_thens.into_bump_slice(), desugared_final_else),
+                region: loc_expr.region,
+            })
+        }
+        Expect(condition, continuation) => {
+            let desugared_condition = &*arena.alloc(desugar_expr(arena, &condition));
+            let desugared_continuation = &*arena.alloc(desugar_expr(arena, &continuation));
+            arena.alloc(Located {
+                value: Expect(desugared_condition, desugared_continuation),
                 region: loc_expr.region,
             })
         }
