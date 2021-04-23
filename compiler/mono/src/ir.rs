@@ -4294,15 +4294,19 @@ pub fn from_can<'a>(
         }
 
         Expect(condition, rest) => {
-            let cond_symbol = env.unique_symbol();
             let rest = from_can(env, variable, rest.value, procs, layout_cache);
-            let call_type = CallType::LowLevel { op: LowLevel::Not };
+
+            let bool_layout = Layout::Builtin(Builtin::Int1);
+            let cond_symbol = env.unique_symbol();
+
+            let call_type = CallType::LowLevel {
+                op: LowLevel::ExpectTrue,
+            };
             let arguments = env.arena.alloc([cond_symbol]);
             let call = self::Call {
                 call_type,
                 arguments,
             };
-            let bool_layout = Layout::Builtin(Builtin::Int1);
             let test = Expr::Call(call);
 
             let rest = Stmt::Let(

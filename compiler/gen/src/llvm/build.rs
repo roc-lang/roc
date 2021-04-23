@@ -4430,6 +4430,34 @@ fn run_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid dict layout"),
             }
         }
+        ExpectTrue => {
+            debug_assert_eq!(args.len(), 1);
+
+            let context = env.context;
+            let bd = env.builder;
+
+            let (cond, _cond_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            let condition = bd.build_int_compare(
+                IntPredicate::EQ,
+                cond.into_int_value(),
+                context.bool_type().const_int(1, false),
+                "has_not_overflowed",
+            );
+
+            let then_block = context.append_basic_block(parent, "then_block");
+            let throw_block = context.append_basic_block(parent, "throw_block");
+
+            bd.build_conditional_branch(condition, then_block, throw_block);
+
+            bd.position_at_end(throw_block);
+
+            throw_exception(env, "assert failed!");
+
+            bd.position_at_end(then_block);
+
+            cond
+        }
     }
 }
 
