@@ -83,6 +83,7 @@ fn infer_eq(actual: &str, expected_str: &str) {
     match expr2_result {
         Ok((expr, _)) => {
             let constraint = constrain_expr(
+                &code_arena,
                 &mut env,
                 &expr,
                 Expected::NoExpectation(Type2::Variable(var)),
