@@ -3260,7 +3260,7 @@ pub fn with_hole<'a>(
 
         EmptyRecord => Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole),
 
-        Expect(_, _) => todo!(),
+        Expect(_, rest) => todo!(),
 
         If {
             cond_var,
@@ -4292,6 +4292,37 @@ pub fn from_can<'a>(
 
             stmt
         }
+
+        Expect(condition, rest) => {
+            let cond_symbol = env.unique_symbol();
+            let rest = from_can(env, variable, rest.value, procs, layout_cache);
+            let call_type = CallType::LowLevel { op: LowLevel::Not };
+            let arguments = env.arena.alloc([cond_symbol]);
+            let call = self::Call {
+                call_type,
+                arguments,
+            };
+            let bool_layout = Layout::Builtin(Builtin::Int1);
+            let test = Expr::Call(call);
+
+            let rest = Stmt::Let(
+                env.unique_symbol(),
+                test,
+                bool_layout,
+                env.arena.alloc(rest),
+            );
+
+            with_hole(
+                env,
+                condition.value,
+                variable,
+                procs,
+                layout_cache,
+                cond_symbol,
+                env.arena.alloc(rest),
+            )
+        }
+
         LetRec(defs, cont, _) => {
             // because Roc is strict, only functions can be recursive!
             for def in defs.into_iter() {
