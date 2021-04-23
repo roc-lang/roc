@@ -1,5 +1,8 @@
 // Adapted from https://github.com/sotrh/learn-wgpu
-// by Benjamin Hansen, licensed under the MIT license
+// by Benjamin Hansen - license information can be found in the COPYRIGHT
+// file in the root directory of this distribution.
+//
+// Thank you, Benjamin!
 
 use super::rect::Rect;
 use crate::graphics::colors;

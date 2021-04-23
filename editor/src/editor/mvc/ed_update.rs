@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::editor::code_lines::CodeLines;
 use crate::editor::ed_error::from_ui_res;
 use crate::editor::ed_error::print_ui_err;
@@ -22,7 +24,12 @@ use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::lang::ast::Expr2;
+use crate::lang::constrain::constrain_expr;
 use crate::lang::pool::NodeId;
+use crate::lang::pool::Pool;
+use crate::lang::pool::PoolStr;
+use crate::lang::types::Type2;
+use crate::lang::{constrain::Constraint, solve};
 use crate::ui::text::caret_w_select::CaretWSelect;
 use crate::ui::text::lines::MoveCaretFun;
 use crate::ui::text::selection::validate_raw_sel;
@@ -32,6 +39,14 @@ use crate::ui::text::text_pos::TextPos;
 use crate::ui::text::{lines, lines::Lines, lines::SelectableLines};
 use crate::ui::ui_error::UIResult;
 use crate::window::keyboard_input::Modifiers;
+use roc_can::expected::Expected;
+use roc_collections::all::MutMap;
+use roc_module::ident::Lowercase;
+use roc_module::symbol::Symbol;
+use roc_region::all::Region;
+use roc_types::solved_types::Solved;
+use roc_types::subs::{Subs, Variable};
+use roc_types::{pretty_print::content_to_string, subs::VarStore};
 use snafu::OptionExt;
 use winit::event::VirtualKeyCode;
 use VirtualKeyCode::*;
@@ -165,10 +180,13 @@ impl<'a> EdModel<'a> {
                 })?;
 
                 self.set_caret(expr_start_pos);
+
+                //let type_str = self.expr2_to_type(ast_node_id);
+
                 self.selected_expr_opt = Some(SelectedExpression {
                     ast_node_id,
                     mark_node_id: parent_id,
-                    type_str: "Str".to_owned(), // TODO get this String from type inference
+                    type_str: PoolStr::new("{}", self.module.env.pool), // TODO get this PoolStr from type inference
                 });
 
                 self.dirty = true;
@@ -186,10 +204,13 @@ impl<'a> EdModel<'a> {
                 })?;
 
                 self.set_caret(expr_start_pos);
+
+                //let type_str = self.expr2_to_type(ast_node_id);
+
                 self.selected_expr_opt = Some(SelectedExpression {
                     ast_node_id,
                     mark_node_id,
-                    type_str: "Str".to_owned(), // TODO get this String from type inference
+                    type_str: PoolStr::new("{}", self.module.env.pool), // TODO get this PoolStr from type inference
                 });
 
                 self.dirty = true;
@@ -197,6 +218,67 @@ impl<'a> EdModel<'a> {
         }
 
         Ok(())
+    }
+
+    fn expr2_to_type(&mut self, expr2_id: NodeId<Expr2>) -> PoolStr {
+        let var = self.module.env.var_store.fresh();
+        let expr = self.module.env.pool.get(expr2_id);
+
+        let constrained = constrain_expr(
+            &mut self.module.env,
+            &expr,
+            Expected::NoExpectation(Type2::Variable(var)),
+            Region::zero(),
+        );
+
+        // extract the var_store out of the env again
+        let mut var_store = VarStore::default();
+        std::mem::swap(self.module.env.var_store, &mut var_store);
+
+        let (mut solved, _, _) = EdModel::run_solve(
+            self.module.env.pool,
+            Default::default(),
+            Default::default(),
+            constrained,
+            var_store,
+        );
+
+        let subs = solved.inner_mut();
+
+        let content = subs.get(var).content;
+
+        PoolStr::new(
+            &content_to_string(content, &subs, self.module.env.home, &Default::default()),
+            self.module.env.pool,
+        )
+    }
+
+    fn run_solve(
+        mempool: &mut Pool,
+        aliases: MutMap<Symbol, roc_types::types::Alias>,
+        rigid_variables: MutMap<Variable, Lowercase>,
+        constraint: Constraint,
+        var_store: VarStore,
+    ) -> (Solved<Subs>, solve::Env, Vec<solve::TypeError>) {
+        let env = solve::Env {
+            vars_by_symbol: MutMap::default(),
+            aliases,
+        };
+
+        let mut subs = Subs::new(var_store.into());
+
+        for (var, name) in rigid_variables {
+            subs.rigid_var(var, name);
+        }
+
+        // Now that the module is parsed, canonicalized, and constrained,
+        // we need to type check it.
+        let mut problems = Vec::new();
+
+        // Run the solver to populate Subs.
+        let (solved_subs, solved_env) = solve::run(mempool, &env, &mut problems, subs, &constraint);
+
+        (solved_subs, solved_env, problems)
     }
 
     pub fn ed_handle_key_down(
@@ -234,7 +316,7 @@ impl<'a> EdModel<'a> {
         }
     }
 
-    fn replace_slected_expr_with_blank(&mut self) -> EdResult<()> {
+    fn replace_selected_expr_with_blank(&mut self) -> EdResult<()> {
         let expr_mark_node_id_opt = if let Some(sel_expr) = &self.selected_expr_opt {
             let expr2_level_mark_node = self.markup_node_pool.get(sel_expr.mark_node_id);
 
@@ -249,6 +331,7 @@ impl<'a> EdModel<'a> {
                 .replace_node(sel_expr.mark_node_id, blank_replacement);
 
             let active_selection = self.get_selection().context(MissingSelection {})?;
+
             self.code_lines.del_selection(active_selection)?;
             self.grid_node_map.del_selection(active_selection)?;
 
@@ -454,7 +537,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                 // On Linux, '\u{8}' is backspace,
                 // on macOS '\u{7f}'.
 
-                ed_model.replace_slected_expr_with_blank()?;
+                ed_model.replace_selected_expr_with_blank()?;
 
                 InputOutcome::Accepted
             }
@@ -632,8 +715,10 @@ pub mod test_ed_update {
     use crate::editor::mvc::ed_update::handle_new_char;
     use crate::editor::mvc::ed_update::EdResult;
     use crate::ui::ui_error::UIResult;
+    use crate::window::keyboard_input::test_modifiers::ctrl_shift;
     use bumpalo::collections::String as BumpString;
     use bumpalo::Bump;
+    use winit::event::VirtualKeyCode::*;
 
     fn ed_res_to_res<T>(ed_res: EdResult<T>) -> Result<T, String> {
         match ed_res {
@@ -649,6 +734,8 @@ pub mod test_ed_update {
         }
     }
 
+    // Create ed_model from pre_lines DSL, do handle_new_char() with new_char, check if modified ed_model has expected
+    // string representation of code, caret position and active selection.
     pub fn assert_insert(
         pre_lines: &[&str],
         expected_post_lines: &[&str],
@@ -657,6 +744,8 @@ pub mod test_ed_update {
         assert_insert_seq(pre_lines, expected_post_lines, &new_char.to_string())
     }
 
+    // Create ed_model from pre_lines DSL, do handle_new_char() for every char in new_char_seq, check if modified ed_model has expected
+    // string representation of code, caret position and active selection.
     pub fn assert_insert_seq(
         pre_lines: &[&str],
         expected_post_lines: &[&str],
@@ -1164,6 +1253,263 @@ pub mod test_ed_update {
             &["{ ┃g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }"],
             "2",
         )?;
+        Ok(())
+    }
+
+    // Create ed_model from pre_lines DSL, do ctrl+shift+up as many times as repeat.
+    // check if modified ed_model has expected string representation of code, caret position and active selection.
+    pub fn assert_ctrl_shift_up_repeat(
+        pre_lines: &[&str],
+        expected_post_lines: &[&str],
+        repeats: usize,
+    ) -> Result<(), String> {
+        let test_arena = Bump::new();
+        let code_str = BumpString::from_str_in(&pre_lines.join("").replace("┃", ""), &test_arena);
+
+        let mut model_refs = init_model_refs();
+
+        let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
+
+        for _ in 0..repeats {
+            ed_model.ed_handle_key_down(&ctrl_shift(), Up)?;
+        }
+
+        let post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
+
+        assert_eq!(post_lines, expected_post_lines);
+
+        Ok(())
+    }
+
+    pub fn assert_ctrl_shift_up(
+        pre_lines: &[&str],
+        expected_post_lines: &[&str],
+    ) -> Result<(), String> {
+        assert_ctrl_shift_up_repeat(pre_lines, expected_post_lines, 1)
+    }
+
+    #[test]
+    fn test_ctrl_shift_up_blank() -> Result<(), String> {
+        // Blank is auto-inserted
+        assert_ctrl_shift_up(&["┃"], &["┃❮ ❯"])?;
+        assert_ctrl_shift_up_repeat(&["┃"], &["┃❮ ❯"], 4)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ctrl_shift_up_string() -> Result<(), String> {
+        assert_ctrl_shift_up(&["\"┃\""], &["┃❮\"\"❯"])?;
+        assert_ctrl_shift_up(&["┃\"\""], &["┃❮\"\"❯"])?;
+        assert_ctrl_shift_up(&["\"┃0\""], &["┃❮\"0\"❯"])?;
+        assert_ctrl_shift_up(&["\"0┃\""], &["┃❮\"0\"❯"])?;
+        assert_ctrl_shift_up(&["\"abc┃\""], &["┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up(&["\"ab┃c\""], &["┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up(&["\"┃abc\""], &["┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up(&["┃\"abc\""], &["┃❮\"abc\"❯"])?;
+        assert_ctrl_shift_up_repeat(&["\"abc┃\""], &["┃❮\"abc\"❯"], 3)?;
+        assert_ctrl_shift_up(
+            &["\"hello, hello.12345ZXY{}[]-><-┃\""],
+            &["┃❮\"hello, hello.12345ZXY{}[]-><-\"❯"],
+        )?;
+
+        assert_ctrl_shift_up(&["\"\"┃"], &["\"\"┃"])?;
+        assert_ctrl_shift_up(&["\"abc\"┃"], &["\"abc\"┃"])?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ctrl_shift_up_record() -> Result<(), String> {
+        assert_ctrl_shift_up(&["{ ┃ }"], &["┃❮{  }❯"])?;
+        assert_ctrl_shift_up(&["{┃  }"], &["┃❮{  }❯"])?;
+        assert_ctrl_shift_up(&["┃{  }"], &["┃❮{  }❯"])?;
+        assert_ctrl_shift_up(&["{  ┃}"], &["┃❮{  }❯"])?;
+        assert_ctrl_shift_up_repeat(&["{ ┃ }"], &["┃❮{  }❯"], 4)?;
+        assert_ctrl_shift_up(&["{  }┃"], &["{  }┃"])?;
+
+        assert_ctrl_shift_up(&["{ pear┃ }"], &["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up(&["{ pea┃r }"], &["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up(&["{ p┃ear }"], &["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up(&["{ ┃pear }"], &["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up(&["{┃ pear }"], &["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up(&["┃{ pear }"], &["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up(&["{ pear ┃}"], &["┃❮{ pear }❯"])?;
+        assert_ctrl_shift_up_repeat(&["{ pear┃ }"], &["┃❮{ pear }❯"], 3)?;
+        assert_ctrl_shift_up(&["{ pear }┃"], &["{ pear }┃"])?;
+
+        assert_ctrl_shift_up(&["{ camelCase123┃ }"], &["┃❮{ camelCase123 }❯"])?;
+
+        assert_ctrl_shift_up(&["{ a: \"┃\" }"], &["{ a: ┃❮\"\"❯ }"])?;
+        assert_ctrl_shift_up(&["{ a: ┃\"\" }"], &["{ a: ┃❮\"\"❯ }"])?;
+        assert_ctrl_shift_up(&["{ a: \"\"┃ }"], &["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up(&["{ a: \"\" ┃}"], &["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_repeat(&["{ a: \"\" ┃}"], &["┃❮{ a: \"\" }❯"], 3)?;
+        assert_ctrl_shift_up(&["{ a: \"\" }┃"], &["{ a: \"\" }┃"])?;
+        assert_ctrl_shift_up(&["{ a:┃ \"\" }"], &["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up(&["{ a┃: \"\" }"], &["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up(&["{ ┃a: \"\" }"], &["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up(&["{┃ a: \"\" }"], &["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up(&["┃{ a: \"\" }"], &["┃❮{ a: \"\" }❯"])?;
+        assert_ctrl_shift_up_repeat(&["{ a: \"┃\" }"], &["┃❮{ a: \"\" }❯"], 2)?;
+        assert_ctrl_shift_up_repeat(&["{ a: \"┃\" }"], &["┃❮{ a: \"\" }❯"], 4)?;
+
+        assert_ctrl_shift_up(&["{ abc: \"de┃\" }"], &["{ abc: ┃❮\"de\"❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: \"d┃e\" }"], &["{ abc: ┃❮\"de\"❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: \"┃de\" }"], &["{ abc: ┃❮\"de\"❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: ┃\"de\" }"], &["{ abc: ┃❮\"de\"❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: \"de\"┃ }"], &["┃❮{ abc: \"de\" }❯"])?;
+        assert_ctrl_shift_up_repeat(&["{ abc: \"d┃e\" }"], &["┃❮{ abc: \"de\" }❯"], 2)?;
+        assert_ctrl_shift_up_repeat(&["{ abc: \"d┃e\" }"], &["┃❮{ abc: \"de\" }❯"], 3)?;
+
+        assert_ctrl_shift_up(
+            &["{ camelCase123: \"hello, hello.12┃345ZXY{}[]-><-\" }"],
+            &["{ camelCase123: ┃❮\"hello, hello.12345ZXY{}[]-><-\"❯ }"],
+        )?;
+        assert_ctrl_shift_up(
+            &["{ camel┃Case123: \"hello, hello.12345ZXY{}[]-><-\" }"],
+            &["┃❮{ camelCase123: \"hello, hello.12345ZXY{}[]-><-\" }❯"],
+        )?;
+        assert_ctrl_shift_up_repeat(
+            &["{ camelCase123: \"hello, hello┃.12345ZXY{}[]-><-\" }"],
+            &["┃❮{ camelCase123: \"hello, hello.12345ZXY{}[]-><-\" }❯"],
+            2,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ctrl_shift_up_nested_record() -> Result<(), String> {
+        assert_ctrl_shift_up(&["{ abc: { ┃ } }"], &["{ abc: ┃❮{  }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: {┃  } }"], &["{ abc: ┃❮{  }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: ┃{  } }"], &["{ abc: ┃❮{  }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: {  ┃} }"], &["{ abc: ┃❮{  }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: {  }┃ }"], &["┃❮{ abc: {  } }❯"])?;
+
+        assert_ctrl_shift_up(&["{ abc: { ┃d } }"], &["{ abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: {┃ d } }"], &["{ abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: ┃{ d } }"], &["{ abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: { d ┃} }"], &["{ abc: ┃❮{ d }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: { d┃e } }"], &["{ abc: ┃❮{ de }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: { d }┃ }"], &["┃❮{ abc: { d } }❯"])?;
+        assert_ctrl_shift_up(&["┃{ abc: { d } }"], &["┃❮{ abc: { d } }❯"])?;
+
+        assert_ctrl_shift_up(&["{ abc: { de: { ┃ } } }"], &["{ abc: { de: ┃❮{  }❯ } }"])?;
+        assert_ctrl_shift_up(&["{ abc: { de: ┃{  } } }"], &["{ abc: { de: ┃❮{  }❯ } }"])?;
+        assert_ctrl_shift_up(&["{ abc: { de: {  }┃ } }"], &["{ abc: ┃❮{ de: {  } }❯ }"])?;
+
+        assert_ctrl_shift_up(&["{ abc: { de: \"┃\" } }"], &["{ abc: { de: ┃❮\"\"❯ } }"])?;
+        assert_ctrl_shift_up(&["{ abc: { de: ┃\"\" } }"], &["{ abc: { de: ┃❮\"\"❯ } }"])?;
+        assert_ctrl_shift_up(&["{ abc: { de: \"\"┃ } }"], &["{ abc: ┃❮{ de: \"\" }❯ }"])?;
+        assert_ctrl_shift_up(
+            &["{ abc: { de: \"f g┃\" } }"],
+            &["{ abc: { de: ┃❮\"f g\"❯ } }"],
+        )?;
+        assert_ctrl_shift_up(
+            &["{ abc: { de┃: \"f g\" } }"],
+            &["{ abc: ┃❮{ de: \"f g\" }❯ }"],
+        )?;
+        assert_ctrl_shift_up(
+            &["{ abc: {┃ de: \"f g\" } }"],
+            &["{ abc: ┃❮{ de: \"f g\" }❯ }"],
+        )?;
+        assert_ctrl_shift_up(
+            &["{ abc: { de: \"f g\" ┃} }"],
+            &["{ abc: ┃❮{ de: \"f g\" }❯ }"],
+        )?;
+        assert_ctrl_shift_up(
+            &["{ abc: { de: \"f g\" }┃ }"],
+            &["┃❮{ abc: { de: \"f g\" } }❯"],
+        )?;
+        assert_ctrl_shift_up(
+            &["┃{ abc: { de: \"f g\" } }"],
+            &["┃❮{ abc: { de: \"f g\" } }❯"],
+        )?;
+        assert_ctrl_shift_up(
+            &["{ abc: { de: \"f g\" } }┃"],
+            &["{ abc: { de: \"f g\" } }┃"],
+        )?;
+
+        assert_ctrl_shift_up_repeat(
+            &["{ abc: { de: \"f g┃\" } }"],
+            &["{ abc: ┃❮{ de: \"f g\" }❯ }"],
+            2,
+        )?;
+        assert_ctrl_shift_up_repeat(
+            &["{ abc: { de: ┃\"f g\" } }"],
+            &["┃❮{ abc: { de: \"f g\" } }❯"],
+            3,
+        )?;
+        assert_ctrl_shift_up_repeat(
+            &["{ abc: { de: ┃\"f g\" } }"],
+            &["┃❮{ abc: { de: \"f g\" } }❯"],
+            4,
+        )?;
+
+        assert_ctrl_shift_up_repeat(
+            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
+            &["{ g: { oi: { ng: { d: ┃❮{ e: { e: { p: { camelCase } } } }❯ } } } }"],
+            4,
+        )?;
+        assert_ctrl_shift_up_repeat(
+            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
+            &["{ g: ┃❮{ oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } }❯ }"],
+            7,
+        )?;
+        assert_ctrl_shift_up_repeat(
+            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
+            &["┃❮{ g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }❯"],
+            9,
+        )?;
+
+        Ok(())
+    }
+
+    // Create ed_model from pre_lines DSL, do handle_new_char() with new_char_seq, select current Expr2,
+    // check if generated tooltip matches expected_tooltip.
+    pub fn assert_type_tooltip_seq(
+        pre_lines: &[&str],
+        expected_tooltip: &str,
+        new_char_seq: &str,
+    ) -> Result<(), String> {
+        let test_arena = Bump::new();
+        let code_str = BumpString::from_str_in(&pre_lines.join("").replace("┃", ""), &test_arena);
+
+        let mut model_refs = init_model_refs();
+
+        let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
+
+        for input_char in new_char_seq.chars() {
+            ed_res_to_res(handle_new_char(&input_char, &mut ed_model))?;
+        }
+
+        ed_model.select_expr()?;
+
+        let created_tooltip = ed_model.selected_expr_opt.unwrap().type_str;
+
+        assert_eq!(
+            created_tooltip.as_str(ed_model.module.env.pool),
+            expected_tooltip
+        );
+
+        Ok(())
+    }
+
+    // Create ed_model from pre_lines DSL, do handle_new_char() with new_char, select current Expr2,
+    // check if generated tooltip matches expected_tooltip.
+    pub fn assert_type_tooltip(
+        pre_lines: &[&str],
+        expected_tooltip: &str,
+        new_char: char,
+    ) -> Result<(), String> {
+        assert_type_tooltip_seq(pre_lines, expected_tooltip, &new_char.to_string())
+    }
+
+    #[test]
+    fn test_type_tooltip_record() -> Result<(), String> {
+        assert_type_tooltip(&["┃"], "{}", '{')?;
+
         Ok(())
     }
 }
