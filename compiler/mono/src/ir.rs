@@ -3260,6 +3260,8 @@ pub fn with_hole<'a>(
 
         EmptyRecord => Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole),
 
+        Expect(_, _) => todo!(),
+
         If {
             cond_var,
             branch_var,
