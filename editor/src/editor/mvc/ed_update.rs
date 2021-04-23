@@ -713,9 +713,13 @@ pub mod test_ed_update {
     use crate::editor::mvc::ed_model::test_ed_model::ed_model_to_dsl;
     use crate::editor::mvc::ed_model::test_ed_model::init_model_refs;
     use crate::editor::mvc::ed_update::handle_new_char;
+    use crate::editor::mvc::ed_update::EdModel;
     use crate::editor::mvc::ed_update::EdResult;
+    use crate::ui::text::lines::SelectableLines;
     use crate::ui::ui_error::UIResult;
+    use crate::window::keyboard_input::no_mods;
     use crate::window::keyboard_input::test_modifiers::ctrl_shift;
+    use crate::window::keyboard_input::Modifiers;
     use bumpalo::collections::String as BumpString;
     use bumpalo::Bump;
     use winit::event::VirtualKeyCode::*;
@@ -1111,11 +1115,11 @@ pub mod test_ed_update {
         assert_insert_seq_ignore(&["{ a: \"z\"┃ }"], "a{\"5")?;
         assert_insert_seq_ignore(&["{ a: \"z\" }┃"], "a{\"5")?;
 
-        assert_insert_seq_ignore(&["┃{ a: \"hello, hello.12345ZXY{}[]-><-\" }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{┃ a: \"hello, hello.12345ZXY{}[]-><-\" }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ a: ┃\"hello, hello.12345ZXY{}[]-><-\" }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ a: \"hello, hello.12345ZXY{}[]-><-\"┃ }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ a: \"hello, hello.12345ZXY{}[]-><-\" }┃"], "a{\"5")?;
+        assert_insert_seq_ignore(&["┃{ a: \"hello, hello.0123456789ZXY{}[]-><-\" }"], "a{\"5")?;
+        assert_insert_seq_ignore(&["{┃ a: \"hello, hello.0123456789ZXY{}[]-><-\" }"], "a{\"5")?;
+        assert_insert_seq_ignore(&["{ a: ┃\"hello, hello.0123456789ZXY{}[]-><-\" }"], "a{\"5")?;
+        assert_insert_seq_ignore(&["{ a: \"hello, hello.0123456789ZXY{}[]-><-\"┃ }"], "a{\"5")?;
+        assert_insert_seq_ignore(&["{ a: \"hello, hello.0123456789ZXY{}[]-><-\" }┃"], "a{\"5")?;
 
         Ok(())
     }
@@ -1161,59 +1165,59 @@ pub mod test_ed_update {
         assert_insert_seq_ignore(&["{ camelCaseB1: { ┃z15a: \"\" } }"], "1")?;
 
         assert_insert_seq_ignore(
-            &["{ camelCaseB1: { z15a: \"hello, hello.12345ZXY{}[]-><-\"┃ } }"],
+            &["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\"┃ } }"],
             "{\"5",
         )?;
         assert_insert_seq_ignore(
-            &["{ camelCaseB1: { z15a: ┃\"hello, hello.12345ZXY{}[]-><-\" } }"],
+            &["{ camelCaseB1: { z15a: ┃\"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             "{\"5",
         )?;
         assert_insert_seq_ignore(
-            &["{ camelCaseB1: { z15a:┃ \"hello, hello.12345ZXY{}[]-><-\" } }"],
+            &["{ camelCaseB1: { z15a:┃ \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             "{\"5",
         )?;
         assert_insert_seq_ignore(
-            &["{ camelCaseB1: { z15a: \"hello, hello.12345ZXY{}[]-><-\" ┃} }"],
+            &["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" ┃} }"],
             "{\"5",
         )?;
         assert_insert_seq_ignore(
-            &["{ camelCaseB1: {┃ z15a: \"hello, hello.12345ZXY{}[]-><-\" } }"],
+            &["{ camelCaseB1: {┃ z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             "{\"5",
         )?;
         assert_insert_seq_ignore(
-            &["{ camelCaseB1: ┃{ z15a: \"hello, hello.12345ZXY{}[]-><-\" } }"],
+            &["{ camelCaseB1: ┃{ z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             "{\"5",
         )?;
         assert_insert_seq_ignore(
-            &["{ camelCaseB1: { z15a: \"hello, hello.12345ZXY{}[]-><-\" }┃ }"],
+            &["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" }┃ }"],
             "{\"5",
         )?;
         assert_insert_seq_ignore(
-            &["{ camelCaseB1: { z15a: \"hello, hello.12345ZXY{}[]-><-\" } ┃}"],
+            &["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } ┃}"],
             "{\"5",
         )?;
         assert_insert_seq_ignore(
-            &["{ camelCaseB1: { z15a: \"hello, hello.12345ZXY{}[]-><-\" } }┃"],
+            &["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }┃"],
             "{\"5",
         )?;
         assert_insert_seq_ignore(
-            &["{ camelCaseB1:┃ { z15a: \"hello, hello.12345ZXY{}[]-><-\" } }"],
+            &["{ camelCaseB1:┃ { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             "{\"5",
         )?;
         assert_insert_seq_ignore(
-            &["{┃ camelCaseB1: { z15a: \"hello, hello.12345ZXY{}[]-><-\" } }"],
+            &["{┃ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             "{\"5",
         )?;
         assert_insert_seq_ignore(
-            &["┃{ camelCaseB1: { z15a: \"hello, hello.12345ZXY{}[]-><-\" } }"],
+            &["┃{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             "{\"5",
         )?;
         assert_insert_seq_ignore(
-            &["{ ┃camelCaseB1: { z15a: \"hello, hello.12345ZXY{}[]-><-\" } }"],
+            &["{ ┃camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             "1",
         )?;
         assert_insert_seq_ignore(
-            &["{ camelCaseB1: { ┃z15a: \"hello, hello.12345ZXY{}[]-><-\" } }"],
+            &["{ camelCaseB1: { ┃z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
             "1",
         )?;
 
@@ -1309,8 +1313,8 @@ pub mod test_ed_update {
         assert_ctrl_shift_up(&["┃\"abc\""], &["┃❮\"abc\"❯"])?;
         assert_ctrl_shift_up_repeat(&["\"abc┃\""], &["┃❮\"abc\"❯"], 3)?;
         assert_ctrl_shift_up(
-            &["\"hello, hello.12345ZXY{}[]-><-┃\""],
-            &["┃❮\"hello, hello.12345ZXY{}[]-><-\"❯"],
+            &["\"hello, hello.0123456789ZXY{}[]-><-┃\""],
+            &["┃❮\"hello, hello.0123456789ZXY{}[]-><-\"❯"],
         )?;
 
         assert_ctrl_shift_up(&["\"\"┃"], &["\"\"┃"])?;
@@ -1363,16 +1367,16 @@ pub mod test_ed_update {
         assert_ctrl_shift_up_repeat(&["{ abc: \"d┃e\" }"], &["┃❮{ abc: \"de\" }❯"], 3)?;
 
         assert_ctrl_shift_up(
-            &["{ camelCase123: \"hello, hello.12┃345ZXY{}[]-><-\" }"],
-            &["{ camelCase123: ┃❮\"hello, hello.12345ZXY{}[]-><-\"❯ }"],
+            &["{ camelCase123: \"hello, hello.012┃3456789ZXY{}[]-><-\" }"],
+            &["{ camelCase123: ┃❮\"hello, hello.0123456789ZXY{}[]-><-\"❯ }"],
         )?;
         assert_ctrl_shift_up(
-            &["{ camel┃Case123: \"hello, hello.12345ZXY{}[]-><-\" }"],
-            &["┃❮{ camelCase123: \"hello, hello.12345ZXY{}[]-><-\" }❯"],
+            &["{ camel┃Case123: \"hello, hello.0123456789ZXY{}[]-><-\" }"],
+            &["┃❮{ camelCase123: \"hello, hello.0123456789ZXY{}[]-><-\" }❯"],
         )?;
         assert_ctrl_shift_up_repeat(
-            &["{ camelCase123: \"hello, hello┃.12345ZXY{}[]-><-\" }"],
-            &["┃❮{ camelCase123: \"hello, hello.12345ZXY{}[]-><-\" }❯"],
+            &["{ camelCase123: \"hello, hello┃.0123456789ZXY{}[]-><-\" }"],
+            &["┃❮{ camelCase123: \"hello, hello.0123456789ZXY{}[]-><-\" }❯"],
             2,
         )?;
 
@@ -1509,6 +1513,208 @@ pub mod test_ed_update {
     #[test]
     fn test_type_tooltip_record() -> Result<(), String> {
         assert_type_tooltip(&["┃"], "{}", '{')?;
+
+        Ok(())
+    }
+
+    type ModelMoveCaretFun = fn(&mut EdModel<'_>, &Modifiers) -> UIResult<()>;
+
+    // Create ed_model from pre_lines DSL, do ctrl+shift+up as many times as repeat. Then move the caret by executing
+    // move_caret_fun. Next check if modified ed_model has expected string representation of code, caret position and
+    // active selection.
+    fn assert_ctrl_shift_up_move(
+        pre_lines: &[&str],
+        expected_post_lines: &[&str],
+        repeats: usize,
+        move_caret_fun: ModelMoveCaretFun,
+    ) -> Result<(), String> {
+        let test_arena = Bump::new();
+        let code_str = BumpString::from_str_in(&pre_lines.join("").replace("┃", ""), &test_arena);
+
+        let mut model_refs = init_model_refs();
+
+        let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
+
+        for _ in 0..repeats {
+            ed_model.ed_handle_key_down(&ctrl_shift(), Up)?;
+        }
+
+        move_caret_fun(&mut ed_model, &no_mods())?;
+
+        let post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
+
+        assert_eq!(post_lines, expected_post_lines);
+
+        Ok(())
+    }
+
+    fn assert_ctrl_shift_single_up_move(
+        pre_lines: &[&str],
+        expected_post_lines: &[&str],
+        move_caret_fun: ModelMoveCaretFun,
+    ) -> Result<(), String> {
+        assert_ctrl_shift_up_move(pre_lines, expected_post_lines, 1, move_caret_fun)
+    }
+
+    // because complex lifetime stuff
+    macro_rules! move_right {
+        () => {
+            |ed_model, modifiers| EdModel::move_caret_right(ed_model, modifiers)
+        };
+    }
+    macro_rules! move_left {
+        () => {
+            |ed_model, modifiers| EdModel::move_caret_left(ed_model, modifiers)
+        };
+    }
+    macro_rules! move_up {
+        () => {
+            |ed_model, modifiers| EdModel::move_caret_up(ed_model, modifiers)
+        };
+    }
+    macro_rules! move_down {
+        () => {
+            |ed_model, modifiers| EdModel::move_caret_down(ed_model, modifiers)
+        };
+    }
+    macro_rules! move_home {
+        () => {
+            |ed_model, modifiers| EdModel::move_caret_home(ed_model, modifiers)
+        };
+    }
+    macro_rules! move_end {
+        () => {
+            |ed_model, modifiers| EdModel::move_caret_end(ed_model, modifiers)
+        };
+    }
+
+    #[test]
+    fn test_ctrl_shift_up_move_blank() -> Result<(), String> {
+        // Blank is auto-inserted
+        assert_ctrl_shift_single_up_move(&["┃"], &[" ┃"], move_right!())?;
+        assert_ctrl_shift_up_move(&["┃"], &["┃ "], 3, move_left!())?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ctrl_shift_up_move_string() -> Result<(), String> {
+        assert_ctrl_shift_single_up_move(&["┃\"\""], &["\"\"┃"], move_down!())?;
+        assert_ctrl_shift_single_up_move(&["┃\"abc\""], &["┃\"abc\""], move_up!())?;
+        assert_ctrl_shift_single_up_move(
+            &["┃\"hello, hello.0123456789ZXY{}[]-><-\""],
+            &["\"hello, hello.0123456789ZXY{}[]-><-\"┃"],
+            move_end!(),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ctrl_shift_up_move_record() -> Result<(), String> {
+        assert_ctrl_shift_single_up_move(&["┃{  }"], &["┃{  }"], move_home!())?;
+        assert_ctrl_shift_single_up_move(&["┃{ a }"], &["{ a }┃"], move_down!())?;
+        assert_ctrl_shift_single_up_move(&["┃{ a: { b } }"], &["{ a: { b } }┃"], move_right!())?;
+        assert_ctrl_shift_single_up_move(&["{ a: { ┃ } }"], &["{ a: {  } }┃"], move_end!())?;
+        assert_ctrl_shift_up_move(
+            &["{ a: { b: { ┃ } } }"],
+            &["{ a: ┃{ b: {  } } }"],
+            2,
+            move_up!(),
+        )?;
+        assert_ctrl_shift_up_move(
+            &["{ camelCase: { cC123: \"hello┃, hello.0123456789ZXY{}[]-><-\" } }"],
+            &["{ camelCase: { cC123: \"hello, hello.0123456789ZXY{}[]-><-\" }┃ }"],
+            2,
+            move_down!(),
+        )?;
+
+        Ok(())
+    }
+
+    // Create ed_model from pre_lines DSL, do ctrl+shift+up as many times as repeat. Then do backspace.
+    // Next check if modified ed_model has expected string representation of code, caret position and
+    // active selection.
+    fn assert_ctrl_shift_up_backspace(
+        pre_lines: &[&str],
+        expected_post_lines: &[&str],
+        repeats: usize,
+    ) -> Result<(), String> {
+        let test_arena = Bump::new();
+        let code_str = BumpString::from_str_in(&pre_lines.join("").replace("┃", ""), &test_arena);
+
+        let mut model_refs = init_model_refs();
+
+        let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
+
+        for _ in 0..repeats {
+            ed_model.ed_handle_key_down(&ctrl_shift(), Up)?;
+        }
+
+        handle_new_char(&'\u{8}', &mut ed_model)?; // \u{8} is the char for backspace on linux
+
+        let post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
+
+        assert_eq!(post_lines, expected_post_lines);
+
+        Ok(())
+    }
+
+    fn assert_ctrl_shift_single_up_backspace(
+        pre_lines: &[&str],
+        expected_post_lines: &[&str],
+    ) -> Result<(), String> {
+        assert_ctrl_shift_up_backspace(pre_lines, expected_post_lines, 1)
+    }
+
+    #[test]
+    fn test_ctrl_shift_up_backspace_blank() -> Result<(), String> {
+        // Blank is inserted when root is deleted
+        assert_ctrl_shift_single_up_backspace(&["┃"], &["┃ "])?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ctrl_shift_up_backspace_string() -> Result<(), String> {
+        // Blank is inserted when root is deleted
+        assert_ctrl_shift_single_up_backspace(&["\"┃\""], &["┃ "])?;
+        assert_ctrl_shift_single_up_backspace(&["\"\"┃"], &["\"\"┃"])?;
+        assert_ctrl_shift_single_up_backspace(&["┃\"abc\""], &["┃ "])?;
+        assert_ctrl_shift_single_up_backspace(
+            &["\"hello┃, hello.0123456789ZXY{}[]-><-\""],
+            &["┃ "],
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ctrl_shift_up_backspace_record() -> Result<(), String> {
+        // Blank is inserted when root is deleted
+        assert_ctrl_shift_single_up_backspace(&["{┃  }"], &["┃ "])?;
+        assert_ctrl_shift_single_up_backspace(&["{ a┃ }"], &["┃ "])?;
+        assert_ctrl_shift_single_up_backspace(&["{ a: { b }┃ }"], &["┃ "])?;
+        assert_ctrl_shift_single_up_backspace(&["{ a: \"b cd\"┃ }"], &["┃ "])?;
+
+        assert_ctrl_shift_single_up_backspace(&["{ a: ┃{ b } }"], &["{ a: ┃  }"])?;
+        assert_ctrl_shift_single_up_backspace(&["{ a: \"┃b cd\" }"], &["{ a: ┃  }"])?;
+        assert_ctrl_shift_single_up_backspace(
+            &["{ g: { oi: { ng: { d: { ┃e: { e: { p: { camelCase } } } } } } } }"],
+            &["{ g: { oi: { ng: { d: ┃  } } } }"],
+        )?;
+
+        assert_ctrl_shift_up_backspace(
+            &["{ a: { b: { c: \"abc┃  \" } } }"],
+            &["{ a: { b: ┃  } }"],
+            2,
+        )?;
+        assert_ctrl_shift_up_backspace(&["{ a: { b: { c: {┃  } } } }"], &["{ a: { b: ┃  } }"], 2)?;
+        assert_ctrl_shift_up_backspace(
+            &["{ g: { oi: { ng: { d: { e: { e: { p┃: { camelCase } } } } } } } }"],
+            &["{ g: ┃  }"],
+            6,
+        )?;
 
         Ok(())
     }
