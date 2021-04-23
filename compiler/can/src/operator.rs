@@ -9,7 +9,7 @@ use roc_region::all::{Located, Region};
 
 // BinOp precedence logic adapted from Gluon by Markus Westerlind
 // https://github.com/gluon-lang/gluon - license information can be found in
-// the COPYRIGHT_DETAILS file in the root directory of this distribution.
+// the LEGAL_DETAILS file in the root directory of this distribution.
 //
 // Thank you, Markus!
 
