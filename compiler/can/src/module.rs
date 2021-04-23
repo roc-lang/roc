@@ -405,6 +405,12 @@ fn fix_values_captured_in_closure_expr(
             fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);
         }
 
+        Expect(condition, loc_expr) => {
+            // LetNonRec(Box<Def>, Box<Located<Expr>>, Variable, Aliases),
+            fix_values_captured_in_closure_expr(&mut condition.value, no_capture_symbols);
+            fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);
+        }
+
         Closure {
             captured_symbols,
             name,

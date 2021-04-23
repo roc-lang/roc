@@ -158,6 +158,9 @@ pub enum Expr {
         arguments: Vec<(Variable, Located<Expr>)>,
     },
 
+    // Test
+    Expect(Box<Located<Expr>>, Box<Located<Expr>>),
+
     // Compiles, but will crash if reached
     RuntimeError(RuntimeError),
 }
@@ -649,9 +652,30 @@ pub fn canonicalize_expr<'a>(
                 Output::default(),
             )
         }
-        ast::Expr::Expect(_condition, _continuation) => todo!(),
+        ast::Expr::Expect(condition, continuation) => {
+            let mut output = Output::default();
+
+            let (loc_condition, output1) =
+                canonicalize_expr(env, var_store, scope, condition.region, &condition.value);
+
+            let (loc_continuation, output2) = canonicalize_expr(
+                env,
+                var_store,
+                scope,
+                continuation.region,
+                &continuation.value,
+            );
+
+            output.union(output1);
+            output.union(output2);
+
+            (
+                Expect(Box::new(loc_condition), Box::new(loc_continuation)),
+                output,
+            )
+        }
         ast::Expr::If(if_thens, final_else_branch) => {
-            let mut branches = Vec::with_capacity(1);
+            let mut branches = Vec::with_capacity(if_thens.len());
             let mut output = Output::default();
 
             for (condition, then_branch) in if_thens.iter() {
@@ -1280,6 +1304,20 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 branches: new_branches,
                 final_else,
             }
+        }
+
+        Expect(loc_condition, loc_expr) => {
+            let loc_condition = Located {
+                region: loc_condition.region,
+                value: inline_calls(var_store, scope, loc_condition.value),
+            };
+
+            let loc_expr = Located {
+                region: loc_expr.region,
+                value: inline_calls(var_store, scope, loc_expr.value),
+            };
+
+            Expect(Box::new(loc_condition), Box::new(loc_expr))
         }
 
         LetRec(defs, loc_expr, var) => {
