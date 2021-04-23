@@ -406,6 +406,36 @@ pub fn constrain_expr(
             )
         }
 
+        Expect(loc_cond, continuation) => {
+            let expect_bool = |region| {
+                let bool_type = Type::Variable(Variable::BOOL);
+                Expected::ForReason(Reason::IfCondition, bool_type, region)
+            };
+
+            let cond_con = constrain_expr(
+                env,
+                loc_cond.region,
+                &loc_cond.value,
+                expect_bool(loc_cond.region),
+            );
+
+            let continuation_con = constrain_expr(
+                env,
+                continuation.region,
+                &continuation.value,
+                ForReason(
+                    Reason::IfBranch {
+                        index: Index::zero_based(0),
+                        total_branches: 0,
+                    },
+                    expected.get_type(),
+                    continuation.region,
+                ),
+            );
+
+            exists(vec![], And(vec![cond_con, continuation_con]))
+        }
+
         If {
             cond_var,
             branch_var,
