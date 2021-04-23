@@ -896,12 +896,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // The layout of the struct expects them to be dropped!
                 let (field_expr, field_layout) = load_symbol_and_layout(scope, symbol);
                 if !field_layout.is_dropped_because_empty() {
-                    field_types.push(basic_type_from_layout(
-                        env.arena,
-                        env.context,
-                        &field_layout,
-                        env.ptr_bytes,
-                    ));
+                    field_types.push(basic_type_from_layout(env, &field_layout));
 
                     field_vals.push(field_expr);
                 }
@@ -953,12 +948,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             for field_symbol in it {
                 let (val, field_layout) = load_symbol_and_layout(scope, field_symbol);
                 if !field_layout.is_dropped_because_empty() {
-                    let field_type = basic_type_from_layout(
-                        env.arena,
-                        env.context,
-                        &field_layout,
-                        env.ptr_bytes,
-                    );
+                    let field_type = basic_type_from_layout(env, &field_layout);
 
                     field_types.push(field_type);
                     field_vals.push(val);
@@ -1000,7 +990,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let tag_layout = Layout::Union(UnionLayout::NonRecursive(fields));
 
             debug_assert!(*union_size > 1);
-            let ptr_size = env.ptr_bytes;
 
             let ctx = env.context;
             let builder = env.builder;
@@ -1018,8 +1007,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
                 if !tag_field_layout.is_dropped_because_empty() {
-                    let field_type =
-                        basic_type_from_layout(env.arena, env.context, tag_field_layout, ptr_size);
+                    let field_type = basic_type_from_layout(env, tag_field_layout);
 
                     field_types.push(field_type);
 
@@ -1076,8 +1064,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             // This tricks comes from
             // https://github.com/raviqqe/ssf/blob/bc32aae68940d5bddf5984128e85af75ca4f4686/ssf-llvm/src/expression_compiler.rs#L116
 
-            let internal_type =
-                basic_type_from_layout(env.arena, env.context, &tag_layout, env.ptr_bytes);
+            let internal_type = basic_type_from_layout(env, &tag_layout);
 
             cast_tag_to_block_of_memory(builder, struct_val.into_struct_value(), internal_type)
         }
@@ -1091,7 +1078,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let tag_layout = Layout::Union(UnionLayout::NonRecursive(fields));
 
             debug_assert!(*union_size > 1);
-            let ptr_size = env.ptr_bytes;
 
             let ctx = env.context;
             let builder = env.builder;
@@ -1109,8 +1095,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
                 if !tag_field_layout.is_dropped_because_empty() {
-                    let field_type =
-                        basic_type_from_layout(env.arena, env.context, tag_field_layout, ptr_size);
+                    let field_type = basic_type_from_layout(env, tag_field_layout);
 
                     field_types.push(field_type);
 
@@ -1172,7 +1157,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let struct_layout =
                 Layout::Union(UnionLayout::NonRecursive(env.arena.alloc([*fields])));
 
-            let ptr_size = env.ptr_bytes;
             let ctx = env.context;
             let builder = env.builder;
 
@@ -1187,8 +1171,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
                 if !tag_field_layout.is_dropped_because_empty() {
-                    let field_type =
-                        basic_type_from_layout(env.arena, env.context, tag_field_layout, ptr_size);
+                    let field_type = basic_type_from_layout(env, tag_field_layout);
 
                     field_types.push(field_type);
 
@@ -1247,8 +1230,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             ..
         } => {
             let tag_layout = Layout::Union(UnionLayout::NonRecursive(fields));
-            let tag_struct_type =
-                basic_type_from_layout(env.arena, env.context, &tag_layout, env.ptr_bytes);
+            let tag_struct_type = basic_type_from_layout(env, &tag_layout);
             if *tag_id == *nullable_id as u8 {
                 let output_type = tag_struct_type.ptr_type(AddressSpace::Generic);
 
@@ -1256,7 +1238,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             }
 
             debug_assert!(*union_size > 1);
-            let ptr_size = env.ptr_bytes;
 
             let ctx = env.context;
             let builder = env.builder;
@@ -1281,8 +1262,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
                 if !tag_field_layout.is_dropped_because_empty() {
-                    let field_type =
-                        basic_type_from_layout(env.arena, env.context, tag_field_layout, ptr_size);
+                    let field_type = basic_type_from_layout(env, tag_field_layout);
 
                     field_types.push(field_type);
 
@@ -1359,7 +1339,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             debug_assert!(!arguments.is_empty());
 
             debug_assert!(*union_size == 2);
-            let ptr_size = env.ptr_bytes;
 
             let ctx = env.context;
             let builder = env.builder;
@@ -1382,8 +1361,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // Zero-sized fields have no runtime representation.
                 // The layout of the struct expects them to be dropped!
                 if !tag_field_layout.is_dropped_because_empty() {
-                    let field_type =
-                        basic_type_from_layout(env.arena, env.context, tag_field_layout, ptr_size);
+                    let field_type = basic_type_from_layout(env, tag_field_layout);
 
                     field_types.push(field_type);
 
@@ -1484,12 +1462,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     Layout::Union(UnionLayout::NonNullableUnwrapped(fields)),
                 ) => {
                     let struct_layout = Layout::Struct(fields);
-                    let struct_type = basic_type_from_layout(
-                        env.arena,
-                        env.context,
-                        &struct_layout,
-                        env.ptr_bytes,
-                    );
+                    let struct_type = basic_type_from_layout(env, &struct_layout);
 
                     let cast_argument = env
                         .builder
@@ -1531,11 +1504,9 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             // Determine types, assumes the descriminant is in the field layouts
             let num_fields = field_layouts.len();
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-            let ptr_bytes = env.ptr_bytes;
 
             for field_layout in field_layouts.iter() {
-                let field_type =
-                    basic_type_from_layout(env.arena, env.context, &field_layout, ptr_bytes);
+                let field_type = basic_type_from_layout(env, &field_layout);
                 field_types.push(field_type);
             }
 
@@ -1727,7 +1698,7 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
         // a pointer to the block of memory representation
         builder.build_bitcast(
             result,
-            basic_type_from_layout(env.arena, env.context, structure_layout, env.ptr_bytes),
+            basic_type_from_layout(env, structure_layout),
             "cast_rec_pointer_lookup_at_index_ptr",
         )
     } else {
@@ -1773,7 +1744,7 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     let builder = env.builder;
     let ctx = env.context;
 
-    let value_type = basic_type_from_layout(env.arena, ctx, layout, env.ptr_bytes);
+    let value_type = basic_type_from_layout(env, layout);
     let len_type = env.ptr_int();
 
     let extra_bytes = layout.alignment_bytes(env.ptr_bytes).max(env.ptr_bytes);
@@ -2189,8 +2160,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             cond_layout,
             cond_symbol,
         } => {
-            let ret_type =
-                basic_type_from_layout(env.arena, env.context, &ret_layout, env.ptr_bytes);
+            let ret_type = basic_type_from_layout(env, &ret_layout);
 
             let switch_args = SwitchArgsIr {
                 cond_layout: *cond_layout,
@@ -2214,8 +2184,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let mut joinpoint_args = Vec::with_capacity_in(parameters.len(), env.arena);
 
             for param in parameters.iter() {
-                let btype =
-                    basic_type_from_layout(env.arena, env.context, &param.layout, env.ptr_bytes);
+                let btype = basic_type_from_layout(env, &param.layout);
                 joinpoint_args.push(create_entry_block_alloca(
                     env,
                     parent,
@@ -3077,7 +3046,6 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
 ) -> FunctionValue<'ctx> {
     let args = proc.args;
     let arena = env.arena;
-    let context = &env.context;
 
     let fn_name = layout_ids
         .get(symbol, layout)
@@ -3114,11 +3082,11 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
         }
     }
 
-    let ret_type = basic_type_from_layout(arena, context, &proc.ret_layout, env.ptr_bytes);
+    let ret_type = basic_type_from_layout(env, &proc.ret_layout);
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
 
     for (layout, _) in args.iter() {
-        let arg_type = basic_type_from_layout(arena, env.context, &layout, env.ptr_bytes);
+        let arg_type = basic_type_from_layout(env, &layout);
 
         arg_basic_types.push(arg_type);
     }
@@ -3167,7 +3135,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     let mut argument_types = Vec::with_capacity_in(arguments.len() + 3, env.arena);
 
     for layout in arguments {
-        let arg_type = basic_type_from_layout(arena, context, layout, env.ptr_bytes);
+        let arg_type = basic_type_from_layout(env, layout);
         let arg_ptr_type = arg_type.ptr_type(AddressSpace::Generic);
 
         argument_types.push(arg_ptr_type.into());
@@ -3178,23 +3146,18 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
             ClosureLayout::extend_function_layout(arena, arguments, *closure, result);
 
         // this is already a (function) pointer type
-        basic_type_from_layout(arena, context, &function_layout, env.ptr_bytes)
+        basic_type_from_layout(env, &function_layout)
     };
     argument_types.push(function_pointer_type);
 
     let closure_argument_type = {
-        let basic_type = basic_type_from_layout(
-            arena,
-            context,
-            &closure.as_block_of_memory_layout(),
-            env.ptr_bytes,
-        );
+        let basic_type = basic_type_from_layout(env, &closure.as_block_of_memory_layout());
 
         basic_type.ptr_type(AddressSpace::Generic)
     };
     argument_types.push(closure_argument_type.into());
 
-    let result_type = basic_type_from_layout(arena, context, result, env.ptr_bytes);
+    let result_type = basic_type_from_layout(env, result);
 
     let roc_call_result_type =
         context.struct_type(&[context.i64_type().into(), result_type], false);
@@ -3263,7 +3226,6 @@ pub fn build_function_caller<'a, 'ctx, 'env>(
 ) {
     use inkwell::types::BasicType;
 
-    let arena = env.arena;
     let context = &env.context;
     let builder = env.builder;
 
@@ -3279,7 +3241,7 @@ pub fn build_function_caller<'a, 'ctx, 'env>(
     let mut argument_types = Vec::with_capacity_in(arguments.len() + 3, env.arena);
 
     for layout in arguments {
-        let arg_type = basic_type_from_layout(arena, context, layout, env.ptr_bytes);
+        let arg_type = basic_type_from_layout(env, layout);
         let arg_ptr_type = arg_type.ptr_type(AddressSpace::Generic);
 
         argument_types.push(arg_ptr_type.into());
@@ -3295,19 +3257,18 @@ pub fn build_function_caller<'a, 'ctx, 'env>(
         let function_layout = Layout::FunctionPointer(&args, result);
 
         // this is already a (function) pointer type
-        basic_type_from_layout(arena, context, &function_layout, env.ptr_bytes)
+        basic_type_from_layout(env, &function_layout)
     };
     argument_types.push(function_pointer_type);
 
     let closure_argument_type = {
-        let basic_type =
-            basic_type_from_layout(arena, context, &Layout::Struct(&[]), env.ptr_bytes);
+        let basic_type = basic_type_from_layout(env, &Layout::Struct(&[]));
 
         basic_type.ptr_type(AddressSpace::Generic)
     };
     argument_types.push(closure_argument_type.into());
 
-    let result_type = basic_type_from_layout(arena, context, result, env.ptr_bytes);
+    let result_type = basic_type_from_layout(env, result);
 
     let roc_call_result_type =
         context.struct_type(&[context.i64_type().into(), result_type], false);
@@ -3338,12 +3299,8 @@ pub fn build_function_caller<'a, 'ctx, 'env>(
 
     // let closure_data = context.struct_type(&[], false).const_zero().into();
 
-    let actual_function_type = basic_type_from_layout(
-        arena,
-        context,
-        &Layout::FunctionPointer(arguments, result),
-        env.ptr_bytes,
-    );
+    let actual_function_type =
+        basic_type_from_layout(env, &Layout::FunctionPointer(arguments, result));
 
     let function_ptr = builder
         .build_bitcast(function_ptr, actual_function_type, "cast")
@@ -3387,7 +3344,7 @@ fn build_host_exposed_alias_size<'a, 'ctx, 'env>(
         def_name,
         alias_symbol,
         None,
-        basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes),
+        basic_type_from_layout(env, layout),
     )
 }
 
@@ -4115,8 +4072,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let arg = load_symbol(scope, &args[0]).into_int_value();
 
-            let to = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes)
-                .into_int_type();
+            let to = basic_type_from_layout(env, layout).into_int_type();
 
             env.builder.build_int_cast(arg, to, "inc_cast").into()
         }
@@ -4455,7 +4411,7 @@ fn build_foreign_symbol_return_result<'a, 'ctx, 'env>(
     for arg in arguments.iter() {
         let (value, layout) = load_symbol_and_layout(scope, arg);
         arg_vals.push(value);
-        let arg_type = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
+        let arg_type = basic_type_from_layout(env, layout);
         debug_assert_eq!(arg_type, value.get_type());
         arg_types.push(arg_type);
     }
@@ -4482,7 +4438,7 @@ fn build_foreign_symbol_write_result_into_ptr<'a, 'ctx, 'env>(
     for arg in arguments.iter() {
         let (value, layout) = load_symbol_and_layout(scope, arg);
         arg_vals.push(value);
-        let arg_type = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
+        let arg_type = basic_type_from_layout(env, layout);
         debug_assert_eq!(arg_type, value.get_type());
         arg_types.push(arg_type);
     }
@@ -4504,7 +4460,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
     ret_layout: &Layout<'a>,
     call_or_invoke: ForeignCallOrInvoke<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let ret_type = basic_type_from_layout(env.arena, env.context, ret_layout, env.ptr_bytes);
+    let ret_type = basic_type_from_layout(env, ret_layout);
     let return_pointer = env.builder.build_alloca(ret_type, "return_value");
 
     // crude approximation of the C calling convention
@@ -4611,9 +4567,8 @@ where
         Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) => {
             // no static guarantees, but all is not lost: we can check the refcount
             // if it is one, we hold the final reference, and can mutate it in-place!
-            let ctx = env.context;
 
-            let ret_type = basic_type_from_layout(env.arena, ctx, list_layout, env.ptr_bytes);
+            let ret_type = basic_type_from_layout(env, list_layout);
 
             let refcount_ptr = PointerToRefcount::from_list_wrapper(env, original_wrapper);
             let refcount = refcount_ptr.get_refcount(env);
@@ -5109,7 +5064,7 @@ fn builtin_to_int_type<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     builtin: &Builtin<'a>,
 ) -> IntType<'ctx> {
-    let result = basic_type_from_builtin(env.arena, env.context, builtin, env.ptr_bytes);
+    let result = basic_type_from_builtin(env, builtin);
     debug_assert!(result.is_int_type());
 
     result.into_int_type()
@@ -5229,10 +5184,7 @@ fn int_abs_with_overflow<'a, 'ctx, 'env>(
         let bits_to_shift = ((arg_layout.stack_size(env.ptr_bytes) as u64) * 8) - 1;
         let shift_val = ctx.i64_type().const_int(bits_to_shift, false);
         let shifted = bd.build_right_shift(arg, shift_val, true, shifted_name);
-        let alloca = bd.build_alloca(
-            basic_type_from_builtin(env.arena, ctx, arg_layout, env.ptr_bytes),
-            "#int_abs_help",
-        );
+        let alloca = bd.build_alloca(basic_type_from_builtin(env, arg_layout), "#int_abs_help");
 
         // shifted = arg >>> 63
         bd.build_store(alloca, shifted);

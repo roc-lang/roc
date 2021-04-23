@@ -106,7 +106,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
 
     // Load the usize length from the wrapper.
     let len = list_len(builder, original_wrapper);
-    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+    let elem_type = basic_type_from_layout(env, elem_layout);
     let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
     let list_ptr = load_list_ptr(builder, original_wrapper, ptr_type);
 
@@ -185,11 +185,10 @@ pub fn list_join<'a, 'ctx, 'env>(
             let builder = env.builder;
             let ctx = env.context;
 
-            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+            let elem_type = basic_type_from_layout(env, elem_layout);
             let elem_ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
-            let inner_list_type =
-                basic_type_from_layout(env.arena, ctx, &inner_list_layout, env.ptr_bytes);
+            let inner_list_type = basic_type_from_layout(env, &inner_list_layout);
 
             let outer_list_wrapper = outer_list.into_struct_value();
             let outer_list_len = list_len(builder, outer_list_wrapper);
@@ -395,8 +394,7 @@ pub fn list_get_unsafe<'a, 'ctx, 'env>(
 
     match list_layout {
         Layout::Builtin(Builtin::List(_, elem_layout)) => {
-            let ctx = env.context;
-            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+            let elem_type = basic_type_from_layout(env, elem_layout);
             let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
             // Load the pointer to the array data
             let array_data_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
@@ -497,7 +495,7 @@ pub fn list_set<'a, 'ctx, 'env>(
     let build_then = || {
         let (elem, elem_layout) = args[2];
         let ctx = env.context;
-        let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+        let elem_type = basic_type_from_layout(env, elem_layout);
         let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
         let (new_wrapper, array_data_ptr) = match input_inplace {
@@ -1385,8 +1383,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
                 let second_list_length_comparison = list_is_not_empty(env, second_list_len);
 
                 let build_second_list_then = || {
-                    let elem_type =
-                        basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+                    let elem_type = basic_type_from_layout(env, elem_layout);
                     let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
                     let (new_wrapper, _) = clone_nonempty_list(
@@ -1413,7 +1410,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
             };
 
             let if_first_list_is_not_empty = || {
-                let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+                let elem_type = basic_type_from_layout(env, elem_layout);
                 let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
                 let if_second_list_is_empty = || {
