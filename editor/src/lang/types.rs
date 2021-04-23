@@ -60,7 +60,13 @@ pub enum Problem2 {
 
 impl ShallowClone for Type2 {
     fn shallow_clone(&self) -> Self {
-        todo!()
+        match self {
+            Self::Variable(var) => Self::Variable(*var),
+            Self::Alias(symbol, pool_vec, type_id) => {
+                Self::Alias(*symbol, pool_vec.shallow_clone(), type_id.clone())
+            }
+            rest => todo!("{:?}", rest),
+        }
     }
 }
 

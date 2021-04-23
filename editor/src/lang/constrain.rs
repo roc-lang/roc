@@ -59,7 +59,11 @@ pub fn constrain_expr<'a>(
 
             flex_vars.push(*var);
 
-            let range_type_id = env.pool.add(Type2::Variable(*var));
+            let precision_var = env.var_store.fresh();
+
+            let range_type = Type2::Variable(precision_var);
+
+            let range_type_id = env.pool.add(range_type);
 
             and_constraints.push(Eq(
                 num_type.shallow_clone(),

@@ -143,3 +143,15 @@ fn constrain_empty_record() {
         "{}",
     )
 }
+
+#[test]
+fn constrain_small_int() {
+    infer_eq(
+        indoc!(
+            r#"
+            12
+            "#
+        ),
+        "",
+    )
+}
