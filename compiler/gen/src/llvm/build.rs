@@ -4442,7 +4442,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                 IntPredicate::EQ,
                 cond.into_int_value(),
                 context.bool_type().const_int(1, false),
-                "has_not_overflowed",
+                "is_true",
             );
 
             let then_block = context.append_basic_block(parent, "then_block");

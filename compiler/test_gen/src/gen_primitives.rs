@@ -2296,3 +2296,19 @@ fn call_invalid_layout() {
         true
     );
 }
+
+#[test]
+#[should_panic(expected = "assert failed!")]
+fn expect_fail() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            expect 1 == 2
+
+            3
+            "#
+        ),
+        3,
+        i64
+    );
+}
