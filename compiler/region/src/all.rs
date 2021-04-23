@@ -90,7 +90,7 @@ impl Region {
         }
     }
 
-    pub fn from_row_col(row: u32, col: u16) -> Self {
+    pub const fn from_row_col(row: u32, col: u16) -> Self {
         Region {
             start_col: col,
             start_line: row,
@@ -99,7 +99,12 @@ impl Region {
         }
     }
 
-    pub fn from_rows_cols(start_line: u32, start_col: u16, end_line: u32, end_col: u16) -> Self {
+    pub const fn from_rows_cols(
+        start_line: u32,
+        start_col: u16,
+        end_line: u32,
+        end_col: u16,
+    ) -> Self {
         Region {
             start_col,
             start_line,
@@ -120,6 +125,10 @@ impl Region {
             row: self.end_line,
             col: self.end_col,
         }
+    }
+
+    pub const fn between(start: Position, end: Position) -> Self {
+        Self::from_rows_cols(start.row, start.col, end.row, end.col)
     }
 }
 

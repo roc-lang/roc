@@ -1,8 +1,9 @@
-pub static IF: &str = "if";
-pub static THEN: &str = "then";
-pub static ELSE: &str = "else";
-pub static WHEN: &str = "when";
-pub static AS: &str = "as";
-pub static IS: &str = "is";
+pub const IF: &str = "if";
+pub const THEN: &str = "then";
+pub const ELSE: &str = "else";
+pub const WHEN: &str = "when";
+pub const AS: &str = "as";
+pub const IS: &str = "is";
+pub const EXPECT: &str = "expect";
 
-pub static KEYWORDS: [&str; 6] = [IF, THEN, ELSE, WHEN, AS, IS];
+pub const KEYWORDS: [&str; 7] = [IF, THEN, ELSE, WHEN, AS, IS, EXPECT];

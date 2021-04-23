@@ -1,5 +1,5 @@
 // Adapted from https://github.com/cessen/ropey
-// by Nathan Vegdahl - license information can be found in the COPYRIGHT
+// by Nathan Vegdahl - license information can be found in the LEGAL_DETAILS
 // file in the root directory of this distribution.
 //
 // Thank you, Nathan!

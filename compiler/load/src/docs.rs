@@ -158,6 +158,8 @@ fn generate_module_doc<'a>(
 
         Body(_, _) => (acc, None),
 
+        Expect(c) => todo!("documentation for tests {:?}", c),
+
         NotYetImplemented(s) => todo!("{}", s),
     }
 }
