@@ -728,7 +728,13 @@ impl<'a> Context<'a> {
 
                 // the result of an invoke should not be touched in the fail branch
                 // but it should be present in the pass branch (otherwise it would be dead)
-                debug_assert!(case_live_vars.contains(symbol));
+                // NOTE: we cheat a bit here to allow `invoke` when generating code for `expect`
+                let is_dead = !case_live_vars.contains(symbol);
+
+                if is_dead && layout.is_refcounted() {
+                    panic!("A variable of a reference-counted layout is dead; that's a bug!");
+                }
+
                 case_live_vars.remove(symbol);
 
                 let fail = {
@@ -738,7 +744,9 @@ impl<'a> Context<'a> {
                     ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b)
                 };
 
-                case_live_vars.insert(*symbol);
+                if !is_dead {
+                    case_live_vars.insert(*symbol);
+                }
 
                 let pass = {
                     // TODO should we use ctor info like Lean?

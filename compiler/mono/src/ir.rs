@@ -3260,7 +3260,7 @@ pub fn with_hole<'a>(
 
         EmptyRecord => Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole),
 
-        Expect(_, rest) => todo!(),
+        Expect(_, _) => unreachable!("I think this is unreachable"),
 
         If {
             cond_var,
@@ -4307,14 +4307,14 @@ pub fn from_can<'a>(
                 call_type,
                 arguments,
             };
-            let test = Expr::Call(call);
 
-            let rest = Stmt::Let(
-                env.unique_symbol(),
-                test,
-                bool_layout,
-                env.arena.alloc(rest),
-            );
+            let rest = Stmt::Invoke {
+                symbol: env.unique_symbol(),
+                call,
+                layout: bool_layout,
+                pass: env.arena.alloc(rest),
+                fail: env.arena.alloc(Stmt::Rethrow),
+            };
 
             with_hole(
                 env,
