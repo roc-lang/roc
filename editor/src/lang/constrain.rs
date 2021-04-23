@@ -121,6 +121,8 @@ fn num_signed64(pool: &mut Pool) -> Type2 {
 }
 
 fn num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
+    use crate::lang::pool::ShallowClone;
+
     let range_type = pool.get(range);
 
     let alias_content = Type2::TagUnion(
@@ -128,7 +130,7 @@ fn num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
             vec![(
                 // TagName::Private(Symbol::NUM_AT_INTEGER)
                 PoolStr::new("Num.@Integer", pool),
-                PoolVec::new(vec![*range_type].into_iter(), pool),
+                PoolVec::new(vec![range_type.shallow_clone()].into_iter(), pool),
             )]
             .into_iter(),
             pool,
@@ -144,6 +146,8 @@ fn num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
 }
 
 fn num_num(pool: &mut Pool, type_id: TypeId) -> Type2 {
+    use crate::lang::pool::ShallowClone;
+
     let range_type = pool.get(type_id);
 
     let alias_content = Type2::TagUnion(
@@ -151,7 +155,7 @@ fn num_num(pool: &mut Pool, type_id: TypeId) -> Type2 {
             vec![(
                 // TagName::Private(Symbol::NUM_AT_NUM)
                 PoolStr::new("Num.@Num", pool),
-                PoolVec::new(vec![*range_type].into_iter(), pool),
+                PoolVec::new(vec![range_type.shallow_clone()].into_iter(), pool),
             )]
             .into_iter(),
             pool,
