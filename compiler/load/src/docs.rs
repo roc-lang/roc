@@ -269,9 +269,7 @@ fn type_to_docs(type_annotation: ast::TypeAnnotation) -> Option<TypeAnnotation> 
     }
 }
 
-fn record_field_to_doc<'a>(
-    field: ast::AssignedField<'a, ast::TypeAnnotation>,
-) -> Option<RecordField> {
+fn record_field_to_doc(field: ast::AssignedField<'_, ast::TypeAnnotation>) -> Option<RecordField> {
     match field {
         AssignedField::RequiredValue(name, _, type_ann) => {
             type_to_docs(type_ann.value).map(|type_ann_docs| RecordField {
