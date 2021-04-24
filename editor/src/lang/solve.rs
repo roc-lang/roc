@@ -661,7 +661,7 @@ pub fn insert_type_into_subs(mempool: &mut Pool, subs: &mut Subs, typ: &Type2) -
 }
 
 fn type_to_variable(
-    mempool: &mut Pool,
+    mempool: &Pool,
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
@@ -727,6 +727,95 @@ fn type_to_variable(
             register(subs, rank, pools, content)
         }
 
+        Alias(Symbol::BOOL_BOOL, _, _) => roc_types::subs::Variable::BOOL,
+        Alias(symbol, args, alias_type_id) => {
+            // TODO cache in uniqueness inference gives problems! all Int's get the same uniqueness var!
+            // Cache aliases without type arguments. Commonly used aliases like `Int` would otherwise get O(n)
+            // different variables (once for each occurence). The recursion restriction is required
+            // for uniqueness types only: recursive aliases "introduce" an unbound uniqueness
+            // attribute in the body, when
+            //
+            // Peano : [ S Peano, Z ]
+            //
+            // becomes
+            //
+            // Peano : [ S (Attr u Peano), Z ]
+            //
+            // This `u` variable can be different between lists, so giving just one variable to
+            // this type is incorrect.
+            // TODO does caching work at all with uniqueness types? even Int then hides a uniqueness variable
+
+            let alias_type = mempool.get(*alias_type_id);
+            let is_recursive = false; // alias_type.is_recursive();
+            let no_args = args.is_empty();
+            /*
+            if no_args && !is_recursive {
+                if let Some(var) = cached.get(symbol) {
+                    return *var;
+                }
+            }
+            */
+
+            let mut arg_vars = Vec::with_capacity(args.len());
+            let mut new_aliases = ImMap::default();
+
+            for (arg, arg_type_id) in args.iter(mempool) {
+                let arg_type = mempool.get(*arg_type_id);
+
+                let arg_var = type_to_variable(mempool, subs, rank, pools, cached, arg_type);
+
+                let arg_str = arg.as_str(mempool);
+
+                arg_vars.push((roc_module::ident::Lowercase::from(arg_str), arg_var));
+                new_aliases.insert(arg_str, arg_var);
+            }
+
+            let alias_var = type_to_variable(mempool, subs, rank, pools, cached, alias_type);
+            let content = Content::Alias(*symbol, arg_vars, alias_var);
+
+            let result = register(subs, rank, pools, content);
+
+            if no_args && !is_recursive {
+                // cached.insert(*symbol, result);
+            }
+
+            result
+        }
+        TagUnion(tags, ext_id) => {
+            let mut tag_vars = MutMap::default();
+            let ext = mempool.get(*ext_id);
+
+            for (_tag, tag_argument_types) in tags.iter(mempool) {
+                let mut tag_argument_vars = Vec::with_capacity(tag_argument_types.len());
+
+                for arg_type in tag_argument_types.iter(mempool) {
+                    tag_argument_vars.push(type_to_variable(
+                        mempool, subs, rank, pools, cached, arg_type,
+                    ));
+                }
+
+                tag_vars.insert(
+                    roc_module::ident::TagName::Private(Symbol::NUM_NUM),
+                    tag_argument_vars,
+                );
+            }
+
+            let temp_ext_var = type_to_variable(mempool, subs, rank, pools, cached, ext);
+            let mut ext_tag_vec = Vec::new();
+            let new_ext_var = match roc_types::pretty_print::chase_ext_tag_union(
+                subs,
+                temp_ext_var,
+                &mut ext_tag_vec,
+            ) {
+                Ok(()) => roc_types::subs::Variable::EMPTY_TAG_UNION,
+                Err((new, _)) => new,
+            };
+            tag_vars.extend(ext_tag_vec.into_iter());
+
+            let content = Content::Structure(FlatType::TagUnion(tag_vars, new_ext_var));
+
+            register(subs, rank, pools, content)
+        }
         other => todo!("not implemented {:?}", &other),
         //
         //        // This case is important for the rank of boolean variables
@@ -740,35 +829,6 @@ fn type_to_variable(
         //            let ret_var = type_to_variable(subs, rank, pools, cached, ret_type);
         //            let closure_var = type_to_variable(subs, rank, pools, cached, closure_type);
         //            let content = Content::Structure(FlatType::Func(arg_vars, closure_var, ret_var));
-        //
-        //            register(subs, rank, pools, content)
-        //        }
-        //        TagUnion(tags, ext) => {
-        //            let mut tag_vars = MutMap::default();
-        //
-        //            for (tag, tag_argument_types) in tags {
-        //                let mut tag_argument_vars = Vec::with_capacity(tag_argument_types.len());
-        //
-        //                for arg_type in tag_argument_types {
-        //                    tag_argument_vars.push(type_to_variable(subs, rank, pools, cached, arg_type));
-        //                }
-        //
-        //                tag_vars.insert(tag.clone(), tag_argument_vars);
-        //            }
-        //
-        //            let temp_ext_var = type_to_variable(subs, rank, pools, cached, ext);
-        //            let mut ext_tag_vec = Vec::new();
-        //            let new_ext_var = match roc_types::pretty_print::chase_ext_tag_union(
-        //                subs,
-        //                temp_ext_var,
-        //                &mut ext_tag_vec,
-        //            ) {
-        //                Ok(()) => Variable::EMPTY_TAG_UNION,
-        //                Err((new, _)) => new,
-        //            };
-        //            tag_vars.extend(ext_tag_vec.into_iter());
-        //
-        //            let content = Content::Structure(FlatType::TagUnion(tag_vars, new_ext_var));
         //
         //            register(subs, rank, pools, content)
         //        }
@@ -811,54 +871,6 @@ fn type_to_variable(
         //            );
         //
         //            tag_union_var
-        //        }
-        //        Alias(Symbol::BOOL_BOOL, _, _) => Variable::BOOL,
-        //        Alias(symbol, args, alias_type) => {
-        //            // TODO cache in uniqueness inference gives problems! all Int's get the same uniqueness var!
-        //            // Cache aliases without type arguments. Commonly used aliases like `Int` would otherwise get O(n)
-        //            // different variables (once for each occurence). The recursion restriction is required
-        //            // for uniqueness types only: recursive aliases "introduce" an unbound uniqueness
-        //            // attribute in the body, when
-        //            //
-        //            // Peano : [ S Peano, Z ]
-        //            //
-        //            // becomes
-        //            //
-        //            // Peano : [ S (Attr u Peano), Z ]
-        //            //
-        //            // This `u` variable can be different between lists, so giving just one variable to
-        //            // this type is incorrect.
-        //            // TODO does caching work at all with uniqueness types? even Int then hides a uniqueness variable
-        //            let is_recursive = alias_type.is_recursive();
-        //            let no_args = args.is_empty();
-        //            /*
-        //            if no_args && !is_recursive {
-        //                if let Some(var) = cached.get(symbol) {
-        //                    return *var;
-        //                }
-        //            }
-        //            */
-        //
-        //            let mut arg_vars = Vec::with_capacity(args.len());
-        //            let mut new_aliases = ImMap::default();
-        //
-        //            for (arg, arg_type) in args {
-        //                let arg_var = type_to_variable(subs, rank, pools, cached, arg_type);
-        //
-        //                arg_vars.push((arg.clone(), arg_var));
-        //                new_aliases.insert(arg.clone(), arg_var);
-        //            }
-        //
-        //            let alias_var = type_to_variable(subs, rank, pools, cached, alias_type);
-        //            let content = Content::Alias(*symbol, arg_vars, alias_var);
-        //
-        //            let result = register(subs, rank, pools, content);
-        //
-        //            if no_args && !is_recursive {
-        //                // cached.insert(*symbol, result);
-        //            }
-        //
-        //            result
         //        }
         //        HostExposedAlias {
         //            name: symbol,

@@ -108,7 +108,7 @@ fn num_int(pool: &mut Pool, range: TypeId) -> Type2 {
     )
 }
 
-fn num_signed64(pool: &mut Pool) -> Type2 {
+fn _num_signed64(pool: &mut Pool) -> Type2 {
     let alias_content = Type2::TagUnion(
         PoolVec::new(
             // TagName::Private(Symbol::NUM_AT_SIGNED64)
