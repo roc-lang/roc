@@ -242,23 +242,22 @@ fn type_to_docs(type_annotation: ast::TypeAnnotation) -> Option<TypeAnnotation> 
 
             let mut any_fields_include_private_tags = false;
 
-            let mut index = 0;
-
-            while index < fields.len() && !any_fields_include_private_tags {
-                let field = fields[index];
-
+            for field in fields {
                 match record_field_to_doc(field.value) {
                     None => {
                         any_fields_include_private_tags = true;
+                        break;
                     }
                     Some(doc_field) => {
                         doc_fields.push(doc_field);
-
-                        index = index + 1;
                     }
                 }
             }
-            Some(Record { fields: doc_fields })
+            if any_fields_include_private_tags {
+                None
+            } else {
+                Some(Record { fields: doc_fields })
+            }
         }
         ast::TypeAnnotation::SpaceBefore(&sub_type_ann, _) => type_to_docs(sub_type_ann),
         ast::TypeAnnotation::SpaceAfter(&sub_type_ann, _) => type_to_docs(sub_type_ann),
