@@ -342,6 +342,34 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                 buf.push(')');
             }
         }
+        TypeAnnotation::Record { fields } => {
+            buf.push_str("<br>");
+            let record_indent = indent_level + 1;
+            indent(buf, record_indent);
+            buf.push('{');
+            buf.push_str("<br>");
+
+            let next_indent_level = record_indent + 1;
+            for (index, field) in fields.iter().enumerate() {
+                indent(buf, next_indent_level);
+                buf.push_str(field.name.as_str());
+
+                let separator = if field.optional { " ? " } else { " : " };
+
+                buf.push_str(separator);
+
+                type_annotation_to_html(next_indent_level, buf, &field.type_annotation);
+
+                if index < (fields.len() - 1) {
+                    buf.push(',');
+                }
+
+                buf.push_str("<br>");
+            }
+
+            indent(buf, record_indent);
+            buf.push('}');
+        }
     }
 }
 

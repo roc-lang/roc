@@ -1,8 +1,9 @@
-use crate::docs::TypeAnnotation::{Apply, BoundVariable, TagUnion};
+use crate::docs::TypeAnnotation::{Apply, BoundVariable, Record, TagUnion};
 use inlinable_string::InlinableString;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::IdentIds;
 use roc_parse::ast;
+use roc_parse::ast::AssignedField;
 use roc_region::all::Located;
 
 // Documentation generation requirements
@@ -41,6 +42,16 @@ pub enum TypeAnnotation {
         name: String,
         parts: Vec<TypeAnnotation>,
     },
+    Record {
+        fields: Vec<RecordField>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct RecordField {
+    pub name: String,
+    pub optional: bool,
+    pub type_annotation: TypeAnnotation,
 }
 
 #[derive(Debug, Clone)]
@@ -227,11 +238,69 @@ fn type_to_docs(type_annotation: ast::TypeAnnotation) -> Option<TypeAnnotation> 
 
             Some(Apply { name, parts })
         }
+        ast::TypeAnnotation::Record {
+            fields,
+            ext: _,
+            final_comments: _,
+        } => {
+            let mut doc_fields = Vec::new();
+
+            let mut any_fields_include_private_tags = false;
+
+            let mut index = 0;
+
+            while index < fields.len() && !any_fields_include_private_tags {
+                let field = fields[index];
+
+                match record_field_to_doc(field.value) {
+                    None => {
+                        any_fields_include_private_tags = true;
+                    }
+                    Some(doc_field) => {
+                        doc_fields.push(doc_field);
+
+                        index = index + 1;
+                    }
+                }
+            }
+            Some(Record { fields: doc_fields })
+        }
+        ast::TypeAnnotation::SpaceBefore(&sub_type_ann, _) => type_to_docs(sub_type_ann),
+        ast::TypeAnnotation::SpaceAfter(&sub_type_ann, _) => type_to_docs(sub_type_ann),
         _ => {
             // TODO "Implement type to docs")
 
             None
         }
+    }
+}
+
+fn record_field_to_doc<'a>(
+    field: ast::AssignedField<'a, ast::TypeAnnotation>,
+) -> Option<RecordField> {
+    match field {
+        AssignedField::RequiredValue(name, _, type_ann) => {
+            type_to_docs(type_ann.value).map(|type_ann_docs| RecordField {
+                name: name.value.to_string(),
+                type_annotation: type_ann_docs,
+                optional: false,
+            })
+        }
+        AssignedField::SpaceBefore(&sub_field, _) => record_field_to_doc(sub_field),
+        AssignedField::SpaceAfter(&sub_field, _) => record_field_to_doc(sub_field),
+        AssignedField::OptionalValue(name, _, type_ann) => {
+            type_to_docs(type_ann.value).map(|type_ann_docs| RecordField {
+                name: name.value.to_string(),
+                type_annotation: type_ann_docs,
+                optional: true,
+            })
+        }
+        AssignedField::LabelOnly(label) => Some(RecordField {
+            name: label.value.to_string(),
+            type_annotation: BoundVariable(label.value.to_string()),
+            optional: false,
+        }),
+        AssignedField::Malformed(_) => None,
     }
 }
 
