@@ -6,3 +6,4 @@ pub mod ed_view;
 mod lookup_update;
 mod record_update;
 mod string_update;
+mod int_update;

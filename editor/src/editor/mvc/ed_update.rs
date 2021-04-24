@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use crate::editor::mvc::int_update::update_int;
+use crate::editor::mvc::int_update::start_new_int;
 use crate::editor::code_lines::CodeLines;
 use crate::editor::ed_error::from_ui_res;
 use crate::editor::ed_error::print_ui_err;
@@ -561,6 +563,9 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                     '{' => {
                                         start_new_record(ed_model)?
                                     }
+                                    '0'..='9' => {
+                                        start_new_int(ed_model, ch)?
+                                    }
                                     _ => InputOutcome::Ignored
                                 }
                             } else if let Some(prev_mark_node_id) = prev_mark_node_id_opt{
@@ -686,9 +691,28 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                 InputOutcome::Ignored
                             }
                         },
-                        Err(e) => {
-                            print_ui_err(&e);
-                            InputOutcome::Ignored
+                        Err(_) => { //no MarkupNode at the current position
+                            let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
+                            if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
+                                let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
+
+                                let prev_ast_node = ed_model.module.env.pool.get(prev_mark_node.get_ast_node_id());
+                                
+                                match prev_ast_node {
+                                    Expr2::SmallInt{ .. } => {
+                                        if ch.is_ascii_digit() {
+                                            update_int(ed_model, prev_mark_node_id, ch)?
+                                        } else {
+                                            InputOutcome::Ignored
+                                        }
+                                    },
+                                    _ => {
+                                        InputOutcome::Ignored
+                                    }
+                                }
+                            } else {
+                                InputOutcome::Ignored
+                            }
                         }
                     };
 
