@@ -586,7 +586,7 @@ fn modify_refcount_layout_help<'a, 'ctx, 'env>(
             WhenRecursive::Loop(union_layout) => {
                 let layout = Layout::Union(*union_layout);
 
-                let bt = basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
+                let bt = basic_type_from_layout(env, &layout);
 
                 // cast the i64 pointer to a pointer to block of memory
                 let field_cast = env
@@ -634,7 +634,7 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
+            let basic_type = basic_type_from_layout(env, &layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_list_help(
@@ -711,9 +711,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
     builder.position_at_end(modification_block);
 
     if element_layout.contains_refcounted() {
-        let ptr_type =
-            basic_type_from_layout(env.arena, env.context, element_layout, env.ptr_bytes)
-                .ptr_type(AddressSpace::Generic);
+        let ptr_type = basic_type_from_layout(env, element_layout).ptr_type(AddressSpace::Generic);
 
         let (len, ptr) = load_list(env.builder, original_wrapper, ptr_type);
 
@@ -774,7 +772,7 @@ fn modify_refcount_str<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
+            let basic_type = basic_type_from_layout(env, &layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_str_help(env, mode, layout, function_value);
@@ -874,7 +872,7 @@ fn modify_refcount_dict<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
+            let basic_type = basic_type_from_layout(env, &layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_dict_help(
@@ -1192,12 +1190,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
 
         env.builder.position_at_end(block);
 
-        let wrapper_type = basic_type_from_layout(
-            env.arena,
-            env.context,
-            &Layout::Struct(field_layouts),
-            env.ptr_bytes,
-        );
+        let wrapper_type = basic_type_from_layout(env, &Layout::Struct(field_layouts));
 
         // cast the opaque pointer to a pointer of the correct shape
         let struct_ptr = env
@@ -1498,12 +1491,7 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
         let block = env.context.append_basic_block(parent, "tag_id_modify");
         env.builder.position_at_end(block);
 
-        let wrapper_type = basic_type_from_layout(
-            env.arena,
-            env.context,
-            &Layout::Struct(field_layouts),
-            env.ptr_bytes,
-        );
+        let wrapper_type = basic_type_from_layout(env, &Layout::Struct(field_layouts));
 
         debug_assert!(wrapper_type.is_struct_type());
         let wrapper_struct = cast_block_of_memory_to_tag(env.builder, wrapper_struct, wrapper_type);

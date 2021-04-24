@@ -6,7 +6,7 @@ use crate::llvm::bitcode::{
 use crate::llvm::build::{
     complex_bitcast, load_symbol, load_symbol_and_layout, set_name, Env, Scope,
 };
-use crate::llvm::convert::{self, as_const_zero, basic_type_from_layout, collection};
+use crate::llvm::convert::{as_const_zero, basic_type_from_layout};
 use crate::llvm::refcounting::Mode;
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::types::BasicType;
@@ -83,12 +83,7 @@ pub fn dict_empty<'a, 'ctx, 'env>(
 
     call_void_bitcode_fn(env, &[result_alloc.into()], &bitcode::DICT_EMPTY);
 
-    let result = env
-        .builder
-        .build_load(result_alloc, "load_result")
-        .into_struct_value();
-
-    zig_dict_to_struct(env, result).into()
+    env.builder.build_load(result_alloc, "load_result")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -110,8 +105,7 @@ pub fn dict_insert<'a, 'ctx, 'env>(
     let key_ptr = builder.build_alloca(key.get_type(), "key_ptr");
     let value_ptr = builder.build_alloca(value.get_type(), "value_ptr");
 
-    env.builder
-        .build_store(dict_ptr, struct_to_zig_dict(env, dict.into_struct_value()));
+    env.builder.build_store(dict_ptr, dict);
     env.builder.build_store(key_ptr, key);
     env.builder.build_store(value_ptr, value);
 
@@ -152,15 +146,6 @@ pub fn dict_insert<'a, 'ctx, 'env>(
         &bitcode::DICT_INSERT,
     );
 
-    let result_ptr = env
-        .builder
-        .build_bitcast(
-            result_ptr,
-            convert::dict(env.context, env.ptr_bytes).ptr_type(AddressSpace::Generic),
-            "to_roc_dict",
-        )
-        .into_pointer_value();
-
     env.builder.build_load(result_ptr, "load_result")
 }
 
@@ -181,8 +166,7 @@ pub fn dict_remove<'a, 'ctx, 'env>(
     let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
     let key_ptr = builder.build_alloca(key.get_type(), "key_ptr");
 
-    env.builder
-        .build_store(dict_ptr, struct_to_zig_dict(env, dict.into_struct_value()));
+    env.builder.build_store(dict_ptr, dict);
     env.builder.build_store(key_ptr, key);
 
     let key_width = env
@@ -221,15 +205,6 @@ pub fn dict_remove<'a, 'ctx, 'env>(
         &bitcode::DICT_REMOVE,
     );
 
-    let result_ptr = env
-        .builder
-        .build_bitcast(
-            result_ptr,
-            convert::dict(env.context, env.ptr_bytes).ptr_type(AddressSpace::Generic),
-            "to_roc_dict",
-        )
-        .into_pointer_value();
-
     env.builder.build_load(result_ptr, "load_result")
 }
 
@@ -250,8 +225,7 @@ pub fn dict_contains<'a, 'ctx, 'env>(
     let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
     let key_ptr = builder.build_alloca(key.get_type(), "key_ptr");
 
-    env.builder
-        .build_store(dict_ptr, struct_to_zig_dict(env, dict.into_struct_value()));
+    env.builder.build_store(dict_ptr, dict);
     env.builder.build_store(key_ptr, key);
 
     let key_width = env
@@ -300,8 +274,7 @@ pub fn dict_get<'a, 'ctx, 'env>(
     let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
     let key_ptr = builder.build_alloca(key.get_type(), "key_ptr");
 
-    env.builder
-        .build_store(dict_ptr, struct_to_zig_dict(env, dict.into_struct_value()));
+    env.builder.build_store(dict_ptr, dict);
     env.builder.build_store(key_ptr, key);
 
     let key_width = env
@@ -355,7 +328,7 @@ pub fn dict_get<'a, 'ctx, 'env>(
     let if_not_null = env.context.append_basic_block(parent, "if_not_null");
     let done_block = env.context.append_basic_block(parent, "done");
 
-    let value_bt = basic_type_from_layout(env.arena, env.context, value_layout, env.ptr_bytes);
+    let value_bt = basic_type_from_layout(env, value_layout);
     let default = as_const_zero(&value_bt);
 
     env.builder
@@ -411,8 +384,7 @@ pub fn dict_elements_rc<'a, 'ctx, 'env>(
     let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
 
     let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
-    env.builder
-        .build_store(dict_ptr, struct_to_zig_dict(env, dict.into_struct_value()));
+    env.builder.build_store(dict_ptr, dict);
 
     let key_width = env
         .ptr_int()
@@ -457,8 +429,7 @@ pub fn dict_keys<'a, 'ctx, 'env>(
     let zig_list_type = env.module.get_struct_type("list.RocList").unwrap();
 
     let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
-    env.builder
-        .build_store(dict_ptr, struct_to_zig_dict(env, dict.into_struct_value()));
+    env.builder.build_store(dict_ptr, dict);
 
     let key_width = env
         .ptr_int()
@@ -492,7 +463,7 @@ pub fn dict_keys<'a, 'ctx, 'env>(
         .builder
         .build_bitcast(
             list_ptr,
-            collection(env.context, env.ptr_bytes).ptr_type(AddressSpace::Generic),
+            super::convert::zig_list_type(env).ptr_type(AddressSpace::Generic),
             "to_roc_list",
         )
         .into_pointer_value();
@@ -516,15 +487,8 @@ pub fn dict_union<'a, 'ctx, 'env>(
     let dict1_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
     let dict2_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
 
-    env.builder.build_store(
-        dict1_ptr,
-        struct_to_zig_dict(env, dict1.into_struct_value()),
-    );
-
-    env.builder.build_store(
-        dict2_ptr,
-        struct_to_zig_dict(env, dict2.into_struct_value()),
-    );
+    env.builder.build_store(dict1_ptr, dict1);
+    env.builder.build_store(dict2_ptr, dict2);
 
     let key_width = env
         .ptr_int()
@@ -561,15 +525,6 @@ pub fn dict_union<'a, 'ctx, 'env>(
         ],
         &bitcode::DICT_UNION,
     );
-
-    let output_ptr = env
-        .builder
-        .build_bitcast(
-            output_ptr,
-            convert::dict(env.context, env.ptr_bytes).ptr_type(AddressSpace::Generic),
-            "to_roc_dict",
-        )
-        .into_pointer_value();
 
     env.builder.build_load(output_ptr, "load_output_ptr")
 }
@@ -631,15 +586,8 @@ fn dict_intersect_or_difference<'a, 'ctx, 'env>(
     let dict1_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
     let dict2_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
 
-    env.builder.build_store(
-        dict1_ptr,
-        struct_to_zig_dict(env, dict1.into_struct_value()),
-    );
-
-    env.builder.build_store(
-        dict2_ptr,
-        struct_to_zig_dict(env, dict2.into_struct_value()),
-    );
+    env.builder.build_store(dict1_ptr, dict1);
+    env.builder.build_store(dict2_ptr, dict2);
 
     let key_width = env
         .ptr_int()
@@ -677,15 +625,6 @@ fn dict_intersect_or_difference<'a, 'ctx, 'env>(
         op,
     );
 
-    let output_ptr = env
-        .builder
-        .build_bitcast(
-            output_ptr,
-            convert::dict(env.context, env.ptr_bytes).ptr_type(AddressSpace::Generic),
-            "to_roc_dict",
-        )
-        .into_pointer_value();
-
     env.builder.build_load(output_ptr, "load_output_ptr")
 }
 
@@ -707,8 +646,7 @@ pub fn dict_walk<'a, 'ctx, 'env>(
     let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
 
     let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
-    env.builder
-        .build_store(dict_ptr, struct_to_zig_dict(env, dict.into_struct_value()));
+    env.builder.build_store(dict_ptr, dict);
 
     let stepper_ptr = builder.build_alloca(stepper.get_type(), "stepper_ptr");
     env.builder.build_store(stepper_ptr, stepper);
@@ -722,7 +660,7 @@ pub fn dict_walk<'a, 'ctx, 'env>(
     .as_global_value()
     .as_pointer_value();
 
-    let accum_bt = basic_type_from_layout(env.arena, env.context, accum_layout, env.ptr_bytes);
+    let accum_bt = basic_type_from_layout(env, accum_layout);
     let accum_ptr = builder.build_alloca(accum_bt, "accum_ptr");
     env.builder.build_store(accum_ptr, accum);
 
@@ -777,12 +715,11 @@ pub fn dict_values<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
-    let zig_list_type = env.module.get_struct_type("list.RocList").unwrap();
+    let zig_dict_type = super::convert::zig_dict_type(env);
+    let zig_list_type = super::convert::zig_list_type(env);
 
     let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
-    env.builder
-        .build_store(dict_ptr, struct_to_zig_dict(env, dict.into_struct_value()));
+    env.builder.build_store(dict_ptr, dict);
 
     let key_width = env
         .ptr_int()
@@ -816,7 +753,7 @@ pub fn dict_values<'a, 'ctx, 'env>(
         .builder
         .build_bitcast(
             list_ptr,
-            collection(env.context, env.ptr_bytes).ptr_type(AddressSpace::Generic),
+            super::convert::zig_list_type(env).ptr_type(AddressSpace::Generic),
             "to_roc_list",
         )
         .into_pointer_value();
@@ -833,8 +770,6 @@ pub fn set_from_list<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
-
     let list_alloca = builder.build_alloca(list.get_type(), "list_alloca");
     let list_ptr = env.builder.build_bitcast(
         list_alloca,
@@ -850,13 +785,7 @@ pub fn set_from_list<'a, 'ctx, 'env>(
 
     let value_width = env.ptr_int().const_zero();
 
-    let result_alloca =
-        builder.build_alloca(convert::dict(env.context, env.ptr_bytes), "result_alloca");
-    let result_ptr = builder.build_bitcast(
-        result_alloca,
-        zig_dict_type.ptr_type(AddressSpace::Generic),
-        "to_zig_dict",
-    );
+    let result_alloca = builder.build_alloca(zig_dict_type(env), "result_alloca");
 
     let alignment =
         Alignment::from_key_value_layout(key_layout, &Layout::Struct(&[]), env.ptr_bytes);
@@ -878,7 +807,7 @@ pub fn set_from_list<'a, 'ctx, 'env>(
             hash_fn.as_global_value().as_pointer_value().into(),
             eq_fn.as_global_value().as_pointer_value().into(),
             dec_key_fn.as_global_value().as_pointer_value().into(),
-            result_ptr,
+            result_alloca.into(),
         ],
         &bitcode::SET_FROM_LIST,
     );
@@ -929,8 +858,7 @@ fn build_hash_wrapper<'a, 'ctx, 'env>(
             set_name(seed_arg.into(), Symbol::ARG_1.ident_string(&env.interns));
             set_name(value_ptr.into(), Symbol::ARG_2.ident_string(&env.interns));
 
-            let value_type = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes)
-                .ptr_type(AddressSpace::Generic);
+            let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 
             let value_cast = env
                 .builder
@@ -968,31 +896,6 @@ fn dict_symbol_to_zig_dict<'a, 'ctx, 'env>(
         .into_struct_value()
 }
 
-fn zig_dict_to_struct<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    zig_dict: StructValue<'ctx>,
-) -> StructValue<'ctx> {
-    complex_bitcast(
-        env.builder,
-        zig_dict.into(),
-        crate::llvm::convert::dict(env.context, env.ptr_bytes).into(),
-        "to_zig_dict",
-    )
-    .into_struct_value()
-}
-
-fn struct_to_zig_dict<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    struct_dict: StructValue<'ctx>,
-) -> StructValue<'ctx> {
-    // get the RocStr type defined by zig
-    let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
-
-    complex_bitcast(
-        env.builder,
-        struct_dict.into(),
-        zig_dict_type.into(),
-        "to_zig_dict",
-    )
-    .into_struct_value()
+fn zig_dict_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> inkwell::types::StructType<'ctx> {
+    env.module.get_struct_type("dict.RocDict").unwrap()
 }
