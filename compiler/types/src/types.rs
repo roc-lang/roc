@@ -891,6 +891,7 @@ pub enum Reason {
         index: Index,
     },
     WhenGuard,
+    ExpectCondition,
     IfCondition,
     IfBranch {
         index: Index,

@@ -172,7 +172,7 @@ fn build_eq<'a, 'ctx, 'env>(
             WhenRecursive::Loop(union_layout) => {
                 let layout = Layout::Union(union_layout);
 
-                let bt = basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
+                let bt = basic_type_from_layout(env, &layout);
 
                 // cast the i64 pointer to a pointer to block of memory
                 let field1_cast = env
@@ -377,8 +377,7 @@ fn build_list_eq<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arena = env.arena;
-            let arg_type = basic_type_from_layout(arena, env.context, &list_layout, env.ptr_bytes);
+            let arg_type = basic_type_from_layout(env, &list_layout);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -475,8 +474,7 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
         env.builder.position_at_end(then_block);
 
         let builder = env.builder;
-        let element_type =
-            basic_type_from_layout(env.arena, env.context, element_layout, env.ptr_bytes);
+        let element_type = basic_type_from_layout(env, element_layout);
         let ptr_type = get_ptr_type(&element_type, AddressSpace::Generic);
         let ptr1 = load_list_ptr(env.builder, list1, ptr_type);
         let ptr2 = load_list_ptr(env.builder, list2, ptr_type);
@@ -587,9 +585,7 @@ fn build_struct_eq<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arena = env.arena;
-            let arg_type =
-                basic_type_from_layout(arena, env.context, &struct_layout, env.ptr_bytes);
+            let arg_type = basic_type_from_layout(env, &struct_layout);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -692,12 +688,7 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
                 WhenRecursive::Loop(union_layout) => {
                     let field_layout = Layout::Union(*union_layout);
 
-                    let bt = basic_type_from_layout(
-                        env.arena,
-                        env.context,
-                        &field_layout,
-                        env.ptr_bytes,
-                    );
+                    let bt = basic_type_from_layout(env, &field_layout);
 
                     // cast the i64 pointer to a pointer to block of memory
                     let field1_cast = env
@@ -777,8 +768,7 @@ fn build_tag_eq<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arena = env.arena;
-            let arg_type = basic_type_from_layout(arena, env.context, &tag_layout, env.ptr_bytes);
+            let arg_type = basic_type_from_layout(env, &tag_layout);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -897,8 +887,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 // TODO drop tag id?
                 let struct_layout = Layout::Struct(field_layouts);
 
-                let wrapper_type =
-                    basic_type_from_layout(env.arena, env.context, &struct_layout, env.ptr_bytes);
+                let wrapper_type = basic_type_from_layout(env, &struct_layout);
                 debug_assert!(wrapper_type.is_struct_type());
 
                 let struct1 = cast_block_of_memory_to_tag(
@@ -1197,8 +1186,7 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
 
     let struct_layout = Layout::Struct(field_layouts);
 
-    let wrapper_type =
-        basic_type_from_layout(env.arena, env.context, &struct_layout, env.ptr_bytes);
+    let wrapper_type = basic_type_from_layout(env, &struct_layout);
     debug_assert!(wrapper_type.is_struct_type());
 
     // cast the opaque pointer to a pointer of the correct shape

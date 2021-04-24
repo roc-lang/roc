@@ -72,7 +72,7 @@ fn build_hash_layout<'a, 'ctx, 'env>(
             WhenRecursive::Loop(union_layout) => {
                 let layout = Layout::Union(union_layout);
 
-                let bt = basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
+                let bt = basic_type_from_layout(env, &layout);
 
                 // cast the i64 pointer to a pointer to block of memory
                 let field_cast = env
@@ -190,12 +190,9 @@ fn build_hash_struct<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arena = env.arena;
-
             let seed_type = env.context.i64_type();
 
-            let arg_type =
-                basic_type_from_layout(arena, env.context, &struct_layout, env.ptr_bytes);
+            let arg_type = basic_type_from_layout(env, &struct_layout);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -289,12 +286,7 @@ fn hash_struct<'a, 'ctx, 'env>(
                     WhenRecursive::Loop(union_layout) => {
                         let field_layout = Layout::Union(*union_layout);
 
-                        let bt = basic_type_from_layout(
-                            env.arena,
-                            env.context,
-                            &field_layout,
-                            env.ptr_bytes,
-                        );
+                        let bt = basic_type_from_layout(env, &field_layout);
 
                         // cast the i64 pointer to a pointer to block of memory
                         let field_cast = env
@@ -346,11 +338,9 @@ fn build_hash_tag<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arena = env.arena;
-
             let seed_type = env.context.i64_type();
 
-            let arg_type = basic_type_from_layout(arena, env.context, &layout, env.ptr_bytes);
+            let arg_type = basic_type_from_layout(env, &layout);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -435,8 +425,7 @@ fn hash_tag<'a, 'ctx, 'env>(
                 // TODO drop tag id?
                 let struct_layout = Layout::Struct(field_layouts);
 
-                let wrapper_type =
-                    basic_type_from_layout(env.arena, env.context, &struct_layout, env.ptr_bytes);
+                let wrapper_type = basic_type_from_layout(env, &struct_layout);
                 debug_assert!(wrapper_type.is_struct_type());
 
                 let as_struct =
@@ -622,11 +611,9 @@ fn build_hash_list<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arena = env.arena;
-
             let seed_type = env.context.i64_type();
 
-            let arg_type = basic_type_from_layout(arena, env.context, &layout, env.ptr_bytes);
+            let arg_type = basic_type_from_layout(env, &layout);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -710,8 +697,7 @@ fn hash_list<'a, 'ctx, 'env>(
     let done_block = env.context.append_basic_block(parent, "done");
     let loop_block = env.context.append_basic_block(parent, "loop");
 
-    let element_type =
-        basic_type_from_layout(env.arena, env.context, element_layout, env.ptr_bytes);
+    let element_type = basic_type_from_layout(env, element_layout);
     let ptr_type = element_type.ptr_type(inkwell::AddressSpace::Generic);
 
     let (length, ptr) = load_list(env.builder, value, ptr_type);
@@ -788,8 +774,7 @@ fn hash_ptr_to_struct<'a, 'ctx, 'env>(
 
     let struct_layout = Layout::Struct(field_layouts);
 
-    let wrapper_type =
-        basic_type_from_layout(env.arena, env.context, &struct_layout, env.ptr_bytes);
+    let wrapper_type = basic_type_from_layout(env, &struct_layout);
     debug_assert!(wrapper_type.is_struct_type());
 
     // cast the opaque pointer to a pointer of the correct shape
@@ -822,7 +807,7 @@ fn store_and_use_as_u8_ptr<'a, 'ctx, 'env>(
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
 ) -> PointerValue<'ctx> {
-    let basic_type = basic_type_from_layout(env.arena, env.context, &layout, env.ptr_bytes);
+    let basic_type = basic_type_from_layout(env, &layout);
     let alloc = env.builder.build_alloca(basic_type, "store");
     env.builder.build_store(alloc, value);
 

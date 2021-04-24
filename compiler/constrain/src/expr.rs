@@ -406,6 +406,25 @@ pub fn constrain_expr(
             )
         }
 
+        Expect(loc_cond, continuation) => {
+            let expect_bool = |region| {
+                let bool_type = Type::Variable(Variable::BOOL);
+                Expected::ForReason(Reason::ExpectCondition, bool_type, region)
+            };
+
+            let cond_con = constrain_expr(
+                env,
+                loc_cond.region,
+                &loc_cond.value,
+                expect_bool(loc_cond.region),
+            );
+
+            let continuation_con =
+                constrain_expr(env, continuation.region, &continuation.value, expected);
+
+            exists(vec![], And(vec![cond_con, continuation_con]))
+        }
+
         If {
             cond_var,
             branch_var,
@@ -759,22 +778,38 @@ pub fn constrain_expr(
             )
         }
         LetNonRec(def, loc_ret, var) => {
-            let body_con = constrain_expr(env, loc_ret.region, &loc_ret.value, expected.clone());
+            let mut stack = Vec::with_capacity(1);
 
-            exists(
-                vec![*var],
-                And(vec![
-                    constrain_def(env, def, body_con),
-                    // Record the type of the entire def-expression in the variable.
-                    // Code gen will need that later!
-                    Eq(
-                        Type::Variable(*var),
-                        expected,
-                        Category::Storage(std::file!(), std::line!()),
-                        loc_ret.region,
-                    ),
-                ]),
-            )
+            let mut loc_ret = loc_ret;
+
+            stack.push((def, var, loc_ret.region));
+
+            while let LetNonRec(def, new_loc_ret, var) = &loc_ret.value {
+                stack.push((def, var, new_loc_ret.region));
+                loc_ret = new_loc_ret;
+            }
+
+            let mut body_con =
+                constrain_expr(env, loc_ret.region, &loc_ret.value, expected.clone());
+
+            while let Some((def, var, ret_region)) = stack.pop() {
+                body_con = exists(
+                    vec![*var],
+                    And(vec![
+                        constrain_def(env, def, body_con),
+                        // Record the type of the entire def-expression in the variable.
+                        // Code gen will need that later!
+                        Eq(
+                            Type::Variable(*var),
+                            expected.clone(),
+                            Category::Storage(std::file!(), std::line!()),
+                            ret_region,
+                        ),
+                    ]),
+                )
+            }
+
+            body_con
         }
         Tag {
             variant_var,

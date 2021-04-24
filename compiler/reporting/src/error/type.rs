@@ -354,6 +354,44 @@ fn to_expr_report<'b>(
             }
         }
         Expected::ForReason(reason, expected_type, region) => match reason {
+            Reason::ExpectCondition => {
+                let problem = alloc.concat(vec![
+                    alloc.text("This "),
+                    alloc.keyword("expect"),
+                    alloc.text(" condition needs to be a "),
+                    alloc.type_str("Bool"),
+                    alloc.text(":"),
+                ]);
+
+                report_bad_type(
+                    alloc,
+                    filename,
+                    &category,
+                    found,
+                    expected_type,
+                    region,
+                    Some(expr_region),
+                    problem,
+                    alloc.text("Right now it’s"),
+                    alloc.concat(vec![
+                        alloc.reflow("But I need every "),
+                        alloc.keyword("expect"),
+                        alloc.reflow(" condition to evaluate to a "),
+                        alloc.type_str("Bool"),
+                        alloc.reflow("—either "),
+                        alloc.global_tag_name("True".into()),
+                        alloc.reflow(" or "),
+                        alloc.global_tag_name("False".into()),
+                        alloc.reflow("."),
+                    ]),
+                    // Note: Elm has a hint here about truthiness. I think that
+                    // makes sense for Elm, since most Elm users will come from
+                    // JS, where truthiness is a thing. I don't really know
+                    // what the background of Roc programmers will be, and I'd
+                    // rather not create a distraction by introducing a term
+                    // they don't know. ("Wait, what's truthiness?")
+                )
+            }
             Reason::IfCondition => {
                 let problem = alloc.concat(vec![
                     alloc.text("This "),

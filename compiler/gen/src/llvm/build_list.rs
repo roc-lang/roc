@@ -6,7 +6,7 @@ use crate::llvm::bitcode::{
 use crate::llvm::build::{
     allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, InPlace,
 };
-use crate::llvm::convert::{basic_type_from_layout, collection, get_ptr_type};
+use crate::llvm::convert::{basic_type_from_layout, get_ptr_type};
 use crate::llvm::refcounting::{
     increment_refcount_layout, refcount_is_one_comparison, PointerToRefcount,
 };
@@ -88,7 +88,7 @@ pub fn list_repeat<'a, 'ctx, 'env>(
     complex_bitcast(
         env.builder,
         output,
-        collection(env.context, env.ptr_bytes).into(),
+        super::convert::zig_list_type(env).into(),
         "from_i128",
     )
 }
@@ -106,7 +106,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
 
     // Load the usize length from the wrapper.
     let len = list_len(builder, original_wrapper);
-    let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+    let elem_type = basic_type_from_layout(env, elem_layout);
     let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
     let list_ptr = load_list_ptr(builder, original_wrapper, ptr_type);
 
@@ -185,11 +185,10 @@ pub fn list_join<'a, 'ctx, 'env>(
             let builder = env.builder;
             let ctx = env.context;
 
-            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+            let elem_type = basic_type_from_layout(env, elem_layout);
             let elem_ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
-            let inner_list_type =
-                basic_type_from_layout(env.arena, ctx, &inner_list_layout, env.ptr_bytes);
+            let inner_list_type = basic_type_from_layout(env, &inner_list_layout);
 
             let outer_list_wrapper = outer_list.into_struct_value();
             let outer_list_len = list_len(builder, outer_list_wrapper);
@@ -318,7 +317,7 @@ pub fn list_join<'a, 'ctx, 'env>(
 
             let build_else = || empty_list(env);
 
-            let struct_type = collection(ctx, env.ptr_bytes);
+            let struct_type = super::convert::zig_list_type(env);
 
             build_basic_phi2(
                 env,
@@ -378,7 +377,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
     complex_bitcast(
         env.builder,
         output,
-        collection(env.context, env.ptr_bytes).into(),
+        super::convert::zig_list_type(env).into(),
         "from_i128",
     )
 }
@@ -395,8 +394,7 @@ pub fn list_get_unsafe<'a, 'ctx, 'env>(
 
     match list_layout {
         Layout::Builtin(Builtin::List(_, elem_layout)) => {
-            let ctx = env.context;
-            let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+            let elem_type = basic_type_from_layout(env, elem_layout);
             let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
             // Load the pointer to the array data
             let array_data_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
@@ -466,7 +464,7 @@ pub fn list_append<'a, 'ctx, 'env>(
     complex_bitcast(
         env.builder,
         output,
-        collection(env.context, env.ptr_bytes).into(),
+        super::convert::zig_list_type(env).into(),
         "from_i128",
     )
 }
@@ -497,7 +495,7 @@ pub fn list_set<'a, 'ctx, 'env>(
     let build_then = || {
         let (elem, elem_layout) = args[2];
         let ctx = env.context;
-        let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+        let elem_type = basic_type_from_layout(env, elem_layout);
         let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
         let (new_wrapper, array_data_ptr) = match input_inplace {
@@ -792,7 +790,7 @@ pub fn list_range<'a, 'ctx, 'env>(
     complex_bitcast(
         env.builder,
         output,
-        collection(env.context, env.ptr_bytes).into(),
+        super::convert::zig_list_type(env).into(),
         "from_i128",
     )
 }
@@ -883,7 +881,7 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
     complex_bitcast(
         env.builder,
         output,
-        collection(env.context, env.ptr_bytes).into(),
+        super::convert::zig_list_type(env).into(),
         "from_i128",
     )
 }
@@ -1000,7 +998,7 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
     complex_bitcast(
         env.builder,
         output,
-        collection(env.context, env.ptr_bytes).into(),
+        super::convert::zig_list_type(env).into(),
         "from_i128",
     )
 }
@@ -1046,7 +1044,7 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
     complex_bitcast(
         env.builder,
         output,
-        collection(env.context, env.ptr_bytes).into(),
+        super::convert::zig_list_type(env).into(),
         "from_i128",
     )
 }
@@ -1151,7 +1149,7 @@ fn list_map_generic<'a, 'ctx, 'env>(
     complex_bitcast(
         env.builder,
         output,
-        collection(env.context, env.ptr_bytes).into(),
+        super::convert::zig_list_type(env).into(),
         "from_i128",
     )
 }
@@ -1238,7 +1236,7 @@ pub fn list_map2<'a, 'ctx, 'env>(
     complex_bitcast(
         env.builder,
         output,
-        collection(env.context, env.ptr_bytes).into(),
+        super::convert::zig_list_type(env).into(),
         "from_i128",
     )
 }
@@ -1342,7 +1340,7 @@ pub fn list_map3<'a, 'ctx, 'env>(
     complex_bitcast(
         env.builder,
         output,
-        collection(env.context, env.ptr_bytes).into(),
+        super::convert::zig_list_type(env).into(),
         "from_i128",
     )
 }
@@ -1385,8 +1383,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
                 let second_list_length_comparison = list_is_not_empty(env, second_list_len);
 
                 let build_second_list_then = || {
-                    let elem_type =
-                        basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+                    let elem_type = basic_type_from_layout(env, elem_layout);
                     let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
                     let (new_wrapper, _) = clone_nonempty_list(
@@ -1408,12 +1405,12 @@ pub fn list_concat<'a, 'ctx, 'env>(
                     second_list_length_comparison,
                     build_second_list_then,
                     build_second_list_else,
-                    BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes)),
+                    BasicTypeEnum::StructType(super::convert::zig_list_type(env)),
                 )
             };
 
             let if_first_list_is_not_empty = || {
-                let elem_type = basic_type_from_layout(env.arena, ctx, elem_layout, env.ptr_bytes);
+                let elem_type = basic_type_from_layout(env, elem_layout);
                 let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
 
                 let if_second_list_is_empty = || {
@@ -1523,7 +1520,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
                     second_list_length_comparison,
                     if_second_list_is_not_empty,
                     if_second_list_is_empty,
-                    BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes)),
+                    BasicTypeEnum::StructType(super::convert::zig_list_type(env)),
                 )
             };
 
@@ -1533,7 +1530,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
                 first_list_length_comparison,
                 if_first_list_is_not_empty,
                 if_first_list_is_empty,
-                BasicTypeEnum::StructType(collection(ctx, env.ptr_bytes)),
+                BasicTypeEnum::StructType(super::convert::zig_list_type(env)),
             )
         }
         _ => {
@@ -1735,9 +1732,7 @@ where
 }
 
 pub fn empty_polymorphic_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
-    let ctx = env.context;
-
-    let struct_type = collection(ctx, env.ptr_bytes);
+    let struct_type = super::convert::zig_list_type(env);
 
     // The pointer should be null (aka zero) and the length should be zero,
     // so the whole struct should be a const_zero
@@ -1746,9 +1741,7 @@ pub fn empty_polymorphic_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> Basi
 
 // TODO investigate: does this cause problems when the layout is known? this value is now not refcounted!
 pub fn empty_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
-    let ctx = env.context;
-
-    let struct_type = collection(ctx, env.ptr_bytes);
+    let struct_type = super::convert::zig_list_type(env);
 
     // The pointer should be null (aka zero) and the length should be zero,
     // so the whole struct should be a const_zero
@@ -1835,7 +1828,7 @@ pub fn clone_nonempty_list<'a, 'ctx, 'env>(
     let u8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
     let generic_ptr = cast_basic_basic(builder, clone_ptr.into(), u8_ptr_type.into());
 
-    let struct_type = collection(ctx, env.ptr_bytes);
+    let struct_type = super::convert::zig_list_type(env);
     let mut struct_val;
 
     // Store the pointer
@@ -1856,7 +1849,7 @@ pub fn clone_nonempty_list<'a, 'ctx, 'env>(
     let answer = builder
         .build_bitcast(
             struct_val.into_struct_value(),
-            collection(ctx, ptr_bytes),
+            super::convert::zig_list_type(env),
             "cast_collection",
         )
         .into_struct_value();
@@ -1927,8 +1920,7 @@ pub fn store_list<'a, 'ctx, 'env>(
     let ctx = env.context;
     let builder = env.builder;
 
-    let ptr_bytes = env.ptr_bytes;
-    let struct_type = collection(ctx, ptr_bytes);
+    let struct_type = super::convert::zig_list_type(env);
 
     let u8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
     let generic_ptr =
@@ -1953,7 +1945,7 @@ pub fn store_list<'a, 'ctx, 'env>(
 
     builder.build_bitcast(
         struct_val.into_struct_value(),
-        collection(ctx, ptr_bytes),
+        super::convert::zig_list_type(env),
         "cast_collection",
     )
 }

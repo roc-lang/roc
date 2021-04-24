@@ -122,16 +122,13 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
         set_name(*argument, name.ident_string(&env.interns));
     }
 
-    let closure_type =
-        basic_type_from_layout(env.arena, env.context, function_layout, env.ptr_bytes)
-            .ptr_type(AddressSpace::Generic);
+    let closure_type = basic_type_from_layout(env, function_layout).ptr_type(AddressSpace::Generic);
 
     let mut arguments_cast =
         bumpalo::collections::Vec::with_capacity_in(arguments.len(), env.arena);
 
     for (argument_ptr, layout) in arguments.iter().zip(argument_layouts) {
-        let basic_type = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes)
-            .ptr_type(AddressSpace::Generic);
+        let basic_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 
         let argument_cast = env
             .builder
@@ -278,8 +275,7 @@ pub fn build_rc_wrapper<'a, 'ctx, 'env>(
 
             set_name(value_ptr.into(), Symbol::ARG_1.ident_string(&env.interns));
 
-            let value_type = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes)
-                .ptr_type(AddressSpace::Generic);
+            let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 
             let value_cast = env
                 .builder
@@ -352,8 +348,7 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
             set_name(value_ptr1.into(), Symbol::ARG_1.ident_string(&env.interns));
             set_name(value_ptr2.into(), Symbol::ARG_2.ident_string(&env.interns));
 
-            let value_type = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes)
-                .ptr_type(AddressSpace::Generic);
+            let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 
             let value_cast1 = env
                 .builder
@@ -434,7 +429,7 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
             set_name(value_ptr1.into(), Symbol::ARG_2.ident_string(&env.interns));
             set_name(value_ptr2.into(), Symbol::ARG_3.ident_string(&env.interns));
 
-            let value_type = basic_type_from_layout(env.arena, env.context, layout, env.ptr_bytes);
+            let value_type = basic_type_from_layout(env, layout);
             let function_type = env
                 .context
                 .i8_type()
