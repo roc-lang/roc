@@ -8,10 +8,10 @@ in with {
   # Look here for information about how pin version of nixpkgs
   #  → https://nixos.wiki/wiki/FAQ/Pinning_Nixpkgs
   pkgs = import (builtins.fetchGit {
-    name = "nixpkgs-2021-01-07";
+    name = "nixpkgs-2021-04-23";
     url = "https://github.com/nixos/nixpkgs/";
     ref = "refs/heads/nixpkgs-unstable";
-    rev = "4a580eb51bce94cae356e841f3f5303d31afbaf1";
+    rev = "8d0340aee5caac3807c58ad7fa4ebdbbdd9134d6";
   }) { };
 
   isMacOS = currentOS == "darwin";
@@ -83,6 +83,7 @@ let
     libxml2
     ncurses
     zlib
+    libiconv
     # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
     llvmPkgs.lld
     # dev tools
