@@ -652,6 +652,8 @@ enum HeaderFor<'a> {
     PkgConfig {
         /// usually `base`
         config_shorthand: &'a str,
+        /// the type scheme of the main function (required by the platform)
+        platform_main_type: TypedIdent<'a>,
     },
     Interface,
 }
@@ -2027,16 +2029,17 @@ fn update<'a>(
 
             state.module_cache.mono_problems.insert(module_id, problems);
 
+            state.procedures.extend(procedures);
+            state.timings.insert(module_id, module_timing);
+
             let work = state
                 .dependencies
                 .notify(module_id, Phase::MakeSpecializations);
 
-            state.procedures.extend(procedures);
-            state.timings.insert(module_id, module_timing);
-
-            if state.dependencies.solved_all() && state.goal_phase == Phase::MakeSpecializations {
-                debug_assert!(work.is_empty(), "still work remaining {:?}", &work);
-
+            if work.is_empty()
+                && state.dependencies.solved_all()
+                && state.goal_phase == Phase::MakeSpecializations
+            {
                 Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 Proc::optimize_refcount_operations(
@@ -3097,6 +3100,7 @@ fn send_header_two<'a>(
 
     let extra = HeaderFor::PkgConfig {
         config_shorthand: shorthand,
+        platform_main_type: requires[0].value.clone(),
     };
 
     let mut package_qualified_imported_modules = MutSet::default();
