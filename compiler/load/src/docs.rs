@@ -186,21 +186,16 @@ fn type_to_docs(type_annotation: ast::TypeAnnotation) -> Option<TypeAnnotation> 
 
             let mut any_tags_are_private = false;
 
-            let mut index = 0;
-
-            while index < tags.len() && !any_tags_are_private {
-                let tag = tags[index];
-
+            for tag in tags {
                 match tag_to_doc(tag.value) {
                     None => {
                         any_tags_are_private = true;
+                        break;
                     }
                     Some(tag_ann) => {
                         tags_to_render.push(tag_ann);
                     }
                 }
-
-                index += 1;
             }
 
             if any_tags_are_private {
@@ -313,16 +308,10 @@ fn tag_to_doc(tag: ast::Tag) -> Option<Tag> {
             values: {
                 let mut type_vars = Vec::new();
 
-                let mut index = 0;
-
-                while index < args.len() {
-                    let arg = args[index];
-
+                for arg in args {
                     if let Some(type_var) = type_to_docs(arg.value) {
                         type_vars.push(type_var);
                     }
-
-                    index += 1;
                 }
 
                 type_vars
