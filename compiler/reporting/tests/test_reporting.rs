@@ -6357,4 +6357,34 @@ mod test_reporting {
             ),
         )
     }
+
+    #[test]
+    fn expect_expr_type_error() {
+        report_problem_as(
+            indoc!(
+                r#"
+                expect "foobar"
+
+                4
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+                
+                This `expect` condition needs to be a Bool:
+                
+                1│  expect "foobar"
+                           ^^^^^^^^
+                
+                Right now it’s a string of type:
+                
+                    Str
+                
+                But I need every `expect` condition to evaluate to a Bool—either `True`
+                or `False`.
+            "#
+            ),
+        )
+    }
 }
