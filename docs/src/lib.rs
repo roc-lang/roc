@@ -301,32 +301,22 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
             buf.push('[');
             buf.push_str("<br>");
 
-            let mut index = 0;
             let next_indent_level = tag_union_indent + 1;
-            let tags_len = tags.len();
-            while index < tags_len {
-                let tag = &tags[index];
 
+            for (index, tag) in tags.iter().enumerate() {
                 indent(buf, next_indent_level);
                 buf.push_str(tag.name.as_str());
 
-                let mut tag_value_index = 0;
-                while tag_value_index < tag.values.len() {
-                    let type_value = &tag.values[tag_value_index];
-
+                for type_value in &tag.values {
                     buf.push(' ');
                     type_annotation_to_html(next_indent_level, buf, type_value);
-
-                    tag_value_index += 1;
                 }
 
-                if index < (tags_len - 1) {
+                if index < (tags.len() - 1) {
                     buf.push(',');
                 }
 
                 buf.push_str("<br>");
-
-                index += 1;
             }
 
             indent(buf, tag_union_indent);
