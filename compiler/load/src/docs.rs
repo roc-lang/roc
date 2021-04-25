@@ -46,12 +46,19 @@ pub enum TypeAnnotation {
         fields: Vec<RecordField>,
     },
 }
-
 #[derive(Debug, Clone)]
-pub struct RecordField {
-    pub name: String,
-    pub optional: bool,
-    pub type_annotation: TypeAnnotation,
+pub enum RecordField {
+    RecordField {
+        name: String,
+        type_annotation: TypeAnnotation,
+    },
+    OptionalField {
+        name: String,
+        type_annotation: TypeAnnotation,
+    },
+    LabelOnly {
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -272,25 +279,21 @@ fn type_to_docs(type_annotation: ast::TypeAnnotation) -> Option<TypeAnnotation> 
 fn record_field_to_doc(field: ast::AssignedField<'_, ast::TypeAnnotation>) -> Option<RecordField> {
     match field {
         AssignedField::RequiredValue(name, _, type_ann) => {
-            type_to_docs(type_ann.value).map(|type_ann_docs| RecordField {
+            type_to_docs(type_ann.value).map(|type_ann_docs| RecordField::RecordField {
                 name: name.value.to_string(),
                 type_annotation: type_ann_docs,
-                optional: false,
             })
         }
         AssignedField::SpaceBefore(&sub_field, _) => record_field_to_doc(sub_field),
         AssignedField::SpaceAfter(&sub_field, _) => record_field_to_doc(sub_field),
         AssignedField::OptionalValue(name, _, type_ann) => {
-            type_to_docs(type_ann.value).map(|type_ann_docs| RecordField {
+            type_to_docs(type_ann.value).map(|type_ann_docs| RecordField::OptionalField {
                 name: name.value.to_string(),
                 type_annotation: type_ann_docs,
-                optional: true,
             })
         }
-        AssignedField::LabelOnly(label) => Some(RecordField {
+        AssignedField::LabelOnly(label) => Some(RecordField::LabelOnly {
             name: label.value.to_string(),
-            type_annotation: BoundVariable(label.value.to_string()),
-            optional: false,
         }),
         AssignedField::Malformed(_) => None,
     }

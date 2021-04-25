@@ -1,8 +1,8 @@
 extern crate pulldown_cmark;
 use roc_builtins::std::StdLib;
 use roc_can::builtins::builtin_defs_map;
-use roc_load::docs::ModuleDocumentation;
 use roc_load::docs::TypeAnnotation;
+use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::file::LoadingProblem;
 
 use std::fs;
@@ -352,13 +352,30 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
             let next_indent_level = record_indent + 1;
             for (index, field) in fields.iter().enumerate() {
                 indent(buf, next_indent_level);
-                buf.push_str(field.name.as_str());
 
-                let separator = if field.optional { " ? " } else { " : " };
+                let fields_name = match field {
+                    RecordField::RecordField { name, .. } => name,
+                    RecordField::OptionalField { name, .. } => name,
+                    RecordField::LabelOnly { name } => name,
+                };
 
-                buf.push_str(separator);
+                buf.push_str(fields_name.as_str());
 
-                type_annotation_to_html(next_indent_level, buf, &field.type_annotation);
+                match field {
+                    RecordField::RecordField {
+                        type_annotation, ..
+                    } => {
+                        buf.push_str(" : ");
+                        type_annotation_to_html(next_indent_level, buf, type_annotation);
+                    }
+                    RecordField::OptionalField {
+                        type_annotation, ..
+                    } => {
+                        buf.push_str(" ? ");
+                        type_annotation_to_html(next_indent_level, buf, type_annotation);
+                    }
+                    RecordField::LabelOnly { .. } => {}
+                }
 
                 if index < (fields.len() - 1) {
                     buf.push(',');
