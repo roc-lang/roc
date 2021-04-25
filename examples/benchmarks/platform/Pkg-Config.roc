@@ -2,7 +2,7 @@ platform folkertdev/foo
     requires {model=>Model, msg=>Msg} {main : Effect {}}
     exposes []
     packages {}
-    imports [ Task ]
+    imports [ Task.{ Task } ]
     provides [ mainForHost ]
     effects fx.Effect
         {
@@ -11,5 +11,5 @@ platform folkertdev/foo
             getInt : Effect { value: I64, errorCode: [ A, B ], isError: Bool }
         }
 
-mainForHost : Task.Task {} [] as Fx
+mainForHost : Task {} [] as Fx
 mainForHost = main
