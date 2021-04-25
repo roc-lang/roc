@@ -109,7 +109,14 @@ fn render_main_content(module: &ModuleDocumentation) -> String {
             type_annotation_to_html(0, &mut content, &type_ann);
         }
 
-        buf.push_str(html_node("h3", vec![("id", name)], content.as_str()).as_str());
+        buf.push_str(
+            html_node(
+                "h3",
+                vec![("id", name), ("class", "entry-name")],
+                content.as_str(),
+            )
+            .as_str(),
+        );
 
         if let Some(docs) = &entry.docs {
             buf.push_str(markdown_to_html(docs.to_string()).as_str());
@@ -283,7 +290,7 @@ pub fn files_to_documentations(
     files_docs
 }
 
-const INDENT: &str = "&nbsp;&nbsp;&nbsp;&nbsp;";
+const INDENT: &str = "    ";
 
 fn indent(buf: &mut String, times: usize) {
     for _ in 0..times {
@@ -291,15 +298,19 @@ fn indent(buf: &mut String, times: usize) {
     }
 }
 
+fn new_line(buf: &mut String) {
+    buf.push('\n');
+}
+
 fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &TypeAnnotation) {
     match type_ann {
         TypeAnnotation::TagUnion { tags, extension } => {
-            buf.push_str("<br>");
+            new_line(buf);
 
             let tag_union_indent = indent_level + 1;
             indent(buf, tag_union_indent);
             buf.push('[');
-            buf.push_str("<br>");
+            new_line(buf);
 
             let next_indent_level = tag_union_indent + 1;
 
@@ -316,7 +327,7 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                     buf.push(',');
                 }
 
-                buf.push_str("<br>");
+                new_line(buf);
             }
 
             indent(buf, tag_union_indent);
@@ -343,11 +354,13 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
             }
         }
         TypeAnnotation::Record { fields } => {
-            buf.push_str("<br>");
+            new_line(buf);
+
             let record_indent = indent_level + 1;
             indent(buf, record_indent);
             buf.push('{');
-            buf.push_str("<br>");
+
+            new_line(buf);
 
             let next_indent_level = record_indent + 1;
             for (index, field) in fields.iter().enumerate() {
@@ -381,7 +394,7 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                     buf.push(',');
                 }
 
-                buf.push_str("<br>");
+                new_line(buf);
             }
 
             indent(buf, record_indent);
