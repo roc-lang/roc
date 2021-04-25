@@ -1,6 +1,5 @@
 use crate::graphics::primitives::rect::Rect;
 use crate::graphics::primitives::text as gr_text;
-use crate::graphics::primitives::text::layout_from_text;
 use crate::graphics::primitives::text::Text;
 use crate::ui::theme::UITheme;
 
@@ -65,8 +64,7 @@ impl<'a> ToolTip<'a> {
         let y_margin = glyph_dim_rect.height / 4.0;
 
         let text = self.make_tooltip_text(text_x_offset, text_y_offset, y_margin, ui_theme);
-        let text_layout = layout_from_text(&text);
-        let text_section = gr_text::owned_section_from_text(&text, text_layout);
+        let text_section = gr_text::owned_section_from_text(&text);
 
         let rect = self.make_tooltip_rect(
             glyph_dim_rect.width * (text.text.len() as f32) + width_padding,

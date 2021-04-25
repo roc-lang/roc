@@ -87,10 +87,9 @@ fn section_from_text<'a>(
     )
 }
 
-pub fn owned_section_from_text(
-    text: &Text,
-    layout: wgpu_glyph::Layout<wgpu_glyph::BuiltInLineBreaker>,
-) -> OwnedSection {
+pub fn owned_section_from_text(text: &Text) -> OwnedSection {
+    let layout = layout_from_text(text);
+
     OwnedSection {
         screen_position: text.position.into(),
         bounds: text.area_bounds.into(),
