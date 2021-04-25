@@ -298,15 +298,19 @@ fn indent(buf: &mut String, times: usize) {
     }
 }
 
+fn new_line(buf: &mut String) {
+    buf.push('\n');
+}
+
 fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &TypeAnnotation) {
     match type_ann {
         TypeAnnotation::TagUnion { tags, extension } => {
-            buf.push_str("<br>");
+            new_line(buf);
 
             let tag_union_indent = indent_level + 1;
             indent(buf, tag_union_indent);
             buf.push('[');
-            buf.push_str("<br>");
+            new_line(buf);
 
             let next_indent_level = tag_union_indent + 1;
 
@@ -323,7 +327,7 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                     buf.push(',');
                 }
 
-                buf.push_str("<br>");
+                new_line(buf);
             }
 
             indent(buf, tag_union_indent);
@@ -350,11 +354,13 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
             }
         }
         TypeAnnotation::Record { fields } => {
-            buf.push_str("<br>");
+            new_line(buf);
+
             let record_indent = indent_level + 1;
             indent(buf, record_indent);
             buf.push('{');
-            buf.push_str("<br>");
+
+            new_line(buf);
 
             let next_indent_level = record_indent + 1;
             for (index, field) in fields.iter().enumerate() {
@@ -388,7 +394,7 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                     buf.push(',');
                 }
 
-                buf.push_str("<br>");
+                new_line(buf);
             }
 
             indent(buf, record_indent);
