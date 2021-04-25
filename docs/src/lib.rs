@@ -109,7 +109,14 @@ fn render_main_content(module: &ModuleDocumentation) -> String {
             type_annotation_to_html(0, &mut content, &type_ann);
         }
 
-        buf.push_str(html_node("h3", vec![("id", name)], content.as_str()).as_str());
+        buf.push_str(
+            html_node(
+                "h3",
+                vec![("id", name), ("class", "entry-name")],
+                content.as_str(),
+            )
+            .as_str(),
+        );
 
         if let Some(docs) = &entry.docs {
             buf.push_str(markdown_to_html(docs.to_string()).as_str());
@@ -283,7 +290,7 @@ pub fn files_to_documentations(
     files_docs
 }
 
-const INDENT: &str = "&nbsp;&nbsp;&nbsp;&nbsp;";
+const INDENT: &str = "    ";
 
 fn indent(buf: &mut String, times: usize) {
     for _ in 0..times {
