@@ -1,9 +1,9 @@
 app "http-get"
     packages { base: "platform" }
-    imports [ base.Task.{ await }, base.Stdout, base.Stdin, base.Http ]
+    imports [ base.Task.{ Task, await }, base.Stdout, base.Stdin, base.Http ]
     provides [ main ] to base
 
-main : Task.Task {} *
+main : Task {} *
 main =
     _ <- await (Stdout.line "What URL should I get?")
 
