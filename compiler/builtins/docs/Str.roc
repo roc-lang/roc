@@ -125,6 +125,21 @@ decimal : Float *, Nat -> Str
 ## To split a string into its individual graphemes, use #Str.graphemes
 split : Str, Str -> List Str
 
+## Split a string around newlines.
+##
+## On strings that use `"\n"` for their line endings, this gives the same answer
+## as passing `"\n"` to #Str.split. However, on strings that use `"\n\r"` (such
+## as [in Windows files](https://en.wikipedia.org/wiki/Newline#History)), this
+## will consume the entire `"\n\r"` instead of just the `"\n"`.
+##
+## >>> Str.lines "Hello, World!\nNice to meet you!"
+##
+## >>> Str.lines "Hello, World!\n\rNice to meet you!"
+##
+## To split a string using a custom separator, use #Str.split. For more advanced
+## string splitting, use a #Parser.
+lines : Str, Str -> List Str
+
 ## Check
 
 ## Returns #True if the string is empty, and #False otherwise.
