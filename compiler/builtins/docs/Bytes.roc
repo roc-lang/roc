@@ -4,13 +4,6 @@ interface Bytes
         ]
     imports []
 
-## Terminology
-##
-## There are two forms of byte ordering used here:
-##
-## NBO is short for [Network Byte Ordering](https://en.wikipedia.org/wiki/Endianness#Networking) (also known as ["Big-Endian"](https://en.wikipedia.org/wiki/Endianness) - you can also think of NBO as being short for "Normal Byte Ordering")
-## RBO is short for Reverse Byte Ordering (also known as ["Little-Endian"](https://en.wikipedia.org/wiki/Endianness))
-
 # Conversion
 
 ## Return a #List of the string's #U8 UTF-8 [code units](https://unicode.org/glossary/#code_unit).
@@ -52,8 +45,8 @@ len : Bytes -> Nat
 
 isEmpty : Bytes -> Bool
 
-## The byte ordering of the currently running system.
-hostOrdering : [ Nbo, Rbo ]
+## The endianness of the currently running system.
+hostEndianness : [ Big, Little ]
 
 # Access
 
@@ -62,8 +55,8 @@ take : Bytes, Nat -> Bytes
 
 # Building
 
-appendNbo : Bytes, Num * -> Bytes
-appendRbo : Bytes, Num * -> Bytes
+appendLe : Bytes, Num * -> Bytes
+appendBe : Bytes, Num * -> Bytes
 concat : Bytes, Bytes -> Bytes
 
 # Parsing
@@ -78,22 +71,22 @@ parseUtf16Usv : Bytes -> Result { answer : U32, rest : Bytes } [ Expected [ Utf1
 parseUtf8Grapheme : Bytes -> Result { answer : Utf8, rest : Bytes } [ Expected [ Utf8Grapheme ]* Bytes ]*
 parseUtf16Grapheme : Bytes -> Result { answer : Utf16, rest : Bytes } [ Expected [ Utf16Grapheme ]* Bytes ]*
 
-# Network Byte Order ("Big-Endian")
-parseNboU16 : Bytes -> Result { answer : U16, rest : Bytes } [ Expected [ U16 ]* Bytes ]*
-parseNboI16 : Bytes -> Result { answer : I16, rest : Bytes } [ Expected [ I16 ]* Bytes ]*
-parseNboU32 : Bytes -> Result { answer : U32, rest : Bytes } [ Expected [ U32 ]* Bytes ]*
-parseNboI32 : Bytes -> Result { answer : I32, rest : Bytes } [ Expected [ I32 ]* Bytes ]*
-parseNboU64 : Bytes -> Result { answer : U64, rest : Bytes } [ Expected [ U64 ]* Bytes ]*
-parseNboI64 : Bytes -> Result { answer : I64, rest : Bytes } [ Expected [ I64 ]* Bytes ]*
-parseNboU128 : Bytes -> Result { answer : U128, rest : Bytes } [ Expected [ U128 ]* Bytes ]*
-parseNboI128 : Bytes -> Result { answer : I128, rest : Bytes } [ Expected [ I128 ]* Bytes ]*
+# Little-Endian
+parseLeU16 : Bytes -> Result { answer : U16, rest : Bytes } [ Expected [ U16 ]* Bytes ]*
+parseLeI16 : Bytes -> Result { answer : I16, rest : Bytes } [ Expected [ I16 ]* Bytes ]*
+parseLeU32 : Bytes -> Result { answer : U32, rest : Bytes } [ Expected [ U32 ]* Bytes ]*
+parseLeI32 : Bytes -> Result { answer : I32, rest : Bytes } [ Expected [ I32 ]* Bytes ]*
+parseLeU64 : Bytes -> Result { answer : U64, rest : Bytes } [ Expected [ U64 ]* Bytes ]*
+parseLeI64 : Bytes -> Result { answer : I64, rest : Bytes } [ Expected [ I64 ]* Bytes ]*
+parseLeU128 : Bytes -> Result { answer : U128, rest : Bytes } [ Expected [ U128 ]* Bytes ]*
+parseLeI128 : Bytes -> Result { answer : I128, rest : Bytes } [ Expected [ I128 ]* Bytes ]*
 
-# Reverse Byte Order ("Little-Endian")
-parseRboU16 : Bytes -> Result { answer : U16, rest : Bytes } [ Expected [ U16 ]* Bytes ]*
-parseRboI16 : Bytes -> Result { answer : I16, rest : Bytes } [ Expected [ I16 ]* Bytes ]*
-parseRboU32 : Bytes -> Result { answer : U32, rest : Bytes } [ Expected [ U32 ]* Bytes ]*
-parseRboI32 : Bytes -> Result { answer : I32, rest : Bytes } [ Expected [ I32 ]* Bytes ]*
-parseRboU64 : Bytes -> Result { answer : U64, rest : Bytes } [ Expected [ U64 ]* Bytes ]*
-parseRboI64 : Bytes -> Result { answer : I64, rest : Bytes } [ Expected [ I64 ]* Bytes ]*
-parseRboU128 : Bytes -> Result { answer : U128, rest : Bytes } [ Expected [ U128 ]* Bytes ]*
-parseRboI128 : Bytes -> Result { answer : I128, rest : Bytes } [ Expected [ I128 ]* Bytes ]*
+# Big-Endian
+parseBeU16 : Bytes -> Result { answer : U16, rest : Bytes } [ Expected [ U16 ]* Bytes ]*
+parseBeI16 : Bytes -> Result { answer : I16, rest : Bytes } [ Expected [ I16 ]* Bytes ]*
+parseBeU32 : Bytes -> Result { answer : U32, rest : Bytes } [ Expected [ U32 ]* Bytes ]*
+parseBeI32 : Bytes -> Result { answer : I32, rest : Bytes } [ Expected [ I32 ]* Bytes ]*
+parseBeU64 : Bytes -> Result { answer : U64, rest : Bytes } [ Expected [ U64 ]* Bytes ]*
+parseBeI64 : Bytes -> Result { answer : I64, rest : Bytes } [ Expected [ I64 ]* Bytes ]*
+parseBeU128 : Bytes -> Result { answer : U128, rest : Bytes } [ Expected [ U128 ]* Bytes ]*
+parseBeI128 : Bytes -> Result { answer : I128, rest : Bytes } [ Expected [ I128 ]* Bytes ]*
