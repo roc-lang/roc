@@ -100,7 +100,8 @@ interface Str
 
 ## A [Unicode](https://unicode.org) text value.
 ##
-Str : [ @Str ]
+## The type parameter represents the string's encoding.
+Str a : [ @Str a ]
 
 ## Convert
 
@@ -111,7 +112,7 @@ Str : [ @Str ]
 ##
 ## If you want to keep all the digits, passing the same float to #Str.num
 ## will do that.
-decimal : Float *, Nat -> Str
+decimal : Float *, Nat -> Str *
 
 ## Split a string around a separator.
 ##
@@ -123,7 +124,7 @@ decimal : Float *, Nat -> Str
 ## >>> Str.split "1,2,3" ""
 ##
 ## To split a string into its individual graphemes, use #Str.graphemes
-split : Str, Str -> List Str
+split : Str a, Str a -> List (Str a)
 
 ## Split a string around newlines.
 ##
@@ -138,7 +139,7 @@ split : Str, Str -> List Str
 ##
 ## To split a string using a custom separator, use #Str.split. For more advanced
 ## string splitting, use a #Parser.
-lines : Str, Str -> List Str
+lines : Str a, Str a -> List (Str a)
 
 ## Check
 
@@ -147,30 +148,30 @@ lines : Str, Str -> List Str
 ## >>> Str.isEmpty "hi!"
 ##
 ## >>> Str.isEmpty ""
-isEmpty : Str -> Bool
+isEmpty : Str * -> Bool
 
-startsWith : Str, Str -> Bool
+startsWith : Str a, Str a -> Bool
 
-endsWith : Str, Str -> Bool
+endsWith : Str a, Str a -> Bool
 
-contains : Str, Str -> Bool
+contains : Str a, Str a -> Bool
 
-anyGraphemes : Str, (Str -> Bool) -> Bool
+anyGraphemes : Str a, (Str a -> Bool) -> Bool
 
-allGraphemes : Str, (Str -> Bool) -> Bool
+allGraphemes : Str a, (Str a -> Bool) -> Bool
 
 ## Combine
 
 ## Combine a list of strings into a single string.
 ##
 ## >>> Str.join [ "a", "bc", "def" ]
-join : List Str -> Str
+join : List (Str a) -> Str a
 
 ## Combine a list of strings into a single string, with a separator
 ## string in between each.
 ##
 ## >>> Str.joinWith [ "one", "two", "three" ] ", "
-joinWith : List Str, Str -> Str
+joinWith : List (Str a), Str a -> Str a
 
 ## Add to the start of a string until it has at least the given number of
 ## graphemes.
@@ -182,7 +183,7 @@ joinWith : List Str, Str -> Str
 ## >>> Str.padGraphemesStart "0" 5 "12345"
 ##
 ## >>> Str.padGraphemesStart "✈️"" 5 "👩‍👩‍👦‍👦👩‍👩‍👦‍👦👩‍👩‍👦‍👦"
-padGraphemesStart : Str, Nat, Str -> Str
+padGraphemesStart : Str a, Nat, Str a -> Str a
 
 ## Add to the end of a string until it has at least the given number of
 ## graphemes.
@@ -194,7 +195,7 @@ padGraphemesStart : Str, Nat, Str -> Str
 ## >>> Str.padGraphemesStart "0" 5 "12345"
 ##
 ## >>> Str.padGraphemesStart "✈️"" 5 "👩‍👩‍👦‍👦👩‍👩‍👦‍👦👩‍👩‍👦‍👦"
-padGraphemesEnd : Str, Nat, Str -> Str
+padGraphemesEnd : Str a, Nat, Str a -> Str a
 
 ## Graphemes
 
@@ -204,7 +205,7 @@ padGraphemesEnd : Str, Nat, Str -> Str
 ##
 ## >>> Str.graphemes  "👍👍👍"
 ##
-graphemes : Str -> List Str
+graphemes : Str a -> List (Str a)
 
 ##     Str.countGraphemes "Roc!"   # 4
 ##     Str.countGraphemes "七巧板" # 3
@@ -217,16 +218,16 @@ graphemes : Str -> List Str
 ## >>> Str.reverseGraphemes  "🐦✈️"👩‍👩‍👦‍👦"
 ##
 ## >>> Str.reversegraphemes "Crème Brûlée"
-reverseGraphemes : Str -> Str
+reverseGraphemes : Str a -> Str a
 
 ## Returns #True if the two strings are equal when ignoring case.
 ##
 ## >>> Str.caseInsensitiveEq "hi" "Hi"
-isCaseInsensitiveEq : Str, Str -> Bool
+isCaseInsensitiveEq : Str a, Str a -> Bool
 
-isCaseInsensitiveNeq : Str, Str -> Bool
+isCaseInsensitiveNeq : Str a, Str a -> Bool
 
-walkGraphemes : Str, { start: state, step: (state, Str -> state) } -> state
+walkGraphemes : Str a, { start: state, step: (state, Str a -> state) } -> state
 
 ## Returns #True if the string begins with an uppercase letter.
 ##
@@ -251,7 +252,7 @@ walkGraphemes : Str, { start: state, step: (state, Str -> state) } -> state
 ## [in Turkish](https://en.wikipedia.org/wiki/Dotted_and_dotless_I#In_computing),
 ## the same `"i"` capitalizes to `"İ"`) see the [roc/locale](roc/locale) package
 ## package for functions which capitalize strings.
-isCapitalized : Str -> Bool
+isCapitalized : Str * -> Bool
 
 ## Returns #True if the string consists entirely of uppercase letters.
 ##
@@ -272,7 +273,7 @@ isCapitalized : Str -> Bool
 ## >>> Str.isAllUppercase "🐦"
 ##
 ## >>> Str.isAllUppercase ""
-isAllUppercase : Str -> Bool
+isAllUppercase : Str * -> Bool
 
 ## Returns #True if the string consists entirely of lowercase letters.
 ##
@@ -293,16 +294,20 @@ isAllUppercase : Str -> Bool
 ## >>> Str.isAllLowercase "🐦"
 ##
 ## >>> Str.isAllLowercase ""
-isAllLowercase : Str -> Bool
+isAllLowercase : Str * -> Bool
 
-## Code Units
+## Return the string with any blank spaces removed from both the beginning
+## as well as the end.
+trim : Str a -> Str a
+
+## Unicode Scalar Values
 
 ## Besides graphemes, another way to break down strings is into
-## raw code unit integers.
+## Unicode Scalar Values.
 ##
-## Code units are no substitute for graphemes!
+## USVs are no substitute for graphemes!
 ## These functions exist to support advanced use cases like those found in
-## [roc/unicode](roc/unicode), and using code units when graphemes would
+## [roc/unicode](roc/unicode), and using USVs when graphemes would
 ## be more appropriate can very easily lead to bugs.
 ##
 ## For example, `Str.countGraphemes "👩‍👩‍👦‍👦"` returns `1`,
@@ -310,90 +315,9 @@ isAllLowercase : Str -> Bool
 ## `Str.toUtf16 "👩‍👩‍👦‍👦"` returns a list with a length of 11.
 ## and `Str.toUtf32 "👩‍👩‍👦‍👦"` returns a list with a length of 7.
 
-## Return a #List of the string's #U8 UTF-8 [code units](https://unicode.org/glossary/#code_unit).
-## (To split the string into a #List of smaller #Str values instead of #U8 values,
-## see #Str.split and #Str.graphemes.)
-##
-## >>> Str.toUtf8 "👩‍👩‍👦‍👦"
-##
-## >>> Str.toUtf8 "Roc"
-##
-## >>> Str.toUtf8 "鹏"
-##
-## >>> Str.toUtf8 "🐦"
-##
-## For a more flexible function that walks through each of these #U8 code units
-## without creating a #List, see #Str.walkUtf8 and #Str.walkRevUtf8.
-toUtf8 : Str -> List U8
 
-## Return a #List of the string's #U16 UTF-16 [code units](https://unicode.org/glossary/#code_unit).
-## (To split the string into a #List of smaller #Str values instead of #U16 values,
-## see #Str.split and #Str.graphemes.)
-##
-## >>> Str.toUtf16 "👩‍👩‍👦‍👦"
-##
-## >>> Str.toUtf16 "Roc"
-##
-## >>> Str.toUtf16 "鹏"
-##
-## >>> Str.toUtf16 "🐦"
-##
-## For a more flexible function that walks through each of these #U16 code units
-## without creating a #List, see #Str.walkUtf16 and #Str.walkRevUtf16.
-toUtf16 : Str -> List U16
-
-## Return a #List of the string's #U32 UTF-32 [code units](https://unicode.org/glossary/#code_unit).
-## (To split the string into a #List of smaller #Str values instead of #U32 values,
-## see #Str.split and #Str.graphemes.)
-##
-## >>> Str.toUtf32 "👩‍👩‍👦‍👦"
-##
-## >>> Str.toUtf32 "Roc"
-##
-## >>> Str.toUtf32 "鹏"
-##
-## >>> Str.toUtf32 "🐦"
-##
-## For a more flexible function that walks through each of these #U32 code units
-## without creating a #List, see #Str.walkUtf32 and #Str.walkRevUtf32.
-toUtf32 : Str -> List U32
-
-## Return the string with any blank spaces removed from both the beginning
-## as well as the end.
-trim : Str -> Str
-
-## Walk through the string's #U8 UTF-8 [code units](https://unicode.org/glossary/#code_unit)
-## to build up a state.
-## (If you want a `step` function which receives a #Str instead of an #U8, see #Str.walkGraphemes.)
-##
-## Here are the #U8 values that will be passed to `step` when this function is
-## called on various strings:
-##
-## * `"👩‍👩‍👦‍👦"` passes 240, 159, 145, 169, 226, 128, 141, 240, 159, 145, 169, 226, 128, 141, 240, 159, 145, 166, 226, 128, 141, 240, 159, 145, 166
-## * `"Roc"` passes 82, 111, 99
-## * `"鹏"` passes 233, 185, 143
-## * `"🐦"` passes 240, 159, 144, 166
-##
-## To convert a #Str into a plain `List U8` of UTF-8 code units, see #Str.toUtf8.
-walkUtf8 : Str, { start: state, step: (state, U8 -> state) } -> state
-
-## Walk through the string's #U16 UTF-16 [code units](https://unicode.org/glossary/#code_unit)
-## to build up a state.
-## (If you want a `step` function which receives a #Str instead of an #U16, see #Str.walkGraphemes.)
-##
-## Here are the #U16 values that will be passed to `step` when this function is
-## called on various strings:
-##
-## * `"👩‍👩‍👦‍👦"` passes 55357, 56425, 8205, 55357, 56425, 8205, 55357, 56422, 8205, 55357, 56422
-## * `"Roc"` passes 82, 111, 99
-## * `"鹏"` passes 40527
-## * `"🐦"` passes 55357, 56358
-##
-## To convert a #Str into a plain `List U16` of UTF-16 code units, see #Str.toUtf16.
-walkUtf16 : Str, { start: state, step: (state, U16 -> state) } -> state
-
-## Walk through the string's #U32 UTF-32 [code units](https://unicode.org/glossary/#code_unit)
-## to build up a state.
+## Walk through the string's [Unicode Scalar Values](http://www.unicode.org/glossary/#unicode_scalar_value)
+## (USVs) to build up a state.
 ## (If you want a `step` function which receives a #Str instead of an #U32, see #Str.walkGraphemes.)
 ##
 ## Here are the #U32 values that will be passed to `step` when this function is
@@ -403,43 +327,10 @@ walkUtf16 : Str, { start: state, step: (state, U16 -> state) } -> state
 ## * `"Roc"` passes 82, 111, 99
 ## * `"鹏"` passes 40527
 ## * `"🐦"` passes 128038
-##
-## To convert a #Str into a plain `List U32` of UTF-32 code units, see #Str.toUtf32.
-walkUtf32 : Str, { start: state, step: (state, U32 -> state) } -> state
+walkUsv : Str, { start: state, step: (state, U32 -> state) } -> state
 
-
-## Walk backwards through the string's #U8 UTF-8 [code units](https://unicode.org/glossary/#code_unit)
-## to build up a state.
-## (If you want a `step` function which receives a #Str instead of an #U8, see #Str.walkGraphemes.)
-##
-## Here are the #U8 values that will be passed to `step` when this function is
-## called on various strings:
-##
-## * `"👩‍👩‍👦‍👦"` passes 166, 145, 159, 240, 141, 128, 226, 166, 145, 159, 240, 141, 128, 226, 169, 145, 159, 240, 141, 128, 226, 169, 145, 159, 240
-## * `"Roc"` passes 99, 111, 82
-## * `"鹏"` passes 143, 185, 233
-## * `"🐦"` passes 166, 144, 159, 240
-##
-## To convert a #Str into a plain `List U8` of UTF-8 code units, see #Str.toUtf8.
-walkRevUtf8 : Str, { start: state, step: (state, U8 -> state) } -> state
-
-## Walk backwards through the string's #U16 UTF-16 [code units](https://unicode.org/glossary/#code_unit)
-## to build up a state.
-## (If you want a `step` function which receives a #Str instead of an #U16, see #Str.walkGraphemes.)
-##
-## Here are the #U16 values that will be passed to `step` when this function is
-## called on various strings:
-##
-## * `"👩‍👩‍👦‍👦"` passes 56422, 55357, 8205, 56422, 55357, 8205, 56425, 55357, 8205, 56425, 55357
-## * `"Roc"` passes 99, 111, 82
-## * `"鹏"` passes 40527
-## * `"🐦"` passes 56358, 55357
-##
-## To convert a #Str into a plain `List U16` of UTF-16 code units, see #Str.toUtf16.
-walkRevUtf16 : Str, { start: state, step: (state, U16 -> state) } -> state
-
-## Walk backwards through the string's #U32 UTF-32 [code units](https://unicode.org/glossary/#code_unit)
-## to build up a state.
+## Walk backwards through the string's [Unicode Scalar Values](http://www.unicode.org/glossary/#unicode_scalar_value)
+## (USVs) to build up a state.
 ## (If you want a `step` function which receives a #Str instead of an #U32, see #Str.walkGraphemes.)
 ##
 ## Here are the #U32 values that will be passed to `step` when this function is
@@ -451,4 +342,21 @@ walkRevUtf16 : Str, { start: state, step: (state, U16 -> state) } -> state
 ## * `"🐦"` passes 128038
 ##
 ## To convert a #Str into a plain `List U32` of UTF-32 code units, see #Str.toUtf32.
-walkRevUtf32 : Str, { start: state, step: (state, U32 -> state) } -> state
+walkBackwardsUsv : Str, { start: state, step: (state, U32 -> state) } -> state
+
+# Parsing
+
+## Parse a [Unicode Scalar Value](http://www.unicode.org/glossary/#unicode_scalar_value)
+## (USV).
+parseUsv : Str a -> Result { answer : U32, rest : Str a } [ Expected [ Usv ]* (Str a) ]*
+parseGrapheme : Str a -> Result { answer : Str a, rest : Str a } [ Expected [ Grapheme ]* (Str a) ]*
+parseU8 : Str a -> Result { answer : U8, rest : Str a } [ Expected [ U8 ]* (Str a) ]*
+parseI8 : Str a -> Result { answer : I8, rest : Str a } [ Expected [ I8 ]* (Str a) ]*
+parseU16 : Str a -> Result { answer : U16, rest : Str a } [ Expected [ U16 ]* (Str a) ]*
+parseI16 : Str a -> Result { answer : I16, rest : Str a } [ Expected [ I16 ]* (Str a) ]*
+parseU32 : Str a -> Result { answer : U32, rest : Str a } [ Expected [ U32 ]* (Str a) ]*
+parseI32 : Str a -> Result { answer : I32, rest : Str a } [ Expected [ I32 ]* (Str a) ]*
+parseU64 : Str a -> Result { answer : U64, rest : Str a } [ Expected [ U64 ]* (Str a) ]*
+parseI64 : Str a -> Result { answer : I64, rest : Str a } [ Expected [ I64 ]* (Str a) ]*
+parseU128 : Str a -> Result { answer : U128, rest : Str a } [ Expected [ U128 ]* (Str a) ]*
+parseI128 : Str a -> Result { answer : I128, rest : Str a } [ Expected [ I128 ]* (Str a) ]*
