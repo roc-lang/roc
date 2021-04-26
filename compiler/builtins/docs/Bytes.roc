@@ -68,11 +68,16 @@ concat : Bytes, Bytes -> Bytes
 ## Parse a [Unicode Scalar Value](http://www.unicode.org/glossary/#unicode_scalar_value)
 ## (USV) encoded as UTF-8.
 ##
-## To parse a fixed-length UTF-8 string, you can use #Bytes.take and #Bytes.toUtf8.
+## To parse an entire UTF-8 string, you can use #Bytes.toUtf8 or #Bytes.parsePastUtf8.
 parseUtf8Usv : Bytes -> Result { answer : U32, rest : Bytes } [ Expected [ Utf8Usv ]* Bytes ]*
 parseUtf16Usv : Bytes -> Result { answer : U32, rest : Bytes } [ Expected [ Utf16Usv ]* Bytes ]*
 parseUtf8Grapheme : Bytes -> Result { answer : Utf8, rest : Bytes } [ Expected [ Utf8Grapheme ]* Bytes ]*
 parseUtf16Grapheme : Bytes -> Result { answer : Utf16, rest : Bytes } [ Expected [ Utf16Grapheme ]* Bytes ]*
+
+## If the bytes begin with the given UTF-8 string, return whatever bytes come
+## after it.
+parsePastUtf8 : Bytes, Utf8 -> Result Bytes [ Expected [ ExactUtf8 Utf8 ]* Bytes ]*
+parsePastUtf16 : Bytes, Utf16 -> Result Bytes [ Expected [ ExactUtf16 Utf16 ]* Bytes ]*
 
 # Little-Endian
 parseLeU16 : Bytes -> Result { answer : U16, rest : Bytes } [ Expected [ U16 ]* Bytes ]*

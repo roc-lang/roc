@@ -346,10 +346,16 @@ walkBackwardsUsv : Str, { start: state, step: (state, U32 -> state) } -> state
 
 # Parsing
 
-## Parse a [Unicode Scalar Value](http://www.unicode.org/glossary/#unicode_scalar_value)
-## (USV).
+## Parse a [Unicode Scalar Value](http://www.unicode.org/glossary/#unicode_scalar_value).
 parseUsv : Str a -> Result { answer : U32, rest : Str a } [ Expected [ Usv ]* (Str a) ]*
+## Parse an [extended grapheme cluster](http://www.unicode.org/glossary/#extended_grapheme_cluster).
 parseGrapheme : Str a -> Result { answer : Str a, rest : Str a } [ Expected [ Grapheme ]* (Str a) ]*
+
+## If the first string begins with the second, return whatever comes
+## after the second.
+parsePastStr : Str a, Str a -> Result (Str a) [ Expected [ ExactStr (Str a) ]* Bytes ]*
+parsePastUsv : Str a, U32 -> Result (Str a) [ Expected [ ExactUsv U32 ]* Bytes ]*
+
 parseU8 : Str a -> Result { answer : U8, rest : Str a } [ Expected [ U8 ]* (Str a) ]*
 parseI8 : Str a -> Result { answer : I8, rest : Str a } [ Expected [ I8 ]* (Str a) ]*
 parseU16 : Str a -> Result { answer : U16, rest : Str a } [ Expected [ U16 ]* (Str a) ]*
