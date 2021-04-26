@@ -32,6 +32,9 @@ toUtf16 : Bytes -> Result Utf16 [ BadUtf16 ]*
 
 ## The number of bytes a string uses in memory.
 ##
+## This is not the same as the "number of characters" in the string; for that
+## use case, see #Str.countGraphemes instead!
+##
 ## >>> Bytes.inStr "👩‍👩‍👦‍👦"
 ##
 ## >>> Bytes.inStr "Roc"
