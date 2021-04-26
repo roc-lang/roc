@@ -1,19 +1,17 @@
-
-use crate::editor::slow_pool::MarkNodeId;
-use crate::editor::mvc::ed_update::get_node_context;
-use crate::editor::mvc::ed_update::NodeContext;
+use crate::editor::ed_error::EdResult;
+use crate::editor::markup::attribute::Attributes;
+use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
-use crate::lang::ast::IntVal;
+use crate::editor::mvc::ed_update::get_node_context;
+use crate::editor::mvc::ed_update::NodeContext;
+use crate::editor::slow_pool::MarkNodeId;
+use crate::editor::syntax_highlight::HighlightStyle;
 use crate::lang::ast::Expr2::SmallInt;
+use crate::lang::ast::IntVal;
 use crate::lang::ast::{IntStyle, IntVal::*};
 use crate::lang::pool::PoolStr;
-use crate::editor::ed_error::{EdResult};
-use crate::editor::markup::nodes::MarkupNode;
-use crate::editor::syntax_highlight::HighlightStyle;
-use crate::editor::markup::attribute::Attributes;
 use crate::ui::text::lines::SelectableLines;
-
 
 // digit_char should be verified to be a digit before calling this function
 pub fn start_new_int(ed_model: &mut EdModel, digit_char: &char) -> EdResult<InputOutcome> {
@@ -31,13 +29,12 @@ pub fn start_new_int(ed_model: &mut EdModel, digit_char: &char) -> EdResult<Inpu
 
     let digit_string = digit_char.to_string();
 
-    let expr2_node = 
-        SmallInt {
-            number: IntVal::U64(*digit_char as u64),  // TODO determine if u64 on wordlength of current arch, perhaps introduce Unknown(i64)
-            var: int_var,   
-            style: IntStyle::Decimal, 
-            text: PoolStr::new(&digit_string, &mut ed_model.module.env.pool)   
-        };
+    let expr2_node = SmallInt {
+        number: IntVal::U64(*digit_char as u64), // TODO determine if u64 on wordlength of current arch, perhaps introduce Unknown(i64)
+        var: int_var,
+        style: IntStyle::Decimal,
+        text: PoolStr::new(&digit_string, &mut ed_model.module.env.pool),
+    };
 
     ed_model.module.env.pool.set(ast_node_id, expr2_node);
 
@@ -50,7 +47,9 @@ pub fn start_new_int(ed_model: &mut EdModel, digit_char: &char) -> EdResult<Inpu
     };
 
     if is_blank_node {
-        ed_model.markup_node_pool.replace_node(curr_mark_node_id, int_node);
+        ed_model
+            .markup_node_pool
+            .replace_node(curr_mark_node_id, int_node);
 
         // remove data corresponding to Blank node
         ed_model.del_at_line(old_caret_pos.line, old_caret_pos.column)?;
@@ -72,9 +71,13 @@ pub fn start_new_int(ed_model: &mut EdModel, digit_char: &char) -> EdResult<Inpu
     }
 }
 
-
 // digit_char should be verified to be a digit before calling this function
-pub fn update_int(ed_model: &mut EdModel, int_mark_node_id: MarkNodeId, digit_char: &char) -> EdResult<InputOutcome> {
+// todo verify if new int needs more than e.g. 64 bits
+pub fn update_int(
+    ed_model: &mut EdModel,
+    int_mark_node_id: MarkNodeId,
+    digit_char: &char,
+) -> EdResult<InputOutcome> {
     let old_caret_pos = ed_model.get_caret();
 
     let node_caret_offset = ed_model
@@ -85,43 +88,50 @@ pub fn update_int(ed_model: &mut EdModel, int_mark_node_id: MarkNodeId, digit_ch
     let int_ast_node_id = int_mark_node.get_ast_node_id();
 
     let content_str_mut = int_mark_node.get_content_mut()?;
-    content_str_mut.insert(node_caret_offset, *digit_char);
 
-    let content_str = int_mark_node.get_content()?;
+    // 00, 01 are not valid ints
+    if (content_str_mut == "0" && (node_caret_offset == 1 || *digit_char == '0'))
+        || (*digit_char == '0' && node_caret_offset == 0)
+    {
+        Ok(InputOutcome::Ignored)
+    } else {
+        content_str_mut.insert(node_caret_offset, *digit_char);
 
-     // update GridNodeMap and CodeLines
-     ed_model.insert_between_line(
-        old_caret_pos.line,
-        old_caret_pos.column,
-        &digit_char.to_string(),
-        int_mark_node_id,
-    )?;
+        let content_str = int_mark_node.get_content()?;
 
-    // update ast
-    let new_pool_str = PoolStr::new(&content_str, ed_model.module.env.pool);
-    let int_ast_node = ed_model.module.env.pool.get_mut(int_ast_node_id);
-    match int_ast_node {
-        SmallInt{ number, text, .. } => {
+        // update GridNodeMap and CodeLines
+        ed_model.insert_between_line(
+            old_caret_pos.line,
+            old_caret_pos.column,
+            &digit_char.to_string(),
+            int_mark_node_id,
+        )?;
 
-            *number = match number {
-                // TODO remove unwrap
-                I64(_) => I64(content_str.parse::<i64>().unwrap()),
-                U64(_) => U64(content_str.parse::<u64>().unwrap()),
-                I32(_) => I32(content_str.parse::<i32>().unwrap()),
-                U32(_) => U32(content_str.parse::<u32>().unwrap()),
-                I16(_) => I16(content_str.parse::<i16>().unwrap()),
-                U16(_) => U16(content_str.parse::<u16>().unwrap()),
-                I8(_) => I8(content_str.parse::<i8>().unwrap()),
-                U8(_) => U8(content_str.parse::<u8>().unwrap()),
-            };
-            
-            *text = new_pool_str;
+        // update ast
+        let new_pool_str = PoolStr::new(&content_str, ed_model.module.env.pool);
+        let int_ast_node = ed_model.module.env.pool.get_mut(int_ast_node_id);
+        match int_ast_node {
+            SmallInt { number, text, .. } => {
+                *number = match number {
+                    // TODO remove unwrap
+                    I64(_) => I64(content_str.parse::<i64>().unwrap()),
+                    U64(_) => U64(content_str.parse::<u64>().unwrap()),
+                    I32(_) => I32(content_str.parse::<i32>().unwrap()),
+                    U32(_) => U32(content_str.parse::<u32>().unwrap()),
+                    I16(_) => I16(content_str.parse::<i16>().unwrap()),
+                    U16(_) => U16(content_str.parse::<u16>().unwrap()),
+                    I8(_) => I8(content_str.parse::<i8>().unwrap()),
+                    U8(_) => U8(content_str.parse::<u8>().unwrap()),
+                };
+
+                *text = new_pool_str;
+            }
+            _ => unimplemented!("TODO implement updating this type of Number"),
         }
-        _ => unimplemented!("TODO implement updating this type of Number")
+
+        // update caret
+        ed_model.simple_move_carets_right(1);
+
+        Ok(InputOutcome::Accepted)
     }
-
-    // update caret
-    ed_model.simple_move_carets_right(1);
-
-    Ok(InputOutcome::Accepted)
 }

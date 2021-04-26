@@ -173,87 +173,133 @@ pub fn update_record_colon(
         curr_mark_node_id,
         curr_mark_node,
         parent_id_opt,
-        ast_node_id: _,
+        ast_node_id,
     } = get_node_context(&ed_model)?;
-
+    // TODO clean up if-else waterfall
     if let Some(parent_id) = parent_id_opt {
-        let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
+        let curr_ast_node = ed_model.module.env.pool.get(ast_node_id);
 
-        let new_child_index = index_of(curr_mark_node_id, &sibling_ids)?;
+        let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
+        if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
+            let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
 
-        let ast_node_ref = ed_model.module.env.pool.get(record_ast_node_id);
+            let prev_ast_node = ed_model
+                .module
+                .env
+                .pool
+                .get(prev_mark_node.get_ast_node_id());
 
-        match ast_node_ref {
-            Expr2::Record {
-                record_var: _,
-                fields,
-            } => {
-                // update AST node
-                let new_field_val = Expr2::Blank;
-                let new_field_val_id = ed_model.module.env.pool.add(new_field_val);
+            // current and prev node should always point to record when in valid position to add ':'
+            if let Expr2::Record { .. } = prev_ast_node {
+                if let Expr2::Record { .. } = curr_ast_node {
+                    let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
 
-                let first_field_mut = fields
-                    .iter_mut(ed_model.module.env.pool)
-                    .next()
-                    .with_context(|| RecordWithoutFields {})?;
+                    let new_child_index = index_of(curr_mark_node_id, &sibling_ids)?;
 
-                *first_field_mut = RecordField::LabeledValue(
-                    *first_field_mut.get_record_field_pool_str(),
-                    *first_field_mut.get_record_field_var(),
-                    new_field_val_id,
-                );
+                    let ast_node_ref = ed_model.module.env.pool.get(record_ast_node_id);
 
-                // update Markup
-                let record_colon = nodes::COLON;
+                    match ast_node_ref {
+                        Expr2::Record {
+                            record_var: _,
+                            fields,
+                        } => {
+                            let next_mark_node_id_res =
+                                ed_model.grid_node_map.get_id_at_row_col(old_caret_pos);
 
-                let record_colon_node = MarkupNode::Text {
-                    content: record_colon.to_owned(),
-                    ast_node_id: record_ast_node_id,
-                    syn_high_style: HighlightStyle::Operator,
-                    attributes: Attributes::new(),
-                    parent_id_opt: Some(parent_id),
-                };
+                            if let Ok(next_mark_node_id) = next_mark_node_id_res {
+                                let next_mark_node =
+                                    ed_model.markup_node_pool.get(next_mark_node_id);
+                                if next_mark_node.get_content()? == nodes::RIGHT_ACCOLADE {
+                                    // update AST node
+                                    let new_field_val = Expr2::Blank;
+                                    let new_field_val_id =
+                                        ed_model.module.env.pool.add(new_field_val);
 
-                let record_colon_node_id = ed_model.markup_node_pool.add(record_colon_node);
-                ed_model
-                    .markup_node_pool
-                    .get_mut(parent_id)
-                    .add_child_at_index(new_child_index, record_colon_node_id)?;
+                                    let first_field_mut = fields
+                                        .iter_mut(ed_model.module.env.pool)
+                                        .next()
+                                        .with_context(|| RecordWithoutFields {})?;
 
-                let record_blank_node = MarkupNode::Blank {
-                    ast_node_id: new_field_val_id,
-                    syn_high_style: HighlightStyle::Blank,
-                    attributes: Attributes::new(),
-                    parent_id_opt: Some(parent_id),
-                };
+                                    *first_field_mut = RecordField::LabeledValue(
+                                        *first_field_mut.get_record_field_pool_str(),
+                                        *first_field_mut.get_record_field_var(),
+                                        new_field_val_id,
+                                    );
 
-                let record_blank_node_id = ed_model.markup_node_pool.add(record_blank_node);
-                ed_model
-                    .markup_node_pool
-                    .get_mut(parent_id)
-                    .add_child_at_index(new_child_index + 1, record_blank_node_id)?;
+                                    // update Markup
+                                    let record_colon = nodes::COLON;
 
-                // update caret
-                ed_model.simple_move_carets_right(record_colon.len());
+                                    let record_colon_node = MarkupNode::Text {
+                                        content: record_colon.to_owned(),
+                                        ast_node_id: record_ast_node_id,
+                                        syn_high_style: HighlightStyle::Operator,
+                                        attributes: Attributes::new(),
+                                        parent_id_opt: Some(parent_id),
+                                    };
 
-                // update GridNodeMap and CodeLines
-                ed_model.insert_between_line(
-                    old_caret_pos.line,
-                    old_caret_pos.column,
-                    nodes::COLON,
-                    record_colon_node_id,
-                )?;
+                                    let record_colon_node_id =
+                                        ed_model.markup_node_pool.add(record_colon_node);
+                                    ed_model
+                                        .markup_node_pool
+                                        .get_mut(parent_id)
+                                        .add_child_at_index(
+                                            new_child_index,
+                                            record_colon_node_id,
+                                        )?;
 
-                ed_model.insert_between_line(
-                    old_caret_pos.line,
-                    old_caret_pos.column + nodes::COLON.len(),
-                    nodes::BLANK_PLACEHOLDER,
-                    record_blank_node_id,
-                )?;
+                                    let record_blank_node = MarkupNode::Blank {
+                                        ast_node_id: new_field_val_id,
+                                        syn_high_style: HighlightStyle::Blank,
+                                        attributes: Attributes::new(),
+                                        parent_id_opt: Some(parent_id),
+                                    };
 
-                Ok(InputOutcome::Accepted)
+                                    let record_blank_node_id =
+                                        ed_model.markup_node_pool.add(record_blank_node);
+                                    ed_model
+                                        .markup_node_pool
+                                        .get_mut(parent_id)
+                                        .add_child_at_index(
+                                            new_child_index + 1,
+                                            record_blank_node_id,
+                                        )?;
+
+                                    // update caret
+                                    ed_model.simple_move_carets_right(record_colon.len());
+
+                                    // update GridNodeMap and CodeLines
+                                    ed_model.insert_between_line(
+                                        old_caret_pos.line,
+                                        old_caret_pos.column,
+                                        nodes::COLON,
+                                        record_colon_node_id,
+                                    )?;
+
+                                    ed_model.insert_between_line(
+                                        old_caret_pos.line,
+                                        old_caret_pos.column + nodes::COLON.len(),
+                                        nodes::BLANK_PLACEHOLDER,
+                                        record_blank_node_id,
+                                    )?;
+
+                                    Ok(InputOutcome::Accepted)
+                                } else {
+                                    Ok(InputOutcome::Ignored)
+                                }
+                            } else {
+                                Ok(InputOutcome::Ignored)
+                            }
+                        }
+                        _ => Ok(InputOutcome::Ignored),
+                    }
+                } else {
+                    Ok(InputOutcome::Ignored)
+                }
+            } else {
+                Ok(InputOutcome::Ignored)
             }
-            other => unimplemented!("TODO implement updating of Expr2 {:?}.", other),
+        } else {
+            Ok(InputOutcome::Ignored)
         }
     } else {
         MissingParent {

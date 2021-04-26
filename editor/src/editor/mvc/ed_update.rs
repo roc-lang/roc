@@ -1,10 +1,7 @@
 #![allow(dead_code)]
 
-use crate::editor::mvc::int_update::update_int;
-use crate::editor::mvc::int_update::start_new_int;
 use crate::editor::code_lines::CodeLines;
 use crate::editor::ed_error::from_ui_res;
-use crate::editor::ed_error::print_ui_err;
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::MissingSelection;
 use crate::editor::grid_node_map::GridNodeMap;
@@ -14,6 +11,8 @@ use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_model::SelectedExpression;
+use crate::editor::mvc::int_update::start_new_int;
+use crate::editor::mvc::int_update::update_int;
 use crate::editor::mvc::lookup_update::update_invalid_lookup;
 use crate::editor::mvc::record_update::start_new_record;
 use crate::editor::mvc::record_update::update_empty_record;
@@ -162,6 +161,33 @@ impl<'a> EdModel<'a> {
         self.code_lines.del_at_line(line_nr, index)
     }
 
+    pub fn set_selected_expr(
+        &mut self,
+        expr_start_pos: TextPos,
+        expr_end_pos: TextPos,
+        ast_node_id: NodeId<Expr2>,
+        mark_node_id: MarkNodeId,
+    ) -> EdResult<()> {
+        self.set_raw_sel(RawSelection {
+            start_pos: expr_start_pos,
+            end_pos: expr_end_pos,
+        })?;
+
+        self.set_caret(expr_start_pos);
+
+        //let type_str = self.expr2_to_type(ast_node_id);
+
+        self.selected_expr_opt = Some(SelectedExpression {
+            ast_node_id,
+            mark_node_id,
+            type_str: PoolStr::new("{}", self.module.env.pool), // TODO get this PoolStr from type inference
+        });
+
+        self.dirty = true;
+
+        Ok(())
+    }
+
     // select all MarkupNodes that refer to specific ast node and its children.
     pub fn select_expr(&mut self) -> EdResult<()> {
         // include parent in selection if an `Expr2` was already selected
@@ -176,22 +202,7 @@ impl<'a> EdModel<'a> {
                     .grid_node_map
                     .get_nested_start_end_pos(parent_id, self)?;
 
-                self.set_raw_sel(RawSelection {
-                    start_pos: expr_start_pos,
-                    end_pos: expr_end_pos,
-                })?;
-
-                self.set_caret(expr_start_pos);
-
-                //let type_str = self.expr2_to_type(ast_node_id);
-
-                self.selected_expr_opt = Some(SelectedExpression {
-                    ast_node_id,
-                    mark_node_id: parent_id,
-                    type_str: PoolStr::new("{}", self.module.env.pool), // TODO get this PoolStr from type inference
-                });
-
-                self.dirty = true;
+                self.set_selected_expr(expr_start_pos, expr_end_pos, ast_node_id, parent_id)?;
             }
         } else {
             // select `Expr2` in which caret is currently positioned
@@ -200,22 +211,17 @@ impl<'a> EdModel<'a> {
                 let (expr_start_pos, expr_end_pos, ast_node_id, mark_node_id) = self
                     .grid_node_map
                     .get_expr_start_end_pos(self.get_caret(), &self)?;
-                self.set_raw_sel(RawSelection {
-                    start_pos: expr_start_pos,
-                    end_pos: expr_end_pos,
-                })?;
 
-                self.set_caret(expr_start_pos);
+                self.set_selected_expr(expr_start_pos, expr_end_pos, ast_node_id, mark_node_id)?;
+            } else if self
+                .grid_node_map
+                .node_exists_at_pos(caret_pos.decrement_col())
+            {
+                let (expr_start_pos, expr_end_pos, ast_node_id, mark_node_id) = self
+                    .grid_node_map
+                    .get_expr_start_end_pos(self.get_caret().decrement_col(), &self)?;
 
-                //let type_str = self.expr2_to_type(ast_node_id);
-
-                self.selected_expr_opt = Some(SelectedExpression {
-                    ast_node_id,
-                    mark_node_id,
-                    type_str: PoolStr::new("{}", self.module.env.pool), // TODO get this PoolStr from type inference
-                });
-
-                self.dirty = true;
+                self.set_selected_expr(expr_start_pos, expr_end_pos, ast_node_id, mark_node_id)?;
             }
         }
 
@@ -607,68 +613,94 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                 InputOutcome::Ignored
                                             }
                                         }
+                                        Expr2::SmallInt{ .. } => {
+                                            if ch.is_ascii_digit() {
+                                                update_int(ed_model, curr_mark_node_id, ch)?
+                                            } else {
+                                                InputOutcome::Ignored
+                                            }
+                                        }
                                         _ => InputOutcome::Ignored
                                     }
                                 } else if ch.is_ascii_alphanumeric() { // prev_mark_node_id != curr_mark_node_id
-                                    let prev_ast_node_id =
-                                        ed_model
-                                        .markup_node_pool
-                                        .get(prev_mark_node_id)
-                                        .get_ast_node_id();
 
-                                    let prev_node_ref = ed_model.module.env.pool.get(prev_ast_node_id);
-
-                                    match prev_node_ref {
-                                        Expr2::InvalidLookup(old_pool_str) => {
-                                            update_invalid_lookup(
-                                                &ch.to_string(),
-                                                old_pool_str,
-                                                prev_mark_node_id,
-                                                prev_ast_node_id,
-                                                ed_model
-                                            )?
-                                        }
-                                        Expr2::Record{ record_var:_, fields } => {
-                                            let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
-
-                                            if (curr_mark_node.get_content()? == nodes::RIGHT_ACCOLADE || curr_mark_node.get_content()? == nodes::COLON) &&
-                                                prev_mark_node.is_all_alphanumeric()? {
-                                                update_record_field(
-                                                    &ch.to_string(),
-                                                    ed_model.get_caret(),
-                                                    prev_mark_node_id,
-                                                    fields,
-                                                    ed_model,
-                                                )?
-                                            } else if prev_mark_node.get_content()? == nodes::LEFT_ACCOLADE && curr_mark_node.is_all_alphanumeric()? {
-                                                update_record_field(
-                                                    &ch.to_string(),
-                                                    ed_model.get_caret(),
-                                                    curr_mark_node_id,
-                                                    fields,
-                                                    ed_model,
-                                                )?
+                                    match ast_node_ref {
+                                        Expr2::SmallInt{ .. } => {
+                                            if ch.is_ascii_digit() {
+                                                update_int(ed_model, curr_mark_node_id, ch)?
                                             } else {
                                                 InputOutcome::Ignored
                                             }
                                         }
                                         _ => {
-                                            match ast_node_ref {
-                                                Expr2::EmptyRecord => {
-                                                    let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
+                                            let prev_ast_node_id =
+                                            ed_model
+                                            .markup_node_pool
+                                            .get(prev_mark_node_id)
+                                            .get_ast_node_id();
 
-                                                    if ch.is_ascii_alphabetic() && ch.is_ascii_lowercase() {
-                                                        update_empty_record(
+                                            let prev_node_ref = ed_model.module.env.pool.get(prev_ast_node_id);
+
+                                            match prev_node_ref {
+                                                Expr2::InvalidLookup(old_pool_str) => {
+                                                    update_invalid_lookup(
+                                                        &ch.to_string(),
+                                                        old_pool_str,
+                                                        prev_mark_node_id,
+                                                        prev_ast_node_id,
+                                                        ed_model
+                                                    )?
+                                                }
+                                                Expr2::Record{ record_var:_, fields } => {
+                                                    let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
+
+                                                    if (curr_mark_node.get_content()? == nodes::RIGHT_ACCOLADE || curr_mark_node.get_content()? == nodes::COLON) &&
+                                                        prev_mark_node.is_all_alphanumeric()? {
+                                                        update_record_field(
                                                             &ch.to_string(),
+                                                            ed_model.get_caret(),
                                                             prev_mark_node_id,
-                                                            sibling_ids,
-                                                            ed_model
+                                                            fields,
+                                                            ed_model,
+                                                        )?
+                                                    } else if prev_mark_node.get_content()? == nodes::LEFT_ACCOLADE && curr_mark_node.is_all_alphanumeric()? {
+                                                        update_record_field(
+                                                            &ch.to_string(),
+                                                            ed_model.get_caret(),
+                                                            curr_mark_node_id,
+                                                            fields,
+                                                            ed_model,
                                                         )?
                                                     } else {
                                                         InputOutcome::Ignored
                                                     }
                                                 }
-                                                _ => InputOutcome::Ignored
+                                                Expr2::SmallInt{ .. } => {
+                                                    if ch.is_ascii_digit() {
+                                                        update_int(ed_model, prev_mark_node_id, ch)?
+                                                    } else {
+                                                        InputOutcome::Ignored
+                                                    }
+                                                }
+                                                _ => {
+                                                    match ast_node_ref {
+                                                        Expr2::EmptyRecord => {
+                                                            let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
+
+                                                            if ch.is_ascii_alphabetic() && ch.is_ascii_lowercase() {
+                                                                update_empty_record(
+                                                                    &ch.to_string(),
+                                                                    prev_mark_node_id,
+                                                                    sibling_ids,
+                                                                    ed_model
+                                                                )?
+                                                            } else {
+                                                                InputOutcome::Ignored
+                                                            }
+                                                        }
+                                                        _ => InputOutcome::Ignored
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -687,8 +719,17 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                 }
 
                             } else {
-                                // Not supporting any Expr2 right now that would allow prepending at the start of a line
-                                InputOutcome::Ignored
+                                match ast_node_ref {
+                                    Expr2::SmallInt{ .. } => {
+                                        if ch.is_ascii_digit() {
+                                            update_int(ed_model, curr_mark_node_id, ch)?
+                                        } else {
+                                            InputOutcome::Ignored
+                                        }
+                                    },
+                                    // only SmallInt currently allows prepending at the start
+                                    _ => InputOutcome::Ignored
+                                }
                             }
                         },
                         Err(_) => { //no MarkupNode at the current position
@@ -697,7 +738,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                 let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
 
                                 let prev_ast_node = ed_model.module.env.pool.get(prev_mark_node.get_ast_node_id());
-                                
+
                                 match prev_ast_node {
                                     Expr2::SmallInt{ .. } => {
                                         if ch.is_ascii_digit() {
@@ -806,12 +847,67 @@ pub mod test_ed_update {
         // space is added because Blank is inserted
         assert_insert(&["┃"], &["┃ "], 'a')?;
         assert_insert(&["┃"], &["┃ "], ';')?;
-        assert_insert(&["┃"], &["┃ "], '5')?;
         assert_insert(&["┃"], &["┃ "], '-')?;
         assert_insert(&["┃"], &["┃ "], '_')?;
 
         Ok(())
     }
+
+    #[test]
+    fn test_int() -> Result<(), String> {
+        assert_insert(&["┃"], &["0┃"], '0')?;
+        assert_insert(&["┃"], &["1┃"], '1')?;
+        assert_insert(&["┃"], &["2┃"], '2')?;
+        assert_insert(&["┃"], &["3┃"], '3')?;
+        assert_insert(&["┃"], &["4┃"], '4')?;
+        assert_insert(&["┃"], &["5┃"], '5')?;
+        assert_insert(&["┃"], &["6┃"], '6')?;
+        assert_insert(&["┃"], &["7┃"], '7')?;
+        assert_insert(&["┃"], &["8┃"], '8')?;
+        assert_insert(&["┃"], &["9┃"], '9')?;
+
+        assert_insert(&["1┃"], &["19┃"], '9')?;
+        assert_insert(&["9876┃"], &["98769┃"], '9')?;
+
+        assert_insert(&["0┃"], &["0┃"], '0')?;
+        assert_insert(&["0┃"], &["0┃"], '9')?;
+        assert_insert(&["10┃"], &["103┃"], '3')?;
+        assert_insert(&["┃0"], &["┃0"], '0')?;
+        assert_insert(&["┃0"], &["1┃0"], '1')?;
+        assert_insert(&["┃1"], &["┃1"], '0')?;
+        assert_insert(&["10000┃"], &["100000┃"], '0')?;
+
+        assert_insert(&["┃1234"], &["5┃1234"], '5')?;
+        assert_insert(&["1┃234"], &["10┃234"], '0')?;
+        assert_insert(&["12┃34"], &["121┃34"], '1')?;
+        assert_insert(&["123┃4"], &["1232┃4"], '2')?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ignore_int() -> Result<(), String> {
+        assert_insert_seq_ignore(&["┃0"], "{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq_ignore(&["┃7"], "{}()[]-><-_\"azAZ:@")?;
+
+        assert_insert_seq_ignore(&["0┃"], ",{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq_ignore(&["8┃"], ",{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq_ignore(&["20┃"], ",{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq_ignore(&["83┃"], ",{}()[]-><-_\"azAZ:@")?;
+
+        assert_insert_seq_ignore(&["1┃0"], ",{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq_ignore(&["8┃4"], ",{}()[]-><-_\"azAZ:@")?;
+
+        assert_insert_seq_ignore(&["┃10"], ",{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq_ignore(&["┃84"], ",{}()[]-><-_\"azAZ:@")?;
+
+        assert_insert_seq_ignore(&["129┃96"], ",{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq_ignore(&["97┃684"], ",{}()[]-><-_\"azAZ:@")?;
+
+        Ok(())
+    }
+
+    //TODO test_int arch bit limit
 
     #[test]
     fn test_string() -> Result<(), String> {
@@ -947,13 +1043,28 @@ pub mod test_ed_update {
         assert_insert_seq(&["{ a┃ }"], &["{ a: \"┃\" }"], ":\"")?;
         assert_insert_seq(&["{ abc┃ }"], &["{ abc: \"┃\" }"], ":\"")?;
 
+        assert_insert_seq(&["{ a┃ }"], &["{ a: 0┃ }"], ":0")?;
+        assert_insert_seq(&["{ abc┃ }"], &["{ abc: 9┃ }"], ":9")?;
+        assert_insert_seq(&["{ a┃ }"], &["{ a: 1000┃ }"], ":1000")?;
+        assert_insert_seq(&["{ abc┃ }"], &["{ abc: 98761┃ }"], ":98761")?;
+
         assert_insert(&["{ a: \"┃\" }"], &["{ a: \"a┃\" }"], 'a')?;
         assert_insert(&["{ a: \"a┃\" }"], &["{ a: \"ab┃\" }"], 'b')?;
         assert_insert(&["{ a: \"a┃b\" }"], &["{ a: \"az┃b\" }"], 'z')?;
         assert_insert(&["{ a: \"┃ab\" }"], &["{ a: \"z┃ab\" }"], 'z')?;
 
+        assert_insert(&["{ a: 1┃ }"], &["{ a: 10┃ }"], '0')?;
+        assert_insert(&["{ a: 100┃ }"], &["{ a: 1004┃ }"], '4')?;
+        assert_insert(&["{ a: 9┃76 }"], &["{ a: 98┃76 }"], '8')?;
+        assert_insert(&["{ a: 4┃691 }"], &["{ a: 40┃691 }"], '0')?;
+        assert_insert(&["{ a: 469┃1 }"], &["{ a: 4699┃1 }"], '9')?;
+
         assert_insert(&["{ camelCase: \"┃\" }"], &["{ camelCase: \"a┃\" }"], 'a')?;
         assert_insert(&["{ camelCase: \"a┃\" }"], &["{ camelCase: \"ab┃\" }"], 'b')?;
+
+        assert_insert(&["{ camelCase: 3┃ }"], &["{ camelCase: 35┃ }"], '5')?;
+        assert_insert(&["{ camelCase: ┃2 }"], &["{ camelCase: 5┃2 }"], '5')?;
+        assert_insert(&["{ camelCase: 10┃2 }"], &["{ camelCase: 106┃2 }"], '6')?;
 
         assert_insert(&["{ a┃: \"\" }"], &["{ ab┃: \"\" }"], 'b')?;
         assert_insert(&["{ ┃a: \"\" }"], &["{ z┃a: \"\" }"], 'z')?;
@@ -975,7 +1086,16 @@ pub mod test_ed_update {
             'z',
         )?;
 
+        assert_insert(&["{ a┃: 0 }"], &["{ ab┃: 0 }"], 'b')?;
+        assert_insert(&["{ ┃a: 2100 }"], &["{ z┃a: 2100 }"], 'z')?;
+        assert_insert(&["{ ab┃: 9876 }"], &["{ abc┃: 9876 }"], 'c')?;
+        assert_insert(&["{ ┃ab: 102 }"], &["{ z┃ab: 102 }"], 'z')?;
+        assert_insert(&["{ camelCase┃: 99999 }"], &["{ camelCaseB┃: 99999 }"], 'B')?;
+        assert_insert(&["{ camel┃Case: 88156 }"], &["{ camelZ┃Case: 88156 }"], 'Z')?;
+        assert_insert(&["{ ┃camelCase: 1 }"], &["{ z┃camelCase: 1 }"], 'z')?;
+
         assert_insert_seq(&["┃"], &["{ camelCase: \"hello┃\" }"], "{camelCase:\"hello")?;
+        assert_insert_seq(&["┃"], &["{ camelCase: 10009┃ }"], "{camelCase:10009")?;
 
         Ok(())
     }
@@ -1037,6 +1157,25 @@ pub mod test_ed_update {
             "ul",
         )?;
 
+        assert_insert_seq(&["{ a: { zulu┃ } }"], &["{ a: { zulu: 1┃ } }"], ":1")?;
+        assert_insert_seq(
+            &["{ abc: { camelCase┃ } }"],
+            &["{ abc: { camelCase: 0┃ } }"],
+            ":0",
+        )?;
+        assert_insert_seq(
+            &["{ camelCase: { z┃ } }"],
+            &["{ camelCase: { z: 45┃ } }"],
+            ":45",
+        )?;
+
+        assert_insert_seq(&["{ a: { zulu: ┃0 } }"], &["{ a: { zulu: 4┃0 } }"], "4")?;
+        assert_insert_seq(
+            &["{ a: { zulu: 10┃98 } }"],
+            &["{ a: { zulu: 1077┃98 } }"],
+            "77",
+        )?;
+
         assert_insert_seq(&["{ a: { zulu┃ } }"], &["{ a: { zulu: { ┃ } } }"], ":{")?;
         assert_insert_seq(
             &["{ abc: { camelCase┃ } }"],
@@ -1095,146 +1234,199 @@ pub mod test_ed_update {
         Ok(())
     }
 
+    const IGNORE_CHARS: &str = "{}()[]-><-_\"azAZ:@09";
+    const IGNORE_NO_LTR: &str = "{\"5";
+    const IGNORE_NO_NUM: &str = "a{\"";
+
     #[test]
     fn test_ignore_record() -> Result<(), String> {
-        assert_insert_seq_ignore(&["┃{  }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{  }┃"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{┃  }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{  ┃}"], "a{\"5")?;
+        assert_insert_seq_ignore(&["┃{  }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{  }┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{┃  }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{  ┃}"], IGNORE_CHARS)?;
 
-        assert_insert_seq_ignore(&["{ ┃ }"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ ┃a }"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ ┃abc }"], "{\"5")?;
+        assert_insert_seq_ignore(&["{ ┃ }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ ┃a }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ ┃abc }"], IGNORE_NO_LTR)?;
 
-        assert_insert_seq_ignore(&["┃{ a }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ a }┃"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{┃ a }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ a ┃}"], "a{\"5")?;
+        assert_insert_seq_ignore(&["┃{ a }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ a }┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{┃ a }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ a ┃}"], IGNORE_CHARS)?;
 
-        assert_insert_seq_ignore(&["┃{ a15 }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ a15 }┃"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{┃ a15 }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ a15 ┃}"], "a{\"5")?;
+        assert_insert_seq_ignore(&["┃{ a15 }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ a15 }┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{┃ a15 }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ a15 ┃}"], IGNORE_CHARS)?;
 
-        assert_insert_seq_ignore(&["┃{ camelCase }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ camelCase }┃"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{┃ camelCase }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ camelCase ┃}"], "a{\"5")?;
+        assert_insert_seq_ignore(&["┃{ camelCase }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ camelCase }┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{┃ camelCase }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ camelCase ┃}"], IGNORE_CHARS)?;
 
-        assert_insert_seq_ignore(&["┃{ a: \"\" }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{┃ a: \"\" }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ a: ┃\"\" }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ a: \"\"┃ }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ a: \"\" }┃"], "a{\"5")?;
+        assert_insert_seq_ignore(&["┃{ a: \"\" }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{┃ a: \"\" }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ a: ┃\"\" }"], "0")?;
+        assert_insert_seq_ignore(&["{ a: ┃\"\" }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ a: \"\"┃ }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ a: \"\" }┃"], IGNORE_CHARS)?;
 
-        assert_insert_seq_ignore(&["┃{ camelCase: \"\" }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{┃ camelCase: \"\" }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ camelCase: ┃\"\" }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ camelCase: \"\"┃ }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ camelCase: \"\" }┃"], "a{\"5")?;
+        assert_insert_seq_ignore(&["┃{ a: 1 }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{┃ a: 2 }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ a: ┃6 }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore(&["{ a: 8┃ }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore(&["{ a: 0 }┃"], IGNORE_CHARS)?;
 
-        assert_insert_seq_ignore(&["┃{ a: \"z\" }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{┃ a: \"z\" }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ a: ┃\"z\" }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ a: \"z\"┃ }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ a: \"z\" }┃"], "a{\"5")?;
+        assert_insert_seq_ignore(&["┃{ camelCase: 1 }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{┃ camelCase: 7 }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ camelCase: ┃2 }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore(&["{ camelCase: 4┃ }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore(&["{ camelCase: 9 }┃"], IGNORE_CHARS)?;
 
-        assert_insert_seq_ignore(&["┃{ a: \"hello, hello.0123456789ZXY{}[]-><-\" }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{┃ a: \"hello, hello.0123456789ZXY{}[]-><-\" }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ a: ┃\"hello, hello.0123456789ZXY{}[]-><-\" }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ a: \"hello, hello.0123456789ZXY{}[]-><-\"┃ }"], "a{\"5")?;
-        assert_insert_seq_ignore(&["{ a: \"hello, hello.0123456789ZXY{}[]-><-\" }┃"], "a{\"5")?;
+        assert_insert_seq_ignore(&["┃{ camelCase: \"\" }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{┃ camelCase: \"\" }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ camelCase: ┃\"\" }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ camelCase: \"\"┃ }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ camelCase: \"\" }┃"], IGNORE_CHARS)?;
+
+        assert_insert_seq_ignore(&["┃{ a: \"z\" }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{┃ a: \"z\" }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ a: ┃\"z\" }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ a: \"z\"┃ }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ a: \"z\" }┃"], IGNORE_CHARS)?;
+
+        assert_insert_seq_ignore(
+            &["┃{ a: \"hello, hello.0123456789ZXY{}[]-><-\" }"],
+            IGNORE_CHARS,
+        )?;
+        assert_insert_seq_ignore(
+            &["{┃ a: \"hello, hello.0123456789ZXY{}[]-><-\" }"],
+            IGNORE_CHARS,
+        )?;
+        assert_insert_seq_ignore(
+            &["{ a: ┃\"hello, hello.0123456789ZXY{}[]-><-\" }"],
+            IGNORE_CHARS,
+        )?;
+        assert_insert_seq_ignore(
+            &["{ a: \"hello, hello.0123456789ZXY{}[]-><-\"┃ }"],
+            IGNORE_CHARS,
+        )?;
+        assert_insert_seq_ignore(
+            &["{ a: \"hello, hello.0123456789ZXY{}[]-><-\" }┃"],
+            IGNORE_CHARS,
+        )?;
+
+        assert_insert_seq_ignore(&["┃{ a: 915480 }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{┃ a: 915480 }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ a: ┃915480 }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore(&["{ a: 915480┃ }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore(&["{ a: 915480 }┃"], IGNORE_CHARS)?;
 
         Ok(())
     }
 
     #[test]
     fn test_ignore_nested_record() -> Result<(), String> {
-        assert_insert_seq_ignore(&["{ a: { ┃ } }"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ a: ┃{  } }"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ a: {┃  } }"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ a: {  }┃ }"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ a: {  } ┃}"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ a: {  } }┃"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ a:┃ {  } }"], "{\"5")?;
-        assert_insert_seq_ignore(&["{┃ a: {  } }"], "{\"5")?;
-        assert_insert_seq_ignore(&["┃{ a: {  } }"], "{\"5")?;
+        assert_insert_seq_ignore(&["{ a: { ┃ } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ a: ┃{  } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ a: {┃  } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ a: {  }┃ }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ a: {  } ┃}"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ a: {  } }┃"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ a:┃ {  } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{┃ a: {  } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["┃{ a: {  } }"], IGNORE_NO_LTR)?;
         assert_insert_seq_ignore(&["{ ┃a: {  } }"], "1")?;
 
-        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a ┃} }"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ camelCaseB1: {┃ z15a } }"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ camelCaseB1: ┃{ z15a } }"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a }┃ }"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a } ┃}"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a } }┃"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ camelCaseB1:┃ { z15a } }"], "{\"5")?;
-        assert_insert_seq_ignore(&["{┃ camelCaseB1: { z15a } }"], "{\"5")?;
-        assert_insert_seq_ignore(&["┃{ camelCaseB1: { z15a } }"], "{\"5")?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a ┃} }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: {┃ z15a } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: ┃{ z15a } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a }┃ }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a } ┃}"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a } }┃"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1:┃ { z15a } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{┃ camelCaseB1: { z15a } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["┃{ camelCaseB1: { z15a } }"], IGNORE_NO_LTR)?;
         assert_insert_seq_ignore(&["{ ┃camelCaseB1: { z15a } }"], "1")?;
         assert_insert_seq_ignore(&["{ camelCaseB1: { ┃z15a } }"], "1")?;
 
-        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: \"\"┃ } }"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: ┃\"\" } }"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a:┃ \"\" } }"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: \"\" ┃} }"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ camelCaseB1: {┃ z15a: \"\" } }"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ camelCaseB1: ┃{ z15a: \"\" } }"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: \"\" }┃ }"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: \"\" } ┃}"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: \"\" } }┃"], "{\"5")?;
-        assert_insert_seq_ignore(&["{ camelCaseB1:┃ { z15a: \"\" } }"], "{\"5")?;
-        assert_insert_seq_ignore(&["{┃ camelCaseB1: { z15a: \"\" } }"], "{\"5")?;
-        assert_insert_seq_ignore(&["┃{ camelCaseB1: { z15a: \"\" } }"], "{\"5")?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: \"\"┃ } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: ┃\"\" } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a:┃ \"\" } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: \"\" ┃} }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: {┃ z15a: \"\" } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: ┃{ z15a: \"\" } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: \"\" }┃ }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: \"\" } ┃}"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: \"\" } }┃"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1:┃ { z15a: \"\" } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{┃ camelCaseB1: { z15a: \"\" } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["┃{ camelCaseB1: { z15a: \"\" } }"], IGNORE_NO_LTR)?;
         assert_insert_seq_ignore(&["{ ┃camelCaseB1: { z15a: \"\" } }"], "1")?;
         assert_insert_seq_ignore(&["{ camelCaseB1: { ┃z15a: \"\" } }"], "1")?;
 
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: 0┃ } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: ┃123 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a:┃ 999 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: 80 ┃} }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: {┃ z15a: 99000 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: ┃{ z15a: 12 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: 7 }┃ }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: 98 } ┃}"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: 4582 } }┃"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1:┃ { z15a: 0 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore(&["{┃ camelCaseB1: { z15a: 44 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore(&["┃{ camelCaseB1: { z15a: 100123 } }"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore(&["{ ┃camelCaseB1: { z15a: 5 } }"], "1")?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { ┃z15a: 6 } }"], "1")?;
+
         assert_insert_seq_ignore(
             &["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\"┃ } }"],
-            "{\"5",
+            IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
             &["{ camelCaseB1: { z15a: ┃\"hello, hello.0123456789ZXY{}[]-><-\" } }"],
-            "{\"5",
+            IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
             &["{ camelCaseB1: { z15a:┃ \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
-            "{\"5",
+            IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
             &["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" ┃} }"],
-            "{\"5",
+            IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
             &["{ camelCaseB1: {┃ z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
-            "{\"5",
+            IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
             &["{ camelCaseB1: ┃{ z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
-            "{\"5",
+            IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
             &["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" }┃ }"],
-            "{\"5",
+            IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
             &["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } ┃}"],
-            "{\"5",
+            IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
             &["{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }┃"],
-            "{\"5",
+            IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
             &["{ camelCaseB1:┃ { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
-            "{\"5",
+            IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
             &["{┃ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
-            "{\"5",
+            IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
             &["┃{ camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
-            "{\"5",
+            IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
             &["{ ┃camelCaseB1: { z15a: \"hello, hello.0123456789ZXY{}[]-><-\" } }"],
@@ -1247,35 +1439,35 @@ pub mod test_ed_update {
 
         assert_insert_seq_ignore(
             &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase ┃} } } } } } } }"],
-            "{\"5",
+            IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
             &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase } ┃} } } } } } }"],
-            "{\"5",
+            IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
             &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }┃"],
-            "{\"5",
+            IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
             &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } ┃} } }"],
-            "{\"5",
+            IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
             &["{ g: { oi: { ng: { d: { e: {┃ e: { p: { camelCase } } } } } } } }"],
-            "{\"5",
+            IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
             &["{ g: { oi: { ng: { d: { e: { e:┃ { p: { camelCase } } } } } } } }"],
-            "{\"5",
+            IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
             &["{┃ g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }"],
-            "{\"5",
+            IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
             &["┃{ g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }"],
-            "{\"5",
+            IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
             &["{ ┃g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }"],
@@ -1326,6 +1518,20 @@ pub mod test_ed_update {
     }
 
     #[test]
+    fn test_ctrl_shift_up_int() -> Result<(), String> {
+        assert_ctrl_shift_up(&["5┃"], &["┃❮5❯"])?;
+        assert_ctrl_shift_up_repeat(&["0┃"], &["┃❮0❯"], 3)?;
+        assert_ctrl_shift_up(&["12345┃"], &["┃❮12345❯"])?;
+        assert_ctrl_shift_up(&["┃12345"], &["┃❮12345❯"])?;
+        assert_ctrl_shift_up(&["1┃2345"], &["┃❮12345❯"])?;
+        assert_ctrl_shift_up(&["12┃345"], &["┃❮12345❯"])?;
+        assert_ctrl_shift_up(&["123┃45"], &["┃❮12345❯"])?;
+        assert_ctrl_shift_up(&["1234┃5"], &["┃❮12345❯"])?;
+
+        Ok(())
+    }
+
+    #[test]
     fn test_ctrl_shift_up_string() -> Result<(), String> {
         assert_ctrl_shift_up(&["\"┃\""], &["┃❮\"\"❯"])?;
         assert_ctrl_shift_up(&["┃\"\""], &["┃❮\"\"❯"])?;
@@ -1341,8 +1547,8 @@ pub mod test_ed_update {
             &["┃❮\"hello, hello.0123456789ZXY{}[]-><-\"❯"],
         )?;
 
-        assert_ctrl_shift_up(&["\"\"┃"], &["\"\"┃"])?;
-        assert_ctrl_shift_up(&["\"abc\"┃"], &["\"abc\"┃"])?;
+        assert_ctrl_shift_up(&["\"\"┃"], &["┃❮\"\"❯"])?;
+        assert_ctrl_shift_up(&["\"abc\"┃"], &["┃❮\"abc\"❯"])?;
 
         Ok(())
     }
@@ -1354,7 +1560,7 @@ pub mod test_ed_update {
         assert_ctrl_shift_up(&["┃{  }"], &["┃❮{  }❯"])?;
         assert_ctrl_shift_up(&["{  ┃}"], &["┃❮{  }❯"])?;
         assert_ctrl_shift_up_repeat(&["{ ┃ }"], &["┃❮{  }❯"], 4)?;
-        assert_ctrl_shift_up(&["{  }┃"], &["{  }┃"])?;
+        assert_ctrl_shift_up(&["{  }┃"], &["┃❮{  }❯"])?;
 
         assert_ctrl_shift_up(&["{ pear┃ }"], &["┃❮{ pear }❯"])?;
         assert_ctrl_shift_up(&["{ pea┃r }"], &["┃❮{ pear }❯"])?;
@@ -1364,7 +1570,7 @@ pub mod test_ed_update {
         assert_ctrl_shift_up(&["┃{ pear }"], &["┃❮{ pear }❯"])?;
         assert_ctrl_shift_up(&["{ pear ┃}"], &["┃❮{ pear }❯"])?;
         assert_ctrl_shift_up_repeat(&["{ pear┃ }"], &["┃❮{ pear }❯"], 3)?;
-        assert_ctrl_shift_up(&["{ pear }┃"], &["{ pear }┃"])?;
+        assert_ctrl_shift_up(&["{ pear }┃"], &["┃❮{ pear }❯"])?;
 
         assert_ctrl_shift_up(&["{ camelCase123┃ }"], &["┃❮{ camelCase123 }❯"])?;
 
@@ -1373,7 +1579,7 @@ pub mod test_ed_update {
         assert_ctrl_shift_up(&["{ a: \"\"┃ }"], &["┃❮{ a: \"\" }❯"])?;
         assert_ctrl_shift_up(&["{ a: \"\" ┃}"], &["┃❮{ a: \"\" }❯"])?;
         assert_ctrl_shift_up_repeat(&["{ a: \"\" ┃}"], &["┃❮{ a: \"\" }❯"], 3)?;
-        assert_ctrl_shift_up(&["{ a: \"\" }┃"], &["{ a: \"\" }┃"])?;
+        assert_ctrl_shift_up(&["{ a: \"\" }┃"], &["┃❮{ a: \"\" }❯"])?;
         assert_ctrl_shift_up(&["{ a:┃ \"\" }"], &["┃❮{ a: \"\" }❯"])?;
         assert_ctrl_shift_up(&["{ a┃: \"\" }"], &["┃❮{ a: \"\" }❯"])?;
         assert_ctrl_shift_up(&["{ ┃a: \"\" }"], &["┃❮{ a: \"\" }❯"])?;
@@ -1381,6 +1587,21 @@ pub mod test_ed_update {
         assert_ctrl_shift_up(&["┃{ a: \"\" }"], &["┃❮{ a: \"\" }❯"])?;
         assert_ctrl_shift_up_repeat(&["{ a: \"┃\" }"], &["┃❮{ a: \"\" }❯"], 2)?;
         assert_ctrl_shift_up_repeat(&["{ a: \"┃\" }"], &["┃❮{ a: \"\" }❯"], 4)?;
+
+        assert_ctrl_shift_up(&["{ a: 1┃0 }"], &["{ a: ┃❮10❯ }"])?;
+        assert_ctrl_shift_up(&["{ a: ┃9 }"], &["{ a: ┃❮9❯ }"])?;
+        assert_ctrl_shift_up(&["{ a: 98┃89 }"], &["{ a: ┃❮9889❯ }"])?;
+        assert_ctrl_shift_up(&["{ a: 44┃ }"], &["┃❮{ a: 44 }❯"])?;
+        assert_ctrl_shift_up(&["{ a: 0 ┃}"], &["┃❮{ a: 0 }❯"])?;
+        assert_ctrl_shift_up_repeat(&["{ a: 123 ┃}"], &["┃❮{ a: 123 }❯"], 3)?;
+        assert_ctrl_shift_up(&["{ a: 96 }┃"], &["┃❮{ a: 96 }❯"])?;
+        assert_ctrl_shift_up(&["{ a:┃ 985600 }"], &["┃❮{ a: 985600 }❯"])?;
+        assert_ctrl_shift_up(&["{ a┃: 5648 }"], &["┃❮{ a: 5648 }❯"])?;
+        assert_ctrl_shift_up(&["{ ┃a: 1000000 }"], &["┃❮{ a: 1000000 }❯"])?;
+        assert_ctrl_shift_up(&["{┃ a: 1 }"], &["┃❮{ a: 1 }❯"])?;
+        assert_ctrl_shift_up(&["┃{ a: 900600 }"], &["┃❮{ a: 900600 }❯"])?;
+        assert_ctrl_shift_up_repeat(&["{ a: 10┃000 }"], &["┃❮{ a: 10000 }❯"], 2)?;
+        assert_ctrl_shift_up_repeat(&["{ a: ┃45 }"], &["┃❮{ a: 45 }❯"], 4)?;
 
         assert_ctrl_shift_up(&["{ abc: \"de┃\" }"], &["{ abc: ┃❮\"de\"❯ }"])?;
         assert_ctrl_shift_up(&["{ abc: \"d┃e\" }"], &["{ abc: ┃❮\"de\"❯ }"])?;
@@ -1456,7 +1677,7 @@ pub mod test_ed_update {
         )?;
         assert_ctrl_shift_up(
             &["{ abc: { de: \"f g\" } }┃"],
-            &["{ abc: { de: \"f g\" } }┃"],
+            &["┃❮{ abc: { de: \"f g\" } }❯"],
         )?;
 
         assert_ctrl_shift_up_repeat(
@@ -1474,6 +1695,23 @@ pub mod test_ed_update {
             &["┃❮{ abc: { de: \"f g\" } }❯"],
             4,
         )?;
+
+        assert_ctrl_shift_up(&["{ abc: { de: ┃951 } }"], &["{ abc: { de: ┃❮951❯ } }"])?;
+        assert_ctrl_shift_up(&["{ abc: { de: 11┃0 } }"], &["{ abc: { de: ┃❮110❯ } }"])?;
+        assert_ctrl_shift_up(&["{ abc: { de: 444┃ } }"], &["{ abc: ┃❮{ de: 444 }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: { de┃: 99 } }"], &["{ abc: ┃❮{ de: 99 }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: {┃ de: 0 } }"], &["{ abc: ┃❮{ de: 0 }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: { de: 230 ┃} }"], &["{ abc: ┃❮{ de: 230 }❯ }"])?;
+        assert_ctrl_shift_up(&["{ abc: { de: 7 }┃ }"], &["┃❮{ abc: { de: 7 } }❯"])?;
+        assert_ctrl_shift_up(&["┃{ abc: { de: 1 } }"], &["┃❮{ abc: { de: 1 } }❯"])?;
+        assert_ctrl_shift_up(
+            &["{ abc: { de: 111111 } }┃"],
+            &["┃❮{ abc: { de: 111111 } }❯"],
+        )?;
+
+        assert_ctrl_shift_up_repeat(&["{ abc: { de: 1┃5 } }"], &["{ abc: ┃❮{ de: 15 }❯ }"], 2)?;
+        assert_ctrl_shift_up_repeat(&["{ abc: { de: ┃55 } }"], &["┃❮{ abc: { de: 55 } }❯"], 3)?;
+        assert_ctrl_shift_up_repeat(&["{ abc: { de: ┃400 } }"], &["┃❮{ abc: { de: 400 } }❯"], 4)?;
 
         assert_ctrl_shift_up_repeat(
             &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase┃ } } } } } } } }"],
@@ -1622,6 +1860,15 @@ pub mod test_ed_update {
     }
 
     #[test]
+    fn test_ctrl_shift_up_move_int() -> Result<(), String> {
+        assert_ctrl_shift_single_up_move(&["┃0"], &["0┃"], move_down!())?;
+        assert_ctrl_shift_single_up_move(&["┃9654"], &["┃9654"], move_up!())?;
+        assert_ctrl_shift_single_up_move(&["┃100546"], &["100546┃"], move_end!())?;
+
+        Ok(())
+    }
+
+    #[test]
     fn test_ctrl_shift_up_move_string() -> Result<(), String> {
         assert_ctrl_shift_single_up_move(&["┃\"\""], &["\"\"┃"], move_down!())?;
         assert_ctrl_shift_single_up_move(&["┃\"abc\""], &["┃\"abc\""], move_up!())?;
@@ -1649,6 +1896,13 @@ pub mod test_ed_update {
         assert_ctrl_shift_up_move(
             &["{ camelCase: { cC123: \"hello┃, hello.0123456789ZXY{}[]-><-\" } }"],
             &["{ camelCase: { cC123: \"hello, hello.0123456789ZXY{}[]-><-\" }┃ }"],
+            2,
+            move_down!(),
+        )?;
+
+        assert_ctrl_shift_up_move(
+            &["{ camelCase: { cC123: 9┃5 } }"],
+            &["{ camelCase: { cC123: 95 }┃ }"],
             2,
             move_down!(),
         )?;
@@ -1700,10 +1954,20 @@ pub mod test_ed_update {
     }
 
     #[test]
+    fn test_ctrl_shift_up_backspace_int() -> Result<(), String> {
+        // Blank is inserted when root is deleted
+        assert_ctrl_shift_single_up_backspace(&["95┃21"], &["┃ "])?;
+        assert_ctrl_shift_single_up_backspace(&["0┃"], &["┃ "])?;
+        assert_ctrl_shift_single_up_backspace(&["┃10000"], &["┃ "])?;
+
+        Ok(())
+    }
+
+    #[test]
     fn test_ctrl_shift_up_backspace_string() -> Result<(), String> {
         // Blank is inserted when root is deleted
         assert_ctrl_shift_single_up_backspace(&["\"┃\""], &["┃ "])?;
-        assert_ctrl_shift_single_up_backspace(&["\"\"┃"], &["\"\"┃"])?;
+        assert_ctrl_shift_single_up_backspace(&["\"\"┃"], &["┃ "])?;
         assert_ctrl_shift_single_up_backspace(&["┃\"abc\""], &["┃ "])?;
         assert_ctrl_shift_single_up_backspace(
             &["\"hello┃, hello.0123456789ZXY{}[]-><-\""],
@@ -1723,6 +1987,7 @@ pub mod test_ed_update {
 
         assert_ctrl_shift_single_up_backspace(&["{ a: ┃{ b } }"], &["{ a: ┃  }"])?;
         assert_ctrl_shift_single_up_backspace(&["{ a: \"┃b cd\" }"], &["{ a: ┃  }"])?;
+        assert_ctrl_shift_single_up_backspace(&["{ a: ┃12 }"], &["{ a: ┃  }"])?;
         assert_ctrl_shift_single_up_backspace(
             &["{ g: { oi: { ng: { d: { ┃e: { e: { p: { camelCase } } } } } } } }"],
             &["{ g: { oi: { ng: { d: ┃  } } } }"],
@@ -1730,6 +1995,11 @@ pub mod test_ed_update {
 
         assert_ctrl_shift_up_backspace(
             &["{ a: { b: { c: \"abc┃  \" } } }"],
+            &["{ a: { b: ┃  } }"],
+            2,
+        )?;
+        assert_ctrl_shift_up_backspace(
+            &["{ a: { b: { c: 100┃000 } } }"],
             &["{ a: { b: ┃  } }"],
             2,
         )?;
