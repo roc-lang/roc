@@ -45,6 +45,9 @@ len : Bytes -> Nat
 
 isEmpty : Bytes -> Bool
 
+## The endianness of the currently running system.
+hostEndianness : [ Big, Little ]
+
 # Access
 
 splitFirst : Bytes -> Result { first : U8, rest : Bytes } [ NoBytes ]*
@@ -52,8 +55,8 @@ take : Bytes, Nat -> Bytes
 
 # Building
 
-## Append a number to the bytes, encoded using native endianness.
-appendNe : Bytes, Num * -> Bytes
+## Append a number to the bytes, encoded using host endianness.
+appendHe : Bytes, Num * -> Bytes
 appendLe : Bytes, Num * -> Bytes
 appendBe : Bytes, Num * -> Bytes
 concat : Bytes, Bytes -> Bytes
@@ -90,12 +93,12 @@ parseBeI64 : Bytes -> Result { answer : I64, rest : Bytes } [ Expected [ I64 ]* 
 parseBeU128 : Bytes -> Result { answer : U128, rest : Bytes } [ Expected [ U128 ]* Bytes ]*
 parseBeI128 : Bytes -> Result { answer : I128, rest : Bytes } [ Expected [ I128 ]* Bytes ]*
 
-# Native-Endian
-parseNeU16 : Bytes -> Result { answer : U16, rest : Bytes } [ Expected [ U16 ]* Bytes ]*
-parseNeI16 : Bytes -> Result { answer : I16, rest : Bytes } [ Expected [ I16 ]* Bytes ]*
-parseNeU32 : Bytes -> Result { answer : U32, rest : Bytes } [ Expected [ U32 ]* Bytes ]*
-parseNeI32 : Bytes -> Result { answer : I32, rest : Bytes } [ Expected [ I32 ]* Bytes ]*
-parseNeU64 : Bytes -> Result { answer : U64, rest : Bytes } [ Expected [ U64 ]* Bytes ]*
-parseNeI64 : Bytes -> Result { answer : I64, rest : Bytes } [ Expected [ I64 ]* Bytes ]*
-parseNeU128 : Bytes -> Result { answer : U128, rest : Bytes } [ Expected [ U128 ]* Bytes ]*
-parseNeI128 : Bytes -> Result { answer : I128, rest : Bytes } [ Expected [ I128 ]* Bytes ]*
+# Host Endiannesss
+parseHeU16 : Bytes -> Result { answer : U16, rest : Bytes } [ Expected [ U16 ]* Bytes ]*
+parseHeI16 : Bytes -> Result { answer : I16, rest : Bytes } [ Expected [ I16 ]* Bytes ]*
+parseHeU32 : Bytes -> Result { answer : U32, rest : Bytes } [ Expected [ U32 ]* Bytes ]*
+parseHeI32 : Bytes -> Result { answer : I32, rest : Bytes } [ Expected [ I32 ]* Bytes ]*
+parseHeU64 : Bytes -> Result { answer : U64, rest : Bytes } [ Expected [ U64 ]* Bytes ]*
+parseHeI64 : Bytes -> Result { answer : I64, rest : Bytes } [ Expected [ I64 ]* Bytes ]*
+parseHeU128 : Bytes -> Result { answer : U128, rest : Bytes } [ Expected [ U128 ]* Bytes ]*
+parseHeI128 : Bytes -> Result { answer : I128, rest : Bytes } [ Expected [ I128 ]* Bytes ]*
