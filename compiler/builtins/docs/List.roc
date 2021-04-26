@@ -660,6 +660,10 @@ isEmpty : List * -> Bool
 
 contains : List elem, elem -> Bool
 
+startsWith : List elem, List elem -> Bool
+
+endsWith : List elem, List elem -> Bool
+
 all : List elem, (elem -> Bool) -> Bool
 
 any : List elem, (elem -> Bool) -> Bool
