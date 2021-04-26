@@ -1,6 +1,29 @@
 interface Bytes
     exposes
-        [ Bytes
+        [
+            Bytes,
+            parseUtf8Usv,
+            parseUtf16Usv,
+            parseUtf8Grapheme,
+            parseUtf16Grapheme,
+            parsePastUtf8,
+            parsePastUtf16,
+            parseLeU16,
+            parseLeI16,
+            parseLeU32,
+            parseLeI32,
+            parseLeU64,
+            parseLeI64,
+            parseLeU128,
+            parseLeI128,
+            parseBeU16,
+            parseBeI16,
+            parseBeU32,
+            parseBeI32,
+            parseBeU64,
+            parseBeI64,
+            parseBeU128,
+            parseBeI128
         ]
     imports []
 
