@@ -54,7 +54,6 @@ parseBytes : Parser ok err, List U8 -> Result ok (List (BytesProblem err))
 
 # Primitives
 
-bool : Parser ok err, Bool -> Parser ok [ ExpectedUtf8 Utf8 ]err
 utf8 : Parser ok err, Utf8 -> Parser ok [ ExpectedUtf8 Utf8 ]err
 utf16 : Parser ok err, Utf16 -> Parser ok [ ExpectedUtf16 Utf16 ]err
 u8 : Parser ok err, U8 -> Parser ok [ ExpectedU8 U8 ]err
