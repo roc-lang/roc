@@ -101,7 +101,7 @@ interface Str
 ## A [Unicode](https://unicode.org) text value.
 ##
 ## The type parameter represents the string's encoding.
-Str a : [ @Str a ]
+Str : [ @Str ]
 
 ## Convert
 
@@ -112,7 +112,7 @@ Str a : [ @Str a ]
 ##
 ## If you want to keep all the digits, passing the same float to #Str.num
 ## will do that.
-decimal : Float *, Nat -> Str *
+decimal : Float *, Nat -> Str
 
 ## Split a string around a separator.
 ##
@@ -124,7 +124,7 @@ decimal : Float *, Nat -> Str *
 ## >>> Str.split "1,2,3" ""
 ##
 ## To split a string into its individual graphemes, use #Str.graphemes
-split : Str a, Str a -> List (Str a)
+split : Str, Str -> List Str
 
 ## Split a string around newlines.
 ##
@@ -139,7 +139,7 @@ split : Str a, Str a -> List (Str a)
 ##
 ## To split a string using a custom separator, use #Str.split. For more advanced
 ## string splitting, use a #Parser.
-lines : Str a, Str a -> List (Str a)
+lines : Str, Str -> List Str
 
 ## Check
 
@@ -148,30 +148,30 @@ lines : Str a, Str a -> List (Str a)
 ## >>> Str.isEmpty "hi!"
 ##
 ## >>> Str.isEmpty ""
-isEmpty : Str * -> Bool
+isEmpty : Str -> Bool
 
-startsWith : Str a, Str a -> Bool
+startsWith : Str, Str -> Bool
 
-endsWith : Str a, Str a -> Bool
+endsWith : Str, Str -> Bool
 
-contains : Str a, Str a -> Bool
+contains : Str, Str -> Bool
 
-anyGraphemes : Str a, (Str a -> Bool) -> Bool
+anyGraphemes : Str, (Str -> Bool) -> Bool
 
-allGraphemes : Str a, (Str a -> Bool) -> Bool
+allGraphemes : Str, (Str -> Bool) -> Bool
 
 ## Combine
 
 ## Combine a list of strings into a single string.
 ##
 ## >>> Str.join [ "a", "bc", "def" ]
-join : List (Str a) -> Str a
+join : List Str -> Str
 
 ## Combine a list of strings into a single string, with a separator
 ## string in between each.
 ##
 ## >>> Str.joinWith [ "one", "two", "three" ] ", "
-joinWith : List (Str a), Str a -> Str a
+joinWith : List Str, Str -> Str
 
 ## Add to the start of a string until it has at least the given number of
 ## graphemes.
@@ -183,7 +183,7 @@ joinWith : List (Str a), Str a -> Str a
 ## >>> Str.padGraphemesStart "0" 5 "12345"
 ##
 ## >>> Str.padGraphemesStart "✈️"" 5 "👩‍👩‍👦‍👦👩‍👩‍👦‍👦👩‍👩‍👦‍👦"
-padGraphemesStart : Str a, Nat, Str a -> Str a
+padGraphemesStart : Str, Nat, Str -> Str
 
 ## Add to the end of a string until it has at least the given number of
 ## graphemes.
@@ -195,7 +195,7 @@ padGraphemesStart : Str a, Nat, Str a -> Str a
 ## >>> Str.padGraphemesStart "0" 5 "12345"
 ##
 ## >>> Str.padGraphemesStart "✈️"" 5 "👩‍👩‍👦‍👦👩‍👩‍👦‍👦👩‍👩‍👦‍👦"
-padGraphemesEnd : Str a, Nat, Str a -> Str a
+padGraphemesEnd : Str, Nat, Str -> Str
 
 ## Graphemes
 
@@ -205,7 +205,7 @@ padGraphemesEnd : Str a, Nat, Str a -> Str a
 ##
 ## >>> Str.graphemes  "👍👍👍"
 ##
-graphemes : Str a -> List (Str a)
+graphemes : Str -> List Str
 
 ##     Str.countGraphemes "Roc!"   # 4
 ##     Str.countGraphemes "七巧板" # 3
@@ -218,16 +218,16 @@ graphemes : Str a -> List (Str a)
 ## >>> Str.reverseGraphemes  "🐦✈️"👩‍👩‍👦‍👦"
 ##
 ## >>> Str.reversegraphemes "Crème Brûlée"
-reverseGraphemes : Str a -> Str a
+reverseGraphemes : Str -> Str
 
 ## Returns #True if the two strings are equal when ignoring case.
 ##
 ## >>> Str.caseInsensitiveEq "hi" "Hi"
-isCaseInsensitiveEq : Str a, Str a -> Bool
+isCaseInsensitiveEq : Str, Str -> Bool
 
-isCaseInsensitiveNeq : Str a, Str a -> Bool
+isCaseInsensitiveNeq : Str, Str -> Bool
 
-walkGraphemes : Str a, { start: state, step: (state, Str a -> state) } -> state
+walkGraphemes : Str, { start: state, step: (state, Str -> state) } -> state
 
 ## Returns #True if the string begins with an uppercase letter.
 ##
@@ -252,7 +252,7 @@ walkGraphemes : Str a, { start: state, step: (state, Str a -> state) } -> state
 ## [in Turkish](https://en.wikipedia.org/wiki/Dotted_and_dotless_I#In_computing),
 ## the same `"i"` capitalizes to `"İ"`) see the [roc/locale](roc/locale) package
 ## package for functions which capitalize strings.
-isCapitalized : Str * -> Bool
+isCapitalized : Str -> Bool
 
 ## Returns #True if the string consists entirely of uppercase letters.
 ##
@@ -273,7 +273,7 @@ isCapitalized : Str * -> Bool
 ## >>> Str.isAllUppercase "🐦"
 ##
 ## >>> Str.isAllUppercase ""
-isAllUppercase : Str * -> Bool
+isAllUppercase : Str -> Bool
 
 ## Returns #True if the string consists entirely of lowercase letters.
 ##
@@ -294,11 +294,45 @@ isAllUppercase : Str * -> Bool
 ## >>> Str.isAllLowercase "🐦"
 ##
 ## >>> Str.isAllLowercase ""
-isAllLowercase : Str * -> Bool
+isAllLowercase : Str -> Bool
 
 ## Return the string with any blank spaces removed from both the beginning
 ## as well as the end.
-trim : Str a -> Str a
+trim : Str -> Str
+
+fromUtf8 : Bytes -> Result Str [ BadUtf8 ]*
+
+## Convert from UTF-8, substituting the replacement character ("�") for any
+## invalid sequences encountered.
+fromUtf8Sub : Bytes -> Str
+
+fromUtf16Le : Bytes -> Result Str [ BadUtf16Le ]*
+
+fromUtf16LeSub : Bytes -> Str
+
+fromUtf16Be : Bytes -> Result Str [ BadUtf16Be ]*
+
+fromUtf16BeSub : Bytes -> Str
+
+## Return a #List of the string's #U8 UTF-8 [code units](https://unicode.org/glossary/#code_unit).
+## (To split the string into a #List of smaller #Str values instead of #U8 values,
+## see #Str.split and #Str.graphemes.)
+##
+## >>> Str.toUtf8 "👩‍👩‍👦‍👦"
+##
+## >>> Str.toUtf8 "Roc"
+##
+## >>> Str.toUtf8 "鹏"
+##
+## >>> Str.toUtf8 "🐦"
+##
+## For a more flexible function that walks through each of these #U8 code units
+## without creating a #List, see #Str.walkUtf8 and #Str.walkRevUtf8.
+toUtf8 : Str -> Bytes
+
+toUtf16Le : Str -> Bytes
+
+toUtf16Be : Str -> Bytes
 
 ## Unicode Scalar Values
 
@@ -346,23 +380,28 @@ walkBackwardsUsv : Str, { start: state, step: (state, U32 -> state) } -> state
 
 # Parsing
 
-## Parse a [Unicode Scalar Value](http://www.unicode.org/glossary/#unicode_scalar_value).
-parseUsv : Str a -> Result { answer : U32, rest : Str a } [ Expected [ Usv ]* (Str a) ]*
-## Parse an [extended grapheme cluster](http://www.unicode.org/glossary/#extended_grapheme_cluster).
-parseGrapheme : Str a -> Result { answer : Str a, rest : Str a } [ Expected [ Grapheme ]* (Str a) ]*
+## Return the first [Unicode Scalar Value](http://www.unicode.org/glossary/#unicode_scalar_value)
+## in the string, along with the rest of the string after that USV.
+parseUsv : Str -> Result { usv : U32, rest : Str } [ StrWasEmpty ]*
+
+## Return the first [extended grapheme cluster](http://www.unicode.org/glossary/#extended_grapheme_cluster)
+## in the string, along with the rest of the string after that grapheme.
+parseGrapheme : Str -> Result { grapheme : Str, rest : Str } [ StrWasEmpty ]*
 
 ## If the first string begins with the second, return whatever comes
 ## after the second.
-parsePastStr : Str a, Str a -> Result (Str a) [ Expected [ ExactStr (Str a) ]* Bytes ]*
-parsePastUsv : Str a, U32 -> Result (Str a) [ Expected [ ExactUsv U32 ]* Bytes ]*
+chompStr : Str, Str -> Result Str [ Expected [ ExactStr Str ]* Bytes ]*
+chompUsv, U32 -> Result Str [ Expected [ ExactUsv U32 ]* Bytes ]*
 
-parseU8 : Str a -> Result { answer : U8, rest : Str a } [ Expected [ U8 ]* (Str a) ]*
-parseI8 : Str a -> Result { answer : I8, rest : Str a } [ Expected [ I8 ]* (Str a) ]*
-parseU16 : Str a -> Result { answer : U16, rest : Str a } [ Expected [ U16 ]* (Str a) ]*
-parseI16 : Str a -> Result { answer : I16, rest : Str a } [ Expected [ I16 ]* (Str a) ]*
-parseU32 : Str a -> Result { answer : U32, rest : Str a } [ Expected [ U32 ]* (Str a) ]*
-parseI32 : Str a -> Result { answer : I32, rest : Str a } [ Expected [ I32 ]* (Str a) ]*
-parseU64 : Str a -> Result { answer : U64, rest : Str a } [ Expected [ U64 ]* (Str a) ]*
-parseI64 : Str a -> Result { answer : I64, rest : Str a } [ Expected [ I64 ]* (Str a) ]*
-parseU128 : Str a -> Result { answer : U128, rest : Str a } [ Expected [ U128 ]* (Str a) ]*
-parseI128 : Str a -> Result { answer : I128, rest : Str a } [ Expected [ I128 ]* (Str a) ]*
+## If the string begins with digits which can represent a valid #U8, return
+## that number along with the rest of the string after the digits.
+parseU8 : Str -> Result { u8 : U8, rest : Str } [ Expected [ DigitsU8 ]* Str ]*
+parseI8 : Str -> Result { i8 : I8, rest : Str } [ Expected [ DigitsI8 ]* Str ]*
+parseU16 : Str -> Result { u16 : U16, rest : Str } [ Expected [ DigitsU16 ]* Str ]*
+parseI16 : Str -> Result { i16 : I16, rest : Str } [ Expected [ DigitsI16 ]* Str ]*
+parseU32 : Str -> Result { u32 : U32, rest : Str } [ Expected [ DigitsU32 ]* Str ]*
+parseI32 : Str -> Result { i32 : I32, rest : Str } [ Expected [ DigitsI32 ]* Str ]*
+parseU64 : Str -> Result { u64 : U64, rest : Str } [ Expected [ DigitsU64 ]* Str ]*
+parseI64 : Str -> Result { i64 : I64, rest : Str } [ Expected [ DigitsI64 ]* Str ]*
+parseU128 : Str -> Result { u128 : U128, rest : Str } [ Expected [ DigitsU128 ]* Str ]*
+parseI128 : Str -> Result { i128 : I128, rest : Str } [ Expected [ DigitsI128 ]* Str ]*
