@@ -1,8 +1,8 @@
 extern crate pulldown_cmark;
 use roc_builtins::std::StdLib;
 use roc_can::builtins::builtin_defs_map;
-use roc_load::docs::ModuleDocumentation;
 use roc_load::docs::TypeAnnotation;
+use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::file::LoadingProblem;
 
 use std::fs;
@@ -109,7 +109,14 @@ fn render_main_content(module: &ModuleDocumentation) -> String {
             type_annotation_to_html(0, &mut content, &type_ann);
         }
 
-        buf.push_str(html_node("h3", vec![("id", name)], content.as_str()).as_str());
+        buf.push_str(
+            html_node(
+                "h3",
+                vec![("id", name), ("class", "entry-name")],
+                content.as_str(),
+            )
+            .as_str(),
+        );
 
         if let Some(docs) = &entry.docs {
             buf.push_str(markdown_to_html(docs.to_string()).as_str());
@@ -283,7 +290,7 @@ pub fn files_to_documentations(
     files_docs
 }
 
-const INDENT: &str = "&nbsp;&nbsp;&nbsp;&nbsp;";
+const INDENT: &str = "    ";
 
 fn indent(buf: &mut String, times: usize) {
     for _ in 0..times {
@@ -291,42 +298,36 @@ fn indent(buf: &mut String, times: usize) {
     }
 }
 
+fn new_line(buf: &mut String) {
+    buf.push('\n');
+}
+
 fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &TypeAnnotation) {
     match type_ann {
         TypeAnnotation::TagUnion { tags, extension } => {
-            buf.push_str("<br>");
+            new_line(buf);
 
             let tag_union_indent = indent_level + 1;
             indent(buf, tag_union_indent);
             buf.push('[');
-            buf.push_str("<br>");
+            new_line(buf);
 
-            let mut index = 0;
             let next_indent_level = tag_union_indent + 1;
-            let tags_len = tags.len();
-            while index < tags_len {
-                let tag = &tags[index];
 
+            for (index, tag) in tags.iter().enumerate() {
                 indent(buf, next_indent_level);
                 buf.push_str(tag.name.as_str());
 
-                let mut tag_value_index = 0;
-                while tag_value_index < tag.values.len() {
-                    let type_value = &tag.values[tag_value_index];
-
+                for type_value in &tag.values {
                     buf.push(' ');
                     type_annotation_to_html(next_indent_level, buf, type_value);
-
-                    tag_value_index += 1;
                 }
 
-                if index < (tags_len - 1) {
+                if index < (tags.len() - 1) {
                     buf.push(',');
                 }
 
-                buf.push_str("<br>");
-
-                index += 1;
+                new_line(buf);
             }
 
             indent(buf, tag_union_indent);
@@ -351,6 +352,53 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                 }
                 buf.push(')');
             }
+        }
+        TypeAnnotation::Record { fields } => {
+            new_line(buf);
+
+            let record_indent = indent_level + 1;
+            indent(buf, record_indent);
+            buf.push('{');
+
+            new_line(buf);
+
+            let next_indent_level = record_indent + 1;
+            for (index, field) in fields.iter().enumerate() {
+                indent(buf, next_indent_level);
+
+                let fields_name = match field {
+                    RecordField::RecordField { name, .. } => name,
+                    RecordField::OptionalField { name, .. } => name,
+                    RecordField::LabelOnly { name } => name,
+                };
+
+                buf.push_str(fields_name.as_str());
+
+                match field {
+                    RecordField::RecordField {
+                        type_annotation, ..
+                    } => {
+                        buf.push_str(" : ");
+                        type_annotation_to_html(next_indent_level, buf, type_annotation);
+                    }
+                    RecordField::OptionalField {
+                        type_annotation, ..
+                    } => {
+                        buf.push_str(" ? ");
+                        type_annotation_to_html(next_indent_level, buf, type_annotation);
+                    }
+                    RecordField::LabelOnly { .. } => {}
+                }
+
+                if index < (fields.len() - 1) {
+                    buf.push(',');
+                }
+
+                new_line(buf);
+            }
+
+            indent(buf, record_indent);
+            buf.push('}');
         }
     }
 }

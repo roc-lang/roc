@@ -1,8 +1,9 @@
-use crate::docs::TypeAnnotation::{Apply, BoundVariable, TagUnion};
+use crate::docs::TypeAnnotation::{Apply, BoundVariable, Record, TagUnion};
 use inlinable_string::InlinableString;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::IdentIds;
 use roc_parse::ast;
+use roc_parse::ast::AssignedField;
 use roc_region::all::Located;
 
 // Documentation generation requirements
@@ -40,6 +41,23 @@ pub enum TypeAnnotation {
     Apply {
         name: String,
         parts: Vec<TypeAnnotation>,
+    },
+    Record {
+        fields: Vec<RecordField>,
+    },
+}
+#[derive(Debug, Clone)]
+pub enum RecordField {
+    RecordField {
+        name: String,
+        type_annotation: TypeAnnotation,
+    },
+    OptionalField {
+        name: String,
+        type_annotation: TypeAnnotation,
+    },
+    LabelOnly {
+        name: String,
     },
 }
 
@@ -175,21 +193,16 @@ fn type_to_docs(type_annotation: ast::TypeAnnotation) -> Option<TypeAnnotation> 
 
             let mut any_tags_are_private = false;
 
-            let mut index = 0;
-
-            while index < tags.len() && !any_tags_are_private {
-                let tag = tags[index];
-
+            for tag in tags {
                 match tag_to_doc(tag.value) {
                     None => {
                         any_tags_are_private = true;
+                        break;
                     }
                     Some(tag_ann) => {
                         tags_to_render.push(tag_ann);
                     }
                 }
-
-                index += 1;
             }
 
             if any_tags_are_private {
@@ -227,11 +240,62 @@ fn type_to_docs(type_annotation: ast::TypeAnnotation) -> Option<TypeAnnotation> 
 
             Some(Apply { name, parts })
         }
+        ast::TypeAnnotation::Record {
+            fields,
+            ext: _,
+            final_comments: _,
+        } => {
+            let mut doc_fields = Vec::new();
+
+            let mut any_fields_include_private_tags = false;
+
+            for field in fields {
+                match record_field_to_doc(field.value) {
+                    None => {
+                        any_fields_include_private_tags = true;
+                        break;
+                    }
+                    Some(doc_field) => {
+                        doc_fields.push(doc_field);
+                    }
+                }
+            }
+            if any_fields_include_private_tags {
+                None
+            } else {
+                Some(Record { fields: doc_fields })
+            }
+        }
+        ast::TypeAnnotation::SpaceBefore(&sub_type_ann, _) => type_to_docs(sub_type_ann),
+        ast::TypeAnnotation::SpaceAfter(&sub_type_ann, _) => type_to_docs(sub_type_ann),
         _ => {
             // TODO "Implement type to docs")
 
             None
         }
+    }
+}
+
+fn record_field_to_doc(field: ast::AssignedField<'_, ast::TypeAnnotation>) -> Option<RecordField> {
+    match field {
+        AssignedField::RequiredValue(name, _, type_ann) => {
+            type_to_docs(type_ann.value).map(|type_ann_docs| RecordField::RecordField {
+                name: name.value.to_string(),
+                type_annotation: type_ann_docs,
+            })
+        }
+        AssignedField::SpaceBefore(&sub_field, _) => record_field_to_doc(sub_field),
+        AssignedField::SpaceAfter(&sub_field, _) => record_field_to_doc(sub_field),
+        AssignedField::OptionalValue(name, _, type_ann) => {
+            type_to_docs(type_ann.value).map(|type_ann_docs| RecordField::OptionalField {
+                name: name.value.to_string(),
+                type_annotation: type_ann_docs,
+            })
+        }
+        AssignedField::LabelOnly(label) => Some(RecordField::LabelOnly {
+            name: label.value.to_string(),
+        }),
+        AssignedField::Malformed(_) => None,
     }
 }
 
@@ -244,16 +308,10 @@ fn tag_to_doc(tag: ast::Tag) -> Option<Tag> {
             values: {
                 let mut type_vars = Vec::new();
 
-                let mut index = 0;
-
-                while index < args.len() {
-                    let arg = args[index];
-
+                for arg in args {
                     if let Some(type_var) = type_to_docs(arg.value) {
                         type_vars.push(type_var);
                     }
-
-                    index += 1;
                 }
 
                 type_vars

@@ -161,174 +161,46 @@ pub fn list_prepend<'a, 'ctx, 'env>(
 /// List.join : List (List elem) -> List elem
 pub fn list_join<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    inplace: InPlace,
-    parent: FunctionValue<'ctx>,
+    _inplace: InPlace,
+    _parent: FunctionValue<'ctx>,
     outer_list: BasicValueEnum<'ctx>,
     outer_list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    // List.join is implemented as follows:
-    // 1. loop over every list to sum the list lengths
-    // 2. using the sum of all the list lengths, allocate an output list of
-    //    that size.
-    // 3. loop over every list, for every list, loop over every element
-    //    putting it into the output list
-
     match outer_list_layout {
-        // If the input list is empty, or if it is a list of empty lists
-        // then simply return an empty list
         Layout::Builtin(Builtin::EmptyList)
-        | Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::EmptyList))) => empty_list(env),
-        Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::List(_, elem_layout)))) => {
-            let inner_list_layout =
-                Layout::Builtin(Builtin::List(MemoryMode::Refcounted, elem_layout));
+        | Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::EmptyList))) => {
+            // If the input list is empty, or if it is a list of empty lists
+            // then simply return an empty list
+            empty_list(env)
+        }
+        Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::List(_, element_layout)))) => {
+            let list_i128 = complex_bitcast(
+                env.builder,
+                outer_list,
+                env.context.i128_type().into(),
+                "to_i128",
+            );
 
-            let builder = env.builder;
-            let ctx = env.context;
+            let element_width = env
+                .ptr_int()
+                .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
 
-            let elem_type = basic_type_from_layout(env, elem_layout);
-            let elem_ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+            let alignment = element_layout.alignment_bytes(env.ptr_bytes);
+            let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
 
-            let inner_list_type = basic_type_from_layout(env, &inner_list_layout);
-
-            let outer_list_wrapper = outer_list.into_struct_value();
-            let outer_list_len = list_len(builder, outer_list_wrapper);
-            let outer_list_ptr = {
-                let elem_ptr_type = get_ptr_type(&inner_list_type, AddressSpace::Generic);
-
-                load_list_ptr(builder, outer_list_wrapper, elem_ptr_type)
-            };
-
-            // outer_list_len > 0
-            // We do this check to avoid allocating memory. If the input
-            // list is empty, then we can just return an empty list.
-            let comparison = list_is_not_empty(env, outer_list_len);
-
-            let build_then = || {
-                let list_len_sum_name = "#listslengthsum";
-                let list_len_sum_alloca = builder.build_alloca(ctx.i64_type(), list_len_sum_name);
-
-                builder.build_store(list_len_sum_alloca, ctx.i64_type().const_int(0, false));
-
-                // List Sum Loop
-                let sum_loop = |_, inner_list: BasicValueEnum<'ctx>| {
-                    let inner_list_len = list_len(builder, inner_list.into_struct_value());
-
-                    let next_list_sum = builder.build_int_add(
-                        builder
-                            .build_load(list_len_sum_alloca, list_len_sum_name)
-                            .into_int_value(),
-                        inner_list_len,
-                        "nextlistsum",
-                    );
-
-                    builder.build_store(list_len_sum_alloca, next_list_sum);
-                };
-
-                incrementing_elem_loop(
-                    builder,
-                    ctx,
-                    parent,
-                    outer_list_ptr,
-                    outer_list_len,
-                    "#sum_index",
-                    sum_loop,
-                );
-
-                let final_list_sum = builder
-                    .build_load(list_len_sum_alloca, list_len_sum_name)
-                    .into_int_value();
-
-                let final_list_ptr = allocate_list(env, inplace, elem_layout, final_list_sum);
-
-                let dest_elem_ptr_alloca = builder.build_alloca(elem_ptr_type, "dest_elem");
-
-                builder.build_store(dest_elem_ptr_alloca, final_list_ptr);
-
-                // Inner List Loop
-                let inner_list_loop = |_, inner_list: BasicValueEnum<'ctx>| {
-                    let inner_list_wrapper = inner_list.into_struct_value();
-
-                    let inner_list_len = list_len(builder, inner_list_wrapper);
-
-                    // inner_list_len > 0
-                    let inner_list_comparison = list_is_not_empty(env, inner_list_len);
-
-                    let inner_list_non_empty_block =
-                        ctx.append_basic_block(parent, "inner_list_non_empty");
-                    let after_inner_list_non_empty_block =
-                        ctx.append_basic_block(parent, "branchcont");
-
-                    builder.build_conditional_branch(
-                        inner_list_comparison,
-                        inner_list_non_empty_block,
-                        after_inner_list_non_empty_block,
-                    );
-                    builder.position_at_end(inner_list_non_empty_block);
-
-                    let inner_list_ptr = load_list_ptr(builder, inner_list_wrapper, elem_ptr_type);
-
-                    // Element Inserting Loop
-                    let inner_elem_loop = |_, src_elem| {
-                        // TODO clone src_elem
-
-                        let curr_dest_elem_ptr = builder
-                            .build_load(dest_elem_ptr_alloca, "load_dest_elem_ptr")
-                            .into_pointer_value();
-
-                        builder.build_store(curr_dest_elem_ptr, src_elem);
-
-                        let inc_dest_elem_ptr = BasicValueEnum::PointerValue(unsafe {
-                            builder.build_in_bounds_gep(
-                                curr_dest_elem_ptr,
-                                &[env.ptr_int().const_int(1_u64, false)],
-                                "increment_dest_elem",
-                            )
-                        });
-
-                        builder.build_store(dest_elem_ptr_alloca, inc_dest_elem_ptr);
-                    };
-
-                    incrementing_elem_loop(
-                        builder,
-                        ctx,
-                        parent,
-                        inner_list_ptr,
-                        inner_list_len,
-                        "#inner_index",
-                        inner_elem_loop,
-                    );
-
-                    builder.build_unconditional_branch(after_inner_list_non_empty_block);
-                    builder.position_at_end(after_inner_list_non_empty_block);
-                };
-
-                incrementing_elem_loop(
-                    builder,
-                    ctx,
-                    parent,
-                    outer_list_ptr,
-                    outer_list_len,
-                    "#inner_list_index",
-                    inner_list_loop,
-                );
-
-                store_list(env, final_list_ptr, final_list_sum)
-            };
-
-            let build_else = || empty_list(env);
-
-            let struct_type = super::convert::zig_list_type(env);
-
-            build_basic_phi2(
+            let output = call_bitcode_fn(
                 env,
-                parent,
-                comparison,
-                build_then,
-                build_else,
-                BasicTypeEnum::StructType(struct_type),
+                &[list_i128, alignment_iv.into(), element_width.into()],
+                &bitcode::LIST_JOIN,
+            );
+
+            complex_bitcast(
+                env.builder,
+                output,
+                super::convert::zig_list_type(env).into(),
+                "from_i128",
             )
         }
-
         _ => {
             unreachable!("Invalid List layout for List.join {:?}", outer_list_layout);
         }
