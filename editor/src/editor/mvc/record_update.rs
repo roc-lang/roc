@@ -197,7 +197,9 @@ pub fn update_record_colon(
                 .get(prev_mark_node.get_ast_node_id());
 
             // current and prev node should always point to record when in valid position to add ':'
-            if matches!(prev_ast_node, Expr2::Record { .. }) && matches!(curr_ast_node, Expr2::Record { .. }) {
+            if matches!(prev_ast_node, Expr2::Record { .. })
+                && matches!(curr_ast_node, Expr2::Record { .. })
+            {
                 let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
 
                 let new_child_index = index_of(curr_mark_node_id, &sibling_ids)?;
