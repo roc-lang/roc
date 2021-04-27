@@ -92,7 +92,7 @@ pub fn update_int(
     // 00, 01 are not valid ints
     if (content_str_mut == "0" && (node_caret_offset == 1 || *digit_char == '0'))
         || (*digit_char == '0' && node_caret_offset == 0)
-    {   
+    {
         Ok(InputOutcome::Ignored)
     } else {
         content_str_mut.insert(node_caret_offset, *digit_char);
@@ -131,8 +131,7 @@ pub fn update_int(
 
         // update caret
         ed_model.simple_move_carets_right(1);
-        
+
         Ok(InputOutcome::Accepted)
     }
-    
 }

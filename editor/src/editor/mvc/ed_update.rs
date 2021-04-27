@@ -529,7 +529,6 @@ pub fn get_node_context<'a>(ed_model: &'a EdModel) -> EdResult<NodeContext<'a>> 
 }
 
 pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult<InputOutcome> {
-
     let input_outcome = match received_char {
             '\u{1}' // Ctrl + A
             | '\u{3}' // Ctrl + C
@@ -730,7 +729,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                     _ => InputOutcome::Ignored
                                 }
                             }
-                        
+
                     } else { //no MarkupNode at the current position
                             let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
                             if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
@@ -754,7 +753,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                 InputOutcome::Ignored
                             }
                         };
-                    
+
 
                     if let InputOutcome::Accepted = outcome {
                         ed_model.set_sel_none();
@@ -826,19 +825,9 @@ pub mod test_ed_update {
 
         let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
 
-        let mut start = std::time::Instant::now();
-        //let guard = pprof::ProfilerGuard::new(100).unwrap();
-
         for input_char in new_char_seq.chars() {
             ed_res_to_res(handle_new_char(&input_char, &mut ed_model))?;
-            println!("elapsed {:?}", start.elapsed());
-            start = std::time::Instant::now();
         }
-
-        /*if let Ok(report) = guard.report().build() {
-            let file = std::fs::File::create("flamegraph.svg").unwrap();
-            report.flamegraph(file).unwrap();
-        };*/
 
         let post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
 
