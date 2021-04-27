@@ -529,6 +529,7 @@ pub fn get_node_context<'a>(ed_model: &'a EdModel) -> EdResult<NodeContext<'a>> 
 }
 
 pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult<InputOutcome> {
+
     let input_outcome = match received_char {
             '\u{1}' // Ctrl + A
             | '\u{3}' // Ctrl + C
@@ -550,11 +551,9 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                 InputOutcome::Accepted
             }
             ch => {
-                let curr_mark_node_id_res = ed_model.get_curr_mark_node_id();
-
                 let outcome =
-                    match curr_mark_node_id_res {
-                        Ok(curr_mark_node_id) => {
+                    if ed_model.grid_node_map.node_exists_at_pos(ed_model.get_caret()){
+                        let curr_mark_node_id = ed_model.get_curr_mark_node_id()?;
                             let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
                             let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
 
@@ -731,8 +730,8 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                     _ => InputOutcome::Ignored
                                 }
                             }
-                        },
-                        Err(_) => { //no MarkupNode at the current position
+                        
+                    } else { //no MarkupNode at the current position
                             let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
                             if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
                                 let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
@@ -754,8 +753,8 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                             } else {
                                 InputOutcome::Ignored
                             }
-                        }
-                    };
+                        };
+                    
 
                     if let InputOutcome::Accepted = outcome {
                         ed_model.set_sel_none();
@@ -827,9 +826,19 @@ pub mod test_ed_update {
 
         let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
 
+        let mut start = std::time::Instant::now();
+        //let guard = pprof::ProfilerGuard::new(100).unwrap();
+
         for input_char in new_char_seq.chars() {
             ed_res_to_res(handle_new_char(&input_char, &mut ed_model))?;
+            println!("elapsed {:?}", start.elapsed());
+            start = std::time::Instant::now();
         }
+
+        /*if let Ok(report) = guard.report().build() {
+            let file = std::fs::File::create("flamegraph.svg").unwrap();
+            report.flamegraph(file).unwrap();
+        };*/
 
         let post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
 
@@ -881,6 +890,13 @@ pub mod test_ed_update {
         assert_insert(&["1┃234"], &["10┃234"], '0')?;
         assert_insert(&["12┃34"], &["121┃34"], '1')?;
         assert_insert(&["123┃4"], &["1232┃4"], '2')?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_int_time() -> Result<(), String> {
+        assert_insert_seq(&["┃"], &["555555┃"], "555555")?;
 
         Ok(())
     }
