@@ -130,6 +130,9 @@ pub enum EdError {
     #[snafu(display("RecordWithoutFields: expected record to have at least one field because it is not an EmpyRecord."))]
     RecordWithoutFields { backtrace: Backtrace },
 
+    #[snafu(display("StringParseError: {}", msg))]
+    StringParseError { msg: String, backtrace: Backtrace },
+
     #[snafu(display("UIError: {}", msg))]
     UIErrorBacktrace { msg: String, backtrace: Backtrace },
 }

@@ -551,7 +551,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
             }
             ch => {
                 let outcome =
-                    if ed_model.grid_node_map.node_exists_at_pos(ed_model.get_caret()){
+                    if ed_model.node_exists_at_caret() {
                         let curr_mark_node_id = ed_model.get_curr_mark_node_id()?;
                             let curr_mark_node = ed_model.markup_node_pool.get(curr_mark_node_id);
                             let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
@@ -612,11 +612,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                             }
                                         }
                                         Expr2::SmallInt{ .. } => {
-                                            if ch.is_ascii_digit() {
-                                                update_int(ed_model, curr_mark_node_id, ch)?
-                                            } else {
-                                                InputOutcome::Ignored
-                                            }
+                                            update_int(ed_model, curr_mark_node_id, ch)?
                                         }
                                         _ => InputOutcome::Ignored
                                     }
@@ -624,18 +620,14 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
                                     match ast_node_ref {
                                         Expr2::SmallInt{ .. } => {
-                                            if ch.is_ascii_digit() {
-                                                update_int(ed_model, curr_mark_node_id, ch)?
-                                            } else {
-                                                InputOutcome::Ignored
-                                            }
+                                            update_int(ed_model, curr_mark_node_id, ch)?
                                         }
                                         _ => {
                                             let prev_ast_node_id =
-                                            ed_model
-                                            .markup_node_pool
-                                            .get(prev_mark_node_id)
-                                            .get_ast_node_id();
+                                                ed_model
+                                                .markup_node_pool
+                                                .get(prev_mark_node_id)
+                                                .get_ast_node_id();
 
                                             let prev_node_ref = ed_model.module.env.pool.get(prev_ast_node_id);
 
@@ -674,27 +666,19 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                     }
                                                 }
                                                 Expr2::SmallInt{ .. } => {
-                                                    if ch.is_ascii_digit() {
-                                                        update_int(ed_model, prev_mark_node_id, ch)?
-                                                    } else {
-                                                        InputOutcome::Ignored
-                                                    }
+                                                    update_int(ed_model, prev_mark_node_id, ch)?
                                                 }
                                                 _ => {
                                                     match ast_node_ref {
                                                         Expr2::EmptyRecord => {
                                                             let sibling_ids = curr_mark_node.get_sibling_ids(&ed_model.markup_node_pool);
 
-                                                            if ch.is_ascii_alphabetic() && ch.is_ascii_lowercase() {
-                                                                update_empty_record(
-                                                                    &ch.to_string(),
-                                                                    prev_mark_node_id,
-                                                                    sibling_ids,
-                                                                    ed_model
-                                                                )?
-                                                            } else {
-                                                                InputOutcome::Ignored
-                                                            }
+                                                            update_empty_record(
+                                                                &ch.to_string(),
+                                                                prev_mark_node_id,
+                                                                sibling_ids,
+                                                                ed_model
+                                                            )?
                                                         }
                                                         _ => InputOutcome::Ignored
                                                     }
@@ -719,11 +703,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                             } else {
                                 match ast_node_ref {
                                     Expr2::SmallInt{ .. } => {
-                                        if ch.is_ascii_digit() {
-                                            update_int(ed_model, curr_mark_node_id, ch)?
-                                        } else {
-                                            InputOutcome::Ignored
-                                        }
+                                        update_int(ed_model, curr_mark_node_id, ch)?
                                     },
                                     // only SmallInt currently allows prepending at the start
                                     _ => InputOutcome::Ignored
@@ -739,11 +719,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
                                 match prev_ast_node {
                                     Expr2::SmallInt{ .. } => {
-                                        if ch.is_ascii_digit() {
-                                            update_int(ed_model, prev_mark_node_id, ch)?
-                                        } else {
-                                            InputOutcome::Ignored
-                                        }
+                                        update_int(ed_model, prev_mark_node_id, ch)?
                                     },
                                     _ => {
                                         InputOutcome::Ignored
@@ -811,6 +787,10 @@ pub mod test_ed_update {
         assert_insert_seq(pre_lines, expected_post_lines, &new_char.to_string())
     }
 
+    pub fn assert_insert_ignore(lines: &[&str], new_char: char) -> Result<(), String> {
+        assert_insert_seq(lines, lines, &new_char.to_string())
+    }
+
     // Create ed_model from pre_lines DSL, do handle_new_char() for every char in new_char_seq, check if modified ed_model has expected
     // string representation of code, caret position and active selection.
     pub fn assert_insert_seq(
@@ -866,26 +846,14 @@ pub mod test_ed_update {
 
         assert_insert(&["1┃"], &["19┃"], '9')?;
         assert_insert(&["9876┃"], &["98769┃"], '9')?;
-
-        assert_insert(&["0┃"], &["0┃"], '0')?;
-        assert_insert(&["0┃"], &["0┃"], '9')?;
         assert_insert(&["10┃"], &["103┃"], '3')?;
-        assert_insert(&["┃0"], &["┃0"], '0')?;
         assert_insert(&["┃0"], &["1┃0"], '1')?;
-        assert_insert(&["┃1"], &["┃1"], '0')?;
         assert_insert(&["10000┃"], &["100000┃"], '0')?;
 
         assert_insert(&["┃1234"], &["5┃1234"], '5')?;
         assert_insert(&["1┃234"], &["10┃234"], '0')?;
         assert_insert(&["12┃34"], &["121┃34"], '1')?;
         assert_insert(&["123┃4"], &["1232┃4"], '2')?;
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_int_time() -> Result<(), String> {
-        assert_insert_seq(&["┃"], &["555555┃"], "555555")?;
 
         Ok(())
     }
@@ -908,6 +876,12 @@ pub mod test_ed_update {
 
         assert_insert_seq_ignore(&["129┃96"], ",{}()[]-><-_\"azAZ:@")?;
         assert_insert_seq_ignore(&["97┃684"], ",{}()[]-><-_\"azAZ:@")?;
+
+        assert_insert_ignore(&["0┃"], '0')?;
+        assert_insert_ignore(&["0┃"], '9')?;
+        assert_insert_ignore(&["┃0"], '0')?;
+        assert_insert_ignore(&["┃1234"], '0')?;
+        assert_insert_ignore(&["┃100"], '0')?;
 
         Ok(())
     }
