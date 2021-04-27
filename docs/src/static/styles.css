@@ -52,6 +52,10 @@ a {
   height: 100%;
 }
 
+.entry-name {
+  white-space: pre-wrap;
+}
+
 .pkg-full-name a {
   padding-top: 12px;
   padding-bottom: 16px;
