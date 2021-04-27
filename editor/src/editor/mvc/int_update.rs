@@ -133,13 +133,13 @@ pub fn update_int(
 fn update_small_int_num(number: &mut IntVal, updated_str: &str) -> EdResult<()> {
     *number = match number {
         I64(_) => I64(check_parse_res(updated_str.parse::<i64>())?),
-        U64(_) => U64(updated_str.parse::<u64>().unwrap()),
-        I32(_) => I32(updated_str.parse::<i32>().unwrap()),
-        U32(_) => U32(updated_str.parse::<u32>().unwrap()),
-        I16(_) => I16(updated_str.parse::<i16>().unwrap()),
-        U16(_) => U16(updated_str.parse::<u16>().unwrap()),
-        I8(_) => I8(updated_str.parse::<i8>().unwrap()),
-        U8(_) => U8(updated_str.parse::<u8>().unwrap()),
+        U64(_) => U64(check_parse_res(updated_str.parse::<u64>())?),
+        I32(_) => I32(check_parse_res(updated_str.parse::<i32>())?),
+        U32(_) => U32(check_parse_res(updated_str.parse::<u32>())?),
+        I16(_) => I16(check_parse_res(updated_str.parse::<i16>())?),
+        U16(_) => U16(check_parse_res(updated_str.parse::<u16>())?),
+        I8(_) => I8(check_parse_res(updated_str.parse::<i8>())?),
+        U8(_) => U8(check_parse_res(updated_str.parse::<u8>())?),
     };
 
     Ok(())
@@ -147,7 +147,7 @@ fn update_small_int_num(number: &mut IntVal, updated_str: &str) -> EdResult<()> 
 
 fn check_parse_res<T, E: std::fmt::Debug>(parse_res: Result<T, E>) -> EdResult<T> {
     match parse_res {
-        Ok(updated_num) => Ok(updated_num),
+        Ok(some_type) => Ok(some_type),
         Err(parse_err) => StringParseError {
             msg: format!("{:?}", parse_err),
         }
