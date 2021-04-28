@@ -842,7 +842,7 @@ struct State<'a> {
     /// pending specializations in the same thread.
     pub needs_specialization: MutSet<ModuleId>,
 
-    pub all_pending_specializations: MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization>>,
+    pub all_pending_specializations: MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>,
 
     pub specializations_in_flight: u32,
 
@@ -3969,6 +3969,7 @@ fn add_def_to_module<'a>(
                         procs.insert_exposed(
                             symbol,
                             layout,
+                            mono_env.arena,
                             mono_env.subs,
                             def.annotation,
                             annotation,
@@ -4021,6 +4022,7 @@ fn add_def_to_module<'a>(
                         procs.insert_exposed(
                             symbol,
                             layout,
+                            mono_env.arena,
                             mono_env.subs,
                             def.annotation,
                             annotation,
