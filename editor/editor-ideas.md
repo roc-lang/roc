@@ -104,6 +104,8 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Suggested quick fixes should be directly visible and clickable. Not like in vs code where you put the caret on an error until a lightbulb appears in the margin which you have to click for the fixes to apppear, after which you click to apply the fix you want :( .
 * Regex-like find and substitution based on plain english description and example (replacement). i.e. replace all `[` between double quotes with `{`. [Inspiration](https://alexmoltzau.medium.com/english-to-regex-thanks-to-gpt-3-13f03b68236e).
 * Show productivity tips based on behavior. i.e. if the user is scrolling through the error bar and clicking on the next error several times, show a tip with "go to next error" shortcut.
+* Command to "benchmark this function" or "benchmark this test" with flamegraph and execution time per line.
+
 #### Autocomplete
 
 - Use more space for autocomplete options:
