@@ -4831,7 +4831,7 @@ fn from_can_when<'a>(
     )
 }
 
-fn substitute(substitutions: &MutMap<Symbol, Symbol>, s: Symbol) -> Option<Symbol> {
+fn substitute(substitutions: &BumpMap<Symbol, Symbol>, s: Symbol) -> Option<Symbol> {
     match substitutions.get(&s) {
         Some(new) => {
             debug_assert!(!substitutions.contains_key(new));
@@ -4842,7 +4842,7 @@ fn substitute(substitutions: &MutMap<Symbol, Symbol>, s: Symbol) -> Option<Symbo
 }
 
 fn substitute_in_exprs<'a>(arena: &'a Bump, stmt: &mut Stmt<'a>, from: Symbol, to: Symbol) {
-    let mut subs = MutMap::default();
+    let mut subs = BumpMap::with_capacity_in(1, arena);
     subs.insert(from, to);
 
     // TODO clean this up
@@ -4855,7 +4855,7 @@ fn substitute_in_exprs<'a>(arena: &'a Bump, stmt: &mut Stmt<'a>, from: Symbol, t
 fn substitute_in_stmt_help<'a>(
     arena: &'a Bump,
     stmt: &'a Stmt<'a>,
-    subs: &MutMap<Symbol, Symbol>,
+    subs: &BumpMap<Symbol, Symbol>,
 ) -> Option<&'a Stmt<'a>> {
     use Stmt::*;
 
@@ -5023,7 +5023,7 @@ fn substitute_in_stmt_help<'a>(
 fn substitute_in_call<'a>(
     arena: &'a Bump,
     call: &'a Call<'a>,
-    subs: &MutMap<Symbol, Symbol>,
+    subs: &BumpMap<Symbol, Symbol>,
 ) -> Option<Call<'a>> {
     let Call {
         call_type,
@@ -5086,7 +5086,7 @@ fn substitute_in_call<'a>(
 fn substitute_in_expr<'a>(
     arena: &'a Bump,
     expr: &'a Expr<'a>,
-    subs: &MutMap<Symbol, Symbol>,
+    subs: &BumpMap<Symbol, Symbol>,
 ) -> Option<Expr<'a>> {
     use Expr::*;
 
