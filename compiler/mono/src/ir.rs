@@ -6926,7 +6926,7 @@ fn from_can_pattern_help<'a>(
 
             // sorted fields based on the destruct
             let mut mono_destructs = Vec::with_capacity_in(destructs.len(), env.arena);
-            let destructs_by_label = env.arena.alloc(MutMap::default());
+            let mut destructs_by_label = BumpMap::with_capacity_in(destructs.len(), env.arena);
             destructs_by_label.extend(destructs.iter().map(|x| (&x.value.label, x)));
 
             let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
