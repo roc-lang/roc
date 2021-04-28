@@ -30,6 +30,26 @@ pub type SendSet<K> = im::hashset::HashSet<K, BuildHasher>;
 
 pub type BumpMap<'a, K, V> = hashbrown::HashMap<K, V, BuildHasher, hashbrown::BumpWrapper<'a>>;
 
+pub trait BumpMapDefault<'a> {
+    fn new_in(arena: &'a bumpalo::Bump) -> Self;
+
+    fn with_capacity_in(capacity: usize, arena: &'a bumpalo::Bump) -> Self;
+}
+
+impl<'a, K, V> BumpMapDefault<'a> for BumpMap<'a, K, V> {
+    fn new_in(arena: &'a bumpalo::Bump) -> Self {
+        hashbrown::HashMap::with_hasher_in(default_hasher(), hashbrown::BumpWrapper(arena))
+    }
+
+    fn with_capacity_in(capacity: usize, arena: &'a bumpalo::Bump) -> Self {
+        hashbrown::HashMap::with_capacity_and_hasher_in(
+            capacity,
+            default_hasher(),
+            hashbrown::BumpWrapper(arena),
+        )
+    }
+}
+
 pub fn arena_join<'a, I>(arena: &'a Bump, strings: &mut I, join_str: &str) -> String<'a>
 where
     I: Iterator<Item = &'a str>,
