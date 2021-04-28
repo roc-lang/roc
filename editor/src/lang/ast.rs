@@ -437,6 +437,9 @@ fn expr2_to_string_helper(
         Expr2::InvalidLookup(pool_str) => {
             out_string.push_str(&format!("InvalidLookup({})", pool_str.as_str(pool)));
         }
+        Expr2::SmallInt { text, .. } => {
+            out_string.push_str(&format!("SmallInt({})", text.as_str(pool)));
+        }
         other => todo!("Implement for {:?}", other),
     }
 

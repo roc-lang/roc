@@ -126,6 +126,10 @@ impl<'a> EdModel<'a> {
 
         Ok(prev_id_opt)
     }
+
+    pub fn node_exists_at_caret(&self) -> bool {
+        self.grid_node_map.node_exists_at_pos(self.get_caret())
+    }
 }
 
 #[derive(Debug)]
