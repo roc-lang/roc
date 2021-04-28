@@ -16,6 +16,7 @@ use roc_editor::lang::{
     types::Type2,
 };
 use roc_module::ident::Lowercase;
+use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_module::symbol::{IdentIds, ModuleIds};
 use roc_region::all::Region;
@@ -83,6 +84,7 @@ fn infer_eq(actual: &str, expected_str: &str) {
     match expr2_result {
         Ok((expr, _)) => {
             let constraint = constrain_expr(
+                &code_arena,
                 &mut env,
                 &expr,
                 Expected::NoExpectation(Type2::Variable(var)),
@@ -92,6 +94,7 @@ fn infer_eq(actual: &str, expected_str: &str) {
             let Env {
                 pool,
                 var_store: ref_var_store,
+                dep_idents,
                 ..
             } = env;
 
@@ -111,7 +114,11 @@ fn infer_eq(actual: &str, expected_str: &str) {
 
             let content = subs.get(var).content;
 
-            let actual_str = content_to_string(content, &subs, mod_id, &Default::default());
+            let interns = Interns {
+                module_ids,
+                all_ident_ids: dep_idents,
+            };
+            let actual_str = content_to_string(content, &subs, mod_id, &interns);
 
             assert_eq!(actual_str, expected_str);
         }
@@ -140,5 +147,17 @@ fn constrain_empty_record() {
             "#
         ),
         "{}",
+    )
+}
+
+#[test]
+fn constrain_small_int() {
+    infer_eq(
+        indoc!(
+            r#"
+            12
+            "#
+        ),
+        "Int *",
     )
 }
