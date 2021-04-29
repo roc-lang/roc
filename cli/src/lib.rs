@@ -175,18 +175,22 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
                         .strip_prefix(env::current_dir().unwrap())
                         .unwrap_or(&binary_path);
 
-                    println!(
-                        "🎉 Built {} in {} ms",
-                        generated_filename.to_str().unwrap(),
-                        total_time.as_millis()
-                    );
-
                     // Return a nonzero exit code if there were problems
                     let status_code = match outcome {
                         BuildOutcome::NoProblems => 0,
                         BuildOutcome::OnlyWarnings => 1,
                         BuildOutcome::Errors => 2,
                     };
+
+                    // No need to waste time freeing this memory,
+                    // since the process is about to exit anyway.
+                    std::mem::forget(arena);
+
+                    println!(
+                        "🎉 Built {} in {} ms",
+                        generated_filename.to_str().unwrap(),
+                        total_time.as_millis()
+                    );
 
                     Ok(status_code)
                 }
