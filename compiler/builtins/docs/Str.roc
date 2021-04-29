@@ -395,13 +395,16 @@ chompUsv, U32 -> Result Str [ Expected [ ExactUsv U32 ]* Bytes ]*
 
 ## If the string begins with digits which can represent a valid #U8, return
 ## that number along with the rest of the string after the digits.
-parseU8 : Str -> Result { u8 : U8, rest : Str } [ Expected [ DigitsU8 ]* Str ]*
-parseI8 : Str -> Result { i8 : I8, rest : Str } [ Expected [ DigitsI8 ]* Str ]*
-parseU16 : Str -> Result { u16 : U16, rest : Str } [ Expected [ DigitsU16 ]* Str ]*
-parseI16 : Str -> Result { i16 : I16, rest : Str } [ Expected [ DigitsI16 ]* Str ]*
-parseU32 : Str -> Result { u32 : U32, rest : Str } [ Expected [ DigitsU32 ]* Str ]*
-parseI32 : Str -> Result { i32 : I32, rest : Str } [ Expected [ DigitsI32 ]* Str ]*
-parseU64 : Str -> Result { u64 : U64, rest : Str } [ Expected [ DigitsU64 ]* Str ]*
-parseI64 : Str -> Result { i64 : I64, rest : Str } [ Expected [ DigitsI64 ]* Str ]*
-parseU128 : Str -> Result { u128 : U128, rest : Str } [ Expected [ DigitsU128 ]* Str ]*
-parseI128 : Str -> Result { i128 : I128, rest : Str } [ Expected [ DigitsI128 ]* Str ]*
+parseU8 : Str -> Result { u8 : U8, rest : Str } [ Expected [ NumU8 ]* Str ]*
+parseI8 : Str -> Result { i8 : I8, rest : Str } [ Expected [ NumI8 ]* Str ]*
+parseU16 : Str -> Result { u16 : U16, rest : Str } [ Expected [ NumU16 ]* Str ]*
+parseI16 : Str -> Result { i16 : I16, rest : Str } [ Expected [ NumI16 ]* Str ]*
+parseU32 : Str -> Result { u32 : U32, rest : Str } [ Expected [ NumU32 ]* Str ]*
+parseI32 : Str -> Result { i32 : I32, rest : Str } [ Expected [ NumI32 ]* Str ]*
+parseU64 : Str -> Result { u64 : U64, rest : Str } [ Expected [ NumU64 ]* Str ]*
+parseI64 : Str -> Result { i64 : I64, rest : Str } [ Expected [ NumI64 ]* Str ]*
+parseU128 : Str -> Result { u128 : U128, rest : Str } [ Expected [ NumU128 ]* Str ]*
+parseI128 : Str -> Result { i128 : I128, rest : Str } [ Expected [ NumI128 ]* Str ]*
+
+parseF64 : Str -> Result { u128 : U128, rest : Str } [ Expected [ NumF64 ]* Str ]*
+parseF32 : Str -> Result { i128 : I128, rest : Str } [ Expected [ NumF32 ]* Str ]*
