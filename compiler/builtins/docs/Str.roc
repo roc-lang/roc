@@ -99,8 +99,6 @@ interface Str
 ## It has many more tools than this module does!
 
 ## A [Unicode](https://unicode.org) text value.
-##
-## The type parameter represents the string's encoding.
 Str : [ @Str ]
 
 ## Convert
