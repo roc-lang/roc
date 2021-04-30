@@ -8,22 +8,14 @@ interface Bytes
             parseUtf16Grapheme,
             parsePastUtf8,
             parsePastUtf16,
-            parseLeU16,
-            parseLeI16,
-            parseLeU32,
-            parseLeI32,
-            parseLeU64,
-            parseLeI64,
-            parseLeU128,
-            parseLeI128,
-            parseBeU16,
-            parseBeI16,
-            parseBeU32,
-            parseBeI32,
-            parseBeU64,
-            parseBeI64,
-            parseBeU128,
-            parseBeI128
+            parseU16,
+            parseI16,
+            parseU32,
+            parseI32,
+            parseU64,
+            parseI64,
+            parseU128,
+            parseI128,
         ]
     imports []
 
@@ -37,8 +29,14 @@ len : Bytes -> Nat
 
 isEmpty : Bytes -> Bool
 
-## The endianness of the currently running system.
-hostEndianness : [ Big, Little ]
+## The [endianness](https://en.wikipedia.org/wiki/Endianness) of the currently running system.
+hostEndi : Endi
+
+## [Endianness](https://en.wikipedia.org/wiki/Endianness)
+##
+## Be - Big Endian
+## Le - Little Endian
+Endi : [ Be, Le ]
 
 # Access
 
@@ -54,38 +52,30 @@ concat : Bytes, Bytes -> Bytes
 
 # Parsing
 
-
 ## Parse a [Unicode Scalar Value](http://www.unicode.org/glossary/#unicode_scalar_value)
 ## (USV) encoded as UTF-8.
 ##
 ## To parse an entire UTF-8 string, you can use #Bytes.toUtf8 or #Bytes.parsePastUtf8.
-parseUsvUtf8 : Bytes -> Result { answer : U32, rest : Bytes } [ Expected [ Utf8Usv ]* Bytes ]*
-parseUsvUtf16Le : Bytes -> Result { answer : U32, rest : Bytes } [ Expected [ Utf16BeUsv ]* Bytes ]*
-parseUsvUtf16Be : Bytes -> Result { answer : U32, rest : Bytes } [ Expected [ Utf16BeUsv ]* Bytes ]*
-parseGraphemeUtf8 : Bytes -> Result { answer : Str, rest : Bytes } [ Expected [ Utf8Grapheme ]* Bytes ]*
-parseGraphemeUtf16Le : Bytes -> Result { answer : Str, rest : Bytes } [ Expected [ Utf16LeGrapheme ]* Bytes ]*
-parseGraphemeUtf16Be : Bytes -> Result { answer : Str, rest : Bytes } [ Expected [ Utf16BeGrapheme ]* Bytes ]*
+parseUsvUtf8 : Bytes -> Result { val : Usv, rest : Bytes } [ Expected [ Utf8Usv ]* Bytes ]*
+parseUsvUtf16 : Bytes, Endi -> Result { val : Usv, rest : Bytes } [ Expected [ Utf16Usv Endi ]* Bytes ]*
+parseGraphemeUtf8 : Bytes -> Result { val : Str, rest : Bytes } [ Expected [ Utf8Grapheme ]* Bytes ]*
+parseGraphemeUtf16 : Bytes, Endi -> Result { val : Str, rest : Bytes } [ Expected [ Utf16Grapheme Endi ]* Bytes ]*
 
-## If the bytes begin with the given string, return whatever bytes come
+## If the bytes begin with the given UTF-8 string, return whatever bytes come
 ## after it.
-parsePastStr : Bytes, Str -> Result Bytes [ Expected [ ExactStr Str ]* Bytes ]*
+chompUtf8 : Bytes, Str -> Result Bytes [ Expected [ ExactStr Str ]* Bytes ]*
+chompUtf16 : Bytes, Endi, Str -> Result Bytes [ Expected [ ExactStr Str ]* Bytes ]*
+chompUsvUtf8 : Usv -> Result Str [ Expected [ ExactUsv Usv ]* Bytes ]*
+chompUsvUtf16 : Usv, Endi -> Result Str [ Expected [ ExactUsv Usv ]* Bytes ]*
+## If the bytes begin with the given bytes, return whatever bytes come
+## after them.
+chompBytes : Bytes, Bytes -> Result Bytes [ Expected [ ExactStr Str ]* Bytes ]*
 
-# Little-Endian
-parseU16Le : Bytes -> Result { answer : U16, rest : Bytes } [ Expected [ U16 ]* Bytes ]*
-parseI16Le : Bytes -> Result { answer : I16, rest : Bytes } [ Expected [ I16 ]* Bytes ]*
-parseU32Le : Bytes -> Result { answer : U32, rest : Bytes } [ Expected [ U32 ]* Bytes ]*
-parseI32Le : Bytes -> Result { answer : I32, rest : Bytes } [ Expected [ I32 ]* Bytes ]*
-parseU64Le : Bytes -> Result { answer : U64, rest : Bytes } [ Expected [ U64 ]* Bytes ]*
-parseI64Le : Bytes -> Result { answer : I64, rest : Bytes } [ Expected [ I64 ]* Bytes ]*
-parseU128Le : Bytes -> Result { answer : U128, rest : Bytes } [ Expected [ U128 ]* Bytes ]*
-parseI128Le : Bytes -> Result { answer : I128, rest : Bytes } [ Expected [ I128 ]* Bytes ]*
-
-# Big-Endian
-parseU16Be : Bytes -> Result { answer : U16, rest : Bytes } [ Expected [ U16 ]* Bytes ]*
-parseI16Be : Bytes -> Result { answer : I16, rest : Bytes } [ Expected [ I16 ]* Bytes ]*
-parseU32Be : Bytes -> Result { answer : U32, rest : Bytes } [ Expected [ U32 ]* Bytes ]*
-parseI32Be : Bytes -> Result { answer : I32, rest : Bytes } [ Expected [ I32 ]* Bytes ]*
-parseU64Be : Bytes -> Result { answer : U64, rest : Bytes } [ Expected [ U64 ]* Bytes ]*
-parseI64Be : Bytes -> Result { answer : I64, rest : Bytes } [ Expected [ I64 ]* Bytes ]*
-parseU128Be : Bytes -> Result { answer : U128, rest : Bytes } [ Expected [ U128 ]* Bytes ]*
-parseI128Be : Bytes -> Result { answer : I128, rest : Bytes } [ Expected [ I128 ]* Bytes ]*
+parseU16 : Bytes, Endi -> Result { val : U16, rest : Bytes } [ Expected [ U16 Endi ]* Bytes ]*
+parseI16 : Bytes, Endi -> Result { val : I16, rest : Bytes } [ Expected [ I16 Endi ]* Bytes ]*
+parseU32 : Bytes, Endi -> Result { val : U32, rest : Bytes } [ Expected [ U32 Endi ]* Bytes ]*
+parseI32 : Bytes, Endi -> Result { val : I32, rest : Bytes } [ Expected [ I32 Endi ]* Bytes ]*
+parseU64 : Bytes, Endi -> Result { val : U64, rest : Bytes } [ Expected [ U64 Endi ]* Bytes ]*
+parseI64 : Bytes, Endi -> Result { val : I64, rest : Bytes } [ Expected [ I64 Endi ]* Bytes ]*
+parseU128 : Bytes, Endi -> Result { val : U128, rest : Bytes } [ Expected [ U128 Endi ]* Bytes ]*
+parseI128 : Bytes, Endi -> Result { val : I128, rest : Bytes } [ Expected [ I128 Endi ]* Bytes ]*

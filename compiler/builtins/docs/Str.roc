@@ -101,6 +101,15 @@ interface Str
 ## A [Unicode](https://unicode.org) text value.
 Str : [ @Str ]
 
+## A [Unicode Scalar Value](http://www.unicode.org/glossary/#unicode_scalar_value).
+##
+## This is a [U32] that has been validated to be in the acceptable range for
+## a USV.
+##
+## You can make one of these using single quote literals - e.g. `'x'` - or
+## convert to and from a raw [Num] using [Num.toUsv] and [Num.fromUsv].
+Usv : [ @Usv U32 ]
+
 ## Convert
 
 ## Convert a #Float to a decimal string, rounding off to the given number of decimal places.
@@ -334,7 +343,7 @@ toUtf16Be : Str -> Bytes
 
 ## Unicode Scalar Values
 
-## Besides graphemes, another way to break down strings is into
+## Besides graphemes and bytes, another way to break down strings is into
 ## Unicode Scalar Values.
 ##
 ## USVs are no substitute for graphemes!
@@ -350,22 +359,22 @@ toUtf16Be : Str -> Bytes
 
 ## Walk through the string's [Unicode Scalar Values](http://www.unicode.org/glossary/#unicode_scalar_value)
 ## (USVs) to build up a state.
-## (If you want a `step` function which receives a #Str instead of an #U32, see #Str.walkGraphemes.)
+## (If you want a `step` function which receives a #Str instead of an #Usv, see #Str.walkGraphemes.)
 ##
-## Here are the #U32 values that will be passed to `step` when this function is
+## Here are the #Usv values that will be passed to `step` when this function is
 ## called on various strings:
 ##
 ## * `"👩‍👩‍👦‍👦"` passes 128105, 8205, 128105, 8205, 128102, 8205, 128102
 ## * `"Roc"` passes 82, 111, 99
 ## * `"鹏"` passes 40527
 ## * `"🐦"` passes 128038
-walkUsv : Str, { start: state, step: (state, U32 -> state) } -> state
+walkUsv : Str, { start: state, step: (state, Usv -> state) } -> state
 
 ## Walk backwards through the string's [Unicode Scalar Values](http://www.unicode.org/glossary/#unicode_scalar_value)
 ## (USVs) to build up a state.
-## (If you want a `step` function which receives a #Str instead of an #U32, see #Str.walkGraphemes.)
+## (If you want a `step` function which receives a #Str instead of an #Usv, see #Str.walkGraphemes.)
 ##
-## Here are the #U32 values that will be passed to `step` when this function is
+## Here are the #Usv values that will be passed to `step` when this function is
 ## called on various strings:
 ##
 ## * `"👩‍👩‍👦‍👦"` passes 128102, 8205, 128102, 8205, 128105, 8205, 128105
@@ -373,36 +382,36 @@ walkUsv : Str, { start: state, step: (state, U32 -> state) } -> state
 ## * `"鹏"` passes 40527
 ## * `"🐦"` passes 128038
 ##
-## To convert a #Str into a plain `List U32` of UTF-32 code units, see #Str.toUtf32.
-walkBackwardsUsv : Str, { start: state, step: (state, U32 -> state) } -> state
+## To convert a #Str into a plain `List Usv` of UTF-32 code units, see #Str.toUtf32.
+walkBackwardsUsv : Str, { start: state, step: (state, Usv -> state) } -> state
 
 # Parsing
 
 ## Return the first [Unicode Scalar Value](http://www.unicode.org/glossary/#unicode_scalar_value)
 ## in the string, along with the rest of the string after that USV.
-parseUsv : Str -> Result { answer : U32, rest : Str } [ StrWasEmpty ]*
+parseUsv : Str -> Result { val : Usv, rest : Str } [ Expected [ ValidUsv ]* Str ]*
 
 ## Return the first [extended grapheme cluster](http://www.unicode.org/glossary/#extended_grapheme_cluster)
 ## in the string, along with the rest of the string after that grapheme.
-parseGrapheme : Str -> Result { answer : Str, rest : Str } [ Expected [ Grapheme ]* Str ]*
+parseGrapheme : Str -> Result { val : Str, rest : Str } [ Expected [ Grapheme ]* Str ]*
 
 ## If the first string begins with the second, return whatever comes
 ## after the second.
 chompStr : Str, Str -> Result Str [ Expected [ ExactStr Str ]* Bytes ]*
-chompUsv, U32 -> Result Str [ Expected [ Usv U32 ]* Bytes ]*
+chompUsv : Usv -> Result Str [ Expected [ ExactUsv Usv ]* Bytes ]*
 
 ## If the string begins with digits which can represent a valid #U8, return
 ## that number along with the rest of the string after the digits.
-parseU8 : Str -> Result { answer : U8, rest : Str } [ Expected [ NumU8 ]* Str ]*
-parseI8 : Str -> Result { answer : I8, rest : Str } [ Expected [ NumI8 ]* Str ]*
-parseU16 : Str -> Result { answer : U16, rest : Str } [ Expected [ NumU16 ]* Str ]*
-parseI16 : Str -> Result { answer : I16, rest : Str } [ Expected [ NumI16 ]* Str ]*
-parseU32 : Str -> Result { answer : U32, rest : Str } [ Expected [ NumU32 ]* Str ]*
-parseI32 : Str -> Result { answer : I32, rest : Str } [ Expected [ NumI32 ]* Str ]*
-parseU64 : Str -> Result { answer : U64, rest : Str } [ Expected [ NumU64 ]* Str ]*
-parseI64 : Str -> Result { answer : I64, rest : Str } [ Expected [ NumI64 ]* Str ]*
-parseU128 : Str -> Result { answer : U128, rest : Str } [ Expected [ NumU128 ]* Str ]*
-parseI128 : Str -> Result { answer : I128, rest : Str } [ Expected [ NumI128 ]* Str ]*
+parseU8 : Str -> Result { val : U8, rest : Str } [ Expected [ NumU8 ]* Str ]*
+parseI8 : Str -> Result { val : I8, rest : Str } [ Expected [ NumI8 ]* Str ]*
+parseU16 : Str -> Result { val : U16, rest : Str } [ Expected [ NumU16 ]* Str ]*
+parseI16 : Str -> Result { val : I16, rest : Str } [ Expected [ NumI16 ]* Str ]*
+parseU32 : Str -> Result { val : U32, rest : Str } [ Expected [ NumU32 ]* Str ]*
+parseI32 : Str -> Result { val : I32, rest : Str } [ Expected [ NumI32 ]* Str ]*
+parseU64 : Str -> Result { val : U64, rest : Str } [ Expected [ NumU64 ]* Str ]*
+parseI64 : Str -> Result { val : I64, rest : Str } [ Expected [ NumI64 ]* Str ]*
+parseU128 : Str -> Result { val : U128, rest : Str } [ Expected [ NumU128 ]* Str ]*
+parseI128 : Str -> Result { val : I128, rest : Str } [ Expected [ NumI128 ]* Str ]*
 
-parseF64 : Str -> Result { answer : U128, rest : Str } [ Expected [ NumF64 ]* Str ]*
-parseF32 : Str -> Result { answer : I128, rest : Str } [ Expected [ NumF32 ]* Str ]*
+parseF64 : Str -> Result { val : U128, rest : Str } [ Expected [ NumF64 ]* Str ]*
+parseF32 : Str -> Result { val : I128, rest : Str } [ Expected [ NumF32 ]* Str ]*

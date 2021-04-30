@@ -24,7 +24,7 @@ Parser a :
         @Parser (Str -> Result { answer : a, rest : Str } RawProblem),
     ]
 
-RawProblem :
+Problem :
     [
         Expected
             [
@@ -40,12 +40,14 @@ RawProblem :
                 NumI128,
                 NumF64,
                 NumF32,
-                End
+                ExactStr Str,
+                Grapheme,
+                End,
             ]
+            Str
     ]
 
 keep : Parser a, (a -> Parser b) -> Parser b
-
 skip : Parser *, ({} -> Parser b) -> Parser b
 
 symbol : Str -> Parser {}

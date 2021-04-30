@@ -28,40 +28,44 @@ Problem :
             [
                 NumU8,
                 NumI8,
-                NumU16,
-                NumI16,
-                NumU32,
-                NumI32,
-                NumU64,
-                NumI64,
-                NumU128,
-                NumI128,
-                NumF64,
-                NumF32,
-                Usv U32,
+                NumU16 Endi,
+                NumI16 Endi,
+                NumU32 Endi,
+                NumI32 Endi,
+                NumU64 Endi,
+                NumI64 Endi,
+                NumU128 Endi,
+                NumI128 Endi,
+                NumF64 Endi,
+                NumF32 Endi,
                 Utf8 Str,
-                Utf16Le Str,
-                Utf16Be Str,
+                Utf16 Str Endi,
+                UsvUtf8,
+                UsvUtf16 Endi,
                 GraphemeUtf8,
-                GraphemeUtf16Le,
-                GraphemeUtf16Be,
+                GraphemeUtf16 Endi,
                 End,
             ]
             Str
     ]
 
 keep : Parser a, (a -> Parser b) -> Parser b
-
 skip : Parser *, ({} -> Parser b) -> Parser b
 
-utf8 : Parser Str
-utf16 : Parser Str
-
 graphemeUtf8 : Parser Str
-graphemeUtf16Le : Parser Str
-graphemeUtf16Be : Parser Str
-
-usv : Parser U32
+graphemeUtf16 : Endi -> Parser Str
+utf8 : Str -> Parser Str
+utf16 : Str, Endi -> Parser Str
+usvUtf8 : Parser U32 # UTF-8 defines endianness
+usvUtf16 : Endi -> Parser U32
 
 u8 : Parser U8
 i8 : Parser I8
+u16 : Endi -> Parser U16
+i16 : Endi -> Parser I16
+u32 : Endi -> Parser U32
+i32 : Endi -> Parser I32
+u64 : Endi -> Parser U64
+i64 : Endi -> Parser I64
+u128 : Endi -> Parser U128
+i128 : Endi -> Parser I128
