@@ -1,4 +1,5 @@
 target
+generated-docs
 zig-cache
 .direnv
 *.rs.bk
