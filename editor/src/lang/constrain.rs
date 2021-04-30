@@ -8,7 +8,7 @@ use crate::lang::{
 };
 
 use roc_can::expected::Expected;
-use roc_collections::all::SendMap;
+use roc_collections::all::{BumpMap, BumpMapDefault};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::{
@@ -32,7 +32,7 @@ pub enum Constraint<'a> {
 pub struct LetConstraint<'a> {
     pub rigid_vars: BumpVec<'a, Variable>,
     pub flex_vars: BumpVec<'a, Variable>,
-    pub def_types: SendMap<Symbol, Located<Type2>>,
+    pub def_types: BumpMap<'a, Symbol, Located<Type2>>,
     pub defs_constraint: Constraint<'a>,
     pub ret_constraint: Constraint<'a>,
 }
@@ -79,7 +79,7 @@ pub fn constrain_expr<'a>(
             let let_constraint = arena.alloc(LetConstraint {
                 rigid_vars,
                 flex_vars,
-                def_types: SendMap::default(),
+                def_types: BumpMap::new_in(arena),
                 defs_constraint,
                 ret_constraint: Constraint::True,
             });
