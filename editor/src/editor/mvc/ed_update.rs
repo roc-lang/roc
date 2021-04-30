@@ -275,6 +275,7 @@ impl<'a> EdModel<'a> {
             vars_by_symbol: MutMap::default(),
             aliases,
         };
+        let arena = Bump::new();
 
         let mut subs = Subs::new(var_store.into());
 
@@ -287,7 +288,8 @@ impl<'a> EdModel<'a> {
         let mut problems = Vec::new();
 
         // Run the solver to populate Subs.
-        let (solved_subs, solved_env) = solve::run(mempool, &env, &mut problems, subs, &constraint);
+        let (solved_subs, solved_env) =
+            solve::run(&arena, mempool, &env, &mut problems, subs, &constraint);
 
         (solved_subs, solved_env, problems)
     }
