@@ -55,12 +55,6 @@ pub struct PartialProc<'a> {
     pub is_self_recursive: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Default)]
-pub struct HostExposedVariables {
-    rigids: MutMap<Lowercase, Variable>,
-    aliases: MutMap<Symbol, Variable>,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum CapturedSymbols<'a> {
     None,
