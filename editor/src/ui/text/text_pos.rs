@@ -13,6 +13,19 @@ impl TextPos {
             column: self.column + 1,
         }
     }
+
+    pub fn decrement_col(&self) -> TextPos {
+        let new_col = if self.column > 0 {
+            self.column - 1
+        } else {
+            self.column
+        };
+
+        TextPos {
+            line: self.line,
+            column: new_col,
+        }
+    }
 }
 
 impl Ord for TextPos {

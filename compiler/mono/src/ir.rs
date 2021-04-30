@@ -6,7 +6,7 @@ use crate::layout::{
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet};
+use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap, MutSet};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -77,31 +77,35 @@ impl<'a> CapturedSymbols<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct PendingSpecialization {
+pub struct PendingSpecialization<'a> {
     solved_type: SolvedType,
-    host_exposed_aliases: MutMap<Symbol, SolvedType>,
+    host_exposed_aliases: BumpMap<'a, Symbol, SolvedType>,
 }
 
-impl PendingSpecialization {
-    pub fn from_var(subs: &Subs, var: Variable) -> Self {
+impl<'a> PendingSpecialization<'a> {
+    pub fn from_var(arena: &'a Bump, subs: &Subs, var: Variable) -> Self {
         let solved_type = SolvedType::from_var(subs, var);
         PendingSpecialization {
             solved_type,
-            host_exposed_aliases: MutMap::default(),
+            host_exposed_aliases: BumpMap::new_in(arena),
         }
     }
 
     pub fn from_var_host_exposed(
+        arena: &'a Bump,
         subs: &Subs,
         var: Variable,
-        host_exposed_aliases: &MutMap<Symbol, Variable>,
+        exposed: &MutMap<Symbol, Variable>,
     ) -> Self {
         let solved_type = SolvedType::from_var(subs, var);
 
-        let host_exposed_aliases = host_exposed_aliases
-            .iter()
-            .map(|(symbol, variable)| (*symbol, SolvedType::from_var(subs, *variable)))
-            .collect();
+        let mut host_exposed_aliases = BumpMap::with_capacity_in(exposed.len(), arena);
+
+        host_exposed_aliases.extend(
+            exposed
+                .iter()
+                .map(|(symbol, variable)| (*symbol, SolvedType::from_var(subs, *variable))),
+        );
 
         PendingSpecialization {
             solved_type,
@@ -275,7 +279,8 @@ pub struct Procs<'a> {
     pub partial_procs: MutMap<Symbol, PartialProc<'a>>,
     pub imported_module_thunks: MutSet<Symbol>,
     pub module_thunks: MutSet<Symbol>,
-    pub pending_specializations: Option<MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization>>>,
+    pub pending_specializations:
+        Option<MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>>,
     pub specialized: MutMap<(Symbol, Layout<'a>), InProgressProc<'a>>,
     pub call_by_pointer_wrappers: MutMap<Symbol, Symbol>,
     pub runtime_errors: MutMap<Symbol, &'a str>,
@@ -502,7 +507,7 @@ impl<'a> Procs<'a> {
                 // Changing it to use .entry() would necessarily make it incorrect.
                 #[allow(clippy::map_entry)]
                 if !already_specialized {
-                    let pending = PendingSpecialization::from_var(env.subs, annotation);
+                    let pending = PendingSpecialization::from_var(env.arena, env.subs, annotation);
 
                     let partial_proc;
                     if let Some(existing) = self.partial_procs.get(&symbol) {
@@ -576,6 +581,7 @@ impl<'a> Procs<'a> {
         &mut self,
         name: Symbol,
         layout: Layout<'a>,
+        arena: &'a Bump,
         subs: &Subs,
         opt_annotation: Option<roc_can::def::Annotation>,
         fn_var: Variable,
@@ -590,8 +596,9 @@ impl<'a> Procs<'a> {
         // We're done with that tuple, so move layout back out to avoid cloning it.
         let (name, layout) = tuple;
         let pending = match opt_annotation {
-            None => PendingSpecialization::from_var(subs, fn_var),
+            None => PendingSpecialization::from_var(arena, subs, fn_var),
             Some(annotation) => PendingSpecialization::from_var_host_exposed(
+                arena,
                 subs,
                 fn_var,
                 &annotation.introduced_variables.host_exposed_aliases,
@@ -634,7 +641,7 @@ impl<'a> Procs<'a> {
         // We're done with that tuple, so move layout back out to avoid cloning it.
         let (name, layout) = tuple;
 
-        let pending = PendingSpecialization::from_var(env.subs, fn_var);
+        let pending = PendingSpecialization::from_var(env.arena, env.subs, fn_var);
 
         // This should only be called when pending_specializations is Some.
         // Otherwise, it's being called in the wrong pass!
@@ -674,10 +681,10 @@ impl<'a> Procs<'a> {
 }
 
 fn add_pending<'a>(
-    pending_specializations: &mut MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization>>,
+    pending_specializations: &mut MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>,
     symbol: Symbol,
     layout: Layout<'a>,
-    pending: PendingSpecialization,
+    pending: PendingSpecialization<'a>,
 ) {
     let all_pending = pending_specializations
         .entry(symbol)
@@ -1662,7 +1669,7 @@ pub fn specialize_all<'a>(
             name,
             layout_cache,
             solved_type,
-            MutMap::default(),
+            BumpMap::new_in(env.arena),
             partial_proc,
         ) {
             Ok((proc, layout)) => {
@@ -1833,8 +1840,7 @@ fn specialize_external<'a>(
     let host_exposed_layouts = if host_exposed_variables.is_empty() {
         HostExposedLayouts::NotHostExposed
     } else {
-        let mut aliases =
-            hashbrown::HashMap::with_hasher_in(default_hasher(), hashbrown::BumpWrapper(env.arena));
+        let mut aliases = BumpMap::new_in(env.arena);
 
         for (symbol, variable) in host_exposed_variables {
             let layout = layout_cache
@@ -2336,7 +2342,7 @@ fn specialize_solved_type<'a>(
     proc_name: Symbol,
     layout_cache: &mut LayoutCache<'a>,
     solved_type: SolvedType,
-    host_exposed_aliases: MutMap<Symbol, SolvedType>,
+    host_exposed_aliases: BumpMap<Symbol, SolvedType>,
     partial_proc: PartialProc<'a>,
 ) -> Result<(Proc<'a>, Layout<'a>), SpecializeFailure<'a>> {
     // add the specializations that other modules require of us
@@ -4832,7 +4838,7 @@ fn from_can_when<'a>(
     )
 }
 
-fn substitute(substitutions: &MutMap<Symbol, Symbol>, s: Symbol) -> Option<Symbol> {
+fn substitute(substitutions: &BumpMap<Symbol, Symbol>, s: Symbol) -> Option<Symbol> {
     match substitutions.get(&s) {
         Some(new) => {
             debug_assert!(!substitutions.contains_key(new));
@@ -4843,7 +4849,7 @@ fn substitute(substitutions: &MutMap<Symbol, Symbol>, s: Symbol) -> Option<Symbo
 }
 
 fn substitute_in_exprs<'a>(arena: &'a Bump, stmt: &mut Stmt<'a>, from: Symbol, to: Symbol) {
-    let mut subs = MutMap::default();
+    let mut subs = BumpMap::with_capacity_in(1, arena);
     subs.insert(from, to);
 
     // TODO clean this up
@@ -4856,7 +4862,7 @@ fn substitute_in_exprs<'a>(arena: &'a Bump, stmt: &mut Stmt<'a>, from: Symbol, t
 fn substitute_in_stmt_help<'a>(
     arena: &'a Bump,
     stmt: &'a Stmt<'a>,
-    subs: &MutMap<Symbol, Symbol>,
+    subs: &BumpMap<Symbol, Symbol>,
 ) -> Option<&'a Stmt<'a>> {
     use Stmt::*;
 
@@ -5024,7 +5030,7 @@ fn substitute_in_stmt_help<'a>(
 fn substitute_in_call<'a>(
     arena: &'a Bump,
     call: &'a Call<'a>,
-    subs: &MutMap<Symbol, Symbol>,
+    subs: &BumpMap<Symbol, Symbol>,
 ) -> Option<Call<'a>> {
     let Call {
         call_type,
@@ -5087,7 +5093,7 @@ fn substitute_in_call<'a>(
 fn substitute_in_expr<'a>(
     arena: &'a Bump,
     expr: &'a Expr<'a>,
-    subs: &MutMap<Symbol, Symbol>,
+    subs: &BumpMap<Symbol, Symbol>,
 ) -> Option<Expr<'a>> {
     use Expr::*;
 
@@ -6090,7 +6096,7 @@ fn call_by_name<'a>(
                 let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
                 assign_to_symbols(env, procs, layout_cache, iter, result)
             } else {
-                let pending = PendingSpecialization::from_var(env.subs, fn_var);
+                let pending = PendingSpecialization::from_var(env.arena, env.subs, fn_var);
 
                 // When requested (that is, when procs.pending_specializations is `Some`),
                 // store a pending specialization rather than specializing immediately.
@@ -6927,7 +6933,7 @@ fn from_can_pattern_help<'a>(
 
             // sorted fields based on the destruct
             let mut mono_destructs = Vec::with_capacity_in(destructs.len(), env.arena);
-            let destructs_by_label = env.arena.alloc(MutMap::default());
+            let mut destructs_by_label = BumpMap::with_capacity_in(destructs.len(), env.arena);
             destructs_by_label.extend(destructs.iter().map(|x| (&x.value.label, x)));
 
             let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
