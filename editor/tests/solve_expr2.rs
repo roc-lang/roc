@@ -24,7 +24,8 @@ use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, Variable};
 use roc_types::{pretty_print::content_to_string, subs::VarStore};
 
-fn run_solve(
+fn run_solve<'a>(
+    arena: &'a Bump,
     mempool: &mut Pool,
     aliases: MutMap<Symbol, roc_types::types::Alias>,
     rigid_variables: MutMap<Variable, Lowercase>,
@@ -47,7 +48,8 @@ fn run_solve(
     let mut problems = Vec::new();
 
     // Run the solver to populate Subs.
-    let (solved_subs, solved_env) = solve::run(mempool, &env, &mut problems, subs, &constraint);
+    let (solved_subs, solved_env) =
+        solve::run(arena, mempool, &env, &mut problems, subs, &constraint);
 
     (solved_subs, solved_env, problems)
 }
@@ -103,6 +105,7 @@ fn infer_eq(actual: &str, expected_str: &str) {
             std::mem::swap(ref_var_store, &mut var_store);
 
             let (mut solved, _, _) = run_solve(
+                &code_arena,
                 pool,
                 Default::default(),
                 Default::default(),
