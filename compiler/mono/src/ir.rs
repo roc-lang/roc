@@ -288,8 +288,8 @@ pub struct Procs<'a> {
     pub externals_we_need: MutMap<ModuleId, ExternalSpecializations>,
 }
 
-impl<'a> Default for Procs<'a> {
-    fn default() -> Self {
+impl<'a> Procs<'a> {
+    pub fn new_in(arena: &'a Bump) -> Self {
         Self {
             partial_procs: MutMap::default(),
             imported_module_thunks: MutSet::default(),

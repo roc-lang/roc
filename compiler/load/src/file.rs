@@ -1464,7 +1464,7 @@ where
                 all_pending_specializations: MutMap::default(),
                 specializations_in_flight: 0,
                 layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
-                procs: Procs::default(),
+                procs: Procs::new_in(arena),
             };
 
             // We've now distributed one worker queue to each thread.
@@ -3836,7 +3836,7 @@ fn build_pending_specializations<'a>(
     exposed_to_host: MutMap<Symbol, Variable>,
 ) -> Msg<'a> {
     let find_specializations_start = SystemTime::now();
-    let mut procs = Procs::default();
+    let mut procs = Procs::new_in(arena);
 
     debug_assert!(procs.imported_module_thunks.is_empty());
     procs.imported_module_thunks = imported_module_thunks;
