@@ -6,7 +6,7 @@ use crate::layout::{
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap, MutSet};
+use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, BumpSet, MutMap, MutSet};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -277,8 +277,8 @@ impl ExternalSpecializations {
 #[derive(Clone, Debug)]
 pub struct Procs<'a> {
     pub partial_procs: BumpMap<'a, Symbol, PartialProc<'a>>,
-    pub imported_module_thunks: MutSet<Symbol>,
-    pub module_thunks: MutSet<Symbol>,
+    pub imported_module_thunks: BumpSet<'a, Symbol>,
+    pub module_thunks: BumpSet<'a, Symbol>,
     pub pending_specializations:
         Option<MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>>,
     pub specialized: BumpMap<'a, (Symbol, Layout<'a>), InProgressProc<'a>>,
@@ -292,8 +292,8 @@ impl<'a> Procs<'a> {
     pub fn new_in(arena: &'a Bump) -> Self {
         Self {
             partial_procs: BumpMap::new_in(arena),
-            imported_module_thunks: MutSet::default(),
-            module_thunks: MutSet::default(),
+            imported_module_thunks: BumpSet::new_in(arena),
+            module_thunks: BumpSet::new_in(arena),
             pending_specializations: Some(MutMap::default()),
             specialized: BumpMap::new_in(arena),
             runtime_errors: BumpMap::new_in(arena),

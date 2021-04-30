@@ -8,7 +8,7 @@ use roc_builtins::std::StdLib;
 use roc_can::constraint::Constraint;
 use roc_can::def::{Declaration, Def};
 use roc_can::module::{canonicalize_module_defs, Module};
-use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet};
+use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, BumpSet, MutMap, MutSet};
 use roc_constrain::module::{
     constrain_imports, pre_constrain_imports, ConstrainableImports, Import,
 };
@@ -369,7 +369,12 @@ struct ModuleCache<'a> {
     header_sources: MutMap<ModuleId, (PathBuf, &'a str)>,
 }
 
-fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> Vec<BuildTask<'a>> {
+fn start_phase<'a>(
+    module_id: ModuleId,
+    phase: Phase,
+    arena: &'a Bump,
+    state: &mut State<'a>,
+) -> Vec<BuildTask<'a>> {
     // we blindly assume all dependencies are met
 
     match state
@@ -391,7 +396,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 .dependencies
                 .notify(module_id, phase)
                 .into_iter()
-                .map(|(module_id, phase)| start_phase(module_id, phase, state))
+                .map(|(module_id, phase)| start_phase(module_id, phase, arena, state))
                 .flatten()
                 .collect();
         }
@@ -545,7 +550,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                     ident_ids,
                 } = typechecked;
 
-                let mut imported_module_thunks = MutSet::default();
+                let mut imported_module_thunks = BumpSet::new_in(arena);
 
                 if let Some(imports) = state.module_cache.imports.get(&module_id) {
                     for imported in imports.iter() {
@@ -971,7 +976,7 @@ enum BuildTask<'a> {
         module_timing: ModuleTiming,
         layout_cache: LayoutCache<'a>,
         solved_subs: Solved<Subs>,
-        imported_module_thunks: MutSet<Symbol>,
+        imported_module_thunks: BumpSet<'a, Symbol>,
         module_id: ModuleId,
         ident_ids: IdentIds,
         decls: Vec<Declaration>,
@@ -1603,13 +1608,14 @@ where
 }
 
 fn start_tasks<'a>(
-    work: MutSet<(ModuleId, Phase)>,
+    arena: &'a Bump,
     state: &mut State<'a>,
+    work: MutSet<(ModuleId, Phase)>,
     injector: &Injector<BuildTask<'a>>,
     worker_listeners: &'a [Sender<WorkerMsg>],
 ) -> Result<(), LoadingProblem<'a>> {
     for (module_id, phase) in work {
-        for task in start_phase(module_id, phase, state) {
+        for task in start_phase(module_id, phase, arena, state) {
             enqueue_task(&injector, worker_listeners, task)?
         }
     }
@@ -1731,11 +1737,11 @@ fn update<'a>(
 
             state.module_cache.headers.insert(header.module_id, header);
 
-            start_tasks(work, &mut state, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
 
             let work = state.dependencies.notify(home, Phase::LoadHeader);
 
-            start_tasks(work, &mut state, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1768,7 +1774,7 @@ fn update<'a>(
 
             let work = state.dependencies.notify(module_id, Phase::Parse);
 
-            start_tasks(work, &mut state, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1803,7 +1809,7 @@ fn update<'a>(
                 .dependencies
                 .notify(module_id, Phase::CanonicalizeAndConstrain);
 
-            start_tasks(work, &mut state, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1854,7 +1860,7 @@ fn update<'a>(
                     .notify(module_id, Phase::CanonicalizeAndConstrain),
             );
 
-            start_tasks(work, &mut state, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1956,7 +1962,7 @@ fn update<'a>(
                     state.constrained_ident_ids.insert(module_id, ident_ids);
                 }
 
-                start_tasks(work, &mut state, &injector, worker_listeners)?;
+                start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
             }
 
             Ok(state)
@@ -2011,7 +2017,7 @@ fn update<'a>(
                 .dependencies
                 .notify(module_id, Phase::FindSpecializations);
 
-            start_tasks(work, &mut state, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -2104,7 +2110,7 @@ fn update<'a>(
                     existing.extend(requested);
                 }
 
-                start_tasks(work, &mut state, &injector, worker_listeners)?;
+                start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
             }
 
             Ok(state)
@@ -3825,7 +3831,7 @@ fn make_specializations<'a>(
 fn build_pending_specializations<'a>(
     arena: &'a Bump,
     solved_subs: Solved<Subs>,
-    imported_module_thunks: MutSet<Symbol>,
+    imported_module_thunks: BumpSet<'a, Symbol>,
     home: ModuleId,
     mut ident_ids: IdentIds,
     decls: Vec<Declaration>,

@@ -29,6 +29,7 @@ pub type SendMap<K, V> = im::hashmap::HashMap<K, V, BuildHasher>;
 pub type SendSet<K> = im::hashset::HashSet<K, BuildHasher>;
 
 pub type BumpMap<'a, K, V> = hashbrown::HashMap<K, V, BuildHasher, hashbrown::BumpWrapper<'a>>;
+pub type BumpSet<'a, K> = hashbrown::HashSet<K, BuildHasher, hashbrown::BumpWrapper<'a>>;
 
 pub trait BumpMapDefault<'a> {
     fn new_in(arena: &'a bumpalo::Bump) -> Self;
@@ -43,6 +44,20 @@ impl<'a, K, V> BumpMapDefault<'a> for BumpMap<'a, K, V> {
 
     fn with_capacity_in(capacity: usize, arena: &'a bumpalo::Bump) -> Self {
         hashbrown::HashMap::with_capacity_and_hasher_in(
+            capacity,
+            default_hasher(),
+            hashbrown::BumpWrapper(arena),
+        )
+    }
+}
+
+impl<'a, K> BumpMapDefault<'a> for BumpSet<'a, K> {
+    fn new_in(arena: &'a bumpalo::Bump) -> Self {
+        hashbrown::HashSet::with_hasher_in(default_hasher(), hashbrown::BumpWrapper(arena))
+    }
+
+    fn with_capacity_in(capacity: usize, arena: &'a bumpalo::Bump) -> Self {
+        hashbrown::HashSet::with_capacity_and_hasher_in(
             capacity,
             default_hasher(),
             hashbrown::BumpWrapper(arena),
