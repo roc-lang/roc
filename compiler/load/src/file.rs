@@ -8,7 +8,7 @@ use roc_builtins::std::StdLib;
 use roc_can::constraint::Constraint;
 use roc_can::def::{Declaration, Def};
 use roc_can::module::{canonicalize_module_defs, Module};
-use roc_collections::all::{default_hasher, MutMap, MutSet};
+use roc_collections::all::{default_hasher, BumpMap, MutMap, MutSet};
 use roc_constrain::module::{
     constrain_imports, pre_constrain_imports, ConstrainableImports, Import,
 };
@@ -769,7 +769,7 @@ enum Msg<'a> {
         module_id: ModuleId,
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
-        external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
+        external_specializations_requested: BumpMap<'a, ModuleId, ExternalSpecializations>,
         procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         module_timing: ModuleTiming,

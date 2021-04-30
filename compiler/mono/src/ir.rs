@@ -276,29 +276,29 @@ impl ExternalSpecializations {
 
 #[derive(Clone, Debug)]
 pub struct Procs<'a> {
-    pub partial_procs: MutMap<Symbol, PartialProc<'a>>,
+    pub partial_procs: BumpMap<'a, Symbol, PartialProc<'a>>,
     pub imported_module_thunks: MutSet<Symbol>,
     pub module_thunks: MutSet<Symbol>,
     pub pending_specializations:
         Option<MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>>,
-    pub specialized: MutMap<(Symbol, Layout<'a>), InProgressProc<'a>>,
-    pub call_by_pointer_wrappers: MutMap<Symbol, Symbol>,
-    pub runtime_errors: MutMap<Symbol, &'a str>,
+    pub specialized: BumpMap<'a, (Symbol, Layout<'a>), InProgressProc<'a>>,
+    pub runtime_errors: BumpMap<'a, Symbol, &'a str>,
+    pub call_by_pointer_wrappers: BumpMap<'a, Symbol, Symbol>,
     pub externals_others_need: ExternalSpecializations,
-    pub externals_we_need: MutMap<ModuleId, ExternalSpecializations>,
+    pub externals_we_need: BumpMap<'a, ModuleId, ExternalSpecializations>,
 }
 
 impl<'a> Procs<'a> {
     pub fn new_in(arena: &'a Bump) -> Self {
         Self {
-            partial_procs: MutMap::default(),
+            partial_procs: BumpMap::new_in(arena),
             imported_module_thunks: MutSet::default(),
             module_thunks: MutSet::default(),
             pending_specializations: Some(MutMap::default()),
-            specialized: MutMap::default(),
-            runtime_errors: MutMap::default(),
-            call_by_pointer_wrappers: MutMap::default(),
-            externals_we_need: MutMap::default(),
+            specialized: BumpMap::new_in(arena),
+            runtime_errors: BumpMap::new_in(arena),
+            call_by_pointer_wrappers: BumpMap::new_in(arena),
+            externals_we_need: BumpMap::new_in(arena),
             externals_others_need: ExternalSpecializations::default(),
         }
     }
@@ -5948,7 +5948,7 @@ fn add_needed_external<'a>(
     name: Symbol,
 ) {
     // call of a function that is not in this module
-    use std::collections::hash_map::Entry::{Occupied, Vacant};
+    use hashbrown::hash_map::Entry::{Occupied, Vacant};
 
     let existing = match procs.externals_we_need.entry(name.module_id()) {
         Vacant(entry) => entry.insert(ExternalSpecializations::default()),
