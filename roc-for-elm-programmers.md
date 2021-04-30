@@ -349,11 +349,34 @@ Here are two differences:
 
 For example:
 
-```coffeescript
+```rust
 when color is
     Blue -> 1
     Green | Red | Yellow -> 2
     Purple -> 3
+```
+
+Like Rust, you can add an `if` guard after a pattern:
+
+```rust
+when color is
+    Blue -> 1
+    Green | Red | Yellow if totalColors >= 3 -> 2
+    Green | Red | Yellow -> 4 # only gets run if totalColors < 3
+```
+
+This gives you a way to use constants in patterns:
+
+```rust
+pi = 3.14
+e = 2.72
+
+when number is
+    0 -> "zero"
+    1 -> "one"
+    v if v == pi -> "pi"
+    v if v == e -> "e"
+    _ -> ""
 ```
 
 ## Custom Types
