@@ -243,14 +243,20 @@ impl<'a> Proc<'a> {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct ExternalSpecializations {
-    pub specs: MutMap<Symbol, MutSet<SolvedType>>,
+#[derive(Clone, Debug)]
+pub struct ExternalSpecializations<'a> {
+    pub specs: BumpMap<'a, Symbol, MutSet<SolvedType>>,
 }
 
-impl ExternalSpecializations {
+impl<'a> ExternalSpecializations<'a> {
+    pub fn new_in(arena: &'a Bump) -> Self {
+        Self {
+            specs: BumpMap::new_in(arena),
+        }
+    }
+
     pub fn insert(&mut self, symbol: Symbol, typ: SolvedType) {
-        use std::collections::hash_map::Entry::{Occupied, Vacant};
+        use hashbrown::hash_map::Entry::{Occupied, Vacant};
 
         let existing = match self.specs.entry(symbol) {
             Vacant(entry) => entry.insert(MutSet::default()),
@@ -261,7 +267,7 @@ impl ExternalSpecializations {
     }
 
     pub fn extend(&mut self, other: Self) {
-        use std::collections::hash_map::Entry::{Occupied, Vacant};
+        use hashbrown::hash_map::Entry::{Occupied, Vacant};
 
         for (symbol, solved_types) in other.specs {
             let existing = match self.specs.entry(symbol) {
@@ -280,12 +286,12 @@ pub struct Procs<'a> {
     pub imported_module_thunks: BumpSet<'a, Symbol>,
     pub module_thunks: BumpSet<'a, Symbol>,
     pub pending_specializations:
-        Option<MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>>,
+        Option<BumpMap<'a, Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>>,
     pub specialized: BumpMap<'a, (Symbol, Layout<'a>), InProgressProc<'a>>,
     pub runtime_errors: BumpMap<'a, Symbol, &'a str>,
     pub call_by_pointer_wrappers: BumpMap<'a, Symbol, Symbol>,
-    pub externals_others_need: ExternalSpecializations,
-    pub externals_we_need: BumpMap<'a, ModuleId, ExternalSpecializations>,
+    pub externals_others_need: ExternalSpecializations<'a>,
+    pub externals_we_need: BumpMap<'a, ModuleId, ExternalSpecializations<'a>>,
 }
 
 impl<'a> Procs<'a> {
@@ -294,12 +300,12 @@ impl<'a> Procs<'a> {
             partial_procs: BumpMap::new_in(arena),
             imported_module_thunks: BumpSet::new_in(arena),
             module_thunks: BumpSet::new_in(arena),
-            pending_specializations: Some(MutMap::default()),
+            pending_specializations: Some(BumpMap::new_in(arena)),
             specialized: BumpMap::new_in(arena),
             runtime_errors: BumpMap::new_in(arena),
             call_by_pointer_wrappers: BumpMap::new_in(arena),
             externals_we_need: BumpMap::new_in(arena),
-            externals_others_need: ExternalSpecializations::default(),
+            externals_others_need: ExternalSpecializations::new_in(arena),
         }
     }
 }
@@ -681,7 +687,11 @@ impl<'a> Procs<'a> {
 }
 
 fn add_pending<'a>(
-    pending_specializations: &mut MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>,
+    pending_specializations: &mut BumpMap<
+        'a,
+        Symbol,
+        MutMap<Layout<'a>, PendingSpecialization<'a>>,
+    >,
     symbol: Symbol,
     layout: Layout<'a>,
     pending: PendingSpecialization<'a>,
@@ -1688,7 +1698,9 @@ pub fn specialize_all<'a>(
         }
     }
 
-    let mut pending_specializations = procs.pending_specializations.unwrap_or_default();
+    let mut pending_specializations = procs
+        .pending_specializations
+        .unwrap_or_else(|| BumpMap::new_in(env.arena));
 
     // When calling from_can, pending_specializations should be unavailable.
     // This must be a single pass, and we must not add any more entries to it!
@@ -5951,7 +5963,7 @@ fn add_needed_external<'a>(
     use hashbrown::hash_map::Entry::{Occupied, Vacant};
 
     let existing = match procs.externals_we_need.entry(name.module_id()) {
-        Vacant(entry) => entry.insert(ExternalSpecializations::default()),
+        Vacant(entry) => entry.insert(ExternalSpecializations::new_in(env.arena)),
         Occupied(entry) => entry.into_mut(),
     };
 

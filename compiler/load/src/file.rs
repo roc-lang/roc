@@ -355,7 +355,7 @@ struct ModuleCache<'a> {
     constrained: MutMap<ModuleId, ConstrainedModule>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
-    external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
+    external_specializations_requested: MutMap<ModuleId, ExternalSpecializations<'a>>,
 
     /// Various information
     imports: MutMap<ModuleId, MutSet<ModuleId>>,
@@ -584,7 +584,7 @@ fn start_phase<'a>(
                     .module_cache
                     .external_specializations_requested
                     .remove(&module_id)
-                    .unwrap_or_default();
+                    .unwrap_or_else(|| ExternalSpecializations::new_in(arena));
 
                 let FoundSpecializationsModule {
                     module_id,
@@ -774,7 +774,7 @@ enum Msg<'a> {
         module_id: ModuleId,
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
-        external_specializations_requested: BumpMap<'a, ModuleId, ExternalSpecializations>,
+        external_specializations_requested: BumpMap<'a, ModuleId, ExternalSpecializations<'a>>,
         procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         module_timing: ModuleTiming,
@@ -988,7 +988,7 @@ enum BuildTask<'a> {
         subs: Subs,
         procs: Procs<'a>,
         layout_cache: LayoutCache<'a>,
-        specializations_we_must_make: ExternalSpecializations,
+        specializations_we_must_make: ExternalSpecializations<'a>,
         module_timing: ModuleTiming,
     },
 }
@@ -2063,7 +2063,7 @@ fn update<'a>(
                         .external_specializations_requested
                         .entry(module_id)
                     {
-                        Vacant(entry) => entry.insert(ExternalSpecializations::default()),
+                        Vacant(entry) => entry.insert(ExternalSpecializations::new_in(arena)),
                         Occupied(entry) => entry.into_mut(),
                     };
 
@@ -2103,7 +2103,7 @@ fn update<'a>(
                         .external_specializations_requested
                         .entry(module_id)
                     {
-                        Vacant(entry) => entry.insert(ExternalSpecializations::default()),
+                        Vacant(entry) => entry.insert(ExternalSpecializations::new_in(arena)),
                         Occupied(entry) => entry.into_mut(),
                     };
 
@@ -3782,7 +3782,7 @@ fn make_specializations<'a>(
     mut subs: Subs,
     mut procs: Procs<'a>,
     mut layout_cache: LayoutCache<'a>,
-    specializations_we_must_make: ExternalSpecializations,
+    specializations_we_must_make: ExternalSpecializations<'a>,
     mut module_timing: ModuleTiming,
     ptr_bytes: u32,
 ) -> Msg<'a> {
