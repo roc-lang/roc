@@ -84,7 +84,7 @@ mod test_reporting {
             let arena = Bump::new();
 
             // Compile and add all the Procs before adding main
-            let mut procs = Procs::default();
+            let mut procs = Procs::new_in(&arena);
             let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
