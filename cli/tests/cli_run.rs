@@ -56,7 +56,8 @@ mod cli_run {
         if !compile_out.stderr.is_empty() {
             panic!("{}", compile_out.stderr);
         }
-        assert!(compile_out.status.success());
+
+        assert!(compile_out.status.success(), "bad status {:?}", compile_out);
 
         let out = if use_valgrind && ALLOW_VALGRIND {
             let (valgrind_out, raw_xml) = run_with_valgrind(
