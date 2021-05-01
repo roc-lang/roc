@@ -81,6 +81,17 @@ fn layout_width<'a, 'ctx, 'env>(
         .into()
 }
 
+fn pass_as_opaque<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    ptr: PointerValue<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    env.builder.build_bitcast(
+        ptr,
+        env.context.i8_type().ptr_type(AddressSpace::Generic),
+        "to_opaque",
+    )
+}
+
 /// List.single : a -> List a
 pub fn list_single<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -490,8 +501,6 @@ fn list_walk_generic<'a, 'ctx, 'env>(
         ListWalk::WalkBackwardsUntil => todo!(),
     };
 
-    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
-
     let transform_ptr = builder.build_alloca(func.get_type(), "transform_ptr");
     env.builder.build_store(transform_ptr, func);
 
@@ -515,14 +524,13 @@ fn list_walk_generic<'a, 'ctx, 'env>(
                 env,
                 &[
                     pass_list_as_i128(env, list),
-                    env.builder
-                        .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+                    pass_as_opaque(env, transform_ptr),
                     stepper_caller.into(),
-                    env.builder.build_bitcast(default_ptr, u8_ptr, "to_u8_ptr"),
+                    pass_as_opaque(env, default_ptr),
                     alignment_intvalue(env, &element_layout),
                     layout_width(env, element_layout),
                     layout_width(env, default_layout),
-                    env.builder.build_bitcast(result_ptr, u8_ptr, "to_opaque"),
+                    pass_as_opaque(env, result_ptr),
                 ],
                 zig_function,
             );
@@ -533,15 +541,14 @@ fn list_walk_generic<'a, 'ctx, 'env>(
                 env,
                 &[
                     pass_list_as_i128(env, list),
-                    env.builder
-                        .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+                    pass_as_opaque(env, transform_ptr),
                     stepper_caller.into(),
-                    env.builder.build_bitcast(default_ptr, u8_ptr, "to_u8_ptr"),
+                    pass_as_opaque(env, default_ptr),
                     alignment_intvalue(env, &element_layout),
                     layout_width(env, element_layout),
                     layout_width(env, default_layout),
                     dec_element_fn.as_global_value().as_pointer_value().into(),
-                    env.builder.build_bitcast(result_ptr, u8_ptr, "to_opaque"),
+                    pass_as_opaque(env, result_ptr),
                 ],
                 zig_function,
             );
@@ -592,8 +599,6 @@ pub fn list_range<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
-
     let low_ptr = builder.build_alloca(low.get_type(), "low_ptr");
     env.builder.build_store(low_ptr, low);
 
@@ -610,8 +615,8 @@ pub fn list_range<'a, 'ctx, 'env>(
         env,
         &[
             int_width,
-            env.builder.build_bitcast(low_ptr, u8_ptr, "to_u8_ptr"),
-            env.builder.build_bitcast(high_ptr, u8_ptr, "to_u8_ptr"),
+            pass_as_opaque(env, low_ptr),
+            pass_as_opaque(env, high_ptr),
         ],
         &bitcode::LIST_RANGE,
     )
@@ -653,8 +658,6 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
-
     let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
     env.builder.build_store(transform_ptr, transform);
 
@@ -670,8 +673,7 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
         env,
         &[
             pass_list_as_i128(env, list),
-            env.builder
-                .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+            pass_as_opaque(env, transform_ptr),
             stepper_caller.into(),
             alignment_intvalue(env, &element_layout),
             layout_width(env, element_layout),
@@ -738,8 +740,6 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
-
     let result_layout = match transform_layout {
         Layout::FunctionPointer(_, ret) => ret,
         Layout::Closure(_, _, ret) => ret,
@@ -773,8 +773,7 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
         env,
         &[
             pass_list_as_i128(env, list),
-            env.builder
-                .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+            pass_as_opaque(env, transform_ptr),
             stepper_caller.into(),
             alignment_intvalue(env, &before_layout),
             before_width.into(),
@@ -795,8 +794,6 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
     list: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
-
     let transform_ptr = transform.into_pointer_value();
 
     let compare_wrapper = build_compare_wrapper(env, layout_ids, element_layout)
@@ -807,8 +804,7 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
         env,
         &[
             pass_list_as_i128(env, list),
-            env.builder
-                .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+            pass_as_opaque(env, transform_ptr),
             compare_wrapper.into(),
             alignment_intvalue(env, &element_layout),
             layout_width(env, element_layout),
@@ -877,8 +873,6 @@ fn list_map_generic<'a, 'ctx, 'env>(
         _ => unreachable!("not a callable layout"),
     };
 
-    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
-
     let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
     env.builder.build_store(transform_ptr, transform);
 
@@ -891,8 +885,7 @@ fn list_map_generic<'a, 'ctx, 'env>(
         env,
         &[
             pass_list_as_i128(env, list),
-            env.builder
-                .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+            pass_as_opaque(env, transform_ptr),
             stepper_caller.into(),
             alignment_intvalue(env, &element_layout),
             layout_width(env, element_layout),
@@ -919,8 +912,6 @@ pub fn list_map2<'a, 'ctx, 'env>(
         Layout::Closure(_, _, ret) => ret,
         _ => unreachable!("not a callable layout"),
     };
-
-    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
     let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
     env.builder.build_store(transform_ptr, transform);
@@ -951,8 +942,7 @@ pub fn list_map2<'a, 'ctx, 'env>(
         &[
             pass_list_as_i128(env, list1),
             pass_list_as_i128(env, list2),
-            env.builder
-                .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+            pass_as_opaque(env, transform_ptr),
             stepper_caller.into(),
             alignment_intvalue(env, &transform_layout),
             a_width.into(),
@@ -984,8 +974,6 @@ pub fn list_map3<'a, 'ctx, 'env>(
         Layout::Closure(_, _, ret) => ret,
         _ => unreachable!("not a callable layout"),
     };
-
-    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
     let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
     env.builder.build_store(transform_ptr, transform);
@@ -1022,8 +1010,7 @@ pub fn list_map3<'a, 'ctx, 'env>(
             pass_list_as_i128(env, list1),
             pass_list_as_i128(env, list2),
             pass_list_as_i128(env, list3),
-            env.builder
-                .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
+            pass_as_opaque(env, transform_ptr),
             stepper_caller.into(),
             alignment_intvalue(env, transform_layout),
             a_width.into(),
