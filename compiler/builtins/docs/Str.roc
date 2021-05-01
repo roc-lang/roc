@@ -306,12 +306,30 @@ trim : Str -> Str
 fromScalar : U32 -> Result Str [ BadScalar ]*
 fromCodePoints : List U32 -> Result Str [ BadCodePoint U32 ]*
 fromUtf8 : List U8 -> Result Str [ BadUtf8 ]*
-fromUtf16 : List U8, Endi -> Result Str [ BadUtf16 Endi ]*
+
+## Create a [Str] from bytes encoded as [UTF-16LE](https://en.wikipedia.org/wiki/UTF-16#Byte-order_encoding_schemes).
+fromUtf16Le : List U8 -> Result Str [ BadUtf16Le Endi ]*
+
+## Create a [Str] from bytes encoded as [UTF-16BE](https://en.wikipedia.org/wiki/UTF-16#Byte-order_encoding_schemes).
+fromUtf16Be : List U8 -> Result Str [ BadUtf16Be Endi ]*
+
+## Create a [Str] from bytes encoded as UTF-16 with a [Byte Order Mark](https://en.wikipedia.org/wiki/Byte_order_mark).
+fromUtf16Bom : List U8 -> Result Str [ BadUtf16 Endi, NoBom ]*
+
+## Create a [Str] from bytes encoded as [UTF-32LE](https://web.archive.org/web/20120322145307/http://mail.apps.ietf.org/ietf/charsets/msg01095.html)
+fromUtf32Le : List U8 -> Result Str [ BadUtf32Le Endi ]*
+
+## Create a [Str] from bytes encoded as [UTF-32BE](https://web.archive.org/web/20120322145307/http://mail.apps.ietf.org/ietf/charsets/msg01095.html)
+fromUtf32Be : List U8 -> Result Str [ BadUtf32Be Endi ]*
+
+## Create a [Str] from bytes encoded as UTF-32 with a [Byte Order Mark](https://en.wikipedia.org/wiki/Byte_order_mark).
+fromUtf32Bom : List U8 -> Result Str [ BadUtf32 Endi, NoBom ]*
 
 ## Convert from UTF-8, substituting the replacement character ("�") for any
 ## invalid sequences encountered.
 fromUtf8Sub : List U8 -> Str
 fromUtf16Sub : List U8, Endi -> Str
+fromUtf16BomSub : List U8 -> Result Str [ NoBom ]*
 
 ## Return a #List of the string's #U8 UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a #List of smaller #Str values instead of #U8 values,
@@ -328,7 +346,12 @@ fromUtf16Sub : List U8, Endi -> Str
 ## For a more flexible function that walks through each of these #U8 code units
 ## without creating a #List, see #Str.walkUtf8 and #Str.walkRevUtf8.
 toUtf8 : Str -> List U8
-toUtf16 : Str, Endi -> List U8
+toUtf16Be : Str -> List U8
+toUtf16Le : Str -> List U8
+toUtf16Bom : Str, Endi -> List U8
+toUtf32Be : Str -> List U8
+toUtf32Le : Str -> List U8
+toUtf32Bom : Str, Endi -> List U8
 
 # Parsing
 
