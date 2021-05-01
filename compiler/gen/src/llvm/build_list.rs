@@ -32,6 +32,7 @@ fn list_returned_from_zig<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     output: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
+    // per the C ABI, our list objects are passed between functions as an i128
     complex_bitcast(
         env.builder,
         output,
@@ -100,15 +101,13 @@ pub fn list_repeat<'a, 'ctx, 'env>(
         .ptr_int()
         .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
 
-    let alignment = element_layout.alignment_bytes(env.ptr_bytes);
-    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
     let inc_element_fn = build_inc_wrapper(env, layout_ids, element_layout);
 
     call_bitcode_fn_returns_list(
         env,
         &[
             list_len.into(),
-            alignment_iv.into(),
+            alignment_intvalue(env, element_layout),
             env.builder.build_bitcast(element_ptr, u8_ptr, "to_u8_ptr"),
             element_width.into(),
             inc_element_fn.as_global_value().as_pointer_value().into(),
@@ -209,12 +208,13 @@ pub fn list_join<'a, 'ctx, 'env>(
                 .ptr_int()
                 .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
 
-            let alignment = element_layout.alignment_bytes(env.ptr_bytes);
-            let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
-
             call_bitcode_fn_returns_list(
                 env,
-                &[list_i128, alignment_iv.into(), element_width.into()],
+                &[
+                    list_i128,
+                    alignment_intvalue(env, element_layout),
+                    element_width.into(),
+                ],
                 &bitcode::LIST_JOIN,
             )
         }
@@ -254,12 +254,13 @@ pub fn list_reverse<'a, 'ctx, 'env>(
         .ptr_int()
         .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
 
-    let alignment = element_layout.alignment_bytes(env.ptr_bytes);
-    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
-
     call_bitcode_fn_returns_list(
         env,
-        &[list_i128, alignment_iv.into(), element_width.into()],
+        &[
+            list_i128,
+            alignment_intvalue(env, &element_layout),
+            element_width.into(),
+        ],
         &bitcode::LIST_REVERSE,
     )
 }
@@ -325,14 +326,11 @@ pub fn list_append<'a, 'ctx, 'env>(
     let element_ptr = builder.build_alloca(element.get_type(), "element");
     builder.build_store(element_ptr, element);
 
-    let alignment = element_layout.alignment_bytes(env.ptr_bytes);
-    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
-
     call_bitcode_fn_returns_list(
         env,
         &[
             list_i128,
-            alignment_iv.into(),
+            alignment_intvalue(env, &element_layout),
             builder.build_bitcast(
                 element_ptr,
                 env.context.i8_type().ptr_type(AddressSpace::Generic),
@@ -550,9 +548,6 @@ fn list_walk_generic<'a, 'ctx, 'env>(
         .ptr_int()
         .const_int(default_layout.stack_size(env.ptr_bytes) as u64, false);
 
-    let alignment = element_layout.alignment_bytes(env.ptr_bytes);
-    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
-
     let result_ptr = env.builder.build_alloca(default.get_type(), "result");
 
     match variant {
@@ -565,7 +560,7 @@ fn list_walk_generic<'a, 'ctx, 'env>(
                         .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
                     stepper_caller.into(),
                     env.builder.build_bitcast(default_ptr, u8_ptr, "to_u8_ptr"),
-                    alignment_iv.into(),
+                    alignment_intvalue(env, &element_layout),
                     element_width.into(),
                     default_width.into(),
                     env.builder.build_bitcast(result_ptr, u8_ptr, "to_opaque"),
@@ -583,7 +578,7 @@ fn list_walk_generic<'a, 'ctx, 'env>(
                         .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
                     stepper_caller.into(),
                     env.builder.build_bitcast(default_ptr, u8_ptr, "to_u8_ptr"),
-                    alignment_iv.into(),
+                    alignment_intvalue(env, &element_layout),
                     element_width.into(),
                     default_width.into(),
                     dec_element_fn.as_global_value().as_pointer_value().into(),
@@ -725,9 +720,6 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
         .ptr_int()
         .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
 
-    let alignment = element_layout.alignment_bytes(env.ptr_bytes);
-    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
-
     let inc_element_fn = build_inc_wrapper(env, layout_ids, element_layout);
     let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
 
@@ -738,7 +730,7 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
             env.builder
                 .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
             stepper_caller.into(),
-            alignment_iv.into(),
+            alignment_intvalue(env, &element_layout),
             element_width.into(),
             inc_element_fn.as_global_value().as_pointer_value().into(),
             dec_element_fn.as_global_value().as_pointer_value().into(),
@@ -833,9 +825,6 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
         .ptr_int()
         .const_int(result_layout.stack_size(env.ptr_bytes) as u64, false);
 
-    let alignment = before_layout.alignment_bytes(env.ptr_bytes);
-    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
-
     let inc_closure = build_inc_wrapper(env, layout_ids, transform_layout);
     let dec_result_fn = build_dec_wrapper(env, layout_ids, result_layout);
 
@@ -846,7 +835,7 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
             env.builder
                 .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
             stepper_caller.into(),
-            alignment_iv.into(),
+            alignment_intvalue(env, &before_layout),
             before_width.into(),
             result_width.into(),
             after_width.into(),
@@ -879,9 +868,6 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
         .ptr_int()
         .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
 
-    let alignment = element_layout.alignment_bytes(env.ptr_bytes);
-    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
-
     call_bitcode_fn_returns_list(
         env,
         &[
@@ -889,7 +875,7 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
             env.builder
                 .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
             compare_wrapper.into(),
-            alignment_iv.into(),
+            alignment_intvalue(env, &element_layout),
             element_width.into(),
         ],
         bitcode::LIST_SORT_WITH,
@@ -976,9 +962,6 @@ fn list_map_generic<'a, 'ctx, 'env>(
         .ptr_int()
         .const_int(return_layout.stack_size(env.ptr_bytes) as u64, false);
 
-    let alignment = element_layout.alignment_bytes(env.ptr_bytes);
-    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
-
     call_bitcode_fn_returns_list(
         env,
         &[
@@ -986,7 +969,7 @@ fn list_map_generic<'a, 'ctx, 'env>(
             env.builder
                 .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
             stepper_caller.into(),
-            alignment_iv.into(),
+            alignment_intvalue(env, &element_layout),
             old_element_width.into(),
             new_element_width.into(),
         ],
@@ -1049,9 +1032,6 @@ pub fn list_map2<'a, 'ctx, 'env>(
         .ptr_int()
         .const_int(return_layout.stack_size(env.ptr_bytes) as u64, false);
 
-    let alignment = return_layout.alignment_bytes(env.ptr_bytes);
-    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
-
     let dec_a = build_dec_wrapper(env, layout_ids, element1_layout);
     let dec_b = build_dec_wrapper(env, layout_ids, element2_layout);
 
@@ -1063,7 +1043,7 @@ pub fn list_map2<'a, 'ctx, 'env>(
             env.builder
                 .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
             stepper_caller.into(),
-            alignment_iv.into(),
+            alignment_intvalue(env, &transform_layout),
             a_width.into(),
             b_width.into(),
             c_width.into(),
@@ -1142,9 +1122,6 @@ pub fn list_map3<'a, 'ctx, 'env>(
         .ptr_int()
         .const_int(return_layout.stack_size(env.ptr_bytes) as u64, false);
 
-    let alignment = return_layout.alignment_bytes(env.ptr_bytes);
-    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
-
     let dec_a = build_dec_wrapper(env, layout_ids, element1_layout);
     let dec_b = build_dec_wrapper(env, layout_ids, element2_layout);
     let dec_c = build_dec_wrapper(env, layout_ids, element3_layout);
@@ -1158,7 +1135,7 @@ pub fn list_map3<'a, 'ctx, 'env>(
             env.builder
                 .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
             stepper_caller.into(),
-            alignment_iv.into(),
+            alignment_intvalue(env, transform_layout),
             a_width.into(),
             b_width.into(),
             c_width.into(),
