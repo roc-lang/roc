@@ -8,7 +8,7 @@ use roc_builtins::std::StdLib;
 use roc_can::constraint::Constraint;
 use roc_can::def::{Declaration, Def};
 use roc_can::module::{canonicalize_module_defs, Module};
-use roc_collections::all::{default_hasher, MutMap, MutSet};
+use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, BumpSet, MutMap, MutSet};
 use roc_constrain::module::{
     constrain_imports, pre_constrain_imports, ConstrainableImports, Import,
 };
@@ -355,7 +355,7 @@ struct ModuleCache<'a> {
     constrained: MutMap<ModuleId, ConstrainedModule>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
-    external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
+    external_specializations_requested: MutMap<ModuleId, ExternalSpecializations<'a>>,
 
     /// Various information
     imports: MutMap<ModuleId, MutSet<ModuleId>>,
@@ -369,7 +369,12 @@ struct ModuleCache<'a> {
     header_sources: MutMap<ModuleId, (PathBuf, &'a str)>,
 }
 
-fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> Vec<BuildTask<'a>> {
+fn start_phase<'a>(
+    module_id: ModuleId,
+    phase: Phase,
+    arena: &'a Bump,
+    state: &mut State<'a>,
+) -> Vec<BuildTask<'a>> {
     // we blindly assume all dependencies are met
 
     match state
@@ -391,7 +396,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                 .dependencies
                 .notify(module_id, phase)
                 .into_iter()
-                .map(|(module_id, phase)| start_phase(module_id, phase, state))
+                .map(|(module_id, phase)| start_phase(module_id, phase, arena, state))
                 .flatten()
                 .collect();
         }
@@ -545,7 +550,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                     ident_ids,
                 } = typechecked;
 
-                let mut imported_module_thunks = MutSet::default();
+                let mut imported_module_thunks = BumpSet::new_in(arena);
 
                 if let Some(imports) = state.module_cache.imports.get(&module_id) {
                     for imported in imports.iter() {
@@ -579,7 +584,7 @@ fn start_phase<'a>(module_id: ModuleId, phase: Phase, state: &mut State<'a>) -> 
                     .module_cache
                     .external_specializations_requested
                     .remove(&module_id)
-                    .unwrap_or_default();
+                    .unwrap_or_else(|| ExternalSpecializations::new_in(arena));
 
                 let FoundSpecializationsModule {
                     module_id,
@@ -769,7 +774,7 @@ enum Msg<'a> {
         module_id: ModuleId,
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
-        external_specializations_requested: MutMap<ModuleId, ExternalSpecializations>,
+        external_specializations_requested: BumpMap<'a, ModuleId, ExternalSpecializations<'a>>,
         procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         module_timing: ModuleTiming,
@@ -971,7 +976,7 @@ enum BuildTask<'a> {
         module_timing: ModuleTiming,
         layout_cache: LayoutCache<'a>,
         solved_subs: Solved<Subs>,
-        imported_module_thunks: MutSet<Symbol>,
+        imported_module_thunks: BumpSet<'a, Symbol>,
         module_id: ModuleId,
         ident_ids: IdentIds,
         decls: Vec<Declaration>,
@@ -983,7 +988,7 @@ enum BuildTask<'a> {
         subs: Subs,
         procs: Procs<'a>,
         layout_cache: LayoutCache<'a>,
-        specializations_we_must_make: ExternalSpecializations,
+        specializations_we_must_make: ExternalSpecializations<'a>,
         module_timing: ModuleTiming,
     },
 }
@@ -1464,7 +1469,7 @@ where
                 all_pending_specializations: MutMap::default(),
                 specializations_in_flight: 0,
                 layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
-                procs: Procs::default(),
+                procs: Procs::new_in(arena),
             };
 
             // We've now distributed one worker queue to each thread.
@@ -1603,13 +1608,14 @@ where
 }
 
 fn start_tasks<'a>(
-    work: MutSet<(ModuleId, Phase)>,
+    arena: &'a Bump,
     state: &mut State<'a>,
+    work: MutSet<(ModuleId, Phase)>,
     injector: &Injector<BuildTask<'a>>,
     worker_listeners: &'a [Sender<WorkerMsg>],
 ) -> Result<(), LoadingProblem<'a>> {
     for (module_id, phase) in work {
-        for task in start_phase(module_id, phase, state) {
+        for task in start_phase(module_id, phase, arena, state) {
             enqueue_task(&injector, worker_listeners, task)?
         }
     }
@@ -1731,11 +1737,11 @@ fn update<'a>(
 
             state.module_cache.headers.insert(header.module_id, header);
 
-            start_tasks(work, &mut state, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
 
             let work = state.dependencies.notify(home, Phase::LoadHeader);
 
-            start_tasks(work, &mut state, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1768,7 +1774,7 @@ fn update<'a>(
 
             let work = state.dependencies.notify(module_id, Phase::Parse);
 
-            start_tasks(work, &mut state, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1803,7 +1809,7 @@ fn update<'a>(
                 .dependencies
                 .notify(module_id, Phase::CanonicalizeAndConstrain);
 
-            start_tasks(work, &mut state, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1854,7 +1860,7 @@ fn update<'a>(
                     .notify(module_id, Phase::CanonicalizeAndConstrain),
             );
 
-            start_tasks(work, &mut state, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1956,7 +1962,7 @@ fn update<'a>(
                     state.constrained_ident_ids.insert(module_id, ident_ids);
                 }
 
-                start_tasks(work, &mut state, &injector, worker_listeners)?;
+                start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
             }
 
             Ok(state)
@@ -2011,7 +2017,7 @@ fn update<'a>(
                 .dependencies
                 .notify(module_id, Phase::FindSpecializations);
 
-            start_tasks(work, &mut state, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -2057,7 +2063,7 @@ fn update<'a>(
                         .external_specializations_requested
                         .entry(module_id)
                     {
-                        Vacant(entry) => entry.insert(ExternalSpecializations::default()),
+                        Vacant(entry) => entry.insert(ExternalSpecializations::new_in(arena)),
                         Occupied(entry) => entry.into_mut(),
                     };
 
@@ -2097,14 +2103,14 @@ fn update<'a>(
                         .external_specializations_requested
                         .entry(module_id)
                     {
-                        Vacant(entry) => entry.insert(ExternalSpecializations::default()),
+                        Vacant(entry) => entry.insert(ExternalSpecializations::new_in(arena)),
                         Occupied(entry) => entry.into_mut(),
                     };
 
                     existing.extend(requested);
                 }
 
-                start_tasks(work, &mut state, &injector, worker_listeners)?;
+                start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
             }
 
             Ok(state)
@@ -3776,7 +3782,7 @@ fn make_specializations<'a>(
     mut subs: Subs,
     mut procs: Procs<'a>,
     mut layout_cache: LayoutCache<'a>,
-    specializations_we_must_make: ExternalSpecializations,
+    specializations_we_must_make: ExternalSpecializations<'a>,
     mut module_timing: ModuleTiming,
     ptr_bytes: u32,
 ) -> Msg<'a> {
@@ -3825,7 +3831,7 @@ fn make_specializations<'a>(
 fn build_pending_specializations<'a>(
     arena: &'a Bump,
     solved_subs: Solved<Subs>,
-    imported_module_thunks: MutSet<Symbol>,
+    imported_module_thunks: BumpSet<'a, Symbol>,
     home: ModuleId,
     mut ident_ids: IdentIds,
     decls: Vec<Declaration>,
@@ -3836,7 +3842,7 @@ fn build_pending_specializations<'a>(
     exposed_to_host: MutMap<Symbol, Variable>,
 ) -> Msg<'a> {
     let find_specializations_start = SystemTime::now();
-    let mut procs = Procs::default();
+    let mut procs = Procs::new_in(arena);
 
     debug_assert!(procs.imported_module_thunks.is_empty());
     procs.imported_module_thunks = imported_module_thunks;
