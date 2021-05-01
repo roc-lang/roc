@@ -1475,7 +1475,6 @@ fn clone_nonempty_list<'a, 'ctx, 'env>(
     elem_layout: &Layout<'_>,
 ) -> (StructValue<'ctx>, PointerValue<'ctx>) {
     let builder = env.builder;
-    let ctx = env.context;
     let ptr_bytes = env.ptr_bytes;
 
     // Calculate the number of bytes we'll need to allocate.
@@ -1504,10 +1503,6 @@ fn clone_nonempty_list<'a, 'ctx, 'env>(
         panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
     }
 
-    // Create a fresh wrapper struct for the newly populated array
-    let u8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
-    let generic_ptr = cast_basic_basic(builder, clone_ptr.into(), u8_ptr_type.into());
-
     let struct_type = super::convert::zig_list_type(env);
     let mut struct_val;
 
@@ -1515,7 +1510,7 @@ fn clone_nonempty_list<'a, 'ctx, 'env>(
     struct_val = builder
         .build_insert_value(
             struct_type.get_undef(),
-            generic_ptr,
+            pass_as_opaque(env, clone_ptr),
             Builtin::WRAPPER_PTR,
             "insert_ptr_clone_nonempty_list",
         )
@@ -1569,14 +1564,9 @@ pub fn store_list<'a, 'ctx, 'env>(
     pointer_to_first_element: PointerValue<'ctx>,
     len: IntValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    let ctx = env.context;
     let builder = env.builder;
 
     let struct_type = super::convert::zig_list_type(env);
-
-    let u8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
-    let generic_ptr =
-        cast_basic_basic(builder, pointer_to_first_element.into(), u8_ptr_type.into());
 
     let mut struct_val;
 
@@ -1584,7 +1574,7 @@ pub fn store_list<'a, 'ctx, 'env>(
     struct_val = builder
         .build_insert_value(
             struct_type.get_undef(),
-            generic_ptr,
+            pass_as_opaque(env, pointer_to_first_element),
             Builtin::WRAPPER_PTR,
             "insert_ptr_store_list",
         )
