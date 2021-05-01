@@ -164,3 +164,15 @@ fn constrain_small_int() {
         "Int *",
     )
 }
+
+#[test]
+fn constrain_float() {
+    infer_eq(
+        indoc!(
+            r#"
+            3.14
+            "#
+        ),
+        "Float *",
+    )
+}
