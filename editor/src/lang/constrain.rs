@@ -86,12 +86,90 @@ pub fn constrain_expr<'a>(
 
             Let(let_constraint)
         }
+        Expr2::Float { var, .. } => {
+            let mut flex_vars = BumpVec::with_capacity_in(1, arena);
+            let rigid_vars = BumpVec::new_in(arena);
+
+            let mut and_constraints = BumpVec::with_capacity_in(2, arena);
+
+            let num_type = Type2::Variable(*var);
+
+            flex_vars.push(*var);
+
+            let precision_var = env.var_store.fresh();
+
+            let range_type = Type2::Variable(precision_var);
+
+            let range_type_id = env.pool.add(range_type);
+
+            and_constraints.push(Eq(
+                num_type.shallow_clone(),
+                Expected::ForReason(
+                    Reason::FloatLiteral,
+                    num_float(env.pool, range_type_id),
+                    region,
+                ),
+                Category::Int,
+                region,
+            ));
+
+            and_constraints.push(Eq(num_type, expected, Category::Float, region));
+
+            let defs_constraint = And(and_constraints);
+
+            let let_constraint = arena.alloc(LetConstraint {
+                rigid_vars,
+                flex_vars,
+                def_types: BumpMap::new_in(arena),
+                defs_constraint,
+                ret_constraint: Constraint::True,
+            });
+
+            Let(let_constraint)
+        }
         _ => todo!("implement constaints for {:?}", expr),
     }
 }
 
 fn str_type(pool: &mut Pool) -> Type2 {
     Type2::Apply(Symbol::STR_STR, PoolVec::empty(pool))
+}
+
+fn num_float(pool: &mut Pool, range: TypeId) -> Type2 {
+    let num_floatingpoint_type = num_floatingpoint(pool, range);
+    let num_floatingpoint_id = pool.add(num_floatingpoint_type);
+
+    let num_num_type = num_num(pool, num_floatingpoint_id);
+    let num_num_id = pool.add(num_num_type);
+
+    Type2::Alias(
+        Symbol::NUM_FLOAT,
+        PoolVec::new(vec![(PoolStr::new("range", pool), range)].into_iter(), pool),
+        num_num_id,
+    )
+}
+
+fn num_floatingpoint(pool: &mut Pool, range: TypeId) -> Type2 {
+    let range_type = pool.get(range);
+
+    let alias_content = Type2::TagUnion(
+        PoolVec::new(
+            vec![(
+                // TagName::Private(Symbol::NUM_AT_FLOATINGPOINT)
+                PoolStr::new("Num.@FloatingPoint", pool),
+                PoolVec::new(vec![range_type.shallow_clone()].into_iter(), pool),
+            )]
+            .into_iter(),
+            pool,
+        ),
+        pool.add(Type2::EmptyTagUnion),
+    );
+
+    Type2::Alias(
+        Symbol::NUM_FLOATINGPOINT,
+        PoolVec::new(vec![(PoolStr::new("range", pool), range)].into_iter(), pool),
+        pool.add(alias_content),
+    )
 }
 
 fn num_int(pool: &mut Pool, range: TypeId) -> Type2 {
