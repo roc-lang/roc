@@ -120,14 +120,11 @@ pub const RocList = extern struct {
             @memset(dest_ptr + old_length * element_width, 0, delta_length * element_width);
         }
 
-        // NOTE the newly added elements are left uninitialized
-
         const result = RocList{
             .bytes = first_slot,
             .length = new_length,
         };
 
-        // NOTE we fuse an increment of all keys/values with a decrement of the input dict
         utils.decref(allocator, alignment, self.bytes, old_length * element_width);
 
         return result;

@@ -41,7 +41,7 @@ fn list_returned_from_zig<'a, 'ctx, 'env>(
     )
 }
 
-fn call_bitcode_fn_returns_list<'a, 'ctx, 'env>(
+pub fn call_bitcode_fn_returns_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,

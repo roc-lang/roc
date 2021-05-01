@@ -1,6 +1,6 @@
 use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
 use crate::llvm::build::{complex_bitcast, Env, InPlace, Scope};
-use crate::llvm::build_list::{allocate_list, store_list};
+use crate::llvm::build_list::{allocate_list, call_bitcode_fn_returns_list, store_list};
 use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
@@ -240,7 +240,7 @@ pub fn str_to_bytes<'a, 'ctx, 'env>(
         "to_bytes",
     );
 
-    call_bitcode_fn_returns_str(env, &[string], &bitcode::STR_TO_BYTES)
+    call_bitcode_fn_returns_list(env, &[string], &bitcode::STR_TO_BYTES)
 }
 
 /// Str.fromUtf8 : List U8 -> { a : Bool, b : Str, c : Nat, d : I8 }
@@ -325,27 +325,4 @@ pub fn empty_str<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'c
     // The pointer should be null (aka zero) and the length should be zero,
     // so the whole struct should be a const_zero
     BasicValueEnum::StructValue(struct_type.const_zero())
-}
-
-fn str_returned_from_zig<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    output: BasicValueEnum<'ctx>,
-) -> BasicValueEnum<'ctx> {
-    // per the C ABI, our list objects are passed between functions as an i128
-    complex_bitcast(
-        env.builder,
-        output,
-        super::convert::zig_str_type(env).into(),
-        "from_i128",
-    )
-}
-
-fn call_bitcode_fn_returns_str<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    args: &[BasicValueEnum<'ctx>],
-    fn_name: &str,
-) -> BasicValueEnum<'ctx> {
-    let value = call_bitcode_fn(env, args, fn_name);
-
-    str_returned_from_zig(env, value)
 }
