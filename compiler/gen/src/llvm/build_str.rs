@@ -240,14 +240,7 @@ pub fn str_to_bytes<'a, 'ctx, 'env>(
         "to_bytes",
     );
 
-    let zig_result = call_bitcode_fn(env, &[string], &bitcode::STR_TO_BYTES);
-
-    complex_bitcast(
-        env.builder,
-        zig_result,
-        super::convert::zig_list_type(env).into(),
-        "to_bytes",
-    )
+    call_bitcode_fn_returns_str(env, &[string], &bitcode::STR_TO_BYTES)
 }
 
 /// Str.fromUtf8 : List U8 -> { a : Bool, b : Str, c : Nat, d : I8 }
@@ -332,4 +325,27 @@ pub fn empty_str<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'c
     // The pointer should be null (aka zero) and the length should be zero,
     // so the whole struct should be a const_zero
     BasicValueEnum::StructValue(struct_type.const_zero())
+}
+
+fn str_returned_from_zig<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    output: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    // per the C ABI, our list objects are passed between functions as an i128
+    complex_bitcast(
+        env.builder,
+        output,
+        super::convert::zig_str_type(env).into(),
+        "from_i128",
+    )
+}
+
+fn call_bitcode_fn_returns_str<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    args: &[BasicValueEnum<'ctx>],
+    fn_name: &str,
+) -> BasicValueEnum<'ctx> {
+    let value = call_bitcode_fn(env, args, fn_name);
+
+    str_returned_from_zig(env, value)
 }

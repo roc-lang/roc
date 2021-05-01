@@ -86,6 +86,40 @@ pub const RocList = extern struct {
         new_length: usize,
         element_width: usize,
     ) RocList {
+        if (self.bytes) |source_ptr| {
+            if (self.isUnique()) {
+                const align_width: usize = blk: {
+                    if (alignment > 8) {
+                        break :blk (2 * @sizeOf(usize));
+                    } else {
+                        break :blk @sizeOf(usize);
+                    }
+                };
+
+                const old_width = align_width + self.len() * element_width;
+                const new_width = align_width + new_length * element_width;
+
+                // TODO handle out of memory
+                // NOTE realloc will dealloc the original allocation
+                const old_allocation = (source_ptr - align_width)[0..old_width];
+                const new_allocation = allocator.realloc(old_allocation, new_width) catch unreachable;
+
+                const new_source = @ptrCast([*]u8, new_allocation) + align_width;
+                return RocList{ .bytes = new_source, .length = new_length };
+            }
+        }
+
+        return self.reallocateFresh(allocator, alignment, new_length, element_width);
+    }
+
+    /// reallocate by explicitly making a new allocation and copying elements over
+    fn reallocateFresh(
+        self: RocList,
+        allocator: *Allocator,
+        alignment: usize,
+        new_length: usize,
+        element_width: usize,
+    ) RocList {
         const old_length = self.length;
         const delta_length = new_length - old_length;
 
