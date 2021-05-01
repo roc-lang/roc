@@ -72,6 +72,15 @@ fn pass_list_as_i128<'a, 'ctx, 'env>(
     complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128")
 }
 
+fn layout_width<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    env.ptr_int()
+        .const_int(layout.stack_size(env.ptr_bytes) as u64, false)
+        .into()
+}
+
 /// List.single : a -> List a
 pub fn list_single<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -79,16 +88,12 @@ pub fn list_single<'a, 'ctx, 'env>(
     element: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let element_width = env
-        .ptr_int()
-        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
-
     call_bitcode_fn_returns_list(
         env,
         &[
             alignment_intvalue(env, element_layout),
             pass_element_as_opaque(env, element),
-            element_width.into(),
+            layout_width(env, element_layout),
         ],
         &bitcode::LIST_SINGLE,
     )
@@ -102,10 +107,6 @@ pub fn list_repeat<'a, 'ctx, 'env>(
     element: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let element_width = env
-        .ptr_int()
-        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
-
     let inc_element_fn = build_inc_wrapper(env, layout_ids, element_layout);
 
     call_bitcode_fn_returns_list(
@@ -114,7 +115,7 @@ pub fn list_repeat<'a, 'ctx, 'env>(
             list_len.into(),
             alignment_intvalue(env, element_layout),
             pass_element_as_opaque(env, element),
-            element_width.into(),
+            layout_width(env, element_layout),
             inc_element_fn.as_global_value().as_pointer_value().into(),
         ],
         bitcode::LIST_REPEAT,
@@ -202,16 +203,12 @@ pub fn list_join<'a, 'ctx, 'env>(
             empty_list(env)
         }
         Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::List(_, element_layout)))) => {
-            let element_width = env
-                .ptr_int()
-                .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
-
             call_bitcode_fn_returns_list(
                 env,
                 &[
                     pass_list_as_i128(env, outer_list),
                     alignment_intvalue(env, element_layout),
-                    element_width.into(),
+                    layout_width(env, element_layout),
                 ],
                 &bitcode::LIST_JOIN,
             )
@@ -246,16 +243,12 @@ pub fn list_reverse<'a, 'ctx, 'env>(
         _ => unreachable!("Invalid layout {:?} in List.reverse", list_layout),
     };
 
-    let element_width = env
-        .ptr_int()
-        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
-
     call_bitcode_fn_returns_list(
         env,
         &[
             pass_list_as_i128(env, list),
             alignment_intvalue(env, &element_layout),
-            element_width.into(),
+            layout_width(env, &element_layout),
         ],
         &bitcode::LIST_REVERSE,
     )
@@ -306,17 +299,13 @@ pub fn list_append<'a, 'ctx, 'env>(
     element: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let element_width = env
-        .ptr_int()
-        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
-
     call_bitcode_fn_returns_list(
         env,
         &[
             pass_list_as_i128(env, original_wrapper.into()),
             alignment_intvalue(env, &element_layout),
             pass_element_as_opaque(env, element),
-            element_width.into(),
+            layout_width(env, element_layout),
         ],
         &bitcode::LIST_APPEND,
     )
@@ -518,14 +507,6 @@ fn list_walk_generic<'a, 'ctx, 'env>(
     .as_global_value()
     .as_pointer_value();
 
-    let element_width = env
-        .ptr_int()
-        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
-
-    let default_width = env
-        .ptr_int()
-        .const_int(default_layout.stack_size(env.ptr_bytes) as u64, false);
-
     let result_ptr = env.builder.build_alloca(default.get_type(), "result");
 
     match variant {
@@ -539,8 +520,8 @@ fn list_walk_generic<'a, 'ctx, 'env>(
                     stepper_caller.into(),
                     env.builder.build_bitcast(default_ptr, u8_ptr, "to_u8_ptr"),
                     alignment_intvalue(env, &element_layout),
-                    element_width.into(),
-                    default_width.into(),
+                    layout_width(env, element_layout),
+                    layout_width(env, default_layout),
                     env.builder.build_bitcast(result_ptr, u8_ptr, "to_opaque"),
                 ],
                 zig_function,
@@ -557,8 +538,8 @@ fn list_walk_generic<'a, 'ctx, 'env>(
                     stepper_caller.into(),
                     env.builder.build_bitcast(default_ptr, u8_ptr, "to_u8_ptr"),
                     alignment_intvalue(env, &element_layout),
-                    element_width.into(),
-                    default_width.into(),
+                    layout_width(env, element_layout),
+                    layout_width(env, default_layout),
                     dec_element_fn.as_global_value().as_pointer_value().into(),
                     env.builder.build_bitcast(result_ptr, u8_ptr, "to_opaque"),
                 ],
@@ -644,19 +625,18 @@ pub fn list_contains<'a, 'ctx, 'env>(
     element_layout: &Layout<'a>,
     list: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    let element_width = env
-        .ptr_int()
-        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
-
-    let eq_fn = build_eq_wrapper(env, layout_ids, element_layout);
+    let eq_fn = build_eq_wrapper(env, layout_ids, element_layout)
+        .as_global_value()
+        .as_pointer_value()
+        .into();
 
     call_bitcode_fn(
         env,
         &[
             pass_list_as_i128(env, list),
             pass_element_as_opaque(env, element),
-            element_width.into(),
-            eq_fn.as_global_value().as_pointer_value().into(),
+            layout_width(env, element_layout),
+            eq_fn,
         ],
         bitcode::LIST_CONTAINS,
     )
@@ -683,10 +663,6 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
             .as_global_value()
             .as_pointer_value();
 
-    let element_width = env
-        .ptr_int()
-        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
-
     let inc_element_fn = build_inc_wrapper(env, layout_ids, element_layout);
     let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
 
@@ -698,7 +674,7 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
                 .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
             stepper_caller.into(),
             alignment_intvalue(env, &element_layout),
-            element_width.into(),
+            layout_width(env, element_layout),
             inc_element_fn.as_global_value().as_pointer_value().into(),
             dec_element_fn.as_global_value().as_pointer_value().into(),
         ],
@@ -827,10 +803,6 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
         .as_global_value()
         .as_pointer_value();
 
-    let element_width = env
-        .ptr_int()
-        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
-
     call_bitcode_fn_returns_list(
         env,
         &[
@@ -839,7 +811,7 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
                 .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
             compare_wrapper.into(),
             alignment_intvalue(env, &element_layout),
-            element_width.into(),
+            layout_width(env, element_layout),
         ],
         bitcode::LIST_SORT_WITH,
     )
@@ -915,14 +887,6 @@ fn list_map_generic<'a, 'ctx, 'env>(
             .as_global_value()
             .as_pointer_value();
 
-    let old_element_width = env
-        .ptr_int()
-        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
-
-    let new_element_width = env
-        .ptr_int()
-        .const_int(return_layout.stack_size(env.ptr_bytes) as u64, false);
-
     call_bitcode_fn_returns_list(
         env,
         &[
@@ -931,8 +895,8 @@ fn list_map_generic<'a, 'ctx, 'env>(
                 .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
             stepper_caller.into(),
             alignment_intvalue(env, &element_layout),
-            old_element_width.into(),
-            new_element_width.into(),
+            layout_width(env, element_layout),
+            layout_width(env, return_layout),
         ],
         op,
     )
