@@ -51,6 +51,27 @@ fn call_bitcode_fn_returns_list<'a, 'ctx, 'env>(
     list_returned_from_zig(env, value)
 }
 
+fn pass_element_as_opaque<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    element: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let element_ptr = env.builder.build_alloca(element.get_type(), "element");
+    env.builder.build_store(element_ptr, element);
+
+    env.builder.build_bitcast(
+        element_ptr,
+        env.context.i8_type().ptr_type(AddressSpace::Generic),
+        "to_opaque",
+    )
+}
+
+fn pass_list_as_i128<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    list: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128")
+}
+
 /// List.single : a -> List a
 pub fn list_single<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -58,24 +79,15 @@ pub fn list_single<'a, 'ctx, 'env>(
     element: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
     let element_width = env
         .ptr_int()
         .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
-
-    let element_ptr = builder.build_alloca(element.get_type(), "element");
-    builder.build_store(element_ptr, element);
 
     call_bitcode_fn_returns_list(
         env,
         &[
             alignment_intvalue(env, element_layout),
-            builder.build_bitcast(
-                element_ptr,
-                env.context.i8_type().ptr_type(AddressSpace::Generic),
-                "to_opaque",
-            ),
+            pass_element_as_opaque(env, element),
             element_width.into(),
         ],
         &bitcode::LIST_SINGLE,
@@ -90,13 +102,6 @@ pub fn list_repeat<'a, 'ctx, 'env>(
     element: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
-    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
-
-    let element_ptr = builder.build_alloca(element.get_type(), "element_ptr");
-    env.builder.build_store(element_ptr, element);
-
     let element_width = env
         .ptr_int()
         .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
@@ -108,7 +113,7 @@ pub fn list_repeat<'a, 'ctx, 'env>(
         &[
             list_len.into(),
             alignment_intvalue(env, element_layout),
-            env.builder.build_bitcast(element_ptr, u8_ptr, "to_u8_ptr"),
+            pass_element_as_opaque(env, element),
             element_width.into(),
             inc_element_fn.as_global_value().as_pointer_value().into(),
         ],
@@ -197,13 +202,6 @@ pub fn list_join<'a, 'ctx, 'env>(
             empty_list(env)
         }
         Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::List(_, element_layout)))) => {
-            let list_i128 = complex_bitcast(
-                env.builder,
-                outer_list,
-                env.context.i128_type().into(),
-                "to_i128",
-            );
-
             let element_width = env
                 .ptr_int()
                 .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
@@ -211,7 +209,7 @@ pub fn list_join<'a, 'ctx, 'env>(
             call_bitcode_fn_returns_list(
                 env,
                 &[
-                    list_i128,
+                    pass_list_as_i128(env, outer_list),
                     alignment_intvalue(env, element_layout),
                     element_width.into(),
                 ],
@@ -248,8 +246,6 @@ pub fn list_reverse<'a, 'ctx, 'env>(
         _ => unreachable!("Invalid layout {:?} in List.reverse", list_layout),
     };
 
-    let list_i128 = complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128");
-
     let element_width = env
         .ptr_int()
         .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
@@ -257,7 +253,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
     call_bitcode_fn_returns_list(
         env,
         &[
-            list_i128,
+            pass_list_as_i128(env, list),
             alignment_intvalue(env, &element_layout),
             element_width.into(),
         ],
@@ -310,32 +306,16 @@ pub fn list_append<'a, 'ctx, 'env>(
     element: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
-    let list_i128 = complex_bitcast(
-        env.builder,
-        original_wrapper.into(),
-        env.context.i128_type().into(),
-        "to_i128",
-    );
-
     let element_width = env
         .ptr_int()
         .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
 
-    let element_ptr = builder.build_alloca(element.get_type(), "element");
-    builder.build_store(element_ptr, element);
-
     call_bitcode_fn_returns_list(
         env,
         &[
-            list_i128,
+            pass_list_as_i128(env, original_wrapper.into()),
             alignment_intvalue(env, &element_layout),
-            builder.build_bitcast(
-                element_ptr,
-                env.context.i8_type().ptr_type(AddressSpace::Generic),
-                "to_opaque",
-            ),
+            pass_element_as_opaque(env, element),
             element_width.into(),
         ],
         &bitcode::LIST_APPEND,
@@ -523,8 +503,6 @@ fn list_walk_generic<'a, 'ctx, 'env>(
 
     let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
-    let list_i128 = complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128");
-
     let transform_ptr = builder.build_alloca(func.get_type(), "transform_ptr");
     env.builder.build_store(transform_ptr, func);
 
@@ -555,7 +533,7 @@ fn list_walk_generic<'a, 'ctx, 'env>(
             call_void_bitcode_fn(
                 env,
                 &[
-                    list_i128,
+                    pass_list_as_i128(env, list),
                     env.builder
                         .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
                     stepper_caller.into(),
@@ -573,7 +551,7 @@ fn list_walk_generic<'a, 'ctx, 'env>(
             call_void_bitcode_fn(
                 env,
                 &[
-                    list_i128,
+                    pass_list_as_i128(env, list),
                     env.builder
                         .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
                     stepper_caller.into(),
@@ -666,15 +644,6 @@ pub fn list_contains<'a, 'ctx, 'env>(
     element_layout: &Layout<'a>,
     list: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
-    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
-
-    let list_i128 = complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128");
-
-    let key_ptr = builder.build_alloca(element.get_type(), "key_ptr");
-    env.builder.build_store(key_ptr, element);
-
     let element_width = env
         .ptr_int()
         .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
@@ -684,8 +653,8 @@ pub fn list_contains<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[
-            list_i128,
-            env.builder.build_bitcast(key_ptr, u8_ptr, "to_u8_ptr"),
+            pass_list_as_i128(env, list),
+            pass_element_as_opaque(env, element),
             element_width.into(),
             eq_fn.as_global_value().as_pointer_value().into(),
         ],
@@ -706,8 +675,6 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
 
     let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
-    let list_i128 = complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128");
-
     let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
     env.builder.build_store(transform_ptr, transform);
 
@@ -726,7 +693,7 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
     call_bitcode_fn_returns_list(
         env,
         &[
-            list_i128,
+            pass_list_as_i128(env, list),
             env.builder
                 .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
             stepper_caller.into(),
@@ -803,8 +770,6 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
         _ => unreachable!("not a callable layout"),
     };
 
-    let list_i128 = complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128");
-
     let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
     env.builder.build_store(transform_ptr, transform);
 
@@ -831,7 +796,7 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[
-            list_i128,
+            pass_list_as_i128(env, list),
             env.builder
                 .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
             stepper_caller.into(),
@@ -856,8 +821,6 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
-    let list_i128 = complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128");
-
     let transform_ptr = transform.into_pointer_value();
 
     let compare_wrapper = build_compare_wrapper(env, layout_ids, element_layout)
@@ -871,7 +834,7 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
     call_bitcode_fn_returns_list(
         env,
         &[
-            list_i128,
+            pass_list_as_i128(env, list),
             env.builder
                 .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
             compare_wrapper.into(),
@@ -944,8 +907,6 @@ fn list_map_generic<'a, 'ctx, 'env>(
 
     let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
-    let list_i128 = complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128");
-
     let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
     env.builder.build_store(transform_ptr, transform);
 
@@ -965,7 +926,7 @@ fn list_map_generic<'a, 'ctx, 'env>(
     call_bitcode_fn_returns_list(
         env,
         &[
-            list_i128,
+            pass_list_as_i128(env, list),
             env.builder
                 .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
             stepper_caller.into(),
@@ -997,20 +958,6 @@ pub fn list_map2<'a, 'ctx, 'env>(
 
     let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
-    let list1_i128 = complex_bitcast(
-        env.builder,
-        list1,
-        env.context.i128_type().into(),
-        "to_i128",
-    );
-
-    let list2_i128 = complex_bitcast(
-        env.builder,
-        list2,
-        env.context.i128_type().into(),
-        "to_i128",
-    );
-
     let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
     env.builder.build_store(transform_ptr, transform);
 
@@ -1038,8 +985,8 @@ pub fn list_map2<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[
-            list1_i128,
-            list2_i128,
+            pass_list_as_i128(env, list1),
+            pass_list_as_i128(env, list2),
             env.builder
                 .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
             stepper_caller.into(),
@@ -1076,27 +1023,6 @@ pub fn list_map3<'a, 'ctx, 'env>(
 
     let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
-    let list1_i128 = complex_bitcast(
-        env.builder,
-        list1,
-        env.context.i128_type().into(),
-        "to_i128",
-    );
-
-    let list2_i128 = complex_bitcast(
-        env.builder,
-        list2,
-        env.context.i128_type().into(),
-        "to_i128",
-    );
-
-    let list3_i128 = complex_bitcast(
-        env.builder,
-        list3,
-        env.context.i128_type().into(),
-        "to_i128",
-    );
-
     let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
     env.builder.build_store(transform_ptr, transform);
 
@@ -1129,9 +1055,9 @@ pub fn list_map3<'a, 'ctx, 'env>(
     call_bitcode_fn_returns_list(
         env,
         &[
-            list1_i128,
-            list2_i128,
-            list3_i128,
+            pass_list_as_i128(env, list1),
+            pass_list_as_i128(env, list2),
+            pass_list_as_i128(env, list3),
             env.builder
                 .build_bitcast(transform_ptr, u8_ptr, "to_opaque"),
             stepper_caller.into(),
