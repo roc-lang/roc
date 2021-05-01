@@ -3,8 +3,9 @@
 use crate::lang::constrain::Constraint::{self, *};
 use crate::lang::pool::Pool;
 use crate::lang::types::Type2;
+use bumpalo::Bump;
 use roc_can::expected::{Expected, PExpected};
-use roc_collections::all::{ImMap, MutMap};
+use roc_collections::all::{BumpMap, BumpMapDefault, MutMap};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::solved_types::Solved;
@@ -133,20 +134,22 @@ struct State {
     mark: Mark,
 }
 
-pub fn run(
+pub fn run<'a>(
+    arena: &'a Bump,
     mempool: &mut Pool,
     env: &Env,
     problems: &mut Vec<TypeError>,
     mut subs: Subs,
     constraint: &Constraint,
 ) -> (Solved<Subs>, Env) {
-    let env = run_in_place(mempool, env, problems, &mut subs, constraint);
+    let env = run_in_place(arena, mempool, env, problems, &mut subs, constraint);
 
     (Solved(subs), env)
 }
 
 /// Modify an existing subs in-place instead
-pub fn run_in_place(
+pub fn run_in_place<'a>(
+    arena: &'a Bump,
     mempool: &mut Pool,
     env: &Env,
     problems: &mut Vec<TypeError>,
@@ -160,6 +163,7 @@ pub fn run_in_place(
     };
     let rank = Rank::toplevel();
     let state = solve(
+        arena,
         mempool,
         env,
         state,
@@ -175,7 +179,8 @@ pub fn run_in_place(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn solve(
+fn solve<'a>(
+    arena: &'a Bump,
     mempool: &mut Pool,
     env: &Env,
     state: State,
@@ -197,8 +202,9 @@ fn solve(
         //            copy
         //        }
         Eq(typ, expectation, category, region) => {
-            let actual = type_to_var(mempool, subs, rank, pools, cached_aliases, typ);
+            let actual = type_to_var(arena, mempool, subs, rank, pools, cached_aliases, typ);
             let expected = type_to_var(
+                arena,
                 mempool,
                 subs,
                 rank,
@@ -338,6 +344,7 @@ fn solve(
 
             for sub_constraint in sub_constraints.iter() {
                 state = solve(
+                    arena,
                     mempool,
                     env,
                     state,
@@ -399,6 +406,7 @@ fn solve(
                     // If the return expression is guaranteed to solve,
                     // solve the assignments themselves and move on.
                     solve(
+                        arena,
                         mempool,
                         &env,
                         state,
@@ -412,6 +420,7 @@ fn solve(
                 }
                 ret_con if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() => {
                     let state = solve(
+                        arena,
                         mempool,
                         env,
                         state,
@@ -424,10 +433,11 @@ fn solve(
                     );
 
                     // Add a variable for each def to new_vars_by_env.
-                    let mut local_def_vars = ImMap::default();
+                    let mut local_def_vars = BumpMap::new_in(arena);
 
                     for (symbol, loc_type) in let_con.def_types.iter() {
                         let var = type_to_var(
+                            arena,
                             mempool,
                             subs,
                             rank,
@@ -453,6 +463,7 @@ fn solve(
                     }
 
                     let new_state = solve(
+                        arena,
                         mempool,
                         &new_env,
                         state,
@@ -504,12 +515,13 @@ fn solve(
                     // run solver in next pool
 
                     // Add a variable for each def to local_def_vars.
-                    let mut local_def_vars = ImMap::default();
+                    let mut local_def_vars = BumpMap::new_in(arena);
 
                     for (symbol, loc_type) in let_con.def_types.iter() {
                         let def_type = &loc_type.value;
 
                         let var = type_to_var(
+                            arena,
                             mempool,
                             subs,
                             next_rank,
@@ -532,6 +544,7 @@ fn solve(
                         env: saved_env,
                         mark,
                     } = solve(
+                        arena,
                         mempool,
                         &env,
                         state,
@@ -617,6 +630,7 @@ fn solve(
                     // Now solve the body, using the new vars_by_symbol which includes
                     // the assignments' name-to-variable mappings.
                     let new_state = solve(
+                        arena,
                         mempool,
                         &new_env,
                         temp_state,
@@ -639,7 +653,8 @@ fn solve(
     }
 }
 
-fn type_to_var(
+fn type_to_var<'a>(
+    arena: &'a Bump,
     mempool: &mut Pool,
     subs: &mut Subs,
     rank: Rank,
@@ -647,20 +662,26 @@ fn type_to_var(
     cached: &mut MutMap<Symbol, Variable>,
     typ: &Type2,
 ) -> Variable {
-    type_to_variable(mempool, subs, rank, pools, cached, typ)
+    type_to_variable(arena, mempool, subs, rank, pools, cached, typ)
 }
 
 /// Abusing existing functions for our purposes
 /// this is to put a solved type back into subs
-pub fn insert_type_into_subs(mempool: &mut Pool, subs: &mut Subs, typ: &Type2) -> Variable {
+pub fn insert_type_into_subs<'a>(
+    arena: &'a Bump,
+    mempool: &mut Pool,
+    subs: &mut Subs,
+    typ: &Type2,
+) -> Variable {
     let rank = Rank::NONE;
     let mut pools = Pools::default();
     let mut cached = MutMap::default();
 
-    type_to_variable(mempool, subs, rank, &mut pools, &mut cached, typ)
+    type_to_variable(arena, mempool, subs, rank, &mut pools, &mut cached, typ)
 }
 
-fn type_to_variable(
+fn type_to_variable<'a>(
+    arena: &'a Bump,
     mempool: &Pool,
     subs: &mut Subs,
     rank: Rank,
@@ -676,7 +697,9 @@ fn type_to_variable(
             let mut arg_vars = Vec::with_capacity(args.len());
             for var_id in args.iter_node_ids() {
                 let arg = mempool.get(var_id);
-                arg_vars.push(type_to_variable(mempool, subs, rank, pools, cached, arg))
+                arg_vars.push(type_to_variable(
+                    arena, mempool, subs, rank, pools, cached, arg,
+                ))
             }
 
             let flat_type = FlatType::Apply(*symbol, arg_vars);
@@ -697,22 +720,22 @@ fn type_to_variable(
                 let (field, field_type) = mempool.get(node_id);
 
                 let field_var = match field_type {
-                    Required(typ) => {
-                        Required(type_to_variable(mempool, subs, rank, pools, cached, typ))
-                    }
-                    Optional(typ) => {
-                        Optional(type_to_variable(mempool, subs, rank, pools, cached, typ))
-                    }
-                    Demanded(typ) => {
-                        Demanded(type_to_variable(mempool, subs, rank, pools, cached, typ))
-                    }
+                    Required(typ) => Required(type_to_variable(
+                        arena, mempool, subs, rank, pools, cached, typ,
+                    )),
+                    Optional(typ) => Optional(type_to_variable(
+                        arena, mempool, subs, rank, pools, cached, typ,
+                    )),
+                    Demanded(typ) => Demanded(type_to_variable(
+                        arena, mempool, subs, rank, pools, cached, typ,
+                    )),
                 };
 
                 field_vars.insert(field.as_str(mempool).into(), field_var);
             }
 
             let ext = mempool.get(*ext_id);
-            let temp_ext_var = type_to_variable(mempool, subs, rank, pools, cached, ext);
+            let temp_ext_var = type_to_variable(arena, mempool, subs, rank, pools, cached, ext);
             let new_ext_var = match roc_types::pretty_print::chase_ext_record(
                 subs,
                 temp_ext_var,
@@ -757,12 +780,12 @@ fn type_to_variable(
             */
 
             let mut arg_vars = Vec::with_capacity(args.len());
-            let mut new_aliases = ImMap::default();
+            let mut new_aliases = BumpMap::new_in(arena);
 
             for (arg, arg_type_id) in args.iter(mempool) {
                 let arg_type = mempool.get(*arg_type_id);
 
-                let arg_var = type_to_variable(mempool, subs, rank, pools, cached, arg_type);
+                let arg_var = type_to_variable(arena, mempool, subs, rank, pools, cached, arg_type);
 
                 let arg_str = arg.as_str(mempool);
 
@@ -770,7 +793,7 @@ fn type_to_variable(
                 new_aliases.insert(arg_str, arg_var);
             }
 
-            let alias_var = type_to_variable(mempool, subs, rank, pools, cached, alias_type);
+            let alias_var = type_to_variable(arena, mempool, subs, rank, pools, cached, alias_type);
             let content = Content::Alias(*symbol, arg_vars, alias_var);
 
             let result = register(subs, rank, pools, content);
@@ -790,7 +813,7 @@ fn type_to_variable(
 
                 for arg_type in tag_argument_types.iter(mempool) {
                     tag_argument_vars.push(type_to_variable(
-                        mempool, subs, rank, pools, cached, arg_type,
+                        arena, mempool, subs, rank, pools, cached, arg_type,
                     ));
                 }
 
@@ -800,7 +823,7 @@ fn type_to_variable(
                 );
             }
 
-            let temp_ext_var = type_to_variable(mempool, subs, rank, pools, cached, ext);
+            let temp_ext_var = type_to_variable(arena, mempool, subs, rank, pools, cached, ext);
             let mut ext_tag_vec = Vec::new();
             let new_ext_var = match roc_types::pretty_print::chase_ext_tag_union(
                 subs,
