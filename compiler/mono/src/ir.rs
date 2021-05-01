@@ -73,7 +73,8 @@ impl<'a> CapturedSymbols<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PendingSpecialization<'a> {
     solved_type: SolvedType,
-    host_exposed_aliases: BumpMap<'a, Symbol, SolvedType>,
+    host_exposed_aliases: BumpMap<Symbol, SolvedType>,
+    _lifetime: std::marker::PhantomData<&'a u8>,
 }
 
 impl<'a> PendingSpecialization<'a> {
@@ -82,6 +83,7 @@ impl<'a> PendingSpecialization<'a> {
         PendingSpecialization {
             solved_type,
             host_exposed_aliases: BumpMap::new_in(arena),
+            _lifetime: std::marker::PhantomData,
         }
     }
 
@@ -104,6 +106,7 @@ impl<'a> PendingSpecialization<'a> {
         PendingSpecialization {
             solved_type,
             host_exposed_aliases,
+            _lifetime: std::marker::PhantomData,
         }
     }
 }
@@ -124,8 +127,8 @@ pub struct Proc<'a> {
 pub enum HostExposedLayouts<'a> {
     NotHostExposed,
     HostExposed {
-        rigids: BumpMap<'a, Lowercase, Layout<'a>>,
-        aliases: BumpMap<'a, Symbol, Layout<'a>>,
+        rigids: BumpMap<Lowercase, Layout<'a>>,
+        aliases: BumpMap<Symbol, Layout<'a>>,
     },
 }
 
@@ -239,13 +242,15 @@ impl<'a> Proc<'a> {
 
 #[derive(Clone, Debug)]
 pub struct ExternalSpecializations<'a> {
-    pub specs: BumpMap<'a, Symbol, MutSet<SolvedType>>,
+    pub specs: BumpMap<Symbol, MutSet<SolvedType>>,
+    _lifetime: std::marker::PhantomData<&'a u8>,
 }
 
 impl<'a> ExternalSpecializations<'a> {
     pub fn new_in(arena: &'a Bump) -> Self {
         Self {
             specs: BumpMap::new_in(arena),
+            _lifetime: std::marker::PhantomData,
         }
     }
 
@@ -276,16 +281,16 @@ impl<'a> ExternalSpecializations<'a> {
 
 #[derive(Clone, Debug)]
 pub struct Procs<'a> {
-    pub partial_procs: BumpMap<'a, Symbol, PartialProc<'a>>,
-    pub imported_module_thunks: BumpSet<'a, Symbol>,
-    pub module_thunks: BumpSet<'a, Symbol>,
+    pub partial_procs: BumpMap<Symbol, PartialProc<'a>>,
+    pub imported_module_thunks: BumpSet<Symbol>,
+    pub module_thunks: BumpSet<Symbol>,
     pub pending_specializations:
-        Option<BumpMap<'a, Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>>,
-    pub specialized: BumpMap<'a, (Symbol, Layout<'a>), InProgressProc<'a>>,
-    pub runtime_errors: BumpMap<'a, Symbol, &'a str>,
-    pub call_by_pointer_wrappers: BumpMap<'a, Symbol, Symbol>,
+        Option<BumpMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>>,
+    pub specialized: BumpMap<(Symbol, Layout<'a>), InProgressProc<'a>>,
+    pub runtime_errors: BumpMap<Symbol, &'a str>,
+    pub call_by_pointer_wrappers: BumpMap<Symbol, Symbol>,
     pub externals_others_need: ExternalSpecializations<'a>,
-    pub externals_we_need: BumpMap<'a, ModuleId, ExternalSpecializations<'a>>,
+    pub externals_we_need: BumpMap<ModuleId, ExternalSpecializations<'a>>,
 }
 
 impl<'a> Procs<'a> {
@@ -681,11 +686,7 @@ impl<'a> Procs<'a> {
 }
 
 fn add_pending<'a>(
-    pending_specializations: &mut BumpMap<
-        'a,
-        Symbol,
-        MutMap<Layout<'a>, PendingSpecialization<'a>>,
-    >,
+    pending_specializations: &mut BumpMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>,
     symbol: Symbol,
     layout: Layout<'a>,
     pending: PendingSpecialization<'a>,
@@ -1860,10 +1861,7 @@ fn specialize_external<'a>(
         }
 
         HostExposedLayouts::HostExposed {
-            rigids: hashbrown::HashMap::with_hasher_in(
-                default_hasher(),
-                hashbrown::BumpWrapper(env.arena),
-            ),
+            rigids: BumpMap::new_in(env.arena),
             aliases,
         }
     };
@@ -2314,6 +2312,7 @@ fn specialize<'a>(
     let PendingSpecialization {
         solved_type,
         host_exposed_aliases,
+        ..
     } = pending;
 
     specialize_solved_type(
