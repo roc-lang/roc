@@ -18,6 +18,38 @@ use inkwell::{AddressSpace, IntPredicate};
 use roc_builtins::bitcode;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, MemoryMode};
 
+fn alignment_intvalue<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    element_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let alignment = element_layout.alignment_bytes(env.ptr_bytes);
+    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
+
+    alignment_iv.into()
+}
+
+fn list_returned_from_zig<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    output: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    complex_bitcast(
+        env.builder,
+        output,
+        super::convert::zig_list_type(env).into(),
+        "from_i128",
+    )
+}
+
+fn call_bitcode_fn_returns_list<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    args: &[BasicValueEnum<'ctx>],
+    fn_name: &str,
+) -> BasicValueEnum<'ctx> {
+    let value = call_bitcode_fn(env, args, fn_name);
+
+    list_returned_from_zig(env, value)
+}
+
 /// List.single : a -> List a
 pub fn list_single<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -34,13 +66,10 @@ pub fn list_single<'a, 'ctx, 'env>(
     let element_ptr = builder.build_alloca(element.get_type(), "element");
     builder.build_store(element_ptr, element);
 
-    let alignment = element_layout.alignment_bytes(env.ptr_bytes);
-    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
-
-    let output = call_bitcode_fn(
+    call_bitcode_fn_returns_list(
         env,
         &[
-            alignment_iv.into(),
+            alignment_intvalue(env, element_layout),
             builder.build_bitcast(
                 element_ptr,
                 env.context.i8_type().ptr_type(AddressSpace::Generic),
@@ -49,13 +78,6 @@ pub fn list_single<'a, 'ctx, 'env>(
             element_width.into(),
         ],
         &bitcode::LIST_SINGLE,
-    );
-
-    complex_bitcast(
-        env.builder,
-        output,
-        super::convert::zig_list_type(env).into(),
-        "from_i128",
     )
 }
 
@@ -82,7 +104,7 @@ pub fn list_repeat<'a, 'ctx, 'env>(
     let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
     let inc_element_fn = build_inc_wrapper(env, layout_ids, element_layout);
 
-    let output = call_bitcode_fn(
+    call_bitcode_fn_returns_list(
         env,
         &[
             list_len.into(),
@@ -92,13 +114,6 @@ pub fn list_repeat<'a, 'ctx, 'env>(
             inc_element_fn.as_global_value().as_pointer_value().into(),
         ],
         bitcode::LIST_REPEAT,
-    );
-
-    complex_bitcast(
-        env.builder,
-        output,
-        super::convert::zig_list_type(env).into(),
-        "from_i128",
     )
 }
 
@@ -197,17 +212,10 @@ pub fn list_join<'a, 'ctx, 'env>(
             let alignment = element_layout.alignment_bytes(env.ptr_bytes);
             let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
 
-            let output = call_bitcode_fn(
+            call_bitcode_fn_returns_list(
                 env,
                 &[list_i128, alignment_iv.into(), element_width.into()],
                 &bitcode::LIST_JOIN,
-            );
-
-            complex_bitcast(
-                env.builder,
-                output,
-                super::convert::zig_list_type(env).into(),
-                "from_i128",
             )
         }
         _ => {
@@ -249,17 +257,10 @@ pub fn list_reverse<'a, 'ctx, 'env>(
     let alignment = element_layout.alignment_bytes(env.ptr_bytes);
     let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
 
-    let output = call_bitcode_fn(
+    call_bitcode_fn_returns_list(
         env,
         &[list_i128, alignment_iv.into(), element_width.into()],
         &bitcode::LIST_REVERSE,
-    );
-
-    complex_bitcast(
-        env.builder,
-        output,
-        super::convert::zig_list_type(env).into(),
-        "from_i128",
     )
 }
 
@@ -327,7 +328,7 @@ pub fn list_append<'a, 'ctx, 'env>(
     let alignment = element_layout.alignment_bytes(env.ptr_bytes);
     let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
 
-    let output = call_bitcode_fn(
+    call_bitcode_fn_returns_list(
         env,
         &[
             list_i128,
@@ -340,13 +341,6 @@ pub fn list_append<'a, 'ctx, 'env>(
             element_width.into(),
         ],
         &bitcode::LIST_APPEND,
-    );
-
-    complex_bitcast(
-        env.builder,
-        output,
-        super::convert::zig_list_type(env).into(),
-        "from_i128",
     )
 }
 
@@ -658,7 +652,7 @@ pub fn list_range<'a, 'ctx, 'env>(
         .const_int(IntWidth::from(builtin) as u64, false)
         .into();
 
-    let output = call_bitcode_fn(
+    call_bitcode_fn(
         env,
         &[
             int_width,
@@ -666,13 +660,6 @@ pub fn list_range<'a, 'ctx, 'env>(
             env.builder.build_bitcast(high_ptr, u8_ptr, "to_u8_ptr"),
         ],
         &bitcode::LIST_RANGE,
-    );
-
-    complex_bitcast(
-        env.builder,
-        output,
-        super::convert::zig_list_type(env).into(),
-        "from_i128",
     )
 }
 
@@ -744,7 +731,7 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
     let inc_element_fn = build_inc_wrapper(env, layout_ids, element_layout);
     let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
 
-    let output = call_bitcode_fn(
+    call_bitcode_fn_returns_list(
         env,
         &[
             list_i128,
@@ -757,13 +744,6 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
             dec_element_fn.as_global_value().as_pointer_value().into(),
         ],
         &bitcode::LIST_KEEP_IF,
-    );
-
-    complex_bitcast(
-        env.builder,
-        output,
-        super::convert::zig_list_type(env).into(),
-        "from_i128",
     )
 }
 
@@ -859,7 +839,7 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
     let inc_closure = build_inc_wrapper(env, layout_ids, transform_layout);
     let dec_result_fn = build_dec_wrapper(env, layout_ids, result_layout);
 
-    let output = call_bitcode_fn(
+    call_bitcode_fn(
         env,
         &[
             list_i128,
@@ -874,13 +854,6 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
             dec_result_fn.as_global_value().as_pointer_value().into(),
         ],
         op,
-    );
-
-    complex_bitcast(
-        env.builder,
-        output,
-        super::convert::zig_list_type(env).into(),
-        "from_i128",
     )
 }
 
@@ -909,7 +882,7 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
     let alignment = element_layout.alignment_bytes(env.ptr_bytes);
     let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
 
-    let output = call_bitcode_fn(
+    call_bitcode_fn_returns_list(
         env,
         &[
             list_i128,
@@ -920,13 +893,6 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
             element_width.into(),
         ],
         bitcode::LIST_SORT_WITH,
-    );
-
-    complex_bitcast(
-        env.builder,
-        output,
-        super::convert::zig_list_type(env).into(),
-        "from_i128",
     )
 }
 
@@ -1013,7 +979,7 @@ fn list_map_generic<'a, 'ctx, 'env>(
     let alignment = element_layout.alignment_bytes(env.ptr_bytes);
     let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
 
-    let output = call_bitcode_fn(
+    call_bitcode_fn_returns_list(
         env,
         &[
             list_i128,
@@ -1025,13 +991,6 @@ fn list_map_generic<'a, 'ctx, 'env>(
             new_element_width.into(),
         ],
         op,
-    );
-
-    complex_bitcast(
-        env.builder,
-        output,
-        super::convert::zig_list_type(env).into(),
-        "from_i128",
     )
 }
 
@@ -1096,7 +1055,7 @@ pub fn list_map2<'a, 'ctx, 'env>(
     let dec_a = build_dec_wrapper(env, layout_ids, element1_layout);
     let dec_b = build_dec_wrapper(env, layout_ids, element2_layout);
 
-    let output = call_bitcode_fn(
+    call_bitcode_fn(
         env,
         &[
             list1_i128,
@@ -1112,13 +1071,6 @@ pub fn list_map2<'a, 'ctx, 'env>(
             dec_b.as_global_value().as_pointer_value().into(),
         ],
         bitcode::LIST_MAP2,
-    );
-
-    complex_bitcast(
-        env.builder,
-        output,
-        super::convert::zig_list_type(env).into(),
-        "from_i128",
     )
 }
 
@@ -1197,7 +1149,7 @@ pub fn list_map3<'a, 'ctx, 'env>(
     let dec_b = build_dec_wrapper(env, layout_ids, element2_layout);
     let dec_c = build_dec_wrapper(env, layout_ids, element3_layout);
 
-    let output = call_bitcode_fn(
+    call_bitcode_fn_returns_list(
         env,
         &[
             list1_i128,
@@ -1216,13 +1168,6 @@ pub fn list_map3<'a, 'ctx, 'env>(
             dec_c.as_global_value().as_pointer_value().into(),
         ],
         bitcode::LIST_MAP3,
-    );
-
-    complex_bitcast(
-        env.builder,
-        output,
-        super::convert::zig_list_type(env).into(),
-        "from_i128",
     )
 }
 
