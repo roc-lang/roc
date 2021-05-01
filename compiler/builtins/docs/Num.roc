@@ -829,21 +829,12 @@ tryRecip : Float a -> Result (Float a) [ DivByZero ]*
 ## >>> Float.sqrt -4.0
 sqrt : Float a -> [Ok (Float a), InvalidSqrt]*
 
-## Try to convert a [Num] to a [Usv].
-##
-## Although [Usv]s are [U32]s under the hood,
-## not all [U32]s are valid [Usv]s.
-##
-## If you specifically have a [U8], the [Num.ascii]
-## function will convert it directly to a [Usv]
-## with no possibility of failure.
-toUsv : Num * -> Result Usv [ InvalidUsv ]*
 
-## Convert a raw [U8] to a [Usv].
-##
-## Since all [U8] values are valid [Usv]s, this
-## operation cannot fail.
-ascii : U8 -> Usv
+## [Endianness](https://en.wikipedia.org/wiki/Endianness)
+Endi : [ Big, Little ]
 
-## Convert a [Usv] into a [U32].
-fromUsv : Usv -> U32
+## The [endianness](https://en.wikipedia.org/wiki/Endianness) of [Num] values on
+## the currently running system.
+endi : Endi
+
+toBytes : Num *, Endi -> List U8
