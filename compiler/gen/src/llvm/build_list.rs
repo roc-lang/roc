@@ -21,33 +21,42 @@ use roc_mono::layout::{Builtin, Layout, LayoutIds, MemoryMode};
 /// List.single : a -> List a
 pub fn list_single<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    inplace: InPlace,
-    elem: BasicValueEnum<'ctx>,
-    elem_layout: &Layout<'a>,
+    _inplace: InPlace,
+    element: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
-    let ctx = env.context;
 
-    // allocate a list of size 1 on the heap
-    let size = ctx.i64_type().const_int(1, false);
+    let element_width = env
+        .ptr_int()
+        .const_int(element_layout.stack_size(env.ptr_bytes) as u64, false);
 
-    let ptr = allocate_list(env, inplace, elem_layout, size);
+    let element_ptr = builder.build_alloca(element.get_type(), "element");
+    builder.build_store(element_ptr, element);
 
-    // Put the element into the list
-    let elem_ptr = unsafe {
-        builder.build_in_bounds_gep(
-            ptr,
-            &[ctx.i64_type().const_int(
-                // 0 as in 0 index of our new list
-                0_u64, false,
-            )],
-            "index",
-        )
-    };
+    let alignment = element_layout.alignment_bytes(env.ptr_bytes);
+    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
 
-    builder.build_store(elem_ptr, elem);
+    let output = call_bitcode_fn(
+        env,
+        &[
+            alignment_iv.into(),
+            builder.build_bitcast(
+                element_ptr,
+                env.context.i8_type().ptr_type(AddressSpace::Generic),
+                "to_opaque",
+            ),
+            element_width.into(),
+        ],
+        &bitcode::LIST_SINGLE,
+    );
 
-    store_list(env, ptr, env.ptr_int().const_int(1, false))
+    complex_bitcast(
+        env.builder,
+        output,
+        super::convert::zig_list_type(env).into(),
+        "from_i128",
+    )
 }
 
 /// List.repeat : Int, elem -> List elem

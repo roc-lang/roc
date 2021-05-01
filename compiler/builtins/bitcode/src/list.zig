@@ -626,6 +626,18 @@ pub fn listRepeat(count: usize, alignment: usize, element: Opaque, element_width
     }
 }
 
+pub fn listSingle(alignment: usize, element: Opaque, element_width: usize) callconv(.C) RocList {
+    var output = RocList.allocate(std.heap.c_allocator, alignment, 1, element_width);
+
+    if (output.bytes) |target| {
+        if (element) |source| {
+            @memcpy(target, source, element_width);
+        }
+    }
+
+    return output;
+}
+
 pub fn listAppend(list: RocList, alignment: usize, element: Opaque, element_width: usize) callconv(.C) RocList {
     const old_length = list.len();
     var output = list.reallocate(std.heap.c_allocator, alignment, old_length + 1, element_width);

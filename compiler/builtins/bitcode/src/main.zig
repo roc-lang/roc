@@ -19,6 +19,7 @@ comptime {
     exportListFn(list.listContains, "contains");
     exportListFn(list.listRepeat, "repeat");
     exportListFn(list.listAppend, "append");
+    exportListFn(list.listSingle, "single");
     exportListFn(list.listJoin, "join");
     exportListFn(list.listRange, "range");
     exportListFn(list.listReverse, "reverse");
