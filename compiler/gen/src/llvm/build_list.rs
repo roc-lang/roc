@@ -1477,7 +1477,7 @@ pub fn empty_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'
     BasicValueEnum::StructValue(struct_type.const_zero())
 }
 
-pub fn list_is_not_empty<'ctx>(env: &Env<'_, 'ctx, '_>, len: IntValue<'ctx>) -> IntValue<'ctx> {
+fn list_is_not_empty<'ctx>(env: &Env<'_, 'ctx, '_>, len: IntValue<'ctx>) -> IntValue<'ctx> {
     env.builder.build_int_compare(
         IntPredicate::UGT,
         len,
@@ -1516,7 +1516,7 @@ pub fn load_list_ptr<'ctx>(
     cast_basic_basic(builder, generic_ptr.into(), ptr_type.into()).into_pointer_value()
 }
 
-pub fn clone_nonempty_list<'a, 'ctx, 'env>(
+fn clone_nonempty_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     inplace: InPlace,
     list_len: IntValue<'ctx>,
@@ -1584,34 +1584,6 @@ pub fn clone_nonempty_list<'a, 'ctx, 'env>(
         .into_struct_value();
 
     (answer, clone_ptr)
-}
-
-pub fn clone_list<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    output_inplace: InPlace,
-    elem_layout: &Layout<'a>,
-    length: IntValue<'ctx>,
-    old_ptr: PointerValue<'ctx>,
-) -> PointerValue<'ctx> {
-    let builder = env.builder;
-    let ptr_bytes = env.ptr_bytes;
-
-    // allocate new empty list (with refcount 1)
-    let new_ptr = allocate_list(env, output_inplace, elem_layout, length);
-
-    let stack_size = elem_layout.stack_size(env.ptr_bytes);
-    let bytes = builder.build_int_mul(
-        length,
-        env.context.i64_type().const_int(stack_size as u64, false),
-        "size_in_bytes",
-    );
-
-    // copy old elements in
-    builder
-        .build_memcpy(new_ptr, ptr_bytes, old_ptr, ptr_bytes, bytes)
-        .unwrap();
-
-    new_ptr
 }
 
 pub fn allocate_list<'a, 'ctx, 'env>(
