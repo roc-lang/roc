@@ -371,11 +371,11 @@ toUtf32Bom : Str, Endi -> List U8
 
 # Parsing
 
-## Return the first [extended grapheme cluster](http://www.unicode.org/glossary/#extended_grapheme_cluster)
-## in the string, along with the rest of the string after that grapheme.
+## If the string begins with a valid [extended grapheme cluster](http://www.unicode.org/glossary/#extended_grapheme_cluster),
+## return it along with the rest of the string after that grapheme.
 ##
-## If the string does not contain a full grapheme, for example because it was
-## empty, returns `Err`.
+## If the string does not begin with a full grapheme, for example because it was
+## empty, return `Err`.
 parseGrapheme : Str -> Result { val : Str, rest : Str } [ Expected [ Grapheme ]* Str ]*
 
 ## If the string begins with a valid [Unicode code point](http://www.unicode.org/glossary/#code_point),
