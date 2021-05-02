@@ -3,7 +3,8 @@ use inlinable_string::InlinableString;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::IdentIds;
 use roc_parse::ast;
-use roc_parse::ast::AssignedField;
+use roc_parse::ast::CommentOrNewline;
+use roc_parse::ast::{AssignedField, Def};
 use roc_region::all::Located;
 
 // Documentation generation requirements
@@ -72,21 +73,82 @@ pub fn generate_module_docs<'a>(
     exposed_ident_ids: &'a IdentIds,
     parsed_defs: &'a [Located<ast::Def<'a>>],
 ) -> ModuleDocumentation {
+    let maybe_module_docs = parsed_defs
+        .first()
+        .and_then(|first_def| generate_module_doc(&first_def.value));
+
     let (entries, _) =
         parsed_defs
             .iter()
             .fold((vec![], None), |(acc, maybe_comments_after), def| {
-                generate_module_doc(exposed_ident_ids, acc, maybe_comments_after, &def.value)
+                generate_entry_doc(exposed_ident_ids, acc, maybe_comments_after, &def.value)
             });
 
     ModuleDocumentation {
         name: module_name.as_str().to_string(),
-        docs: "".to_string(),
+        docs: match maybe_module_docs {
+            None => String::new(),
+            Some(module_docs) => module_docs,
+        },
         entries,
     }
 }
 
-fn generate_module_doc<'a>(
+fn generate_module_doc<'a>(def: &'a ast::Def<'a>) -> Option<String> {
+    dbg!(def);
+    match def {
+        Def::SpaceBefore(_, comments_or_new_lines) => {
+            comments_or_new_lines_to_module_docs(comments_or_new_lines)
+        }
+        _ => None,
+    }
+}
+
+fn comments_or_new_lines_to_module_docs<'a>(
+    comments_or_new_lines: &'a [roc_parse::ast::CommentOrNewline<'a>],
+) -> Option<String> {
+    let mut docs = String::new();
+
+    let mut in_doc_comments = false;
+    let mut left_doc_comments = false;
+
+    for comment_or_new_line in comments_or_new_lines.iter() {
+        match comment_or_new_line {
+            CommentOrNewline::DocComment(doc_str) => {
+                in_doc_comments = true;
+                docs.push_str(doc_str);
+                docs.push('\n');
+            }
+
+            CommentOrNewline::LineComment(_) | CommentOrNewline::Newline => {
+                if in_doc_comments {
+                    left_doc_comments = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // We want to check if we ever traversed all the way through
+    // a block of doc comments, because in this case..
+    //
+    //     interface Box exposes [ new ] imports []
+    //
+    //     ## Make a box
+    //     new : item -> Box item
+    //
+    // The doc comment "Make a box" belongs to the `new` function and
+    // not the module as a whole. The rule is that module documentation
+    // is the first block of doc comments that have regular comments or
+    // empty lines both before and after them.
+    if docs.is_empty() || !left_doc_comments {
+        None
+    } else {
+        Some(docs)
+    }
+}
+
+fn generate_entry_doc<'a>(
     exposed_ident_ids: &'a IdentIds,
     mut acc: Vec<DocEntry>,
     before_comments_or_new_lines: Option<&'a [roc_parse::ast::CommentOrNewline<'a>]>,
@@ -95,25 +157,24 @@ fn generate_module_doc<'a>(
     Vec<DocEntry>,
     Option<&'a [roc_parse::ast::CommentOrNewline<'a>]>,
 ) {
-    use roc_parse::ast::Def::*;
     use roc_parse::ast::Pattern;
 
     match def {
-        SpaceBefore(sub_def, comments_or_new_lines) => {
+        Def::SpaceBefore(sub_def, comments_or_new_lines) => {
             // Comments before a definition are attached to the current defition
-            generate_module_doc(exposed_ident_ids, acc, Some(comments_or_new_lines), sub_def)
+            generate_entry_doc(exposed_ident_ids, acc, Some(comments_or_new_lines), sub_def)
         }
 
-        SpaceAfter(sub_def, comments_or_new_lines) => {
+        Def::SpaceAfter(sub_def, comments_or_new_lines) => {
             let (new_acc, _) =
                 // If there are comments before, attach to this definition
-                generate_module_doc(exposed_ident_ids, acc, before_comments_or_new_lines, sub_def);
+                generate_entry_doc(exposed_ident_ids, acc, before_comments_or_new_lines, sub_def);
 
             // Comments after a definition are attached to the next definition
             (new_acc, Some(comments_or_new_lines))
         }
 
-        Annotation(loc_pattern, _loc_ann) => match loc_pattern.value {
+        Def::Annotation(loc_pattern, _loc_ann) => match loc_pattern.value {
             Pattern::Identifier(identifier) => {
                 // Check if the definition is exposed
                 if exposed_ident_ids
@@ -133,7 +194,7 @@ fn generate_module_doc<'a>(
 
             _ => (acc, None),
         },
-        AnnotatedBody { ann_pattern, .. } => match ann_pattern.value {
+        Def::AnnotatedBody { ann_pattern, .. } => match ann_pattern.value {
             Pattern::Identifier(identifier) => {
                 // Check if the definition is exposed
                 if exposed_ident_ids
@@ -154,7 +215,7 @@ fn generate_module_doc<'a>(
             _ => (acc, None),
         },
 
-        Alias { name, vars, ann } => {
+        Def::Alias { name, vars, ann } => {
             let mut type_vars = Vec::new();
 
             for var in vars.iter() {
@@ -174,11 +235,11 @@ fn generate_module_doc<'a>(
             (acc, None)
         }
 
-        Body(_, _) => (acc, None),
+        Def::Body(_, _) => (acc, None),
 
-        Expect(c) => todo!("documentation for tests {:?}", c),
+        Def::Expect(c) => todo!("documentation for tests {:?}", c),
 
-        NotYetImplemented(s) => todo!("{}", s),
+        Def::NotYetImplemented(s) => todo!("{}", s),
     }
 }
 
@@ -327,21 +388,20 @@ fn tag_to_doc(tag: ast::Tag) -> Option<Tag> {
 fn comments_or_new_lines_to_docs<'a>(
     comments_or_new_lines: &'a [roc_parse::ast::CommentOrNewline<'a>],
 ) -> Option<String> {
-    use roc_parse::ast::CommentOrNewline::*;
-
     let mut docs = String::new();
 
     for comment_or_new_line in comments_or_new_lines.iter() {
         match comment_or_new_line {
-            DocComment(doc_str) => {
+            CommentOrNewline::DocComment(doc_str) => {
                 docs.push_str(doc_str);
                 docs.push('\n');
             }
-            Newline | LineComment(_) => {
+            CommentOrNewline::Newline | CommentOrNewline::LineComment(_) => {
                 docs = String::new();
             }
         }
     }
+
     if docs.is_empty() {
         None
     } else {
