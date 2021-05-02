@@ -289,7 +289,6 @@ pub struct Procs<'a> {
     pub specialized: BumpMap<(Symbol, Layout<'a>), InProgressProc<'a>>,
     pub runtime_errors: BumpMap<Symbol, &'a str>,
     pub call_by_pointer_wrappers: BumpMap<Symbol, Symbol>,
-    pub externals_others_need: ExternalSpecializations<'a>,
     pub externals_we_need: BumpMap<ModuleId, ExternalSpecializations<'a>>,
 }
 
@@ -304,7 +303,6 @@ impl<'a> Procs<'a> {
             runtime_errors: BumpMap::new_in(arena),
             call_by_pointer_wrappers: BumpMap::new_in(arena),
             externals_we_need: BumpMap::new_in(arena),
-            externals_others_need: ExternalSpecializations::new_in(arena),
         }
     }
 }
@@ -1634,9 +1632,10 @@ fn pattern_to_when<'a>(
 pub fn specialize_all<'a>(
     env: &mut Env<'a, '_>,
     mut procs: Procs<'a>,
+    externals_others_need: ExternalSpecializations<'a>,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
-    specialize_all_help(env, &mut procs, layout_cache);
+    specialize_all_help(env, &mut procs, externals_others_need, layout_cache);
 
     // When calling from_can, pending_specializations should be unavailable.
     // This must be a single pass, and we must not add any more entries to it!
@@ -1707,11 +1706,12 @@ pub fn specialize_all<'a>(
 fn specialize_all_help<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
+    externals_others_need: ExternalSpecializations<'a>,
     layout_cache: &mut LayoutCache<'a>,
 ) {
     let mut symbol_solved_type = Vec::new_in(env.arena);
 
-    for (symbol, solved_types) in procs.externals_others_need.specs.iter() {
+    for (symbol, solved_types) in externals_others_need.specs.iter() {
         // for some unclear reason, the MutSet does not deduplicate according to the hash
         // instance. So we do it manually here
         let mut as_vec: std::vec::Vec<_> = solved_types.iter().collect();
