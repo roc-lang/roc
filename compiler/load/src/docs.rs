@@ -95,7 +95,6 @@ pub fn generate_module_docs<'a>(
 }
 
 fn generate_module_doc<'a>(def: &'a ast::Def<'a>) -> Option<String> {
-    dbg!(def);
     match def {
         Def::SpaceBefore(_, comments_or_new_lines) => {
             comments_or_new_lines_to_module_docs(comments_or_new_lines)
