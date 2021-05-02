@@ -410,6 +410,18 @@ fn u64_alias_content() -> SolvedType {
     int_alias_content(unsigned64_type())
 }
 
+// U32
+
+#[inline(always)]
+pub fn u32_type() -> SolvedType {
+    SolvedType::Alias(Symbol::NUM_U32, vec![], Box::new(u32_alias_content()))
+}
+
+#[inline(always)]
+fn u32_alias_content() -> SolvedType {
+    int_alias_content(unsigned32_type())
+}
+
 // I128
 
 #[inline(always)]

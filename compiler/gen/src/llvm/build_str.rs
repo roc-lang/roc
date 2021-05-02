@@ -185,6 +185,23 @@ pub fn str_starts_with<'a, 'ctx, 'env>(
     )
 }
 
+/// Str.startsWithCodePoint : Str, U32 -> Bool
+pub fn str_starts_with_code_point<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    str_symbol: Symbol,
+    prefix_symbol: Symbol,
+) -> BasicValueEnum<'ctx> {
+    let str_i128 = str_symbol_to_i128(env, scope, str_symbol);
+    let prefix = load_symbol(scope, &prefix_symbol);
+
+    call_bitcode_fn(
+        env,
+        &[str_i128.into(), prefix],
+        &bitcode::STR_STARTS_WITH_CODE_POINT,
+    )
+}
+
 /// Str.endsWith : Str, Str -> Bool
 pub fn str_ends_with<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
