@@ -1,6 +1,6 @@
 use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
 use crate::llvm::build::{complex_bitcast, Env, InPlace, Scope};
-use crate::llvm::build_list::{allocate_list, store_list};
+use crate::llvm::build_list::{allocate_list, call_bitcode_fn_returns_list, store_list};
 use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
@@ -240,14 +240,7 @@ pub fn str_to_bytes<'a, 'ctx, 'env>(
         "to_bytes",
     );
 
-    let zig_result = call_bitcode_fn(env, &[string], &bitcode::STR_TO_BYTES);
-
-    complex_bitcast(
-        env.builder,
-        zig_result,
-        super::convert::zig_list_type(env).into(),
-        "to_bytes",
-    )
+    call_bitcode_fn_returns_list(env, &[string], &bitcode::STR_TO_BYTES)
 }
 
 /// Str.fromUtf8 : List U8 -> { a : Bool, b : Str, c : Nat, d : I8 }

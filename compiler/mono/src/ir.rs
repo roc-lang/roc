@@ -73,7 +73,8 @@ impl<'a> CapturedSymbols<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PendingSpecialization<'a> {
     solved_type: SolvedType,
-    host_exposed_aliases: BumpMap<'a, Symbol, SolvedType>,
+    host_exposed_aliases: BumpMap<Symbol, SolvedType>,
+    _lifetime: std::marker::PhantomData<&'a u8>,
 }
 
 impl<'a> PendingSpecialization<'a> {
@@ -82,6 +83,7 @@ impl<'a> PendingSpecialization<'a> {
         PendingSpecialization {
             solved_type,
             host_exposed_aliases: BumpMap::new_in(arena),
+            _lifetime: std::marker::PhantomData,
         }
     }
 
@@ -104,6 +106,7 @@ impl<'a> PendingSpecialization<'a> {
         PendingSpecialization {
             solved_type,
             host_exposed_aliases,
+            _lifetime: std::marker::PhantomData,
         }
     }
 }
@@ -124,8 +127,8 @@ pub struct Proc<'a> {
 pub enum HostExposedLayouts<'a> {
     NotHostExposed,
     HostExposed {
-        rigids: BumpMap<'a, Lowercase, Layout<'a>>,
-        aliases: BumpMap<'a, Symbol, Layout<'a>>,
+        rigids: BumpMap<Lowercase, Layout<'a>>,
+        aliases: BumpMap<Symbol, Layout<'a>>,
     },
 }
 
@@ -239,13 +242,15 @@ impl<'a> Proc<'a> {
 
 #[derive(Clone, Debug)]
 pub struct ExternalSpecializations<'a> {
-    pub specs: BumpMap<'a, Symbol, MutSet<SolvedType>>,
+    pub specs: BumpMap<Symbol, MutSet<SolvedType>>,
+    _lifetime: std::marker::PhantomData<&'a u8>,
 }
 
 impl<'a> ExternalSpecializations<'a> {
     pub fn new_in(arena: &'a Bump) -> Self {
         Self {
             specs: BumpMap::new_in(arena),
+            _lifetime: std::marker::PhantomData,
         }
     }
 
@@ -276,16 +281,16 @@ impl<'a> ExternalSpecializations<'a> {
 
 #[derive(Clone, Debug)]
 pub struct Procs<'a> {
-    pub partial_procs: BumpMap<'a, Symbol, PartialProc<'a>>,
-    pub imported_module_thunks: BumpSet<'a, Symbol>,
-    pub module_thunks: BumpSet<'a, Symbol>,
+    pub partial_procs: BumpMap<Symbol, PartialProc<'a>>,
+    pub imported_module_thunks: BumpSet<Symbol>,
+    pub module_thunks: BumpSet<Symbol>,
     pub pending_specializations:
-        Option<BumpMap<'a, Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>>,
-    pub specialized: BumpMap<'a, (Symbol, Layout<'a>), InProgressProc<'a>>,
-    pub runtime_errors: BumpMap<'a, Symbol, &'a str>,
-    pub call_by_pointer_wrappers: BumpMap<'a, Symbol, Symbol>,
+        Option<BumpMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>>,
+    pub specialized: BumpMap<(Symbol, Layout<'a>), InProgressProc<'a>>,
+    pub runtime_errors: BumpMap<Symbol, &'a str>,
+    pub call_by_pointer_wrappers: BumpMap<Symbol, Symbol>,
     pub externals_others_need: ExternalSpecializations<'a>,
-    pub externals_we_need: BumpMap<'a, ModuleId, ExternalSpecializations<'a>>,
+    pub externals_we_need: BumpMap<ModuleId, ExternalSpecializations<'a>>,
 }
 
 impl<'a> Procs<'a> {
@@ -681,11 +686,7 @@ impl<'a> Procs<'a> {
 }
 
 fn add_pending<'a>(
-    pending_specializations: &mut BumpMap<
-        'a,
-        Symbol,
-        MutMap<Layout<'a>, PendingSpecialization<'a>>,
-    >,
+    pending_specializations: &mut BumpMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>,
     symbol: Symbol,
     layout: Layout<'a>,
     pending: PendingSpecialization<'a>,
@@ -1635,73 +1636,14 @@ pub fn specialize_all<'a>(
     mut procs: Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
 ) -> Procs<'a> {
-    let it = procs.externals_others_need.specs.clone();
-    let it = it
-        .into_iter()
-        .map(|(symbol, solved_types)| {
-            // for some unclear reason, the MutSet does not deduplicate according to the hash
-            // instance. So we do it manually here
-            let mut as_vec: std::vec::Vec<_> = solved_types.into_iter().collect();
-
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
-
-            let hash_the_thing = |x: &SolvedType| {
-                let mut hasher = DefaultHasher::new();
-                x.hash(&mut hasher);
-                hasher.finish()
-            };
-
-            as_vec.sort_by_key(|x| hash_the_thing(x));
-            as_vec.dedup_by_key(|x| hash_the_thing(x));
-
-            as_vec.into_iter().map(move |s| (symbol, s))
-        })
-        .flatten();
-
-    for (name, solved_type) in it.into_iter() {
-        let partial_proc = match procs.partial_procs.get(&name) {
-            Some(v) => v.clone(),
-            None => {
-                panic!("Cannot find a partial proc for {:?}", name);
-            }
-        };
-
-        match specialize_solved_type(
-            env,
-            &mut procs,
-            name,
-            layout_cache,
-            solved_type,
-            BumpMap::new_in(env.arena),
-            partial_proc,
-        ) {
-            Ok((proc, layout)) => {
-                procs.specialized.insert((name, layout), Done(proc));
-            }
-            Err(SpecializeFailure {
-                problem: _,
-                attempted_layout,
-            }) => {
-                let proc = generate_runtime_error_function(env, name, attempted_layout);
-
-                procs
-                    .specialized
-                    .insert((name, attempted_layout), Done(proc));
-            }
-        }
-    }
-
-    let mut pending_specializations = procs
-        .pending_specializations
-        .unwrap_or_else(|| BumpMap::new_in(env.arena));
+    specialize_all_help(env, &mut procs, layout_cache);
 
     // When calling from_can, pending_specializations should be unavailable.
     // This must be a single pass, and we must not add any more entries to it!
-    procs.pending_specializations = None;
+    let opt_pending_specializations = std::mem::replace(&mut procs.pending_specializations, None);
 
-    for (name, mut by_layout) in pending_specializations.drain() {
-        for (layout, pending) in by_layout.drain() {
+    for (name, by_layout) in opt_pending_specializations.into_iter().flatten() {
+        for (layout, pending) in by_layout.into_iter() {
             // If we've already seen this (Symbol, Layout) combination before,
             // don't try to specialize it again. If we do, we'll loop forever!
             //
@@ -1760,6 +1702,69 @@ pub fn specialize_all<'a>(
     }
 
     procs
+}
+
+fn specialize_all_help<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+) {
+    let mut symbol_solved_type = Vec::new_in(env.arena);
+
+    for (symbol, solved_types) in procs.externals_others_need.specs.iter() {
+        // for some unclear reason, the MutSet does not deduplicate according to the hash
+        // instance. So we do it manually here
+        let mut as_vec: std::vec::Vec<_> = solved_types.iter().collect();
+
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let hash_the_thing = |x: &SolvedType| {
+            let mut hasher = DefaultHasher::new();
+            x.hash(&mut hasher);
+            hasher.finish()
+        };
+
+        as_vec.sort_by_key(|x| hash_the_thing(x));
+        as_vec.dedup_by_key(|x| hash_the_thing(x));
+
+        for s in as_vec {
+            symbol_solved_type.push((*symbol, s.clone()));
+        }
+    }
+
+    for (name, solved_type) in symbol_solved_type.into_iter() {
+        let partial_proc = match procs.partial_procs.get(&name) {
+            Some(v) => v.clone(),
+            None => {
+                panic!("Cannot find a partial proc for {:?}", name);
+            }
+        };
+
+        match specialize_solved_type(
+            env,
+            procs,
+            name,
+            layout_cache,
+            solved_type,
+            BumpMap::new_in(env.arena),
+            partial_proc,
+        ) {
+            Ok((proc, layout)) => {
+                procs.specialized.insert((name, layout), Done(proc));
+            }
+            Err(SpecializeFailure {
+                problem: _,
+                attempted_layout,
+            }) => {
+                let proc = generate_runtime_error_function(env, name, attempted_layout);
+
+                procs
+                    .specialized
+                    .insert((name, attempted_layout), Done(proc));
+            }
+        }
+    }
 }
 
 fn generate_runtime_error_function<'a>(
@@ -1856,10 +1861,7 @@ fn specialize_external<'a>(
         }
 
         HostExposedLayouts::HostExposed {
-            rigids: hashbrown::HashMap::with_hasher_in(
-                default_hasher(),
-                hashbrown::BumpWrapper(env.arena),
-            ),
+            rigids: BumpMap::new_in(env.arena),
             aliases,
         }
     };
@@ -2310,6 +2312,7 @@ fn specialize<'a>(
     let PendingSpecialization {
         solved_type,
         host_exposed_aliases,
+        ..
     } = pending;
 
     specialize_solved_type(

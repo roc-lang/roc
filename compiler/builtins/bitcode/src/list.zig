@@ -86,6 +86,25 @@ pub const RocList = extern struct {
         new_length: usize,
         element_width: usize,
     ) RocList {
+        if (self.bytes) |source_ptr| {
+            if (self.isUnique()) {
+                const new_source = utils.unsafeReallocate(source_ptr, allocator, alignment, self.len(), new_length, element_width);
+
+                return RocList{ .bytes = new_source, .length = new_length };
+            }
+        }
+
+        return self.reallocateFresh(allocator, alignment, new_length, element_width);
+    }
+
+    /// reallocate by explicitly making a new allocation and copying elements over
+    fn reallocateFresh(
+        self: RocList,
+        allocator: *Allocator,
+        alignment: usize,
+        new_length: usize,
+        element_width: usize,
+    ) RocList {
         const old_length = self.length;
         const delta_length = new_length - old_length;
 
@@ -101,14 +120,11 @@ pub const RocList = extern struct {
             @memset(dest_ptr + old_length * element_width, 0, delta_length * element_width);
         }
 
-        // NOTE the newly added elements are left uninitialized
-
         const result = RocList{
             .bytes = first_slot,
             .length = new_length,
         };
 
-        // NOTE we fuse an increment of all keys/values with a decrement of the input dict
         utils.decref(allocator, alignment, self.bytes, old_length * element_width);
 
         return result;
@@ -624,6 +640,18 @@ pub fn listRepeat(count: usize, alignment: usize, element: Opaque, element_width
     } else {
         unreachable;
     }
+}
+
+pub fn listSingle(alignment: usize, element: Opaque, element_width: usize) callconv(.C) RocList {
+    var output = RocList.allocate(std.heap.c_allocator, alignment, 1, element_width);
+
+    if (output.bytes) |target| {
+        if (element) |source| {
+            @memcpy(target, source, element_width);
+        }
+    }
+
+    return output;
 }
 
 pub fn listAppend(list: RocList, alignment: usize, element: Opaque, element_width: usize) callconv(.C) RocList {

@@ -162,6 +162,49 @@ pub const RocStr = extern struct {
         }
     }
 
+    pub fn reallocate(
+        self: RocStr,
+        allocator: *Allocator,
+        new_length: usize,
+    ) RocStr {
+        const alignment = 1;
+        const element_width = 1;
+
+        if (self.bytes) |source_ptr| {
+            if (self.isUnique()) {
+                const new_source = utils.unsafeReallocate(source_ptr, allocator, alignment, self.len(), new_length, element_width);
+
+                return RocStr{ .str_bytes = new_source, .str_len = new_length };
+            }
+        }
+
+        return self.reallocateFresh(allocator, alignment, new_length, element_width);
+    }
+
+    /// reallocate by explicitly making a new allocation and copying elements over
+    pub fn reallocateFresh(
+        self: RocStr,
+        allocator: *Allocator,
+        new_length: usize,
+    ) RocStr {
+        const old_length = self.len();
+        const delta_length = new_length - old_length;
+
+        const result = RocStr.allocate(allocator, InPlace.Clone, new_length);
+
+        // transfer the memory
+
+        const source_ptr = self.asU8ptr();
+        const dest_ptr = result.asU8ptr();
+
+        @memcpy(dest_ptr, source_ptr, old_length);
+        @memset(dest_ptr + old_length, 0, delta_length);
+
+        self.deinit(allocator);
+
+        return result;
+    }
+
     pub fn isSmallStr(self: RocStr) bool {
         // NOTE: returns False for empty string!
         return @bitCast(isize, self.str_len) < 0;
@@ -180,6 +223,22 @@ pub const RocStr = extern struct {
 
     pub fn isEmpty(self: RocStr) bool {
         return self.len() == 0;
+    }
+
+    pub fn isUnique(self: RocStr) bool {
+        // the empty list is unique (in the sense that copying it will not leak memory)
+        if (self.isEmpty()) {
+            return true;
+        }
+
+        // small strings can be copied
+        if (self.isSmallStr()) {
+            return true;
+        }
+
+        // otherwise, check if the refcount is one
+        const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.str_bytes));
+        return (ptr - 1)[0] == utils.REFCOUNT_ONE;
     }
 
     pub fn asSlice(self: RocStr) []u8 {
@@ -840,11 +899,36 @@ fn strConcat(allocator: *Allocator, result_in_place: InPlace, arg1: RocStr, arg2
     } else {
         const combined_length = arg1.len() + arg2.len();
 
-        var result = RocStr.allocate(allocator, result_in_place, combined_length);
+        const alignment = 1;
+        const element_width = 1;
+
+        if (!arg1.isSmallStr() and arg1.isUnique()) {
+            if (arg1.str_bytes) |source_ptr| {
+                const new_source = utils.unsafeReallocate(
+                    source_ptr,
+                    allocator,
+                    alignment,
+                    arg1.len(),
+                    combined_length,
+                    element_width,
+                );
+
+                @memcpy(new_source + arg1.len(), arg2.asU8ptr(), arg2.len());
+
+                return RocStr{ .str_bytes = new_source, .str_len = combined_length };
+            }
+        }
+
+        var result = arg1.reallocateFresh(
+            allocator,
+            combined_length,
+        );
         var result_ptr = result.asU8ptr();
 
         arg1.memcpy(result_ptr);
         arg2.memcpy(result_ptr + arg1.len());
+
+        arg1.deinit(allocator);
 
         return result;
     }
