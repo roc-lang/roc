@@ -833,8 +833,4 @@ sqrt : Float a -> [Ok (Float a), InvalidSqrt]*
 ## [Endianness](https://en.wikipedia.org/wiki/Endianness)
 Endi : [ Big, Little ]
 
-## The [endianness](https://en.wikipedia.org/wiki/Endianness) of [Num] values on
-## the currently running system.
-endi : Endi
-
 toBytes : Num *, Endi -> List U8
