@@ -21,17 +21,6 @@ interface Bytes
 
 Bytes : List U8
 
-# Access
-
-splitFirst : Bytes -> Result { val : U8, rest : Bytes } [ NoBytes ]*
-
-take : Bytes, Nat -> Bytes
-
-# Building
-
-append : Bytes, Endi, Num * -> Bytes
-concat : Bytes, Bytes -> Bytes
-
 # Parsing
 
 ## Parse an exact number of UTF-8 [extended grapheme clusters](http://www.unicode.org/glossary/#extended_grapheme_cluster)
