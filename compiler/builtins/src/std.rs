@@ -48,6 +48,7 @@ pub fn standard_stdlib() -> StdLib {
             Symbol::SET_SET,
             Symbol::DICT_DICT,
             Symbol::STR_STR,
+            Symbol::STR_USV,
         ]
         .into_iter()
         .collect(),
