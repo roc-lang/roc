@@ -150,6 +150,22 @@ isEmpty : Str -> Bool
 
 startsWith : Str, Str -> Bool
 
+## If the string begins with a [Unicode code point](http://www.unicode.org/glossary/#code_point)
+## equal to the given [U32], return `True`. Otherwise return `False`.
+##
+## If the given [Str] is empty, or if the given [U32] is not a valid
+## code point, this will return `False`.
+##
+## **Performance Note:** This runs slightly faster than [Str.startsWith], so
+## if you want to check whether a string begins with something that's representable
+## in a single code point, you can use (for example) `Str.startsWithCodePoint '鹏'`
+## instead of `Str.startsWithCodePoint "鹏"`. ('鹏' evaluates to the [U32]
+## value `40527`.) This will not work for graphemes which take up mulitple code
+## points, however; `Str.startsWithCodePoint '🕊'` would be a compiler error
+## because 🕊 takes up multiple code points and cannot be represented as a
+## single [U32]. You'd need to use `Str.startsWithCodePoint "🕊"` instead.
+startsWithCodePoint : Str, U32 -> Bool
+
 endsWith : Str, Str -> Bool
 
 contains : Str, Str -> Bool
@@ -361,6 +377,13 @@ toUtf32Bom : Str, Endi -> List U8
 ## If the string does not contain a full grapheme, for example because it was
 ## empty, returns `Err`.
 parseGrapheme : Str -> Result { val : Str, rest : Str } [ Expected [ Grapheme ]* Str ]*
+
+## If the string begins with a valid [Unicode code point](http://www.unicode.org/glossary/#code_point),
+## return it along with the rest of the string after that code point.
+##
+## If the string does not begin with a valid code point, for example because it was
+## empty, return `Err`.
+parseCodePoint : Str -> Result { val : U32, rest : Str } [ Expected [ CodePoint ]* Str ]*
 
 ## If the first string begins with the second, return whatever comes
 ## after the second.
