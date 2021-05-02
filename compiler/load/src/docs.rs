@@ -1,3 +1,4 @@
+use crate::docs::DocEntry::DetatchedDoc;
 use crate::docs::TypeAnnotation::{Apply, BoundVariable, Record, TagUnion};
 use inlinable_string::InlinableString;
 use roc_module::ident::ModuleName;
@@ -20,12 +21,17 @@ pub struct Documentation {
 #[derive(Debug, Clone)]
 pub struct ModuleDocumentation {
     pub name: String,
-    pub docs: String,
     pub entries: Vec<DocEntry>,
 }
 
 #[derive(Debug, Clone)]
-pub struct DocEntry {
+pub enum DocEntry {
+    DocDef(DocDef),
+    DetatchedDoc(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct DocDef {
     pub name: String,
     pub type_vars: Vec<String>,
     pub type_annotation: Option<TypeAnnotation>,
@@ -73,10 +79,6 @@ pub fn generate_module_docs<'a>(
     exposed_ident_ids: &'a IdentIds,
     parsed_defs: &'a [Located<ast::Def<'a>>],
 ) -> ModuleDocumentation {
-    let maybe_module_docs = parsed_defs
-        .first()
-        .and_then(|first_def| generate_module_doc(&first_def.value));
-
     let (entries, _) =
         parsed_defs
             .iter()
@@ -86,65 +88,32 @@ pub fn generate_module_docs<'a>(
 
     ModuleDocumentation {
         name: module_name.as_str().to_string(),
-        docs: match maybe_module_docs {
-            None => String::new(),
-            Some(module_docs) => module_docs,
-        },
         entries,
     }
 }
 
-fn generate_module_doc<'a>(def: &'a ast::Def<'a>) -> Option<String> {
-    match def {
-        Def::SpaceBefore(_, comments_or_new_lines) => {
-            comments_or_new_lines_to_module_docs(comments_or_new_lines)
-        }
-        _ => None,
-    }
-}
-
-fn comments_or_new_lines_to_module_docs<'a>(
+fn detatched_docs_from_comments_and_new_lines<'a>(
     comments_or_new_lines: &'a [roc_parse::ast::CommentOrNewline<'a>],
-) -> Option<String> {
-    let mut docs = String::new();
+) -> Vec<String> {
+    let mut detatched_docs: Vec<String> = Vec::new();
 
-    let mut in_doc_comments = false;
-    let mut left_doc_comments = false;
+    let mut docs = String::new();
 
     for comment_or_new_line in comments_or_new_lines.iter() {
         match comment_or_new_line {
             CommentOrNewline::DocComment(doc_str) => {
-                in_doc_comments = true;
                 docs.push_str(doc_str);
                 docs.push('\n');
             }
 
             CommentOrNewline::LineComment(_) | CommentOrNewline::Newline => {
-                if in_doc_comments {
-                    left_doc_comments = true;
-                    break;
-                }
+                detatched_docs.push(docs.clone());
+                docs = String::new();
             }
         }
     }
 
-    // We want to check if we ever traversed all the way through
-    // a block of doc comments, because in this case..
-    //
-    //     interface Box exposes [ new ] imports []
-    //
-    //     ## Make a box
-    //     new : item -> Box item
-    //
-    // The doc comment "Make a box" belongs to the `new` function and
-    // not the module as a whole. The rule is that module documentation
-    // is the first block of doc comments that have regular comments or
-    // empty lines both before and after them.
-    if docs.is_empty() || !left_doc_comments {
-        None
-    } else {
-        Some(docs)
-    }
+    detatched_docs
 }
 
 fn generate_entry_doc<'a>(
@@ -161,6 +130,11 @@ fn generate_entry_doc<'a>(
     match def {
         Def::SpaceBefore(sub_def, comments_or_new_lines) => {
             // Comments before a definition are attached to the current defition
+
+            for detatched_doc in detatched_docs_from_comments_and_new_lines(comments_or_new_lines) {
+                acc.push(DetatchedDoc(detatched_doc));
+            }
+
             generate_entry_doc(exposed_ident_ids, acc, Some(comments_or_new_lines), sub_def)
         }
 
@@ -180,13 +154,13 @@ fn generate_entry_doc<'a>(
                     .get_id(&InlinableString::from(identifier))
                     .is_some()
                 {
-                    let entry = DocEntry {
+                    let doc_def = DocDef {
                         name: identifier.to_string(),
                         type_annotation: None,
                         type_vars: Vec::new(),
                         docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
                     };
-                    acc.push(entry);
+                    acc.push(DocEntry::DocDef(doc_def));
                 }
                 (acc, None)
             }
@@ -200,13 +174,13 @@ fn generate_entry_doc<'a>(
                     .get_id(&InlinableString::from(identifier))
                     .is_some()
                 {
-                    let entry = DocEntry {
+                    let doc_def = DocDef {
                         name: identifier.to_string(),
                         type_annotation: None,
                         type_vars: Vec::new(),
                         docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
                     };
-                    acc.push(entry);
+                    acc.push(DocEntry::DocDef(doc_def));
                 }
                 (acc, None)
             }
@@ -223,13 +197,13 @@ fn generate_entry_doc<'a>(
                 }
             }
 
-            let entry = DocEntry {
+            let doc_def = DocDef {
                 name: name.value.to_string(),
                 type_annotation: type_to_docs(ann.value),
                 type_vars,
                 docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
             };
-            acc.push(entry);
+            acc.push(DocEntry::DocDef(doc_def));
 
             (acc, None)
         }

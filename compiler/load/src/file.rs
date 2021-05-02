@@ -3516,7 +3516,6 @@ fn fabricate_effects_module<'a>(
     // Should a effect module ever have a ModuleDocumentation?
     let module_docs = ModuleDocumentation {
         name: String::from(name),
-        docs: String::from("idk fix this later"),
         entries: Vec::new(),
     };
 

@@ -1,7 +1,7 @@
 extern crate pulldown_cmark;
 use roc_builtins::std::StdLib;
 use roc_can::builtins::builtin_defs_map;
-use roc_load::docs::TypeAnnotation;
+use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::file::LoadingProblem;
 
@@ -86,41 +86,48 @@ fn render_main_content(module: &ModuleDocumentation) -> String {
         .as_str(),
     );
 
-    buf.push_str(markdown_to_html(module.docs.clone()).as_str());
+    // buf.push_str(markdown_to_html(module.docs.clone()).as_str());
 
     for entry in &module.entries {
-        let mut href = String::new();
-        href.push('#');
-        href.push_str(entry.name.as_str());
+        match entry {
+            DocEntry::DocDef(doc_def) => {
+                let mut href = String::new();
+                href.push('#');
+                href.push_str(doc_def.name.as_str());
 
-        let name = entry.name.as_str();
+                let name = doc_def.name.as_str();
 
-        let mut content = String::new();
+                let mut content = String::new();
 
-        content.push_str(html_node("a", vec![("href", href.as_str())], name).as_str());
+                content.push_str(html_node("a", vec![("href", href.as_str())], name).as_str());
 
-        for type_var in &entry.type_vars {
-            content.push(' ');
-            content.push_str(type_var.as_str());
-        }
+                for type_var in &doc_def.type_vars {
+                    content.push(' ');
+                    content.push_str(type_var.as_str());
+                }
 
-        if let Some(type_ann) = &entry.type_annotation {
-            content.push_str(" : ");
-            type_annotation_to_html(0, &mut content, &type_ann);
-        }
+                if let Some(type_ann) = &doc_def.type_annotation {
+                    content.push_str(" : ");
+                    type_annotation_to_html(0, &mut content, &type_ann);
+                }
 
-        buf.push_str(
-            html_node(
-                "h3",
-                vec![("id", name), ("class", "entry-name")],
-                content.as_str(),
-            )
-            .as_str(),
-        );
+                buf.push_str(
+                    html_node(
+                        "h3",
+                        vec![("id", name), ("class", "entry-name")],
+                        content.as_str(),
+                    )
+                    .as_str(),
+                );
 
-        if let Some(docs) = &entry.docs {
-            buf.push_str(markdown_to_html(docs.to_string()).as_str());
-        }
+                if let Some(docs) = &doc_def.docs {
+                    buf.push_str(markdown_to_html(docs.to_string()).as_str());
+                }
+            }
+            DocEntry::DetatchedDoc(docs) => {
+                buf.push_str(markdown_to_html(docs.to_string()).as_str());
+            }
+        };
     }
 
     buf
@@ -218,20 +225,22 @@ fn render_module_links(modules: &[ModuleDocumentation]) -> String {
             let mut entries_buf = String::new();
 
             for entry in &module.entries {
-                let mut entry_href = String::new();
+                if let DocEntry::DocDef(doc_def) = entry {
+                    let mut entry_href = String::new();
 
-                entry_href.push_str(href.as_str());
-                entry_href.push('#');
-                entry_href.push_str(entry.name.as_str());
+                    entry_href.push_str(href.as_str());
+                    entry_href.push('#');
+                    entry_href.push_str(doc_def.name.as_str());
 
-                entries_buf.push_str(
-                    html_node(
-                        "a",
-                        vec![("href", entry_href.as_str())],
-                        entry.name.as_str(),
-                    )
-                    .as_str(),
-                );
+                    entries_buf.push_str(
+                        html_node(
+                            "a",
+                            vec![("href", entry_href.as_str())],
+                            doc_def.name.as_str(),
+                        )
+                        .as_str(),
+                    );
+                }
             }
 
             entries_buf
