@@ -3798,14 +3798,15 @@ fn make_specializations<'a>(
         ptr_bytes,
     };
 
-    procs
-        .externals_others_need
-        .extend(specializations_we_must_make);
-
     // TODO: for now this final specialization pass is sequential,
     // with no parallelization at all. We should try to parallelize
     // this, but doing so will require a redesign of Procs.
-    procs = roc_mono::ir::specialize_all(&mut mono_env, procs, &mut layout_cache);
+    procs = roc_mono::ir::specialize_all(
+        &mut mono_env,
+        procs,
+        specializations_we_must_make,
+        &mut layout_cache,
+    );
 
     let external_specializations_requested = procs.externals_we_need.clone();
     let procedures = procs.get_specialized_procs_without_rc(mono_env.arena);
