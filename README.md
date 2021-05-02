@@ -1,10 +1,4 @@
-# Not ready to be a public repo yet!
-
-> ...but if you'd like to share it around, feel free to link people to
-> [this short talk](https://youtu.be/ZnYa99QoznE?t=4790) introducing the
-> language. It'd be best to avoid having Roc ending up on link aggregators like
-> Hacker News or Reddit until it's further along, but it's not a top secret
-> project or anything. For now it's better to spread gradually, not virally.
+# The Roc Programming Language
 
 Roc is a language for making delightful software.
 
