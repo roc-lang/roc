@@ -60,24 +60,33 @@ pub export fn main() u8 {
     return 0;
 }
 
-pub export fn malloc(size: usize) ?*u8 {
+pub export fn malloc(size: usize) callconv(.C) ?*c_void {
     const stdout = std.io.getStdOut().writer();
-
-    const ns = std.time.nanoTimestamp();
-    stdout.print("\x1B[36m{} | \x1B[39m Custom malloc allocated {} bytes!\n", .{ns, size}) catch unreachable;
-
     const allocator = testing.allocator;
+
+    // Perfo,m the actual malloc
+    const startNs = std.time.nanoTimestamp();
     const ptr = allocator.alignedAlloc(u8, 16, size) catch unreachable;
+    const endNs = std.time.nanoTimestamp();
 
-    return @ptrCast(?*u8, ptr);
+    const totalMs = @divTrunc(endNs - startNs, 1000);
+
+    stdout.print("\x1B[36m{} | \x1B[39m Custom malloc allocated {} bytes in {} ms!\n", .{startNs, size, totalMs}) catch unreachable;
+
+    return @ptrCast(?*c_void, ptr);
 }
-
-pub export fn free(_ptr: ?*u8) void {
-    // TODO Leak!!!
+pub export fn free(c_ptr: *u128) callconv(.C) void {
     const stdout = std.io.getStdOut().writer();
-    const ns = std.time.nanoTimestamp();
+    const allocator = testing.allocator;
 
-    stdout.print("\x1B[36m{} | \x1B[39m Custom dealloc ran!\n", .{ns}) catch unreachable;
+    // Perform the actual free
+    const startNs = std.time.nanoTimestamp();
+    allocator.destroy(c_ptr);
+    const endNs = std.time.nanoTimestamp();
+
+    const totalMs = @divTrunc(endNs - startNs, 1000);
+
+    stdout.print("\x1B[36m{} | \x1B[39m Custom dealloc ran in {} ms!\n", .{startNs, totalMs}) catch unreachable;
 }
 
 fn call_the_closure(function_pointer: *const u8, closure_data_pointer: [*]u8) void {
