@@ -87,5 +87,5 @@ never done anything with Rust and also never worked on a compiler, but we've
 been able to find beginner-friendly projects to get people up to speed gradually.)
 
 If you're interested in getting involved, check out
-[this talk](https://youtu.be/ZnYa99QoznE?t=4790) which has more context on goals
-and timelines, and send an email to the address mentioned towards the end!
+[CONTRIBUTING.md](https://github.com/rtfeldman/roc/blob/trunk/CONTRIBUTING.md) which has more info
+and a link to our Zulip chat!
