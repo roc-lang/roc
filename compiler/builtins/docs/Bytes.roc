@@ -15,9 +15,12 @@ interface Bytes
             parseU64,
             parseI64,
             parseU128,
-            parseI128,
+            parseI128
         ]
     imports []
+
+
+Bytes : [ @Bytes ]
 
 # Conversion
 
