@@ -389,6 +389,10 @@ parseCodePoint : Str -> Result { val : U32, rest : Str } [ Expected [ CodePoint 
 ## after the second.
 chomp : Str, Str -> Result Str [ Expected [ ExactStr Str ]* Str ]*
 
+## If the string begins with a [Unicode code point](http://www.unicode.org/glossary/#code_point)
+## equal to the given [U32], return whatever comes after that code point.
+chompCodePoint : Str, U32 -> Result Str [ Expected [ ExactCodePoint U32 ]* Str ]*
+
 ## If the string begins with digits which can represent a valid #U8, return
 ## that number along with the rest of the string after the digits.
 parseU8 : Str -> Result { val : U8, rest : Str } [ Expected [ NumU8 ]* Str ]*
