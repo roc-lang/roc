@@ -128,7 +128,7 @@ fn when_one_element_tag() {
     assert_evals_to!(
         indoc!(
             r#"
-            x : [ Pair (Int *) (Int *) ]
+            x : [ Pair (Int a) (Int a) ]
             x = Pair 0x2 0x3
 
             when x is
@@ -286,7 +286,7 @@ fn return_unnamed_fn() {
         indoc!(
             r#"
             wrapper = \{} ->
-                alwaysFloatIdentity : Int * -> (Float * -> Float *)
+                alwaysFloatIdentity : Int * -> (Float a -> Float a)
                 alwaysFloatIdentity = \_ ->
                     (\a -> a)
 
@@ -717,7 +717,7 @@ fn linked_list_sum_int() {
             zero : LinkedList (Int *)
             zero = Nil
 
-            sum : LinkedList (Int *) -> Int *
+            sum : LinkedList (Int a) -> Int a
             sum = \list ->
                 when list is
                     Nil -> 0
@@ -772,7 +772,7 @@ fn when_nested_maybe() {
             r#"
             Maybe a : [ Nothing, Just a ]
 
-            x : Maybe (Maybe (Int *))
+            x : Maybe (Maybe (Int a))
             x = Just (Just 41)
 
             when x is
@@ -1026,11 +1026,11 @@ fn io_poc_effect() {
             runEffect : Effect a -> a
             runEffect = \@Effect thunk -> thunk {}
 
-            foo : Effect (Float *)
+            foo : Effect F64 
             foo =
                 succeed 3.14
 
-            main : Float *
+            main : F64
             main =
                 runEffect foo
 
@@ -1051,14 +1051,14 @@ fn io_poc_desugared() {
             # succeed : a -> ({} -> a)
             succeed = \x -> \{} -> x
 
-            foo : {} -> Float *
+            foo : {} -> F64 
             foo =
                 succeed 3.14
 
             # runEffect : ({} ->  a) -> a
             runEffect = \thunk -> thunk {}
 
-            main : Float *
+            main : F64 
             main =
                 runEffect foo
             "#
@@ -1609,7 +1609,7 @@ fn linked_list_double_pattern_match() {
 
             ConsList a : [ Cons a (ConsList a), Nil ]
 
-            foo : ConsList (Int *) -> Int *
+            foo : ConsList (Int a) -> Int a
             foo = \list ->
                 when list is
                     Cons _ (Cons x _) -> x
@@ -1835,7 +1835,7 @@ fn non_exhaustive_pattern_let() {
     assert_evals_to!(
         indoc!(
             r#"
-            x : Result (Int *) (Float *)
+            x : Result (Int a) (Float b)
             x = Ok 4
 
             (Ok y) = x
