@@ -1360,7 +1360,7 @@ fn parse_expr_end<'a>(
     }
 }
 
-fn parse_loc_expr<'a>(
+pub fn parse_loc_expr<'a>(
     min_indent: u16,
     arena: &'a Bump,
     state: State<'a>,
