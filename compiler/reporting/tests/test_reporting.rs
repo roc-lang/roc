@@ -6400,13 +6400,41 @@ mod test_reporting {
                 mult : Num *, F64 -> F64
                 mult = \a, b -> a * b
 
-                {}
+                mult 0 0
                 "#
             ),
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
+                The 2nd argument to `mul` is not what I expect:
+
+                2│  mult = \a, b -> a * b
+                                        ^
+
+                This `b` value is a:
+
+                    F64
+
+                But `mul` needs the 2nd argument to be:
+
+                    Num *
+
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `mult` definition:
+
+                1│  mult : Num *, F64 -> F64
+                2│  mult = \a, b -> a * b
+                                    ^^^^^
+
+                This `mul` call produces:
+
+                    Num *
+
+                But the type annotation on `mult` says it should be:
+
+                    F64
             "#
             ),
         )
@@ -6420,13 +6448,41 @@ mod test_reporting {
                 mult : Num a, F64 -> F64
                 mult = \a, b -> a * b
 
-                {}
+                mult 0 0
                 "#
             ),
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
+                The 2nd argument to `mul` is not what I expect:
+
+                2│  mult = \a, b -> a * b
+                                        ^
+
+                This `b` value is a:
+
+                    F64
+
+                But `mul` needs the 2nd argument to be:
+
+                    Num a
+
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `mult` definition:
+
+                1│  mult : Num a, F64 -> F64
+                2│  mult = \a, b -> a * b
+                                    ^^^^^
+
+                This `mul` call produces:
+
+                    Num a
+
+                But the type annotation on `mult` says it should be:
+
+                    F64
             "#
             ),
         )
