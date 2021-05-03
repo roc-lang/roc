@@ -1,9 +1,11 @@
+use crate::docs::DocEntry::DetatchedDoc;
 use crate::docs::TypeAnnotation::{Apply, BoundVariable, Record, TagUnion};
 use inlinable_string::InlinableString;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::IdentIds;
 use roc_parse::ast;
-use roc_parse::ast::AssignedField;
+use roc_parse::ast::CommentOrNewline;
+use roc_parse::ast::{AssignedField, Def};
 use roc_region::all::Located;
 
 // Documentation generation requirements
@@ -19,12 +21,17 @@ pub struct Documentation {
 #[derive(Debug, Clone)]
 pub struct ModuleDocumentation {
     pub name: String,
-    pub docs: String,
     pub entries: Vec<DocEntry>,
 }
 
 #[derive(Debug, Clone)]
-pub struct DocEntry {
+pub enum DocEntry {
+    DocDef(DocDef),
+    DetatchedDoc(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct DocDef {
     pub name: String,
     pub type_vars: Vec<String>,
     pub type_annotation: Option<TypeAnnotation>,
@@ -76,17 +83,40 @@ pub fn generate_module_docs<'a>(
         parsed_defs
             .iter()
             .fold((vec![], None), |(acc, maybe_comments_after), def| {
-                generate_module_doc(exposed_ident_ids, acc, maybe_comments_after, &def.value)
+                generate_entry_doc(exposed_ident_ids, acc, maybe_comments_after, &def.value)
             });
 
     ModuleDocumentation {
         name: module_name.as_str().to_string(),
-        docs: "".to_string(),
         entries,
     }
 }
 
-fn generate_module_doc<'a>(
+fn detatched_docs_from_comments_and_new_lines<'a>(
+    comments_or_new_lines: &'a [roc_parse::ast::CommentOrNewline<'a>],
+) -> Vec<String> {
+    let mut detatched_docs: Vec<String> = Vec::new();
+
+    let mut docs = String::new();
+
+    for comment_or_new_line in comments_or_new_lines.iter() {
+        match comment_or_new_line {
+            CommentOrNewline::DocComment(doc_str) => {
+                docs.push_str(doc_str);
+                docs.push('\n');
+            }
+
+            CommentOrNewline::LineComment(_) | CommentOrNewline::Newline => {
+                detatched_docs.push(docs.clone());
+                docs = String::new();
+            }
+        }
+    }
+
+    detatched_docs
+}
+
+fn generate_entry_doc<'a>(
     exposed_ident_ids: &'a IdentIds,
     mut acc: Vec<DocEntry>,
     before_comments_or_new_lines: Option<&'a [roc_parse::ast::CommentOrNewline<'a>]>,
@@ -95,58 +125,62 @@ fn generate_module_doc<'a>(
     Vec<DocEntry>,
     Option<&'a [roc_parse::ast::CommentOrNewline<'a>]>,
 ) {
-    use roc_parse::ast::Def::*;
     use roc_parse::ast::Pattern;
 
     match def {
-        SpaceBefore(sub_def, comments_or_new_lines) => {
+        Def::SpaceBefore(sub_def, comments_or_new_lines) => {
             // Comments before a definition are attached to the current defition
-            generate_module_doc(exposed_ident_ids, acc, Some(comments_or_new_lines), sub_def)
+
+            for detatched_doc in detatched_docs_from_comments_and_new_lines(comments_or_new_lines) {
+                acc.push(DetatchedDoc(detatched_doc));
+            }
+
+            generate_entry_doc(exposed_ident_ids, acc, Some(comments_or_new_lines), sub_def)
         }
 
-        SpaceAfter(sub_def, comments_or_new_lines) => {
+        Def::SpaceAfter(sub_def, comments_or_new_lines) => {
             let (new_acc, _) =
                 // If there are comments before, attach to this definition
-                generate_module_doc(exposed_ident_ids, acc, before_comments_or_new_lines, sub_def);
+                generate_entry_doc(exposed_ident_ids, acc, before_comments_or_new_lines, sub_def);
 
             // Comments after a definition are attached to the next definition
             (new_acc, Some(comments_or_new_lines))
         }
 
-        Annotation(loc_pattern, _loc_ann) => match loc_pattern.value {
+        Def::Annotation(loc_pattern, _loc_ann) => match loc_pattern.value {
             Pattern::Identifier(identifier) => {
                 // Check if the definition is exposed
                 if exposed_ident_ids
                     .get_id(&InlinableString::from(identifier))
                     .is_some()
                 {
-                    let entry = DocEntry {
+                    let doc_def = DocDef {
                         name: identifier.to_string(),
                         type_annotation: None,
                         type_vars: Vec::new(),
                         docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
                     };
-                    acc.push(entry);
+                    acc.push(DocEntry::DocDef(doc_def));
                 }
                 (acc, None)
             }
 
             _ => (acc, None),
         },
-        AnnotatedBody { ann_pattern, .. } => match ann_pattern.value {
+        Def::AnnotatedBody { ann_pattern, .. } => match ann_pattern.value {
             Pattern::Identifier(identifier) => {
                 // Check if the definition is exposed
                 if exposed_ident_ids
                     .get_id(&InlinableString::from(identifier))
                     .is_some()
                 {
-                    let entry = DocEntry {
+                    let doc_def = DocDef {
                         name: identifier.to_string(),
                         type_annotation: None,
                         type_vars: Vec::new(),
                         docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
                     };
-                    acc.push(entry);
+                    acc.push(DocEntry::DocDef(doc_def));
                 }
                 (acc, None)
             }
@@ -154,7 +188,7 @@ fn generate_module_doc<'a>(
             _ => (acc, None),
         },
 
-        Alias { name, vars, ann } => {
+        Def::Alias { name, vars, ann } => {
             let mut type_vars = Vec::new();
 
             for var in vars.iter() {
@@ -163,22 +197,22 @@ fn generate_module_doc<'a>(
                 }
             }
 
-            let entry = DocEntry {
+            let doc_def = DocDef {
                 name: name.value.to_string(),
                 type_annotation: type_to_docs(ann.value),
                 type_vars,
                 docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
             };
-            acc.push(entry);
+            acc.push(DocEntry::DocDef(doc_def));
 
             (acc, None)
         }
 
-        Body(_, _) => (acc, None),
+        Def::Body(_, _) => (acc, None),
 
-        Expect(c) => todo!("documentation for tests {:?}", c),
+        Def::Expect(c) => todo!("documentation for tests {:?}", c),
 
-        NotYetImplemented(s) => todo!("{}", s),
+        Def::NotYetImplemented(s) => todo!("{}", s),
     }
 }
 
@@ -327,21 +361,20 @@ fn tag_to_doc(tag: ast::Tag) -> Option<Tag> {
 fn comments_or_new_lines_to_docs<'a>(
     comments_or_new_lines: &'a [roc_parse::ast::CommentOrNewline<'a>],
 ) -> Option<String> {
-    use roc_parse::ast::CommentOrNewline::*;
-
     let mut docs = String::new();
 
     for comment_or_new_line in comments_or_new_lines.iter() {
         match comment_or_new_line {
-            DocComment(doc_str) => {
+            CommentOrNewline::DocComment(doc_str) => {
                 docs.push_str(doc_str);
                 docs.push('\n');
             }
-            Newline | LineComment(_) => {
+            CommentOrNewline::Newline | CommentOrNewline::LineComment(_) => {
                 docs = String::new();
             }
         }
     }
+
     if docs.is_empty() {
         None
     } else {
