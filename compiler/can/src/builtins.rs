@@ -58,6 +58,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_SPLIT => str_split,
         STR_IS_EMPTY => str_is_empty,
         STR_STARTS_WITH => str_starts_with,
+        STR_STARTS_WITH_CODE_POINT => str_starts_with_code_point,
         STR_ENDS_WITH => str_ends_with,
         STR_COUNT_GRAPHEMES => str_count_graphemes,
         STR_FROM_INT => str_from_int,
@@ -1445,22 +1446,12 @@ fn str_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Str.startsWith : Str, Str -> Bool
 fn str_starts_with(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let str_var = var_store.fresh();
-    let bool_var = var_store.fresh();
+    lowlevel_2(symbol, LowLevel::StrStartsWith, var_store)
+}
 
-    let body = RunLowLevel {
-        op: LowLevel::StrStartsWith,
-        args: vec![(str_var, Var(Symbol::ARG_1)), (str_var, Var(Symbol::ARG_2))],
-        ret_var: bool_var,
-    };
-
-    defn(
-        symbol,
-        vec![(str_var, Symbol::ARG_1), (str_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        bool_var,
-    )
+/// Str.startsWithCodePoint : Str, U32 -> Bool
+fn str_starts_with_code_point(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::StrStartsWithCodePoint, var_store)
 }
 
 /// Str.endsWith : Str, Str -> Bool

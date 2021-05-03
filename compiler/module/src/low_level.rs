@@ -7,6 +7,7 @@ pub enum LowLevel {
     StrJoinWith,
     StrIsEmpty,
     StrStartsWith,
+    StrStartsWithCodePoint,
     StrEndsWith,
     StrSplit,
     StrCountGraphemes,

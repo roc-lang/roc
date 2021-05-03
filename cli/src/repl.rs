@@ -1,7 +1,7 @@
 use const_format::concatcp;
 use gen::{gen_and_eval, ReplOutput};
 use roc_gen::llvm::build::OptLevel;
-use roc_parse::parser::SyntaxError;
+use roc_parse::parser::{EExpr, SyntaxError};
 use rustyline::error::ReadlineError;
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline::Editor;
@@ -71,7 +71,15 @@ impl Validator for InputValidator {
         if ctx.input().is_empty() {
             Ok(ValidationResult::Incomplete)
         } else {
-            Ok(ValidationResult::Valid(None))
+            let arena = bumpalo::Bump::new();
+            match roc_parse::test_helpers::parse_expr_with(&arena, ctx.input()) {
+                // Special case some syntax errors to allow for multi-line inputs
+                Err(SyntaxError::Expr(EExpr::DefMissingFinalExpr(_, _)))
+                | Err(SyntaxError::Expr(EExpr::DefMissingFinalExpr2(_, _, _))) => {
+                    Ok(ValidationResult::Incomplete)
+                }
+                _ => Ok(ValidationResult::Valid(None)),
+            }
         }
     }
 }

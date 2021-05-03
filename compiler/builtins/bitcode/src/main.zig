@@ -69,6 +69,7 @@ comptime {
     exportStrFn(str.countSegments, "count_segments");
     exportStrFn(str.countGraphemeClusters, "count_grapheme_clusters");
     exportStrFn(str.startsWith, "starts_with");
+    exportStrFn(str.startsWithCodePoint, "starts_with_code_point");
     exportStrFn(str.endsWith, "ends_with");
     exportStrFn(str.strConcatC, "concat");
     exportStrFn(str.strJoinWithC, "joinWith");

@@ -4,7 +4,8 @@ use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::builtin_aliases::{
     bool_type, dict_type, float_type, i128_type, int_type, list_type, nat_type, num_type,
-    ordering_type, result_type, set_type, str_type, str_utf8_byte_problem_type, u64_type, u8_type,
+    ordering_type, result_type, set_type, str_type, str_utf8_byte_problem_type, u32_type, u64_type,
+    u8_type,
 };
 use roc_types::solved_types::SolvedType;
 use roc_types::subs::VarId;
@@ -48,7 +49,6 @@ pub fn standard_stdlib() -> StdLib {
             Symbol::SET_SET,
             Symbol::DICT_DICT,
             Symbol::STR_STR,
-            Symbol::STR_USV,
         ]
         .into_iter()
         .collect(),
@@ -604,6 +604,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::STR_STARTS_WITH,
         top_level_function(vec![str_type(), str_type()], Box::new(bool_type())),
+    );
+
+    // startsWithCodePoint : Str, U32 -> Bool
+    add_type(
+        Symbol::STR_STARTS_WITH_CODE_POINT,
+        top_level_function(vec![str_type(), u32_type()], Box::new(bool_type())),
     );
 
     // endsWith : Str, Str -> Bool

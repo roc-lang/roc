@@ -806,6 +806,41 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
     return true;
 }
 
+// Str.startsWithCodePoint
+pub fn startsWithCodePoint(string: RocStr, prefix: u32) callconv(.C) bool {
+    const bytes_len = string.len();
+    const bytes_ptr = string.asU8ptr();
+
+    var buffer: [4]u8 = undefined;
+
+    var width = std.unicode.utf8Encode(@truncate(u21, prefix), &buffer) catch unreachable;
+
+    var i: usize = 0;
+    while (i < width) : (i += 1) {
+        const a = buffer[i];
+        const b = bytes_ptr[i];
+        if (a != b) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+test "startsWithCodePoint: ascii char" {
+    const whole = RocStr.init(testing.allocator, "foobar", 6);
+    const prefix = 'f';
+    expect(startsWithCodePoint(whole, prefix));
+}
+
+test "startsWithCodePoint: emoji" {
+    const yes = RocStr.init(testing.allocator, "💖foobar", 10);
+    const no = RocStr.init(testing.allocator, "foobar", 6);
+    const prefix = '💖';
+    expect(startsWithCodePoint(yes, prefix));
+    expect(!startsWithCodePoint(no, prefix));
+}
+
 test "startsWith: foo starts with fo" {
     const foo = RocStr.init(testing.allocator, "foo", 3);
     const fo = RocStr.init(testing.allocator, "fo", 2);

@@ -421,6 +421,20 @@ fn str_starts_with() {
 }
 
 #[test]
+fn str_starts_with_code_point() {
+    assert_evals_to!(
+        &format!(r#"Str.startsWithCodePoint "foobar" {}"#, 'f' as u32),
+        true,
+        bool
+    );
+    assert_evals_to!(
+        &format!(r#"Str.startsWithCodePoint "zoobar" {}"#, 'f' as u32),
+        false,
+        bool
+    );
+}
+
+#[test]
 fn str_ends_with() {
     assert_evals_to!(r#"Str.endsWith "hello world" "world""#, true, bool);
     assert_evals_to!(r#"Str.endsWith "nope" "hello world""#, false, bool);
