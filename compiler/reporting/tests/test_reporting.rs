@@ -1081,7 +1081,7 @@ mod test_reporting {
 
                 But `f` needs the 1st argument to be:
 
-                    { foo : Int a }
+                    { foo : Int * }
 
                 Tip: Seems like a record field typo. Maybe `bar` should be `foo`?
 
@@ -1157,7 +1157,7 @@ mod test_reporting {
 
                 But `f` needs the 1st argument to be:
 
-                    [ Green Bool, Red (Int a) ]
+                    [ Green Bool, Red (Int *) ]
 
                 Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
 
@@ -1195,7 +1195,7 @@ mod test_reporting {
 
                 But the type annotation on `x` says it should be:
 
-                    Int a
+                    Int *
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1234,7 +1234,7 @@ mod test_reporting {
 
                 But the type annotation on `x` says it should be:
 
-                    Int a
+                    Int *
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1270,7 +1270,7 @@ mod test_reporting {
 
                 But the type annotation on `x` says it should be:
 
-                    Int a
+                    Int *
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1604,7 +1604,7 @@ mod test_reporting {
 
                 But the type annotation says it should be:
 
-                    { x : Int a }
+                    { x : Int * }
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1765,7 +1765,7 @@ mod test_reporting {
 
                 But the type annotation on `x` says it should be:
 
-                    { a : Int a, b : Float b, c : Bool }
+                    { a : Int *, b : Float *, c : Bool }
 
                 Tip: Looks like the c and a fields are missing.
                 "#
@@ -2687,7 +2687,7 @@ mod test_reporting {
 
                 But `f` needs the 1st argument to be:
 
-                    { x : Int a }
+                    { x : Int * }
 
                 Tip: Seems like a record field typo. Maybe `y` should be `x`?
 
