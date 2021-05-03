@@ -40,8 +40,8 @@ Problem :
                 NumF32 Endi,
                 Utf8 Str,
                 Utf16 Str Endi,
-                UsvUtf8,
-                UsvUtf16 Endi,
+                CodePointUtf8,
+                CodePointUtf16 Endi,
                 GraphemeUtf8,
                 GraphemeUtf16 Endi,
                 End,
@@ -52,12 +52,10 @@ Problem :
 keep : Parser a, (a -> Parser b) -> Parser b
 skip : Parser *, ({} -> Parser b) -> Parser b
 
-graphemeUtf8 : Parser Str
-graphemeUtf16 : Endi -> Parser Str
 utf8 : Str -> Parser Str
 utf16 : Str, Endi -> Parser Str
-usvUtf8 : Parser U32 # UTF-8 defines endianness
-usvUtf16 : Endi -> Parser U32
+graphemeUtf8 : Parser Str
+graphemeUtf16 : Endi -> Parser Str
 
 u8 : Parser U8
 i8 : Parser I8

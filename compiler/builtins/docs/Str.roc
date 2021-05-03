@@ -101,15 +101,6 @@ interface Str
 ## A [Unicode](https://unicode.org) text value.
 Str : [ @Str ]
 
-## A [Unicode Scalar Value](http://www.unicode.org/glossary/#unicode_scalar_value).
-##
-## This is a [U32] that has been validated to be in the acceptable range for
-## a USV.
-##
-## You can make one of these using single quote literals - e.g. `'x'` - or
-## convert to and from a raw [Num] using [Num.toUsv] and [Num.fromUsv].
-Usv : [ @Usv U32 ]
-
 ## Convert
 
 ## Convert a #Float to a decimal string, rounding off to the given number of decimal places.
@@ -158,6 +149,22 @@ lines : Str, Str -> List Str
 isEmpty : Str -> Bool
 
 startsWith : Str, Str -> Bool
+
+## If the string begins with a [Unicode code point](http://www.unicode.org/glossary/#code_point)
+## equal to the given [U32], return `True`. Otherwise return `False`.
+##
+## If the given [Str] is empty, or if the given [U32] is not a valid
+## code point, this will return `False`.
+##
+## **Performance Note:** This runs slightly faster than [Str.startsWith], so
+## if you want to check whether a string begins with something that's representable
+## in a single code point, you can use (for example) `Str.startsWithCodePoint '鹏'`
+## instead of `Str.startsWithCodePoint "鹏"`. ('鹏' evaluates to the [U32]
+## value `40527`.) This will not work for graphemes which take up mulitple code
+## points, however; `Str.startsWithCodePoint '🕊'` would be a compiler error
+## because 🕊 takes up multiple code points and cannot be represented as a
+## single [U32]. You'd need to use `Str.startsWithCodePoint "🕊"` instead.
+startsWithCodePoint : Str, U32 -> Bool
 
 endsWith : Str, Str -> Bool
 
@@ -235,6 +242,9 @@ isCaseInsensitiveEq : Str, Str -> Bool
 isCaseInsensitiveNeq : Str, Str -> Bool
 
 walkGraphemes : Str, { start: state, step: (state, Str -> state) } -> state
+walkGraphemesUntil : Str, { start: state, step: (state, Str -> [ Continue state, Done state ]) } -> state
+walkGraphemesBackwards : Str, { start: state, step: (state, Str -> state) } -> state
+walkGraphemesBackwardsUntil : Str, { start: state, step: (state, Str -> [ Continue state, Done state ]) } -> state
 
 ## Returns #True if the string begins with an uppercase letter.
 ##
@@ -307,19 +317,35 @@ isAllLowercase : Str -> Bool
 ## as well as the end.
 trim : Str -> Str
 
-fromUtf8 : Bytes -> Result Str [ BadUtf8 ]*
+## If the given [U32] is a valid [Unicode Scalar Value](http://www.unicode.org/glossary/#unicode_scalar_value),
+## return a [Str] containing only that scalar.
+fromScalar : U32 -> Result Str [ BadScalar ]*
+fromCodePoints : List U32 -> Result Str [ BadCodePoint U32 ]*
+fromUtf8 : List U8 -> Result Str [ BadUtf8 ]*
+
+## Create a [Str] from bytes encoded as [UTF-16LE](https://en.wikipedia.org/wiki/UTF-16#Byte-order_encoding_schemes).
+fromUtf16Le : List U8 -> Result Str [ BadUtf16Le Endi ]*
+
+## Create a [Str] from bytes encoded as [UTF-16BE](https://en.wikipedia.org/wiki/UTF-16#Byte-order_encoding_schemes).
+fromUtf16Be : List U8 -> Result Str [ BadUtf16Be Endi ]*
+
+## Create a [Str] from bytes encoded as UTF-16 with a [Byte Order Mark](https://en.wikipedia.org/wiki/Byte_order_mark).
+fromUtf16Bom : List U8 -> Result Str [ BadUtf16 Endi, NoBom ]*
+
+## Create a [Str] from bytes encoded as [UTF-32LE](https://web.archive.org/web/20120322145307/http://mail.apps.ietf.org/ietf/charsets/msg01095.html)
+fromUtf32Le : List U8 -> Result Str [ BadUtf32Le Endi ]*
+
+## Create a [Str] from bytes encoded as [UTF-32BE](https://web.archive.org/web/20120322145307/http://mail.apps.ietf.org/ietf/charsets/msg01095.html)
+fromUtf32Be : List U8 -> Result Str [ BadUtf32Be Endi ]*
+
+## Create a [Str] from bytes encoded as UTF-32 with a [Byte Order Mark](https://en.wikipedia.org/wiki/Byte_order_mark).
+fromUtf32Bom : List U8 -> Result Str [ BadUtf32 Endi, NoBom ]*
 
 ## Convert from UTF-8, substituting the replacement character ("�") for any
 ## invalid sequences encountered.
-fromUtf8Sub : Bytes -> Str
-
-fromUtf16Le : Bytes -> Result Str [ BadUtf16Le ]*
-
-fromUtf16LeSub : Bytes -> Str
-
-fromUtf16Be : Bytes -> Result Str [ BadUtf16Be ]*
-
-fromUtf16BeSub : Bytes -> Str
+fromUtf8Sub : List U8 -> Str
+fromUtf16Sub : List U8, Endi -> Str
+fromUtf16BomSub : List U8 -> Result Str [ NoBom ]*
 
 ## Return a #List of the string's #U8 UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a #List of smaller #Str values instead of #U8 values,
@@ -335,70 +361,37 @@ fromUtf16BeSub : Bytes -> Str
 ##
 ## For a more flexible function that walks through each of these #U8 code units
 ## without creating a #List, see #Str.walkUtf8 and #Str.walkRevUtf8.
-toUtf8 : Str -> Bytes
-
-toUtf16Le : Str -> Bytes
-
-toUtf16Be : Str -> Bytes
-
-## Unicode Scalar Values
-
-## Besides graphemes and bytes, another way to break down strings is into
-## Unicode Scalar Values.
-##
-## USVs are no substitute for graphemes!
-## These functions exist to support advanced use cases like those found in
-## [roc/unicode](roc/unicode), and using USVs when graphemes would
-## be more appropriate can very easily lead to bugs.
-##
-## For example, `Str.countGraphemes "👩‍👩‍👦‍👦"` returns `1`,
-## whereas `Str.toUtf8 "👩‍👩‍👦‍👦"` returns a list with a length of 25,
-## `Str.toUtf16 "👩‍👩‍👦‍👦"` returns a list with a length of 11.
-## and `Str.toUtf32 "👩‍👩‍👦‍👦"` returns a list with a length of 7.
-
-
-## Walk through the string's [Unicode Scalar Values](http://www.unicode.org/glossary/#unicode_scalar_value)
-## (USVs) to build up a state.
-## (If you want a `step` function which receives a #Str instead of an #Usv, see #Str.walkGraphemes.)
-##
-## Here are the #Usv values that will be passed to `step` when this function is
-## called on various strings:
-##
-## * `"👩‍👩‍👦‍👦"` passes 128105, 8205, 128105, 8205, 128102, 8205, 128102
-## * `"Roc"` passes 82, 111, 99
-## * `"鹏"` passes 40527
-## * `"🐦"` passes 128038
-walkUsv : Str, { start: state, step: (state, Usv -> state) } -> state
-
-## Walk backwards through the string's [Unicode Scalar Values](http://www.unicode.org/glossary/#unicode_scalar_value)
-## (USVs) to build up a state.
-## (If you want a `step` function which receives a #Str instead of an #Usv, see #Str.walkGraphemes.)
-##
-## Here are the #Usv values that will be passed to `step` when this function is
-## called on various strings:
-##
-## * `"👩‍👩‍👦‍👦"` passes 128102, 8205, 128102, 8205, 128105, 8205, 128105
-## * `"Roc"` passes 99, 111, 82
-## * `"鹏"` passes 40527
-## * `"🐦"` passes 128038
-##
-## To convert a #Str into a plain `List Usv` of UTF-32 code units, see #Str.toUtf32.
-walkBackwardsUsv : Str, { start: state, step: (state, Usv -> state) } -> state
+toUtf8 : Str -> List U8
+toUtf16Be : Str -> List U8
+toUtf16Le : Str -> List U8
+toUtf16Bom : Str, Endi -> List U8
+toUtf32Be : Str -> List U8
+toUtf32Le : Str -> List U8
+toUtf32Bom : Str, Endi -> List U8
 
 # Parsing
 
-## Return the first [Unicode Scalar Value](http://www.unicode.org/glossary/#unicode_scalar_value)
-## in the string, along with the rest of the string after that USV.
-parseUsv : Str -> Result { val : Usv, rest : Str } [ Expected [ ValidUsv ]* Str ]*
-
-## Return the first [extended grapheme cluster](http://www.unicode.org/glossary/#extended_grapheme_cluster)
-## in the string, along with the rest of the string after that grapheme.
+## If the string begins with a valid [extended grapheme cluster](http://www.unicode.org/glossary/#extended_grapheme_cluster),
+## return it along with the rest of the string after that grapheme.
+##
+## If the string does not begin with a full grapheme, for example because it was
+## empty, return `Err`.
 parseGrapheme : Str -> Result { val : Str, rest : Str } [ Expected [ Grapheme ]* Str ]*
+
+## If the string begins with a valid [Unicode code point](http://www.unicode.org/glossary/#code_point),
+## return it along with the rest of the string after that code point.
+##
+## If the string does not begin with a valid code point, for example because it was
+## empty, return `Err`.
+parseCodePoint : Str -> Result { val : U32, rest : Str } [ Expected [ CodePoint ]* Str ]*
 
 ## If the first string begins with the second, return whatever comes
 ## after the second.
-chompStr : Str, Str -> Result Str [ Expected [ ExactStr Str ]* Bytes ]*
-chompUsv : Usv -> Result Str [ Expected [ ExactUsv Usv ]* Bytes ]*
+chomp : Str, Str -> Result Str [ Expected [ ExactStr Str ]* Str ]*
+
+## If the string begins with a [Unicode code point](http://www.unicode.org/glossary/#code_point)
+## equal to the given [U32], return whatever comes after that code point.
+chompCodePoint : Str, U32 -> Result Str [ Expected [ ExactCodePoint U32 ]* Str ]*
 
 ## If the string begins with digits which can represent a valid #U8, return
 ## that number along with the rest of the string after the digits.
