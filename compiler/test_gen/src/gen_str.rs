@@ -428,7 +428,7 @@ fn str_starts_with_code_point() {
         bool
     );
     assert_evals_to!(
-        &format!(r#"Str.startsWithCodePoint "boobar" {}"#, 'f' as u32),
+        &format!(r#"Str.startsWithCodePoint "zoobar" {}"#, 'f' as u32),
         false,
         bool
     );

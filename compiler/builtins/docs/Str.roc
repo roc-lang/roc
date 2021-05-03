@@ -161,8 +161,8 @@ startsWith : Str, Str -> Bool
 ## in a single code point, you can use (for example) `Str.startsWithCodePoint '鹏'`
 ## instead of `Str.startsWithCodePoint "鹏"`. ('鹏' evaluates to the [U32]
 ## value `40527`.) This will not work for graphemes which take up mulitple code
-## points, however; `Str.startsWithCodePoint '🕊'` would be a compiler error
-## because 🕊 takes up multiple code points and cannot be represented as a
+## points, however; `Str.startsWithCodePoint '👩‍👩‍👦‍👦'` would be a compiler error
+## because 👩‍👩‍👦‍👦 takes up multiple code points and cannot be represented as a
 ## single [U32]. You'd need to use `Str.startsWithCodePoint "🕊"` instead.
 startsWithCodePoint : Str, U32 -> Bool
 
