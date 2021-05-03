@@ -71,6 +71,10 @@ mod test_reporting {
             subs.rigid_var(var, name);
         }
 
+        for var in output.introduced_variables.wildcards {
+            subs.rigid_var(var, "*".into());
+        }
+
         let mut unify_problems = Vec::new();
         let (_content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
@@ -6348,9 +6352,9 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-                
+
                 Underscore patterns are not allowed in definitions
-                
+
                 1│  _ = 3
                     ^
             "#
@@ -6371,18 +6375,58 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
-                
+
                 This `expect` condition needs to be a Bool:
-                
+
                 1│  expect "foobar"
                            ^^^^^^^^
-                
+
                 Right now it’s a string of type:
-                
+
                     Str
-                
+
                 But I need every `expect` condition to evaluate to a Bool—either `True`
                 or `False`.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn num_too_general_wildcard() {
+        report_problem_as(
+            indoc!(
+                r#"
+                mult : Num *, F64 -> F64
+                mult = \a, b -> a * b
+
+                {}
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn num_too_general_named() {
+        report_problem_as(
+            indoc!(
+                r#"
+                mult : Num a, F64 -> F64
+                mult = \a, b -> a * b
+
+                {}
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
             "#
             ),
         )

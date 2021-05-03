@@ -155,8 +155,12 @@ where
         }
     }
 
-    for (var, lowercase) in output.introduced_variables.name_by_var.clone() {
-        rigid_variables.insert(var, lowercase);
+    for (var, lowercase) in output.introduced_variables.name_by_var {
+        rigid_variables.insert(var, lowercase.clone());
+    }
+
+    for var in output.introduced_variables.wildcards {
+        rigid_variables.insert(var, "*".into());
     }
 
     let mut references = MutSet::default();
