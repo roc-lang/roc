@@ -12,7 +12,8 @@ use crate::llvm::build_list::{
 };
 use crate::llvm::build_str::{
     empty_str, str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int,
-    str_from_utf8, str_join_with, str_number_of_bytes, str_split, str_starts_with, str_to_bytes,
+    str_from_utf8, str_join_with, str_number_of_bytes, str_split, str_starts_with,
+    str_starts_with_code_point, str_to_bytes,
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
@@ -3542,6 +3543,12 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 2);
 
             str_starts_with(env, scope, args[0], args[1])
+        }
+        StrStartsWithCodePoint => {
+            // Str.startsWithCodePoint : Str, U32 -> Bool
+            debug_assert_eq!(args.len(), 2);
+
+            str_starts_with_code_point(env, scope, args[0], args[1])
         }
         StrEndsWith => {
             // Str.startsWith : Str, Str -> Bool
