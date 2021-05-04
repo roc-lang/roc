@@ -18,7 +18,7 @@ jobs:
           clean: "true"
 
       - name: Earthly version
-        run: earthly --no-cache --version
+        run: earthly --version
 
       - name: install dependencies, build, run zig tests, rustfmt, clippy, cargo test --release
-        run: earthly +test-all
+        run: earthly  --no-cache +test-all
