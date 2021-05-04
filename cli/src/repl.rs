@@ -3,9 +3,11 @@ use gen::{gen_and_eval, ReplOutput};
 use roc_gen::llvm::build::OptLevel;
 use roc_parse::parser::{EExpr, SyntaxError};
 use rustyline::error::ReadlineError;
+use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline::Editor;
-use rustyline_derive::{Completer, Helper, Highlighter, Hinter};
+use rustyline_derive::{Completer, Helper, Hinter};
+use std::borrow::Cow;
 use std::io;
 use target_lexicon::Triple;
 
@@ -26,11 +28,12 @@ pub const WELCOME_MESSAGE: &str = concatcp!(
 );
 pub const INSTRUCTIONS: &str = "Enter an expression, or :help, or :exit/:q.\n";
 pub const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
+pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
 
 mod eval;
 mod gen;
 
-#[derive(Completer, Helper, Hinter, Highlighter)]
+#[derive(Completer, Helper, Hinter)]
 struct ReplHelper {
     validator: InputValidator,
     pending_src: String,
@@ -41,6 +44,24 @@ impl ReplHelper {
         ReplHelper {
             validator: InputValidator::new(),
             pending_src: String::new(),
+        }
+    }
+}
+
+impl Highlighter for ReplHelper {
+    fn has_continuation_prompt(&self) -> bool {
+        true
+    }
+
+    fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
+        &'s self,
+        prompt: &'p str,
+        info: PromptInfo<'_>,
+    ) -> Cow<'b, str> {
+        if info.line_no() > 0 {
+            CONT_PROMPT.into()
+        } else {
+            prompt.into()
         }
     }
 }
@@ -72,10 +93,12 @@ impl Validator for InputValidator {
             Ok(ValidationResult::Incomplete)
         } else {
             let arena = bumpalo::Bump::new();
-            match roc_parse::test_helpers::parse_expr_with(&arena, ctx.input()) {
+            let state = roc_parse::parser::State::new(ctx.input().trim().as_bytes());
+
+            match roc_parse::expr::parse_loc_expr(0, &arena, state) {
                 // Special case some syntax errors to allow for multi-line inputs
-                Err(SyntaxError::Expr(EExpr::DefMissingFinalExpr(_, _)))
-                | Err(SyntaxError::Expr(EExpr::DefMissingFinalExpr2(_, _, _))) => {
+                Err((_, EExpr::DefMissingFinalExpr(_, _), _))
+                | Err((_, EExpr::DefMissingFinalExpr2(_, _, _), _)) => {
                     Ok(ValidationResult::Incomplete)
                 }
                 _ => Ok(ValidationResult::Valid(None)),
