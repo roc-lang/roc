@@ -7126,8 +7126,8 @@ pub fn num_argument_to_int_or_float(
     known_to_be_float: bool,
 ) -> IntOrFloat {
     match subs.get_without_compacting(var).content {
-        Content::FlexVar(_) if known_to_be_float => IntOrFloat::BinaryFloatType(FloatPrecision::F64),
-        Content::FlexVar(_) => IntOrFloat::SignedIntType(IntPrecision::I64), // We default (Num *) to I64
+        Content::FlexVar(_) | Content::RigidVar(_) if known_to_be_float => IntOrFloat::BinaryFloatType(FloatPrecision::F64),
+        Content::FlexVar(_) | Content::RigidVar(_) => IntOrFloat::SignedIntType(IntPrecision::I64), // We default (Num *) to I64
 
         Content::Alias(Symbol::NUM_INTEGER, args, _)  => {
             debug_assert!(args.len() == 1);

@@ -71,6 +71,10 @@ mod test_reporting {
             subs.rigid_var(var, name);
         }
 
+        for var in output.introduced_variables.wildcards {
+            subs.rigid_var(var, "*".into());
+        }
+
         let mut unify_problems = Vec::new();
         let (_content, mut subs) = infer_expr(subs, &mut unify_problems, &constraint, var);
 
@@ -1077,7 +1081,7 @@ mod test_reporting {
 
                 But `f` needs the 1st argument to be:
 
-                    { foo : Int a }
+                    { foo : Int * }
 
                 Tip: Seems like a record field typo. Maybe `bar` should be `foo`?
 
@@ -1153,7 +1157,7 @@ mod test_reporting {
 
                 But `f` needs the 1st argument to be:
 
-                    [ Green Bool, Red (Int a) ]
+                    [ Green Bool, Red (Int *) ]
 
                 Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
 
@@ -1191,7 +1195,7 @@ mod test_reporting {
 
                 But the type annotation on `x` says it should be:
 
-                    Int a
+                    Int *
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1230,7 +1234,7 @@ mod test_reporting {
 
                 But the type annotation on `x` says it should be:
 
-                    Int a
+                    Int *
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1266,7 +1270,7 @@ mod test_reporting {
 
                 But the type annotation on `x` says it should be:
 
-                    Int a
+                    Int *
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1600,7 +1604,7 @@ mod test_reporting {
 
                 But the type annotation says it should be:
 
-                    { x : Int a }
+                    { x : Int * }
 
                 Tip: You can convert between Int and Float using functions like
                 `Num.toFloat` and `Num.round`.
@@ -1761,7 +1765,7 @@ mod test_reporting {
 
                 But the type annotation on `x` says it should be:
 
-                    { a : Int a, b : Float b, c : Bool }
+                    { a : Int *, b : Float *, c : Bool }
 
                 Tip: Looks like the c and a fields are missing.
                 "#
@@ -2683,7 +2687,7 @@ mod test_reporting {
 
                 But `f` needs the 1st argument to be:
 
-                    { x : Int a }
+                    { x : Int * }
 
                 Tip: Seems like a record field typo. Maybe `y` should be `x`?
 
@@ -6348,9 +6352,9 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
-                
+
                 Underscore patterns are not allowed in definitions
-                
+
                 1│  _ = 3
                     ^
             "#
@@ -6371,18 +6375,114 @@ mod test_reporting {
             indoc!(
                 r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
-                
+
                 This `expect` condition needs to be a Bool:
-                
+
                 1│  expect "foobar"
                            ^^^^^^^^
-                
+
                 Right now it’s a string of type:
-                
+
                     Str
-                
+
                 But I need every `expect` condition to evaluate to a Bool—either `True`
                 or `False`.
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn num_too_general_wildcard() {
+        report_problem_as(
+            indoc!(
+                r#"
+                mult : Num *, F64 -> F64
+                mult = \a, b -> a * b
+
+                mult 0 0
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd argument to `mul` is not what I expect:
+
+                2│  mult = \a, b -> a * b
+                                        ^
+
+                This `b` value is a:
+
+                    F64
+
+                But `mul` needs the 2nd argument to be:
+
+                    Num *
+
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `mult` definition:
+
+                1│  mult : Num *, F64 -> F64
+                2│  mult = \a, b -> a * b
+                                    ^^^^^
+
+                This `mul` call produces:
+
+                    Num *
+
+                But the type annotation on `mult` says it should be:
+
+                    F64
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn num_too_general_named() {
+        report_problem_as(
+            indoc!(
+                r#"
+                mult : Num a, F64 -> F64
+                mult = \a, b -> a * b
+
+                mult 0 0
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                The 2nd argument to `mul` is not what I expect:
+
+                2│  mult = \a, b -> a * b
+                                        ^
+
+                This `b` value is a:
+
+                    F64
+
+                But `mul` needs the 2nd argument to be:
+
+                    Num a
+
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                Something is off with the body of the `mult` definition:
+
+                1│  mult : Num a, F64 -> F64
+                2│  mult = \a, b -> a * b
+                                    ^^^^^
+
+                This `mul` call produces:
+
+                    Num a
+
+                But the type annotation on `mult` says it should be:
+
+                    F64
             "#
             ),
         )
