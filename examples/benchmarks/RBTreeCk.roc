@@ -60,7 +60,7 @@ main =
         Nil ->
             Task.putLine "fail"
 
-insert : Map, I64, Bool -> Map
+insert : Tree (Num k) v, (Num k), v -> Tree (Num k) v
 insert = \t, k, v -> if isRed t then setBlack (ins t k v) else ins t k v
 
 
@@ -78,7 +78,7 @@ isRed = \tree ->
 
 lt = \x, y -> x < y
 
-ins : Map, I64, Bool -> Map
+ins : Tree (Num k) v, (Num k), v -> Tree (Num k) v
 ins = \tree, kx, vx ->
     when tree is
         Leaf ->
@@ -100,7 +100,7 @@ ins = \tree, kx, vx ->
             else
                 Node Black a kx vx b
 
-balance1 : Map, Map -> Map 
+balance1 : Tree a b, Tree a b -> Tree a b 
 balance1 = \tree1, tree2 ->
     when tree1 is
         Leaf -> Leaf
@@ -111,7 +111,7 @@ balance1 = \tree1, tree2 ->
                 Node _ l  ky vy r                     -> Node Black (Node Red l ky vy r) kv vv t
                 Leaf -> Leaf
 
-balance2 : Map, Map -> Map 
+balance2 : Tree a b, Tree a b -> Tree a b 
 balance2 = \tree1, tree2 ->
     when tree1 is
         Leaf -> Leaf

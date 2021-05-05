@@ -87,7 +87,7 @@ isRed = \tree ->
 
 lt = \x, y -> x < y
 
-ins : Map, I64, Bool -> Map
+ins : Tree I64 Bool, I64, Bool -> Tree I64 Bool
 ins = \tree, kx, vx ->
     when tree is
         Leaf ->
@@ -188,11 +188,12 @@ delMin = \t ->
 
 
 
-delete : Map, I64 -> Map
+delete : Tree I64 Bool, I64 -> Tree I64 Bool
 delete = \t, k ->
     when del t k is
       Del tx _ -> setBlack tx
 
+del : Tree I64 Bool, I64 -> Del I64 Bool
 del = \t, k ->
     when t is
       Leaf -> Del Leaf False
