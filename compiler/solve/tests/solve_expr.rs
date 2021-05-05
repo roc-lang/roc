@@ -4450,4 +4450,33 @@ mod solve_expr {
             "Num *",
         );
     }
+
+    #[test]
+    fn rigid_type_variable_problem() {
+        // see https://github.com/rtfeldman/roc/issues/1162
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+        app "test" provides [ main ] to "./platform"
+
+        RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
+
+        balance : a, RBTree a -> RBTree a
+        balance = \key, left ->
+              when left is
+                Node _ _ lRight ->
+                    Node key lRight Empty
+
+                _ ->
+                    Empty
+
+
+        main : RBTree {}
+        main =
+            balance {} Empty
+            "#
+            ),
+            "RBTree {}",
+        );
+    }
 }
