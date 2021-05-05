@@ -1,9 +1,9 @@
 use bumpalo::{collections::Vec as BumpVec, Bump};
 
-use crate::lang::pool::{Pool, PoolStr, PoolVec, ShallowClone};
 use crate::lang::{
     ast::{Expr2, RecordField},
     expr::Env,
+    pool::{Pool, PoolStr, PoolVec, ShallowClone},
     types::{Type2, TypeId},
 };
 
