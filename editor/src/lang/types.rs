@@ -34,7 +34,7 @@ pub enum Type2 {
     RecursiveTagUnion(Variable, PoolVec<(PoolStr, PoolVec<Type2>)>, TypeId), // 16B = 4B + 8B + 4B
 
     EmptyRec,
-    Record(PoolVec<(PoolStr, RecordField<Type2>)>, TypeId), // 12B = 8B + 4B
+    Record(PoolVec<(PoolStr, RecordField<TypeId>)>, TypeId), // 12B = 8B + 4B
 
     Function(PoolVec<Type2>, TypeId, TypeId), // 16B = 8B + 4B + 4B
     Apply(Symbol, PoolVec<Type2>),            // 16B = 8B + 8B
@@ -111,7 +111,7 @@ impl Type2 {
                 }
                 Record(fields, ext) => {
                     for (_, field) in fields.iter(pool) {
-                        stack.push(field.as_inner());
+                        stack.push(pool.get(*field.as_inner()));
                     }
                     stack.push(pool.get(*ext));
                 }
@@ -392,7 +392,22 @@ pub fn to_type2<'a>(
 
             for (node_id, (label, field)) in field_types.iter_node_ids().zip(field_types_map) {
                 let poolstr = PoolStr::new(label, env.pool);
-                env.pool[node_id] = (poolstr, field);
+
+                let rec_field = match field {
+                    RecordField::Optional(_) => {
+                        let field_id = env.pool.add(field.into_inner());
+                        RecordField::Optional(field_id)
+                    }
+                    RecordField::Demanded(_) => {
+                        let field_id = env.pool.add(field.into_inner());
+                        RecordField::Demanded(field_id)
+                    }
+                    RecordField::Required(_) => {
+                        let field_id = env.pool.add(field.into_inner());
+                        RecordField::Required(field_id)
+                    }
+                };
+                env.pool[node_id] = (poolstr, rec_field);
             }
 
             let ext_type = match ext {
