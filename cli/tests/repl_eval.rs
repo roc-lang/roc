@@ -557,6 +557,20 @@ mod repl_eval {
         );
     }
 
+    #[test]
+    fn multiline_let() {
+        expect_success(
+            indoc!(
+                "
+                x = 2
+                y = 3
+                x + y
+                "
+            ),
+            "5 : Num *",
+        );
+    }
+
     //    #[test]
     //    fn parse_problem() {
     //        // can't find something that won't parse currently
