@@ -132,7 +132,9 @@ pub fn constrain_expr<'a>(
             if fields.is_empty() {
                 constrain_empty_record(expected, region)
             } else {
+                dbg!(std::mem::size_of::<types::RecordField<Type2>>());
                 let field_types = PoolVec::with_capacity(fields.len() as u32, env.pool);
+
                 let mut field_vars = BumpVec::with_capacity_in(fields.len(), arena);
 
                 // Constraints need capacity for each field
@@ -163,7 +165,12 @@ pub fn constrain_expr<'a>(
 
                 let record_type = Type2::Record(field_types, env.pool.add(Type2::EmptyRec));
 
-                let record_con = Eq(record_type, expected, Category::Record, region);
+                let record_con = Eq(
+                    record_type,
+                    expected.shallow_clone(),
+                    Category::Record,
+                    region,
+                );
 
                 constraints.push(record_con);
 

@@ -11,6 +11,7 @@
 /// Pages also use the node value 0 (all 0 bits) to mark nodes as unoccupied.
 /// This is important for performance.
 use libc::{c_void, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
+use roc_can::expected::Expected;
 use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::mem::size_of;
@@ -582,4 +583,10 @@ impl<T> Iterator for PoolVecIterNodeIds<T> {
 /// Clones the outer node, but does not clone any nodeids
 pub trait ShallowClone {
     fn shallow_clone(&self) -> Self;
+}
+
+impl<T: ShallowClone> ShallowClone for Expected<T> {
+    fn shallow_clone(&self) -> Self {
+        todo!()
+    }
 }
