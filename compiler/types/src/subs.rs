@@ -90,13 +90,17 @@ impl VarStore {
 
         Variable(answer)
     }
-}
 
-impl From<VarStore> for Variable {
-    fn from(store: VarStore) -> Self {
-        Variable(store.next)
+    pub fn fresh_lambda_set(&mut self) -> LambdaSet {
+        LambdaSet(self.fresh())
     }
 }
+
+// impl From<VarStore> for Variable {
+//     fn from(store: VarStore) -> Self {
+//         Variable(store.next)
+//     }
+// }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct OptVariable(u32);
@@ -207,6 +211,9 @@ impl UnifyKey for Variable {
     }
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct LambdaSet(Variable);
+
 /// Used in SolvedType
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct VarId(u32);
@@ -231,16 +238,19 @@ impl fmt::Debug for VarId {
 }
 
 impl Subs {
-    pub fn new(next_var: Variable) -> Self {
-        let entries = next_var.0;
+    pub fn new(var_store: VarStore) -> Self {
+        let entries = var_store.next;
+
         let mut subs = Subs {
             utable: UnificationTable::default(),
         };
 
+        // NOTE the utable does not (currently) have a with_capacity; using this as the next-best thing
+        subs.utable.reserve(entries as usize);
+
         // TODO There are at least these opportunities for performance optimization here:
-        //
-        // * Initializing the backing vec using with_capacity instead of default()
         // * Making the default flex_var_descriptor be all 0s, so no init step is needed.
+
         for _ in 0..entries {
             subs.utable.new_key(flex_var_descriptor());
         }
