@@ -3384,7 +3384,7 @@ dependencies = [
 [[package]]
 name = "rustyline"
 version = "6.2.0"
-source = "git+https://github.com/rtfeldman/rustyline?tag=prompt-fix#a6b8a20d2bf5c3793d7367848be2f4afec2f0d99"
+source = "git+https://github.com/basile-henry/rustyline?branch=multiline-non-tty-prompt#4ddbc2f4b4d6bda4af8173b3dd7df7a20bb18c89"
 dependencies = [
  "cfg-if 0.1.10",
  "dirs-next",
@@ -3402,7 +3402,7 @@ dependencies = [
 [[package]]
 name = "rustyline-derive"
 version = "0.3.1"
-source = "git+https://github.com/rtfeldman/rustyline?tag=prompt-fix#a6b8a20d2bf5c3793d7367848be2f4afec2f0d99"
+source = "git+https://github.com/basile-henry/rustyline?branch=multiline-non-tty-prompt#4ddbc2f4b4d6bda4af8173b3dd7df7a20bb18c89"
 dependencies = [
  "quote 1.0.9",
  "syn 1.0.65",
