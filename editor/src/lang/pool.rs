@@ -587,6 +587,14 @@ pub trait ShallowClone {
 
 impl<T: ShallowClone> ShallowClone for Expected<T> {
     fn shallow_clone(&self) -> Self {
-        todo!()
+        use Expected::*;
+
+        match self {
+            NoExpectation(t) => NoExpectation(t.shallow_clone()),
+            ForReason(reason, t, region) => ForReason(reason.clone(), t.shallow_clone(), *region),
+            FromAnnotation(loc_pat, n, source, t) => {
+                FromAnnotation(loc_pat.clone(), *n, *source, t.shallow_clone())
+            }
+        }
     }
 }
