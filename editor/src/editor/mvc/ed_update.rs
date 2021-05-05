@@ -302,7 +302,7 @@ impl<'a> EdModel<'a> {
         match virtual_keycode {
             Left => from_ui_res(self.move_caret_left(modifiers)),
             Up => {
-                if modifiers.ctrl && modifiers.shift {
+                if modifiers.cmd_or_ctrl() && modifiers.shift {
                     self.select_expr()
                 } else {
                     from_ui_res(self.move_caret_up(modifiers))
@@ -312,7 +312,7 @@ impl<'a> EdModel<'a> {
             Down => from_ui_res(self.move_caret_down(modifiers)),
 
             A => {
-                if modifiers.ctrl {
+                if modifiers.cmd_or_ctrl() {
                     from_ui_res(self.select_all())
                 } else {
                     Ok(())
@@ -762,7 +762,7 @@ pub mod test_ed_update {
     use crate::ui::text::lines::SelectableLines;
     use crate::ui::ui_error::UIResult;
     use crate::window::keyboard_input::no_mods;
-    use crate::window::keyboard_input::test_modifiers::ctrl_shift;
+    use crate::window::keyboard_input::test_modifiers::ctrl_cmd_shift;
     use crate::window::keyboard_input::Modifiers;
     use bumpalo::collections::String as BumpString;
     use bumpalo::Bump;
@@ -1475,7 +1475,7 @@ pub mod test_ed_update {
         let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
 
         for _ in 0..repeats {
-            ed_model.ed_handle_key_down(&ctrl_shift(), Up)?;
+            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up)?;
         }
 
         let post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
@@ -1782,7 +1782,7 @@ pub mod test_ed_update {
         let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
 
         for _ in 0..repeats {
-            ed_model.ed_handle_key_down(&ctrl_shift(), Up)?;
+            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up)?;
         }
 
         move_caret_fun(&mut ed_model, &no_mods())?;
@@ -1910,7 +1910,7 @@ pub mod test_ed_update {
         let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
 
         for _ in 0..repeats {
-            ed_model.ed_handle_key_down(&ctrl_shift(), Up)?;
+            ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up)?;
         }
 
         handle_new_char(&'\u{8}', &mut ed_model)?; // \u{8} is the char for backspace on linux

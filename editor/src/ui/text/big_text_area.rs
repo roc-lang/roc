@@ -238,7 +238,7 @@ impl SelectableLines for BigTextArea {
             Down => self.move_caret_down(modifiers),
 
             A => {
-                if modifiers.ctrl {
+                if modifiers.cmd_or_ctrl() {
                     self.select_all()
                 } else {
                     Ok(())
