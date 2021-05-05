@@ -720,14 +720,32 @@ fn type_to_variable<'a>(
                 let (field, field_type) = mempool.get(node_id);
 
                 let field_var = match field_type {
-                    Required(typ) => Required(type_to_variable(
-                        arena, mempool, subs, rank, pools, cached, typ,
+                    Required(type_id) => Required(type_to_variable(
+                        arena,
+                        mempool,
+                        subs,
+                        rank,
+                        pools,
+                        cached,
+                        mempool.get(*type_id),
                     )),
-                    Optional(typ) => Optional(type_to_variable(
-                        arena, mempool, subs, rank, pools, cached, typ,
+                    Optional(type_id) => Optional(type_to_variable(
+                        arena,
+                        mempool,
+                        subs,
+                        rank,
+                        pools,
+                        cached,
+                        mempool.get(*type_id),
                     )),
-                    Demanded(typ) => Demanded(type_to_variable(
-                        arena, mempool, subs, rank, pools, cached, typ,
+                    Demanded(type_id) => Demanded(type_to_variable(
+                        arena,
+                        mempool,
+                        subs,
+                        rank,
+                        pools,
+                        cached,
+                        mempool.get(*type_id),
                     )),
                 };
 

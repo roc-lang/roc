@@ -17,6 +17,18 @@ impl Default for Modifiers {
     }
 }
 
+impl Modifiers {
+    pub fn cmd_or_ctrl(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        let active = self.logo;
+
+        #[cfg(not(target_os = "macos"))]
+        let active = self.ctrl;
+
+        active
+    }
+}
+
 pub fn no_mods() -> Modifiers {
     Modifiers {
         shift: false,
@@ -39,12 +51,23 @@ pub fn from_winit(winit_mods: &winit::event::ModifiersState) -> Modifiers {
 pub mod test_modifiers {
     use crate::window::keyboard_input::Modifiers;
 
-    pub fn ctrl_shift() -> Modifiers {
-        Modifiers {
+    pub fn ctrl_cmd_shift() -> Modifiers {
+        #[cfg(target_os = "macos")]
+        let mods = Modifiers {
+            shift: true,
+            ctrl: false,
+            alt: false,
+            logo: true,
+        };
+
+        #[cfg(not(target_os = "macos"))]
+        let mods = Modifiers {
             shift: true,
             ctrl: true,
             alt: false,
             logo: false,
-        }
+        };
+
+        mods
     }
 }

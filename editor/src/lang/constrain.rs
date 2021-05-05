@@ -1,9 +1,9 @@
 use bumpalo::{collections::Vec as BumpVec, Bump};
 
-use crate::lang::pool::{Pool, PoolStr, PoolVec, ShallowClone};
 use crate::lang::{
-    ast::Expr2,
+    ast::{Expr2, RecordField},
     expr::Env,
+    pool::{Pool, PoolStr, PoolVec, ShallowClone},
     types::{Type2, TypeId},
 };
 
@@ -13,6 +13,7 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::{
     subs::Variable,
+    types,
     types::{Category, Reason},
 };
 
@@ -48,7 +49,7 @@ pub fn constrain_expr<'a>(
 
     match expr {
         Expr2::Str(_) => Eq(str_type(env.pool), expected, Category::Str, region),
-        Expr2::EmptyRecord => Eq(Type2::EmptyRec, expected, Category::Record, region),
+        Expr2::EmptyRecord => constrain_empty_record(expected, region),
         Expr2::SmallInt { var, .. } => {
             let mut flex_vars = BumpVec::with_capacity_in(1, arena);
             let rigid_vars = BumpVec::new_in(arena);
@@ -127,8 +128,100 @@ pub fn constrain_expr<'a>(
 
             Let(let_constraint)
         }
+        Expr2::Record { fields, record_var } => {
+            if fields.is_empty() {
+                constrain_empty_record(expected, region)
+            } else {
+                let field_types = PoolVec::with_capacity(fields.len() as u32, env.pool);
+
+                let mut field_vars = BumpVec::with_capacity_in(fields.len(), arena);
+
+                // Constraints need capacity for each field
+                // + 1 for the record itself + 1 for record var
+                let mut constraints = BumpVec::with_capacity_in(2 + fields.len(), arena);
+
+                for (record_field_node_id, field_type_node_id) in
+                    fields.iter_node_ids().zip(field_types.iter_node_ids())
+                {
+                    let record_field = env.pool.get(record_field_node_id);
+
+                    match record_field {
+                        RecordField::LabeledValue(pool_str, var, node_id) => {
+                            let expr = env.pool.get(*node_id);
+
+                            let (field_type, field_con) = constrain_field(arena, env, *var, expr);
+
+                            field_vars.push(*var);
+
+                            let field_type_id = env.pool.add(field_type);
+
+                            env.pool[field_type_node_id] =
+                                (*pool_str, types::RecordField::Required(field_type_id));
+
+                            constraints.push(field_con);
+                        }
+                        e => todo!("{:?}", e),
+                    }
+                }
+
+                let record_type = Type2::Record(field_types, env.pool.add(Type2::EmptyRec));
+
+                let record_con = Eq(
+                    record_type,
+                    expected.shallow_clone(),
+                    Category::Record,
+                    region,
+                );
+
+                constraints.push(record_con);
+
+                // variable to store in the AST
+                let stored_con = Eq(
+                    Type2::Variable(*record_var),
+                    expected,
+                    Category::Storage(std::file!(), std::line!()),
+                    region,
+                );
+
+                field_vars.push(*record_var);
+                constraints.push(stored_con);
+
+                exists(arena, field_vars, And(constraints))
+            }
+        }
         _ => todo!("implement constaints for {:?}", expr),
     }
+}
+
+fn exists<'a>(
+    arena: &'a Bump,
+    flex_vars: BumpVec<'a, Variable>,
+    constraint: Constraint<'a>,
+) -> Constraint<'a> {
+    Constraint::Let(arena.alloc(LetConstraint {
+        rigid_vars: BumpVec::new_in(arena),
+        flex_vars,
+        def_types: BumpMap::new_in(arena),
+        defs_constraint: constraint,
+        ret_constraint: Constraint::True,
+    }))
+}
+
+fn constrain_field<'a>(
+    arena: &'a Bump,
+    env: &mut Env,
+    field_var: Variable,
+    expr: &Expr2,
+) -> (Type2, Constraint<'a>) {
+    let field_type = Type2::Variable(field_var);
+    let field_expected = Expected::NoExpectation(field_type.shallow_clone());
+    let constraint = constrain_expr(arena, env, expr, field_expected, Region::zero());
+
+    (field_type, constraint)
+}
+
+fn constrain_empty_record<'a>(expected: Expected<Type2>, region: Region) -> Constraint<'a> {
+    Constraint::Eq(Type2::EmptyRec, expected, Category::Record, region)
 }
 
 fn str_type(pool: &mut Pool) -> Type2 {
