@@ -3,18 +3,21 @@ use crate::editor::mvc::app_model::AppModel;
 use crate::editor::mvc::app_update::{
     handle_copy, handle_cut, handle_paste, pass_keydown_to_focused,
 };
+use crate::window::keyboard_input::from_winit;
 use winit::event::VirtualKeyCode::*;
 use winit::event::{ElementState, ModifiersState, VirtualKeyCode};
 
 pub fn handle_keydown(
     elem_state: ElementState,
     virtual_keycode: VirtualKeyCode,
-    modifiers: ModifiersState,
+    modifiers_winit: ModifiersState,
     app_model: &mut AppModel,
 ) -> EdResult<()> {
     if let ElementState::Released = elem_state {
         return Ok(());
     }
+
+    let modifiers = from_winit(&modifiers_winit);
 
     match virtual_keycode {
         Left | Up | Right | Down => {
@@ -25,17 +28,17 @@ pub fn handle_keydown(
         Paste => handle_paste(app_model)?,
         Cut => handle_cut(app_model)?,
         C => {
-            if modifiers.ctrl() {
+            if modifiers.cmd_or_ctrl() {
                 handle_copy(app_model)?
             }
         }
         V => {
-            if modifiers.ctrl() {
+            if modifiers.cmd_or_ctrl() {
                 handle_paste(app_model)?
             }
         }
         X => {
-            if modifiers.ctrl() {
+            if modifiers.cmd_or_ctrl() {
                 handle_cut(app_model)?
             }
         }
