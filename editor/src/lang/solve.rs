@@ -1214,15 +1214,19 @@ fn adjust_rank_content(
                 }
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *rec_var);
-                    rank = rank.max(adjust_rank(
-                        subs, young_mark, visit_mark, group_rank, *ext_var,
-                    ));
+                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
 
                     for var in tags.values().flatten() {
                         rank =
                             rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
                     }
+
+                    // THEORY: the recursion var has the same rank as the tag union itself
+                    // all types it uses are also in the tags already, so it cannot influence the
+                    // rank
+                    debug_assert!(
+                        rank >= adjust_rank(subs, young_mark, visit_mark, group_rank, *rec_var)
+                    );
 
                     rank
                 }
