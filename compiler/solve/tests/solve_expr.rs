@@ -4370,12 +4370,11 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore]
     fn pattern_rigid_problem() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
 
