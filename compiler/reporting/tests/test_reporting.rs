@@ -2663,9 +2663,9 @@ mod test_reporting {
         report_problem_as(
             indoc!(
                 r#"
-                Foo : { x : Int * }
+                Foo a : { x : Int a }
 
-                f : Foo -> Int *
+                f : Foo a -> Int a
                 f = \r -> r.x
 
                 f { y: 3.14 }
@@ -2687,7 +2687,7 @@ mod test_reporting {
 
                 But `f` needs the 1st argument to be:
 
-                    { x : Int * }
+                    { x : Int a }
 
                 Tip: Seems like a record field typo. Maybe `y` should be `x`?
 

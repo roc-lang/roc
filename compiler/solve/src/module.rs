@@ -26,7 +26,7 @@ pub fn run_solve(
         aliases,
     };
 
-    let mut subs = Subs::new(var_store.into());
+    let mut subs = Subs::new(var_store);
 
     for (var, name) in rigid_variables {
         subs.rigid_var(var, name);
@@ -50,9 +50,9 @@ pub fn make_solved_types(
     let mut solved_types = MutMap::default();
 
     for (symbol, alias) in solved_env.aliases.iter() {
-        let mut args = Vec::with_capacity(alias.vars.len());
+        let mut args = Vec::with_capacity(alias.type_variables.len());
 
-        for loc_named_var in alias.vars.iter() {
+        for loc_named_var in alias.type_variables.iter() {
             let (name, var) = &loc_named_var.value;
 
             args.push((name.clone(), SolvedType::new(&solved_subs, *var)));

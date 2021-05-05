@@ -1241,9 +1241,9 @@ fn recursive_functon_with_rigid() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            State a : { count : Int *, x : a }
+            State a : { count : I64, x : a }
 
-            foo : State a -> Int *
+            foo : State a -> Int * 
             foo = \state ->
                 if state.count == 0 then
                     0
@@ -1632,15 +1632,15 @@ fn binary_tree_double_pattern_match() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            BTree : [ Node BTree BTree, Leaf (Int *) ]
+            BTree : [ Node BTree BTree, Leaf I64 ]
 
-            foo : BTree -> Int *
+            foo : BTree -> I64 
             foo = \btree ->
                 when btree is
                     Node (Node (Leaf x) _) _ -> x
                     _ -> 0
 
-            main : Int *
+            main : I64 
             main =
                 foo (Node (Node (Leaf 32) (Leaf 0)) (Leaf 0))
             "#
@@ -1927,7 +1927,6 @@ fn case_or_pattern() {
 }
 
 #[test]
-#[ignore]
 fn rosetree_basic() {
     assert_non_opt_evals_to!(
         indoc!(

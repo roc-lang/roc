@@ -61,7 +61,7 @@ where
     let num_deps = dep_idents.len();
 
     for (name, alias) in aliases.into_iter() {
-        scope.add_alias(name, alias.region, alias.vars, alias.typ);
+        scope.add_alias(name, alias.region, alias.type_variables, alias.typ);
     }
 
     // Desugar operators (convert them to Apply calls, taking into account

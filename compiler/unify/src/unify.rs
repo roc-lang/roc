@@ -229,33 +229,13 @@ fn unify_structure(
         }
         RecursionVar { structure, .. } => match flat_type {
             FlatType::TagUnion(_, _) => {
-                let structure_rank = subs.get(*structure).rank;
-                let self_rank = subs.get(ctx.first).rank;
-                let other_rank = subs.get(ctx.second).rank;
                 // unify the structure with this unrecursive tag union
-                let problems = unify_pool(subs, pool, ctx.first, *structure);
-
-                let min_rank = structure_rank.min(self_rank).min(other_rank);
-                subs.set_rank(*structure, min_rank);
-                subs.set_rank(ctx.first, min_rank);
-                subs.set_rank(ctx.second, min_rank);
-
-                problems
+                unify_pool(subs, pool, ctx.first, *structure)
             }
             FlatType::RecursiveTagUnion(rec, _, _) => {
                 debug_assert!(is_recursion_var(subs, *rec));
-                let structure_rank = subs.get(*structure).rank;
-                let self_rank = subs.get(ctx.first).rank;
-                let other_rank = subs.get(ctx.second).rank;
                 // unify the structure with this recursive tag union
-                let problems = unify_pool(subs, pool, ctx.first, *structure);
-
-                let min_rank = structure_rank.min(self_rank).min(other_rank);
-                subs.set_rank(*structure, min_rank);
-                subs.set_rank(ctx.first, min_rank);
-                subs.set_rank(ctx.second, min_rank);
-
-                problems
+                unify_pool(subs, pool, ctx.first, *structure)
             }
             _ => todo!("rec structure {:?}", &flat_type),
         },

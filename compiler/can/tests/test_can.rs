@@ -524,7 +524,7 @@ mod test_can {
     fn annotation_followed_with_unrelated_affectation() {
         let src = indoc!(
             r#"
-                F : Int *
+                F : Str 
 
                 x = 1
 
@@ -545,9 +545,9 @@ mod test_can {
     fn two_annotations_followed_with_unrelated_affectation() {
         let src = indoc!(
             r#"
-                G : Int *
+                G : Str 
 
-                F : Int *
+                F : {} 
                 
                 x = 1
 

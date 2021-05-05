@@ -2834,7 +2834,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore]
     fn rigid_in_letrec_ignored() {
         // re-enable when we don't capture local things that don't need to be!
         infer_eq_without_problem(
@@ -3699,7 +3698,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore]
     fn function_that_captures_nothing_is_not_captured() {
         // we should make sure that a function that doesn't capture anything it not itself captured
         // such functions will be lifted to the top-level, and are thus globally available!
@@ -3713,7 +3711,7 @@ mod solve_expr {
                 g
                 "#
             ),
-            "I64",
+            "Num a -> Num a",
         );
     }
 
@@ -4372,12 +4370,11 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore]
     fn pattern_rigid_problem() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                app Test provides [ main ] imports []
+                app "test" provides [ main ] to "./platform"
 
                 RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
 
@@ -4448,6 +4445,35 @@ mod solve_expr {
                 "#
             ),
             "Num *",
+        );
+    }
+
+    #[test]
+    fn rigid_type_variable_problem() {
+        // see https://github.com/rtfeldman/roc/issues/1162
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+        app "test" provides [ main ] to "./platform"
+
+        RBTree k : [ Node k (RBTree k) (RBTree k), Empty ]
+
+        balance : a, RBTree a -> RBTree a
+        balance = \key, left ->
+              when left is
+                Node _ _ lRight ->
+                    Node key lRight Empty
+
+                _ ->
+                    Empty
+
+
+        main : RBTree {}
+        main =
+            balance {} Empty
+            "#
+            ),
+            "RBTree {}",
         );
     }
 }

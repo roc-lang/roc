@@ -37,7 +37,7 @@ pub fn int_literal(
 #[inline(always)]
 pub fn float_literal(
     num_var: Variable,
-    percision_var: Variable,
+    precision_var: Variable,
     expected: Expected<Type>,
     region: Region,
 ) -> Constraint {
@@ -45,11 +45,11 @@ pub fn float_literal(
     let reason = Reason::FloatLiteral;
 
     exists(
-        vec![num_var],
+        vec![num_var, precision_var],
         And(vec![
             Eq(
                 num_type.clone(),
-                ForReason(reason, num_float(Type::Variable(percision_var)), region),
+                ForReason(reason, num_float(Type::Variable(precision_var)), region),
                 Category::Float,
                 region,
             ),

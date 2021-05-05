@@ -6556,11 +6556,15 @@ fn from_can_pattern_help<'a>(
                     let mut arguments = arguments.clone();
 
                     arguments.sort_by(|arg1, arg2| {
-                        let layout1 = layout_cache.from_var(env.arena, arg1.0, env.subs).unwrap();
-                        let layout2 = layout_cache.from_var(env.arena, arg2.0, env.subs).unwrap();
+                        let size1 = layout_cache
+                            .from_var(env.arena, arg1.0, env.subs)
+                            .map(|x| x.alignment_bytes(env.ptr_bytes))
+                            .unwrap_or(0);
 
-                        let size1 = layout1.alignment_bytes(env.ptr_bytes);
-                        let size2 = layout2.alignment_bytes(env.ptr_bytes);
+                        let size2 = layout_cache
+                            .from_var(env.arena, arg2.0, env.subs)
+                            .map(|x| x.alignment_bytes(env.ptr_bytes))
+                            .unwrap_or(0);
 
                         size2.cmp(&size1)
                     });

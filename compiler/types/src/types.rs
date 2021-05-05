@@ -1,5 +1,5 @@
 use crate::pretty_print::Parens;
-use crate::subs::{Subs, VarStore, Variable};
+use crate::subs::{LambdaSet, Subs, VarStore, Variable};
 use inlinable_string::InlinableString;
 use roc_collections::all::{union, ImMap, ImSet, Index, MutMap, MutSet, SendMap};
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
@@ -373,6 +373,13 @@ impl Type {
         result
     }
 
+    pub fn variables_detail(&self) -> VariableDetail {
+        let mut result = Default::default();
+        variables_help_detailed(self, &mut result);
+
+        result
+    }
+
     pub fn substitute(&mut self, substitutions: &ImMap<Variable, Type>) {
         use Type::*;
 
@@ -617,12 +624,12 @@ impl Type {
             }
             Apply(symbol, args) => {
                 if let Some(alias) = aliases.get(symbol) {
-                    if args.len() != alias.vars.len() {
+                    if args.len() != alias.type_variables.len() {
                         *self = Type::Erroneous(Problem::BadTypeArguments {
                             symbol: *symbol,
                             region,
                             type_got: args.len() as u8,
-                            alias_needs: alias.vars.len() as u8,
+                            alias_needs: alias.type_variables.len() as u8,
                         });
                         return;
                     }
@@ -639,7 +646,7 @@ impl Type {
                             ..
                         },
                         filler,
-                    ) in alias.vars.iter().zip(args.iter())
+                    ) in alias.type_variables.iter().zip(args.iter())
                     {
                         let mut filler = filler.clone();
                         filler.instantiate_aliases(region, aliases, var_store, introduced);
@@ -836,6 +843,101 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
     }
 }
 
+#[derive(Default)]
+pub struct VariableDetail {
+    pub type_variables: MutSet<Variable>,
+    pub lambda_set_variables: MutSet<LambdaSet>,
+    pub recursion_variables: MutSet<Variable>,
+}
+
+impl VariableDetail {
+    pub fn is_empty(&self) -> bool {
+        self.type_variables.is_empty()
+            && self.lambda_set_variables.is_empty()
+            && self.recursion_variables.is_empty()
+    }
+}
+
+fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
+    use Type::*;
+
+    match tipe {
+        EmptyRec | EmptyTagUnion | Erroneous(_) => (),
+
+        Variable(v) => {
+            accum.type_variables.insert(*v);
+        }
+
+        Function(args, closure, ret) => {
+            for arg in args {
+                variables_help_detailed(arg, accum);
+            }
+            if let Type::Variable(v) = **closure {
+                accum.lambda_set_variables.insert(LambdaSet::from(v));
+            } else {
+                variables_help_detailed(closure, accum);
+            }
+
+            variables_help_detailed(ret, accum);
+        }
+        Record(fields, ext) => {
+            use RecordField::*;
+
+            for (_, field) in fields {
+                match field {
+                    Optional(x) => variables_help_detailed(x, accum),
+                    Required(x) => variables_help_detailed(x, accum),
+                    Demanded(x) => variables_help_detailed(x, accum),
+                };
+            }
+            variables_help_detailed(ext, accum);
+        }
+        TagUnion(tags, ext) => {
+            for (_, args) in tags {
+                for x in args {
+                    variables_help_detailed(x, accum);
+                }
+            }
+            variables_help_detailed(ext, accum);
+        }
+        RecursiveTagUnion(rec, tags, ext) => {
+            for (_, args) in tags {
+                for x in args {
+                    variables_help_detailed(x, accum);
+                }
+            }
+            variables_help_detailed(ext, accum);
+
+            // just check that this is actually a recursive type
+            debug_assert!(accum.type_variables.contains(rec));
+
+            // this rec var doesn't need to be in flex_vars or rigid_vars
+            accum.type_variables.remove(rec);
+
+            accum.recursion_variables.insert(*rec);
+        }
+        Alias(_, args, actual) => {
+            for (_, arg) in args {
+                variables_help_detailed(arg, accum);
+            }
+            variables_help_detailed(actual, accum);
+        }
+        HostExposedAlias {
+            arguments, actual, ..
+        } => {
+            for (_, arg) in arguments {
+                variables_help_detailed(arg, accum);
+            }
+            variables_help_detailed(actual, accum);
+        }
+        Apply(_, args) => {
+            for x in args {
+                variables_help_detailed(x, accum);
+            }
+        }
+    }
+}
+
 pub struct RecordStructure {
     pub fields: MutMap<Lowercase, RecordField<Variable>>,
     pub ext: Variable,
@@ -959,10 +1061,13 @@ pub enum PatternCategory {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Alias {
     pub region: Region,
-    pub vars: Vec<Located<(Lowercase, Variable)>>,
+    pub type_variables: Vec<Located<(Lowercase, Variable)>>,
 
-    /// hidden type variables, like the closure variable in `a -> b`
-    pub hidden_variables: MutSet<Variable>,
+    /// lambda set variables, e.g. the one annotating the arrow in
+    /// a |c|-> b
+    pub lambda_set_variables: MutSet<LambdaSet>,
+
+    pub recursion_variables: MutSet<Variable>,
 
     pub typ: Type,
 }
