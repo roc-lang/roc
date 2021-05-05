@@ -214,6 +214,12 @@ impl UnifyKey for Variable {
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LambdaSet(Variable);
 
+impl fmt::Debug for LambdaSet {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "LambdaSet({})", self.0 .0)
+    }
+}
+
 /// Used in SolvedType
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct VarId(u32);
