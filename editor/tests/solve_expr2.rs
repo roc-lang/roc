@@ -176,3 +176,15 @@ fn constrain_float() {
         "Float *",
     )
 }
+
+#[test]
+fn constrain_record() {
+    infer_eq(
+        indoc!(
+            r#"
+            { x : 1, y : "hi" }
+            "#
+        ),
+        "{ x : Int *, y : Str }",
+    )
+}

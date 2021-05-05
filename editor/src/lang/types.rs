@@ -19,25 +19,25 @@ pub type TypeId = NodeId<Type2>;
 pub enum Type2 {
     Variable(Variable),
 
-    Alias(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 20B = 8B + 8B + 4B
-    AsAlias(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 20B = 8B + 8B + 4B
+    Alias(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 24B = 8B + 12B + 4B
+    AsAlias(Symbol, PoolVec<(PoolStr, TypeId)>, TypeId), // 24B = 8B + 12B + 4B
 
+    // 32B
     HostExposedAlias {
         name: Symbol,                          // 8B
-        arguments: PoolVec<(PoolStr, TypeId)>, // 8B
+        arguments: PoolVec<(PoolStr, TypeId)>, // 12B
         actual_var: Variable,                  // 4B
         actual: TypeId,                        // 4B
     },
-
     EmptyTagUnion,
-    TagUnion(PoolVec<(PoolStr, PoolVec<Type2>)>, TypeId), // 12B = 8B + 4B
-    RecursiveTagUnion(Variable, PoolVec<(PoolStr, PoolVec<Type2>)>, TypeId), // 16B = 4B + 8B + 4B
+    TagUnion(PoolVec<(PoolStr, PoolVec<Type2>)>, TypeId), // 16B = 12B + 4B
+    RecursiveTagUnion(Variable, PoolVec<(PoolStr, PoolVec<Type2>)>, TypeId), // 20B = 4B + 12B + 4B
 
     EmptyRec,
-    Record(PoolVec<(PoolStr, RecordField<Type2>)>, TypeId), // 12B = 8B + 4B
+    Record(PoolVec<(PoolStr, RecordField<TypeId>)>, TypeId), // 16B = 12B + 4B
 
-    Function(PoolVec<Type2>, TypeId, TypeId), // 16B = 8B + 4B + 4B
-    Apply(Symbol, PoolVec<Type2>),            // 16B = 8B + 8B
+    Function(PoolVec<Type2>, TypeId, TypeId), // 20B = 12B + 4B + 4B
+    Apply(Symbol, PoolVec<Type2>),            // 20B = 8B + 12B
 
     Erroneous(Problem2),
 }
@@ -46,7 +46,7 @@ pub enum Type2 {
 pub enum Problem2 {
     CanonicalizationProblem,
     CircularType(Symbol, NodeId<ErrorType>), // 12B = 8B + 4B
-    CyclicAlias(Symbol, PoolVec<Symbol>),    // 16B = 8B + 8B
+    CyclicAlias(Symbol, PoolVec<Symbol>),    // 20B = 8B + 12B
     UnrecognizedIdent(PoolStr),              // 8B
     Shadowed(Located<PoolStr>),
     BadTypeArguments {
@@ -111,7 +111,7 @@ impl Type2 {
                 }
                 Record(fields, ext) => {
                     for (_, field) in fields.iter(pool) {
-                        stack.push(field.as_inner());
+                        stack.push(pool.get(*field.as_inner()));
                     }
                     stack.push(pool.get(*ext));
                 }
@@ -392,7 +392,22 @@ pub fn to_type2<'a>(
 
             for (node_id, (label, field)) in field_types.iter_node_ids().zip(field_types_map) {
                 let poolstr = PoolStr::new(label, env.pool);
-                env.pool[node_id] = (poolstr, field);
+
+                let rec_field = match field {
+                    RecordField::Optional(_) => {
+                        let field_id = env.pool.add(field.into_inner());
+                        RecordField::Optional(field_id)
+                    }
+                    RecordField::Demanded(_) => {
+                        let field_id = env.pool.add(field.into_inner());
+                        RecordField::Demanded(field_id)
+                    }
+                    RecordField::Required(_) => {
+                        let field_id = env.pool.add(field.into_inner());
+                        RecordField::Required(field_id)
+                    }
+                };
+                env.pool[node_id] = (poolstr, rec_field);
             }
 
             let ext_type = match ext {
