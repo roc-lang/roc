@@ -3698,7 +3698,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore]
     fn function_that_captures_nothing_is_not_captured() {
         // we should make sure that a function that doesn't capture anything it not itself captured
         // such functions will be lifted to the top-level, and are thus globally available!
@@ -3712,7 +3711,7 @@ mod solve_expr {
                 g
                 "#
             ),
-            "I64",
+            "Num a -> Num a",
         );
     }
 
