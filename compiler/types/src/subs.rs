@@ -96,12 +96,6 @@ impl VarStore {
     }
 }
 
-// impl From<VarStore> for Variable {
-//     fn from(store: VarStore) -> Self {
-//         Variable(store.next)
-//     }
-// }
-
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct OptVariable(u32);
 
@@ -217,6 +211,18 @@ pub struct LambdaSet(Variable);
 impl fmt::Debug for LambdaSet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "LambdaSet({})", self.0 .0)
+    }
+}
+
+impl LambdaSet {
+    pub fn into_inner(self) -> Variable {
+        self.0
+    }
+}
+
+impl From<Variable> for LambdaSet {
+    fn from(variable: Variable) -> Self {
+        LambdaSet(variable)
     }
 }
 

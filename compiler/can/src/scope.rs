@@ -47,8 +47,9 @@ impl Scope {
             let alias = Alias {
                 region,
                 typ,
-                hidden_variables: MutSet::default(),
-                vars: variables,
+                lambda_set_variables: MutSet::default(),
+                recursion_variables: MutSet::default(),
+                type_variables: variables,
             };
 
             aliases.insert(symbol, alias);
@@ -174,17 +175,34 @@ impl Scope {
         vars: Vec<Located<(Lowercase, Variable)>>,
         typ: Type,
     ) {
-        let mut hidden_variables = MutSet::default();
-        hidden_variables.extend(typ.variables());
+        let roc_types::types::VariableDetail {
+            type_variables,
+            lambda_set_variables,
+            recursion_variables,
+        } = typ.variables_detail();
 
-        for loc_var in vars.iter() {
-            hidden_variables.remove(&loc_var.value.1);
-        }
+        debug_assert!({
+            let mut hidden = type_variables;
+
+            for loc_var in vars.iter() {
+                hidden.remove(&loc_var.value.1);
+            }
+
+            if !hidden.is_empty() {
+                panic!(
+                    "Found unbound type variables {:?} \n in type alias {:?} {:?} : {:?}",
+                    hidden, name, &vars, &typ
+                )
+            }
+
+            true
+        });
 
         let alias = Alias {
             region,
-            vars,
-            hidden_variables,
+            type_variables: vars,
+            lambda_set_variables,
+            recursion_variables,
             typ,
         };
 

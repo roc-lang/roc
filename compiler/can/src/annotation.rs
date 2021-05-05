@@ -201,17 +201,17 @@ fn can_annotation_help(
                     let mut substitutions = ImMap::default();
                     let mut vars = Vec::new();
 
-                    if alias.vars.len() != args.len() {
+                    if alias.type_variables.len() != args.len() {
                         let error = Type::Erroneous(Problem::BadTypeArguments {
                             symbol,
                             region,
-                            alias_needs: alias.vars.len() as u8,
+                            alias_needs: alias.type_variables.len() as u8,
                             type_got: args.len() as u8,
                         });
                         return error;
                     }
 
-                    for (loc_var, arg_ann) in alias.vars.iter().zip(args.into_iter()) {
+                    for (loc_var, arg_ann) in alias.type_variables.iter().zip(args.into_iter()) {
                         let name = loc_var.value.0.clone();
                         let var = loc_var.value.1;
 
@@ -227,8 +227,8 @@ fn can_annotation_help(
                     }
 
                     // make sure hidden variables are freshly instantiated
-                    for var in alias.hidden_variables.iter() {
-                        substitutions.insert(*var, Type::Variable(var_store.fresh()));
+                    for var in alias.lambda_set_variables.iter() {
+                        substitutions.insert(var.into_inner(), Type::Variable(var_store.fresh()));
                     }
 
                     // instantiate variables
