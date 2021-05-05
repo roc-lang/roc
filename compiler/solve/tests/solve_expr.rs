@@ -2834,7 +2834,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore]
     fn rigid_in_letrec_ignored() {
         // re-enable when we don't capture local things that don't need to be!
         infer_eq_without_problem(
