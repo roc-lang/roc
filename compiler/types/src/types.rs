@@ -850,6 +850,14 @@ pub struct VariableDetail {
     pub recursion_variables: MutSet<Variable>,
 }
 
+impl VariableDetail {
+    pub fn is_empty(&self) -> bool {
+        self.type_variables.is_empty()
+            && self.lambda_set_variables.is_empty()
+            && self.recursion_variables.is_empty()
+    }
+}
+
 fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
     use Type::*;
 

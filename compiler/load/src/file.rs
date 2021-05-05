@@ -3221,6 +3221,10 @@ fn run_solve<'a>(
         ..
     } = module;
 
+    if false {
+        debug_assert!(constraint.validate(), "{:?}", &constraint);
+    }
+
     let (solved_subs, solved_env, problems) =
         roc_solve::module::run_solve(aliases, rigid_variables, constraint, var_store);
 
