@@ -267,7 +267,7 @@ impl<'a> EdModel<'a> {
 
     fn run_solve(
         mempool: &mut Pool,
-        ast_arena: & Bump,
+        ast_arena: &Bump,
         aliases: MutMap<Symbol, roc_types::types::Alias>,
         rigid_variables: MutMap<Variable, Lowercase>,
         constraint: Constraint,
@@ -1723,6 +1723,7 @@ pub mod test_ed_update {
         pre_lines: &[&str],
         expected_tooltip: &str,
         new_char_seq: &str,
+        select_repeats: usize,
     ) -> Result<(), String> {
         let test_arena = Bump::new();
         let code_str = BumpString::from_str_in(&pre_lines.join("").replace("┃", ""), &test_arena);
@@ -1735,7 +1736,9 @@ pub mod test_ed_update {
             ed_res_to_res(handle_new_char(&input_char, &mut ed_model))?;
         }
 
-        ed_model.select_expr()?;
+        for _ in 0..select_repeats {
+            ed_model.select_expr()?;
+        }
 
         let created_tooltip = ed_model.selected_expr_opt.unwrap().type_str;
 
@@ -1753,13 +1756,36 @@ pub mod test_ed_update {
         pre_lines: &[&str],
         expected_tooltip: &str,
         new_char: char,
+        select_repeats: usize,
     ) -> Result<(), String> {
-        assert_type_tooltip_seq(pre_lines, expected_tooltip, &new_char.to_string())
+        assert_type_tooltip_seq(
+            pre_lines,
+            expected_tooltip,
+            &new_char.to_string(),
+            select_repeats,
+        )
     }
 
     #[test]
     fn test_type_tooltip_record() -> Result<(), String> {
-        assert_type_tooltip(&["┃"], "{}", '{')?;
+        /*assert_type_tooltip(&["┃"], "{}", '{', 1)?;
+        assert_type_tooltip_seq(&["┃"], "{ a : Num * }", "{a:1", 1)?;
+        assert_type_tooltip_seq(&["┃"], "{ camelCase : Num * }", "{camelCase:0", 1)?;
+        assert_type_tooltip_seq(&["┃"], "{ cC123 : Num * }", "{cC123:98760", 1)?;
+        assert_type_tooltip_seq(&["┃"], "Str", "{a:\"b", 1)?;
+
+        assert_type_tooltip(&["┃"], "Num *", '0', 1)?;
+        assert_type_tooltip(&["12┃04"], "Num *", '3', 1)?;
+
+        assert_type_tooltip(&["\"┃\""], "Str", 'a', 1)?;
+        assert_type_tooltip_seq(&["┃"], "Str", "\"a", 1)?;
+
+        assert_type_tooltip_seq(&["┃"], "{ b : Num * }", "{a:{b:1", 1)?;
+        assert_type_tooltip_seq(&["{ a : { ┃b : 1 } }"], "{ b : Num * }", "", 1)?;*/
+        assert_type_tooltip_seq(&["{ a : { ┃b : 1 } }"], "{ a : { b : Num * } }", "", 2)?;
+        /*assert_type_tooltip_seq(&["{ ┃a : { b : 1 } }"], "{ a : { b : Num * } }", "", 1)?;
+        assert_type_tooltip_seq(&["┃{ a : { b : 1 } }"], "{ a : { b : Num * } }", "", 1)?;*/
+        //assert_type_tooltip_seq(&["┃"], "{ a : { b : Num * } }", "{a:{b:1", 2)?;
 
         Ok(())
     }

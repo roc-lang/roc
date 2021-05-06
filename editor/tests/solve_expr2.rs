@@ -188,3 +188,15 @@ fn constrain_record() {
         "{ x : Num *, y : Str }",
     )
 }
+
+#[test]
+fn constrain_nested_record() {
+    infer_eq(
+        indoc!(
+            r#"
+            { camelCase : { x : { y123 : 456 } } }
+            "#
+        ),
+        "{ camelCase : { x : { y123 : Num * } } }",
+    )
+}

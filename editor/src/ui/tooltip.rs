@@ -65,7 +65,8 @@ impl<'a> ToolTip<'a> {
 
         let y_margin = glyph_dim_rect.height / 4.0;
 
-        let text = self.make_tooltip_text(text_x_offset, text_y_offset, y_margin, ui_theme, font_size);
+        let text =
+            self.make_tooltip_text(text_x_offset, text_y_offset, y_margin, ui_theme, font_size);
         let text_section = gr_text::owned_section_from_text(&text);
 
         let rect = self.make_tooltip_rect(
