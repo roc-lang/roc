@@ -61,30 +61,19 @@ pub fn constrain_expr<'a>(
 
             let range_type_id = env.pool.add(range_type);
 
-            and_constraints.push(Eq(
-                num_type.shallow_clone(),
-                Expected::ForReason(Reason::IntLiteral, num_int(env.pool, range_type_id), region),
-                Category::Int,
-                region,
-            ));
-
-            and_constraints.push(Eq(num_type, expected, Category::Int, region));
-
-            let defs_constraint = And(and_constraints);
-
-            let let_constraint = arena.alloc(LetConstraint {
-                rigid_vars,
+            exists(
+                arena,
                 flex_vars,
-                def_types: BumpMap::new_in(arena),
-                defs_constraint,
-                ret_constraint: Constraint::True,
-            });
-
-            Let(let_constraint)
+                Eq(
+                    num_num(env.pool, range_type_id),
+                    expected,
+                    Category::Num,
+                    region,
+                ),
+            )
         }
         Expr2::Float { var, .. } => {
             let mut flex_vars = BumpVec::with_capacity_in(1, arena);
-            let rigid_vars = BumpVec::new_in(arena);
 
             let mut and_constraints = BumpVec::with_capacity_in(2, arena);
 
@@ -252,8 +241,8 @@ fn num_floatingpoint(pool: &mut Pool, range: TypeId) -> Type2 {
     )
 }
 
-fn num_int(pool: &mut Pool, range: TypeId) -> Type2 {
-    let num_integer_type = num_integer(pool, range);
+fn _num_int(pool: &mut Pool, range: TypeId) -> Type2 {
+    let num_integer_type = _num_integer(pool, range);
     let num_integer_id = pool.add(num_integer_type);
 
     let num_num_type = num_num(pool, num_integer_id);
@@ -283,7 +272,7 @@ fn _num_signed64(pool: &mut Pool) -> Type2 {
     )
 }
 
-fn num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
+fn _num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
     let range_type = pool.get(range);
 
     let alias_content = Type2::TagUnion(
