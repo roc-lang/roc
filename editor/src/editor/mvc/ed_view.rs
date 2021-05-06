@@ -156,7 +156,7 @@ pub fn build_selection_graphics(
                 };
 
                 let (tip_rect, tip_text) =
-                    tooltip.render_tooltip(&glyph_dim_rect, &config.ed_theme.ui_theme);
+                    tooltip.render_tooltip(&glyph_dim_rect, &config.ed_theme.ui_theme, config.code_font_size);
 
                 all_rendered.add_rect(tip_rect);
                 all_rendered.add_text(tip_text);
