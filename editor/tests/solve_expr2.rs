@@ -161,7 +161,7 @@ fn constrain_small_int() {
             12
             "#
         ),
-        "Int *",
+        "Num *",
     )
 }
 
@@ -185,6 +185,6 @@ fn constrain_record() {
             { x : 1, y : "hi" }
             "#
         ),
-        "{ x : Int *, y : Str }",
+        "{ x : Num *, y : Str }",
     )
 }
