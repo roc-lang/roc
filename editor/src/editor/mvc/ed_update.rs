@@ -176,12 +176,12 @@ impl<'a> EdModel<'a> {
 
         self.set_caret(expr_start_pos);
 
-        //let type_str = self.expr2_to_type(ast_node_id);
+        let type_str = self.expr2_to_type(ast_node_id);
 
         self.selected_expr_opt = Some(SelectedExpression {
             ast_node_id,
             mark_node_id,
-            type_str: PoolStr::new("{}", self.module.env.pool), // TODO get this PoolStr from type inference
+            type_str,
         });
 
         self.dirty = true;
@@ -248,6 +248,7 @@ impl<'a> EdModel<'a> {
 
         let (mut solved, _, _) = EdModel::run_solve(
             self.module.env.pool,
+            self.ast_arena,
             Default::default(),
             Default::default(),
             constrained,
@@ -266,6 +267,7 @@ impl<'a> EdModel<'a> {
 
     fn run_solve(
         mempool: &mut Pool,
+        ast_arena: & Bump,
         aliases: MutMap<Symbol, roc_types::types::Alias>,
         rigid_variables: MutMap<Variable, Lowercase>,
         constraint: Constraint,
@@ -275,7 +277,6 @@ impl<'a> EdModel<'a> {
             vars_by_symbol: MutMap::default(),
             aliases,
         };
-        let arena = Bump::new();
 
         let mut subs = Subs::new(var_store);
 
@@ -289,7 +290,7 @@ impl<'a> EdModel<'a> {
 
         // Run the solver to populate Subs.
         let (solved_subs, solved_env) =
-            solve::run(&arena, mempool, &env, &mut problems, subs, &constraint);
+            solve::run(&ast_arena, mempool, &env, &mut problems, subs, &constraint);
 
         (solved_subs, solved_env, problems)
     }

@@ -39,6 +39,7 @@ pub struct EdModel<'a> {
     pub caret_w_select_vec: NonEmpty<(CaretWSelect, Option<MarkNodeId>)>,
     pub selected_expr_opt: Option<SelectedExpression>,
     pub show_debug_view: bool,
+    pub ast_arena: &'a Bump,
     // EdModel is dirty if it has changed since the previous render.
     pub dirty: bool,
 }
@@ -100,6 +101,7 @@ pub fn init_model<'a>(
         caret_w_select_vec: NonEmpty::new((CaretWSelect::default(), None)),
         selected_expr_opt: None,
         show_debug_view: false,
+        ast_arena: code_arena,
         dirty: true,
     })
 }
