@@ -52,11 +52,6 @@ pub fn constrain_expr<'a>(
         Expr2::EmptyRecord => constrain_empty_record(expected, region),
         Expr2::SmallInt { var, .. } => {
             let mut flex_vars = BumpVec::with_capacity_in(1, arena);
-            let rigid_vars = BumpVec::new_in(arena);
-
-            let mut and_constraints = BumpVec::with_capacity_in(2, arena);
-
-            let num_type = Type2::Variable(*var);
 
             flex_vars.push(*var);
 
@@ -118,15 +113,7 @@ pub fn constrain_expr<'a>(
 
             let defs_constraint = And(and_constraints);
 
-            let let_constraint = arena.alloc(LetConstraint {
-                rigid_vars,
-                flex_vars,
-                def_types: BumpMap::new_in(arena),
-                defs_constraint,
-                ret_constraint: Constraint::True,
-            });
-
-            Let(let_constraint)
+            exists(arena, flex_vars, defs_constraint)
         }
         Expr2::Record { fields, record_var } => {
             if fields.is_empty() {
