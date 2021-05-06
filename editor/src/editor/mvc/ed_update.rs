@@ -242,17 +242,13 @@ impl<'a> EdModel<'a> {
             Region::zero(),
         );
 
-        // extract the var_store out of the env again
-        let mut var_store = VarStore::default();
-        std::mem::swap(self.module.env.var_store, &mut var_store);
-
         let (mut solved, _, _) = EdModel::run_solve(
             self.module.env.pool,
             self.ast_arena,
             Default::default(),
             Default::default(),
             constrained,
-            var_store,
+            *self.module.env.var_store,
         );
 
         let subs = solved.inner_mut();
@@ -1768,7 +1764,7 @@ pub mod test_ed_update {
 
     #[test]
     fn test_type_tooltip_record() -> Result<(), String> {
-        /*assert_type_tooltip(&["┃"], "{}", '{', 1)?;
+        assert_type_tooltip(&["┃"], "{}", '{', 1)?;
         assert_type_tooltip_seq(&["┃"], "{ a : Num * }", "{a:1", 1)?;
         assert_type_tooltip_seq(&["┃"], "{ camelCase : Num * }", "{camelCase:0", 1)?;
         assert_type_tooltip_seq(&["┃"], "{ cC123 : Num * }", "{cC123:98760", 1)?;
@@ -1781,11 +1777,11 @@ pub mod test_ed_update {
         assert_type_tooltip_seq(&["┃"], "Str", "\"a", 1)?;
 
         assert_type_tooltip_seq(&["┃"], "{ b : Num * }", "{a:{b:1", 1)?;
-        assert_type_tooltip_seq(&["{ a : { ┃b : 1 } }"], "{ b : Num * }", "", 1)?;*/
-        assert_type_tooltip_seq(&["{ a : { ┃b : 1 } }"], "{ a : { b : Num * } }", "", 2)?;
-        /*assert_type_tooltip_seq(&["{ ┃a : { b : 1 } }"], "{ a : { b : Num * } }", "", 1)?;
-        assert_type_tooltip_seq(&["┃{ a : { b : 1 } }"], "{ a : { b : Num * } }", "", 1)?;*/
-        //assert_type_tooltip_seq(&["┃"], "{ a : { b : Num * } }", "{a:{b:1", 2)?;
+        assert_type_tooltip_seq(&["{ a: { ┃b: 1 } }"], "{ b : Num * }", "", 1)?;
+        assert_type_tooltip_seq(&["{ a: { ┃b: 1 } }"], "{ a : { b : Num * } }", "", 2)?;
+        assert_type_tooltip_seq(&["{ ┃a: { b: 1 } }"], "{ a : { b : Num * } }", "", 1)?;
+        assert_type_tooltip_seq(&["┃{ a: { b: 1 } }"], "{ a : { b : Num * } }", "", 1)?;
+        assert_type_tooltip_seq(&["┃"], "{ a : { b : Num * } }", "{a:{b:1", 2)?;
 
         Ok(())
     }
