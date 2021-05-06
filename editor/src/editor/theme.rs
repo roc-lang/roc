@@ -17,7 +17,7 @@ pub struct EdTheme {
 impl Default for EdTheme {
     fn default() -> Self {
         Self {
-            background: from_hsb(240, 10, 19), // #2C2C35
+            background: from_hsb(0, 0, 7), //from_hsb(240, 10, 19), // #2C2C35
             subtle_text: from_hsb(240, 5, 60),
             syntax_high_map: default_highlight_map(),
             ui_theme: UITheme::default(),

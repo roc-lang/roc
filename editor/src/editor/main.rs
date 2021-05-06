@@ -73,7 +73,8 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let mut event_loop = winit::event_loop::EventLoop::new();
 
     let window = winit::window::WindowBuilder::new()
-        .with_inner_size(PhysicalSize::new(1200.0, 1000.0))
+        .with_inner_size(PhysicalSize::new(2000.0, 1400.0))
+        .with_title("Roc")
         .build(&event_loop)
         .unwrap();
 
@@ -150,6 +151,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
         exposed_ident_ids,
     );
 
+    let config: Config = Config::default(); //confy::load("roc_editor", None)?;
     let mut code_str = BumpString::from_str_in("", &code_arena);
 
     let file_path = if let Some(file_path) = file_path_opt {
@@ -176,7 +178,10 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
         match ed_model_res {
             Ok(mut ed_model) => {
-                ed_model.glyph_dim_rect_opt = Some(example_code_glyph_rect(&mut glyph_brush));
+                ed_model.glyph_dim_rect_opt = Some(example_code_glyph_rect(
+                    &mut glyph_brush,
+                    config.code_font_size,
+                ));
 
                 Some(ed_model)
             }
@@ -193,7 +198,6 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
     let mut keyboard_modifiers = ModifiersState::empty();
 
-    let config: Config = Config::default(); //confy::load("roc_editor", None)?;
     let ed_theme = EdTheme::default();
 
     // Render loop

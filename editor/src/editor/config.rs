@@ -11,7 +11,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            code_font_size: 30.0,
+            code_font_size: 60.0,
             ed_theme: EdTheme::default(),
         }
     }

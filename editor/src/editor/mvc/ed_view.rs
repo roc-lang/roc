@@ -12,7 +12,6 @@ use crate::ui::text::caret_w_select::make_caret_rect;
 use crate::ui::text::caret_w_select::make_selection_rect;
 use crate::ui::text::caret_w_select::CaretWSelect;
 use crate::ui::text::selection::Selection;
-use crate::ui::tooltip::ToolTip;
 use crate::ui::ui_error::MissingGlyphDims;
 use cgmath::Vector2;
 use snafu::OptionExt;
@@ -111,11 +110,11 @@ pub fn model_to_wgpu<'a>(
 
 pub fn build_selection_graphics(
     caret_w_select_vec: Vec<CaretWSelect>,
-    selected_expr_opt: &Option<SelectedExpression>,
+    _selected_expr_opt: &Option<SelectedExpression>,
     txt_coords: Vector2<f32>,
     config: &Config,
     glyph_dim_rect: Rect,
-    pool: &Pool,
+    _pool: &Pool,
 ) -> EdResult<RenderedWgpu> {
     let mut all_rendered = RenderedWgpu::new();
     let char_width = glyph_dim_rect.width;
@@ -148,7 +147,7 @@ pub fn build_selection_graphics(
             ));
 
             // render tooltip showing type
-            if let Some(selected_expr) = selected_expr_opt {
+            /*if let Some(selected_expr) = selected_expr_opt {
                 let tooltip = ToolTip {
                     position_x: sel_rect_x,
                     position_y: sel_rect_y - glyph_dim_rect.height,
@@ -160,7 +159,7 @@ pub fn build_selection_graphics(
 
                 all_rendered.add_rect(tip_rect);
                 all_rendered.add_text(tip_text);
-            }
+            }*/
         }
 
         all_rendered.add_rect(make_caret_rect(

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::graphics::primitives::rect::Rect;
 use crate::graphics::primitives::text as gr_text;
 use crate::graphics::primitives::text::Text;
