@@ -161,7 +161,7 @@ fn constrain_small_int() {
             12
             "#
         ),
-        "Int *",
+        "Num *",
     )
 }
 
