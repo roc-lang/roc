@@ -4,9 +4,7 @@ use crate::editor::ed_error::EdResult;
 use crate::editor::mvc::ed_model::SelectedExpression;
 use crate::editor::render_ast::build_code_graphics;
 use crate::editor::render_debug::build_debug_graphics;
-use crate::editor::resources::strings::START_TIP;
 use crate::graphics::primitives::rect::Rect;
-use crate::graphics::primitives::text::{owned_section_from_text, Text};
 use crate::lang::pool::Pool;
 use crate::ui::text::caret_w_select::make_caret_rect;
 use crate::ui::text::caret_w_select::make_selection_rect;
@@ -59,19 +57,6 @@ pub fn model_to_wgpu<'a>(
     let glyph_dim_rect = ed_model.glyph_dim_rect_opt.context(MissingGlyphDims {})?;
 
     let mut all_rendered = RenderedWgpu::new();
-
-    let tip_txt_coords = (txt_coords.x, txt_coords.y - 4.0 * config.code_font_size);
-
-    let start_tip_text = owned_section_from_text(&Text {
-        position: tip_txt_coords.into(),
-        area_bounds: (size.width as f32, size.height as f32).into(),
-        color: config.ed_theme.subtle_text,
-        text: START_TIP,
-        size: config.code_font_size,
-        ..Default::default()
-    });
-
-    all_rendered.add_text(start_tip_text);
 
     let rendered_code_graphics = build_code_graphics(
         ed_model.markup_node_pool.get(ed_model.markup_root_id),
