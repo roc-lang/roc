@@ -144,6 +144,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
         * See [codata](https://www.codota.com/code/java/classes/okhttp3.OkHttpClient) for inspiration on a snippet/example finder.
 * Fuzzy natural language based setting adjustment in search bar or with voice input: increase font size, enable autosave, switch to light theme...
 * Detect deviation of best practices, example case: alert developer when they are defining a color inline (rgb(30,30,30)) while all colors have been previously imported from a single file. See also [Codota](https://www.codota.com).
+* It would be valuable to record the user's interactions with the editor when debugging as well as the AST. On enough data we could train a model to perform a bunch of debugging steps and show values of the most important variables in relation to the bug. Having assistance in finding the exact code that causes the problem could be super valuable. There could be sensitive data, so it should only be recorded and or shared for open source codebases with explicit user permission.
 
 
 ## Testing
