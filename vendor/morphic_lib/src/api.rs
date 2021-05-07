@@ -1,0 +1,1046 @@
+use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
+
+use sha2::{digest::Digest, Sha256};
+
+#[derive(Clone, thiserror::Error, Debug)]
+#[non_exhaustive]
+enum ErrorKind {
+    #[error("no type found for {0:?}")]
+    TypeIdNotFound(TypeId),
+    #[error("no block found for {0:?}")]
+    BlockIdNotFound(BlockId),
+    #[error("no value found for {0:?}")]
+    ValueIdNotFound(ValueId),
+    #[error("no join point found for {0:?}")]
+    JoinPointIdNotFound(JoinPointId),
+    #[error("body of join point {0:?} is not defined")]
+    JoinPointNotDefined(JoinPointId),
+    #[error("body of join point {0:?} has already been defined")]
+    JoinPointAlreadyDefined(JoinPointId),
+    #[error("block {0:?} has no parent")]
+    BlockDetached(BlockId),
+    #[error("block {0:?} already has a parent")]
+    BlockAlreadyAttached(BlockId),
+    #[error("callee specialization variable {0:?} already used elsewhere in the same function")]
+    DuplicateCalleeSpecVar(CalleeSpecBuf),
+    #[error("update mode variable {0:?} already used elsewhere in the same function")]
+    DuplicateUpdateModeVar(UpdateModeBuf),
+    #[error("duplicate type name {0:?} in module")]
+    DuplicateTypeName(TypeNameBuf),
+    #[error("duplicate function name {0:?} in module")]
+    DuplicateFuncName(FuncNameBuf),
+    #[error("duplicate module name {0:?} in program")]
+    DuplicateModName(ModNameBuf),
+    #[error("duplicate entry point name {0:?} in program")]
+    DuplicateEntryPointName(EntryPointNameBuf),
+    #[error("callee specialization variable {0:?} not found")]
+    CalleeSpecVarNotFound(CalleeSpecBuf),
+    #[error("update mode variable {0:?} not found")]
+    UpdateModeVarNotFound(UpdateModeBuf),
+    #[error("function specialization {0:?} not found")]
+    FuncSpecNotFound(FuncSpec),
+    #[error("function {0:?} not found in module")]
+    FuncNotFound(FuncNameBuf),
+    #[error("module {0:?} not found in program")]
+    ModNotFound(ModNameBuf),
+    #[error("entry point {0:?} not found in program")]
+    EntryPointNotFound(EntryPointNameBuf),
+}
+
+#[derive(Clone, thiserror::Error, Debug)]
+#[error("{kind}")]
+pub struct Error {
+    #[from]
+    kind: ErrorKind,
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+// Global identifiers:
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ModName<'a>(pub &'a [u8]);
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct ModNameBuf(Vec<u8>);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EntryPointName<'a>(pub &'a [u8]);
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EntryPointNameBuf(Vec<u8>);
+
+// Module-level identifiers (unique within a module):
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FuncName<'a>(pub &'a [u8]);
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct FuncNameBuf(Vec<u8>);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TypeName<'a>(pub &'a [u8]);
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TypeNameBuf(Vec<u8>);
+
+// Local identifiers (unique within a function body):
+
+/// A reference to an arena-allocated expression object in a function body.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ValueId(pub u32);
+
+/// Value id 0 always refers to the argument to the current function.
+///
+/// Every function takes exactly one argument. Multiple arguments can be represented via tuples.
+pub const ARG_VALUE_ID: ValueId = ValueId(0);
+
+/// A reference to an arena-allocated join point in a function body.
+///
+/// A join point is a point where multiple paths of execution "join" up again. In other words, a
+/// block with multiple entry points. Join points can also be thought of as continuations that do
+/// not escape. See [Compiling without Continuations](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/11/join-points-pldi17.pdf).
+/// Join points are common in functional language IRs, but might also be useful (in the context of
+/// this library) for encoding constructs such as for loops.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct JoinPointId(pub u32);
+
+/// A reference to an arena-allocated block in a function body.
+///
+/// A block is a sequence of zero or more expressions. Each expression has an associated
+/// `ValueId`, which is unique across all blocks within its function.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct BlockId(pub u32);
+
+/// A reference to an arena-allocated type node in a type definition or function body.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TypeId(pub u32);
+
+/// A client-provided name used as a key to look up callee specializations in the solution tables
+/// generated by the analysis engine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CalleeSpecVar<'a>(pub &'a [u8]);
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct CalleeSpecBuf(Vec<u8>);
+
+/// A client-provided name used as a key to look up concrete update mode flags in the solution
+/// tables generated by the analysis engine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct UpdateModeVar<'a>(pub &'a [u8]);
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct UpdateModeBuf(Vec<u8>);
+
+// Input API:
+
+/// A trait for constructing types in both typedefs and function bodies.
+///
+/// Types are conceptually represented via trees of arena-allocated nodes. References to these
+/// nodes are exposed in the API as integer identifiers.
+pub trait TypeContext {
+    /// Create a local type node referring to a named type defined in a module.
+    ///
+    /// A named type is essentially identical to a `newtype` in e.g. Haskell. Named types are
+    /// useful for defining recursive types.
+    fn add_named_type(&mut self, mod_: ModName, type_: TypeName) -> TypeId;
+
+    /// Create a local type node representing an anonymous tuple type of the given types.
+    fn add_tuple_type(&mut self, field_types: &[TypeId]) -> Result<TypeId>;
+
+    /// Create a local type node representing an anonymous tagged union of the given types.
+    fn add_union_type(&mut self, variant_types: &[TypeId]) -> Result<TypeId>;
+
+    /// Create a local type node representing a heap cell.
+    ///
+    /// A heap cell is an abstract object used to model data types which are candidates for in-place
+    /// mutation. A heap cell has reference semantics, and is always in one of two states: either
+    /// "fresh" or "mutated". Accessing a mutated heap cell is considered unsafe, and in-place
+    /// mutations mark heap cells as mutated. The analysis engine tries to perform as many heap
+    /// cell updates as possible in-place, subject to the constraint that every heap cell access
+    /// must be safe.
+    fn add_heap_cell_type(&mut self) -> TypeId;
+
+    /// Create a local type node representing a bag of a given type.
+    ///
+    /// A bag is an immutable unordered collection of values of a given type, permitting duplicates.
+    fn add_bag_type(&mut self, item_type: TypeId) -> Result<TypeId>;
+}
+
+#[derive(Debug, Default)]
+struct SeqGen {
+    next: u32,
+}
+
+impl SeqGen {
+    fn next(&mut self) -> u32 {
+        let result = self.next;
+        self.next += 1;
+        result
+    }
+
+    fn check_in_range(&self, id: u32) -> std::result::Result<(), ()> {
+        if id < self.next {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+}
+
+/// A `TypeDef` defines the content type of a named type.
+pub struct TypeDef;
+
+pub struct TypeDefBuilder {
+    tid_gen: SeqGen,
+}
+
+impl TypeDefBuilder {
+    pub fn new() -> Self {
+        Self {
+            tid_gen: SeqGen::default(),
+        }
+    }
+
+    /// Create a `TypeDef` using the given type node as the root.
+    pub fn build(self, root: TypeId) -> Result<TypeDef> {
+        self.check(root)?;
+        Ok(TypeDef)
+    }
+
+    fn check(&self, id: TypeId) -> Result<()> {
+        self.tid_gen
+            .check_in_range(id.0)
+            .map_err(|()| ErrorKind::TypeIdNotFound(id).into())
+    }
+}
+
+impl TypeContext for TypeDefBuilder {
+    fn add_named_type(&mut self, _mod: ModName, _type: TypeName) -> TypeId {
+        TypeId(self.tid_gen.next())
+    }
+
+    fn add_tuple_type(&mut self, field_types: &[TypeId]) -> Result<TypeId> {
+        for &field_type in field_types {
+            self.check(field_type)?;
+        }
+        Ok(TypeId(self.tid_gen.next()))
+    }
+
+    fn add_union_type(&mut self, variant_types: &[TypeId]) -> Result<TypeId> {
+        for &variant_type in variant_types {
+            self.check(variant_type)?;
+        }
+        Ok(TypeId(self.tid_gen.next()))
+    }
+
+    fn add_heap_cell_type(&mut self) -> TypeId {
+        TypeId(self.tid_gen.next())
+    }
+
+    fn add_bag_type(&mut self, item_type: TypeId) -> Result<TypeId> {
+        self.check(item_type)?;
+        Ok(TypeId(self.tid_gen.next()))
+    }
+}
+
+/// A block, together with a value to return from the block.
+///
+/// The returned value must be in scope at the end of the block.
+///
+/// This is conceptually similar to a `let ... in ...` expression. The block corresponds to the
+/// sequence of `let` bindings, and the returned value id corresponds to the final `in ...`
+/// expression.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct BlockExpr(pub BlockId, pub ValueId);
+
+/// A `FuncDef` defines the signature and body of a function.
+pub struct FuncDef {
+    // We can precompute hashes for all calls because monomorphization isn't implemented yet.
+    callee_spec_vars: BTreeMap<CalleeSpecBuf, FuncSpec>,
+    update_mode_vars: BTreeSet<UpdateModeBuf>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum JoinPointState {
+    Declared,
+    Defined,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum BlockState {
+    Detached,
+    Attached,
+}
+
+pub struct FuncDefBuilder {
+    tid_gen: SeqGen,
+    bid_gen: SeqGen,
+    vid_gen: SeqGen,
+    jid_gen: SeqGen,
+    blocks: BTreeMap<BlockId, BlockState>,
+    join_points: BTreeMap<JoinPointId, JoinPointState>,
+    callee_spec_vars: BTreeMap<CalleeSpecBuf, FuncSpec>,
+    update_mode_vars: BTreeSet<UpdateModeBuf>,
+}
+
+impl FuncDefBuilder {
+    pub fn new() -> Self {
+        let mut result = Self {
+            tid_gen: SeqGen::default(),
+            bid_gen: SeqGen::default(),
+            vid_gen: SeqGen::default(),
+            jid_gen: SeqGen::default(),
+            blocks: BTreeMap::new(),
+            join_points: BTreeMap::new(),
+            callee_spec_vars: BTreeMap::new(),
+            update_mode_vars: BTreeSet::new(),
+        };
+        // Generate `ARG_VALUE_ID`
+        result.vid_gen.next();
+        result
+    }
+
+    fn check_tid(&self, id: TypeId) -> Result<()> {
+        self.tid_gen
+            .check_in_range(id.0)
+            .map_err(|()| ErrorKind::TypeIdNotFound(id).into())
+    }
+
+    fn check_bid(&self, id: BlockId) -> Result<()> {
+        self.bid_gen
+            .check_in_range(id.0)
+            .map_err(|()| ErrorKind::BlockIdNotFound(id).into())
+    }
+
+    fn check_vid(&self, id: ValueId) -> Result<()> {
+        self.vid_gen
+            .check_in_range(id.0)
+            .map_err(|()| ErrorKind::ValueIdNotFound(id).into())
+    }
+
+    fn check_jid(&self, id: JoinPointId) -> Result<()> {
+        self.jid_gen
+            .check_in_range(id.0)
+            .map_err(|()| ErrorKind::JoinPointIdNotFound(id).into())
+    }
+
+    /// Construct a function from this builder with a given argument type, return type, root block,
+    /// and value to return from that root block.
+    pub fn build(mut self, arg_type: TypeId, ret_type: TypeId, root: BlockExpr) -> Result<FuncDef> {
+        // TODO: Perform scope checking and typechecking
+        self.check_tid(arg_type)?;
+        self.check_tid(ret_type)?;
+        self.attach_block(root.0)?;
+        self.check_vid(root.1)?;
+        for (join_point, state) in self.join_points {
+            match state {
+                JoinPointState::Declared => {
+                    return Err(ErrorKind::JoinPointNotDefined(join_point).into());
+                }
+                JoinPointState::Defined => {}
+            }
+        }
+        for (block, state) in self.blocks {
+            match state {
+                BlockState::Detached => {
+                    return Err(ErrorKind::BlockDetached(block).into());
+                }
+                BlockState::Attached => {}
+            }
+        }
+        Ok(FuncDef {
+            callee_spec_vars: self.callee_spec_vars,
+            update_mode_vars: self.update_mode_vars,
+        })
+    }
+
+    /// Declare a join point in a `block`.
+    ///
+    /// Returning from the resulting join point after jumping to it will yield control to the parent
+    /// of the block in which the join point was defined.
+    ///
+    /// This function allows you to forward-declare a join point without specifying its body, which
+    /// makes it possible to define recursive and mutually recursive joint points.  However, you
+    /// must eventually populate the body of each joint point via a call to `define_join_point`.
+    ///
+    /// The returned ValueId is the ValueId of the *argument* to the join point, which is in scope
+    /// within the body of the join point.
+    pub fn declare_join_point(
+        &mut self,
+        block: BlockId,
+        arg_type: TypeId,
+        ret_type: TypeId,
+    ) -> Result<(JoinPointId, ValueId)> {
+        self.check_bid(block)?;
+        self.check_tid(arg_type)?;
+        self.check_tid(ret_type)?;
+        let join_point = JoinPointId(self.jid_gen.next());
+        self.join_points
+            .insert(join_point, JoinPointState::Declared);
+        Ok((join_point, ValueId(self.vid_gen.next())))
+    }
+
+    fn attach_block(&mut self, block: BlockId) -> Result<()> {
+        match self.blocks.insert(block, BlockState::Attached) {
+            Some(BlockState::Detached) => Ok(()),
+            Some(BlockState::Attached) => Err(ErrorKind::BlockAlreadyAttached(block).into()),
+            None => Err(ErrorKind::BlockIdNotFound(block).into()),
+        }
+    }
+
+    /// Define a join point.
+    ///
+    /// Before a join point can be defined, it must be declared via a call to `declare_join_point`.
+    pub fn define_join_point(&mut self, join_point: JoinPointId, body: BlockExpr) -> Result<()> {
+        self.check_jid(join_point)?;
+        self.check_bid(body.0)?;
+        self.check_vid(body.1)?;
+        self.attach_block(body.0)?;
+        match self.join_points.insert(join_point, JoinPointState::Defined) {
+            Some(JoinPointState::Declared) => Ok(()),
+            Some(JoinPointState::Defined) => {
+                Err(ErrorKind::JoinPointAlreadyDefined(join_point).into())
+            }
+            None => Err(ErrorKind::JoinPointIdNotFound(join_point).into()),
+        }
+    }
+
+    /// Add a jump to a join point.
+    ///
+    /// The rest of the API assumes that every code path produces a `ValueId`. Join points do not
+    /// fit this model neatly because jumping to a join point yields control to outside of the
+    /// current expression. Hence, this function returns a dummy unconstrained `ValueId`, which can
+    /// be used as if the jump were a regular expression producing a value of type
+    /// `unreachable_result_type`.
+    pub fn add_jump(
+        &mut self,
+        block: BlockId,
+        join_point: JoinPointId,
+        arg: ValueId,
+        unreachable_result_type: TypeId,
+    ) -> Result<ValueId> {
+        self.check_bid(block)?;
+        self.check_jid(join_point)?;
+        self.check_vid(arg)?;
+        self.check_tid(unreachable_result_type)?;
+        Ok(ValueId(self.vid_gen.next()))
+    }
+
+    /// Add a block to the current function body.
+    ///
+    /// A block is a sequence of zero or more expressions. Each expression has an associated
+    /// `ValueId`, which is unique across all blocks within the current function.
+    ///
+    /// Blocks form a tree. In particular, blocks may contain other blocks via 'choice'
+    /// expressions, and building a function with `build` requires providing a 'root' block which
+    /// acts as the entry point of the function.
+    ///
+    /// When a function body is finalized with `build`, every non-root block should have exactly one
+    /// parent, and the root block should have no parents.
+    pub fn add_block(&mut self) -> BlockId {
+        let block = BlockId(self.bid_gen.next());
+        self.blocks.insert(block, BlockState::Detached);
+        block
+    }
+
+    /// Add an expression with unknown semantics to a block.
+    ///
+    /// The analysis engine will conservatively treat this expression as if it could perform any
+    /// operation expressible in the modeling language except in-place mutations.
+    ///
+    /// This will significantly limit optimizations, but could be useful for prototyping.
+    pub fn add_unknown(&mut self, block: BlockId, result_type: TypeId) -> Result<ValueId> {
+        self.check_bid(block)?;
+        self.check_tid(result_type)?;
+        Ok(ValueId(self.vid_gen.next()))
+    }
+
+    /// Add a function call expression to a block.
+    ///
+    /// The call must be annotated with a `CalleeSpecVar`, to be used in the solution table as a key
+    /// associated with the appropriate specialization of the callee selected by the analysis
+    /// engine.
+    pub fn add_call(
+        &mut self,
+        block: BlockId,
+        callee_spec_var: CalleeSpecVar,
+        callee_mod: ModName,
+        callee: FuncName,
+        arg: ValueId,
+    ) -> Result<ValueId> {
+        self.check_bid(block)?;
+        self.check_vid(arg)?;
+        match self
+            .callee_spec_vars
+            .entry(CalleeSpecBuf(callee_spec_var.0.to_owned()))
+        {
+            Entry::Occupied(entry) => {
+                return Err(ErrorKind::DuplicateCalleeSpecVar(entry.key().clone()).into());
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(hash_func_name(callee_mod, callee));
+            }
+        }
+        Ok(ValueId(self.vid_gen.next()))
+    }
+
+    /// Add a 'choice' expression to a block.
+    ///
+    /// A 'choice' expression consists of one or more 'case' blocks, each of which returns a value.
+    /// Semantically, executing a choice expression always executes exactly one of its 'case'
+    /// blocks. The analysis engine assumes that any 'case' block may be executed whenever the
+    /// 'choice' expression is encountered; it is as if a nondeterministic process selects the
+    /// 'case' block to be executed.
+    pub fn add_choice(&mut self, block: BlockId, cases: &[BlockExpr]) -> Result<ValueId> {
+        self.check_bid(block)?;
+        for &BlockExpr(case_block, case_ret) in cases {
+            self.attach_block(case_block)?;
+            self.check_vid(case_ret)?;
+        }
+        Ok(ValueId(self.vid_gen.next()))
+    }
+
+    /// Add a sub-block expression to a block.
+    ///
+    /// The sub-block expression evaluates to the value returned by the sub-block.
+    ///
+    /// This is useful in combination with join points, because returning from a join point always
+    /// yields control to the parent of the enclosing block in which the join point was defined.
+    /// Without sub-blocks, there would be no way to reduce the scope of a join point within a
+    /// block.
+    pub fn add_sub_block(&mut self, block: BlockId, sub_block: BlockExpr) -> Result<ValueId> {
+        self.check_bid(block)?;
+        self.attach_block(sub_block.0)?;
+        self.check_vid(sub_block.1)?;
+        Ok(ValueId(self.vid_gen.next()))
+    }
+
+    /// Add a 'terminate' expression to a block.
+    ///
+    /// Semantically, a 'terminate' expression is modeled as immediately terminating the entire
+    /// program. Terminating the program is considered to be safe behavior.
+    ///
+    /// The type of the resulting value can be chosen freely, because a 'terminate' expression never
+    /// actually returns (this is analogous to `panic!()` in Rust, which may be used where a value
+    /// of any type is expected).
+    pub fn add_terminate(&mut self, block: BlockId, result_type: TypeId) -> Result<ValueId> {
+        self.check_bid(block)?;
+        self.check_tid(result_type)?;
+        Ok(ValueId(self.vid_gen.next()))
+    }
+
+    /// Add an expresion which creates a fresh heap cell to a block.
+    pub fn add_new_heap_cell(&mut self, block: BlockId) -> Result<ValueId> {
+        self.check_bid(block)?;
+        Ok(ValueId(self.vid_gen.next()))
+    }
+
+    /// Add a 'touch' expression to a block.
+    ///
+    /// A 'touch' expression represents "reading" the contents of a heap cell. Semantically,
+    /// 'touch'ing a heap cell which has been mutated is considered *unsafe*. The analysis engine
+    /// will choose update mode flags to ensure that this never happens.
+    ///
+    /// A 'touch' expression returns the empty tuple type `()`.
+    pub fn add_touch(&mut self, block: BlockId, heap_cell: ValueId) -> Result<ValueId> {
+        self.check_bid(block)?;
+        self.check_vid(heap_cell)?;
+        Ok(ValueId(self.vid_gen.next()))
+    }
+
+    /// Add an 'update' expression to a block.
+    ///
+    /// An 'update' expression represents an attempt to "write" the contents of the heap cell. The
+    /// analysis engine will assign each 'update' operation a concrete "update mode" flag, which is
+    /// either `UpdateMode::Immutable` or `UpdateMode::InPlace`. When the mode is `Immutable`, an
+    /// 'update' operation is semantically a no-op. When the mode is `InPlace`, an 'update'
+    /// operation *mutates* its heap cell, making further 'touch' and 'update' operations on that
+    /// heap cell unsafe. The analysis engine will always choose update modes such that all
+    /// possible executions of the program are guaranteed to be safe.
+    ///
+    /// Note that performing an 'update' operation on a mutated heap cell is considered *unsafe*.
+    /// This is a conservative assumption, and accurately models most real-world update operations.
+    /// If you want a version of 'update' which the analysis engine considers safe to perform on
+    /// mutated heap cells, see `add_update_write_only`. A call to `add_update` is semantically
+    /// equivalent to `add_touch` followed by `add_update_write_only`.
+    ///
+    /// The 'update' expression must be annotated with an `UpdateModeVar`, to be used in the
+    /// solution table as a key associated with the concrete update mode selected for this
+    /// expression by the analysis engine.
+    ///
+    /// An 'update' expression returns the empty tuple type `()`. If you want to model an operation
+    /// which returns an updated version of its input data structure (with the update possibly
+    /// performed in-place), you can return a fresh heap cell with `add_new_heap_cell`. Returning
+    /// the original heap cell is almost certainly not what you want, because if the 'update' is
+    /// performed in-place then any subsequent accesses to the original heap cell will be considered
+    /// unsafe.
+    pub fn add_update(
+        &mut self,
+        block: BlockId,
+        update_mode_var: UpdateModeVar,
+        heap_cell: ValueId,
+    ) -> Result<ValueId> {
+        self.add_touch(block, heap_cell)?;
+        self.add_update_write_only(block, update_mode_var, heap_cell)
+    }
+
+    /// Add a write-only 'update' expression to a block.
+    ///
+    /// This is identical to `add_update`, except that write-only 'update's of mutated heap cells
+    /// are considered safe. This is probably not what you want for most real-world update
+    /// operations.
+    pub fn add_update_write_only(
+        &mut self,
+        block: BlockId,
+        update_mode_var: UpdateModeVar,
+        heap_cell: ValueId,
+    ) -> Result<ValueId> {
+        self.check_bid(block)?;
+        self.check_vid(heap_cell)?;
+        if !self
+            .update_mode_vars
+            .insert(UpdateModeBuf(update_mode_var.0.to_owned()))
+        {
+            return Err(ErrorKind::DuplicateUpdateModeVar(UpdateModeBuf(
+                update_mode_var.0.to_owned(),
+            ))
+            .into());
+        }
+        Ok(ValueId(self.vid_gen.next()))
+    }
+
+    /// Add an expression to a block which creates an empty bag.
+    ///
+    /// A bag is an immutable unordered collection of values of a given type, permitting duplicates.
+    pub fn add_empty_bag(&mut self, block: BlockId, item_type: TypeId) -> Result<ValueId> {
+        self.check_bid(block)?;
+        self.check_tid(item_type)?;
+        Ok(ValueId(self.vid_gen.next()))
+    }
+
+    /// Add an expression to a block which inserts a value into a bag, producing a new bag.
+    pub fn add_bag_insert(
+        &mut self,
+        block: BlockId,
+        bag: ValueId,
+        to_insert: ValueId,
+    ) -> Result<ValueId> {
+        self.check_bid(block)?;
+        self.check_vid(bag)?;
+        self.check_vid(to_insert)?;
+        Ok(ValueId(self.vid_gen.next()))
+    }
+
+    /// Add an expression to a block which gets an item from a bag, returning the item.
+    ///
+    /// The analysis engine assumes that any item in the bag may potentially be obtained from this
+    /// operation; it is as if the item is chosen by a nondeterministic process.
+    ///
+    /// Semantically, if the bag is empty the program is considered to terminate immediately, as if
+    /// a 'terminate' expression had appeared. Terminating the program in this way is considered
+    /// safe behavior.
+    pub fn add_bag_get(&mut self, block: BlockId, bag: ValueId) -> Result<ValueId> {
+        self.check_bid(block)?;
+        self.check_vid(bag)?;
+        Ok(ValueId(self.vid_gen.next()))
+    }
+
+    /// Add an expression to a block which removes an item from a bag, producing a two-element tuple
+    /// containing (1) the bag with the item removed, and (2) the removed item.
+    ///
+    /// The analysis engine assumes that any item in the bag may potentially be removed by this
+    /// operation; it is as if the item to remove is chosen by a nondeterministic process.
+    //
+    /// Semantically, if the original bag is empty the program is considered to terminate
+    /// immediately, as if a 'terminate' expression had appeared. Terminating the program in this
+    /// way is considered safe behavior.
+    pub fn add_bag_remove(&mut self, block: BlockId, bag: ValueId) -> Result<ValueId> {
+        self.check_bid(block)?;
+        self.check_vid(bag)?;
+        Ok(ValueId(self.vid_gen.next()))
+    }
+
+    /// Add an expression to a block which constructs a tuple value.
+    pub fn add_make_tuple(&mut self, block: BlockId, field_vals: &[ValueId]) -> Result<ValueId> {
+        self.check_bid(block)?;
+        for &field_val in field_vals {
+            self.check_vid(field_val)?;
+        }
+        Ok(ValueId(self.vid_gen.next()))
+    }
+
+    /// Add an expression to a block which gets a single field of a tuple value.
+    pub fn add_get_tuple_field(
+        &mut self,
+        block: BlockId,
+        tuple: ValueId,
+        _field_idx: u32,
+    ) -> Result<ValueId> {
+        self.check_bid(block)?;
+        self.check_vid(tuple)?;
+        Ok(ValueId(self.vid_gen.next()))
+    }
+
+    /// Add an expression to a block which constructs a specific variant of an anonymous tagged
+    /// union.
+    pub fn add_make_union(
+        &mut self,
+        block: BlockId,
+        variant_types: &[TypeId],
+        _variant_idx: u32,
+        to_wrap: ValueId,
+    ) -> Result<ValueId> {
+        self.check_bid(block)?;
+        for &variant_type in variant_types {
+            self.check_tid(variant_type)?;
+        }
+        // TODO: Check variant_idx in range
+        self.check_vid(to_wrap)?;
+        Ok(ValueId(self.vid_gen.next()))
+    }
+
+    /// Add an expression to a block which unwraps a specific variant of an anonymous tagged union.
+    ///
+    /// Semantically, if the union value is not actually tagged with the requested variant index,
+    /// the program is considered to terminate immediately, as if a 'terminate' expression had
+    /// appeared. Terminating the program as a result of this kind of variant tag mismatch is
+    /// considered safe behavior.
+    pub fn add_unwrap_union(
+        &mut self,
+        block: BlockId,
+        to_unwrap: ValueId,
+        _variant_idx: u32,
+    ) -> Result<ValueId> {
+        self.check_bid(block)?;
+        self.check_vid(to_unwrap)?;
+        Ok(ValueId(self.vid_gen.next()))
+    }
+
+    /// Add an expression to a block which wraps a value in a named type.
+    ///
+    /// The type of the wrapped value must match the content type of the named type.
+    pub fn add_make_named(
+        &mut self,
+        block: BlockId,
+        _named_mod: ModName,
+        _named: TypeName,
+        to_wrap: ValueId,
+    ) -> Result<ValueId> {
+        self.check_bid(block)?;
+        self.check_vid(to_wrap)?;
+        Ok(ValueId(self.vid_gen.next()))
+    }
+
+    /// Add an expression to a block which unwraps a value wrapped in a named type.
+    ///
+    /// The type of the resulting value will match the content type of the named type.
+    pub fn add_unwrap_named(
+        &mut self,
+        block: BlockId,
+        _named_mod: ModName,
+        _named: TypeName,
+        to_unwrap: ValueId,
+    ) -> Result<ValueId> {
+        self.check_bid(block)?;
+        self.check_vid(to_unwrap)?;
+        Ok(ValueId(self.vid_gen.next()))
+    }
+}
+
+impl TypeContext for FuncDefBuilder {
+    fn add_named_type(&mut self, _mod: ModName, _type: TypeName) -> TypeId {
+        TypeId(self.tid_gen.next())
+    }
+
+    fn add_tuple_type(&mut self, field_types: &[TypeId]) -> Result<TypeId> {
+        for &field_type in field_types {
+            self.check_tid(field_type)?;
+        }
+        Ok(TypeId(self.tid_gen.next()))
+    }
+
+    fn add_union_type(&mut self, variant_types: &[TypeId]) -> Result<TypeId> {
+        for &variant_type in variant_types {
+            self.check_tid(variant_type)?;
+        }
+        Ok(TypeId(self.tid_gen.next()))
+    }
+
+    fn add_heap_cell_type(&mut self) -> TypeId {
+        TypeId(self.tid_gen.next())
+    }
+
+    fn add_bag_type(&mut self, item_type: TypeId) -> Result<TypeId> {
+        self.check_tid(item_type)?;
+        Ok(TypeId(self.tid_gen.next()))
+    }
+}
+
+/// A `ModDef` defines a module, which is a collection of named types and functions.
+pub struct ModDef {
+    func_defs: BTreeMap<FuncNameBuf, FuncDef>,
+}
+
+pub struct ModDefBuilder {
+    type_names: BTreeSet<TypeNameBuf>,
+    func_defs: BTreeMap<FuncNameBuf, FuncDef>,
+}
+
+impl ModDefBuilder {
+    pub fn new() -> Self {
+        Self {
+            type_names: BTreeSet::new(),
+            func_defs: BTreeMap::new(),
+        }
+    }
+
+    pub fn build(self) -> Result<ModDef> {
+        Ok(ModDef {
+            func_defs: self.func_defs,
+        })
+    }
+
+    pub fn add_named_type(&mut self, name: TypeName, _type_def: TypeDef) -> Result<()> {
+        if !self.type_names.insert(TypeNameBuf(name.0.to_owned())) {
+            return Err(ErrorKind::DuplicateTypeName(TypeNameBuf(name.0.to_owned())).into());
+        }
+        Ok(())
+    }
+
+    pub fn add_func(&mut self, name: FuncName, func_def: FuncDef) -> Result<()> {
+        self.func_defs
+            .insert(FuncNameBuf(name.0.to_owned()), func_def);
+        Ok(())
+    }
+}
+
+/// A `Program` is the input to the analysis engine, consisting of a collection of modules
+/// and entry points.
+///
+/// Each entry point has an associated main function, which must have signature `() -> ()`.
+pub struct Program {
+    mods: BTreeMap<ModNameBuf, ModDef>,
+    entry_points: BTreeMap<EntryPointNameBuf, (ModNameBuf, FuncNameBuf)>,
+}
+
+pub struct ProgramBuilder {
+    mods: BTreeMap<ModNameBuf, ModDef>,
+    entry_points: BTreeMap<EntryPointNameBuf, (ModNameBuf, FuncNameBuf)>,
+}
+
+impl ProgramBuilder {
+    pub fn new() -> Self {
+        Self {
+            mods: BTreeMap::new(),
+            entry_points: BTreeMap::new(),
+        }
+    }
+
+    pub fn build(self) -> Result<Program> {
+        Ok(Program {
+            mods: self.mods,
+            entry_points: self.entry_points,
+        })
+    }
+
+    pub fn add_mod(&mut self, name: ModName, mod_def: ModDef) -> Result<()> {
+        match self.mods.entry(ModNameBuf(name.0.to_owned())) {
+            Entry::Occupied(entry) => Err(ErrorKind::DuplicateModName(entry.key().clone()).into()),
+            Entry::Vacant(entry) => {
+                entry.insert(mod_def);
+                Ok(())
+            }
+        }
+    }
+
+    pub fn add_entry_point(
+        &mut self,
+        name: EntryPointName,
+        func_mod: ModName,
+        func: FuncName,
+    ) -> Result<()> {
+        match self
+            .entry_points
+            .entry(EntryPointNameBuf(name.0.to_owned()))
+        {
+            Entry::Occupied(entry) => {
+                Err(ErrorKind::DuplicateEntryPointName(entry.key().clone()).into())
+            }
+            Entry::Vacant(entry) => {
+                entry.insert((
+                    ModNameBuf(func_mod.0.to_owned()),
+                    FuncNameBuf(func.0.to_owned()),
+                ));
+                Ok(())
+            }
+        }
+    }
+}
+
+// Output API:
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum UpdateMode {
+    Immutable,
+    InPlace,
+}
+
+pub const SPEC_HASH_BYTES: usize = 32;
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FuncSpec(pub [u8; SPEC_HASH_BYTES]);
+
+/// The solution table for an individual specialization.
+pub struct FuncSpecSolutions {
+    func_def: FuncDef,
+}
+
+impl FuncSpecSolutions {
+    pub fn callee_spec(&self, var: CalleeSpecVar) -> Result<FuncSpec> {
+        // TODO: The clone here is unnecessary -- avoid it!
+        // (might require something like a transmute)
+        match self
+            .func_def
+            .callee_spec_vars
+            .get(&CalleeSpecBuf(var.0.to_owned()))
+        {
+            Some(spec) => Ok(*spec),
+            None => Err(ErrorKind::CalleeSpecVarNotFound(CalleeSpecBuf(var.0.to_owned())).into()),
+        }
+    }
+
+    pub fn update_mode(&self, var: UpdateModeVar) -> Result<UpdateMode> {
+        // TODO: The clone here is unnecessary -- avoid it!
+        // (might require something like a transmute)
+        if !self
+            .func_def
+            .update_mode_vars
+            .contains(&UpdateModeBuf(var.0.to_owned()))
+        {
+            return Err(ErrorKind::UpdateModeVarNotFound(UpdateModeBuf(var.0.to_owned())).into());
+        }
+        Ok(UpdateMode::Immutable)
+    }
+}
+
+/// Zero or more specializations for a single function, and the solution table for each
+/// specialization.
+pub struct FuncSolutions {
+    spec: FuncSpec,
+    spec_solutions: FuncSpecSolutions,
+}
+
+impl FuncSolutions {
+    pub fn specs<'a>(&'a self) -> impl Iterator<Item = &'a FuncSpec> {
+        std::iter::once(&self.spec)
+    }
+
+    pub fn spec(&self, spec: &FuncSpec) -> Result<&FuncSpecSolutions> {
+        if &self.spec != spec {
+            return Err(ErrorKind::FuncSpecNotFound(*spec).into());
+        }
+        Ok(&self.spec_solutions)
+    }
+}
+
+/// Specializations and solution tables for a single module.
+pub struct ModSolutions {
+    funcs: BTreeMap<FuncNameBuf, FuncSolutions>,
+}
+
+impl ModSolutions {
+    pub fn func_solutions(&self, func: FuncName) -> Result<&FuncSolutions> {
+        // TODO: The clone here is unnecessary -- avoid it!
+        // (might require something like a transmute)
+        match self.funcs.get(&FuncNameBuf(func.0.to_owned())) {
+            Some(func_solutions) => Ok(func_solutions),
+            None => Err(ErrorKind::FuncNotFound(FuncNameBuf(func.0.to_owned())).into()),
+        }
+    }
+}
+
+/// Specializations and solution tables generated for the entire program.
+pub struct Solutions {
+    mods: BTreeMap<ModNameBuf, ModSolutions>,
+    entry_points: BTreeMap<EntryPointNameBuf, (ModNameBuf, FuncNameBuf)>,
+}
+
+impl Solutions {
+    pub fn mod_solutions(&self, mod_: ModName) -> Result<&ModSolutions> {
+        // TODO: The clone here is unnecessary -- avoid it!
+        // (might require something like a transmute)
+        match self.mods.get(&ModNameBuf(mod_.0.to_owned())) {
+            Some(mod_solutions) => Ok(mod_solutions),
+            None => Err(ErrorKind::ModNotFound(ModNameBuf(mod_.0.to_owned())).into()),
+        }
+    }
+
+    pub fn entry_point_solution(
+        &self,
+        entry_point: EntryPointName,
+    ) -> Result<(ModName, FuncName, FuncSpec)> {
+        // TODO: The clone here is unnecessary -- avoid it!
+        // (might require something like a transmute)
+        match self
+            .entry_points
+            .get(&EntryPointNameBuf(entry_point.0.to_owned()))
+        {
+            Some((mod_name, func_name)) => {
+                let mod_name = ModName(&mod_name.0);
+                let func_name = FuncName(&func_name.0);
+                let spec = hash_func_name(mod_name, func_name);
+                Ok((mod_name, func_name, spec))
+            }
+            None => Err(
+                ErrorKind::EntryPointNotFound(EntryPointNameBuf(entry_point.0.to_owned())).into(),
+            ),
+        }
+    }
+}
+
+pub fn solve(program: Program) -> Result<Solutions> {
+    Ok(Solutions {
+        mods: program
+            .mods
+            .into_iter()
+            .map(|(mod_name, mod_def)| {
+                let mod_sols = ModSolutions {
+                    funcs: mod_def
+                        .func_defs
+                        .into_iter()
+                        .map(|(func_name, func_def)| {
+                            let func_sols = FuncSolutions {
+                                spec: hash_func_name(ModName(&mod_name.0), FuncName(&func_name.0)),
+                                spec_solutions: FuncSpecSolutions { func_def },
+                            };
+                            (func_name, func_sols)
+                        })
+                        .collect(),
+                };
+                (mod_name, mod_sols)
+            })
+            .collect(),
+        entry_points: program.entry_points,
+    })
+}
+
+fn hash_bstr(hasher: &mut Sha256, bstr: &[u8]) {
+    let header = (bstr.len() as u64).to_le_bytes();
+    hasher.update(&header);
+    hasher.update(bstr);
+}
+
+fn hash_func_name(mod_: ModName, func: FuncName) -> FuncSpec {
+    let mut hasher = Sha256::new();
+    hash_bstr(&mut hasher, &mod_.0);
+    hash_bstr(&mut hasher, &func.0);
+    FuncSpec(hasher.finalize().into())
+}
