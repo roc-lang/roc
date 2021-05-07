@@ -1,3 +1,5 @@
+#![allow(clippy::manual_map)]
+
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_module::ident::ModuleName;
@@ -283,10 +285,11 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 let mut alternatives = Vec::with_capacity_in(branch.patterns.len(), arena);
                 alternatives.extend(branch.patterns.iter().copied());
 
-                let desugared_guard = branch
-                    .guard
-                    .as_ref()
-                    .map(|guard| *desugar_expr(arena, guard));
+                let desugared_guard = if let Some(guard) = &branch.guard {
+                    Some(*desugar_expr(arena, guard))
+                } else {
+                    None
+                };
 
                 let alternatives = alternatives.into_bump_slice();
 
