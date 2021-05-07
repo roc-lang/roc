@@ -1,3 +1,5 @@
+#![allow(clippy::manual_map)]
+
 use self::InProgressProc::*;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{

@@ -283,8 +283,8 @@ pub fn gen_from_mono_module(
     let emit_o_file = emit_o_file_start.elapsed().unwrap();
 
     CodeGenTiming {
-        emit_o_file,
         code_gen,
+        emit_o_file,
     }
 }
 

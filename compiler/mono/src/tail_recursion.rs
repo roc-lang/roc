@@ -231,10 +231,8 @@ fn insert_jumps<'a>(
                 None
             }
         }
-        Refcounting(modify, cont) => match insert_jumps(arena, cont, goal_id, needle) {
-            Some(cont) => Some(arena.alloc(Refcounting(*modify, cont))),
-            None => None,
-        },
+        Refcounting(modify, cont) => insert_jumps(arena, cont, goal_id, needle)
+            .map(|cont| &*arena.alloc(Refcounting(*modify, cont))),
 
         Rethrow => None,
         Ret(_) => None,

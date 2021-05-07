@@ -226,10 +226,10 @@ impl ShallowClone for ValueDef {
     fn shallow_clone(&self) -> Self {
         Self {
             pattern: self.pattern,
-            expr_type: match &self.expr_type {
-                Some((id, rigids)) => Some((*id, rigids.shallow_clone())),
-                None => None,
-            },
+            expr_type: self
+                .expr_type
+                .as_ref()
+                .map(|(id, rigids)| (*id, rigids.shallow_clone())),
             expr_var: self.expr_var,
         }
     }

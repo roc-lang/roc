@@ -58,7 +58,7 @@ fn new_op_call_expr<'a>(
         }
     };
 
-    Located { value, region }
+    Located { region, value }
 }
 
 fn desugar_def_helps<'a>(
@@ -283,11 +283,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
                 let mut alternatives = Vec::with_capacity_in(branch.patterns.len(), arena);
                 alternatives.extend(branch.patterns.iter().copied());
 
-                let desugared_guard = if let Some(guard) = &branch.guard {
-                    Some(*desugar_expr(arena, guard))
-                } else {
-                    None
-                };
+                let desugared_guard = branch
+                    .guard
+                    .as_ref()
+                    .map(|guard| *desugar_expr(arena, guard));
 
                 let alternatives = alternatives.into_bump_slice();
 

@@ -1098,10 +1098,10 @@ macro_rules! loc {
                     let end_col = state.column;
                     let end_line = state.line;
                     let region = Region {
-                        start_col,
                         start_line,
-                        end_col,
                         end_line,
+                        start_col,
+                        end_col,
                     };
 
                     Ok((progress, Located { region, value }, state))

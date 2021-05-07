@@ -211,7 +211,7 @@ pub fn build_file<'a>(
 
     Ok(BuiltFile {
         binary_path,
-        total_time,
         outcome,
+        total_time,
     })
 }

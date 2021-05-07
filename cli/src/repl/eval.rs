@@ -48,8 +48,8 @@ pub unsafe fn jit_to_ast<'a>(
         arena,
         subs,
         ptr_bytes,
-        home,
         interns,
+        home,
     };
 
     jit_to_ast_help(&env, lib, main_fn_name, layout, content)
