@@ -101,6 +101,10 @@ impl Symbol {
             .into()
         }
     }
+
+    pub const fn to_be_bytes(self) -> [u8; 8] {
+        self.0.to_be_bytes()
+    }
 }
 
 /// Rather than displaying as this:
