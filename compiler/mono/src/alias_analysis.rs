@@ -200,16 +200,17 @@ fn call_spec(
     match &call.call_type {
         ByName {
             name: symbol,
-            full_layout,
-            ret_layout,
-            arg_layouts,
+            full_layout: _,
+            ret_layout: _,
+            arg_layouts: _,
         } => {
             // TODO annotate each call with a unique identifier
             let spec_var = CalleeSpecVar(&[]);
 
             let arg_value_id = build_tuple_value(builder, env, block, call.arguments)?;
-            let name = FuncName(&symbol.to_be_bytes());
-            let module = FuncName(&symbol.to_be_bytes());
+            let slice = &symbol.to_be_bytes();
+            let name = FuncName(slice);
+            let module = MOD_APP;
             builder.add_call(block, spec_var, module, name, arg_value_id)
         }
         ByPointer {
@@ -254,11 +255,11 @@ fn expr_spec(
         FunctionPointer(_, _) => todo!(),
         Call(call) => call_spec(builder, env, block, layout, call),
         Tag {
-            tag_layout,
-            tag_name,
-            tag_id,
-            union_size,
-            arguments,
+            tag_layout: _,
+            tag_name: _,
+            tag_id: _,
+            union_size: _,
+            arguments: _,
         } => todo!(),
         Struct(fields) => build_tuple_value(builder, env, block, fields),
         AccessAtIndex {

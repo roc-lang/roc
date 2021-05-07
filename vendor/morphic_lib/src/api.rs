@@ -199,6 +199,12 @@ pub struct TypeDefBuilder {
     tid_gen: SeqGen,
 }
 
+impl Default for TypeDefBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypeDefBuilder {
     pub fn new() -> Self {
         Self {
@@ -287,6 +293,12 @@ pub struct FuncDefBuilder {
     join_points: BTreeMap<JoinPointId, JoinPointState>,
     callee_spec_vars: BTreeMap<CalleeSpecBuf, FuncSpec>,
     update_mode_vars: BTreeSet<UpdateModeBuf>,
+}
+
+impl Default for FuncDefBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FuncDefBuilder {
@@ -787,6 +799,7 @@ pub struct ModDef {
     func_defs: BTreeMap<FuncNameBuf, FuncDef>,
 }
 
+#[derive(Default)]
 pub struct ModDefBuilder {
     type_names: BTreeSet<TypeNameBuf>,
     func_defs: BTreeMap<FuncNameBuf, FuncDef>,
@@ -829,6 +842,7 @@ pub struct Program {
     entry_points: BTreeMap<EntryPointNameBuf, (ModNameBuf, FuncNameBuf)>,
 }
 
+#[derive(Default)]
 pub struct ProgramBuilder {
     mods: BTreeMap<ModNameBuf, ModDef>,
     entry_points: BTreeMap<EntryPointNameBuf, (ModNameBuf, FuncNameBuf)>,
@@ -939,7 +953,7 @@ pub struct FuncSolutions {
 }
 
 impl FuncSolutions {
-    pub fn specs<'a>(&'a self) -> impl Iterator<Item = &'a FuncSpec> {
+    pub fn specs(&self) -> impl Iterator<Item = &FuncSpec> {
         std::iter::once(&self.spec)
     }
 
