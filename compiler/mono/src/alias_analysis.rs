@@ -389,8 +389,11 @@ fn layout_spec(builder: &mut FuncDefBuilder, layout: &Layout) -> Result<TypeId> 
     match layout {
         Builtin(builtin) => Ok(builtin_spec(builder, builtin)),
         PhantomEmptyStruct => todo!(),
-        Struct(_) => todo!(),
-        Union(_) => todo!(),
+        Struct(fields) => build_tuple_type(builder, fields),
+        Union(union_layout) => {
+            let variant_types = build_variant_types_help(builder, union_layout)?;
+            builder.add_union_type(&variant_types)
+        }
         RecursivePointer => todo!(),
         FunctionPointer(_, _) => todo!(),
         Closure(_, _, _) => todo!(),
