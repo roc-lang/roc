@@ -141,6 +141,20 @@ fn constrain_str() {
     )
 }
 
+// This will be more useful once we actually map
+// strings less than 15 chars to SmallStr
+#[test]
+fn constrain_small_str() {
+    infer_eq(
+        indoc!(
+            r#"
+            "a"
+            "#
+        ),
+        "Str",
+    )
+}
+
 #[test]
 fn constrain_empty_record() {
     infer_eq(
