@@ -24,6 +24,7 @@ comptime {
     exportListFn(list.listRange, "range");
     exportListFn(list.listReverse, "reverse");
     exportListFn(list.listSortWith, "sort_with");
+    exportListFn(list.listConcat, "concat");
 }
 
 // Dict Module
