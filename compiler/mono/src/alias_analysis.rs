@@ -1,14 +1,15 @@
 use morphic_lib::TypeContext;
 use morphic_lib::{
     BlockExpr, BlockId, CalleeSpecVar, FuncDef, FuncDefBuilder, FuncName, ModName, Result, TypeId,
-    TypeName, ValueId,
+    TypeName, UpdateModeVar, ValueId,
 };
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
+use std::convert::TryFrom;
 
 use crate::ir::{Call, CallType, Expr, Literal, Proc, Stmt};
-use crate::layout::{Builtin, Layout, UnionLayout};
+use crate::layout::{Builtin, Layout, ListLayout, UnionLayout};
 
 // just using one module for now
 const MOD_NUM: ModName = ModName(b"UserApp");
@@ -240,14 +241,19 @@ fn call_spec(
 }
 
 fn lowlevel_spec(
-    _builder: &mut FuncDefBuilder,
+    builder: &mut FuncDefBuilder,
     _env: &Env,
-    _block: BlockId,
+    block: BlockId,
     _layout: &Layout,
-    _op: &LowLevel,
+    op: &LowLevel,
     _arguments: &[Symbol],
 ) -> Result<ValueId> {
-    todo!()
+    use LowLevel::*;
+
+    match op {
+        NumAdd => builder.add_make_tuple(block, &[]),
+        _ => todo!(),
+    }
 }
 
 fn build_variant_types(
@@ -343,7 +349,9 @@ fn expr_spec(
         Array { elem_layout, elems } => {
             let type_id = layout_spec(builder, elem_layout)?;
 
-            let mut bag = builder.add_empty_bag(block, type_id)?;
+            let list = new_list(builder, block, type_id)?;
+
+            let mut bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
 
             for symbol in elems.iter() {
                 let value_id = env.symbols[symbol];
@@ -355,9 +363,20 @@ fn expr_spec(
         }
 
         EmptyArray => {
-            let type_id = layout_spec(builder, layout)?;
+            use ListLayout::*;
 
-            builder.add_empty_bag(block, type_id)
+            match ListLayout::try_from(layout) {
+                Ok(EmptyList) => {
+                    // just make up an element type
+                    let type_id = builder.add_tuple_type(&[])?;
+                    new_list(builder, block, type_id)
+                }
+                Ok(List(element_layout)) => {
+                    let type_id = layout_spec(builder, element_layout)?;
+                    new_list(builder, block, type_id)
+                }
+                Err(()) => unreachable!("empty array does not have a list layout"),
+            }
         }
         Reuse { .. } => todo!("currently unused"),
         Reset(_) => todo!("currently unused"),
@@ -377,7 +396,7 @@ fn literal_spec(
     use Literal::*;
 
     match literal {
-        Str(_) => todo!("string literals are statically allocated, so what do we do?"),
+        Str(_) => new_static_string(builder, block),
         Int(_) | Float(_) | Bool(_) | Byte(_) => builder.add_make_tuple(block, &[]),
     }
 }
@@ -424,4 +443,30 @@ fn builtin_spec(builder: &mut FuncDefBuilder, builtin: &Builtin) -> TypeId {
         EmptyDict => todo!(),
         EmptySet => todo!(),
     }
+}
+
+const LIST_CELL_INDEX: u32 = 0;
+const LIST_BAG_INDEX: u32 = 1;
+const LIST_LEN_INDEX: u32 = 2;
+
+fn new_list(builder: &mut FuncDefBuilder, block: BlockId, element_type: TypeId) -> Result<ValueId> {
+    let cell = builder.add_new_heap_cell(block)?;
+    let bag = builder.add_empty_bag(block, element_type)?;
+    let length = new_usize(builder, block)?;
+    builder.add_make_tuple(block, &[cell, bag, length])
+}
+
+fn new_usize(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
+    builder.add_make_tuple(block, &[])
+}
+
+fn new_static_string(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
+    let cell = builder.add_new_heap_cell(block)?;
+
+    // immediately mutate the cell, so any future updates on this value are invalid
+    // updating a static string would cause a crash at runtime
+    let _ = builder.add_update(block, UpdateModeVar(&[]), cell)?;
+
+    let length = new_usize(builder, block)?;
+    builder.add_make_tuple(block, &[cell, length])
 }
