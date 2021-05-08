@@ -174,13 +174,13 @@ pub fn constrain_expr<'a>(
 fn exists<'a>(
     arena: &'a Bump,
     flex_vars: BumpVec<'a, Variable>,
-    constraint: Constraint<'a>,
+    defs_constraint: Constraint<'a>,
 ) -> Constraint<'a> {
     Constraint::Let(arena.alloc(LetConstraint {
         rigid_vars: BumpVec::new_in(arena),
         flex_vars,
         def_types: BumpMap::new_in(arena),
-        defs_constraint: constraint,
+        defs_constraint,
         ret_constraint: Constraint::True,
     }))
 }
