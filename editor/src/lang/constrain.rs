@@ -106,6 +106,55 @@ pub fn constrain_expr<'a>(
 
             exists(arena, flex_vars, defs_constraint)
         }
+        Expr2::List {
+            elem_var, elems, ..
+        } => {
+            let mut flex_vars = BumpVec::with_capacity_in(1, arena);
+
+            flex_vars.push(*elem_var);
+
+            if elems.is_empty() {
+                exists(
+                    arena,
+                    flex_vars,
+                    Eq(
+                        empty_list_type(env.pool, *elem_var),
+                        expected,
+                        Category::List,
+                        region,
+                    ),
+                )
+            } else {
+                let mut constraints = BumpVec::with_capacity_in(1 + elems.len(), arena);
+
+                let list_elem_type = Type2::Variable(*elem_var);
+
+                for (index, elem_node_id) in elems.iter_node_ids().enumerate() {
+                    let elem_expr = env.pool.get(elem_node_id);
+
+                    let elem_expected = Expected::ForReason(
+                        Reason::ElemInList {
+                            index: Index::zero_based(index),
+                        },
+                        list_elem_type.shallow_clone(),
+                        region,
+                    );
+
+                    let constraint = constrain_expr(arena, env, elem_expr, elem_expected, region);
+
+                    constraints.push(constraint);
+                }
+
+                constraints.push(Eq(
+                    list_type(env.pool, list_elem_type),
+                    expected,
+                    Category::List,
+                    region,
+                ));
+
+                exists(arena, flex_vars, And(constraints))
+            }
+        }
         Expr2::Record { fields, record_var } => {
             if fields.is_empty() {
                 constrain_empty_record(expected, region)
