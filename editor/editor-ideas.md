@@ -122,6 +122,8 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * [Kite](https://www.kite.com/) AI autocomplete and doc viewer.
 * [Tabnine](https://www.tabnine.com/) AI autocomplete.
 * [Codota](https://www.codota.com) AI autocomplete and example searching.
+* [Aroma](https://ai.facebook.com/blog/aroma-ml-for-code-recommendation) showing examples similar to current code.
+* [MISM](https://arxiv.org/abs/2006.05265) neural network based code similarity scoring.
 
 ### Non-Code Related Inspiration
 
@@ -159,6 +161,10 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     * Select a function to record.
     * Do a normal run, and save the input and output of the selected function.
     * Generate a unit test with that input-output pair
+
+### Inspiration
+
+* [Haskell language server plugin](https://github.com/haskell/haskell-language-server/blob/master/plugins/hls-eval-plugin/README.md) evaluate code in comments, to test and document functions and to quickly evaluate small expressions.
 
 ## Documentation
 
