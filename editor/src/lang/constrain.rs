@@ -251,18 +251,22 @@ fn constrain_empty_record<'a>(expected: Expected<Type2>, region: Region) -> Cons
     Constraint::Eq(Type2::EmptyRec, expected, Category::Record, region)
 }
 
+#[inline(always)]
 fn builtin_type(symbol: Symbol, args: PoolVec<Type2>) -> Type2 {
     Type2::Apply(symbol, args)
 }
 
+#[inline(always)]
 fn str_type(pool: &mut Pool) -> Type2 {
     builtin_type(Symbol::STR_STR, PoolVec::empty(pool))
 }
 
+#[inline(always)]
 fn empty_list_type(pool: &mut Pool, var: Variable) -> Type2 {
     list_type(pool, Type2::Variable(var))
 }
 
+#[inline(always)]
 fn list_type(pool: &mut Pool, typ: Type2) -> Type2 {
     let args = PoolVec::with_capacity(1, pool);
 
@@ -273,6 +277,7 @@ fn list_type(pool: &mut Pool, typ: Type2) -> Type2 {
     builtin_type(Symbol::LIST_LIST, args)
 }
 
+#[inline(always)]
 fn num_float(pool: &mut Pool, range: TypeId) -> Type2 {
     let num_floatingpoint_type = num_floatingpoint(pool, range);
     let num_floatingpoint_id = pool.add(num_floatingpoint_type);
@@ -287,6 +292,7 @@ fn num_float(pool: &mut Pool, range: TypeId) -> Type2 {
     )
 }
 
+#[inline(always)]
 fn num_floatingpoint(pool: &mut Pool, range: TypeId) -> Type2 {
     let range_type = pool.get(range);
 
@@ -310,6 +316,7 @@ fn num_floatingpoint(pool: &mut Pool, range: TypeId) -> Type2 {
     )
 }
 
+#[inline(always)]
 fn _num_int(pool: &mut Pool, range: TypeId) -> Type2 {
     let num_integer_type = _num_integer(pool, range);
     let num_integer_id = pool.add(num_integer_type);
@@ -324,6 +331,7 @@ fn _num_int(pool: &mut Pool, range: TypeId) -> Type2 {
     )
 }
 
+#[inline(always)]
 fn _num_signed64(pool: &mut Pool) -> Type2 {
     let alias_content = Type2::TagUnion(
         PoolVec::new(
@@ -341,6 +349,7 @@ fn _num_signed64(pool: &mut Pool) -> Type2 {
     )
 }
 
+#[inline(always)]
 fn _num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
     let range_type = pool.get(range);
 
@@ -364,6 +373,7 @@ fn _num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
     )
 }
 
+#[inline(always)]
 fn num_num(pool: &mut Pool, type_id: TypeId) -> Type2 {
     let range_type = pool.get(type_id);
 
