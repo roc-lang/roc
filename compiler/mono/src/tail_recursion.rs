@@ -1,3 +1,5 @@
+#![allow(clippy::manual_map)]
+
 use crate::ir::{CallType, Expr, JoinPointId, Param, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;

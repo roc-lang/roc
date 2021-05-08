@@ -1947,11 +1947,11 @@ fn update<'a>(
 
                     let typechecked = TypeCheckedModule {
                         module_id,
-                        decls,
-                        solved_subs,
-                        ident_ids,
-                        module_timing,
                         layout_cache,
+                        module_timing,
+                        solved_subs,
+                        decls,
+                        ident_ids,
                     };
 
                     state
@@ -2000,10 +2000,10 @@ fn update<'a>(
                 .extend(procs.module_thunks.iter().copied());
 
             let found_specializations_module = FoundSpecializationsModule {
-                layout_cache,
                 module_id,
-                procs,
                 ident_ids,
+                layout_cache,
+                procs,
                 subs,
                 module_timing,
             };
@@ -3715,13 +3715,13 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
         module_id,
         module_name,
         module_path,
+        src,
+        module_timing,
         deps_by_name,
+        imported_modules,
         exposed_ident_ids,
         exposed_imports,
-        src,
         parsed_defs,
-        imported_modules,
-        module_timing,
     };
 
     Ok(Msg::Parsed(parsed))

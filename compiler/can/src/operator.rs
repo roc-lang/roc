@@ -1,3 +1,5 @@
+#![allow(clippy::manual_map)]
+
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_module::ident::ModuleName;
@@ -58,7 +60,7 @@ fn new_op_call_expr<'a>(
         }
     };
 
-    Located { value, region }
+    Located { region, value }
 }
 
 fn desugar_def_helps<'a>(

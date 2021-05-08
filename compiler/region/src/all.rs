@@ -24,8 +24,8 @@ impl Region {
     pub const fn new(start_line: u32, end_line: u32, start_col: u16, end_col: u16) -> Self {
         Self {
             start_line,
-            start_col,
             end_line,
+            start_col,
             end_col,
         }
     }
@@ -106,10 +106,10 @@ impl Region {
         end_col: u16,
     ) -> Self {
         Region {
-            start_col,
             start_line,
-            end_col,
             end_line,
+            start_col,
+            end_col,
         }
     }
 
@@ -177,20 +177,20 @@ impl<T> Located<T> {
     ) -> Located<T> {
         let region = Region {
             start_line,
-            start_col,
             end_line,
+            start_col,
             end_col,
         };
-        Located { value, region }
+        Located { region, value }
     }
 
     pub fn at(region: Region, value: T) -> Located<T> {
-        Located { value, region }
+        Located { region, value }
     }
 
     pub fn at_zero(value: T) -> Located<T> {
         let region = Region::zero();
-        Located { value, region }
+        Located { region, value }
     }
 }
 

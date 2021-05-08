@@ -40,8 +40,8 @@ pub fn type_problem<'b>(
                 .append(alloc.reflow("."));
 
             Report {
-                filename,
                 title,
+                filename,
                 doc,
             }
         }
@@ -85,8 +85,8 @@ pub fn type_problem<'b>(
                     };
 
                     Report {
-                        filename,
                         title,
+                        filename,
                         doc,
                     }
                 }
@@ -94,8 +94,8 @@ pub fn type_problem<'b>(
                     let (doc, title) = cyclic_alias(alloc, symbol, region, others);
 
                     Report {
-                        filename,
                         title,
+                        filename,
                         doc,
                     }
                 }

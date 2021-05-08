@@ -92,7 +92,7 @@ fn term<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>>, Typ
                     let value =
                         TypeAnnotation::As(arena.alloc(loc_ann), spaces, arena.alloc(loc_as));
 
-                    Located { value, region }
+                    Located { region, value }
                 }
 
                 None => loc_ann,

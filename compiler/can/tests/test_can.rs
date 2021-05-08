@@ -87,7 +87,7 @@ mod test_can {
                 IntErrorKind::Overflow,
                 Base::Decimal,
                 Region::zero(),
-                string.into(),
+                string.into_boxed_str(),
             )),
         );
     }

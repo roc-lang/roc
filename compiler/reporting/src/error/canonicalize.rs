@@ -149,8 +149,8 @@ pub fn can_problem<'b>(
             let (doc, title) = crate::error::r#type::cyclic_alias(alloc, symbol, region, others);
 
             return Report {
-                filename,
                 title,
+                filename,
                 doc,
             };
         }

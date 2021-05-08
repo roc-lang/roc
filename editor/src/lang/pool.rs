@@ -263,10 +263,15 @@ impl PoolStr {
         }
     }
 
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self, pool: &Pool) -> usize {
         let contents = self.as_str(pool);
 
         contents.len()
+    }
+
+    pub fn is_empty(&self, pool: &Pool) -> bool {
+        self.len(pool) == 0
     }
 }
 

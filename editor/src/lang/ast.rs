@@ -1,3 +1,5 @@
+#![allow(clippy::manual_map)]
+
 use crate::lang::pattern::{Pattern2, PatternId};
 use crate::lang::pool::Pool;
 use crate::lang::pool::{NodeId, PoolStr, PoolVec, ShallowClone};
