@@ -21,8 +21,8 @@ pub fn proc_spec(proc: &Proc) -> Result<FuncDef> {
 
     let block = builder.add_block();
 
+    // introduce the arguments
     let mut argument_layouts = Vec::new();
-
     for (i, (layout, symbol)) in proc.args.iter().enumerate() {
         let value_id = builder.add_get_tuple_field(block, morphic_lib::ARG_VALUE_ID, i as u32)?;
         env.symbols.insert(*symbol, value_id);
@@ -143,9 +143,8 @@ fn stmt_spec(
 
             let jp_body_value_id = stmt_spec(builder, env, jp_body_block, layout, remainder)?;
 
-            for p in parameters.iter() {
-                env.symbols.remove(&p.symbol);
-            }
+            // NOTE the symbols bound by the join point can shadow the argument symbols of the
+            // surrounding function, so we don't remove them from the env here
 
             // NOTE I think we need to use add_sub_block here, but not sure how
 
@@ -181,7 +180,13 @@ fn build_tuple_value(
     let mut value_ids = Vec::new();
 
     for field in symbols.iter() {
-        let value_id = env.symbols[field];
+        let value_id = match env.symbols.get(field) {
+            None => panic!(
+                "Symbol {:?} is not defined in environment {:?}",
+                field, &env.symbols
+            ),
+            Some(x) => *x,
+        };
         value_ids.push(value_id);
     }
 
@@ -254,7 +259,7 @@ fn lowlevel_spec(
 
     match op {
         NumAdd | NumSub => {
-            // NOTE some numeric operations panic (e.g. on overflow)
+            // NOTE these numeric operations panic (e.g. on overflow)
 
             let pass_block = {
                 let block = builder.add_block();
@@ -277,6 +282,7 @@ fn lowlevel_spec(
 
             builder.add_sub_block(block, sub_block)
         }
+        Eq | NotEq => new_bool(builder, block),
         NumLte | NumLt | NumGt | NumGte => new_order(builder, block),
         ListLen => {
             let list = env.symbols[&arguments[0]];
@@ -309,7 +315,7 @@ fn lowlevel_spec(
 
             Ok(list)
         }
-        _ => todo!(),
+        other => todo!("lowlevel op not implemented: {:?}", other),
     }
 }
 
@@ -399,7 +405,8 @@ fn expr_spec(
                     builder.add_get_tuple_field(block, value_id, *index as u32)
                 }
                 Wrapped::MultiTagUnion => {
-                    todo!("the complicated case")
+                    // TODO this is likely wrong; how can we extract a field from an union constructor?
+                    builder.add_get_tuple_field(block, value_id, *index as u32)
                 }
             }
         }
@@ -535,6 +542,15 @@ fn new_order(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
     let unit = builder.add_tuple_type(&[])?;
     let unit_value = builder.add_make_tuple(block, &[])?;
     builder.add_make_union(block, &[unit, unit, unit], tag_id, unit_value)
+}
+
+fn new_bool(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
+    // always generats False
+    let tag_id = 0;
+
+    let unit = builder.add_tuple_type(&[])?;
+    let unit_value = builder.add_make_tuple(block, &[])?;
+    builder.add_make_union(block, &[unit, unit], tag_id, unit_value)
 }
 
 fn new_num(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {

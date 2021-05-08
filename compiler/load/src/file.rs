@@ -2046,6 +2046,15 @@ fn update<'a>(
                 && state.dependencies.solved_all()
                 && state.goal_phase == Phase::MakeSpecializations
             {
+                if false {
+                    for proc in state.procedures.iter() {
+                        println!("looking at {:?}", proc.1.name);
+                        if let Err(e) = roc_mono::alias_analysis::proc_spec(&proc.1) {
+                            println!("Error in {:?}: {:?}", proc.1.name, e)
+                        }
+                    }
+                }
+
                 Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 Proc::optimize_refcount_operations(
