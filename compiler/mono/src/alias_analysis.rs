@@ -12,7 +12,7 @@ use crate::ir::{Call, CallType, Expr, Literal, Proc, Stmt};
 use crate::layout::{Builtin, Layout, ListLayout, UnionLayout};
 
 // just using one module for now
-const MOD_NUM: ModName = ModName(b"UserApp");
+const MOD_LIST: ModName = ModName(b"UserApp");
 const MOD_APP: ModName = ModName(b"UserApp");
 
 pub fn proc_spec(proc: &Proc) -> Result<FuncDef> {
@@ -242,16 +242,73 @@ fn call_spec(
 
 fn lowlevel_spec(
     builder: &mut FuncDefBuilder,
-    _env: &Env,
+    env: &Env,
     block: BlockId,
-    _layout: &Layout,
+    layout: &Layout,
     op: &LowLevel,
-    _arguments: &[Symbol],
+    arguments: &[Symbol],
 ) -> Result<ValueId> {
     use LowLevel::*;
 
+    let type_id = layout_spec(builder, layout)?;
+
     match op {
-        NumAdd => builder.add_make_tuple(block, &[]),
+        NumAdd | NumSub => {
+            // NOTE some numeric operations panic (e.g. on overflow)
+
+            let pass_block = {
+                let block = builder.add_block();
+                let value = new_num(builder, block)?;
+                BlockExpr(block, value)
+            };
+
+            let fail_block = {
+                let block = builder.add_block();
+                let value = builder.add_terminate(block, type_id)?;
+                BlockExpr(block, value)
+            };
+
+            let sub_block = {
+                let block = builder.add_block();
+                let choice = builder.add_choice(block, &[pass_block, fail_block])?;
+
+                BlockExpr(block, choice)
+            };
+
+            builder.add_sub_block(block, sub_block)
+        }
+        NumLte | NumLt | NumGt | NumGte => new_order(builder, block),
+        ListLen => {
+            let list = env.symbols[&arguments[0]];
+
+            builder.add_get_tuple_field(block, list, LIST_LEN_INDEX)
+        }
+        ListGetUnsafe => {
+            // NOTE the ListGet lowlevel op is only evaluated if the index is in-bounds
+            let list = env.symbols[&arguments[0]];
+
+            let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+            let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+
+            let _unit = builder.add_touch(block, cell)?;
+
+            builder.add_bag_get(block, bag)
+        }
+        ListSet => {
+            let list = env.symbols[&arguments[0]];
+            let to_insert = env.symbols[&arguments[2]];
+
+            let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+            let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+
+            // even if this has been written to before, it's okay to write to it again
+            let update_mode_var = UpdateModeVar(&[]);
+            let _unit = builder.add_update_write_only(block, update_mode_var, cell);
+
+            builder.add_bag_insert(block, bag, to_insert)?;
+
+            Ok(list)
+        }
         _ => todo!(),
     }
 }
@@ -405,7 +462,7 @@ fn layout_spec(builder: &mut FuncDefBuilder, layout: &Layout) -> Result<TypeId> 
     use Layout::*;
 
     match layout {
-        Builtin(builtin) => Ok(builtin_spec(builder, builtin)),
+        Builtin(builtin) => builtin_spec(builder, builtin),
         PhantomEmptyStruct => todo!(),
         Struct(fields) => build_tuple_type(builder, fields),
         Union(union_layout) => {
@@ -419,17 +476,11 @@ fn layout_spec(builder: &mut FuncDefBuilder, layout: &Layout) -> Result<TypeId> 
     }
 }
 
-fn builtin_spec(builder: &mut FuncDefBuilder, builtin: &Builtin) -> TypeId {
+fn builtin_spec(builder: &mut FuncDefBuilder, builtin: &Builtin) -> Result<TypeId> {
     use Builtin::*;
 
     match builtin {
-        Int128 => todo!(),
-        Int64 => builder.add_named_type(MOD_NUM, TypeName(b"I64")),
-        Int32 => todo!(),
-        Int16 => todo!(),
-        Int8 => todo!(),
-        Int1 => todo!(),
-        Usize => todo!(),
+        Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize => builder.add_tuple_type(&[]),
         Float128 => todo!(),
         Float64 => todo!(),
         Float32 => todo!(),
@@ -437,13 +488,19 @@ fn builtin_spec(builder: &mut FuncDefBuilder, builtin: &Builtin) -> TypeId {
         Str => todo!(),
         Dict(_, _) => todo!(),
         Set(_) => todo!(),
-        List(_, _) => todo!(),
+        List(_, _) => {
+            // TODO should incorporate the element type into the name
+            Ok(builder.add_named_type(MOD_LIST, TypeName(b"List")))
+        }
         EmptyStr => todo!(),
         EmptyList => todo!(),
         EmptyDict => todo!(),
         EmptySet => todo!(),
     }
 }
+
+// const OK_TAG_ID: u8 = 1u8;
+// const ERR_TAG_ID: u8 = 0u8;
 
 const LIST_CELL_INDEX: u32 = 0;
 const LIST_BAG_INDEX: u32 = 1;
@@ -457,7 +514,7 @@ fn new_list(builder: &mut FuncDefBuilder, block: BlockId, element_type: TypeId) 
 }
 
 fn new_usize(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
-    builder.add_make_tuple(block, &[])
+    new_num(builder, block)
 }
 
 fn new_static_string(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
@@ -469,4 +526,18 @@ fn new_static_string(builder: &mut FuncDefBuilder, block: BlockId) -> Result<Val
 
     let length = new_usize(builder, block)?;
     builder.add_make_tuple(block, &[cell, length])
+}
+
+fn new_order(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
+    // always generats EQ
+    let tag_id = 0;
+
+    let unit = builder.add_tuple_type(&[])?;
+    let unit_value = builder.add_make_tuple(block, &[])?;
+    builder.add_make_union(block, &[unit, unit, unit], tag_id, unit_value)
+}
+
+fn new_num(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
+    // we model all our numbers as unit values
+    builder.add_make_tuple(block, &[])
 }
