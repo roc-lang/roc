@@ -208,7 +208,7 @@ fn call_spec(
             let spec_var = CalleeSpecVar(&[]);
 
             let arg_value_id = build_tuple_value(builder, env, block, call.arguments)?;
-            let slice = &symbol.to_be_bytes();
+            let slice = &symbol.to_ne_bytes();
             let name = FuncName(slice);
             let module = MOD_APP;
             builder.add_call(block, spec_var, module, name, arg_value_id)
