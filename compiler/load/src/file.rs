@@ -3808,6 +3808,7 @@ fn make_specializations<'a>(
         home,
         ident_ids: &mut ident_ids,
         ptr_bytes,
+        update_mode_counter: 0,
     };
 
     // TODO: for now this final specialization pass is sequential,
@@ -3869,6 +3870,7 @@ fn build_pending_specializations<'a>(
         home,
         ident_ids: &mut ident_ids,
         ptr_bytes,
+        update_mode_counter: 0,
     };
 
     // Add modules' decls to Procs

@@ -241,7 +241,15 @@ fn call_spec(
             // NOTE foreign functions are those exposed by the platform
             todo!()
         }
-        LowLevel { op } => lowlevel_spec(builder, env, block, layout, op, call.arguments),
+        LowLevel { op, update_mode } => lowlevel_spec(
+            builder,
+            env,
+            block,
+            layout,
+            op,
+            *update_mode,
+            call.arguments,
+        ),
     }
 }
 
@@ -251,11 +259,14 @@ fn lowlevel_spec(
     block: BlockId,
     layout: &Layout,
     op: &LowLevel,
+    update_mode: crate::ir::UpdateModeId,
     arguments: &[Symbol],
 ) -> Result<ValueId> {
     use LowLevel::*;
 
     let type_id = layout_spec(builder, layout)?;
+    let mode = update_mode.to_bytes();
+    let update_mode_var = UpdateModeVar(&mode);
 
     match op {
         NumAdd | NumSub => {
@@ -308,7 +319,6 @@ fn lowlevel_spec(
             let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
 
             // even if this has been written to before, it's okay to write to it again
-            let update_mode_var = UpdateModeVar(&[]);
             let _unit = builder.add_update_write_only(block, update_mode_var, cell);
 
             builder.add_bag_insert(block, bag, to_insert)?;

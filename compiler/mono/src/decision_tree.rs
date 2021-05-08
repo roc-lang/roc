@@ -1404,8 +1404,12 @@ fn compile_test_help<'a>(
         default_branch,
     };
 
+    let op = LowLevel::Eq;
     let test = Expr::Call(crate::ir::Call {
-        call_type: crate::ir::CallType::LowLevel { op: LowLevel::Eq },
+        call_type: crate::ir::CallType::LowLevel {
+            op,
+            update_mode: env.next_update_mode_id(op),
+        },
         arguments: arena.alloc([lhs, rhs]),
     });
 

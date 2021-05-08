@@ -735,6 +735,7 @@ pub struct Env<'a, 'i> {
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
     pub ptr_bytes: u32,
+    pub update_mode_counter: u64,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -744,6 +745,17 @@ impl<'a, 'i> Env<'a, 'i> {
         self.home.register_debug_idents(&self.ident_ids);
 
         Symbol::new(self.home, ident_id)
+    }
+
+    pub fn next_update_mode_id(&mut self, op: LowLevel) -> UpdateModeId {
+        let id = UpdateModeId {
+            id: self.update_mode_counter,
+            op,
+        };
+
+        self.update_mode_counter += 1;
+
+        id
     }
 
     pub fn is_imported_symbol(&self, symbol: Symbol) -> bool {
@@ -1004,7 +1016,7 @@ impl<'a> Call<'a> {
                     .text("CallByPointer ")
                     .append(alloc.intersperse(it, " "))
             }
-            LowLevel { op: lowlevel } => {
+            LowLevel { op: lowlevel, .. } => {
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
 
                 alloc
@@ -1024,18 +1036,40 @@ impl<'a> Call<'a> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UpdateModeId {
+    op: LowLevel,
+    id: u64,
+}
+
+impl UpdateModeId {
+    const SIZE: usize = std::mem::size_of::<LowLevel>() + std::mem::size_of::<u64>();
+
+    pub fn to_bytes(self) -> [u8; UpdateModeId::SIZE] {
+        debug_assert_eq!(Self::SIZE, 9);
+
+        let mut result = [0; Self::SIZE];
+
+        result[0] = self.op as u8;
+
+        for (i, b) in self.id.to_ne_bytes().iter().enumerate() {
+            result[i + 1] = *b;
+        }
+
+        result
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum CallType<'a> {
     ByName {
         name: Symbol,
-
         full_layout: Layout<'a>,
         ret_layout: Layout<'a>,
         arg_layouts: &'a [Layout<'a>],
     },
     ByPointer {
         name: Symbol,
-
         full_layout: Layout<'a>,
         ret_layout: Layout<'a>,
         arg_layouts: &'a [Layout<'a>],
@@ -1046,6 +1080,7 @@ pub enum CallType<'a> {
     },
     LowLevel {
         op: LowLevel,
+        update_mode: UpdateModeId,
     },
 }
 
@@ -4168,7 +4203,10 @@ pub fn with_hole<'a>(
                 return_on_layout_error!(env, layout_cache.from_var(env.arena, ret_var, env.subs));
 
             let call = self::Call {
-                call_type: CallType::LowLevel { op },
+                call_type: CallType::LowLevel {
+                    op,
+                    update_mode: env.next_update_mode_id(op),
+                },
                 arguments: arg_symbols,
             };
 
@@ -4316,8 +4354,10 @@ pub fn from_can<'a>(
             let bool_layout = Layout::Builtin(Builtin::Int1);
             let cond_symbol = env.unique_symbol();
 
+            let op = LowLevel::ExpectTrue;
             let call_type = CallType::LowLevel {
-                op: LowLevel::ExpectTrue,
+                op,
+                update_mode: env.next_update_mode_id(op),
             };
             let arguments = env.arena.alloc([cond_symbol]);
             let call = self::Call {

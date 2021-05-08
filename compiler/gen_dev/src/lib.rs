@@ -211,7 +211,7 @@ where
                         }
                     }
 
-                    CallType::LowLevel { op: lowlevel } => {
+                    CallType::LowLevel { op: lowlevel, .. } => {
                         self.build_run_low_level(sym, lowlevel, arguments, layout)
                     }
                     x => Err(format!("the call type, {:?}, is not yet implemented", x)),

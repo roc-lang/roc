@@ -402,7 +402,7 @@ impl<'a> BorrowInfState<'a> {
                 self.own_args(arguments);
             }
 
-            LowLevel { op } => {
+            LowLevel { op, .. } => {
                 // very unsure what demand RunLowLevel should place upon its arguments
                 self.own_var(z);
 
