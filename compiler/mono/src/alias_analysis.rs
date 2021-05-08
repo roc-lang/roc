@@ -8,7 +8,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
 use crate::ir::{Call, CallType, Expr, Literal, Proc, Stmt};
-use crate::layout::{Builtin, Layout};
+use crate::layout::{Builtin, Layout, UnionLayout};
 
 // just using one module for now
 const MOD_NUM: ModName = ModName(b"UserApp");
@@ -188,6 +188,16 @@ fn build_tuple_value(
     builder.add_make_tuple(block, &value_ids)
 }
 
+fn build_tuple_type(builder: &mut FuncDefBuilder, layouts: &[Layout]) -> Result<TypeId> {
+    let mut field_types = Vec::new();
+
+    for field in layouts.iter() {
+        field_types.push(layout_spec(builder, field)?);
+    }
+
+    builder.add_tuple_type(&field_types)
+}
+
 fn call_spec(
     builder: &mut FuncDefBuilder,
     env: &Env,
@@ -241,6 +251,45 @@ fn lowlevel_spec(
     todo!()
 }
 
+fn build_variant_types(
+    builder: &mut FuncDefBuilder,
+    layout: &Layout,
+) -> Option<Result<Vec<TypeId>>> {
+    match layout {
+        Layout::Union(union_layout) => Some(build_variant_types_help(builder, union_layout)),
+        _ => None,
+    }
+}
+
+fn build_variant_types_help(
+    builder: &mut FuncDefBuilder,
+    union_layout: &UnionLayout,
+) -> Result<Vec<TypeId>> {
+    use UnionLayout::*;
+
+    let mut result = Vec::new();
+
+    match union_layout {
+        NonRecursive(tags) => {
+            for tag in tags.iter() {
+                result.push(build_tuple_type(builder, tag)?);
+            }
+        }
+        Recursive(_) => todo!(),
+        NonNullableUnwrapped(_) => todo!(),
+        NullableWrapped {
+            nullable_id: _,
+            other_tags: _,
+        } => todo!(),
+        NullableUnwrapped {
+            nullable_id: _,
+            other_fields: _,
+        } => todo!(),
+    }
+
+    Ok(result)
+}
+
 fn expr_spec(
     builder: &mut FuncDefBuilder,
     env: &Env,
@@ -255,12 +304,16 @@ fn expr_spec(
         FunctionPointer(_, _) => todo!(),
         Call(call) => call_spec(builder, env, block, layout, call),
         Tag {
-            tag_layout: _,
+            tag_layout,
             tag_name: _,
-            tag_id: _,
+            tag_id,
             union_size: _,
-            arguments: _,
-        } => todo!(),
+            arguments,
+        } => {
+            let value_id = build_tuple_value(builder, env, block, arguments)?;
+            let variant_types = build_variant_types(builder, tag_layout).unwrap()?;
+            builder.add_make_union(block, &variant_types, *tag_id as u32, value_id)
+        }
         Struct(fields) => build_tuple_value(builder, env, block, fields),
         AccessAtIndex {
             index,
