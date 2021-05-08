@@ -202,3 +202,39 @@ fn constrain_record() {
         "{ x : Num *, y : Str }",
     )
 }
+
+#[test]
+fn constrain_empty_list() {
+    infer_eq(
+        indoc!(
+            r#"
+            []
+            "#
+        ),
+        "List *",
+    )
+}
+
+#[test]
+fn constrain_list() {
+    infer_eq(
+        indoc!(
+            r#"
+            [ 1, 2 ]
+            "#
+        ),
+        "List (Num *)",
+    )
+}
+
+#[test]
+fn constrain_list_of_records() {
+    infer_eq(
+        indoc!(
+            r#"
+            [ { x: 1 }, { x: 3 } ]
+            "#
+        ),
+        "List { x : Num * }",
+    )
+}
