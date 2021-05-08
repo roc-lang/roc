@@ -202,8 +202,26 @@ fn constrain_empty_record<'a>(expected: Expected<Type2>, region: Region) -> Cons
     Constraint::Eq(Type2::EmptyRec, expected, Category::Record, region)
 }
 
+fn builtin_type(symbol: Symbol, args: PoolVec<Type2>) -> Type2 {
+    Type2::Apply(symbol, args)
+}
+
 fn str_type(pool: &mut Pool) -> Type2 {
-    Type2::Apply(Symbol::STR_STR, PoolVec::empty(pool))
+    builtin_type(Symbol::STR_STR, PoolVec::empty(pool))
+}
+
+fn empty_list_type(pool: &mut Pool, var: Variable) -> Type2 {
+    list_type(pool, Type2::Variable(var))
+}
+
+fn list_type(pool: &mut Pool, typ: Type2) -> Type2 {
+    let args = PoolVec::with_capacity(1, pool);
+
+    for (arg_node_id, arg) in args.iter_node_ids().zip(vec![typ]) {
+        pool[arg_node_id] = arg;
+    }
+
+    builtin_type(Symbol::LIST_LIST, args)
 }
 
 fn num_float(pool: &mut Pool, range: TypeId) -> Type2 {
