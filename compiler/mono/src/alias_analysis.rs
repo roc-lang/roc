@@ -24,7 +24,7 @@ pub fn proc_spec(proc: &Proc) -> Result<FuncDef> {
     // introduce the arguments
     let mut argument_layouts = Vec::new();
     for (i, (layout, symbol)) in proc.args.iter().enumerate() {
-        let value_id = builder.add_get_tuple_field(block, morphic_lib::ARG_VALUE_ID, i as u32)?;
+        let value_id = builder.add_get_tuple_field(block, ValueId::ARGUMENT, i as u32)?;
         env.symbols.insert(*symbol, value_id);
 
         argument_layouts.push(*layout);

@@ -91,10 +91,12 @@ pub struct TypeNameBuf(Vec<u8>);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ValueId(pub u32);
 
-/// Value id 0 always refers to the argument to the current function.
-///
-/// Every function takes exactly one argument. Multiple arguments can be represented via tuples.
-pub const ARG_VALUE_ID: ValueId = ValueId(0);
+impl ValueId {
+    /// The `ValueId` that refers to the argument to the current function.
+    ///
+    /// Every function takes exactly one argument. Multiple arguments can be represented via tuples.
+    pub const ARGUMENT: Self = ValueId(0);
+}
 
 /// A reference to an arena-allocated join point in a function body.
 ///
@@ -171,12 +173,16 @@ pub trait TypeContext {
     fn add_bag_type(&mut self, item_type: TypeId) -> Result<TypeId>;
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct SeqGen {
     next: u32,
 }
 
 impl SeqGen {
+    fn new() -> Self {
+        Self { next: 0 }
+    }
+
     fn next(&mut self) -> u32 {
         let result = self.next;
         self.next += 1;
@@ -208,7 +214,7 @@ impl Default for TypeDefBuilder {
 impl TypeDefBuilder {
     pub fn new() -> Self {
         Self {
-            tid_gen: SeqGen::default(),
+            tid_gen: SeqGen::new(),
         }
     }
 
@@ -304,16 +310,16 @@ impl Default for FuncDefBuilder {
 impl FuncDefBuilder {
     pub fn new() -> Self {
         let mut result = Self {
-            tid_gen: SeqGen::default(),
-            bid_gen: SeqGen::default(),
-            vid_gen: SeqGen::default(),
-            jid_gen: SeqGen::default(),
+            tid_gen: SeqGen::new(),
+            bid_gen: SeqGen::new(),
+            vid_gen: SeqGen::new(),
+            jid_gen: SeqGen::new(),
             blocks: BTreeMap::new(),
             join_points: BTreeMap::new(),
             callee_spec_vars: BTreeMap::new(),
             update_mode_vars: BTreeSet::new(),
         };
-        // Generate `ARG_VALUE_ID`
+        // Generate `ValueId::ARGUMENT`
         result.vid_gen.next();
         result
     }
@@ -799,10 +805,15 @@ pub struct ModDef {
     func_defs: BTreeMap<FuncNameBuf, FuncDef>,
 }
 
-#[derive(Default)]
 pub struct ModDefBuilder {
     type_names: BTreeSet<TypeNameBuf>,
     func_defs: BTreeMap<FuncNameBuf, FuncDef>,
+}
+
+impl Default for ModDefBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ModDefBuilder {
@@ -842,10 +853,15 @@ pub struct Program {
     entry_points: BTreeMap<EntryPointNameBuf, (ModNameBuf, FuncNameBuf)>,
 }
 
-#[derive(Default)]
 pub struct ProgramBuilder {
     mods: BTreeMap<ModNameBuf, ModDef>,
     entry_points: BTreeMap<EntryPointNameBuf, (ModNameBuf, FuncNameBuf)>,
+}
+
+impl Default for ProgramBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ProgramBuilder {
