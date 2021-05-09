@@ -132,16 +132,20 @@ fn stmt_spec(
             let (jpid, jp_argument) =
                 builder.declare_join_point(block, jp_arg_type_id, ret_type_id)?;
 
-            env.join_points.insert(*id, jpid);
-            let jp_body_block = builder.add_block();
+            let join_body_sub_block = {
+                env.join_points.insert(*id, jpid);
+                let jp_body_block = builder.add_block();
 
-            // unpack the argument
-            for (i, p) in parameters.iter().enumerate() {
-                let value_id = builder.add_get_tuple_field(jp_body_block, jp_argument, i as u32)?;
-                env.symbols.insert(p.symbol, value_id);
-            }
+                // unpack the argument
+                for (i, p) in parameters.iter().enumerate() {
+                    let value_id =
+                        builder.add_get_tuple_field(jp_body_block, jp_argument, i as u32)?;
+                    env.symbols.insert(p.symbol, value_id);
+                }
 
-            let jp_body_value_id = stmt_spec(builder, env, jp_body_block, layout, remainder)?;
+                let jp_body_value_id = stmt_spec(builder, env, jp_body_block, layout, remainder)?;
+                BlockExpr(jp_body_block, jp_body_value_id)
+            };
 
             // NOTE the symbols bound by the join point can shadow the argument symbols of the
             // surrounding function, so we don't remove them from the env here
@@ -152,9 +156,9 @@ fn stmt_spec(
             let cont_value_id = stmt_spec(builder, env, cont_block, layout, continuation)?;
 
             env.join_points.remove(id);
-            builder.define_join_point(jpid, BlockExpr(jp_body_block, jp_body_value_id))?;
+            builder.define_join_point(jpid, join_body_sub_block)?;
 
-            Ok(cont_value_id)
+            builder.add_sub_block(block, BlockExpr(cont_block, cont_value_id))
         }
         Jump(id, symbols) => {
             let ret_type_id = layout_spec(builder, layout)?;
