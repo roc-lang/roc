@@ -37,7 +37,7 @@ fn run_solve<'a>(
         aliases,
     };
 
-    let mut subs = Subs::new(var_store.into());
+    let mut subs = Subs::new(var_store);
 
     for (var, name) in rigid_variables {
         subs.rigid_var(var, name);
@@ -141,6 +141,20 @@ fn constrain_str() {
     )
 }
 
+// This will be more useful once we actually map
+// strings less than 15 chars to SmallStr
+#[test]
+fn constrain_small_str() {
+    infer_eq(
+        indoc!(
+            r#"
+            "a"
+            "#
+        ),
+        "Str",
+    )
+}
+
 #[test]
 fn constrain_empty_record() {
     infer_eq(
@@ -186,5 +200,41 @@ fn constrain_record() {
             "#
         ),
         "{ x : Num *, y : Str }",
+    )
+}
+
+#[test]
+fn constrain_empty_list() {
+    infer_eq(
+        indoc!(
+            r#"
+            []
+            "#
+        ),
+        "List *",
+    )
+}
+
+#[test]
+fn constrain_list() {
+    infer_eq(
+        indoc!(
+            r#"
+            [ 1, 2 ]
+            "#
+        ),
+        "List (Num *)",
+    )
+}
+
+#[test]
+fn constrain_list_of_records() {
+    infer_eq(
+        indoc!(
+            r#"
+            [ { x: 1 }, { x: 3 } ]
+            "#
+        ),
+        "List { x : Num * }",
     )
 }
