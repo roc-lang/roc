@@ -2451,7 +2451,6 @@ mod test_mono {
     }
 
     #[test]
-    #[ignore]
     fn specialize_closures() {
         compiles_to_ir(
             indoc!(
@@ -2469,16 +2468,20 @@ mod test_mono {
                     two : I64
                     two = 2
 
+                    b : Bool
+                    b = True
+
                     increment : I64 -> I64
-                    increment = \x -> x + 1
+                    increment = \x -> x + one
 
                     double : I64 -> I64
-                    double = \x -> x * two
+                    double = \x -> if b then x * two else x
+
+                    # TODO removing these identity functions causes issues. investigate!
+                    f = (if True then (\x -> x) increment else (\x -> x) double)
 
                     when 3 is 
-                        1 -> increment 0
-                        2 -> double 0
-                        _ -> apply (if True then increment else double) 42
+                        _ -> apply f 42
                 "#
             ),
             indoc!(

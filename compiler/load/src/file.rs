@@ -2046,6 +2046,18 @@ fn update<'a>(
                 && state.dependencies.solved_all()
                 && state.goal_phase == Phase::MakeSpecializations
             {
+                // display the mono IR of the module, for debug purposes
+                if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
+                    let procs_string = state
+                        .procedures
+                        .values()
+                        .map(|proc| proc.to_pretty(200))
+                        .collect::<Vec<_>>();
+
+                    let result = procs_string.join("\n");
+
+                    println!("{}", result);
+                }
                 Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 Proc::optimize_refcount_operations(
@@ -2068,19 +2080,6 @@ fn update<'a>(
                     };
 
                     existing.extend(requested);
-                }
-
-                // display the mono IR of the module, for debug purposes
-                if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
-                    let procs_string = state
-                        .procedures
-                        .values()
-                        .map(|proc| proc.to_pretty(200))
-                        .collect::<Vec<_>>();
-
-                    let result = procs_string.join("\n");
-
-                    println!("{}", result);
                 }
 
                 msg_tx

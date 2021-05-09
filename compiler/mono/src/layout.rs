@@ -98,7 +98,7 @@ pub struct ClosureLayout<'a> {
     /// the layout that this specific closure captures
     /// uses a Vec instead of a MutMap because it's Hash
     /// the vec is likely to be small, so linear search is fine
-    captured: &'a [(TagName, &'a [Layout<'a>])],
+    pub captured: &'a [(TagName, &'a [Layout<'a>])],
 
     /// use with care; there is some stuff happening here re. unwrapping
     /// one-element records that might cause issues

@@ -157,6 +157,12 @@ impl fmt::Display for Symbol {
     }
 }
 
+impl Into<u64> for Symbol {
+    fn into(self) -> u64 {
+        self.0
+    }
+}
+
 fn fallback_debug_fmt(symbol: Symbol, f: &mut fmt::Formatter) -> fmt::Result {
     let module_id = symbol.module_id();
     let ident_id = symbol.ident_id();
