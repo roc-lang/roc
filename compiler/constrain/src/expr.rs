@@ -1156,7 +1156,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                         name,
                         ..
                     },
-                    Type::Function(arg_types, _closure_type, ret_type),
+                    Type::Function(arg_types, signature_closure_type, ret_type),
                 ) => {
                     // NOTE if we ever have problems with the closure, the ignored `_closure_type`
                     // is probably a good place to start the investigation!
@@ -1261,6 +1261,19 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                                 defs_constraint,
                                 ret_constraint,
                             })),
+                            Eq(
+                                Type::Variable(closure_var),
+                                Expected::FromAnnotation(
+                                    def.loc_pattern.clone(),
+                                    arity,
+                                    AnnotationSource::TypedBody {
+                                        region: annotation.region,
+                                    },
+                                    *signature_closure_type.clone(),
+                                ),
+                                Category::ClosureSize,
+                                region,
+                            ),
                             Store(signature.clone(), *fn_var, std::file!(), std::line!()),
                             Store(signature, expr_var, std::file!(), std::line!()),
                             Store(ret_type, ret_var, std::file!(), std::line!()),

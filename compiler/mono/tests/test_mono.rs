@@ -2415,4 +2415,139 @@ mod test_mono {
             ),
         )
     }
+
+    #[test]
+    #[ignore]
+    fn somehow_drops_definitions() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                one : I64 
+                one = 1
+
+                two : I64
+                two = 2
+
+                increment : I64 -> I64
+                increment = \x -> x + one
+
+                double : I64 -> I64
+                double = \x -> x * two
+
+                apply : (a -> a), a -> a
+                apply = \f, x -> f x
+
+                main =
+                    apply (if True then increment else double) 42
+                "#
+            ),
+            indoc!(
+                r#"
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn specialize_closures() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+
+                apply : (a -> a), a -> a
+                apply = \f, x -> f x
+
+                main =
+                    one : I64 
+                    one = 1
+
+                    two : I64
+                    two = 2
+
+                    increment : I64 -> I64
+                    increment = \x -> x + 1
+
+                    double : I64 -> I64
+                    double = \x -> x * two
+
+                    when 3 is 
+                        1 -> increment 0
+                        2 -> double 0
+                        _ -> apply (if True then increment else double) 42
+                "#
+            ),
+            indoc!(
+                r#"
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn specialize_lowlevel() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+
+                apply : (a -> a), a -> a
+                apply = \f, x -> f x
+
+                main =
+                    one : I64 
+                    one = 1
+
+                    two : I64
+                    two = 2
+
+                    increment : I64 -> I64
+                    increment = \x -> x + 1
+
+                    double : I64 -> I64
+                    double = \x -> x * two
+
+                    when 3 is 
+                        1 -> increment 0
+                        2 -> double 0
+                        _ -> List.map [] (if True then increment else double) |> List.len 
+                "#
+            ),
+            indoc!(
+                r#"
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn static_str_closure() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                main : Str
+                main =
+                    x = "long string that is malloced"
+
+                    f : {} -> Str
+                    f = (\_ -> x)
+
+                    f {}
+                "#
+            ),
+            indoc!(
+                r#"
+                "#
+            ),
+        )
+    }
 }
