@@ -1028,196 +1028,30 @@ pub fn list_map3<'a, 'ctx, 'env>(
 /// List.concat : List elem, List elem -> List elem
 pub fn list_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    inplace: InPlace,
-    parent: FunctionValue<'ctx>,
+    _inplace: InPlace,
+    _parent: FunctionValue<'ctx>,
     first_list: BasicValueEnum<'ctx>,
     second_list: BasicValueEnum<'ctx>,
     list_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-    let ctx = env.context;
-
-    let second_list_wrapper = second_list.into_struct_value();
-
-    let second_list_len = list_len(builder, second_list_wrapper);
-
-    // We only match on the first lists layout
-    // because the first and second input lists
-    // necessarily have the same layout
     match list_layout {
-        Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-        Layout::Builtin(Builtin::List(_, elem_layout)) => {
-            let first_list_wrapper = first_list.into_struct_value();
-
-            let first_list_len = list_len(builder, first_list_wrapper);
-
-            // first_list_len > 0
-            // We do this check to avoid allocating memory. If the first input
-            // list is empty, then we can just return the second list cloned
-            let first_list_length_comparison = list_is_not_empty(env, first_list_len);
-
-            let if_first_list_is_empty = || {
-                // second_list_len > 0
-                // We do this check to avoid allocating memory. If the second input
-                // list is empty, then we can just return an empty list
-                let second_list_length_comparison = list_is_not_empty(env, second_list_len);
-
-                let build_second_list_then = || {
-                    let elem_type = basic_type_from_layout(env, elem_layout);
-                    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-
-                    let (new_wrapper, _) = clone_nonempty_list(
-                        env,
-                        inplace,
-                        second_list_len,
-                        load_list_ptr(builder, second_list_wrapper, ptr_type),
-                        elem_layout,
-                    );
-
-                    BasicValueEnum::StructValue(new_wrapper)
-                };
-
-                let build_second_list_else = || empty_list(env);
-
-                build_basic_phi2(
-                    env,
-                    parent,
-                    second_list_length_comparison,
-                    build_second_list_then,
-                    build_second_list_else,
-                    BasicTypeEnum::StructType(super::convert::zig_list_type(env)),
-                )
-            };
-
-            let if_first_list_is_not_empty = || {
-                let elem_type = basic_type_from_layout(env, elem_layout);
-                let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-
-                let if_second_list_is_empty = || {
-                    let (new_wrapper, _) = clone_nonempty_list(
-                        env,
-                        inplace,
-                        first_list_len,
-                        load_list_ptr(builder, first_list_wrapper, ptr_type),
-                        elem_layout,
-                    );
-
-                    BasicValueEnum::StructValue(new_wrapper)
-                };
-
-                // second_list_len > 0
-                // We do this check to avoid allocating memory. If the second input
-                // list is empty, then we can just return the first list cloned
-                let second_list_length_comparison = list_is_not_empty(env, second_list_len);
-
-                let if_second_list_is_not_empty = || {
-                    let combined_list_len =
-                        builder.build_int_add(first_list_len, second_list_len, "add_list_lengths");
-
-                    let combined_list_ptr =
-                        allocate_list(env, inplace, elem_layout, combined_list_len);
-
-                    let first_list_ptr = load_list_ptr(builder, first_list_wrapper, ptr_type);
-
-                    // FIRST LOOP
-                    // TODO when the element type supports it, replace FIRST_LOOP with a memcpy!
-                    let first_loop = |first_index, first_list_elem| {
-                        // The pointer to the element in the combined list
-                        let combined_list_elem_ptr = unsafe {
-                            builder.build_in_bounds_gep(
-                                combined_list_ptr,
-                                &[first_index],
-                                "load_index_combined_list",
-                            )
-                        };
-
-                        // Mutate the new array in-place to change the element.
-                        builder.build_store(combined_list_elem_ptr, first_list_elem);
-                    };
-
-                    let index_name = "#index";
-
-                    let index_alloca = incrementing_elem_loop(
-                        builder,
-                        ctx,
-                        parent,
-                        first_list_ptr,
-                        first_list_len,
-                        index_name,
-                        first_loop,
-                    );
-
-                    // Reset the index variable to 0
-                    builder.build_store(index_alloca, ctx.i64_type().const_int(0, false));
-
-                    let second_list_ptr = load_list_ptr(builder, second_list_wrapper, ptr_type);
-
-                    // SECOND LOOP
-                    // TODO when the element type supports it, replace SECOND_LOOP with a memcpy!
-                    let second_loop = |second_index, second_list_elem| {
-                        // The pointer to the element in the combined list.
-                        // Note that the pointer does not start at the index
-                        // 0, it starts at the index of first_list_len. In that
-                        // sense it is "offset".
-                        let offset_combined_list_elem_ptr = unsafe {
-                            builder.build_in_bounds_gep(
-                                combined_list_ptr,
-                                &[first_list_len],
-                                "elem",
-                            )
-                        };
-
-                        // The pointer to the element from the second list
-                        // in the combined list
-                        let combined_list_elem_ptr = unsafe {
-                            builder.build_in_bounds_gep(
-                                offset_combined_list_elem_ptr,
-                                &[second_index],
-                                "load_index_combined_list",
-                            )
-                        };
-
-                        // Mutate the new array in-place to change the element.
-                        builder.build_store(combined_list_elem_ptr, second_list_elem);
-                    };
-
-                    incrementing_elem_loop(
-                        builder,
-                        ctx,
-                        parent,
-                        second_list_ptr,
-                        second_list_len,
-                        index_name,
-                        second_loop,
-                    );
-
-                    store_list(env, combined_list_ptr, combined_list_len)
-                };
-
-                build_basic_phi2(
-                    env,
-                    parent,
-                    second_list_length_comparison,
-                    if_second_list_is_not_empty,
-                    if_second_list_is_empty,
-                    BasicTypeEnum::StructType(super::convert::zig_list_type(env)),
-                )
-            };
-
-            build_basic_phi2(
-                env,
-                parent,
-                first_list_length_comparison,
-                if_first_list_is_not_empty,
-                if_first_list_is_empty,
-                BasicTypeEnum::StructType(super::convert::zig_list_type(env)),
-            )
+        Layout::Builtin(Builtin::EmptyList) => {
+            // If the input list is empty, or if it is a list of empty lists
+            // then simply return an empty list
+            empty_list(env)
         }
+        Layout::Builtin(Builtin::List(_, elem_layout)) => call_bitcode_fn_returns_list(
+            env,
+            &[
+                pass_list_as_i128(env, first_list),
+                pass_list_as_i128(env, second_list),
+                alignment_intvalue(env, elem_layout),
+                layout_width(env, elem_layout),
+            ],
+            &bitcode::LIST_CONCAT,
+        ),
         _ => {
-            unreachable!(
-                "Invalid List layout for first list in List.concat : {:?}",
-                list_layout
-            );
+            unreachable!("Invalid List layout for List.concat {:?}", list_layout);
         }
     }
 }
@@ -1426,15 +1260,6 @@ pub fn empty_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'
     // The pointer should be null (aka zero) and the length should be zero,
     // so the whole struct should be a const_zero
     BasicValueEnum::StructValue(struct_type.const_zero())
-}
-
-fn list_is_not_empty<'ctx>(env: &Env<'_, 'ctx, '_>, len: IntValue<'ctx>) -> IntValue<'ctx> {
-    env.builder.build_int_compare(
-        IntPredicate::UGT,
-        len,
-        env.ptr_int().const_zero(),
-        "list_len_is_nonzero",
-    )
 }
 
 pub fn load_list<'ctx>(
