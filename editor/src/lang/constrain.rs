@@ -8,7 +8,7 @@ use crate::lang::{
 };
 
 use roc_can::expected::Expected;
-use roc_collections::all::{BumpMap, BumpMapDefault};
+use roc_collections::all::{BumpMap, BumpMapDefault, Index};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::{
@@ -106,6 +106,55 @@ pub fn constrain_expr<'a>(
 
             exists(arena, flex_vars, defs_constraint)
         }
+        Expr2::List {
+            elem_var, elems, ..
+        } => {
+            let mut flex_vars = BumpVec::with_capacity_in(1, arena);
+
+            flex_vars.push(*elem_var);
+
+            if elems.is_empty() {
+                exists(
+                    arena,
+                    flex_vars,
+                    Eq(
+                        empty_list_type(env.pool, *elem_var),
+                        expected,
+                        Category::List,
+                        region,
+                    ),
+                )
+            } else {
+                let mut constraints = BumpVec::with_capacity_in(1 + elems.len(), arena);
+
+                let list_elem_type = Type2::Variable(*elem_var);
+
+                for (index, elem_node_id) in elems.iter_node_ids().enumerate() {
+                    let elem_expr = env.pool.get(elem_node_id);
+
+                    let elem_expected = Expected::ForReason(
+                        Reason::ElemInList {
+                            index: Index::zero_based(index),
+                        },
+                        list_elem_type.shallow_clone(),
+                        region,
+                    );
+
+                    let constraint = constrain_expr(arena, env, elem_expr, elem_expected, region);
+
+                    constraints.push(constraint);
+                }
+
+                constraints.push(Eq(
+                    list_type(env.pool, list_elem_type),
+                    expected,
+                    Category::List,
+                    region,
+                ));
+
+                exists(arena, flex_vars, And(constraints))
+            }
+        }
         Expr2::Record { fields, record_var } => {
             if fields.is_empty() {
                 constrain_empty_record(expected, region)
@@ -174,13 +223,13 @@ pub fn constrain_expr<'a>(
 fn exists<'a>(
     arena: &'a Bump,
     flex_vars: BumpVec<'a, Variable>,
-    constraint: Constraint<'a>,
+    defs_constraint: Constraint<'a>,
 ) -> Constraint<'a> {
     Constraint::Let(arena.alloc(LetConstraint {
         rigid_vars: BumpVec::new_in(arena),
         flex_vars,
         def_types: BumpMap::new_in(arena),
-        defs_constraint: constraint,
+        defs_constraint,
         ret_constraint: Constraint::True,
     }))
 }
@@ -202,10 +251,33 @@ fn constrain_empty_record<'a>(expected: Expected<Type2>, region: Region) -> Cons
     Constraint::Eq(Type2::EmptyRec, expected, Category::Record, region)
 }
 
-fn str_type(pool: &mut Pool) -> Type2 {
-    Type2::Apply(Symbol::STR_STR, PoolVec::empty(pool))
+#[inline(always)]
+fn builtin_type(symbol: Symbol, args: PoolVec<Type2>) -> Type2 {
+    Type2::Apply(symbol, args)
 }
 
+#[inline(always)]
+fn str_type(pool: &mut Pool) -> Type2 {
+    builtin_type(Symbol::STR_STR, PoolVec::empty(pool))
+}
+
+#[inline(always)]
+fn empty_list_type(pool: &mut Pool, var: Variable) -> Type2 {
+    list_type(pool, Type2::Variable(var))
+}
+
+#[inline(always)]
+fn list_type(pool: &mut Pool, typ: Type2) -> Type2 {
+    let args = PoolVec::with_capacity(1, pool);
+
+    for (arg_node_id, arg) in args.iter_node_ids().zip(vec![typ]) {
+        pool[arg_node_id] = arg;
+    }
+
+    builtin_type(Symbol::LIST_LIST, args)
+}
+
+#[inline(always)]
 fn num_float(pool: &mut Pool, range: TypeId) -> Type2 {
     let num_floatingpoint_type = num_floatingpoint(pool, range);
     let num_floatingpoint_id = pool.add(num_floatingpoint_type);
@@ -220,6 +292,7 @@ fn num_float(pool: &mut Pool, range: TypeId) -> Type2 {
     )
 }
 
+#[inline(always)]
 fn num_floatingpoint(pool: &mut Pool, range: TypeId) -> Type2 {
     let range_type = pool.get(range);
 
@@ -243,6 +316,7 @@ fn num_floatingpoint(pool: &mut Pool, range: TypeId) -> Type2 {
     )
 }
 
+#[inline(always)]
 fn _num_int(pool: &mut Pool, range: TypeId) -> Type2 {
     let num_integer_type = _num_integer(pool, range);
     let num_integer_id = pool.add(num_integer_type);
@@ -257,6 +331,7 @@ fn _num_int(pool: &mut Pool, range: TypeId) -> Type2 {
     )
 }
 
+#[inline(always)]
 fn _num_signed64(pool: &mut Pool) -> Type2 {
     let alias_content = Type2::TagUnion(
         PoolVec::new(
@@ -274,6 +349,7 @@ fn _num_signed64(pool: &mut Pool) -> Type2 {
     )
 }
 
+#[inline(always)]
 fn _num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
     let range_type = pool.get(range);
 
@@ -297,6 +373,7 @@ fn _num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
     )
 }
 
+#[inline(always)]
 fn num_num(pool: &mut Pool, type_id: TypeId) -> Type2 {
     let range_type = pool.get(type_id);
 
