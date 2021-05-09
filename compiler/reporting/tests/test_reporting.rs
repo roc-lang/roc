@@ -101,6 +101,7 @@ mod test_reporting {
                 ident_ids: &mut ident_ids,
                 ptr_bytes: 8,
                 update_mode_counter: 0,
+                call_specialization_counter: 0,
             };
             let _mono_expr = Stmt::new(
                 &mut mono_env,

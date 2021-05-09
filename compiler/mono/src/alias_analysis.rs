@@ -218,9 +218,10 @@ fn call_spec(
             full_layout: _,
             ret_layout: _,
             arg_layouts: _,
+            specialization_id,
         } => {
-            // TODO annotate each call with a unique identifier
-            let spec_var = CalleeSpecVar(&[]);
+            let array = specialization_id.to_bytes();
+            let spec_var = CalleeSpecVar(&array);
 
             let arg_value_id = build_tuple_value(builder, env, block, call.arguments)?;
             let slice = &symbol.to_ne_bytes();

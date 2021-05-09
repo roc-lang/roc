@@ -1408,7 +1408,7 @@ fn compile_test_help<'a>(
     let test = Expr::Call(crate::ir::Call {
         call_type: crate::ir::CallType::LowLevel {
             op,
-            update_mode: env.next_update_mode_id(op),
+            update_mode: env.next_update_mode_id(),
         },
         arguments: arena.alloc([lhs, rhs]),
     });
