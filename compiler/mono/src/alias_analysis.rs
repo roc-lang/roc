@@ -1,7 +1,7 @@
 use morphic_lib::TypeContext;
 use morphic_lib::{
-    BlockExpr, BlockId, CalleeSpecVar, FuncDef, FuncDefBuilder, FuncName, ModName, Result, TypeId,
-    TypeName, UpdateModeVar, ValueId,
+    BlockExpr, BlockId, CalleeSpecVar, EntryPointName, FuncDef, FuncDefBuilder, FuncName,
+    ModDefBuilder, ModName, ProgramBuilder, Result, TypeId, TypeName, UpdateModeVar, ValueId,
 };
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
@@ -15,7 +15,43 @@ use crate::layout::{Builtin, Layout, ListLayout, UnionLayout};
 const MOD_LIST: ModName = ModName(b"UserApp");
 const MOD_APP: ModName = ModName(b"UserApp");
 
-pub fn proc_spec(proc: &Proc) -> Result<FuncDef> {
+pub fn spec_program<'a, I>(procs: I) -> Result<morphic_lib::Solutions>
+where
+    I: Iterator<Item = &'a Proc<'a>>,
+{
+    let mut main_function = None;
+    let main_module = {
+        let mut m = ModDefBuilder::new();
+
+        for proc in procs {
+            let spec = proc_spec(proc)?;
+
+            m.add_func(FuncName(&proc.name.to_ne_bytes()), spec)?;
+
+            if format!("{:?}", proc.name).contains("mainForHost") {
+                main_function = Some(proc.name);
+            }
+        }
+
+        m.build()?
+    };
+
+    let program = {
+        let mut p = ProgramBuilder::new();
+        p.add_mod(MOD_APP, main_module)?;
+        p.add_entry_point(
+            EntryPointName(b"mainForHost"),
+            MOD_APP,
+            FuncName(&main_function.unwrap().to_ne_bytes()),
+        )?;
+
+        p.build()?
+    };
+
+    morphic_lib::solve(program)
+}
+
+fn proc_spec(proc: &Proc) -> Result<FuncDef> {
     let mut builder = FuncDefBuilder::new();
     let mut env = Env::default();
 
