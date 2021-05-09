@@ -848,7 +848,6 @@ fn swapElements(source_ptr: [*]u8, element_width: usize, index_1: usize, index_2
 pub fn listJoin(list_of_lists: RocList, alignment: usize, element_width: usize) callconv(.C) RocList {
     var total_length: usize = 0;
 
-    const size = list_of_lists.len();
     const slice_of_lists = @ptrCast([*]RocList, @alignCast(@alignOf(RocList), list_of_lists.bytes));
 
     var i: usize = 0;
@@ -868,6 +867,47 @@ pub fn listJoin(list_of_lists: RocList, alignment: usize, element_width: usize) 
                 @memcpy(target + elements_copied * element_width, source, list.len() * element_width);
                 elements_copied += list.len();
             }
+        }
+    }
+
+    return output;
+}
+
+pub fn listConcat(list_a: RocList, list_b: RocList, alignment: usize, element_width: usize) callconv(.C) RocList {
+    if (list_a.isEmpty()) {
+        return list_b;
+    } else if (list_b.isEmpty()) {
+        return list_a;
+    } else if (!list_a.isEmpty() and list_a.isUnique()) {
+        const total_length: usize = list_a.len() + list_b.len();
+
+        if (list_a.bytes) |source| {
+            const new_source = utils.unsafeReallocate(
+                source,
+                std.heap.c_allocator,
+                alignment,
+                list_a.len(),
+                total_length,
+                element_width,
+            );
+
+            if (list_b.bytes) |source_b| {
+                @memcpy(new_source + list_a.len() * element_width, source_b, list_b.len() * element_width);
+            }
+
+            return RocList{ .bytes = new_source, .length = total_length };
+        }
+    }
+    const total_length: usize = list_a.len() + list_b.len();
+
+    const output = RocList.allocate(std.heap.c_allocator, alignment, total_length, element_width);
+
+    if (output.bytes) |target| {
+        if (list_a.bytes) |source| {
+            @memcpy(target, source, list_a.len() * element_width);
+        }
+        if (list_b.bytes) |source| {
+            @memcpy(target + list_a.len() * element_width, source, list_b.len() * element_width);
         }
     }
 
