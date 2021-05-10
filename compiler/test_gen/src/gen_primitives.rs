@@ -1026,7 +1026,7 @@ fn io_poc_effect() {
             runEffect : Effect a -> a
             runEffect = \@Effect thunk -> thunk {}
 
-            foo : Effect F64 
+            foo : Effect F64
             foo =
                 succeed 3.14
 
@@ -1051,14 +1051,14 @@ fn io_poc_desugared() {
             # succeed : a -> ({} -> a)
             succeed = \x -> \{} -> x
 
-            foo : {} -> F64 
+            foo : {} -> F64
             foo =
                 succeed 3.14
 
             # runEffect : ({} ->  a) -> a
             runEffect = \thunk -> thunk {}
 
-            main : F64 
+            main : F64
             main =
                 runEffect foo
             "#
@@ -1243,7 +1243,7 @@ fn recursive_functon_with_rigid() {
 
             State a : { count : I64, x : a }
 
-            foo : State a -> Int * 
+            foo : State a -> Int *
             foo = \state ->
                 if state.count == 0 then
                     0
@@ -1634,13 +1634,13 @@ fn binary_tree_double_pattern_match() {
 
             BTree : [ Node BTree BTree, Leaf I64 ]
 
-            foo : BTree -> I64 
+            foo : BTree -> I64
             foo = \btree ->
                 when btree is
                     Node (Node (Leaf x) _) _ -> x
                     _ -> 0
 
-            main : I64 
+            main : I64
             main =
                 foo (Node (Node (Leaf 32) (Leaf 0)) (Leaf 0))
             "#
@@ -2242,7 +2242,7 @@ fn backpassing_result() {
             main : I64
             main =
                 helper =
-                    x <- Result.after a 
+                    x <- Result.after a
                     y <- Result.after (f x)
                     z <- Result.after (g y)
 
@@ -2250,7 +2250,7 @@ fn backpassing_result() {
 
                 helper
                     |> Result.withDefault 0
-                
+
             "#
         ),
         4,
@@ -2308,6 +2308,43 @@ fn expect_fail() {
             "#
         ),
         3,
+        i64
+    );
+}
+
+#[test]
+fn increment_or_double_closure() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+
+                apply : (a -> a), a -> a
+                apply = \f, x -> f x
+
+                main =
+                    one : I64
+                    one = 1
+
+                    two : I64
+                    two = 2
+
+                    b : Bool
+                    b = True
+
+                    increment : I64 -> I64
+                    increment = \x -> x + one
+
+                    double : I64 -> I64
+                    double = \x -> if b then x * two else x
+
+                    f = (if True then increment else double)
+
+                    apply f 42
+            "#
+        ),
+        43,
         i64
     );
 }
