@@ -86,6 +86,10 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Mozilla DeepSpeech model runs fast, works pretty well for actions but would need additional training for code input.
     Possible to reuse [Mozilla common voice](https://github.com/common-voice/common-voice) for creating more "spoken code" data.
 
+### Beginner-focused Features
+
+ * A good screen to show on startup would be a Roc cheat sheet. 
+
 ### Productivity features
 
 * When refactoring; 
