@@ -216,6 +216,68 @@ pub fn constrain_expr<'a>(
                 exists(arena, field_vars, And(constraints))
             }
         }
+        Expr2::GlobalTag {
+            variant_var,
+            ext_var,
+            name,
+            arguments,
+        } => {
+            let mut flex_vars = BumpVec::with_capacity_in(arguments.len(), arena);
+            let types = PoolVec::with_capacity(arguments.len() as u32, env.pool);
+            let mut arg_cons = BumpVec::with_capacity_in(arguments.len(), arena);
+
+            for (argument_node_id, type_node_id) in
+                arguments.iter_node_ids().zip(types.iter_node_ids())
+            {
+                let (var, expr_node_id) = env.pool.get(argument_node_id);
+
+                let argument_expr = env.pool.get(*expr_node_id);
+
+                let arg_con = constrain_expr(
+                    arena,
+                    env,
+                    argument_expr,
+                    Expected::NoExpectation(Type2::Variable(*var)),
+                    region,
+                );
+
+                arg_cons.push(arg_con);
+                flex_vars.push(*var);
+
+                env.pool[type_node_id] = Type2::Variable(*var);
+            }
+
+            let members = PoolVec::with_capacity(1, env.pool);
+
+            for (member_node_id, member) in members.iter_node_ids().zip(vec![(*name, types)]) {
+                env.pool[member_node_id] = member;
+            }
+
+            let union_con = Eq(
+                Type2::TagUnion(members, env.pool.add(Type2::Variable(*ext_var))),
+                expected.shallow_clone(),
+                Category::TagApply {
+                    tag_name: TagName::Global(name.as_str(env.pool).into()),
+                    args_count: arguments.len(),
+                },
+                region,
+            );
+
+            let ast_con = Eq(
+                Type2::Variable(*variant_var),
+                expected,
+                Category::Storage(std::file!(), std::line!()),
+                region,
+            );
+
+            flex_vars.push(*variant_var);
+            flex_vars.push(*ext_var);
+
+            arg_cons.push(union_con);
+            arg_cons.push(ast_con);
+
+            exists(arena, flex_vars, And(arg_cons))
+        }
         _ => todo!("implement constaints for {:?}", expr),
     }
 }
