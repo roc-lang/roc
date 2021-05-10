@@ -8,14 +8,14 @@ env:
 jobs:
   prep-dependency-container:
     name: fmt, clippy, test --release
-    runs-on: self-hosted
+    runs-on: [self-hosted, i5-4690K]
     timeout-minutes: 60
     env:
       FORCE_COLOR: 1
     steps:
       - uses: actions/checkout@v2
         with:
-          clean: "false"
+          clean: "true"
 
       - name: Earthly version
         run: earthly --version
