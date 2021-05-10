@@ -2956,7 +2956,7 @@ pub fn with_hole<'a>(
                     )
                 }
 
-                Unwrapped(field_layouts) => {
+                Unwrapped(_, field_layouts) => {
                     let field_symbols_temp = sorted_field_symbols(env, procs, layout_cache, args);
 
                     let mut field_symbols = Vec::with_capacity_in(field_layouts.len(), env.arena);
@@ -3990,25 +3990,53 @@ pub fn with_hole<'a>(
                         Value(function_symbol) => {
                             if let Layout::Closure(_, closure_fields, _) = full_layout {
                                 let closure_data_symbol = env.unique_symbol();
-                                let closure_function_symbol = env.unique_symbol();
                                 let closure_symbol = function_symbol;
                                 let closure_tag_id_symbol = env.unique_symbol();
 
                                 // layout of the closure record
-                                let closure_record_layout =
+                                let closure_data_layout =
                                     closure_fields.as_block_of_memory_layout();
 
-                                result = lambda_set_to_switch(
-                                    env,
-                                    closure_fields.captured,
-                                    closure_tag_id_symbol,
-                                    closure_data_symbol,
-                                    arg_symbols,
-                                    arg_layouts,
-                                    ret_layout,
-                                    assigned,
-                                    hole,
-                                );
+                                if closure_fields.captured.is_empty() {
+                                    result = lambda_set_to_switch_make_branch_help(
+                                        env,
+                                        function_symbol,
+                                        closure_data_symbol,
+                                        closure_data_layout,
+                                        arg_symbols,
+                                        arg_layouts,
+                                        ret_layout,
+                                        assigned,
+                                        hole,
+                                    );
+                                } else if let [(TagName::Closure(function_symbol), layout)] =
+                                    closure_fields.captured
+                                {
+                                    // TODO hack for closures that have a closure set of 1
+                                    result = lambda_set_to_switch_make_branch_help(
+                                        env,
+                                        *function_symbol,
+                                        closure_data_symbol,
+                                        closure_data_layout,
+                                        arg_symbols,
+                                        arg_layouts,
+                                        ret_layout,
+                                        assigned,
+                                        hole,
+                                    );
+                                } else {
+                                    result = lambda_set_to_switch(
+                                        env,
+                                        closure_fields.captured,
+                                        closure_tag_id_symbol,
+                                        closure_data_symbol,
+                                        arg_symbols,
+                                        arg_layouts,
+                                        ret_layout,
+                                        assigned,
+                                        hole,
+                                    );
+                                };
 
                                 // extract & assign the closure_tag_id_symbol
                                 let expr = Expr::AccessAtIndex {
@@ -4035,9 +4063,8 @@ pub fn with_hole<'a>(
                                     env.arena.alloc(ret_layout),
                                 );
                                 // layout of the ( function_pointer, closure_record ) pair
-                                let closure_layout = env
-                                    .arena
-                                    .alloc([function_ptr_layout, closure_record_layout]);
+                                let closure_layout =
+                                    env.arena.alloc([function_ptr_layout, closure_data_layout]);
                                 let expr = Expr::AccessAtIndex {
                                     index: 1,
                                     field_layouts: closure_layout,
@@ -4047,7 +4074,7 @@ pub fn with_hole<'a>(
                                 result = Stmt::Let(
                                     closure_data_symbol,
                                     expr,
-                                    closure_record_layout,
+                                    closure_data_layout,
                                     env.arena.alloc(result),
                                 );
                             } else {
@@ -6799,7 +6826,7 @@ fn from_can_pattern_help<'a>(
                         union,
                     }
                 }
-                Unwrapped(field_layouts) => {
+                Unwrapped(_, field_layouts) => {
                     let union = crate::exhaustive::Union {
                         render_as: RenderAs::Tag,
                         alternatives: vec![Ctor {
@@ -7570,8 +7597,32 @@ fn lambda_set_to_switch_make_branch<'a>(
 ) -> Stmt<'a> {
     let result_symbol = env.unique_symbol();
 
-    let mut result = Stmt::Jump(join_point_id, env.arena.alloc([result_symbol]));
+    let hole = Stmt::Jump(join_point_id, env.arena.alloc([result_symbol]));
 
+    lambda_set_to_switch_make_branch_help(
+        env,
+        function_symbol,
+        closure_data_symbol,
+        closure_data_layout,
+        argument_symbols_slice,
+        argument_layouts_slice,
+        return_layout,
+        result_symbol,
+        env.arena.alloc(hole),
+    )
+}
+
+fn lambda_set_to_switch_make_branch_help<'a>(
+    env: &mut Env<'a, '_>,
+    function_symbol: Symbol,
+    closure_data_symbol: Symbol,
+    closure_data_layout: Layout<'a>,
+    argument_symbols_slice: &[Symbol],
+    argument_layouts_slice: &[Layout<'a>],
+    return_layout: Layout<'a>,
+    assigned: Symbol,
+    hole: &'a Stmt<'a>,
+) -> Stmt<'a> {
     // extend layouts with the layout of the closure environment
     let mut argument_layouts = Vec::with_capacity_in(argument_layouts_slice.len() + 1, env.arena);
     argument_layouts.extend(argument_layouts_slice);
@@ -7587,8 +7638,8 @@ fn lambda_set_to_switch_make_branch<'a>(
     let full_layout = Layout::FunctionPointer(argument_layouts, env.arena.alloc(return_layout));
 
     // build the call
-    result = Stmt::Let(
-        result_symbol,
+    Stmt::Let(
+        assigned,
         Expr::Call(self::Call {
             call_type: CallType::ByName {
                 name: function_symbol,
@@ -7599,8 +7650,6 @@ fn lambda_set_to_switch_make_branch<'a>(
             arguments: argument_symbols,
         }),
         return_layout,
-        env.arena.alloc(result),
-    );
-
-    result
+        hole,
+    )
 }

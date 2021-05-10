@@ -130,14 +130,14 @@ impl<'a> ClosureLayout<'a> {
             layout: layouts,
         }
     }
-    fn from_unwrapped(arena: &'a Bump, layouts: &'a [Layout<'a>]) -> Self {
+    fn from_unwrapped(arena: &'a Bump, tag_name: TagName, layouts: &'a [Layout<'a>]) -> Self {
         debug_assert!(!layouts.is_empty());
 
         // DO NOT unwrap 1-element records here!
         let layout = arena.alloc(Layout::Struct(layouts));
 
         ClosureLayout {
-            captured: &[],
+            captured: &*arena.alloc([(tag_name, &*arena.alloc([*layout]) as &[_])]),
             layout,
         }
     }
@@ -212,9 +212,12 @@ impl<'a> ClosureLayout<'a> {
 
                         Ok(Some(closure_layout))
                     }
-                    Unwrapped(layouts) => {
-                        let closure_layout =
-                            ClosureLayout::from_unwrapped(arena, layouts.into_bump_slice());
+                    Unwrapped(tag_name, layouts) => {
+                        let closure_layout = ClosureLayout::from_unwrapped(
+                            arena,
+                            tag_name,
+                            layouts.into_bump_slice(),
+                        );
 
                         Ok(Some(closure_layout))
                     }
@@ -1320,7 +1323,7 @@ pub enum UnionVariant<'a> {
     UnitWithArguments,
     BoolUnion { ttrue: TagName, ffalse: TagName },
     ByteUnion(Vec<'a, TagName>),
-    Unwrapped(Vec<'a, Layout<'a>>),
+    Unwrapped(TagName, Vec<'a, Layout<'a>>),
     Wrapped(WrappedVariant<'a>),
 }
 
@@ -1542,7 +1545,7 @@ pub fn union_sorted_tags_help<'a>(
                     fields: layouts.into_bump_slice(),
                 })
             } else {
-                UnionVariant::Unwrapped(layouts)
+                UnionVariant::Unwrapped(tag_name, layouts)
             }
         }
         num_tags => {
@@ -1694,7 +1697,7 @@ pub fn layout_from_tag_union<'a>(
                 Unit | UnitWithArguments => Layout::Struct(&[]),
                 BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
                 ByteUnion(_) => Layout::Builtin(Builtin::Int8),
-                Unwrapped(mut field_layouts) => {
+                Unwrapped(_, mut field_layouts) => {
                     if field_layouts.len() == 1 {
                         field_layouts.pop().unwrap()
                     } else {
