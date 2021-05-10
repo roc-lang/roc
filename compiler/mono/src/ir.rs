@@ -2511,31 +2511,30 @@ fn specialize_naked_symbol<'a>(
         }
     }
 
-    // A bit ugly, but it does the job
-    match hole {
+    let result = match hole {
         Stmt::Jump(id, _) => Stmt::Jump(*id, env.arena.alloc([symbol])),
-        _ => {
-            let result = Stmt::Ret(symbol);
-            let original = symbol;
+        _ => Stmt::Ret(symbol),
+    };
 
-            // we don't have a more accurate variable available, which means the variable
-            // from the partial_proc will be used. So far that has given the correct
-            // result, but I'm not sure this will continue to be the case in more complex
-            // examples.
-            let opt_fn_var = None;
+    // if the symbol is a function symbol, ensure it is properly specialized!
+    let original = symbol;
 
-            // if this is a function symbol, ensure that it's properly specialized!
-            reuse_function_symbol(
-                env,
-                procs,
-                layout_cache,
-                opt_fn_var,
-                symbol,
-                result,
-                original,
-            )
-        }
-    }
+    // we don't have a more accurate variable available, which means the variable
+    // from the partial_proc will be used. So far that has given the correct
+    // result, but I'm not sure this will continue to be the case in more complex
+    // examples.
+    let opt_fn_var = None;
+
+    // if this is a function symbol, ensure that it's properly specialized!
+    reuse_function_symbol(
+        env,
+        procs,
+        layout_cache,
+        opt_fn_var,
+        symbol,
+        result,
+        original,
+    )
 }
 
 pub fn with_hole<'a>(
@@ -7555,18 +7554,6 @@ fn lambda_set_to_switch<'a>(
     }
 }
 
-//    Switch {
-//        /// This *must* stand for an integer, because Switch potentially compiles to a jump table.
-//        cond_symbol: Symbol,
-//        cond_layout: Layout<'a>,
-//        /// The u64 in the tuple will be compared directly to the condition Expr.
-//        /// If they are equal, this branch will be taken.
-//        branches: &'a [(u64, BranchInfo<'a>, Stmt<'a>)],
-//        /// If no other branches pass, this default branch will be taken.
-//        default_branch: (BranchInfo<'a>, &'a Stmt<'a>),
-//        /// Each branch must return a value of this type.
-//        ret_layout: Layout<'a>,
-//    },
 fn lambda_set_to_switch_make_branch<'a>(
     env: &mut Env<'a, '_>,
     join_point_id: JoinPointId,
