@@ -128,9 +128,6 @@ fn stmt_spec(
             default_branch,
             ret_layout,
         } => {
-            // NOTE should we touch the cond_symbol here? it is always an integer, but the
-            // cond_symbol might be unused if we don't somehow "use" it here
-
             let mut cases = Vec::with_capacity(branches.len() + 1);
 
             let it = branches
@@ -163,8 +160,7 @@ fn stmt_spec(
             let ret_type_id = layout_spec(builder, layout)?;
 
             let jp_arg_type_id = builder.add_tuple_type(&type_ids)?;
-            // NOTE just one value_id is returned, but we need the ids of the individual arguments!
-            // symbols bound by the join point won't be defined right now!
+
             let (jpid, jp_argument) =
                 builder.declare_join_point(block, jp_arg_type_id, ret_type_id)?;
 
@@ -185,8 +181,6 @@ fn stmt_spec(
 
             // NOTE the symbols bound by the join point can shadow the argument symbols of the
             // surrounding function, so we don't remove them from the env here
-
-            // NOTE I think we need to use add_sub_block here, but not sure how
 
             let cont_block = builder.add_block();
             let cont_value_id = stmt_spec(builder, env, cont_block, layout, continuation)?;
@@ -360,7 +354,7 @@ fn lowlevel_spec(
             let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
 
             // even if this has been written to before, it's okay to write to it again
-            let _unit = builder.add_update_write_only(block, update_mode_var, cell);
+            let _unit = builder.add_update(block, update_mode_var, cell)?;
 
             builder.add_bag_insert(block, bag, to_insert)?;
 
@@ -456,7 +450,6 @@ fn expr_spec(
                     builder.add_get_tuple_field(block, value_id, *index as u32)
                 }
                 Wrapped::MultiTagUnion => {
-                    // TODO this is likely wrong; how can we extract a field from an union constructor?
                     builder.add_get_tuple_field(block, value_id, *index as u32)
                 }
             }
