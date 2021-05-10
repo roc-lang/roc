@@ -2519,11 +2519,7 @@ fn specialize_naked_symbol<'a>(
     // if the symbol is a function symbol, ensure it is properly specialized!
     let original = symbol;
 
-    // we don't have a more accurate variable available, which means the variable
-    // from the partial_proc will be used. So far that has given the correct
-    // result, but I'm not sure this will continue to be the case in more complex
-    // examples.
-    let opt_fn_var = None;
+    let opt_fn_var = Some(variable);
 
     // if this is a function symbol, ensure that it's properly specialized!
     reuse_function_symbol(
@@ -3311,6 +3307,7 @@ pub fn with_hole<'a>(
 
                 for (loc_cond, loc_then) in branches.into_iter().rev() {
                     let branching_symbol = env.unique_symbol();
+
                     let then = with_hole(
                         env,
                         loc_then.value,
@@ -4025,7 +4022,7 @@ pub fn with_hole<'a>(
                                 result = Stmt::Let(
                                     closure_tag_id_symbol,
                                     expr,
-                                    closure_record_layout,
+                                    Layout::Builtin(Builtin::Int64),
                                     env.arena.alloc(result),
                                 );
 
@@ -6094,8 +6091,7 @@ fn call_by_name_new<'a>(
 
                 let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
                 assign_to_symbols(env, procs, layout_cache, iter, result)
-            } else if assigned.module_id() != proc_name.module_id() {
-                // TODO ^ use is_imported_symbol when we don't call by pointer any more
+            } else if env.is_imported_symbol(proc_name) {
                 add_needed_external(procs, env, original_fn_var, proc_name);
 
                 let call = if proc_name.module_id() == ModuleId::ATTR {
@@ -7508,19 +7504,27 @@ fn lambda_set_to_switch<'a>(
 
     let mut branches = Vec::with_capacity_in(lambda_set.len(), env.arena);
 
-    for (tag_name, layouts) in lambda_set {
+    let closure_layout = {
+        let mut temporary = Vec::with_capacity_in(lambda_set.len(), env.arena);
+
+        temporary.extend(lambda_set.iter().map(|x| x.1));
+
+        Layout::Union(UnionLayout::NonRecursive(temporary.into_bump_slice()))
+    };
+
+    for (i, (tag_name, _)) in lambda_set.iter().enumerate() {
         if let TagName::Closure(function_symbol) = tag_name {
             let stmt = lambda_set_to_switch_make_branch(
                 env,
                 join_point_id,
                 *function_symbol,
                 closure_data_symbol,
-                Layout::Struct(layouts),
+                closure_layout,
                 argument_symbols,
                 argument_layouts,
                 return_layout,
             );
-            branches.push((Symbol::into(*function_symbol), BranchInfo::None, stmt));
+            branches.push((i as u64, BranchInfo::None, stmt));
         } else {
             unreachable!("non-closure tag in lambda set")
         }

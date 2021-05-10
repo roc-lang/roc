@@ -2496,7 +2496,11 @@ fn build_switch_ir<'a, 'ctx, 'env>(
 
     let cond_symbol = &cond_symbol;
     let (cond_value, stored_layout) = load_symbol_and_layout(scope, cond_symbol);
-    debug_assert_eq!(&cond_layout, stored_layout);
+    debug_assert_eq!(
+        &cond_layout, stored_layout,
+        "\nThis switch wants to match on this layout:\n\n    {:?}\n\nBut the symbol {:?} that is matched on has layout:\n\n    {:?}\n\n    {:?}",
+        cond_layout, cond_symbol, stored_layout, cond_value
+    );
 
     let cont_block = context.append_basic_block(parent, "cont");
 

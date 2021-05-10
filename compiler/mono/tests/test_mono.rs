@@ -2477,10 +2477,7 @@ mod test_mono {
                     double : I64 -> I64
                     double = \x -> if b then x * two else x
 
-                    # TODO removing these identity functions causes issues. investigate!
-                    f = (if True then increment else double)
-
-                    apply f 42
+                    apply (if True then increment else double) 42
                 "#
             ),
             indoc!(
