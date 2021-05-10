@@ -826,7 +826,7 @@ fn type_to_variable<'a>(
             let mut tag_vars = MutMap::default();
             let ext = mempool.get(*ext_id);
 
-            for (_tag, tag_argument_types) in tags.iter(mempool) {
+            for (tag, tag_argument_types) in tags.iter(mempool) {
                 let mut tag_argument_vars = Vec::with_capacity(tag_argument_types.len());
 
                 for arg_type in tag_argument_types.iter(mempool) {
@@ -836,7 +836,7 @@ fn type_to_variable<'a>(
                 }
 
                 tag_vars.insert(
-                    roc_module::ident::TagName::Private(Symbol::NUM_NUM),
+                    roc_module::ident::TagName::Global(tag.as_str(mempool).into()),
                     tag_argument_vars,
                 );
             }
