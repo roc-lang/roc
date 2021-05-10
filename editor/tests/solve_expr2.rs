@@ -238,3 +238,15 @@ fn constrain_list_of_records() {
         "List { x : Num * }",
     )
 }
+
+#[test]
+fn constrain_global_tag() {
+    infer_eq(
+        indoc!(
+            r#"
+            Foo
+            "#
+        ),
+        "[ Foo ]*",
+    )
+}
