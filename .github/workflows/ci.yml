@@ -8,7 +8,7 @@ env:
 jobs:
   prep-dependency-container:
     name: fmt, clippy, test --release
-    runs-on: [self-hosted, i5-4690K]
+    runs-on: [self-hosted, i7-6700K]
     timeout-minutes: 60
     env:
       FORCE_COLOR: 1
