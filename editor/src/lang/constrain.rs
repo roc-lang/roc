@@ -9,7 +9,7 @@ use crate::lang::{
 
 use roc_can::expected::Expected;
 use roc_collections::all::{BumpMap, BumpMapDefault, Index};
-use roc_module::symbol::Symbol;
+use roc_module::{ident::TagName, symbol::Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::{
     subs::Variable,
