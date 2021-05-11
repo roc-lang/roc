@@ -111,6 +111,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Regex-like find and substitution based on plain english description and example (replacement). i.e. replace all `[` between double quotes with `{`. [Inspiration](https://alexmoltzau.medium.com/english-to-regex-thanks-to-gpt-3-13f03b68236e).
 * Show productivity tips based on behavior. i.e. if the user is scrolling through the error bar and clicking on the next error several times, show a tip with "go to next error" shortcut.
 * Command to "benchmark this function" or "benchmark this test" with flamegraph and execution time per line.
+* Instead of going to definition and having to navigate back and forth between files, show an editable view inside the current file. See [this video](https://www.youtube.com/watch?v=EenznqbW5w8)
 
 #### Autocomplete
 
