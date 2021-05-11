@@ -89,7 +89,9 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 
 ### Beginner-focused Features
 
- * A good screen to show on startup would be a Roc cheat sheet. 
+ * Show Roc cheat sheet on start-up.
+ * Plugin that translates short pieces of code from another programming language to Roc. [Relevant research](https://www.youtube.com/watch?v=xTzFJIknh7E). Someone who only knows the R language could get started with Roc with less friction if they could quickly define a list R style (`lst <- c(1,2,3)`) and get it translated to Roc.
+ * Being able to asses or ask the user for the amount of experience they have with Roc would be a valuable feature for recommending plugins, editor tips, recommending tutorials, automated error search (e.g searching common beginner errors first), ... .    
 
 ### Productivity features
 
