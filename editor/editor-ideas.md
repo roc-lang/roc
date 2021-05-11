@@ -112,6 +112,12 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Show productivity tips based on behavior. i.e. if the user is scrolling through the error bar and clicking on the next error several times, show a tip with "go to next error" shortcut.
 * Command to "benchmark this function" or "benchmark this test" with flamegraph and execution time per line.
 * Instead of going to definition and having to navigate back and forth between files, show an editable view inside the current file. See [this video](https://www.youtube.com/watch?v=EenznqbW5w8)
+* When encountering an unexpected error in the user's program we show a button at the bottom to start an automated search on this error. The search would:
+    * look for similar errors in github issues of the relevant libraries
+    * search stackoverflow questions
+    * search a local history of previously encountered errors and fixes
+    * search through a database of our zullip questions
+    * ...
 
 #### Autocomplete
 
