@@ -546,20 +546,13 @@ fn modify_refcount_layout_help<'a, 'ctx, 'env>(
         }
         Closure(_, lambda_set, _) => {
             if lambda_set.contains_refcounted() {
-                let wrapper_struct = value.into_struct_value();
-
-                let field_ptr = env
-                    .builder
-                    .build_extract_value(wrapper_struct, 1, "modify_rc_closure_data")
-                    .unwrap();
-
                 modify_refcount_layout_help(
                     env,
                     parent,
                     layout_ids,
                     mode,
                     when_recursive,
-                    field_ptr,
+                    value,
                     &lambda_set.runtime_representation(),
                 )
             }

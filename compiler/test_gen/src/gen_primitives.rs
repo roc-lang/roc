@@ -992,18 +992,19 @@ fn specialize_closure() {
 
             foo = \{} ->
                 x = 41
-                y = 1
+                y = [1]
 
                 f = \{} -> x
-                g = \{} -> x + y
+                g = \{} -> x + List.len y
 
                 [ f, g ]
+
+            apply = \f -> f {}
 
             main =
                 items = foo {}
 
-                # List.len items
-                List.map items (\f -> f {})
+                List.map items apply 
             "#
         ),
         RocList::from_slice(&[41, 42]),
