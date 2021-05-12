@@ -209,7 +209,7 @@ In Elm:
 In Roc:
 
 ```
-{ x : name : Str, email : Str }* -> Str
+{ name : Str, email : Str }* -> Str
 ```
 
 Here, the open record's type variable appears immediately after the `}`.
