@@ -544,8 +544,8 @@ fn modify_refcount_layout_help<'a, 'ctx, 'env>(
                 }
             }
         }
-        Closure(_, closure_layout, _) => {
-            if closure_layout.contains_refcounted() {
+        Closure(_, lambda_set, _) => {
+            if lambda_set.contains_refcounted() {
                 let wrapper_struct = value.into_struct_value();
 
                 let field_ptr = env
@@ -560,7 +560,7 @@ fn modify_refcount_layout_help<'a, 'ctx, 'env>(
                     mode,
                     when_recursive,
                     field_ptr,
-                    &closure_layout.as_block_of_memory_layout(),
+                    &lambda_set.runtime_representation(),
                 )
             }
         }

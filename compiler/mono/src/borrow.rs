@@ -1,4 +1,4 @@
-use crate::ir::{Expr, JoinPointId, Param, Proc, Stmt};
+use crate::ir::{Expr, JoinPointId, Param, Proc, Stmt, TopLevelFunctionLayout};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -15,14 +15,15 @@ fn should_borrow_layout(layout: &Layout) -> bool {
 
 pub fn infer_borrow<'a>(
     arena: &'a Bump,
-    procs: &MutMap<(Symbol, Layout<'a>), Proc<'a>>,
+    procs: &MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
 ) -> ParamMap<'a> {
     let mut param_map = ParamMap {
         items: MutMap::default(),
     };
 
-    for (key, proc) in procs {
-        param_map.visit_proc(arena, proc, *key);
+    for ((s, top_level), proc) in procs {
+        let key = (*s, arena.alloc(*top_level).full());
+        param_map.visit_proc(arena, proc, key);
     }
 
     let mut env = BorrowInfState {
@@ -47,7 +48,8 @@ pub fn infer_borrow<'a>(
         // mutually recursive functions (or just make all their arguments owned)
 
         for (key, proc) in procs {
-            env.collect_proc(proc, key.1);
+            let layout = arena.alloc(key.1).full();
+            env.collect_proc(proc, layout);
         }
 
         if !env.modified {

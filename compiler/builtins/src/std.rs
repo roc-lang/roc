@@ -148,8 +148,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_type(
         Symbol::NUM_MUL,
         top_level_function(
-            vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
-            Box::new(num_type(flex(TVAR1))),
+            vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+            Box::new(int_type(flex(TVAR1))),
         ),
     );
 

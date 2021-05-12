@@ -913,7 +913,7 @@ fn annotation_without_body() {
 }
 
 #[test]
-fn closure() {
+fn simple_closure() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1012,6 +1012,7 @@ fn specialize_closure() {
 }
 
 #[test]
+#[ignore]
 fn io_poc_effect() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1042,6 +1043,7 @@ fn io_poc_effect() {
 }
 
 #[test]
+#[ignore]
 fn io_poc_desugared() {
     assert_evals_to!(
         indoc!(
@@ -1651,7 +1653,7 @@ fn binary_tree_double_pattern_match() {
 }
 
 #[test]
-fn unified_empty_closure() {
+fn unified_empty_closure_bool() {
     // none of the Closure tags will have a payload
     // this was not handled correctly in the past
     assert_non_opt_evals_to!(
@@ -1675,6 +1677,32 @@ fn unified_empty_closure() {
 }
 
 #[test]
+fn unified_empty_closure_byte() {
+    // none of the Closure tags will have a payload
+    // this was not handled correctly in the past
+    assert_non_opt_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            foo = \{} ->
+                when A is
+                    A -> (\_ -> 3.14)
+                    B -> (\_ -> 3.14)
+                    C -> (\_ -> 3.14)
+
+            main : Float *
+            main =
+                (foo {}) 0
+            "#
+        ),
+        3.14,
+        f64
+    );
+}
+
+#[test]
+#[ignore]
 fn task_always_twice() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1719,6 +1747,7 @@ fn task_always_twice() {
 }
 
 #[test]
+#[ignore]
 fn wildcard_rigid() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -2227,6 +2256,38 @@ fn build_then_apply_closure() {
 }
 
 #[test]
+#[ignore]
+fn expanded_result() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            a : Result I64 Str
+            a = Ok 1
+
+            after = \x, f ->
+                when x is
+                    Ok v -> f v
+                    Err e -> Err e
+
+            main : I64
+            main =
+                helper = after a (\x -> Ok x)
+
+                when helper is
+                    Ok v -> v
+                    Err _ -> 0
+
+            "#
+        ),
+        4,
+        i64
+    );
+}
+
+#[test]
+#[ignore]
 fn backpassing_result() {
     assert_evals_to!(
         indoc!(

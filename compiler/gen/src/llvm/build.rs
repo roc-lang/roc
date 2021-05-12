@@ -49,8 +49,8 @@ use roc_collections::all::{ImMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::ir::{BranchInfo, CallType, JoinPointId, ModifyRc, Wrapped};
-use roc_mono::layout::{Builtin, ClosureLayout, Layout, LayoutIds, MemoryMode, UnionLayout};
+use roc_mono::ir::{BranchInfo, CallType, JoinPointId, ModifyRc, TopLevelFunctionLayout, Wrapped};
+use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, MemoryMode, UnionLayout};
 use target_lexicon::CallingConvention;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -122,6 +122,15 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
     ) {
         self.top_level_thunks
             .insert(symbol, (layout, function_value));
+    }
+    pub fn insert_top_level_thunk_new(
+        &mut self,
+        symbol: Symbol,
+        layout: &'a TopLevelFunctionLayout<'a>,
+        function_value: FunctionValue<'ctx>,
+    ) {
+        self.top_level_thunks
+            .insert(symbol, (layout.full(), function_value));
     }
     fn remove(&mut self, symbol: &Symbol) {
         self.symbols.remove(symbol);
@@ -562,10 +571,10 @@ pub fn promote_to_main_function<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     symbol: Symbol,
-    layout: &Layout<'a>,
+    layout: TopLevelFunctionLayout<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
     let fn_name = layout_ids
-        .get(symbol, layout)
+        .get(symbol, &(env.arena.alloc(layout).full()))
         .to_symbol_string(symbol, &env.interns);
 
     let roc_main_fn = env.module.get_function(&fn_name).unwrap();
@@ -2496,11 +2505,13 @@ fn build_switch_ir<'a, 'ctx, 'env>(
 
     let cond_symbol = &cond_symbol;
     let (cond_value, stored_layout) = load_symbol_and_layout(scope, cond_symbol);
+    /*
     debug_assert_eq!(
         &cond_layout, stored_layout,
         "\nThis switch wants to match on this layout:\n\n    {:?}\n\nBut the symbol {:?} that is matched on has layout:\n\n    {:?}\n\n    {:?}",
         cond_layout, cond_symbol, stored_layout, cond_value
     );
+    */
 
     let cont_block = context.append_basic_block(parent, "cont");
 
@@ -3041,6 +3052,18 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
     wrapper_function
 }
 
+pub fn build_proc_header_new<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    symbol: Symbol,
+    layout: TopLevelFunctionLayout<'a>,
+    proc: &roc_mono::ir::Proc<'a>,
+) -> FunctionValue<'ctx> {
+    let layout = env.arena.alloc(layout).full();
+
+    build_proc_header(env, layout_ids, symbol, &layout, proc)
+}
+
 pub fn build_proc_header<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -3118,7 +3141,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     def_name: &str,
     alias_symbol: Symbol,
     arguments: &[Layout<'a>],
-    closure: &ClosureLayout<'a>,
+    lambda_set: &LambdaSet<'a>,
     result: &Layout<'a>,
 ) {
     use inkwell::types::BasicType;
@@ -3146,8 +3169,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     }
 
     let function_pointer_type = {
-        let function_layout =
-            ClosureLayout::extend_function_layout(arena, arguments, *closure, result);
+        let function_layout = lambda_set.extend_function_layout(arena, arguments, result);
 
         // this is already a (function) pointer type
         basic_type_from_layout(env, &function_layout)
@@ -3155,7 +3177,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     argument_types.push(function_pointer_type);
 
     let closure_argument_type = {
-        let basic_type = basic_type_from_layout(env, &closure.as_block_of_memory_layout());
+        let basic_type = basic_type_from_layout(env, &lambda_set.runtime_representation());
 
         basic_type.ptr_type(AddressSpace::Generic)
     };
@@ -3217,7 +3239,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     );
 
     // STEP 4: build a {} -> u64 function that gives the size of the closure
-    let layout = Layout::Closure(arguments, *closure, result);
+    let layout = Layout::Closure(arguments, *lambda_set, result);
     build_host_exposed_alias_size(env, def_name, alias_symbol, &layout);
 }
 

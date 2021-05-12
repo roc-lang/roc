@@ -16,7 +16,7 @@ mod test_mono {
     use roc_collections::all::MutMap;
     use roc_module::symbol::Symbol;
     use roc_mono::ir::Proc;
-    use roc_mono::layout::Layout;
+    use roc_mono::ir::TopLevelFunctionLayout;
 
     fn promote_expr_to_module(src: &str) -> String {
         let mut buffer =
@@ -105,7 +105,7 @@ mod test_mono {
     #[cfg(debug_assertions)]
     fn verify_procedures(
         expected: &str,
-        procedures: MutMap<(Symbol, Layout<'_>), Proc<'_>>,
+        procedures: MutMap<(Symbol, TopLevelFunctionLayout<'_>), Proc<'_>>,
         main_fn_symbol: Symbol,
     ) {
         let index = procedures
@@ -658,7 +658,7 @@ mod test_mono {
                     ret Test.3;
 
                 procedure Test.0 ():
-                    let Test.2 = FunctionPointer Dict.2;
+                    let Test.2 = CallByName Dict.2;
                     let Test.1 = CallByName Dict.8 Test.2;
                     ret Test.1;
                 "#
@@ -2397,8 +2397,7 @@ mod test_mono {
 
                 procedure Test.1 (Test.5):
                     let Test.2 = 41i64;
-                    let Test.12 = FunctionPointer Test.3;
-                    let Test.11 = Struct {Test.12, Test.2};
+                    let Test.11 = Struct {Test.2};
                     let Test.10 = Array [Test.11];
                     ret Test.10;
 
