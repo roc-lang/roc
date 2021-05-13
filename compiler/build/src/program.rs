@@ -3,7 +3,9 @@ use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::targets::{CodeModel, FileType, RelocMode};
 use inkwell::values::FunctionValue;
-use roc_gen::llvm::build::{build_proc, build_proc_header, module_from_builtins, OptLevel, Scope};
+use roc_gen::llvm::build::{
+    build_proc, build_proc_header_new, module_from_builtins, OptLevel, Scope,
+};
 use roc_load::file::MonomorphizedModule;
 use roc_mono::layout::LayoutIds;
 use std::path::{Path, PathBuf};
@@ -146,12 +148,12 @@ pub fn gen_from_mono_module(
 
     let mut scope = Scope::default();
     for ((symbol, layout), proc) in loaded.procedures {
-        let fn_val = todo!("fix type error"); // build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+        let fn_val = build_proc_header_new(&env, &mut layout_ids, symbol, layout, &proc);
 
         if proc.args.is_empty() {
             // this is a 0-argument thunk, i.e. a top-level constant definition
             // it must be in-scope everywhere in the module!
-            todo!("fix type error"); // scope.insert_top_level_thunk(symbol, layout, fn_val);
+            scope.insert_top_level_thunk_new(symbol, arena.alloc(layout), fn_val);
         }
 
         headers.push((proc, fn_val));

@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 use crate::llvm::bitcode::{
     build_compare_wrapper, build_dec_wrapper, build_eq_wrapper, build_inc_wrapper,
-    build_transform_caller, call_bitcode_fn, call_void_bitcode_fn,
+    build_transform_caller, build_transform_caller_new, call_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
     allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, InPlace,
@@ -16,6 +16,7 @@ use inkwell::types::{BasicTypeEnum, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
 use roc_builtins::bitcode;
+use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, MemoryMode};
 
 fn alignment_intvalue<'a, 'ctx, 'env>(
@@ -810,6 +811,80 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
             layout_width(env, element_layout),
         ],
         bitcode::LIST_SORT_WITH,
+    )
+}
+
+/// List.map : List before, (before -> after) -> List after
+pub fn list_map_new<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    transform: FunctionValue<'ctx>,
+    transform_layout: Layout<'a>,
+    closure_data: BasicValueEnum<'ctx>,
+    closure_data_layout: Layout<'a>,
+    list: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    list_map_generic_new(
+        env,
+        layout_ids,
+        transform,
+        transform_layout,
+        list,
+        element_layout,
+        closure_data,
+        closure_data_layout,
+        bitcode::LIST_MAP,
+        &[*element_layout],
+    )
+}
+
+fn list_map_generic_new<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    transform: FunctionValue<'ctx>,
+    transform_layout: Layout<'a>,
+    list: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
+    closure_data: BasicValueEnum<'ctx>,
+    closure_data_layout: Layout<'a>,
+    op: &str,
+    argument_layouts: &[Layout<'a>],
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+
+    let return_layout = match transform_layout {
+        Layout::FunctionPointer(_, ret) => ret,
+        Layout::Closure(_, _, ret) => ret,
+        _ => unreachable!("not a callable layout"),
+    };
+
+    let closure_data_ptr = builder.build_alloca(closure_data.get_type(), "closure_data_ptr");
+    env.builder.build_store(closure_data_ptr, closure_data);
+
+    let stepper_caller = build_transform_caller_new(
+        env,
+        layout_ids,
+        transform,
+        closure_data_layout,
+        argument_layouts,
+    )
+    .as_global_value()
+    .as_pointer_value();
+
+    dbg!(stepper_caller);
+
+    call_bitcode_fn_returns_list(
+        env,
+        &[
+            pass_list_as_i128(env, list),
+            pass_as_opaque(env, closure_data_ptr),
+            stepper_caller.into(),
+            alignment_intvalue(env, &element_layout),
+            layout_width(env, element_layout),
+            layout_width(env, return_layout),
+        ],
+        op,
     )
 }
 
