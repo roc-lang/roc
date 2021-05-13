@@ -247,14 +247,11 @@ pub fn constrain_expr<'a>(
                 env.pool[type_node_id] = Type2::Variable(*var);
             }
 
-            let members = PoolVec::with_capacity(1, env.pool);
-
-            for (member_node_id, member) in members.iter_node_ids().zip(vec![(*name, types)]) {
-                env.pool[member_node_id] = member;
-            }
-
             let union_con = Eq(
-                Type2::TagUnion(members, env.pool.add(Type2::Variable(*ext_var))),
+                Type2::TagUnion(
+                    PoolVec::new(vec![(*name, types)].into_iter(), env.pool),
+                    env.pool.add(Type2::Variable(*ext_var)),
+                ),
                 expected.shallow_clone(),
                 Category::TagApply {
                     tag_name: TagName::Global(name.as_str(env.pool).into()),
@@ -330,13 +327,7 @@ fn empty_list_type(pool: &mut Pool, var: Variable) -> Type2 {
 
 #[inline(always)]
 fn list_type(pool: &mut Pool, typ: Type2) -> Type2 {
-    let args = PoolVec::with_capacity(1, pool);
-
-    for (arg_node_id, arg) in args.iter_node_ids().zip(vec![typ]) {
-        pool[arg_node_id] = arg;
-    }
-
-    builtin_type(Symbol::LIST_LIST, args)
+    builtin_type(Symbol::LIST_LIST, PoolVec::new(vec![typ].into_iter(), pool))
 }
 
 #[inline(always)]
