@@ -21,7 +21,7 @@ use roc_types::{
 pub enum Constraint<'a> {
     Eq(Type2, Expected<Type2>, Category, Region),
     // Store(Type, Variable, &'static str, u32),
-    // Lookup(Symbol, Expected<Type>, Region),
+    Lookup(Symbol, Expected<Type2>, Region),
     // Pattern(Region, PatternCategory, Type, PExpected<Type>),
     And(BumpVec<'a, Constraint<'a>>),
     Let(&'a LetConstraint<'a>),
