@@ -1807,10 +1807,20 @@ fn list_keep_errs() {
     assert_evals_to!("List.keepErrs [] (\\x -> x)", 0, i64);
     assert_evals_to!("List.keepErrs [1,2] (\\x -> Err x)", &[1, 2], &[i64]);
     assert_evals_to!(
-        "List.keepErrs [0,1,2] (\\x -> x % 0 |> Result.mapErr (\\_ -> 32))",
+        indoc!(
+            r#"
+            mapErr = \result, f ->
+                when result is
+                    Err e -> Err ( f e )
+                    Ok v -> Ok v
+
+            List.keepErrs [0,1,2] (\x -> x % 0 |> mapErr (\_ -> 32))
+            "#
+        ),
         &[32, 32, 32],
         &[i64]
     );
+
     assert_evals_to!("List.keepErrs [Ok 1, Err 2] (\\x -> x)", &[2], &[i64]);
 }
 

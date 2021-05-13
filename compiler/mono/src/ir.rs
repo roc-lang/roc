@@ -7524,6 +7524,7 @@ fn lowlevel_match_on_lambda_set<'a, F>(
 where
     F: Fn(Symbol, Symbol) -> Call<'a> + Copy,
 {
+    dbg!(lambda_set);
     match dbg!(lambda_set.runtime_representation()) {
         Layout::Union(_) => {
             let closure_tag_id_symbol = env.unique_symbol();

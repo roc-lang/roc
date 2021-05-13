@@ -144,12 +144,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     );
 
     // sub or (-) : Num a, Num a -> Num a
-    add_type!(
+    add_top_level_function_type!(
         Symbol::NUM_SUB,
-        top_level_function(
-            vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
-            Box::new(num_type(flex(TVAR1))),
-        ),
+        vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
+        Box::new(num_type(flex(TVAR1))),
     );
 
     // subWrap : Int range, Int range -> Int range
@@ -391,12 +389,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     );
 
     // mod : Int a, Int a -> Result (Int a) [ DivByZero ]*
-    add_type!(
+    add_top_level_function_type!(
         Symbol::NUM_MOD_INT,
-        top_level_function(
-            vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
-            Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
-        ),
+        vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+        Box::new(result_type(int_type(flex(TVAR1)), div_by_zero.clone())),
     );
 
     // isMultipleOf : Int a, Int a -> Bool
@@ -850,9 +846,11 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     });
 
     // keepErrs: List before, (before -> Result * after) -> List after
-    add_type!(Symbol::LIST_KEEP_ERRS, {
+    {
         let_tvars! { star, cvar, before, after};
-        top_level_function(
+
+        add_top_level_function_type!(
+            Symbol::LIST_KEEP_ERRS,
             vec![
                 list_type(flex(before)),
                 closure(
@@ -863,7 +861,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
             ],
             Box::new(list_type(flex(after))),
         )
-    });
+    };
 
     // range : Int a, Int a -> List (Int a)
     add_type!(Symbol::LIST_RANGE, {
@@ -910,11 +908,12 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         )
     });
 
-    // map3 : List a, List b, List c, (a, b, c -> d) -> List d
-    add_type!(Symbol::LIST_MAP3, {
+    {
         let_tvars! {a, b, c, d, cvar};
 
-        top_level_function(
+        // map3 : List a, List b, List c, (a, b, c -> d) -> List d
+        add_top_level_function_type!(
+            Symbol::LIST_MAP3,
             vec![
                 list_type(flex(a)),
                 list_type(flex(b)),
@@ -923,7 +922,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
             ],
             Box::new(list_type(flex(d))),
         )
-    });
+    };
 
     // append : List elem, elem -> List elem
     add_type!(
@@ -1263,15 +1262,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     );
 
     // mapErr : Result a x, (x -> y) -> Result a x
-    add_type!(
+    add_top_level_function_type!(
         Symbol::RESULT_MAP_ERR,
-        top_level_function(
-            vec![
-                result_type(flex(TVAR1), flex(TVAR3)),
-                closure(vec![flex(TVAR3)], TVAR4, Box::new(flex(TVAR2))),
-            ],
-            Box::new(result_type(flex(TVAR1), flex(TVAR2))),
-        ),
+        vec![
+            result_type(flex(TVAR1), flex(TVAR3)),
+            closure(vec![flex(TVAR3)], TVAR4, Box::new(flex(TVAR2))),
+        ],
+        Box::new(result_type(flex(TVAR1), flex(TVAR2))),
     );
 
     // after : Result a err, (a -> Result b err) -> Result b err
