@@ -275,7 +275,7 @@ pub fn helper<'a>(
                 mode,
             );
 
-            fn_val.print_to_stderr();
+            // fn_val.print_to_stderr();
             // module.print_to_stderr();
 
             panic!(
@@ -311,7 +311,7 @@ pub fn helper<'a>(
     }
 
     // Uncomment this to see the module's optimized LLVM instruction output:
-    env.module.print_to_stderr();
+    // env.module.print_to_stderr();
 
     let lib = module_to_dylib(&env.module, &target, opt_level)
         .expect("Error loading compiled dylib for test");

@@ -1877,12 +1877,7 @@ fn specialize_external<'a>(
     // if this is a closure, add the closure record argument
     let pattern_symbols = match captured_symbols {
         CapturedSymbols::None => pattern_symbols,
-        // CapturedSymbols::Captured([]) => pattern_symbols,
-        CapturedSymbols::Captured([]) => {
-            let mut temp = Vec::from_iter_in(pattern_symbols.iter().copied(), env.arena);
-            temp.push(Symbol::ARG_CLOSURE);
-            temp.into_bump_slice()
-        }
+        CapturedSymbols::Captured([]) => pattern_symbols,
         CapturedSymbols::Captured(_) => {
             let mut temp = Vec::from_iter_in(pattern_symbols.iter().copied(), env.arena);
             temp.push(Symbol::ARG_CLOSURE);
@@ -2069,7 +2064,6 @@ fn specialize_external<'a>(
                 None => None,
             };
 
-            // dbg!(proc_name, &proc_args, &closure_data_layout, &ret_layout);
             let proc = Proc {
                 name: proc_name,
                 args: proc_args,
@@ -2438,7 +2432,8 @@ impl<'a> TopLevelFunctionLayout<'a> {
         for old in old_arguments {
             match old {
                 Layout::Closure(_, lambda_set, _) => {
-                    arguments.push(lambda_set.runtime_representation())
+                    let repr = lambda_set.runtime_representation();
+                    arguments.push(repr)
                 }
                 other => arguments.push(*other),
             }
@@ -2994,7 +2989,13 @@ pub fn with_hole<'a>(
                         });
 
                     // even though this was originally a Tag, we treat it as a Struct from now on
-                    let stmt = Stmt::Let(assigned, Expr::Struct(field_symbols), layout, hole);
+                    let stmt = if let [only_field] = field_symbols {
+                        let mut hole = hole.clone();
+                        substitute_in_exprs(env.arena, &mut hole, assigned, *only_field);
+                        hole
+                    } else {
+                        Stmt::Let(assigned, Expr::Struct(field_symbols), layout, hole)
+                    };
 
                     let iter = field_symbols_temp.into_iter().map(|(_, _, data)| data);
                     assign_to_symbols(env, procs, layout_cache, iter, stmt)
@@ -3258,7 +3259,14 @@ pub fn with_hole<'a>(
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             let field_symbols = field_symbols.into_bump_slice();
-            let mut stmt = Stmt::Let(assigned, Expr::Struct(field_symbols), layout, hole);
+
+            let mut stmt = if let [only_field] = field_symbols {
+                let mut hole = hole.clone();
+                substitute_in_exprs(env.arena, &mut hole, assigned, *only_field);
+                hole
+            } else {
+                Stmt::Let(assigned, Expr::Struct(field_symbols), layout, hole)
+            };
 
             for (opt_field, symbol) in can_fields.into_iter().rev().zip(field_symbols.iter().rev())
             {
@@ -6135,6 +6143,8 @@ fn call_by_name_help<'a>(
                                     maybe_closure_layout, layout
                                 );
 
+                                dbg!(maybe_closure_layout, field_symbols, &loc_args);
+
                                 call_specialized_proc(
                                     env,
                                     procs,
@@ -7605,8 +7615,8 @@ fn match_on_lambda_set<'a>(
     env: &mut Env<'a, '_>,
     lambda_set: LambdaSet<'a>,
     closure_data_symbol: Symbol,
-    argument_symbols: &[Symbol],
-    argument_layouts: &[Layout<'a>],
+    argument_symbols: &'a [Symbol],
+    argument_layouts: &'a [Layout<'a>],
     return_layout: Layout<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
@@ -7702,8 +7712,8 @@ fn union_lambda_set_to_switch<'a>(
     closure_tag_id_symbol: Symbol,
     closure_tag_id_layout: Layout<'a>,
     closure_data_symbol: Symbol,
-    argument_symbols: &[Symbol],
-    argument_layouts: &[Layout<'a>],
+    argument_symbols: &'a [Symbol],
+    argument_layouts: &'a [Layout<'a>],
     return_layout: Layout<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
@@ -7762,8 +7772,8 @@ fn union_lambda_set_branch<'a>(
     function_symbol: Symbol,
     closure_data_symbol: Symbol,
     closure_data_layout: Layout<'a>,
-    argument_symbols_slice: &[Symbol],
-    argument_layouts_slice: &[Layout<'a>],
+    argument_symbols_slice: &'a [Symbol],
+    argument_layouts_slice: &'a [Layout<'a>],
     return_layout: Layout<'a>,
 ) -> Stmt<'a> {
     let result_symbol = env.unique_symbol();
@@ -7788,23 +7798,35 @@ fn union_lambda_set_branch_help<'a>(
     function_symbol: Symbol,
     closure_data_symbol: Symbol,
     closure_data_layout: Layout<'a>,
-    argument_symbols_slice: &[Symbol],
-    argument_layouts_slice: &[Layout<'a>],
+    argument_symbols_slice: &'a [Symbol],
+    argument_layouts_slice: &'a [Layout<'a>],
     return_layout: Layout<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    // extend layouts with the layout of the closure environment
-    let mut argument_layouts = Vec::with_capacity_in(argument_layouts_slice.len() + 1, env.arena);
-    argument_layouts.extend(argument_layouts_slice);
-    argument_layouts.push(closure_data_layout);
-    let argument_layouts = argument_layouts.into_bump_slice();
+    let (argument_layouts, argument_symbols) = match closure_data_layout {
+        Layout::Struct(&[]) | Layout::Builtin(Builtin::Int1) | Layout::Builtin(Builtin::Int8) => {
+            (argument_layouts_slice, argument_symbols_slice)
+        }
+        _ => {
+            // extend layouts with the layout of the closure environment
+            let mut argument_layouts =
+                Vec::with_capacity_in(argument_layouts_slice.len() + 1, env.arena);
+            argument_layouts.extend(argument_layouts_slice);
+            argument_layouts.push(closure_data_layout);
 
-    // extend symbols with the symbol of the closure environment
-    let mut argument_symbols = Vec::with_capacity_in(argument_symbols_slice.len() + 1, env.arena);
-    argument_symbols.extend(argument_symbols_slice);
-    argument_symbols.push(closure_data_symbol);
-    let argument_symbols = argument_symbols.into_bump_slice();
+            // extend symbols with the symbol of the closure environment
+            let mut argument_symbols =
+                Vec::with_capacity_in(argument_symbols_slice.len() + 1, env.arena);
+            argument_symbols.extend(argument_symbols_slice);
+            argument_symbols.push(closure_data_symbol);
+
+            (
+                argument_layouts.into_bump_slice(),
+                argument_symbols.into_bump_slice(),
+            )
+        }
+    };
 
     let full_layout = Layout::FunctionPointer(argument_layouts, env.arena.alloc(return_layout));
 
@@ -7831,8 +7853,8 @@ fn enum_lambda_set_to_switch<'a>(
     closure_tag_id_symbol: Symbol,
     closure_tag_id_layout: Layout<'a>,
     closure_data_symbol: Symbol,
-    argument_symbols: &[Symbol],
-    argument_layouts: &[Layout<'a>],
+    argument_symbols: &'a [Symbol],
+    argument_layouts: &'a [Layout<'a>],
     return_layout: Layout<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
@@ -7893,8 +7915,8 @@ fn enum_lambda_set_branch<'a>(
     function_symbol: Symbol,
     closure_data_symbol: Symbol,
     closure_data_layout: Layout<'a>,
-    argument_symbols_slice: &[Symbol],
-    argument_layouts_slice: &[Layout<'a>],
+    argument_symbols_slice: &'a [Symbol],
+    argument_layouts_slice: &'a [Layout<'a>],
     return_layout: Layout<'a>,
 ) -> Stmt<'a> {
     let result_symbol = env.unique_symbol();
@@ -7919,23 +7941,35 @@ fn enum_lambda_set_branch_help<'a>(
     function_symbol: Symbol,
     closure_data_symbol: Symbol,
     closure_data_layout: Layout<'a>,
-    argument_symbols_slice: &[Symbol],
-    argument_layouts_slice: &[Layout<'a>],
+    argument_symbols_slice: &'a [Symbol],
+    argument_layouts_slice: &'a [Layout<'a>],
     return_layout: Layout<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    // extend layouts with the layout of the closure environment
-    let mut argument_layouts = Vec::with_capacity_in(argument_layouts_slice.len() + 1, env.arena);
-    argument_layouts.extend(argument_layouts_slice);
-    argument_layouts.push(closure_data_layout);
-    let argument_layouts = argument_layouts.into_bump_slice();
+    let (argument_layouts, argument_symbols) = match closure_data_layout {
+        Layout::Struct(&[]) | Layout::Builtin(Builtin::Int1) | Layout::Builtin(Builtin::Int8) => {
+            (argument_layouts_slice, argument_symbols_slice)
+        }
+        _ => {
+            // extend layouts with the layout of the closure environment
+            let mut argument_layouts =
+                Vec::with_capacity_in(argument_layouts_slice.len() + 1, env.arena);
+            argument_layouts.extend(argument_layouts_slice);
+            argument_layouts.push(closure_data_layout);
 
-    // extend symbols with the symbol of the closure environment
-    let mut argument_symbols = Vec::with_capacity_in(argument_symbols_slice.len() + 1, env.arena);
-    argument_symbols.extend(argument_symbols_slice);
-    argument_symbols.push(closure_data_symbol);
-    let argument_symbols = argument_symbols.into_bump_slice();
+            // extend symbols with the symbol of the closure environment
+            let mut argument_symbols =
+                Vec::with_capacity_in(argument_symbols_slice.len() + 1, env.arena);
+            argument_symbols.extend(argument_symbols_slice);
+            argument_symbols.push(closure_data_symbol);
+
+            (
+                argument_layouts.into_bump_slice(),
+                argument_symbols.into_bump_slice(),
+            )
+        }
+    };
 
     let full_layout = Layout::FunctionPointer(argument_layouts, env.arena.alloc(return_layout));
 

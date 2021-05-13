@@ -169,16 +169,25 @@ impl<'a> LambdaSet<'a> {
         if let [] = self.set {
             // TERRIBLE HACK for builting functions
             Layout::FunctionPointer(argument_layouts, ret_layout)
-        } else if let [(_, [])] = self.set {
-            // this function does not have anything in its closure, and the lambda set is a
-            // singleton, so we pass no extra argument
-            Layout::FunctionPointer(argument_layouts, ret_layout)
         } else {
-            let mut arguments = Vec::with_capacity_in(argument_layouts.len() + 1, arena);
-            arguments.extend(argument_layouts);
-            arguments.push(self.runtime_representation());
+            match self.representation {
+                Layout::Struct(&[]) => {
+                    // this function does not have anything in its closure, and the lambda set is a
+                    // singleton, so we pass no extra argument
+                    Layout::FunctionPointer(argument_layouts, ret_layout)
+                }
+                Layout::Builtin(Builtin::Int1) | Layout::Builtin(Builtin::Int8) => {
+                    // we don't pass this along either
+                    Layout::FunctionPointer(argument_layouts, ret_layout)
+                }
+                _ => {
+                    let mut arguments = Vec::with_capacity_in(argument_layouts.len() + 1, arena);
+                    arguments.extend(argument_layouts);
+                    arguments.push(self.runtime_representation());
 
-            Layout::FunctionPointer(arguments.into_bump_slice(), ret_layout)
+                    Layout::FunctionPointer(arguments.into_bump_slice(), ret_layout)
+                }
+            }
         }
     }
 

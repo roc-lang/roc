@@ -1094,6 +1094,28 @@ fn return_wrapped_function_pointer() {
 }
 
 #[test]
+fn return_wrapped_function_pointer_b() {
+    assert_non_opt_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+
+            foo : { x: (I64 -> Str) }
+            foo = { x:  (\_ -> "foobar") }
+
+            main : { x:  (I64 -> Str) }
+            main = foo
+            "#
+        ),
+        1,
+        i64,
+        |_| 1
+    );
+}
+
+#[test]
+#[ignore]
 fn return_wrapped_closure() {
     assert_non_opt_evals_to!(
         indoc!(
