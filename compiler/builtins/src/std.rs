@@ -256,12 +256,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     );
 
     // compare : Num a, Num a -> [ LT, EQ, GT ]
-    add_type!(
+    add_top_level_function_type!(
         Symbol::NUM_COMPARE,
-        top_level_function(
-            vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
-            Box::new(ordering_type()),
-        ),
+        vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
+        Box::new(ordering_type()),
     );
 
     // toFloat : Num * -> Float *

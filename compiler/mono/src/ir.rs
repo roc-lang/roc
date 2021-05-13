@@ -4162,7 +4162,7 @@ pub fn with_hole<'a>(
                     let closure_data_symbol = arg_symbols[closure_index];
                     let closure_data_var = args[closure_index].0;
 
-                    match_on_closure_argument!(
+                    let stmt = match_on_closure_argument!(
                         env,
                         procs,
                         layout_cache,
@@ -4173,6 +4173,32 @@ pub fn with_hole<'a>(
                         layout,
                         assigned,
                         hole
+                    );
+
+                    // because of a hack to implement List.product and List.sum, we need to also
+                    // assign to symbols here. Normally the arguments to a lowlevel function are
+                    // all symbols anyway, but because of this hack the closure symbol can be an
+                    // actual closure, and the default is either the number 1 or 0
+                    // this can be removed when we define builtin modules as proper modules
+
+                    let stmt = assign_to_symbol(
+                        env,
+                        procs,
+                        layout_cache,
+                        args[2].0,
+                        Located::at_zero(args[2].1.clone()),
+                        arg_symbols[2],
+                        stmt,
+                    );
+
+                    assign_to_symbol(
+                        env,
+                        procs,
+                        layout_cache,
+                        args[1].0,
+                        Located::at_zero(args[1].1.clone()),
+                        arg_symbols[1],
+                        stmt,
                     )
                 }
                 ListMap2 => {
@@ -7498,7 +7524,7 @@ fn lowlevel_match_on_lambda_set<'a, F>(
 where
     F: Fn(Symbol, Symbol) -> Call<'a> + Copy,
 {
-    match lambda_set.runtime_representation() {
+    match dbg!(lambda_set.runtime_representation()) {
         Layout::Union(_) => {
             let closure_tag_id_symbol = env.unique_symbol();
 
@@ -7534,6 +7560,8 @@ where
             let function_symbol = lambda_set.set[0].0;
 
             let bound = env.unique_symbol();
+
+            dbg!(hole);
 
             // build the call
             let stmt = Stmt::Let(

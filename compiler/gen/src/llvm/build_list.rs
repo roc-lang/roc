@@ -455,13 +455,15 @@ pub fn list_walk_help<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     use crate::llvm::build::load_symbol_and_layout;
 
-    debug_assert_eq!(args.len(), 3);
+    debug_assert_eq!(args.len(), 4);
 
     let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-    let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
+    let (default, default_layout) = load_symbol_and_layout(scope, &args[1]);
 
-    let (default, default_layout) = load_symbol_and_layout(scope, &args[2]);
+    let (function_layout, function) = scope.function_pointers[&args[2]];
+
+    let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
 
     match list_layout {
         Layout::Builtin(Builtin::EmptyList) => default,
@@ -471,8 +473,10 @@ pub fn list_walk_help<'a, 'ctx, 'env>(
             parent,
             list,
             element_layout,
-            func,
-            func_layout,
+            function,
+            function_layout,
+            closure,
+            *closure_layout,
             default,
             default_layout,
             variant,
@@ -487,8 +491,10 @@ fn list_walk_generic<'a, 'ctx, 'env>(
     _parent: FunctionValue<'ctx>,
     list: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
-    func: BasicValueEnum<'ctx>,
-    func_layout: &Layout<'a>,
+    transform: FunctionValue<'ctx>,
+    transform_layout: Layout<'a>,
+    closure_data: BasicValueEnum<'ctx>,
+    closure_data_layout: Layout<'a>,
     default: BasicValueEnum<'ctx>,
     default_layout: &Layout<'a>,
     variant: ListWalk,
@@ -502,16 +508,16 @@ fn list_walk_generic<'a, 'ctx, 'env>(
         ListWalk::WalkBackwardsUntil => todo!(),
     };
 
-    let transform_ptr = builder.build_alloca(func.get_type(), "transform_ptr");
-    env.builder.build_store(transform_ptr, func);
+    let closure_data_ptr = builder.build_alloca(closure_data.get_type(), "closure_data_ptr");
+    env.builder.build_store(closure_data_ptr, closure_data);
 
     let default_ptr = builder.build_alloca(default.get_type(), "default_ptr");
     env.builder.build_store(default_ptr, default);
 
-    let stepper_caller = build_transform_caller(
+    let stepper_caller = build_transform_caller_new(
         env,
-        layout_ids,
-        func_layout,
+        transform,
+        closure_data_layout,
         &[*element_layout, *default_layout],
     )
     .as_global_value()
@@ -525,7 +531,7 @@ fn list_walk_generic<'a, 'ctx, 'env>(
                 env,
                 &[
                     pass_list_as_i128(env, list),
-                    pass_as_opaque(env, transform_ptr),
+                    pass_as_opaque(env, closure_data_ptr),
                     stepper_caller.into(),
                     pass_as_opaque(env, default_ptr),
                     alignment_intvalue(env, &element_layout),
@@ -542,7 +548,7 @@ fn list_walk_generic<'a, 'ctx, 'env>(
                 env,
                 &[
                     pass_list_as_i128(env, list),
-                    pass_as_opaque(env, transform_ptr),
+                    pass_as_opaque(env, closure_data_ptr),
                     stepper_caller.into(),
                     pass_as_opaque(env, default_ptr),
                     alignment_intvalue(env, &element_layout),
@@ -664,15 +670,10 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
     let closure_data_ptr = builder.build_alloca(closure_data.get_type(), "closure_data_ptr");
     env.builder.build_store(closure_data_ptr, closure_data);
 
-    let stepper_caller = build_transform_caller_new(
-        env,
-        layout_ids,
-        transform,
-        closure_data_layout,
-        &[*element_layout],
-    )
-    .as_global_value()
-    .as_pointer_value();
+    let stepper_caller =
+        build_transform_caller_new(env, transform, closure_data_layout, &[*element_layout])
+            .as_global_value()
+            .as_pointer_value();
 
     let inc_element_fn = build_inc_wrapper(env, layout_ids, element_layout);
     let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
@@ -767,15 +768,10 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
     let closure_data_ptr = builder.build_alloca(closure_data.get_type(), "closure_data_ptr");
     env.builder.build_store(closure_data_ptr, closure_data);
 
-    let stepper_caller = build_transform_caller_new(
-        env,
-        layout_ids,
-        transform,
-        closure_data_layout,
-        &[*before_layout],
-    )
-    .as_global_value()
-    .as_pointer_value();
+    let stepper_caller =
+        build_transform_caller_new(env, transform, closure_data_layout, &[*before_layout])
+            .as_global_value()
+            .as_pointer_value();
 
     let before_width = env
         .ptr_int()
@@ -813,21 +809,27 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
 pub fn list_sort_with<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    transform: BasicValueEnum<'ctx>,
+    transform: FunctionValue<'ctx>,
+    closure_data: BasicValueEnum<'ctx>,
+    closure_data_layout: Layout<'a>,
     list: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let transform_ptr = transform.into_pointer_value();
+    let compare_wrapper =
+        build_compare_wrapper(env, transform, closure_data_layout, element_layout)
+            .as_global_value()
+            .as_pointer_value();
 
-    let compare_wrapper = build_compare_wrapper(env, layout_ids, element_layout)
-        .as_global_value()
-        .as_pointer_value();
+    let closure_data_ptr = env
+        .builder
+        .build_alloca(closure_data.get_type(), "closure_data_ptr");
+    env.builder.build_store(closure_data_ptr, closure_data);
 
     call_bitcode_fn_returns_list(
         env,
         &[
             pass_list_as_i128(env, list),
-            pass_as_opaque(env, transform_ptr),
+            pass_as_opaque(env, closure_data_ptr),
             compare_wrapper.into(),
             alignment_intvalue(env, &element_layout),
             layout_width(env, element_layout),
@@ -909,15 +911,10 @@ fn list_map_generic<'a, 'ctx, 'env>(
     let closure_data_ptr = builder.build_alloca(closure_data.get_type(), "closure_data_ptr");
     env.builder.build_store(closure_data_ptr, closure_data);
 
-    let stepper_caller = build_transform_caller_new(
-        env,
-        layout_ids,
-        transform,
-        closure_data_layout,
-        argument_layouts,
-    )
-    .as_global_value()
-    .as_pointer_value();
+    let stepper_caller =
+        build_transform_caller_new(env, transform, closure_data_layout, argument_layouts)
+            .as_global_value()
+            .as_pointer_value();
 
     call_bitcode_fn_returns_list(
         env,
@@ -958,7 +955,6 @@ pub fn list_map2<'a, 'ctx, 'env>(
 
     let stepper_caller = build_transform_caller_new(
         env,
-        layout_ids,
         transform,
         closure_data_layout,
         &[*element1_layout, *element2_layout],
@@ -1026,7 +1022,6 @@ pub fn list_map3<'a, 'ctx, 'env>(
 
     let stepper_caller = build_transform_caller_new(
         env,
-        layout_ids,
         transform,
         closure_data_layout,
         &[*element1_layout, *element2_layout, *element3_layout],

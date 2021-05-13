@@ -3878,7 +3878,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         ListKeepErrs => {
             // List.keepErrs : List before, (before -> Result * after) -> List after
-            debug_assert_eq!(args.len(), 2);
+            debug_assert_eq!(args.len(), 3);
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
@@ -3990,17 +3990,25 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         ListSortWith => {
             // List.sortWith : List a, (a, a -> Ordering) -> List a
-            debug_assert_eq!(args.len(), 2);
+            debug_assert_eq!(args.len(), 3);
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            let func = load_symbol(scope, &args[1]);
+            let (_, function) = scope.function_pointers[&args[1]];
+
+            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(_, element_layout)) => {
-                    list_sort_with(env, layout_ids, func, list, element_layout)
-                }
+                Layout::Builtin(Builtin::List(_, element_layout)) => list_sort_with(
+                    env,
+                    layout_ids,
+                    function,
+                    closure,
+                    *closure_layout,
+                    list,
+                    element_layout,
+                ),
                 _ => unreachable!("invalid list layout"),
             }
         }
