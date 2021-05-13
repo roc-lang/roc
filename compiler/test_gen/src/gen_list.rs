@@ -629,7 +629,8 @@ fn list_map2_pair() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.map2 [1,2,3] [3,2,1] (\a,b -> Pair a b)
+            f = (\a,b -> Pair a b)
+            List.map2 [1,2,3] [3,2,1] f
             "#
         ),
         RocList::from_slice(&[(1, 3), (2, 2), (3, 1)]),
@@ -645,7 +646,7 @@ fn list_map2_different_lengths() {
             List.map2
                 ["a", "b", "lllllllllllllongnggg" ]
                 ["b"]
-                Str.concat
+                (\a, b -> Str.concat a b)
             "#
         ),
         RocList::from_slice(&[RocStr::from_slice("ab".as_bytes()),]),

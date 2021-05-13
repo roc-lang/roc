@@ -652,20 +652,27 @@ pub fn list_contains<'a, 'ctx, 'env>(
 pub fn list_keep_if<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    transform: BasicValueEnum<'ctx>,
-    transform_layout: &Layout<'a>,
+    transform: FunctionValue<'ctx>,
+    transform_layout: Layout<'a>,
+    closure_data: BasicValueEnum<'ctx>,
+    closure_data_layout: Layout<'a>,
     list: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
-    env.builder.build_store(transform_ptr, transform);
+    let closure_data_ptr = builder.build_alloca(closure_data.get_type(), "closure_data_ptr");
+    env.builder.build_store(closure_data_ptr, closure_data);
 
-    let stepper_caller =
-        build_transform_caller(env, layout_ids, transform_layout, &[*element_layout])
-            .as_global_value()
-            .as_pointer_value();
+    let stepper_caller = build_transform_caller_new(
+        env,
+        layout_ids,
+        transform,
+        closure_data_layout,
+        &[*element_layout],
+    )
+    .as_global_value()
+    .as_pointer_value();
 
     let inc_element_fn = build_inc_wrapper(env, layout_ids, element_layout);
     let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
@@ -674,7 +681,7 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
         env,
         &[
             pass_list_as_i128(env, list),
-            pass_as_opaque(env, transform_ptr),
+            pass_as_opaque(env, closure_data_ptr),
             stepper_caller.into(),
             alignment_intvalue(env, &element_layout),
             layout_width(env, element_layout),
@@ -689,8 +696,10 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
 pub fn list_keep_oks<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    transform: BasicValueEnum<'ctx>,
-    transform_layout: &Layout<'a>,
+    transform: FunctionValue<'ctx>,
+    transform_layout: Layout<'a>,
+    closure_data: BasicValueEnum<'ctx>,
+    closure_data_layout: Layout<'a>,
     list: BasicValueEnum<'ctx>,
     before_layout: &Layout<'a>,
     after_layout: &Layout<'a>,
@@ -700,6 +709,8 @@ pub fn list_keep_oks<'a, 'ctx, 'env>(
         layout_ids,
         transform,
         transform_layout,
+        closure_data,
+        closure_data_layout,
         list,
         before_layout,
         after_layout,
@@ -711,8 +722,10 @@ pub fn list_keep_oks<'a, 'ctx, 'env>(
 pub fn list_keep_errs<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    transform: BasicValueEnum<'ctx>,
-    transform_layout: &Layout<'a>,
+    transform: FunctionValue<'ctx>,
+    transform_layout: Layout<'a>,
+    closure_data: BasicValueEnum<'ctx>,
+    closure_data_layout: Layout<'a>,
     list: BasicValueEnum<'ctx>,
     before_layout: &Layout<'a>,
     after_layout: &Layout<'a>,
@@ -722,6 +735,8 @@ pub fn list_keep_errs<'a, 'ctx, 'env>(
         layout_ids,
         transform,
         transform_layout,
+        closure_data,
+        closure_data_layout,
         list,
         before_layout,
         after_layout,
@@ -732,8 +747,10 @@ pub fn list_keep_errs<'a, 'ctx, 'env>(
 pub fn list_keep_result<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    transform: BasicValueEnum<'ctx>,
-    transform_layout: &Layout<'a>,
+    transform: FunctionValue<'ctx>,
+    transform_layout: Layout<'a>,
+    closure_data: BasicValueEnum<'ctx>,
+    closure_data_layout: Layout<'a>,
     list: BasicValueEnum<'ctx>,
     before_layout: &Layout<'a>,
     after_layout: &Layout<'a>,
@@ -747,13 +764,18 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
         _ => unreachable!("not a callable layout"),
     };
 
-    let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
-    env.builder.build_store(transform_ptr, transform);
+    let closure_data_ptr = builder.build_alloca(closure_data.get_type(), "closure_data_ptr");
+    env.builder.build_store(closure_data_ptr, closure_data);
 
-    let stepper_caller =
-        build_transform_caller(env, layout_ids, transform_layout, &[*before_layout])
-            .as_global_value()
-            .as_pointer_value();
+    let stepper_caller = build_transform_caller_new(
+        env,
+        layout_ids,
+        transform,
+        closure_data_layout,
+        &[*before_layout],
+    )
+    .as_global_value()
+    .as_pointer_value();
 
     let before_width = env
         .ptr_int()
@@ -767,14 +789,14 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
         .ptr_int()
         .const_int(result_layout.stack_size(env.ptr_bytes) as u64, false);
 
-    let inc_closure = build_inc_wrapper(env, layout_ids, transform_layout);
+    let inc_closure = build_inc_wrapper(env, layout_ids, &transform_layout);
     let dec_result_fn = build_dec_wrapper(env, layout_ids, result_layout);
 
     call_bitcode_fn(
         env,
         &[
             pass_list_as_i128(env, list),
-            pass_as_opaque(env, transform_ptr),
+            pass_as_opaque(env, closure_data_ptr),
             stepper_caller.into(),
             alignment_intvalue(env, &before_layout),
             before_width.into(),
@@ -814,8 +836,8 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
     )
 }
 
-/// List.map : List before, (before -> after) -> List after
-pub fn list_map_new<'a, 'ctx, 'env>(
+/// List.mapWithIndex : List before, (Nat, before -> after) -> List after
+pub fn list_map_with_index<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     transform: FunctionValue<'ctx>,
@@ -825,7 +847,32 @@ pub fn list_map_new<'a, 'ctx, 'env>(
     list: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    list_map_generic_new(
+    list_map_generic(
+        env,
+        layout_ids,
+        transform,
+        transform_layout,
+        list,
+        element_layout,
+        closure_data,
+        closure_data_layout,
+        bitcode::LIST_MAP_WITH_INDEX,
+        &[Layout::Builtin(Builtin::Usize), *element_layout],
+    )
+}
+
+/// List.map : List before, (before -> after) -> List after
+pub fn list_map<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    transform: FunctionValue<'ctx>,
+    transform_layout: Layout<'a>,
+    closure_data: BasicValueEnum<'ctx>,
+    closure_data_layout: Layout<'a>,
+    list: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    list_map_generic(
         env,
         layout_ids,
         transform,
@@ -839,7 +886,7 @@ pub fn list_map_new<'a, 'ctx, 'env>(
     )
 }
 
-fn list_map_generic_new<'a, 'ctx, 'env>(
+fn list_map_generic<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     transform: FunctionValue<'ctx>,
@@ -872,8 +919,6 @@ fn list_map_generic_new<'a, 'ctx, 'env>(
     .as_global_value()
     .as_pointer_value();
 
-    dbg!(element_layout, layout_width(env, element_layout));
-
     call_bitcode_fn_returns_list(
         env,
         &[
@@ -888,93 +933,13 @@ fn list_map_generic_new<'a, 'ctx, 'env>(
     )
 }
 
-/// List.map : List before, (before -> after) -> List after
-pub fn list_map<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    transform: BasicValueEnum<'ctx>,
-    transform_layout: &Layout<'a>,
-    list: BasicValueEnum<'ctx>,
-    element_layout: &Layout<'a>,
-) -> BasicValueEnum<'ctx> {
-    list_map_generic(
-        env,
-        layout_ids,
-        transform,
-        transform_layout,
-        list,
-        element_layout,
-        bitcode::LIST_MAP,
-        &[*element_layout],
-    )
-}
-
-/// List.mapWithIndex : List before, (Nat, before -> after) -> List after
-pub fn list_map_with_index<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    transform: BasicValueEnum<'ctx>,
-    transform_layout: &Layout<'a>,
-    list: BasicValueEnum<'ctx>,
-    element_layout: &Layout<'a>,
-) -> BasicValueEnum<'ctx> {
-    list_map_generic(
-        env,
-        layout_ids,
-        transform,
-        transform_layout,
-        list,
-        element_layout,
-        bitcode::LIST_MAP_WITH_INDEX,
-        &[Layout::Builtin(Builtin::Usize), *element_layout],
-    )
-}
-
-fn list_map_generic<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    transform: BasicValueEnum<'ctx>,
-    transform_layout: &Layout<'a>,
-    list: BasicValueEnum<'ctx>,
-    element_layout: &Layout<'a>,
-    op: &str,
-    argument_layouts: &[Layout<'a>],
-) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
-    let return_layout = match transform_layout {
-        Layout::FunctionPointer(_, ret) => ret,
-        Layout::Closure(_, _, ret) => ret,
-        _ => unreachable!("not a callable layout"),
-    };
-
-    let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
-    env.builder.build_store(transform_ptr, transform);
-
-    let stepper_caller =
-        build_transform_caller(env, layout_ids, transform_layout, argument_layouts)
-            .as_global_value()
-            .as_pointer_value();
-
-    call_bitcode_fn_returns_list(
-        env,
-        &[
-            pass_list_as_i128(env, list),
-            pass_as_opaque(env, transform_ptr),
-            stepper_caller.into(),
-            alignment_intvalue(env, &element_layout),
-            layout_width(env, element_layout),
-            layout_width(env, return_layout),
-        ],
-        op,
-    )
-}
-
 pub fn list_map2<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    transform: BasicValueEnum<'ctx>,
-    transform_layout: &Layout<'a>,
+    transform: FunctionValue<'ctx>,
+    transform_layout: Layout<'a>,
+    closure_data: BasicValueEnum<'ctx>,
+    closure_data_layout: Layout<'a>,
     list1: BasicValueEnum<'ctx>,
     list2: BasicValueEnum<'ctx>,
     element1_layout: &Layout<'a>,
@@ -988,14 +953,18 @@ pub fn list_map2<'a, 'ctx, 'env>(
         _ => unreachable!("not a callable layout"),
     };
 
-    let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
-    env.builder.build_store(transform_ptr, transform);
+    let closure_data_ptr = builder.build_alloca(closure_data.get_type(), "closure_data_ptr");
+    env.builder.build_store(closure_data_ptr, closure_data);
 
-    let argument_layouts = [*element1_layout, *element2_layout];
-    let stepper_caller =
-        build_transform_caller(env, layout_ids, transform_layout, &argument_layouts)
-            .as_global_value()
-            .as_pointer_value();
+    let stepper_caller = build_transform_caller_new(
+        env,
+        layout_ids,
+        transform,
+        closure_data_layout,
+        &[*element1_layout, *element2_layout],
+    )
+    .as_global_value()
+    .as_pointer_value();
 
     let a_width = env
         .ptr_int()
@@ -1017,7 +986,7 @@ pub fn list_map2<'a, 'ctx, 'env>(
         &[
             pass_list_as_i128(env, list1),
             pass_list_as_i128(env, list2),
-            pass_as_opaque(env, transform_ptr),
+            pass_as_opaque(env, closure_data_ptr),
             stepper_caller.into(),
             alignment_intvalue(env, &transform_layout),
             a_width.into(),
@@ -1033,8 +1002,10 @@ pub fn list_map2<'a, 'ctx, 'env>(
 pub fn list_map3<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    transform: BasicValueEnum<'ctx>,
-    transform_layout: &Layout<'a>,
+    transform: FunctionValue<'ctx>,
+    transform_layout: Layout<'a>,
+    closure_data: BasicValueEnum<'ctx>,
+    closure_data_layout: Layout<'a>,
     list1: BasicValueEnum<'ctx>,
     list2: BasicValueEnum<'ctx>,
     list3: BasicValueEnum<'ctx>,
@@ -1050,14 +1021,18 @@ pub fn list_map3<'a, 'ctx, 'env>(
         _ => unreachable!("not a callable layout"),
     };
 
-    let transform_ptr = builder.build_alloca(transform.get_type(), "transform_ptr");
-    env.builder.build_store(transform_ptr, transform);
+    let closure_data_ptr = builder.build_alloca(closure_data.get_type(), "closure_data_ptr");
+    env.builder.build_store(closure_data_ptr, closure_data);
 
-    let argument_layouts = [*element1_layout, *element2_layout, *element3_layout];
-    let stepper_caller =
-        build_transform_caller(env, layout_ids, transform_layout, &argument_layouts)
-            .as_global_value()
-            .as_pointer_value();
+    let stepper_caller = build_transform_caller_new(
+        env,
+        layout_ids,
+        transform,
+        closure_data_layout,
+        &[*element1_layout, *element2_layout, *element3_layout],
+    )
+    .as_global_value()
+    .as_pointer_value();
 
     let a_width = env
         .ptr_int()
@@ -1085,9 +1060,9 @@ pub fn list_map3<'a, 'ctx, 'env>(
             pass_list_as_i128(env, list1),
             pass_list_as_i128(env, list2),
             pass_list_as_i128(env, list3),
-            pass_as_opaque(env, transform_ptr),
+            pass_as_opaque(env, closure_data_ptr),
             stepper_caller.into(),
-            alignment_intvalue(env, transform_layout),
+            alignment_intvalue(env, &transform_layout),
             a_width.into(),
             b_width.into(),
             c_width.into(),

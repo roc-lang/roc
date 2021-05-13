@@ -7,8 +7,8 @@ use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
     list_get_unsafe, list_join, list_keep_errs, list_keep_if, list_keep_oks, list_len, list_map,
-    list_map2, list_map3, list_map_new, list_map_with_index, list_prepend, list_range, list_repeat,
-    list_reverse, list_set, list_single, list_sort_with, list_walk_help,
+    list_map2, list_map3, list_map_with_index, list_prepend, list_range, list_repeat, list_reverse,
+    list_set, list_single, list_sort_with, list_walk_help,
 };
 use crate::llvm::build_str::{
     empty_str, str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int,
@@ -3716,7 +3716,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(_, element_layout)) => list_map_new(
+                Layout::Builtin(Builtin::List(_, element_layout)) => list_map(
                     env,
                     layout_ids,
                     function,
@@ -3730,12 +3730,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             }
         }
         ListMap2 => {
-            debug_assert_eq!(args.len(), 3);
+            debug_assert_eq!(args.len(), 4);
 
             let (list1, list1_layout) = load_symbol_and_layout(scope, &args[0]);
             let (list2, list2_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            let (func, func_layout) = load_symbol_and_layout(scope, &args[2]);
+            let (function_layout, function) = scope.function_pointers[&args[2]];
+            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
 
             match (list1_layout, list2_layout) {
                 (
@@ -3744,8 +3745,10 @@ fn run_low_level<'a, 'ctx, 'env>(
                 ) => list_map2(
                     env,
                     layout_ids,
-                    func,
-                    func_layout,
+                    function,
+                    function_layout,
+                    closure,
+                    *closure_layout,
                     list1,
                     list2,
                     element1_layout,
@@ -3757,13 +3760,14 @@ fn run_low_level<'a, 'ctx, 'env>(
             }
         }
         ListMap3 => {
-            debug_assert_eq!(args.len(), 4);
+            debug_assert_eq!(args.len(), 5);
 
             let (list1, list1_layout) = load_symbol_and_layout(scope, &args[0]);
             let (list2, list2_layout) = load_symbol_and_layout(scope, &args[1]);
             let (list3, list3_layout) = load_symbol_and_layout(scope, &args[2]);
 
-            let (func, func_layout) = load_symbol_and_layout(scope, &args[3]);
+            let (function_layout, function) = scope.function_pointers[&args[3]];
+            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[4]);
 
             match (list1_layout, list2_layout, list3_layout) {
                 (
@@ -3773,8 +3777,10 @@ fn run_low_level<'a, 'ctx, 'env>(
                 ) => list_map3(
                     env,
                     layout_ids,
-                    func,
-                    func_layout,
+                    function,
+                    function_layout,
+                    closure,
+                    *closure_layout,
                     list1,
                     list2,
                     list3,
@@ -3789,44 +3795,64 @@ fn run_low_level<'a, 'ctx, 'env>(
             }
         }
         ListMapWithIndex => {
-            // List.map : List before, (before -> after) -> List after
-            debug_assert_eq!(args.len(), 2);
+            // List.mapWithIndex : List before, (Nat, before -> after) -> List after
+            debug_assert_eq!(args.len(), 3);
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
+            let (function_layout, function) = scope.function_pointers[&args[1]];
+
+            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(_, element_layout)) => {
-                    list_map_with_index(env, layout_ids, func, func_layout, list, element_layout)
-                }
+                Layout::Builtin(Builtin::List(_, element_layout)) => list_map_with_index(
+                    env,
+                    layout_ids,
+                    function,
+                    function_layout,
+                    closure,
+                    *closure_layout,
+                    list,
+                    element_layout,
+                ),
                 _ => unreachable!("invalid list layout"),
             }
         }
         ListKeepIf => {
             // List.keepIf : List elem, (elem -> Bool) -> List elem
-            debug_assert_eq!(args.len(), 2);
+            debug_assert_eq!(args.len(), 3);
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
+            let (function_layout, function) = scope.function_pointers[&args[1]];
+
+            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(_, element_layout)) => {
-                    list_keep_if(env, layout_ids, func, func_layout, list, element_layout)
-                }
+                Layout::Builtin(Builtin::List(_, element_layout)) => list_keep_if(
+                    env,
+                    layout_ids,
+                    function,
+                    function_layout,
+                    closure,
+                    *closure_layout,
+                    list,
+                    element_layout,
+                ),
                 _ => unreachable!("invalid list layout"),
             }
         }
         ListKeepOks => {
             // List.keepOks : List before, (before -> Result after *) -> List after
-            debug_assert_eq!(args.len(), 2);
+            debug_assert_eq!(args.len(), 3);
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
+            let (function_layout, function) = scope.function_pointers[&args[1]];
+
+            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
             match (list_layout, layout) {
                 (_, Layout::Builtin(Builtin::EmptyList))
@@ -3837,8 +3863,10 @@ fn run_low_level<'a, 'ctx, 'env>(
                 ) => list_keep_oks(
                     env,
                     layout_ids,
-                    func,
-                    func_layout,
+                    function,
+                    function_layout,
+                    closure,
+                    *closure_layout,
                     list,
                     before_layout,
                     after_layout,
@@ -3854,7 +3882,9 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            let (func, func_layout) = load_symbol_and_layout(scope, &args[1]);
+            let (function_layout, function) = scope.function_pointers[&args[1]];
+
+            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
             match (list_layout, layout) {
                 (_, Layout::Builtin(Builtin::EmptyList))
@@ -3865,8 +3895,10 @@ fn run_low_level<'a, 'ctx, 'env>(
                 ) => list_keep_errs(
                     env,
                     layout_ids,
-                    func,
-                    func_layout,
+                    function,
+                    function_layout,
+                    closure,
+                    *closure_layout,
                     list,
                     before_layout,
                     after_layout,

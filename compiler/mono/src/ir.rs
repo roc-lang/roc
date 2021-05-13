@@ -2550,6 +2550,38 @@ fn specialize_naked_symbol<'a>(
     )
 }
 
+macro_rules! match_on_closure_argument {
+    ($env:expr, $procs:expr, $layout_cache:expr, $closure_data_symbol:expr, $closure_data_var:expr, $op:expr, [$($x:expr),* $(,)?], $layout: expr, $assigned:expr, $hole:expr) => {{
+        let closure_data_layout = return_on_layout_error!(
+            $env,
+            $layout_cache.from_var($env.arena, $closure_data_var, $env.subs)
+        );
+
+        let top_level = TopLevelFunctionLayout::from_layout($env.arena, closure_data_layout);
+
+        let arena = $env.arena;
+
+        match closure_data_layout {
+            Layout::Closure(_, lambda_set, _) => {
+                lowlevel_match_on_lambda_set(
+                    $env,
+                    lambda_set,
+                    $closure_data_symbol,
+                    |top_level_function, closure_data| self::Call {
+                        call_type: CallType::LowLevel { op: $op },
+                        arguments: arena.alloc([$($x,)* top_level_function, closure_data]),
+                    },
+                    arena.alloc(top_level).full(),
+                    $layout,
+                    $assigned,
+                    $hole,
+                )
+            }
+            _ => unreachable!(),
+        }
+    }};
+}
+
 pub fn with_hole<'a>(
     env: &mut Env<'a, '_>,
     can_expr: roc_can::expr::Expr,
@@ -3869,7 +3901,7 @@ pub fn with_hole<'a>(
         }
 
         Call(boxed, loc_args, _) => {
-            let (fn_var, loc_expr, _closure_var, ret_var) = *boxed;
+            let (fn_var, loc_expr, lambda_set_var, ret_var) = *boxed;
 
             // even if a call looks like it's by name, it may in fact be by-pointer.
             // E.g. in `(\f, x -> f x)` the call is in fact by pointer.
@@ -3986,6 +4018,9 @@ pub fn with_hole<'a>(
                                 Layout::Closure(_, lambda_set, _) => {
                                     let closure_data_symbol = env.unique_symbol();
 
+                                    let top_level =
+                                        TopLevelFunctionLayout::from_layout(env.arena, full_layout);
+
                                     result = match_on_lambda_set(
                                         env,
                                         lambda_set,
@@ -4099,55 +4134,86 @@ pub fn with_hole<'a>(
 
             use LowLevel::*;
             match op {
-                ListMap => {
+                ListMap | ListMapWithIndex | ListKeepIf | ListKeepOks | ListKeepErrs
+                | ListSortWith => {
                     debug_assert_eq!(arg_symbols.len(), 2);
 
-                    let list_symbol = arg_symbols[0];
-                    let closure_data_symbol = arg_symbols[1];
+                    let closure_index = 1;
+                    let closure_data_symbol = arg_symbols[closure_index];
+                    let closure_data_var = args[closure_index].0;
 
-                    let closure_data_layout = return_on_layout_error!(
+                    match_on_closure_argument!(
                         env,
-                        layout_cache.from_var(env.arena, args[1].0, env.subs)
-                    );
+                        procs,
+                        layout_cache,
+                        closure_data_symbol,
+                        closure_data_var,
+                        op,
+                        [arg_symbols[0]],
+                        layout,
+                        assigned,
+                        hole
+                    )
+                }
+                ListWalk | ListWalkUntil | ListWalkBackwards | DictWalk => {
+                    debug_assert_eq!(arg_symbols.len(), 3);
 
-                    let top_level =
-                        TopLevelFunctionLayout::from_layout(env.arena, closure_data_layout);
+                    let closure_index = 1;
+                    let closure_data_symbol = arg_symbols[closure_index];
+                    let closure_data_var = args[closure_index].0;
 
-                    let arena = env.arena;
+                    match_on_closure_argument!(
+                        env,
+                        procs,
+                        layout_cache,
+                        closure_data_symbol,
+                        closure_data_var,
+                        op,
+                        [arg_symbols[0], arg_symbols[2]],
+                        layout,
+                        assigned,
+                        hole
+                    )
+                }
+                ListMap2 => {
+                    debug_assert_eq!(arg_symbols.len(), 3);
 
-                    match closure_data_layout {
-                        Layout::Closure(argument_layouts, lambda_set, return_layout) => {
-                            // specialize the possible options for the function
-                            for (function_symbol, _) in lambda_set.set {
-                                procs.insert_passed_by_name(
-                                    env,
-                                    args[1].0,
-                                    *function_symbol,
-                                    top_level,
-                                    layout_cache,
-                                );
-                            }
+                    let closure_index = 2;
+                    let closure_data_symbol = arg_symbols[closure_index];
+                    let closure_data_var = args[closure_index].0;
 
-                            lowlevel_match_on_lambda_set(
-                                env,
-                                lambda_set,
-                                closure_data_symbol,
-                                |top_level_function, closure_data| self::Call {
-                                    call_type: CallType::LowLevel { op },
-                                    arguments: arena.alloc([
-                                        list_symbol,
-                                        top_level_function,
-                                        closure_data,
-                                    ]),
-                                },
-                                arena.alloc(top_level).full(),
-                                layout,
-                                assigned,
-                                hole,
-                            )
-                        }
-                        _ => unreachable!(),
-                    }
+                    match_on_closure_argument!(
+                        env,
+                        procs,
+                        layout_cache,
+                        closure_data_symbol,
+                        closure_data_var,
+                        op,
+                        [arg_symbols[0], arg_symbols[1]],
+                        layout,
+                        assigned,
+                        hole
+                    )
+                }
+                ListMap3 => {
+                    debug_assert_eq!(arg_symbols.len(), 4);
+
+                    let closure_index = 3;
+                    let closure_data_symbol = arg_symbols[closure_index];
+                    let closure_data_var = args[closure_index].0;
+
+                    match_on_closure_argument!(
+                        env,
+                        procs,
+                        layout_cache,
+                        closure_data_symbol,
+                        closure_data_var,
+                        op,
+                        [arg_symbols[0], arg_symbols[1], arg_symbols[2]],
+                        layout,
+                        assigned,
+                        hole
+                    )
                 }
                 _ => {
                     let call = self::Call {
@@ -5648,6 +5714,7 @@ fn reuse_function_symbol<'a>(
                         env.arena.alloc(result),
                     );
                 }
+
                 _ => {
                     // danger: a foreign symbol may not be specialized!
                     debug_assert!(
@@ -5677,33 +5744,22 @@ fn reuse_function_symbol<'a>(
 
             match res_layout {
                 Ok(Layout::Closure(argument_layouts, lambda_set, ret_layout)) => {
+                    // define the function pointer
+                    let function_ptr_layout =
+                        TopLevelFunctionLayout::from_layout(env.arena, res_layout.unwrap());
+
+                    procs.insert_passed_by_name(
+                        env,
+                        arg_var,
+                        original,
+                        function_ptr_layout,
+                        layout_cache,
+                    );
+
                     if captures {
                         // this is a closure by capture, meaning it itself captures local variables.
 
                         let closure_data = symbol;
-
-                        // let closure_data_layout = closure_layout.as_named_layout(original);
-                        let closure_data_layout = lambda_set.runtime_representation();
-
-                        // define the function pointer
-                        let function_ptr_layout = TopLevelFunctionLayout::from_layout(
-                            env.arena,
-                            lambda_set.extend_function_layout(
-                                env.arena,
-                                argument_layouts,
-                                ret_layout,
-                            ),
-                        );
-
-                        procs.insert_passed_by_name(
-                            env,
-                            arg_var,
-                            original,
-                            function_ptr_layout,
-                            layout_cache,
-                        );
-
-                        // define the closure data
 
                         let symbols = match captured {
                             CapturedSymbols::Captured(captured_symbols) => {
@@ -6142,8 +6198,6 @@ fn call_by_name_help<'a>(
                                     "\n\n{:?}\n\n{:?}",
                                     maybe_closure_layout, layout
                                 );
-
-                                dbg!(maybe_closure_layout, field_symbols, &loc_args);
 
                                 call_specialized_proc(
                                     env,
@@ -7497,6 +7551,38 @@ where
                 env.arena.alloc(stmt),
             )
         }
+        Layout::Builtin(Builtin::Int1) => {
+            let closure_tag_id_symbol = closure_data_symbol;
+
+            lowlevel_enum_lambda_set_to_switch(
+                env,
+                lambda_set.set,
+                closure_tag_id_symbol,
+                Layout::Builtin(Builtin::Int1),
+                closure_data_symbol,
+                to_lowlevel_call,
+                function_layout,
+                return_layout,
+                assigned,
+                hole,
+            )
+        }
+        Layout::Builtin(Builtin::Int8) => {
+            let closure_tag_id_symbol = closure_data_symbol;
+
+            lowlevel_enum_lambda_set_to_switch(
+                env,
+                lambda_set.set,
+                closure_tag_id_symbol,
+                Layout::Builtin(Builtin::Int8),
+                closure_data_symbol,
+                to_lowlevel_call,
+                function_layout,
+                return_layout,
+                assigned,
+                hole,
+            )
+        }
         other => todo!("{:?}", other),
     }
 }
@@ -7538,7 +7624,7 @@ where
         );
 
         let stmt = Stmt::Let(
-            assigned,
+            bound,
             Expr::FunctionPointer(*function_symbol, function_layout),
             function_layout,
             env.arena.alloc(stmt),
@@ -7987,5 +8073,105 @@ fn enum_lambda_set_branch_help<'a>(
         }),
         return_layout,
         hole,
+    )
+}
+
+fn lowlevel_enum_lambda_set_to_switch<'a, F>(
+    env: &mut Env<'a, '_>,
+    lambda_set: &'a [(Symbol, &'a [Layout<'a>])],
+    closure_tag_id_symbol: Symbol,
+    closure_tag_id_layout: Layout<'a>,
+    closure_data_symbol: Symbol,
+    to_lowlevel_call: F,
+    function_layout: Layout<'a>,
+    return_layout: Layout<'a>,
+    assigned: Symbol,
+    hole: &'a Stmt<'a>,
+) -> Stmt<'a>
+where
+    F: Fn(Symbol, Symbol) -> Call<'a> + Copy,
+{
+    debug_assert!(!lambda_set.is_empty());
+
+    let join_point_id = JoinPointId(env.unique_symbol());
+
+    let mut branches = Vec::with_capacity_in(lambda_set.len(), env.arena);
+
+    let closure_layout = closure_tag_id_layout;
+
+    for (i, (function_symbol, _)) in lambda_set.iter().enumerate() {
+        let stmt = lowlevel_enum_lambda_set_branch(
+            env,
+            join_point_id,
+            *function_symbol,
+            closure_data_symbol,
+            closure_layout,
+            to_lowlevel_call,
+            function_layout,
+            return_layout,
+        );
+        branches.push((i as u64, BranchInfo::None, stmt));
+    }
+
+    let default_branch = {
+        let (_, info, stmt) = branches.pop().unwrap();
+
+        (info, &*env.arena.alloc(stmt))
+    };
+
+    let switch = Stmt::Switch {
+        cond_symbol: closure_tag_id_symbol,
+        cond_layout: closure_tag_id_layout,
+        branches: branches.into_bump_slice(),
+        default_branch,
+        ret_layout: return_layout,
+    };
+
+    let param = Param {
+        symbol: assigned,
+        layout: return_layout,
+        borrow: false,
+    };
+
+    Stmt::Join {
+        id: join_point_id,
+        parameters: &*env.arena.alloc([param]),
+        continuation: hole,
+        remainder: env.arena.alloc(switch),
+    }
+}
+
+fn lowlevel_enum_lambda_set_branch<'a, F>(
+    env: &mut Env<'a, '_>,
+    join_point_id: JoinPointId,
+    function_symbol: Symbol,
+    closure_data_symbol: Symbol,
+    closure_data_layout: Layout<'a>,
+    to_lowlevel_call: F,
+    function_layout: Layout<'a>,
+    return_layout: Layout<'a>,
+) -> Stmt<'a>
+where
+    F: Fn(Symbol, Symbol) -> Call<'a> + Copy,
+{
+    let result_symbol = env.unique_symbol();
+
+    let hole = Stmt::Jump(join_point_id, env.arena.alloc([result_symbol]));
+
+    let bound = env.unique_symbol();
+
+    // build the call
+    let stmt = Stmt::Let(
+        result_symbol,
+        Expr::Call(to_lowlevel_call(bound, closure_data_symbol)),
+        return_layout,
+        env.arena.alloc(hole),
+    );
+
+    Stmt::Let(
+        bound,
+        Expr::FunctionPointer(function_symbol, function_layout),
+        function_layout,
+        env.arena.alloc(stmt),
     )
 }

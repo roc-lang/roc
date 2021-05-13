@@ -631,6 +631,8 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
 
     // TODO is true or false more efficient for non-refcounted layouts?
     let irrelevant = false;
+    let function = irrelevant;
+    let closure_data = irrelevant;
     let owned = false;
     let borrowed = true;
 
@@ -653,16 +655,18 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListPrepend => arena.alloc_slice_copy(&[owned, owned]),
         StrJoinWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
         ListJoin => arena.alloc_slice_copy(&[irrelevant]),
-        ListMap | ListMapWithIndex => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
-        ListMap2 => arena.alloc_slice_copy(&[owned, owned, irrelevant]),
-        ListMap3 => arena.alloc_slice_copy(&[owned, owned, owned, irrelevant]),
-        ListKeepIf | ListKeepOks | ListKeepErrs => arena.alloc_slice_copy(&[owned, borrowed]),
+        ListMap | ListMapWithIndex => arena.alloc_slice_copy(&[owned, function, closure_data]),
+        ListMap2 => arena.alloc_slice_copy(&[owned, owned, function, closure_data]),
+        ListMap3 => arena.alloc_slice_copy(&[owned, owned, owned, function, closure_data]),
+        ListKeepIf | ListKeepOks | ListKeepErrs => {
+            arena.alloc_slice_copy(&[owned, function, closure_data])
+        }
         ListContains => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         ListRange => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
         ListWalk | ListWalkUntil | ListWalkBackwards => {
-            arena.alloc_slice_copy(&[owned, irrelevant, owned])
+            arena.alloc_slice_copy(&[owned, owned, function, closure_data])
         }
-        ListSortWith => arena.alloc_slice_copy(&[owned, irrelevant]),
+        ListSortWith => arena.alloc_slice_copy(&[owned, function, closure_data]),
 
         // TODO when we have lists with capacity (if ever)
         // List.append should own its first argument
@@ -695,7 +699,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         DictUnion | DictDifference | DictIntersection => arena.alloc_slice_copy(&[owned, borrowed]),
 
         // borrow function argument so we don't have to worry about RC of the closure
-        DictWalk => arena.alloc_slice_copy(&[owned, borrowed, owned]),
+        DictWalk => arena.alloc_slice_copy(&[owned, owned, function, closure_data]),
 
         SetFromList => arena.alloc_slice_copy(&[owned]),
 
