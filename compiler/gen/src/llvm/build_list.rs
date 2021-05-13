@@ -872,7 +872,7 @@ fn list_map_generic_new<'a, 'ctx, 'env>(
     .as_global_value()
     .as_pointer_value();
 
-    dbg!(stepper_caller);
+    dbg!(element_layout, layout_width(env, element_layout));
 
     call_bitcode_fn_returns_list(
         env,

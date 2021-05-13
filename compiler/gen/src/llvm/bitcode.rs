@@ -82,7 +82,6 @@ pub fn build_transform_caller_new<'a, 'ctx, 'env>(
         Some(function_value) => function_value,
         None => build_transform_caller_help_new(
             env,
-            layout_ids,
             function,
             closure_data_layout,
             argument_layouts,
@@ -93,7 +92,6 @@ pub fn build_transform_caller_new<'a, 'ctx, 'env>(
 
 fn build_transform_caller_help_new<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
     roc_function: FunctionValue<'ctx>,
     closure_data_layout: Layout<'a>,
     argument_layouts: &[Layout<'a>],
@@ -134,9 +132,6 @@ fn build_transform_caller_help_new<'a, 'ctx, 'env>(
         set_name(*argument, name.ident_string(&env.interns));
     }
 
-    let closure_type =
-        basic_type_from_layout(env, &closure_data_layout).ptr_type(AddressSpace::Generic);
-
     let mut arguments_cast =
         bumpalo::collections::Vec::with_capacity_in(arguments.len(), env.arena);
 
@@ -153,15 +148,33 @@ fn build_transform_caller_help_new<'a, 'ctx, 'env>(
         arguments_cast.push(argument);
     }
 
-    let closure_cast = env
-        .builder
-        .build_bitcast(closure_ptr, closure_type, "load_opaque")
-        .into_pointer_value();
+    match closure_data_layout {
+        Layout::FunctionPointer(_, _) => {
+            // do nothing
+        }
+        Layout::Closure(_, lambda_set, _) => {
+            if let Layout::Struct(&[]) = lambda_set.runtime_representation() {
+                // do nothing
+            } else {
+                let closure_type =
+                    basic_type_from_layout(env, &lambda_set.runtime_representation())
+                        .ptr_type(AddressSpace::Generic);
 
-    let closure_data = env.builder.build_load(closure_cast, "load_opaque");
+                let closure_cast = env
+                    .builder
+                    .build_bitcast(closure_ptr, closure_type, "load_opaque")
+                    .into_pointer_value();
+
+                let closure_data = env.builder.build_load(closure_cast, "load_opaque");
+                dbg!(closure_data);
+
+                arguments_cast.push(closure_data);
+            }
+        }
+        _ => unreachable!(),
+    }
 
     let call = {
-        arguments_cast.push(closure_data);
         env.builder
             .build_call(roc_function, arguments_cast.as_slice(), "tmp")
     };

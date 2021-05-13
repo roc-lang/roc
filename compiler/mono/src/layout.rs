@@ -524,7 +524,7 @@ impl<'a> Layout<'a> {
                     | NonNullableUnwrapped(_) => pointer_size,
                 }
             }
-            Closure(_, closure_layout, _) => pointer_size + closure_layout.stack_size(pointer_size),
+            Closure(_, lambda_set, _) => lambda_set.stack_size(pointer_size),
             FunctionPointer(_, _) => pointer_size,
             RecursivePointer => pointer_size,
             Pointer(_) => pointer_size,
