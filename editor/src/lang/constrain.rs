@@ -52,6 +52,7 @@ pub fn constrain_expr<'a>(
         Expr2::SmallStr(_) => Eq(str_type(env.pool), expected, Category::Str, region),
         Expr2::Blank => True,
         Expr2::EmptyRecord => constrain_empty_record(expected, region),
+        Expr2::Var(symbol) => Lookup(*symbol, expected, region),
         Expr2::SmallInt { var, .. } => {
             let mut flex_vars = BumpVec::with_capacity_in(1, arena);
 
