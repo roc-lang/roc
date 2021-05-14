@@ -723,38 +723,31 @@ impl<'a> Context<'a> {
                 fail,
                 layout,
             } => {
-                // TODO this combines parts of Let and Switch. Did this happen correctly?
-                let mut case_live_vars = collect_stmt(pass, &self.jp_live_vars, MutSet::default());
-                case_live_vars.extend(collect_stmt(fail, &self.jp_live_vars, MutSet::default()));
+                // live vars of the whole expression
+                let invoke_live_vars = collect_stmt(stmt, &self.jp_live_vars, MutSet::default());
 
                 // the result of an invoke should not be touched in the fail branch
                 // but it should be present in the pass branch (otherwise it would be dead)
                 // NOTE: we cheat a bit here to allow `invoke` when generating code for `expect`
-                let is_dead = !case_live_vars.contains(symbol);
+                let is_dead = !invoke_live_vars.contains(symbol);
 
                 if is_dead && layout.is_refcounted() {
                     panic!("A variable of a reference-counted layout is dead; that's a bug!");
                 }
 
-                case_live_vars.remove(symbol);
-
                 let fail = {
                     // TODO should we use ctor info like Lean?
                     let ctx = self.clone();
                     let (b, alt_live_vars) = ctx.visit_stmt(fail);
-                    ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b)
+                    ctx.add_dec_for_alt(&invoke_live_vars, &alt_live_vars, b)
                 };
-
-                if !is_dead {
-                    case_live_vars.insert(*symbol);
-                }
 
                 let pass = {
                     // TODO should we use ctor info like Lean?
                     let ctx = self.clone();
                     let ctx = ctx.update_var_info_invoke(*symbol, layout, call);
                     let (b, alt_live_vars) = ctx.visit_stmt(pass);
-                    ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b)
+                    ctx.add_dec_for_alt(&invoke_live_vars, &alt_live_vars, b)
                 };
 
                 let invoke = Invoke {
@@ -771,7 +764,7 @@ impl<'a> Context<'a> {
                 let stmt = match &call.call_type {
                     CallType::LowLevel { op } => {
                         let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
-                        self.add_dec_after_lowlevel(call.arguments, ps, cont, &case_live_vars)
+                        self.add_dec_after_lowlevel(call.arguments, ps, cont, &invoke_live_vars)
                     }
 
                     CallType::Foreign { .. } => {
@@ -780,7 +773,7 @@ impl<'a> Context<'a> {
                             call.arguments.len(),
                         );
 
-                        self.add_dec_after_lowlevel(call.arguments, ps, cont, &case_live_vars)
+                        self.add_dec_after_lowlevel(call.arguments, ps, cont, &invoke_live_vars)
                     }
 
                     CallType::ByName {
@@ -792,22 +785,19 @@ impl<'a> Context<'a> {
                                 call.arguments,
                                 ps,
                                 cont,
-                                &case_live_vars,
+                                &invoke_live_vars,
                             ),
                             None => self.add_inc_before_consume_all(
                                 call.arguments,
                                 cont,
-                                &case_live_vars,
+                                &invoke_live_vars,
                             ),
                         }
                     }
                     CallType::ByPointer { .. } => {
-                        self.add_inc_before_consume_all(call.arguments, cont, &case_live_vars)
+                        self.add_inc_before_consume_all(call.arguments, cont, &invoke_live_vars)
                     }
                 };
-
-                let mut invoke_live_vars = case_live_vars;
-                occuring_variables_call(call, &mut invoke_live_vars);
 
                 (stmt, invoke_live_vars)
             }
