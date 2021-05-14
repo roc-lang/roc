@@ -21,7 +21,7 @@ use roc_types::{
 pub enum Constraint<'a> {
     Eq(Type2, Expected<Type2>, Category, Region),
     // Store(Type, Variable, &'static str, u32),
-    // Lookup(Symbol, Expected<Type>, Region),
+    Lookup(Symbol, Expected<Type2>, Region),
     // Pattern(Region, PatternCategory, Type, PExpected<Type>),
     And(BumpVec<'a, Constraint<'a>>),
     Let(&'a LetConstraint<'a>),
@@ -52,6 +52,7 @@ pub fn constrain_expr<'a>(
         Expr2::SmallStr(_) => Eq(str_type(env.pool), expected, Category::Str, region),
         Expr2::Blank => True,
         Expr2::EmptyRecord => constrain_empty_record(expected, region),
+        Expr2::Var(symbol) => Lookup(*symbol, expected, region),
         Expr2::SmallInt { var, .. } => {
             let mut flex_vars = BumpVec::with_capacity_in(1, arena);
 
