@@ -168,6 +168,7 @@ impl<'a> LambdaSet<'a> {
     ) -> Layout<'a> {
         if let [] = self.set {
             // TERRIBLE HACK for builting functions
+            panic!();
             Layout::FunctionPointer(argument_layouts, ret_layout)
         } else {
             match self.representation {

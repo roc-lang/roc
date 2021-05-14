@@ -1809,12 +1809,7 @@ fn list_keep_errs() {
     assert_evals_to!(
         indoc!(
             r#"
-            mapErr = \result, f ->
-                when result is
-                    Err e -> Err ( f e )
-                    Ok v -> Ok v
-
-            List.keepErrs [0,1,2] (\x -> x % 0 |> mapErr (\_ -> 32))
+            List.keepErrs [0,1,2] (\x -> x % 0 |> Result.mapErr (\_ -> 32))
             "#
         ),
         &[32, 32, 32],

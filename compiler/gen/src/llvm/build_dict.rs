@@ -1,6 +1,6 @@
 use crate::debug_info_init;
 use crate::llvm::bitcode::{
-    build_dec_wrapper, build_eq_wrapper, build_inc_wrapper, build_transform_caller,
+    build_dec_wrapper, build_eq_wrapper, build_inc_wrapper, build_transform_caller_new,
     call_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
@@ -633,9 +633,11 @@ pub fn dict_walk<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     dict: BasicValueEnum<'ctx>,
-    stepper: BasicValueEnum<'ctx>,
+    transform: FunctionValue<'ctx>,
+    transform_layout: Layout<'a>,
+    closure_data: BasicValueEnum<'ctx>,
+    closure_data_layout: Layout<'a>,
     accum: BasicValueEnum<'ctx>,
-    stepper_layout: &Layout<'a>,
     key_layout: &Layout<'a>,
     value_layout: &Layout<'a>,
     accum_layout: &Layout<'a>,
@@ -648,13 +650,13 @@ pub fn dict_walk<'a, 'ctx, 'env>(
     let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
     env.builder.build_store(dict_ptr, dict);
 
-    let stepper_ptr = builder.build_alloca(stepper.get_type(), "stepper_ptr");
-    env.builder.build_store(stepper_ptr, stepper);
+    let closure_data_ptr = builder.build_alloca(closure_data.get_type(), "closure_data_ptr");
+    env.builder.build_store(closure_data_ptr, closure_data);
 
-    let stepper_caller = build_transform_caller(
+    let stepper_caller = build_transform_caller_new(
         env,
-        layout_ids,
-        stepper_layout,
+        transform,
+        closure_data_layout,
         &[*key_layout, *value_layout, *accum_layout],
     )
     .as_global_value()
@@ -688,7 +690,8 @@ pub fn dict_walk<'a, 'ctx, 'env>(
         env,
         &[
             dict_ptr.into(),
-            env.builder.build_bitcast(stepper_ptr, u8_ptr, "to_opaque"),
+            env.builder
+                .build_bitcast(closure_data_ptr, u8_ptr, "to_opaque"),
             stepper_caller.into(),
             env.builder.build_bitcast(accum_ptr, u8_ptr, "to_opaque"),
             alignment_iv.into(),

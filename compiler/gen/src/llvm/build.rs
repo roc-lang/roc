@@ -3069,8 +3069,6 @@ pub fn build_proc_header_new<'a, 'ctx, 'env>(
 ) -> FunctionValue<'ctx> {
     let layout = env.arena.alloc(layout).full();
 
-    dbg!(symbol, layout);
-
     build_proc_header(env, layout_ids, symbol, &layout, proc)
 }
 
@@ -4448,11 +4446,12 @@ fn run_low_level<'a, 'ctx, 'env>(
             }
         }
         DictWalk => {
-            debug_assert_eq!(args.len(), 3);
+            debug_assert_eq!(args.len(), 4);
 
             let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (stepper, stepper_layout) = load_symbol_and_layout(scope, &args[1]);
-            let (accum, accum_layout) = load_symbol_and_layout(scope, &args[2]);
+            let (default, default_layout) = load_symbol_and_layout(scope, &args[1]);
+            let (function_layout, function) = scope.function_pointers[&args[2]];
+            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
 
             match dict_layout {
                 Layout::Builtin(Builtin::EmptyDict) => {
@@ -4463,12 +4462,14 @@ fn run_low_level<'a, 'ctx, 'env>(
                     env,
                     layout_ids,
                     dict,
-                    stepper,
-                    accum,
-                    stepper_layout,
+                    function,
+                    function_layout,
+                    closure,
+                    *closure_layout,
+                    default,
                     key_layout,
                     value_layout,
-                    accum_layout,
+                    default_layout,
                 ),
                 _ => unreachable!("invalid dict layout"),
             }

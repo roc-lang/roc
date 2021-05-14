@@ -19,7 +19,7 @@ use roc_types::subs::{Content, FlatType, Subs, Variable};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
-pub const PRETTY_PRINT_IR_SYMBOLS: bool = true;
+pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
 
 macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr) => {
@@ -2449,8 +2449,8 @@ impl<'a> TopLevelFunctionLayout<'a> {
             Layout::FunctionPointer(old_arguments, result) => {
                 Self::new(arena, old_arguments, *result)
             }
-            Layout::Closure(arguments, closure_layout, result) => {
-                let full = closure_layout.extend_function_layout(arena, arguments, result);
+            Layout::Closure(arguments, lambda_set, result) => {
+                let full = lambda_set.extend_function_layout(arena, arguments, result);
                 TopLevelFunctionLayout::from_layout(arena, full)
             }
             _ => TopLevelFunctionLayout {
@@ -3901,7 +3901,7 @@ pub fn with_hole<'a>(
         }
 
         Call(boxed, loc_args, _) => {
-            let (fn_var, loc_expr, lambda_set_var, ret_var) = *boxed;
+            let (fn_var, loc_expr, _lambda_set_var, ret_var) = *boxed;
 
             // even if a call looks like it's by name, it may in fact be by-pointer.
             // E.g. in `(\f, x -> f x)` the call is in fact by pointer.
@@ -3910,7 +3910,7 @@ pub fn with_hole<'a>(
             // if it's in there, it's a call by name, otherwise it's a call by pointer
             let is_known = |key| {
                 // a proc in this module, or an imported symbol
-                procs.partial_procs.contains_key(key) || key.module_id() != assigned.module_id()
+                procs.partial_procs.contains_key(key) || env.is_imported_symbol(*key)
             };
 
             match loc_expr.value {
@@ -4180,6 +4180,16 @@ pub fn with_hole<'a>(
                     // all symbols anyway, but because of this hack the closure symbol can be an
                     // actual closure, and the default is either the number 1 or 0
                     // this can be removed when we define builtin modules as proper modules
+
+                    let stmt = assign_to_symbol(
+                        env,
+                        procs,
+                        layout_cache,
+                        args[0].0,
+                        Located::at_zero(args[0].1.clone()),
+                        arg_symbols[0],
+                        stmt,
+                    );
 
                     let stmt = assign_to_symbol(
                         env,
@@ -7524,8 +7534,7 @@ fn lowlevel_match_on_lambda_set<'a, F>(
 where
     F: Fn(Symbol, Symbol) -> Call<'a> + Copy,
 {
-    dbg!(lambda_set);
-    match dbg!(lambda_set.runtime_representation()) {
+    match lambda_set.runtime_representation() {
         Layout::Union(_) => {
             let closure_tag_id_symbol = env.unique_symbol();
 
@@ -7561,8 +7570,6 @@ where
             let function_symbol = lambda_set.set[0].0;
 
             let bound = env.unique_symbol();
-
-            dbg!(hole);
 
             // build the call
             let stmt = Stmt::Let(
