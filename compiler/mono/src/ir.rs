@@ -1792,11 +1792,8 @@ fn specialize_all_help<'a>(
             Ok((proc, layout)) => {
                 if procs.module_thunks.contains(&name) {
                     let top_level = TopLevelFunctionLayout::from_layout(env.arena, layout);
-                    let layout = TopLevelFunctionLayout {
-                        arguments: &[],
-                        result: env.arena.alloc(top_level).full(),
-                    };
-                    procs.specialized.insert((name, layout), Done(proc));
+                    debug_assert_eq!(top_level.arguments, &[]);
+                    procs.specialized.insert((name, top_level), Done(proc));
                 } else {
                     let top_level = TopLevelFunctionLayout::from_layout(env.arena, layout);
                     procs.specialized.insert((name, top_level), Done(proc));
@@ -6086,13 +6083,11 @@ fn call_by_name_new<'a>(
     procs: &mut Procs<'a>,
     fn_var: Variable,
     proc_name: Symbol,
-    mut loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
+    loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
     layout_cache: &mut LayoutCache<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    let original_fn_var = fn_var;
-
     // Register a pending_specialization for this function
     match layout_cache.from_var(env.arena, fn_var, env.subs) {
         Err(LayoutProblem::UnresolvedTypeVar(var)) => {
@@ -6156,9 +6151,16 @@ fn call_by_name_new<'a>(
                 hole,
             )
         }
-        _ => panic!(
-            "calling {:?}, which is not a function nor a module thunk",
-            proc_name,
+        Ok(other) if loc_args.is_empty() => {
+            // this is a 0-argument thunk
+            if env.is_imported_symbol(proc_name) {
+                add_needed_external(procs, env, fn_var, proc_name);
+            }
+            force_thunk(env, proc_name, other, assigned, hole)
+        }
+        other => panic!(
+            "calling {:?}, which is not a function but received arguments, and is a {:?}",
+            proc_name, other,
         ),
     }
 }
