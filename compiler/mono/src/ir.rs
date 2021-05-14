@@ -5907,9 +5907,7 @@ fn reuse_function_symbol<'a>(
                             closure_data,
                             env.arena.alloc(result),
                         )
-                    } else {
-                        debug_assert!(procs.module_thunks.contains(&original));
-
+                    } else if procs.module_thunks.contains(&original) {
                         // this is a 0-argument thunk
                         let layout = Layout::Closure(argument_layouts, lambda_set, ret_layout);
                         let top_level = TopLevelFunctionLayout::new(env.arena, &[], layout);
@@ -5922,6 +5920,18 @@ fn reuse_function_symbol<'a>(
                         );
 
                         force_thunk(env, original, layout, symbol, env.arena.alloc(result))
+                    } else {
+                        procs.insert_passed_by_name(
+                            env,
+                            arg_var,
+                            original,
+                            function_ptr_layout,
+                            layout_cache,
+                        );
+
+                        // a function name (non-closure) that is passed along
+                        // it never has closure data, so we use the empty struct
+                        return let_empty_struct(symbol, env.arena.alloc(result));
                     }
                 }
                 Ok(layout) => {
