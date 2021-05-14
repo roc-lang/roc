@@ -54,8 +54,8 @@ pub export fn main() u8 {
 
     if (flag == 0) {
         // all is well
-        const function_pointer = @intToPtr(*const u8, elements[1]);
-        const closure_data_pointer = @ptrCast([*]u8, output[16..size]);
+        const function_pointer = @intToPtr(*const u8, 1);
+        const closure_data_pointer = @ptrCast([*]u8, output[8..size]);
 
         call_the_closure(function_pointer, closure_data_pointer);
     } else {

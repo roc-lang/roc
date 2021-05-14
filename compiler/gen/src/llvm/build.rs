@@ -2095,7 +2095,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 ref full_layout,
                 ..
             } => {
-                let function_value = function_value_by_name(env, layout_ids, full_layout, name);
+                let function_value = function_value_by_name(env, layout_ids, *full_layout, name);
 
                 invoke_roc_function(
                     env,
@@ -3102,7 +3102,7 @@ pub fn build_proc_header_new<'a, 'ctx, 'env>(
     build_proc_header(env, layout_ids, symbol, &layout, proc)
 }
 
-pub fn build_proc_header<'a, 'ctx, 'env>(
+pub fn build_proc_header<'a, 'b, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     symbol: Symbol,
@@ -3117,31 +3117,48 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
         .to_symbol_string(symbol, &env.interns);
 
     use roc_mono::ir::HostExposedLayouts;
-    match &proc.host_exposed_layouts {
+    let copy = proc.host_exposed_layouts.clone();
+    match copy {
         HostExposedLayouts::NotHostExposed => {}
         HostExposedLayouts::HostExposed { rigids: _, aliases } => {
-            for (name, layout) in aliases {
+            for (name, (symbol, top_level, layout)) in aliases {
                 match layout {
                     Layout::Closure(arguments, closure, result) => {
                         // define closure size and return value size, e.g.
                         //
                         // * roc__mainForHost_1_Update_size() -> i64
                         // * roc__mainForHost_1_Update_result_size() -> i64
-                        build_closure_caller(env, &fn_name, *name, arguments, closure, result)
+
+                        let evaluator_layout = env.arena.alloc(top_level).full();
+                        let evaluator_name = layout_ids
+                            .get_new(symbol, evaluator_layout)
+                            .to_symbol_string(symbol, &env.interns);
+
+                        let evaluator = function_value_by_name_help(
+                            env,
+                            evaluator_layout,
+                            symbol,
+                            &evaluator_name,
+                        );
+
+                        build_closure_caller(
+                            env, &fn_name, evaluator, name, arguments, closure, result,
+                        )
                     }
                     Layout::FunctionPointer(arguments, result) => {
                         // define function size (equal to pointer size) and return value size, e.g.
                         //
                         // * roc__mainForHost_1_Update_size() -> i64
                         // * roc__mainForHost_1_Update_result_size() -> i64
-                        build_function_caller(env, &fn_name, *name, arguments, result)
+                        build_function_caller(env, &fn_name, name, arguments, result)
                     }
-                    _ => {
-                        // for anything else we only define the size symbol, e.g.
-                        //
-                        // * roc__mainForHost_1_Model_size() -> i64
-                        build_host_exposed_alias_size(env, &fn_name, *name, layout)
-                    }
+
+                    Layout::Builtin(_) => {}
+                    Layout::PhantomEmptyStruct => {}
+                    Layout::Struct(_) => {}
+                    Layout::Union(_) => {}
+                    Layout::RecursivePointer => {}
+                    Layout::Pointer(_) => {}
                 }
             }
         }
@@ -3177,9 +3194,10 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
 pub fn build_closure_caller<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
     def_name: &str,
+    evaluator: FunctionValue<'ctx>,
     alias_symbol: Symbol,
     arguments: &[Layout<'a>],
-    lambda_set: &LambdaSet<'a>,
+    lambda_set: LambdaSet<'a>,
     result: &Layout<'a>,
 ) {
     use inkwell::types::BasicType;
@@ -3248,7 +3266,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     let mut parameters = function_value.get_params();
     let output = parameters.pop().unwrap().into_pointer_value();
     let closure_data_ptr = parameters.pop().unwrap().into_pointer_value();
-    let function_ptr = parameters.pop().unwrap().into_pointer_value();
+    let _function_ptr = parameters.pop().unwrap().into_pointer_value();
 
     let closure_data = builder.build_load(closure_data_ptr, "load_closure_data");
 
@@ -3259,9 +3277,12 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
         *param = builder.build_load(param.into_pointer_value(), "load_param");
     }
 
-    parameters.push(closure_data);
+    // parameters.push(closure_data);
 
-    let call_result = invoke_and_catch(env, function_value, function_ptr, &parameters, result_type);
+    // let call_result = invoke_and_catch(env, function_value, function_ptr, &parameters, result_type);
+
+    let call_result =
+        invoke_and_catch(env, function_value, evaluator, &[closure_data], result_type);
 
     builder.build_store(output, call_result);
 
@@ -3277,11 +3298,11 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     );
 
     // STEP 4: build a {} -> u64 function that gives the size of the closure
-    let layout = Layout::Closure(arguments, *lambda_set, result);
+    let layout = Layout::Closure(arguments, lambda_set, result);
     build_host_exposed_alias_size(env, def_name, alias_symbol, &layout);
 }
 
-pub fn build_function_caller<'a, 'ctx, 'env>(
+fn build_function_caller<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
     def_name: &str,
     alias_symbol: Symbol,
@@ -3500,14 +3521,23 @@ pub fn verify_fn(fn_val: FunctionValue<'_>) {
 fn function_value_by_name<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    layout: &Layout<'a>,
+    layout: Layout<'a>,
     symbol: Symbol,
 ) -> FunctionValue<'ctx> {
     let fn_name = layout_ids
-        .get(symbol, layout)
+        .get_new(symbol, layout)
         .to_symbol_string(symbol, &env.interns);
     let fn_name = fn_name.as_str();
 
+    function_value_by_name_help(env, layout, symbol, fn_name)
+}
+
+fn function_value_by_name_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout: Layout<'a>,
+    symbol: Symbol,
+    fn_name: &str,
+) -> FunctionValue<'ctx> {
     env.module.get_function(fn_name).unwrap_or_else(|| {
         if symbol.is_builtin() {
             eprintln!(
@@ -3546,7 +3576,7 @@ fn call_with_args<'a, 'ctx, 'env>(
     _parent: FunctionValue<'ctx>,
     args: &[BasicValueEnum<'ctx>],
 ) -> BasicValueEnum<'ctx> {
-    let fn_val = function_value_by_name(env, layout_ids, layout, symbol);
+    let fn_val = function_value_by_name(env, layout_ids, *layout, symbol);
 
     let call = env.builder.build_call(fn_val, args, "call");
 

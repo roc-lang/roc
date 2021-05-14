@@ -130,7 +130,7 @@ pub enum HostExposedLayouts<'a> {
     NotHostExposed,
     HostExposed {
         rigids: BumpMap<Lowercase, Layout<'a>>,
-        aliases: BumpMap<Symbol, Layout<'a>>,
+        aliases: BumpMap<Symbol, (Symbol, TopLevelFunctionLayout<'a>, Layout<'a>)>,
     },
 }
 
@@ -1907,7 +1907,55 @@ fn specialize_external<'a>(
             let layout = layout_cache
                 .from_var(env.arena, *variable, env.subs)
                 .unwrap();
-            aliases.insert(*symbol, layout);
+
+            let name = env.unique_symbol();
+
+            match layout {
+                Layout::Closure(argument_layouts, lambda_set, return_layout) => {
+                    let assigned = env.unique_symbol();
+                    let unit = env.unique_symbol();
+
+                    let hole = env.arena.alloc(Stmt::Ret(assigned));
+
+                    let body = match_on_lambda_set(
+                        env,
+                        lambda_set,
+                        Symbol::ARG_CLOSURE,
+                        env.arena.alloc([unit]),
+                        argument_layouts,
+                        *return_layout,
+                        assigned,
+                        hole,
+                    );
+
+                    let body = let_empty_struct(unit, env.arena.alloc(body));
+
+                    let proc = Proc {
+                        name,
+                        args: env
+                            .arena
+                            .alloc([(lambda_set.runtime_representation(), Symbol::ARG_CLOSURE)]),
+                        body,
+                        closure_data_layout: None,
+                        ret_layout: *return_layout,
+                        is_self_recursive: SelfRecursive::NotSelfRecursive,
+                        must_own_arguments: false,
+                        host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+                    };
+
+                    let top_level = TopLevelFunctionLayout {
+                        arguments: env.arena.alloc([lambda_set.runtime_representation()]),
+                        result: *return_layout,
+                    };
+
+                    procs
+                        .specialized
+                        .insert((name, top_level), InProgressProc::Done(proc));
+
+                    aliases.insert(*symbol, (name, top_level, layout));
+                }
+                _ => todo!(),
+            }
         }
 
         HostExposedLayouts::HostExposed {
@@ -4337,7 +4385,7 @@ fn construct_closure_data<'a>(
     match lambda_set.layout_for_member(name) {
         ClosureRepresentation::Union {
             tag_id,
-            tag_layout,
+            tag_layout: _,
             union_size,
             tag_name,
         } => {

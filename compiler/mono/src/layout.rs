@@ -1893,7 +1893,11 @@ pub struct LayoutIds<'a> {
 impl<'a> LayoutIds<'a> {
     /// Returns a LayoutId which is unique for the given symbol and layout.
     /// If given the same symbol and same layout, returns the same LayoutId.
-    pub fn get(&mut self, symbol: Symbol, layout: &Layout<'a>) -> LayoutId {
+    pub fn get<'b>(&mut self, symbol: Symbol, layout: &'b Layout<'a>) -> LayoutId {
+        self.get_new(symbol, *layout)
+    }
+
+    pub fn get_new(&mut self, symbol: Symbol, layout: Layout<'a>) -> LayoutId {
         // Note: this function does some weird stuff to satisfy the borrow checker.
         // There's probably a nicer way to write it that still works.
         let ids = self.by_symbol.entry(symbol).or_insert_with(|| IdsByLayout {
@@ -1902,12 +1906,12 @@ impl<'a> LayoutIds<'a> {
         });
 
         // Get the id associated with this layout, or default to next_id.
-        let answer = ids.by_id.get(layout).copied().unwrap_or(ids.next_id);
+        let answer = ids.by_id.get(&layout).copied().unwrap_or(ids.next_id);
 
         // If we had to default to next_id, it must not have been found;
         // store the ID we're going to return and increment next_id.
         if answer == ids.next_id {
-            ids.by_id.insert(*layout, ids.next_id);
+            ids.by_id.insert(layout, ids.next_id);
 
             ids.next_id += 1;
         }
