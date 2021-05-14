@@ -3116,54 +3116,6 @@ pub fn build_proc_header<'a, 'b, 'ctx, 'env>(
         .get(symbol, layout)
         .to_symbol_string(symbol, &env.interns);
 
-    use roc_mono::ir::HostExposedLayouts;
-    let copy = proc.host_exposed_layouts.clone();
-    match copy {
-        HostExposedLayouts::NotHostExposed => {}
-        HostExposedLayouts::HostExposed { rigids: _, aliases } => {
-            for (name, (symbol, top_level, layout)) in aliases {
-                match layout {
-                    Layout::Closure(arguments, closure, result) => {
-                        // define closure size and return value size, e.g.
-                        //
-                        // * roc__mainForHost_1_Update_size() -> i64
-                        // * roc__mainForHost_1_Update_result_size() -> i64
-
-                        let evaluator_layout = env.arena.alloc(top_level).full();
-                        let evaluator_name = layout_ids
-                            .get_new(symbol, evaluator_layout)
-                            .to_symbol_string(symbol, &env.interns);
-
-                        let evaluator = function_value_by_name_help(
-                            env,
-                            evaluator_layout,
-                            symbol,
-                            &evaluator_name,
-                        );
-
-                        build_closure_caller(
-                            env, &fn_name, evaluator, name, arguments, closure, result,
-                        )
-                    }
-                    Layout::FunctionPointer(arguments, result) => {
-                        // define function size (equal to pointer size) and return value size, e.g.
-                        //
-                        // * roc__mainForHost_1_Update_size() -> i64
-                        // * roc__mainForHost_1_Update_result_size() -> i64
-                        build_function_caller(env, &fn_name, name, arguments, result)
-                    }
-
-                    Layout::Builtin(_) => {}
-                    Layout::PhantomEmptyStruct => {}
-                    Layout::Struct(_) => {}
-                    Layout::Union(_) => {}
-                    Layout::RecursivePointer => {}
-                    Layout::Pointer(_) => {}
-                }
-            }
-        }
-    }
-
     let ret_type = basic_type_from_layout(env, &proc.ret_layout);
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
 
@@ -3224,14 +3176,6 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
         argument_types.push(arg_ptr_type.into());
     }
 
-    let function_pointer_type = {
-        let function_layout = lambda_set.extend_function_layout(arena, arguments, result);
-
-        // this is already a (function) pointer type
-        basic_type_from_layout(env, &function_layout)
-    };
-    argument_types.push(function_pointer_type);
-
     let closure_argument_type = {
         let basic_type = basic_type_from_layout(env, &lambda_set.runtime_representation());
 
@@ -3266,7 +3210,6 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     let mut parameters = function_value.get_params();
     let output = parameters.pop().unwrap().into_pointer_value();
     let closure_data_ptr = parameters.pop().unwrap().into_pointer_value();
-    let _function_ptr = parameters.pop().unwrap().into_pointer_value();
 
     let closure_data = builder.build_load(closure_data_ptr, "load_closure_data");
 
@@ -3276,10 +3219,6 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
         debug_assert!(param.is_pointer_value());
         *param = builder.build_load(param.into_pointer_value(), "load_param");
     }
-
-    // parameters.push(closure_data);
-
-    // let call_result = invoke_and_catch(env, function_value, function_ptr, &parameters, result_type);
 
     let call_result =
         invoke_and_catch(env, function_value, evaluator, &[closure_data], result_type);
@@ -3481,6 +3420,55 @@ pub fn build_proc<'a, 'ctx, 'env>(
     proc: roc_mono::ir::Proc<'a>,
     fn_val: FunctionValue<'ctx>,
 ) {
+    use roc_mono::ir::HostExposedLayouts;
+    let copy = proc.host_exposed_layouts.clone();
+    let fn_name = fn_val.get_name().to_string_lossy();
+    match copy {
+        HostExposedLayouts::NotHostExposed => {}
+        HostExposedLayouts::HostExposed { rigids: _, aliases } => {
+            for (name, (symbol, top_level, layout)) in aliases {
+                match layout {
+                    Layout::Closure(arguments, closure, result) => {
+                        // define closure size and return value size, e.g.
+                        //
+                        // * roc__mainForHost_1_Update_size() -> i64
+                        // * roc__mainForHost_1_Update_result_size() -> i64
+
+                        let evaluator_layout = env.arena.alloc(top_level).full();
+                        let evaluator_name = layout_ids
+                            .get_new(symbol, evaluator_layout)
+                            .to_symbol_string(symbol, &env.interns);
+
+                        let evaluator = function_value_by_name_help(
+                            env,
+                            evaluator_layout,
+                            symbol,
+                            &evaluator_name,
+                        );
+
+                        build_closure_caller(
+                            env, &fn_name, evaluator, name, arguments, closure, result,
+                        )
+                    }
+                    Layout::FunctionPointer(arguments, result) => {
+                        // define function size (equal to pointer size) and return value size, e.g.
+                        //
+                        // * roc__mainForHost_1_Update_size() -> i64
+                        // * roc__mainForHost_1_Update_result_size() -> i64
+                        build_function_caller(env, &fn_name, name, arguments, result)
+                    }
+
+                    Layout::Builtin(_) => {}
+                    Layout::PhantomEmptyStruct => {}
+                    Layout::Struct(_) => {}
+                    Layout::Union(_) => {}
+                    Layout::RecursivePointer => {}
+                    Layout::Pointer(_) => {}
+                }
+            }
+        }
+    }
+
     let args = proc.args;
     let context = &env.context;
 
