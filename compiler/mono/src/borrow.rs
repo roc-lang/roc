@@ -6,6 +6,9 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
+pub const OWNED: bool = false;
+pub const BORROWED: bool = true;
+
 fn should_borrow_layout(layout: &Layout) -> bool {
     match layout {
         Layout::Closure(_, _, _) => false,
@@ -622,7 +625,7 @@ impl<'a> BorrowInfState<'a> {
 pub fn foreign_borrow_signature(arena: &Bump, arity: usize) -> &[bool] {
     // NOTE this means that Roc is responsible for cleaning up resources;
     // the host cannot (currently) take ownership
-    let all = bumpalo::vec![in arena; true; arity];
+    let all = bumpalo::vec![in arena; BORROWED; arity];
     all.into_bump_slice()
 }
 
@@ -630,11 +633,11 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
     use LowLevel::*;
 
     // TODO is true or false more efficient for non-refcounted layouts?
-    let irrelevant = false;
+    let irrelevant = OWNED;
     let function = irrelevant;
     let closure_data = irrelevant;
-    let owned = false;
-    let borrowed = true;
+    let owned = OWNED;
+    let borrowed = BORROWED;
 
     // Here we define the borrow signature of low-level operations
     //
