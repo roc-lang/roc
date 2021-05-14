@@ -1,4 +1,4 @@
-use crate::borrow::ParamMap;
+use crate::borrow::{ParamMap, BORROWED, OWNED};
 use crate::ir::{Expr, JoinPointId, ModifyRc, Param, Proc, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
@@ -463,6 +463,7 @@ impl<'a> Context<'a> {
                     arguments,
                 });
 
+                // self.add_inc_before_help(arguments, |_| OWNED, b, b_live_vars)
                 &*self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
@@ -778,6 +779,7 @@ impl<'a> Context<'a> {
                             self.arena,
                             call.arguments.len(),
                         );
+
                         self.add_dec_after_lowlevel(call.arguments, ps, cont, &case_live_vars)
                     }
 
