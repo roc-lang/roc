@@ -1113,7 +1113,6 @@ fn return_wrapped_function_pointer_b() {
 }
 
 #[test]
-#[ignore]
 fn return_wrapped_closure() {
     assert_non_opt_evals_to!(
         indoc!(

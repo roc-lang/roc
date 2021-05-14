@@ -6056,15 +6056,15 @@ fn call_by_name_new<'a>(
             assigned,
             hole,
         ),
-        Ok(Layout::Closure(argument_layouts, lambda_set, ret_layout)) => {
-            match lambda_set.extend_function_layout(env.arena, argument_layouts, ret_layout) {
+        Ok(Layout::Closure(c_argument_layouts, lambda_set, c_ret_layout)) => {
+            match lambda_set.extend_function_layout(env.arena, c_argument_layouts, c_ret_layout) {
                 Layout::FunctionPointer(argument_layouts, ret_layout) => call_by_name_help(
                     env,
                     procs,
                     fn_var,
                     proc_name,
                     loc_args,
-                    Layout::Closure(argument_layouts, lambda_set, ret_layout),
+                    Layout::Closure(c_argument_layouts, lambda_set, c_ret_layout),
                     argument_layouts,
                     ret_layout,
                     layout_cache,
@@ -6277,8 +6277,8 @@ fn call_by_name_help<'a>(
 
                                 debug_assert_eq!(
                                     &maybe_closure_layout, &layout,
-                                    "\n\n{:?}\n\n{:?}",
-                                    maybe_closure_layout, layout
+                                    "\nProcedure {:?}\n\n{:?}\n\n{:?}",
+                                    proc_name, maybe_closure_layout, layout
                                 );
 
                                 call_specialized_proc(
