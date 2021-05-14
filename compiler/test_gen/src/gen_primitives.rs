@@ -1722,7 +1722,6 @@ fn unified_empty_closure_byte() {
 }
 
 #[test]
-#[ignore]
 fn task_always_twice() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1767,7 +1766,6 @@ fn task_always_twice() {
 }
 
 #[test]
-#[ignore]
 fn wildcard_rigid() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -2276,7 +2274,6 @@ fn build_then_apply_closure() {
 }
 
 #[test]
-#[ignore]
 fn expanded_result() {
     assert_evals_to!(
         indoc!(
@@ -2284,7 +2281,7 @@ fn expanded_result() {
             app "test" provides [ main ] to "./platform"
 
             a : Result I64 Str
-            a = Ok 1
+            a = Ok 4
 
             after = \x, f ->
                 when x is
