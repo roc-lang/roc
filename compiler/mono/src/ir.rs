@@ -1790,8 +1790,17 @@ fn specialize_all_help<'a>(
             partial_proc,
         ) {
             Ok((proc, layout)) => {
-                let top_level = TopLevelFunctionLayout::from_layout(env.arena, layout);
-                procs.specialized.insert((name, top_level), Done(proc));
+                if procs.module_thunks.contains(&name) {
+                    let top_level = TopLevelFunctionLayout::from_layout(env.arena, layout);
+                    let layout = TopLevelFunctionLayout {
+                        arguments: &[],
+                        result: env.arena.alloc(top_level).full(),
+                    };
+                    procs.specialized.insert((name, layout), Done(proc));
+                } else {
+                    let top_level = TopLevelFunctionLayout::from_layout(env.arena, layout);
+                    procs.specialized.insert((name, top_level), Done(proc));
+                }
             }
             Err(SpecializeFailure {
                 problem: _,
@@ -5822,16 +5831,15 @@ fn reuse_function_symbol<'a>(
                     let function_ptr_layout =
                         TopLevelFunctionLayout::from_layout(env.arena, res_layout.unwrap());
 
-                    procs.insert_passed_by_name(
-                        env,
-                        arg_var,
-                        original,
-                        function_ptr_layout,
-                        layout_cache,
-                    );
-
                     if captures {
                         // this is a closure by capture, meaning it itself captures local variables.
+                        procs.insert_passed_by_name(
+                            env,
+                            arg_var,
+                            original,
+                            function_ptr_layout,
+                            layout_cache,
+                        );
 
                         let closure_data = symbol;
 
@@ -6170,26 +6178,17 @@ fn call_by_name_help<'a>(
     } else if env.is_imported_symbol(proc_name) {
         add_needed_external(procs, env, original_fn_var, proc_name);
 
-        let call = if proc_name.module_id() == ModuleId::ATTR {
-            // the callable is one of the ATTR::ARG_n symbols
-            // we must call those by-pointer
-            self::Call {
-                call_type: CallType::ByPointer {
-                    name: proc_name,
-                    ret_layout: *ret_layout,
-                    full_layout: function_layout,
-                    arg_layouts: argument_layouts,
-                },
-                arguments: field_symbols,
-            }
+        debug_assert_ne!(proc_name.module_id(), ModuleId::ATTR);
+        if field_symbols.is_empty() {
+            force_thunk(env, proc_name, function_layout, assigned, hole)
         } else {
             debug_assert_eq!(
                 argument_layouts.len(),
                 field_symbols.len(),
-                "scroll up a bit for background {:?}",
-                proc_name
+                "see call_by_name for background (scroll down a bit), function is {:?}",
+                proc_name,
             );
-            self::Call {
+            let call = self::Call {
                 call_type: CallType::ByName {
                     name: proc_name,
                     ret_layout: *ret_layout,
@@ -6197,14 +6196,13 @@ fn call_by_name_help<'a>(
                     arg_layouts: argument_layouts,
                 },
                 arguments: field_symbols,
-            }
-        };
+            };
 
-        let result = build_call(env, call, assigned, *ret_layout, hole);
+            let result = build_call(env, call, assigned, *ret_layout, hole);
 
-        let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
-
-        assign_to_symbols(env, procs, layout_cache, iter, result)
+            let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
+            assign_to_symbols(env, procs, layout_cache, iter, result)
+        }
     } else {
         let pending = PendingSpecialization::from_var(env.arena, env.subs, fn_var);
 

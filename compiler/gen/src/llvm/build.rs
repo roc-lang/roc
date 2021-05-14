@@ -100,6 +100,34 @@ impl From<OptLevel> for OptimizationLevel {
     }
 }
 
+/// Iterate over all functions in an llvm module
+pub struct FunctionIterator<'ctx> {
+    next: Option<FunctionValue<'ctx>>,
+}
+
+impl<'ctx> FunctionIterator<'ctx> {
+    pub fn from_module(module: &inkwell::module::Module<'ctx>) -> Self {
+        Self {
+            next: module.get_first_function(),
+        }
+    }
+}
+
+impl<'ctx> Iterator for FunctionIterator<'ctx> {
+    type Item = FunctionValue<'ctx>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.next {
+            Some(function) => {
+                self.next = function.get_next_function();
+
+                Some(function)
+            }
+            None => None,
+        }
+    }
+}
+
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Scope<'a, 'ctx> {
     symbols: ImMap<Symbol, (Layout<'a>, BasicValueEnum<'ctx>)>,
@@ -3069,7 +3097,7 @@ pub fn build_proc_header_new<'a, 'ctx, 'env>(
 ) -> FunctionValue<'ctx> {
     let layout = env.arena.alloc(layout).full();
 
-    dbg!(symbol, layout);
+    // eprintln!("    {:?}: {:?}\n", symbol, layout);
 
     build_proc_header(env, layout_ids, symbol, &layout, proc)
 }

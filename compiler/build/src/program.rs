@@ -2,7 +2,7 @@ use crate::target;
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::targets::{CodeModel, FileType, RelocMode};
-use inkwell::values::FunctionValue;
+pub use roc_gen::llvm::build::FunctionIterator;
 use roc_gen::llvm::build::{
     build_proc, build_proc_header_new, module_from_builtins, OptLevel, Scope,
 };
@@ -287,32 +287,5 @@ pub fn gen_from_mono_module(
     CodeGenTiming {
         code_gen,
         emit_o_file,
-    }
-}
-
-pub struct FunctionIterator<'ctx> {
-    next: Option<FunctionValue<'ctx>>,
-}
-
-impl<'ctx> FunctionIterator<'ctx> {
-    pub fn from_module(module: &inkwell::module::Module<'ctx>) -> Self {
-        Self {
-            next: module.get_first_function(),
-        }
-    }
-}
-
-impl<'ctx> Iterator for FunctionIterator<'ctx> {
-    type Item = FunctionValue<'ctx>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.next {
-            Some(function) => {
-                self.next = function.get_next_function();
-
-                Some(function)
-            }
-            None => None,
-        }
     }
 }
