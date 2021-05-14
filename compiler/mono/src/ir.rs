@@ -3652,9 +3652,10 @@ pub fn with_hole<'a>(
         }
 
         Accessor {
+            name,
             function_var,
             record_var,
-            closure_var: _,
+            closure_ext_var: _,
             ext_var,
             field_var,
             field,
@@ -3677,8 +3678,6 @@ pub fn with_hole<'a>(
 
             let loc_body = Located::at_zero(body);
 
-            let name = env.unique_symbol();
-
             let arguments = vec![(
                 record_var,
                 Located::at_zero(roc_can::pattern::Pattern::Identifier(record_symbol)),
@@ -3694,15 +3693,18 @@ pub fn with_hole<'a>(
                 field_var,
                 layout_cache,
             ) {
-                Ok(layout) => {
-                    todo!()
-                    // TODO should the let have layout Pointer?
-                    //                    Stmt::Let(
-                    //                        assigned,
-                    //                        call_by_pointer(env, procs, name, layout),
-                    //                        layout,
-                    //                        hole,
-                    //                    )
+                Ok(_) => {
+                    let full_layout = return_on_layout_error!(
+                        env,
+                        layout_cache.from_var(env.arena, function_var, env.subs)
+                    );
+
+                    match full_layout {
+                        Layout::Closure(_, lambda_set, _) => {
+                            construct_closure_data(env, lambda_set, name, &[], assigned, hole)
+                        }
+                        _ => unreachable!(),
+                    }
                 }
 
                 Err(_error) => Stmt::RuntimeError(

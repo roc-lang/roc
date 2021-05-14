@@ -10,7 +10,7 @@ use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{Field, WhenBranch};
 use roc_can::pattern::Pattern;
 use roc_collections::all::{ImMap, Index, SendMap};
-use roc_module::ident::Lowercase;
+use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::subs::Variable;
@@ -712,10 +712,11 @@ pub fn constrain_expr(
             )
         }
         Accessor {
+            name: closure_name,
             function_var,
             field,
             record_var,
-            closure_var,
+            closure_ext_var: closure_var,
             ext_var,
             field_var,
         } => {
@@ -739,9 +740,15 @@ pub fn constrain_expr(
                 region,
             );
 
+            let ext = Type::Variable(*closure_var);
+            let lambda_set = Type::TagUnion(
+                vec![(TagName::Closure(*closure_name), vec![])],
+                Box::new(ext),
+            );
+
             let function_type = Type::Function(
                 vec![record_type],
-                Box::new(Type::Variable(*closure_var)),
+                Box::new(lambda_set),
                 Box::new(field_type),
             );
 
