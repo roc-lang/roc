@@ -1004,7 +1004,7 @@ fn specialize_closure() {
             main =
                 items = foo {}
 
-                List.map items apply 
+                List.map items apply
             "#
         ),
         RocList::from_slice(&[41, 42]),
@@ -1013,7 +1013,6 @@ fn specialize_closure() {
 }
 
 #[test]
-#[ignore]
 fn io_poc_effect() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1044,7 +1043,6 @@ fn io_poc_effect() {
 }
 
 #[test]
-#[ignore]
 fn io_poc_desugared() {
     assert_evals_to!(
         indoc!(
@@ -1052,14 +1050,14 @@ fn io_poc_desugared() {
             app "test" provides [ main ] to "./platform"
 
             # succeed : a -> ({} -> a)
-            succeed = \x -> \{} -> x
+            succeed = \x -> \_ -> x
 
-            foo : {} -> F64
+            foo : Str -> F64
             foo =
                 succeed 3.14
 
             # runEffect : ({} ->  a) -> a
-            runEffect = \thunk -> thunk {}
+            runEffect = \thunk -> thunk ""
 
             main : F64
             main =

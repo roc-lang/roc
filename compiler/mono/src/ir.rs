@@ -19,7 +19,7 @@ use roc_types::subs::{Content, FlatType, Subs, Variable};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
-pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
+pub const PRETTY_PRINT_IR_SYMBOLS: bool = true;
 
 macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr) => {
@@ -1946,7 +1946,7 @@ fn specialize_external<'a>(
                 args: &[],
                 body: specialized_body,
                 closure_data_layout: Some(closure_data_layout),
-                ret_layout: closure_data_layout,
+                ret_layout,
                 is_self_recursive: recursivity,
                 must_own_arguments: false,
                 host_exposed_layouts,
@@ -2257,7 +2257,48 @@ fn build_specialized_proc<'a>(
                 ret_layout,
             })
         }
-        Some(_) | None => {
+        Some(lambda_set) => {
+            // a function that returns a function, but is not itself a closure
+            // e.g.  f = Num.add
+
+            // make sure there is not arg_closure argument without a closure layout
+            debug_assert!(pattern_symbols.last() != Some(&Symbol::ARG_CLOSURE));
+
+            use std::cmp::Ordering;
+            match pattern_layouts_len.cmp(&pattern_symbols.len()) {
+                Ordering::Equal => {
+                    let proc_args = proc_args.into_bump_slice();
+
+                    Ok(FunctionBody {
+                        arguments: proc_args,
+                        closure: None,
+                        ret_layout,
+                    })
+                }
+                Ordering::Greater => {
+                    if pattern_symbols.is_empty() {
+                        let ret_layout = lambda_set.runtime_representation();
+                        Ok(FunctionPointerBody {
+                            arguments: pattern_layouts_slice,
+                            closure: None,
+                            ret_layout,
+                        })
+                    } else {
+                        // so far, the problem when hitting this branch was always somewhere else
+                        // I think this branch should not be reachable in a bugfree compiler
+                        panic!(
+                            "more arguments (according to the layout) than argument symbols for {:?}",
+                            proc_name
+                        )
+                    }
+                }
+                Ordering::Less => panic!(
+                    "more argument symbols than arguments (according to the layout) for {:?}",
+                    proc_name
+                ),
+            }
+        }
+        None => {
             // else we're making a normal function, no closure problems to worry about
             // we'll just assert some things
 
@@ -2983,9 +3024,7 @@ pub fn with_hole<'a>(
                     "The `[]` type has no constructors, source var {:?}",
                     variant_var
                 ),
-                Unit | UnitWithArguments => {
-                    Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole)
-                }
+                Unit | UnitWithArguments => let_empty_struct(assigned, hole),
                 BoolUnion { ttrue, .. } => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Bool(tag_name == ttrue)),
@@ -3334,7 +3373,7 @@ pub fn with_hole<'a>(
             stmt
         }
 
-        EmptyRecord => Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole),
+        EmptyRecord => let_empty_struct(assigned, hole),
 
         Expect(_, _) => unreachable!("I think this is unreachable"),
 
@@ -5678,9 +5717,7 @@ fn handle_variable_aliasing<'a>(
         // then we must construct its closure; since imported symbols have no closure, we use the
         // empty struct
 
-        let layout = Layout::Struct(&[]);
-        let expr = Expr::Struct(&[]);
-        Stmt::Let(left, expr, layout, env.arena.alloc(result))
+        let_empty_struct(left, env.arena.alloc(result))
     } else {
         substitute_in_exprs(env.arena, &mut result, left, right);
 
@@ -5719,6 +5756,10 @@ fn force_thunk<'a>(
     Stmt::Let(assigned, Expr::Call(call), layout, env.arena.alloc(hole))
 }
 
+fn let_empty_struct<'a>(assigned: Symbol, hole: &'a Stmt<'a>) -> Stmt<'a> {
+    Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole)
+}
+
 /// If the symbol is a function, make sure it is properly specialized
 fn reuse_function_symbol<'a>(
     env: &mut Env<'a, '_>,
@@ -5745,12 +5786,7 @@ fn reuse_function_symbol<'a>(
 
                     // an imported symbol is either a function, or a top-level 0-argument thunk
                     // it never has closure data, so we use the empty struct
-                    return Stmt::Let(
-                        symbol,
-                        Expr::Struct(&[]),
-                        Layout::Struct(&[]),
-                        env.arena.alloc(result),
-                    );
+                    return let_empty_struct(symbol, env.arena.alloc(result));
                 }
 
                 _ => {
@@ -5816,12 +5852,20 @@ fn reuse_function_symbol<'a>(
                             env.arena.alloc(result),
                         )
                     } else {
-                        return Stmt::Let(
-                            symbol,
-                            Expr::Struct(&[]),
-                            Layout::Struct(&[]),
-                            env.arena.alloc(result),
+                        debug_assert!(procs.module_thunks.contains(&original));
+
+                        // this is a 0-argument thunk
+                        let layout = Layout::Closure(argument_layouts, lambda_set, ret_layout);
+                        let top_level = TopLevelFunctionLayout::new(env.arena, &[], layout);
+                        procs.insert_passed_by_name(
+                            env,
+                            arg_var,
+                            original,
+                            top_level,
+                            layout_cache,
                         );
+
+                        force_thunk(env, original, layout, symbol, env.arena.alloc(result))
                     }
                 }
                 Ok(layout) => {

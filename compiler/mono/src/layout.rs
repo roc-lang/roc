@@ -102,6 +102,7 @@ pub struct LambdaSet<'a> {
 }
 
 /// representation of the closure *for a particular function*
+#[derive(Debug)]
 pub enum ClosureRepresentation<'a> {
     /// the closure is represented as a union. Includes the tag ID!
     Union {

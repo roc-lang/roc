@@ -3069,6 +3069,8 @@ pub fn build_proc_header_new<'a, 'ctx, 'env>(
 ) -> FunctionValue<'ctx> {
     let layout = env.arena.alloc(layout).full();
 
+    dbg!(symbol, layout);
+
     build_proc_header(env, layout_ids, symbol, &layout, proc)
 }
 
