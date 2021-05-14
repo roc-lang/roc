@@ -163,8 +163,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // mul or (*) : Num a, Num a -> Num a
     add_top_level_function_type!(
         Symbol::NUM_MUL,
-        vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
-        Box::new(int_type(flex(TVAR1))),
+        vec![num_type(flex(TVAR1)), num_type(flex(TVAR1))],
+        Box::new(num_type(flex(TVAR1))),
     );
 
     // mulWrap : Int range, Int range -> Int range
