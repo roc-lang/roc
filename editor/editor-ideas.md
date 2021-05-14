@@ -37,10 +37,11 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 * [VS code debug visualization](https://marketplace.visualstudio.com/items?itemName=hediet.debug-visualizer)
 * [Algorithm visualization for javascript](https://algorithm-visualizer.org)
 * [godbolt.org Compiler Explorer](https://godbolt.org/)
-* Say you have a failing test that used to work, it would be very valuable to see all code that was changed that was used only by that test.
-e.g. you have a test `calculate_sum_test` that only uses the function `add`, when the test fails you should be able to see a diff showing only what changed for the function `add`. It would also be great to have a diff of [expression values](https://homepages.cwi.nl/~storm/livelit/images/bret.png) Bret Victor style. An ambitious project would be to suggest or automatically try fixes based on these diffs.
 * [whitebox debug visualization](https://vimeo.com/483795097)
 * [Hest](https://ivanish.ca/hest-time-travel/) tool for making highly interactive simulations.
+* Say you have a failing test that used to work, it would be very valuable to see all code that was changed that was used only by that test.
+e.g. you have a test `calculate_sum_test` that only uses the function `add`, when the test fails you should be able to see a diff showing only what changed for the function `add`. It would also be great to have a diff of [expression values](https://homepages.cwi.nl/~storm/livelit/images/bret.png) Bret Victor style. An ambitious project would be to suggest or automatically try fixes based on these diffs.
+* I think it could be possible to create a minimal reproduction of a program / block of code / code used by a single test. So for a failing unit test I would expect it to extract imports, the platform, types and functions that are necessary to run only that unit test and put them in a standalone roc project. This would be useful for sharing bugs with library+application authors and colleagues, for profiling or debugging with all "clutter" removed. 
 
 
 ### Structured Editing
@@ -88,7 +89,9 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 
 ### Beginner-focused Features
 
- * A good screen to show on startup would be a Roc cheat sheet. 
+ * Show Roc cheat sheet on start-up.
+ * Plugin that translates short pieces of code from another programming language to Roc. [Relevant research](https://www.youtube.com/watch?v=xTzFJIknh7E). Someone who only knows the R language could get started with Roc with less friction if they could quickly define a list R style (`lst <- c(1,2,3)`) and get it translated to Roc.
+ * Being able to asses or ask the user for the amount of experience they have with Roc would be a valuable feature for recommending plugins, editor tips, recommending tutorials, automated error search (e.g searching common beginner errors first), ... .    
 
 ### Productivity features
 
@@ -110,6 +113,13 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Regex-like find and substitution based on plain english description and example (replacement). i.e. replace all `[` between double quotes with `{`. [Inspiration](https://alexmoltzau.medium.com/english-to-regex-thanks-to-gpt-3-13f03b68236e).
 * Show productivity tips based on behavior. i.e. if the user is scrolling through the error bar and clicking on the next error several times, show a tip with "go to next error" shortcut.
 * Command to "benchmark this function" or "benchmark this test" with flamegraph and execution time per line.
+* Instead of going to definition and having to navigate back and forth between files, show an editable view inside the current file. See [this video](https://www.youtube.com/watch?v=EenznqbW5w8)
+* When encountering an unexpected error in the user's program we show a button at the bottom to start an automated search on this error. The search would:
+    * look for similar errors in github issues of the relevant libraries
+    * search stackoverflow questions
+    * search a local history of previously encountered errors and fixes
+    * search through a database of our zullip questions
+    * ...
 
 #### Autocomplete
 
