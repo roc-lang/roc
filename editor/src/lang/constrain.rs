@@ -249,7 +249,7 @@ pub fn constrain_expr<'a>(
 
             let union_con = Eq(
                 Type2::TagUnion(
-                    PoolVec::new(vec![(*name, types)].into_iter(), env.pool),
+                    PoolVec::new(std::iter::once((*name, types)), env.pool),
                     env.pool.add(Type2::Variable(*ext_var)),
                 ),
                 expected.shallow_clone(),
