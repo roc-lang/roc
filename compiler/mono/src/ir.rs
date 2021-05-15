@@ -1795,23 +1795,13 @@ fn specialize_all_help<'a>(
             partial_proc,
         ) {
             Ok((proc, layout)) => {
+                let top_level = TopLevelFunctionLayout::from_layout(env.arena, layout);
+
                 if procs.module_thunks.contains(&name) {
-                    // TODO recipe for disaster
-                    let top_level = TopLevelFunctionLayout::from_layout(env.arena, layout);
-                    if top_level.arguments.is_empty() {
-                        procs.specialized.insert((name, top_level), Done(proc));
-                    } else {
-                        let top_level = TopLevelFunctionLayout::new(
-                            env.arena,
-                            &[],
-                            env.arena.alloc(top_level).full(),
-                        );
-                        procs.specialized.insert((name, top_level), Done(proc));
-                    }
-                } else {
-                    let top_level = TopLevelFunctionLayout::from_layout(env.arena, layout);
-                    procs.specialized.insert((name, top_level), Done(proc));
+                    debug_assert!(top_level.arguments.is_empty());
                 }
+
+                procs.specialized.insert((name, top_level), Done(proc));
             }
             Err(SpecializeFailure {
                 problem: _,
