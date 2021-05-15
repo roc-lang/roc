@@ -86,8 +86,6 @@ fn render_main_content(module: &ModuleDocumentation) -> String {
         .as_str(),
     );
 
-    // buf.push_str(markdown_to_html(module.docs.clone()).as_str());
-
     for entry in &module.entries {
         match entry {
             DocEntry::DocDef(doc_def) => {
@@ -412,15 +410,99 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
     }
 }
 
+fn insert_doc_links(markdown: String) -> String {
+    insert_doc_links_help(markdown.clone())
+}
+
+fn insert_doc_links_help(markdown: String) -> String {
+    let buf = &markdown.clone();
+    let mut result = String::new();
+
+    let mut chomping_from: Option<usize> = None;
+
+    let mut chars = buf.chars().enumerate().peekable();
+
+    while let Some((index, char)) = chars.next() {
+        match chomping_from {
+            None => {
+                let next_is_alphabetic = match chars.peek() {
+                    None => false,
+                    Some((_, next_char)) => next_char.is_alphabetic(),
+                };
+
+                if char == '#' && next_is_alphabetic {
+                    chomping_from = Some(index);
+                }
+            }
+            Some(from) => {
+                if !(char.is_alphabetic() || char == '.') {
+                    let after_link = buf.chars().skip(from + buf.len());
+
+                    result = buf.chars().take(from).collect();
+
+                    let doc_link =
+                        make_doc_link(buf.chars().skip(from + 1).take(index - from).collect());
+
+                    result.insert_str(from, doc_link.as_str());
+
+                    let remainder = insert_doc_links_help(after_link.collect());
+
+                    result.push_str(remainder.as_str());
+                    break;
+                }
+            }
+        }
+    }
+
+    result
+}
+
+fn make_doc_link(doc_item: String) -> String {
+    let mut label = String::new();
+    let mut link = String::new();
+
+    let mut parts = doc_item.split(".").into_iter().peekable();
+
+    while let Some(part) = parts.next() {
+        label.push_str(part);
+
+        match parts.peek() {
+            None => {
+                link.push_str(".html#");
+                link.push_str(part);
+            }
+            Some(_) => {
+                link.push_str(part);
+                link.push('.');
+
+                label.push('.');
+            }
+        }
+    }
+
+    let mut buf = String::new();
+
+    buf.push('[');
+    buf.push_str(label.as_str());
+    buf.push_str("](");
+
+    buf.push_str(link.as_str());
+    buf.push(')');
+
+    buf
+}
+
 fn markdown_to_html(markdown: String) -> String {
     use pulldown_cmark::CodeBlockKind;
     use pulldown_cmark::CowStr;
     use pulldown_cmark::Event;
     use pulldown_cmark::Tag::*;
 
+    let markdown_with_links = insert_doc_links(markdown);
+
     let markdown_options = pulldown_cmark::Options::empty();
     let mut docs_parser = vec![];
-    let (_, _) = pulldown_cmark::Parser::new_ext(&markdown, markdown_options).fold(
+    let (_, _) = pulldown_cmark::Parser::new_ext(&markdown_with_links, markdown_options).fold(
         (0, 0),
         |(start_quote_count, end_quote_count), event| match event {
             // Replace this sequence (`>>>` syntax):
