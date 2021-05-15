@@ -238,6 +238,7 @@ mod cli_run {
     }
 
     #[test]
+    #[ignore]
     #[serial(astar)]
     fn run_astar_optimized_1() {
         check_output(
@@ -250,6 +251,7 @@ mod cli_run {
     }
 
     #[test]
+    #[ignore]
     #[serial(base64)]
     fn base64() {
         check_output(

@@ -977,6 +977,7 @@ fn newtype_wrapper() {
 }
 
 #[test]
+#[ignore]
 fn applied_tag_function() {
     assert_evals_to!(
         indoc!(
@@ -996,6 +997,7 @@ fn applied_tag_function() {
 }
 
 #[test]
+#[ignore]
 fn applied_tag_function_result() {
     assert_evals_to!(
         indoc!(
@@ -1015,6 +1017,7 @@ fn applied_tag_function_result() {
 }
 
 #[test]
+#[ignore]
 fn applied_tag_function_linked_list() {
     assert_evals_to!(
         indoc!(

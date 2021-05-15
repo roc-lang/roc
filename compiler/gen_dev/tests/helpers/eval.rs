@@ -61,11 +61,17 @@ pub fn helper<'a>(
 
     use roc_load::file::MonomorphizedModule;
     let MonomorphizedModule {
-        procedures,
+        procedures: top_procedures,
         interns,
         exposed_to_host,
         ..
     } = loaded;
+
+    let mut procedures = MutMap::default();
+
+    for ((symbol, top_level), proc) in top_procedures {
+        procedures.insert((symbol, arena.alloc(top_level).full()), proc);
+    }
 
     /*
     println!("=========== Procedures ==========");
@@ -83,11 +89,12 @@ pub fn helper<'a>(
     debug_assert_eq!(exposed_to_host.len(), 1);
     let main_fn_symbol = exposed_to_host.keys().copied().next().unwrap();
 
-    let (_, main_fn_layout) = procedures
+    let main_fn_layout = procedures
         .keys()
         .find(|(s, _)| *s == main_fn_symbol)
-        .unwrap()
-        .clone();
+        .map(|t| t.1)
+        .unwrap();
+
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
     let main_fn_name = layout_ids
         .get(main_fn_symbol, &main_fn_layout)
