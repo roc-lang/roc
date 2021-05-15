@@ -247,24 +247,6 @@ mod gen_num {
             -1,
             i64
         );
-
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    limitedNegate = \num ->
-                        if num == 1 then
-                            -1
-                        else if num == -1 then
-                            1
-                        else
-                            num
-
-                    limitedNegate 1
-                "#
-            ),
-            -1,
-            i64
-        );
     }
 
     #[test]
@@ -385,19 +367,6 @@ mod gen_num {
             ),
             -3.9,
             f64
-        );
-    }
-
-    #[test]
-    fn gen_sub_i64() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    1 - 2 - 3
-                "#
-            ),
-            -4,
-            i64
         );
     }
 
