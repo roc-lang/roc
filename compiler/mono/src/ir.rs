@@ -3865,10 +3865,19 @@ pub fn with_hole<'a>(
                 Wrapped::RecordOrSingleTagUnion
             };
 
-            let expr = Expr::Struct(symbols);
-            let mut stmt = Stmt::Let(assigned, expr, record_layout, hole);
+            let mut stmt = if symbols.len() == 1 {
+                let mut hole = hole.clone();
+                substitute_in_exprs(env.arena, &mut hole, assigned, symbols[0]);
+                hole
+            } else {
+                let expr = Expr::Struct(symbols);
+                Stmt::Let(assigned, expr, record_layout, hole)
+            };
 
+            debug_assert_eq!(field_layouts.len(), symbols.len());
+            debug_assert_eq!(fields.len(), symbols.len());
             let it = field_layouts.iter().zip(symbols.iter()).zip(fields);
+
             for ((field_layout, symbol), what_to_do) in it {
                 match what_to_do {
                     UpdateExisting(field) => {
