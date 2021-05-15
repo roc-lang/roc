@@ -76,6 +76,7 @@ mod gen_num {
     }
 
     #[test]
+    #[ignore]
     fn i64_force_stack() {
         // This claims 33 registers. One more than Arm and RISC-V, and many more than x86-64.
         assert_evals_to!(
