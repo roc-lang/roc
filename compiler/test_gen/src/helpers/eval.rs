@@ -35,7 +35,7 @@ pub fn helper<'a>(
     ignore_problems: bool,
     context: &'a inkwell::context::Context,
 ) -> (&'static str, String, Library) {
-    use roc_gen::llvm::build::{build_proc, build_proc_header, build_proc_header_new, Scope};
+    use roc_gen::llvm::build::{build_proc, build_proc_header, Scope};
     use std::path::{Path, PathBuf};
 
     let filename = PathBuf::from("Test.roc");
@@ -239,7 +239,7 @@ pub fn helper<'a>(
     // because their bodies may reference each other.
     let mut scope = Scope::default();
     for ((symbol, layout), proc) in procedures.drain() {
-        let fn_val = build_proc_header_new(&env, &mut layout_ids, symbol, layout, &proc);
+        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, layout, &proc);
 
         if proc.args.is_empty() {
             // this is a 0-argument thunk, i.e. a top-level constant definition

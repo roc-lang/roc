@@ -594,16 +594,8 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
             set_name(value_ptr2.into(), Symbol::ARG_3.ident_string(&env.interns));
 
             let value_type = basic_type_from_layout(env, layout);
-            let function_type = env
-                .context
-                .i8_type()
-                .fn_type(&[value_type, value_type], false)
-                .ptr_type(AddressSpace::Generic);
             let value_ptr_type = value_type.ptr_type(AddressSpace::Generic);
 
-            let function_cast =
-                env.builder
-                    .build_bitcast(closure_ptr, function_type, "load_opaque");
             let value_cast1 = env
                 .builder
                 .build_bitcast(value_ptr1, value_ptr_type, "load_opaque")

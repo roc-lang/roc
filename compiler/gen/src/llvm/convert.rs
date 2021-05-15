@@ -108,11 +108,9 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
         FunctionPointer(args, ret_layout) => {
             basic_type_from_function_layout(env, args, None, ret_layout)
         }
-        Closure(args, closure_layout, ret_layout) => {
+        Closure(_args, closure_layout, _ret_layout) => {
             let closure_data_layout = closure_layout.runtime_representation();
-            let closure_data = basic_type_from_layout(env, &closure_data_layout);
-
-            closure_data
+            basic_type_from_layout(env, &closure_data_layout)
         }
         Pointer(layout) => basic_type_from_layout(env, &layout)
             .ptr_type(AddressSpace::Generic)

@@ -572,6 +572,9 @@ impl<'a> Procs<'a> {
                     match &mut self.pending_specializations {
                         Some(pending_specializations) => {
                             // register the pending specialization, so this gets code genned later
+                            if self.module_thunks.contains(&symbol) {
+                                debug_assert!(layout.arguments.is_empty());
+                            }
                             add_pending(pending_specializations, symbol, layout, pending);
 
                             self.partial_procs.insert(symbol, partial_proc);
@@ -589,15 +592,14 @@ impl<'a> Procs<'a> {
                                 Ok((proc, layout)) => {
                                     let top_level =
                                         TopLevelFunctionLayout::from_layout(env.arena, layout);
+
                                     debug_assert_eq!(outside_layout, top_level);
-                                    if let Layout::Closure(args, closure, ret) = layout {
-                                        self.specialized.remove(&(symbol, outside_layout));
-                                        let layout =
-                                            closure.extend_function_layout(env.arena, args, ret);
-                                        self.specialized.insert((symbol, top_level), Done(proc));
-                                    } else {
-                                        self.specialized.insert((symbol, top_level), Done(proc));
+
+                                    if self.module_thunks.contains(&proc.name) {
+                                        debug_assert!(top_level.arguments.is_empty());
                                     }
+
+                                    self.specialized.insert((symbol, top_level), Done(proc));
                                 }
                                 Err(error) => {
                                     panic!("TODO generate a RuntimeError message for {:?}", error);
@@ -649,7 +651,9 @@ impl<'a> Procs<'a> {
                 // register the pending specialization, so this gets code genned later
                 add_pending(pending_specializations, name, layout, pending)
             }
-            None => unreachable!("insert_exposed was called after the pending specializations phase had already completed!"),
+            None => unreachable!(
+                r"insert_exposed was called after the pending specializations phase had already completed!"
+            ),
         }
     }
 
@@ -685,6 +689,9 @@ impl<'a> Procs<'a> {
         match &mut self.pending_specializations {
             Some(pending_specializations) => {
                 // register the pending specialization, so this gets code genned later
+                if self.module_thunks.contains(&name) {
+                    debug_assert!(layout.arguments.is_empty());
+                }
                 add_pending(pending_specializations, name, layout, pending)
             }
             None => {
@@ -1714,15 +1721,13 @@ pub fn specialize_all<'a>(
                     Ok((proc, layout)) => {
                         // TODO thiscode is duplicated elsewhere
                         let top_level = TopLevelFunctionLayout::from_layout(env.arena, layout);
-                        debug_assert_eq!(outside_layout, top_level, " in {:?}", name);
 
-                        if let Layout::Closure(args, closure, ret) = layout {
-                            procs.specialized.remove(&(name, outside_layout));
-                            let layout = closure.extend_function_layout(env.arena, args, ret);
-                            procs.specialized.insert((name, top_level), Done(proc));
-                        } else {
-                            procs.specialized.insert((name, top_level), Done(proc));
+                        if procs.module_thunks.contains(&proc.name) {
+                            debug_assert!(top_level.arguments.is_empty(), "{:?}", name);
                         }
+
+                        debug_assert_eq!(outside_layout, top_level, " in {:?}", name);
+                        procs.specialized.insert((name, top_level), Done(proc));
                     }
                     Err(SpecializeFailure {
                         attempted_layout, ..
@@ -1980,7 +1985,6 @@ fn specialize_external<'a>(
 
     match specialized {
         SpecializedLayout::FunctionPointerBody {
-            arguments,
             ret_layout,
             closure: opt_closure_layout,
         } => {
@@ -2152,7 +2156,6 @@ enum SpecializedLayout<'a> {
     },
     /// A body like `foo = Num.add`
     FunctionPointerBody {
-        arguments: &'a [Layout<'a>],
         closure: Option<LambdaSet<'a>>,
         ret_layout: Layout<'a>,
     },
@@ -2342,7 +2345,6 @@ fn build_specialized_proc<'a>(
                     if pattern_symbols.is_empty() {
                         let ret_layout = lambda_set.runtime_representation();
                         Ok(FunctionPointerBody {
-                            arguments: pattern_layouts_slice,
                             closure: None,
                             ret_layout,
                         })
@@ -2382,7 +2384,6 @@ fn build_specialized_proc<'a>(
                 Ordering::Greater => {
                     if pattern_symbols.is_empty() {
                         Ok(FunctionPointerBody {
-                            arguments: pattern_layouts_slice,
                             closure: None,
                             ret_layout,
                         })
@@ -2510,15 +2511,34 @@ fn specialize_solved_type<'a>(
 
             env.subs.rollback_to(snapshot);
             layout_cache.rollback_to(cache_snapshot);
-            Ok((proc, attempted_layout))
+
+            if procs.module_thunks.contains(&proc_name) {
+                Ok((
+                    proc,
+                    Layout::FunctionPointer(&[], env.arena.alloc(attempted_layout)),
+                ))
+            } else {
+                Ok((proc, attempted_layout))
+            }
         }
         Err(error) => {
             env.subs.rollback_to(snapshot);
             layout_cache.rollback_to(cache_snapshot);
-            Err(SpecializeFailure {
-                problem: error,
-                attempted_layout,
-            })
+
+            if procs.module_thunks.contains(&proc_name) {
+                Err(SpecializeFailure {
+                    problem: error,
+                    attempted_layout: Layout::FunctionPointer(
+                        &[],
+                        env.arena.alloc(attempted_layout),
+                    ),
+                })
+            } else {
+                Err(SpecializeFailure {
+                    problem: error,
+                    attempted_layout,
+                })
+            }
         }
     }
 }
@@ -3928,7 +3948,7 @@ pub fn with_hole<'a>(
 
             match layout_cache.from_var(env.arena, function_type, env.subs) {
                 Err(e) => panic!("invalid layout {:?}", e),
-                Ok(Layout::Closure(argument_layouts, lambda_set, ret_layout)) => {
+                Ok(Layout::Closure(_argument_layouts, lambda_set, _ret_layout)) => {
                     let mut captured_symbols = Vec::from_iter_in(captured_symbols, env.arena);
                     captured_symbols.sort();
                     let captured_symbols = captured_symbols.into_bump_slice();
@@ -4121,9 +4141,6 @@ pub fn with_hole<'a>(
                             match full_layout {
                                 Layout::Closure(_, lambda_set, _) => {
                                     let closure_data_symbol = env.unique_symbol();
-
-                                    let top_level =
-                                        TopLevelFunctionLayout::from_layout(env.arena, full_layout);
 
                                     result = match_on_lambda_set(
                                         env,
@@ -6091,7 +6108,7 @@ fn build_call<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn call_by_name_new<'a>(
+fn call_by_name<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     fn_var: Variable,
@@ -6116,6 +6133,20 @@ fn call_by_name_new<'a>(
                 proc_name
             );
             Stmt::RuntimeError(env.arena.alloc(msg))
+        }
+        Ok(layout) if procs.module_thunks.contains(&proc_name) => {
+            // here we turn a call to a module thunk into  forcing of that thunk
+            debug_assert!(loc_args.is_empty());
+            call_by_name_module_thunk(
+                env,
+                procs,
+                fn_var,
+                proc_name,
+                env.arena.alloc(layout),
+                layout_cache,
+                assigned,
+                hole,
+            )
         }
         Ok(Layout::FunctionPointer(argument_layouts, ret_layout)) => call_by_name_help(
             env,
@@ -6148,22 +6179,6 @@ fn call_by_name_new<'a>(
                 _ => unreachable!(),
             }
         }
-        Ok(other) if procs.module_thunks.contains(&proc_name) => {
-            // here we turn a call to a module thunk into  forcing of that thunk
-            call_by_name_help(
-                env,
-                procs,
-                fn_var,
-                proc_name,
-                loc_args,
-                other,
-                &[],
-                env.arena.alloc(other),
-                layout_cache,
-                assigned,
-                hole,
-            )
-        }
         Ok(other) if loc_args.is_empty() => {
             // this is a 0-argument thunk
             if env.is_imported_symbol(proc_name) {
@@ -6194,6 +6209,8 @@ fn call_by_name_help<'a>(
 ) -> Stmt<'a> {
     let original_fn_var = fn_var;
     let arena = env.arena;
+
+    // debug_assert!(!procs.module_thunks.contains(&proc_name), "{:?}", proc_name);
 
     let top_level_layout = TopLevelFunctionLayout::new(env.arena, argument_layouts, *ret_layout);
     let function_layout = env.arena.alloc(top_level_layout).full();
@@ -6292,17 +6309,19 @@ fn call_by_name_help<'a>(
         // exactly once.
         match &mut procs.pending_specializations {
             Some(pending_specializations) => {
-                if env.is_imported_symbol(proc_name) {
-                    add_needed_external(procs, env, original_fn_var, proc_name);
-                } else {
-                    // register the pending specialization, so this gets code genned later
-                    add_pending(
-                        pending_specializations,
-                        proc_name,
-                        top_level_layout,
-                        pending,
-                    );
+                debug_assert!(!env.is_imported_symbol(proc_name));
+
+                if procs.module_thunks.contains(&proc_name) {
+                    debug_assert!(top_level_layout.arguments.is_empty());
                 }
+
+                // register the pending specialization, so this gets code genned later
+                add_pending(
+                    pending_specializations,
+                    proc_name,
+                    top_level_layout,
+                    pending,
+                );
 
                 debug_assert_eq!(
                     argument_layouts.len(),
@@ -6401,270 +6420,121 @@ fn call_by_name_help<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn call_by_name<'a>(
+fn call_by_name_module_thunk<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     fn_var: Variable,
     proc_name: Symbol,
-    loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
+    ret_layout: &'a Layout<'a>,
     layout_cache: &mut LayoutCache<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    return call_by_name_new(
-        env,
-        procs,
-        fn_var,
-        proc_name,
-        loc_args,
-        layout_cache,
-        assigned,
-        hole,
-    );
-    let original_fn_var = fn_var;
+    debug_assert!(!env.is_imported_symbol(proc_name));
 
-    // Register a pending_specialization for this function
-    match layout_cache.from_var(env.arena, fn_var, env.subs) {
-        Err(LayoutProblem::UnresolvedTypeVar(var)) => {
-            let msg = format!(
-                "Hit an unresolved type variable {:?} when creating a layout for {:?} (var {:?})",
-                var, proc_name, fn_var
-            );
-            Stmt::RuntimeError(env.arena.alloc(msg))
-        }
-        Err(LayoutProblem::Erroneous) => {
-            let msg = format!(
-                "Hit an erroneous type when creating a layout for {:?}",
-                proc_name
-            );
-            Stmt::RuntimeError(env.arena.alloc(msg))
-        }
-        Ok(layout) => {
-            // Build the CallByName node
-            let arena = env.arena;
-            let mut pattern_vars = Vec::with_capacity_in(loc_args.len(), arena);
+    // debug_assert!(!procs.module_thunks.contains(&proc_name), "{:?}", proc_name);
 
-            let field_symbols = Vec::from_iter_in(
-                loc_args
-                    .iter()
-                    .map(|(_, arg_expr)| possible_reuse_symbol(env, procs, &arg_expr.value)),
-                arena,
-            )
-            .into_bump_slice();
+    let top_level_layout = TopLevelFunctionLayout::new(env.arena, &[], *ret_layout);
 
-            for (var, _) in &loc_args {
-                match layout_cache.from_var(&env.arena, *var, &env.subs) {
-                    Ok(_) => {
-                        pattern_vars.push(*var);
-                    }
-                    Err(_) => {
-                        // One of this function's arguments code gens to a runtime error,
-                        // so attempting to call it will immediately crash.
-                        return Stmt::RuntimeError("TODO runtime error for invalid layout");
-                    }
+    // the layout without the `FunctionPointer(&[], ...)` wrapper
+    let inner_layout = *ret_layout;
+
+    // the layout with the wrapper
+    let module_thunk_layout = Layout::FunctionPointer(&[], ret_layout);
+
+    // If we've already specialized this one, no further work is needed.
+    if procs
+        .specialized
+        .contains_key(&(proc_name, top_level_layout))
+    {
+        force_thunk(env, proc_name, inner_layout, assigned, hole)
+    } else {
+        let pending = PendingSpecialization::from_var(env.arena, env.subs, fn_var);
+
+        // When requested (that is, when procs.pending_specializations is `Some`),
+        // store a pending specialization rather than specializing immediately.
+        //
+        // We do this so that we can do specialization in two passes: first,
+        // build the mono_expr with all the specialized calls in place (but
+        // no specializations performed yet), and then second, *after*
+        // de-duplicating requested specializations (since multiple modules
+        // which could be getting monomorphized in parallel might request
+        // the same specialization independently), we work through the
+        // queue of pending specializations to complete each specialization
+        // exactly once.
+        match &mut procs.pending_specializations {
+            Some(pending_specializations) => {
+                debug_assert!(!env.is_imported_symbol(proc_name));
+
+                if procs.module_thunks.contains(&proc_name) {
+                    debug_assert!(top_level_layout.arguments.is_empty());
                 }
-            }
 
-            let full_layout = layout;
-            let top_level_layout = TopLevelFunctionLayout::from_layout(env.arena, full_layout);
-
-            // TODO does this work?
-            let empty = &[] as &[_];
-            let (arg_layouts, ret_layout) = match layout {
-                Layout::FunctionPointer(args, rlayout) => (args, rlayout),
-                _ => (empty, &layout),
-            };
-
-            // If we've already specialized this one, no further work is needed.
-            if procs
-                .specialized
-                .contains_key(&(proc_name, top_level_layout))
-            {
-                debug_assert_eq!(
-                    arg_layouts.len(),
-                    field_symbols.len(),
-                    "see call_by_name for background (scroll down a bit), function is {:?}",
+                // register the pending specialization, so this gets code genned later
+                add_pending(
+                    pending_specializations,
                     proc_name,
+                    top_level_layout,
+                    pending,
                 );
 
-                let call = self::Call {
-                    call_type: CallType::ByName {
-                        name: proc_name,
-                        ret_layout: *ret_layout,
-                        full_layout,
-                        arg_layouts,
-                    },
-                    arguments: field_symbols,
-                };
+                force_thunk(env, proc_name, inner_layout, assigned, hole)
+            }
+            None => {
+                let opt_partial_proc = procs.partial_procs.get(&proc_name);
 
-                let result = build_call(env, call, assigned, *ret_layout, hole);
+                match opt_partial_proc {
+                    Some(partial_proc) => {
+                        // TODO should pending_procs hold a Rc<Proc> to avoid this .clone()?
+                        let partial_proc = partial_proc.clone();
 
-                let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
-                assign_to_symbols(env, procs, layout_cache, iter, result)
-            } else {
-                let pending = PendingSpecialization::from_var(env.arena, env.subs, fn_var);
+                        // Mark this proc as in-progress, so if we're dealing with
+                        // mutually recursive functions, we don't loop forever.
+                        // (We had a bug around this before this system existed!)
+                        procs
+                            .specialized
+                            .insert((proc_name, top_level_layout), InProgress);
 
-                // When requested (that is, when procs.pending_specializations is `Some`),
-                // store a pending specialization rather than specializing immediately.
-                //
-                // We do this so that we can do specialization in two passes: first,
-                // build the mono_expr with all the specialized calls in place (but
-                // no specializations performed yet), and then second, *after*
-                // de-duplicating requested specializations (since multiple modules
-                // which could be getting monomorphized in parallel might request
-                // the same specialization independently), we work through the
-                // queue of pending specializations to complete each specialization
-                // exactly once.
-                match &mut procs.pending_specializations {
-                    Some(pending_specializations) => {
-                        if env.is_imported_symbol(proc_name) {
-                            add_needed_external(procs, env, original_fn_var, proc_name);
-                        } else {
-                            // register the pending specialization, so this gets code genned later
-                            add_pending(
-                                pending_specializations,
-                                proc_name,
-                                top_level_layout,
-                                pending,
-                            );
-                        }
+                        match specialize(env, procs, proc_name, layout_cache, pending, partial_proc)
+                        {
+                            Ok((proc, layout)) => {
+                                // NOTE we cannot make the below assertion any more; figure out why
 
-                        debug_assert_eq!(
-                            arg_layouts.len(),
-                            field_symbols.len(),
-                            "see call_by_name for background (scroll down a bit), function is {:?}",
-                            proc_name,
-                        );
+                                let was_present =
+                                    procs.specialized.remove(&(proc_name, top_level_layout));
+                                debug_assert!(was_present.is_some());
 
-                        let call = self::Call {
-                            call_type: CallType::ByName {
-                                name: proc_name,
-                                ret_layout: *ret_layout,
-                                full_layout,
-                                arg_layouts,
-                            },
-                            arguments: field_symbols,
-                        };
-
-                        let result = build_call(env, call, assigned, *ret_layout, hole);
-
-                        let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
-                        assign_to_symbols(env, procs, layout_cache, iter, result)
-                    }
-                    None => {
-                        let opt_partial_proc = procs.partial_procs.get(&proc_name);
-
-                        match opt_partial_proc {
-                            Some(partial_proc) => {
-                                // TODO should pending_procs hold a Rc<Proc> to avoid this .clone()?
-                                let partial_proc = partial_proc.clone();
-
-                                // Mark this proc as in-progress, so if we're dealing with
-                                // mutually recursive functions, we don't loop forever.
-                                // (We had a bug around this before this system existed!)
                                 procs
                                     .specialized
-                                    .insert((proc_name, top_level_layout), InProgress);
+                                    .insert((proc_name, top_level_layout), Done(proc));
 
-                                match specialize(
+                                force_thunk(env, proc_name, inner_layout, assigned, hole)
+                            }
+                            Err(SpecializeFailure {
+                                attempted_layout,
+                                problem: _,
+                            }) => {
+                                let proc = generate_runtime_error_function(
                                     env,
-                                    procs,
                                     proc_name,
-                                    layout_cache,
-                                    pending,
-                                    partial_proc,
-                                ) {
-                                    Ok((proc, layout)) => {
-                                        debug_assert_eq!(
-                                            &full_layout, &layout,
-                                            "\n\n{:?}\n\n{:?}",
-                                            full_layout, layout
-                                        );
+                                    module_thunk_layout,
+                                );
 
-                                        call_specialized_proc(
-                                            env,
-                                            procs,
-                                            proc_name,
-                                            proc,
-                                            layout,
-                                            field_symbols,
-                                            loc_args,
-                                            layout_cache,
-                                            assigned,
-                                            hole,
-                                        )
-                                    }
-                                    Err(SpecializeFailure {
-                                        attempted_layout,
-                                        problem: _,
-                                    }) => {
-                                        let proc = generate_runtime_error_function(
-                                            env,
-                                            proc_name,
-                                            attempted_layout,
-                                        );
+                                let was_present =
+                                    procs.specialized.remove(&(proc_name, top_level_layout));
+                                debug_assert!(was_present.is_some());
 
-                                        call_specialized_proc(
-                                            env,
-                                            procs,
-                                            proc_name,
-                                            proc,
-                                            layout,
-                                            field_symbols,
-                                            loc_args,
-                                            layout_cache,
-                                            assigned,
-                                            hole,
-                                        )
-                                    }
-                                }
-                            }
+                                procs
+                                    .specialized
+                                    .insert((proc_name, top_level_layout), Done(proc));
 
-                            None if assigned.module_id() != proc_name.module_id() => {
-                                add_needed_external(procs, env, original_fn_var, proc_name);
-
-                                let call = if proc_name.module_id() == ModuleId::ATTR {
-                                    // the callable is one of the ATTR::ARG_n symbols
-                                    // we must call those by-pointer
-                                    self::Call {
-                                        call_type: CallType::ByPointer {
-                                            name: proc_name,
-                                            ret_layout: *ret_layout,
-                                            full_layout,
-                                            arg_layouts,
-                                        },
-                                        arguments: field_symbols,
-                                    }
-                                } else {
-                                    debug_assert_eq!(
-                                        arg_layouts.len(),
-                                        field_symbols.len(),
-                                        "scroll up a bit for background {:?}",
-                                        proc_name
-                                    );
-                                    self::Call {
-                                        call_type: CallType::ByName {
-                                            name: proc_name,
-                                            ret_layout: *ret_layout,
-                                            full_layout,
-                                            arg_layouts,
-                                        },
-                                        arguments: field_symbols,
-                                    }
-                                };
-
-                                let result = build_call(env, call, assigned, *ret_layout, hole);
-
-                                let iter =
-                                    loc_args.into_iter().rev().zip(field_symbols.iter().rev());
-
-                                assign_to_symbols(env, procs, layout_cache, iter, result)
-                            }
-
-                            None => {
-                                unreachable!("Proc name {:?} is invalid", proc_name)
+                                force_thunk(env, proc_name, inner_layout, assigned, hole)
                             }
                         }
+                    }
+
+                    None => {
+                        unreachable!("Proc name {:?} is invalid", proc_name)
                     }
                 }
             }
@@ -7638,6 +7508,7 @@ pub fn num_argument_to_int_or_float(
 }
 
 /// Use the lambda set to figure out how to make a lowlevel call
+#[allow(clippy::too_many_arguments)]
 fn lowlevel_match_on_lambda_set<'a, ToLowLevelCall>(
     env: &mut Env<'a, '_>,
     lambda_set: LambdaSet<'a>,
@@ -7734,6 +7605,7 @@ where
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lowlevel_union_lambda_set_to_switch<'a, ToLowLevelCall>(
     env: &mut Env<'a, '_>,
     lambda_set: &'a [(Symbol, &'a [Layout<'a>])],
@@ -7801,36 +7673,6 @@ where
         continuation: hole,
         remainder: env.arena.alloc(switch),
     }
-}
-
-fn lowlevel_union_lambda_set_branch<'a, ToLowLevelCall>(
-    env: &mut Env<'a, '_>,
-    join_point_id: JoinPointId,
-    function_symbol: Symbol,
-    closure_data_symbol: Symbol,
-    closure_data_layout: Layout<'a>,
-    function_layout: Layout<'a>,
-    to_lowlevel_call: ToLowLevelCall,
-    return_layout: Layout<'a>,
-) -> Stmt<'a>
-where
-    ToLowLevelCall: Fn(Symbol, Symbol, Layout<'a>) -> Call<'a> + Copy,
-{
-    let assigned = env.unique_symbol();
-
-    let hole = Stmt::Jump(join_point_id, env.arena.alloc([assigned]));
-
-    // build the call
-    Stmt::Let(
-        assigned,
-        Expr::Call(to_lowlevel_call(
-            function_symbol,
-            closure_data_symbol,
-            function_layout,
-        )),
-        return_layout,
-        env.arena.alloc(hole),
-    )
 }
 
 /// Use the lambda set to figure out how to make a call-by-name
@@ -8237,16 +8079,22 @@ where
     let closure_layout = closure_tag_id_layout;
 
     for (i, (function_symbol, _)) in lambda_set.iter().enumerate() {
-        let stmt = lowlevel_enum_lambda_set_branch(
-            env,
-            join_point_id,
-            *function_symbol,
-            closure_data_symbol,
-            closure_layout,
-            to_lowlevel_call,
-            function_layout,
+        let result_symbol = env.unique_symbol();
+
+        let hole = Stmt::Jump(join_point_id, env.arena.alloc([result_symbol]));
+
+        // build the call
+        let stmt = Stmt::Let(
+            result_symbol,
+            Expr::Call(to_lowlevel_call(
+                *function_symbol,
+                closure_data_symbol,
+                function_layout,
+            )),
             return_layout,
+            env.arena.alloc(hole),
         );
+
         branches.push((i as u64, BranchInfo::None, stmt));
     }
 
@@ -8278,12 +8126,13 @@ where
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lowlevel_enum_lambda_set_branch<'a, ToLowLevelCall>(
     env: &mut Env<'a, '_>,
     join_point_id: JoinPointId,
     function_symbol: Symbol,
     closure_data_symbol: Symbol,
-    closure_data_layout: Layout<'a>,
+    _closure_data_layout: Layout<'a>,
     to_lowlevel_call: ToLowLevelCall,
     function_layout: Layout<'a>,
     return_layout: Layout<'a>,

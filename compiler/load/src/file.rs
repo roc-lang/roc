@@ -4000,6 +4000,9 @@ fn add_def_to_module<'a>(
                     );
                 }
                 body => {
+                    // mark this symbols as a top-level thunk before any other work on the procs
+                    procs.module_thunks.insert(symbol);
+
                     // If this is an exposed symbol, we need to
                     // register it as such. Otherwise, since it
                     // never gets called by Roc code, it will never
@@ -4012,7 +4015,10 @@ fn add_def_to_module<'a>(
                             annotation,
                             mono_env.subs,
                         ) {
-                            Ok(l) => l,
+                            Ok(l) => {
+                                // remember, this is a 0-argument thunk
+                                Layout::FunctionPointer(&[], mono_env.arena.alloc(l))
+                            }
                             Err(LayoutProblem::Erroneous) => {
                                 let message = "top level function has erroneous type";
                                 procs.runtime_errors.insert(symbol, message);
@@ -4052,7 +4058,6 @@ fn add_def_to_module<'a>(
                     };
 
                     procs.partial_procs.insert(symbol, proc);
-                    procs.module_thunks.insert(symbol);
                 }
             };
         }

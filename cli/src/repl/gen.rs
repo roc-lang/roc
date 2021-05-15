@@ -7,7 +7,7 @@ use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
 use roc_fmt::annotation::Formattable;
 use roc_fmt::annotation::{Newlines, Parens};
-use roc_gen::llvm::build::{build_proc, build_proc_header_new, OptLevel};
+use roc_gen::llvm::build::{build_proc, build_proc_header, OptLevel};
 use roc_load::file::LoadingProblem;
 use roc_parse::parser::SyntaxError;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
@@ -188,9 +188,9 @@ pub fn gen_and_eval<'a>(
         // Add all the Proc headers to the module.
         // We have to do this in a separate pass first,
         // because their bodies may reference each other.
-        let mut scope = roc_gen::llvm::build::Scope::default();
+        let scope = roc_gen::llvm::build::Scope::default();
         for ((symbol, layout), proc) in procedures.drain() {
-            let fn_val = build_proc_header_new(&env, &mut layout_ids, symbol, layout, &proc);
+            let fn_val = build_proc_header(&env, &mut layout_ids, symbol, layout, &proc);
 
             if proc.args.is_empty() {
                 // this is a 0-argument thunk, i.e. a top-level constant definition

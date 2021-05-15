@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 use crate::llvm::bitcode::{
     build_compare_wrapper, build_dec_wrapper, build_eq_wrapper, build_inc_wrapper,
-    build_transform_caller, build_transform_caller_new, call_bitcode_fn, call_void_bitcode_fn,
+    build_transform_caller_new, call_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
     allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, InPlace,
@@ -16,7 +16,6 @@ use inkwell::types::{BasicTypeEnum, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
 use roc_builtins::bitcode;
-use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, MemoryMode};
 
 fn alignment_intvalue<'a, 'ctx, 'env>(
@@ -492,7 +491,7 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
     list: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
     transform: FunctionValue<'ctx>,
-    transform_layout: Layout<'a>,
+    _transform_layout: Layout<'a>,
     closure_data: BasicValueEnum<'ctx>,
     closure_data_layout: Layout<'a>,
     default: BasicValueEnum<'ctx>,
@@ -659,7 +658,6 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     transform: FunctionValue<'ctx>,
-    transform_layout: Layout<'a>,
     closure_data: BasicValueEnum<'ctx>,
     closure_data_layout: Layout<'a>,
     list: BasicValueEnum<'ctx>,
@@ -808,7 +806,6 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
 /// List.sortWith : List a, (a, a -> Ordering) -> List a
 pub fn list_sort_with<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
     transform: FunctionValue<'ctx>,
     closure_data: BasicValueEnum<'ctx>,
     closure_data_layout: Layout<'a>,
@@ -841,7 +838,6 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
 /// List.mapWithIndex : List before, (Nat, before -> after) -> List after
 pub fn list_map_with_index<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
     transform: FunctionValue<'ctx>,
     transform_layout: Layout<'a>,
     closure_data: BasicValueEnum<'ctx>,
@@ -851,7 +847,6 @@ pub fn list_map_with_index<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     list_map_generic(
         env,
-        layout_ids,
         transform,
         transform_layout,
         list,
@@ -866,7 +861,6 @@ pub fn list_map_with_index<'a, 'ctx, 'env>(
 /// List.map : List before, (before -> after) -> List after
 pub fn list_map<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
     transform: FunctionValue<'ctx>,
     transform_layout: Layout<'a>,
     closure_data: BasicValueEnum<'ctx>,
@@ -876,7 +870,6 @@ pub fn list_map<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     list_map_generic(
         env,
-        layout_ids,
         transform,
         transform_layout,
         list,
@@ -890,7 +883,6 @@ pub fn list_map<'a, 'ctx, 'env>(
 
 fn list_map_generic<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
     transform: FunctionValue<'ctx>,
     transform_layout: Layout<'a>,
     list: BasicValueEnum<'ctx>,

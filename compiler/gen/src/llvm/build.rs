@@ -8,7 +8,7 @@ use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
     list_get_unsafe, list_join, list_keep_errs, list_keep_if, list_keep_oks, list_len, list_map,
     list_map2, list_map3, list_map_with_index, list_prepend, list_range, list_repeat, list_reverse,
-    list_set, list_single, list_sort_with, list_walk_help,
+    list_set, list_single, list_sort_with,
 };
 use crate::llvm::build_str::{
     empty_str, str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int,
@@ -45,7 +45,7 @@ use inkwell::values::{
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
 use roc_builtins::bitcode;
-use roc_collections::all::{ImMap, MutMap, MutSet};
+use roc_collections::all::{ImMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -920,7 +920,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     scope: &mut Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
-    left_hand_side: Symbol,
     layout: &Layout<'a>,
     expr: &roc_mono::ir::Expr<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -2008,7 +2007,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             for (symbol, expr, layout) in queue {
                 debug_assert!(layout != &Layout::RecursivePointer);
 
-                let val = build_exp_expr(env, layout_ids, scope, parent, *symbol, layout, &expr);
+                let val = build_exp_expr(env, layout_ids, scope, parent, layout, &expr);
 
                 // Make a new scope which includes the binding we just encountered.
                 // This should be done *after* compiling the bound expr, since any
@@ -2512,13 +2511,15 @@ fn build_switch_ir<'a, 'ctx, 'env>(
 
     let cond_symbol = &cond_symbol;
     let (cond_value, stored_layout) = load_symbol_and_layout(scope, cond_symbol);
-    /*
+
     debug_assert_eq!(
-        &cond_layout, stored_layout,
-        "\nThis switch wants to match on this layout:\n\n    {:?}\n\nBut the symbol {:?} that is matched on has layout:\n\n    {:?}\n\n    {:?}",
-        cond_layout, cond_symbol, stored_layout, cond_value
+        basic_type_from_layout(env, &cond_layout),
+        basic_type_from_layout(env, stored_layout),
+        "This switch matches on {:?}, but the matched-on symbol {:?} has layout {:?}",
+        cond_layout,
+        cond_symbol,
+        stored_layout
     );
-    */
 
     let cont_block = context.append_basic_block(parent, "cont");
 
@@ -3059,32 +3060,20 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
     wrapper_function
 }
 
-pub fn build_proc_header_new<'a, 'ctx, 'env>(
+pub fn build_proc_header<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     symbol: Symbol,
-    layout: TopLevelFunctionLayout<'a>,
+    top_level: TopLevelFunctionLayout<'a>,
     proc: &roc_mono::ir::Proc<'a>,
 ) -> FunctionValue<'ctx> {
-    let layout = env.arena.alloc(layout).full();
+    let layout = env.arena.alloc(top_level).full();
 
-    // eprintln!("    {:?}: {:?}\n", symbol, layout);
-
-    build_proc_header(env, layout_ids, symbol, &layout, proc)
-}
-
-pub fn build_proc_header<'a, 'b, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    symbol: Symbol,
-    layout: &Layout<'a>,
-    proc: &roc_mono::ir::Proc<'a>,
-) -> FunctionValue<'ctx> {
     let args = proc.args;
     let arena = env.arena;
 
     let fn_name = layout_ids
-        .get(symbol, layout)
+        .get(symbol, &layout)
         .to_symbol_string(symbol, &env.interns);
 
     let ret_type = basic_type_from_layout(env, &proc.ret_layout);
@@ -3125,7 +3114,6 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 ) {
     use inkwell::types::BasicType;
 
-    let arena = env.arena;
     let context = &env.context;
     let builder = env.builder;
 
@@ -3572,6 +3560,7 @@ pub static C_CALL_CONV: u32 = 0;
 pub static FAST_CALL_CONV: u32 = 8;
 pub static COLD_CALL_CONV: u32 = 9;
 
+#[allow(clippy::too_many_arguments)]
 fn run_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -3586,11 +3575,12 @@ fn run_low_level<'a, 'ctx, 'env>(
 
     // macros because functions cause lifetime issues related to the `env` or `layout_ids`
     macro_rules! passed_function_at_index {
-        ($function_layout:expr, $index:expr) => {{
+        ($index:expr) => {{
+            let function_layout = opt_closure_layout.unwrap();
             let function_symbol = args[$index];
 
             let fn_name = layout_ids
-                .get(function_symbol, &$function_layout)
+                .get(function_symbol, &function_layout)
                 .to_symbol_string(function_symbol, &env.interns);
 
             env.module
@@ -3598,7 +3588,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                 .unwrap_or_else(|| {
                     panic!(
                         "Could not get pointer to unknown function {:?} {:?}",
-                        fn_name, $function_layout
+                        fn_name, function_layout
                     )
                 })
         }};
@@ -3611,7 +3601,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (default, default_layout) = load_symbol_and_layout(scope, &args[1]);
 
             let function_layout = opt_closure_layout.unwrap();
-            let function = passed_function_at_index!(function_layout, 2);
+            let function = passed_function_at_index!(2);
 
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
 
@@ -3785,7 +3775,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
             let function_layout = opt_closure_layout.unwrap();
-            let function = passed_function_at_index!(function_layout, 1);
+            let function = passed_function_at_index!(1);
 
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
@@ -3793,7 +3783,6 @@ fn run_low_level<'a, 'ctx, 'env>(
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
                 Layout::Builtin(Builtin::List(_, element_layout)) => list_map(
                     env,
-                    layout_ids,
                     function,
                     function_layout,
                     closure,
@@ -3811,7 +3800,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (list2, list2_layout) = load_symbol_and_layout(scope, &args[1]);
 
             let function_layout = opt_closure_layout.unwrap();
-            let function = passed_function_at_index!(function_layout, 2);
+            let function = passed_function_at_index!(2);
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
 
             match (list1_layout, list2_layout) {
@@ -3843,7 +3832,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (list3, list3_layout) = load_symbol_and_layout(scope, &args[2]);
 
             let function_layout = opt_closure_layout.unwrap();
-            let function = passed_function_at_index!(function_layout, 3);
+            let function = passed_function_at_index!(3);
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[4]);
 
             match (list1_layout, list2_layout, list3_layout) {
@@ -3878,7 +3867,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
             let function_layout = opt_closure_layout.unwrap();
-            let function = passed_function_at_index!(function_layout, 1);
+            let function = passed_function_at_index!(1);
 
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
@@ -3886,7 +3875,6 @@ fn run_low_level<'a, 'ctx, 'env>(
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
                 Layout::Builtin(Builtin::List(_, element_layout)) => list_map_with_index(
                     env,
-                    layout_ids,
                     function,
                     function_layout,
                     closure,
@@ -3903,8 +3891,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            let function_layout = opt_closure_layout.unwrap();
-            let function = passed_function_at_index!(function_layout, 1);
+            let function = passed_function_at_index!(1);
 
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
@@ -3914,7 +3901,6 @@ fn run_low_level<'a, 'ctx, 'env>(
                     env,
                     layout_ids,
                     function,
-                    function_layout,
                     closure,
                     *closure_layout,
                     list,
@@ -3930,7 +3916,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
             let function_layout = opt_closure_layout.unwrap();
-            let function = passed_function_at_index!(function_layout, 1);
+            let function = passed_function_at_index!(1);
 
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
@@ -3963,7 +3949,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
             let function_layout = opt_closure_layout.unwrap();
-            let function = passed_function_at_index!(function_layout, 1);
+            let function = passed_function_at_index!(1);
 
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
@@ -4060,8 +4046,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            let function_layout = opt_closure_layout.unwrap();
-            let function = passed_function_at_index!(function_layout, 1);
+            let function = passed_function_at_index!(1);
 
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
@@ -4069,7 +4054,6 @@ fn run_low_level<'a, 'ctx, 'env>(
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
                 Layout::Builtin(Builtin::List(_, element_layout)) => list_sort_with(
                     env,
-                    layout_ids,
                     function,
                     closure,
                     *closure_layout,
@@ -4517,8 +4501,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
             let (default, default_layout) = load_symbol_and_layout(scope, &args[1]);
-            let function_layout = opt_closure_layout.unwrap();
-            let function = passed_function_at_index!(function_layout, 2);
+            let function = passed_function_at_index!(2);
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
 
             match dict_layout {
@@ -4531,7 +4514,6 @@ fn run_low_level<'a, 'ctx, 'env>(
                     layout_ids,
                     dict,
                     function,
-                    function_layout,
                     closure,
                     *closure_layout,
                     default,

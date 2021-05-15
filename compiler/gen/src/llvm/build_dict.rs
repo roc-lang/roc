@@ -634,7 +634,6 @@ pub fn dict_walk<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     dict: BasicValueEnum<'ctx>,
     transform: FunctionValue<'ctx>,
-    transform_layout: Layout<'a>,
     closure_data: BasicValueEnum<'ctx>,
     closure_data_layout: Layout<'a>,
     accum: BasicValueEnum<'ctx>,
