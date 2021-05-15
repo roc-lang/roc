@@ -471,8 +471,7 @@ mod test_mono {
                 r#"
                 procedure Test.0 ():
                     let Test.3 = 2i64;
-                    let Test.1 = Struct {Test.3};
-                    ret Test.1;
+                    ret Test.3;
                 "#
             ),
         )
@@ -536,8 +535,7 @@ mod test_mono {
 
                 procedure Test.0 ():
                     let Test.6 = 2i64;
-                    let Test.2 = Struct {Test.6};
-                    let Test.1 = Index 0 Test.2;
+                    let Test.1 = Index 0 Test.6;
                     let Test.4 = 3i64;
                     let Test.3 = CallByName Num.24 Test.1 Test.4;
                     ret Test.3;
@@ -1177,8 +1175,7 @@ mod test_mono {
 
                 procedure Test.0 ():
                     let Test.9 = 9i64;
-                    let Test.6 = Struct {Test.9};
-                    let Test.5 = CallByName Test.1 Test.6;
+                    let Test.5 = CallByName Test.1 Test.9;
                     ret Test.5;
                 "#
             ),
@@ -1246,8 +1243,7 @@ mod test_mono {
 
                 procedure Test.0 ():
                     let Test.9 = 9i64;
-                    let Test.6 = Struct {Test.9};
-                    let Test.5 = CallByName Test.1 Test.6;
+                    let Test.5 = CallByName Test.1 Test.9;
                     ret Test.5;
                 "#
             ),
@@ -1809,13 +1805,12 @@ mod test_mono {
                     ret Test.16;
 
                 procedure Test.0 ():
-                    let Test.15 = FunctionPointer Test.1;
+                    let Test.15 = CallByName Test.1;
                     let Test.14 = CallByName Test.2 Test.15;
                     let Test.5 = CallByName List.7 Test.14;
                     dec Test.14;
-                    let Test.8 = FunctionPointer Test.1;
+                    let Test.8 = CallByName Test.1;
                     let Test.6 = CallByName List.7 Test.8;
-                    dec Test.8;
                     let Test.4 = CallByName Num.24 Test.5 Test.6;
                     ret Test.4;
                 "#
@@ -2039,11 +2034,9 @@ mod test_mono {
 
                 procedure Test.0 ():
                     let Test.34 = true;
-                    let Test.33 = Struct {Test.34};
-                    let Test.5 = CallByName Test.1 Test.33;
+                    let Test.5 = CallByName Test.1 Test.34;
                     let Test.32 = false;
-                    let Test.26 = Struct {Test.32};
-                    let Test.3 = CallByName Test.1 Test.26;
+                    let Test.3 = CallByName Test.1 Test.32;
                     let Test.24 = 11i64;
                     let Test.25 = true;
                     let Test.23 = Struct {Test.24, Test.25};
@@ -2349,20 +2342,18 @@ mod test_mono {
                 r#"
                 procedure Test.1 (Test.5):
                     let Test.2 = 42i64;
-                    let Test.13 = FunctionPointer Test.3;
-                    let Test.3 = Struct {Test.13, Test.2};
+                    let Test.3 = Struct {Test.2};
                     ret Test.3;
 
-                procedure Test.3 (Test.11, #Attr.12):
-                    ret #Attr.12;
+                procedure Test.3 (Test.9, #Attr.12):
+                    let Test.2 = Index 0 #Attr.12;
+                    ret Test.2;
 
                 procedure Test.0 ():
-                    let Test.10 = Struct {};
-                    let Test.4 = CallByName Test.1 Test.10;
+                    let Test.8 = Struct {};
+                    let Test.4 = CallByName Test.1 Test.8;
                     let Test.7 = Struct {};
-                    let Test.8 = Index 1 Test.4;
-                    let Test.9 = Index 0 Test.4;
-                    let Test.6 = CallByPointer Test.9 Test.7 Test.8;
+                    let Test.6 = CallByName Test.3 Test.7 Test.4;
                     ret Test.6;
                 "#
             ),
@@ -2402,7 +2393,8 @@ mod test_mono {
                     ret Test.10;
 
                 procedure Test.3 (Test.9, #Attr.12):
-                    ret #Attr.12;
+                    let Test.2 = Index 0 #Attr.12;
+                    ret Test.2;
 
                 procedure Test.0 ():
                     let Test.8 = Struct {};
@@ -2481,6 +2473,61 @@ mod test_mono {
             ),
             indoc!(
                 r#"
+                procedure Num.24 (#Attr.2, #Attr.3):
+                    let Test.27 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.27;
+
+                procedure Num.26 (#Attr.2, #Attr.3):
+                    let Test.23 = lowlevel NumMul #Attr.2 #Attr.3;
+                    ret Test.23;
+
+                procedure Test.1 (Test.2, Test.3):
+                    let Test.15 = Index 0 Test.2;
+                    joinpoint Test.16 Test.14:
+                        ret Test.14;
+                    in
+                    switch Test.15:
+                        case 0:
+                            let Test.17 = CallByName Test.7 Test.3 Test.2;
+                            jump Test.16 Test.17;
+                    
+                        default:
+                            let Test.18 = CallByName Test.8 Test.3 Test.2;
+                            jump Test.16 Test.18;
+                    
+
+                procedure Test.7 (Test.9, #Attr.12):
+                    let Test.4 = Index 1 #Attr.12;
+                    let Test.26 = CallByName Num.24 Test.9 Test.4;
+                    ret Test.26;
+
+                procedure Test.8 (Test.10, #Attr.12):
+                    let Test.6 = Index 2 #Attr.12;
+                    let Test.5 = Index 1 #Attr.12;
+                    if Test.6 then
+                        let Test.22 = CallByName Num.26 Test.10 Test.5;
+                        ret Test.22;
+                    else
+                        ret Test.10;
+
+                procedure Test.0 ():
+                    let Test.6 = true;
+                    let Test.4 = 1i64;
+                    let Test.5 = 2i64;
+                    joinpoint Test.20 Test.12:
+                        let Test.13 = 42i64;
+                        let Test.11 = CallByName Test.1 Test.12 Test.13;
+                        ret Test.11;
+                    in
+                    let Test.25 = true;
+                    if Test.25 then
+                        let Test.28 = 0i64;
+                        let Test.7 = ClosureTag(Test.7) Test.28 Test.4;
+                        jump Test.20 Test.7;
+                    else
+                        let Test.24 = 1i64;
+                        let Test.8 = ClosureTag(Test.8) Test.24 Test.5 Test.6;
+                        jump Test.20 Test.8;
                 "#
             ),
         )
