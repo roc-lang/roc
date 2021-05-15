@@ -131,7 +131,6 @@ impl<'ctx> Iterator for FunctionIterator<'ctx> {
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Scope<'a, 'ctx> {
     symbols: ImMap<Symbol, (Layout<'a>, BasicValueEnum<'ctx>)>,
-    pub function_pointers: MutMap<Symbol, (Layout<'a>, FunctionValue<'ctx>)>,
     pub top_level_thunks: ImMap<Symbol, (Layout<'a>, FunctionValue<'ctx>)>,
     join_points: ImMap<JoinPointId, (BasicBlock<'ctx>, &'a [PointerValue<'ctx>])>,
 }
@@ -885,7 +884,16 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
         CallType::LowLevel {
             op,
             opt_closure_layout,
-        } => run_low_level(env, layout_ids, scope, parent, layout, *op, arguments),
+        } => run_low_level(
+            env,
+            layout_ids,
+            scope,
+            parent,
+            layout,
+            *op,
+            *opt_closure_layout,
+            arguments,
+        ),
 
         CallType::Foreign {
             foreign_symbol,
@@ -1701,10 +1709,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                                     fn_name, layout
                                 )
                             });
-
-                    scope
-                        .function_pointers
-                        .insert(left_hand_side, (*layout, function_value));
 
                     let ptr = function_value.as_global_value().as_pointer_value();
 
@@ -3609,9 +3613,64 @@ fn run_low_level<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     layout: &Layout<'a>,
     op: LowLevel,
+    opt_closure_layout: Option<Layout<'a>>,
     args: &[Symbol],
 ) -> BasicValueEnum<'ctx> {
     use LowLevel::*;
+
+    // macros because functions cause lifetime issues related to the `env` or `layout_ids`
+    macro_rules! passed_function_at_index {
+        ($function_layout:expr, $index:expr) => {{
+            let function_symbol = args[$index];
+
+            let fn_name = layout_ids
+                .get(function_symbol, &$function_layout)
+                .to_symbol_string(function_symbol, &env.interns);
+
+            env.module
+                .get_function(fn_name.as_str())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Could not get pointer to unknown function {:?} {:?}",
+                        fn_name, $function_layout
+                    )
+                })
+        }};
+    }
+
+    macro_rules! list_walk {
+        ($variant:expr) => {{
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            let (default, default_layout) = load_symbol_and_layout(scope, &args[1]);
+
+            let function_layout = opt_closure_layout.unwrap();
+            let function = passed_function_at_index!(function_layout, 2);
+
+            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
+
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => default,
+                Layout::Builtin(Builtin::List(_, element_layout)) => {
+                    crate::llvm::build_list::list_walk_generic(
+                        env,
+                        layout_ids,
+                        parent,
+                        list,
+                        element_layout,
+                        function,
+                        function_layout,
+                        closure,
+                        *closure_layout,
+                        default,
+                        default_layout,
+                        $variant,
+                    )
+                }
+                _ => unreachable!("invalid list layout"),
+            }
+        }};
+    }
 
     match op {
         StrConcat => {
@@ -3759,7 +3818,8 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            let (function_layout, function) = scope.function_pointers[&args[1]];
+            let function_layout = opt_closure_layout.unwrap();
+            let function = passed_function_at_index!(function_layout, 1);
 
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
@@ -3784,7 +3844,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (list1, list1_layout) = load_symbol_and_layout(scope, &args[0]);
             let (list2, list2_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            let (function_layout, function) = scope.function_pointers[&args[2]];
+            let function_layout = opt_closure_layout.unwrap();
+            let function = passed_function_at_index!(function_layout, 2);
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
 
             match (list1_layout, list2_layout) {
@@ -3815,7 +3876,8 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (list2, list2_layout) = load_symbol_and_layout(scope, &args[1]);
             let (list3, list3_layout) = load_symbol_and_layout(scope, &args[2]);
 
-            let (function_layout, function) = scope.function_pointers[&args[3]];
+            let function_layout = opt_closure_layout.unwrap();
+            let function = passed_function_at_index!(function_layout, 3);
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[4]);
 
             match (list1_layout, list2_layout, list3_layout) {
@@ -3849,7 +3911,8 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            let (function_layout, function) = scope.function_pointers[&args[1]];
+            let function_layout = opt_closure_layout.unwrap();
+            let function = passed_function_at_index!(function_layout, 1);
 
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
@@ -3874,7 +3937,8 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            let (function_layout, function) = scope.function_pointers[&args[1]];
+            let function_layout = opt_closure_layout.unwrap();
+            let function = passed_function_at_index!(function_layout, 1);
 
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
@@ -3899,7 +3963,8 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            let (function_layout, function) = scope.function_pointers[&args[1]];
+            let function_layout = opt_closure_layout.unwrap();
+            let function = passed_function_at_index!(function_layout, 1);
 
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
@@ -3931,7 +3996,8 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            let (function_layout, function) = scope.function_pointers[&args[1]];
+            let function_layout = opt_closure_layout.unwrap();
+            let function = passed_function_at_index!(function_layout, 1);
 
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
@@ -3981,30 +4047,15 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_range(env, *builtin, low.into_int_value(), high.into_int_value())
         }
-        ListWalk => list_walk_help(
-            env,
-            layout_ids,
-            scope,
-            parent,
-            args,
-            crate::llvm::build_list::ListWalk::Walk,
-        ),
-        ListWalkUntil => list_walk_help(
-            env,
-            layout_ids,
-            scope,
-            parent,
-            args,
-            crate::llvm::build_list::ListWalk::WalkUntil,
-        ),
-        ListWalkBackwards => list_walk_help(
-            env,
-            layout_ids,
-            scope,
-            parent,
-            args,
-            crate::llvm::build_list::ListWalk::WalkBackwards,
-        ),
+        ListWalk => {
+            list_walk!(crate::llvm::build_list::ListWalk::Walk)
+        }
+        ListWalkUntil => {
+            list_walk!(crate::llvm::build_list::ListWalk::WalkUntil)
+        }
+        ListWalkBackwards => {
+            list_walk!(crate::llvm::build_list::ListWalk::WalkBackwards)
+        }
         ListAppend => {
             // List.append : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
@@ -4043,7 +4094,8 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            let (_, function) = scope.function_pointers[&args[1]];
+            let function_layout = opt_closure_layout.unwrap();
+            let function = passed_function_at_index!(function_layout, 1);
 
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
@@ -4499,7 +4551,8 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
             let (default, default_layout) = load_symbol_and_layout(scope, &args[1]);
-            let (function_layout, function) = scope.function_pointers[&args[2]];
+            let function_layout = opt_closure_layout.unwrap();
+            let function = passed_function_at_index!(function_layout, 2);
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
 
             match dict_layout {

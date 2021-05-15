@@ -446,11 +446,13 @@ pub enum ListWalk {
 }
 
 pub fn list_walk_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+    env: &'ctx Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     scope: &crate::llvm::build::Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     args: &[roc_module::symbol::Symbol],
+    function: FunctionValue<'a>,
+    function_layout: Layout<'a>,
     variant: ListWalk,
 ) -> BasicValueEnum<'ctx> {
     use crate::llvm::build::load_symbol_and_layout;
@@ -460,8 +462,6 @@ pub fn list_walk_help<'a, 'ctx, 'env>(
     let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
     let (default, default_layout) = load_symbol_and_layout(scope, &args[1]);
-
-    let (function_layout, function) = scope.function_pointers[&args[2]];
 
     let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
 
@@ -485,7 +485,7 @@ pub fn list_walk_help<'a, 'ctx, 'env>(
     }
 }
 
-fn list_walk_generic<'a, 'ctx, 'env>(
+pub fn list_walk_generic<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     _parent: FunctionValue<'ctx>,

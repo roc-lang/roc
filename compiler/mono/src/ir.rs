@@ -7691,26 +7691,16 @@ where
         Layout::Struct(_) => {
             let function_symbol = lambda_set.set[0].0;
 
-            let bound = env.unique_symbol();
-
             // build the call
-            let stmt = Stmt::Let(
+            Stmt::Let(
                 assigned,
                 Expr::Call(to_lowlevel_call(
-                    bound,
+                    function_symbol,
                     closure_data_symbol,
                     function_layout,
                 )),
                 return_layout,
                 env.arena.alloc(hole),
-            );
-
-            // fix the layout; needs top-level signature
-            Stmt::Let(
-                bound,
-                Expr::FunctionPointer(function_symbol, function_layout),
-                function_layout,
-                env.arena.alloc(stmt),
             )
         }
         Layout::Builtin(Builtin::Int1) => {
@@ -7775,25 +7765,16 @@ where
 
         let hole = Stmt::Jump(join_point_id, env.arena.alloc([assigned]));
 
-        let bound = env.unique_symbol();
-
         // build the call
         let stmt = Stmt::Let(
             assigned,
             Expr::Call(to_lowlevel_call(
-                bound,
+                *function_symbol,
                 closure_data_symbol,
                 function_layout,
             )),
             return_layout,
             env.arena.alloc(hole),
-        );
-
-        let stmt = Stmt::Let(
-            bound,
-            Expr::FunctionPointer(*function_symbol, function_layout),
-            function_layout,
-            env.arena.alloc(stmt),
         );
 
         branches.push((i as u64, BranchInfo::None, stmt));
@@ -7844,25 +7825,16 @@ where
 
     let hole = Stmt::Jump(join_point_id, env.arena.alloc([assigned]));
 
-    let bound = env.unique_symbol();
-
     // build the call
-    let stmt = Stmt::Let(
+    Stmt::Let(
         assigned,
         Expr::Call(to_lowlevel_call(
-            bound,
+            function_symbol,
             closure_data_symbol,
             function_layout,
         )),
         return_layout,
         env.arena.alloc(hole),
-    );
-
-    Stmt::Let(
-        assigned,
-        Expr::FunctionPointer(function_symbol, function_layout),
-        function_layout,
-        env.arena.alloc(stmt),
     )
 }
 
@@ -8328,24 +8300,15 @@ where
 
     let hole = Stmt::Jump(join_point_id, env.arena.alloc([result_symbol]));
 
-    let bound = env.unique_symbol();
-
     // build the call
-    let stmt = Stmt::Let(
+    Stmt::Let(
         result_symbol,
         Expr::Call(to_lowlevel_call(
-            bound,
+            function_symbol,
             closure_data_symbol,
             function_layout,
         )),
         return_layout,
         env.arena.alloc(hole),
-    );
-
-    Stmt::Let(
-        bound,
-        Expr::FunctionPointer(function_symbol, function_layout),
-        function_layout,
-        env.arena.alloc(stmt),
     )
 }
