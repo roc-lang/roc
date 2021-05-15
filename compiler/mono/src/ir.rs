@@ -1791,9 +1791,18 @@ fn specialize_all_help<'a>(
         ) {
             Ok((proc, layout)) => {
                 if procs.module_thunks.contains(&name) {
+                    // TODO recipe for disaster
                     let top_level = TopLevelFunctionLayout::from_layout(env.arena, layout);
-                    debug_assert_eq!(top_level.arguments, &[]);
-                    procs.specialized.insert((name, top_level), Done(proc));
+                    if top_level.arguments.is_empty() {
+                        procs.specialized.insert((name, top_level), Done(proc));
+                    } else {
+                        let top_level = TopLevelFunctionLayout::new(
+                            env.arena,
+                            &[],
+                            env.arena.alloc(top_level).full(),
+                        );
+                        procs.specialized.insert((name, top_level), Done(proc));
+                    }
                 } else {
                     let top_level = TopLevelFunctionLayout::from_layout(env.arena, layout);
                     procs.specialized.insert((name, top_level), Done(proc));
