@@ -292,6 +292,16 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn imul_reg64_reg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        unimplemented!("register multiplication not implemented yet for AArch64");
+    }
+
+    #[inline(always)]
     fn jmp_imm32(_buf: &mut Vec<'_, u8>, _offset: i32) -> usize {
         unimplemented!("jump instructions not yet implemented for AArch64");
     }
