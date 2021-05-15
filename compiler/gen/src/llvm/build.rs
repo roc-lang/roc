@@ -1682,40 +1682,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             list_literal(env, inplace, scope, elem_layout, elems)
         }
-        FunctionPointer(symbol, layout) => {
-            match scope.top_level_thunks.get(symbol) {
-                Some((_layout, function_value)) => {
-                    // this is a 0-argument thunk, evaluate it!
-                    let call =
-                        env.builder
-                            .build_call(*function_value, &[], "evaluate_top_level_thunk");
-
-                    call.set_call_convention(FAST_CALL_CONV);
-
-                    call.try_as_basic_value().left().unwrap()
-                }
-                None => {
-                    // this is a function pointer, store it
-                    let fn_name = layout_ids
-                        .get(*symbol, layout)
-                        .to_symbol_string(*symbol, &env.interns);
-
-                    let function_value =
-                        env.module
-                            .get_function(fn_name.as_str())
-                            .unwrap_or_else(|| {
-                                panic!(
-                                    "Could not get pointer to unknown function {:?} {:?}",
-                                    fn_name, layout
-                                )
-                            });
-
-                    let ptr = function_value.as_global_value().as_pointer_value();
-
-                    BasicValueEnum::PointerValue(ptr)
-                }
-            }
-        }
         RuntimeErrorFunction(_) => todo!(),
     }
 }

@@ -103,8 +103,7 @@ pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
     use Expr::*;
 
     match expr {
-        FunctionPointer(symbol, _)
-        | AccessAtIndex {
+        AccessAtIndex {
             structure: symbol, ..
         } => {
             result.insert(*symbol);
@@ -556,11 +555,7 @@ impl<'a> Context<'a> {
                 arguments,
             }) => self.visit_call(z, call_type, arguments, l, b, b_live_vars),
 
-            EmptyArray
-            | FunctionPointer(_, _)
-            | Literal(_)
-            | Reset(_)
-            | RuntimeErrorFunction(_) => {
+            EmptyArray | Literal(_) | Reset(_) | RuntimeErrorFunction(_) => {
                 // EmptyArray is always stack-allocated
                 // function pointers are persistent
                 self.arena.alloc(Stmt::Let(z, v, l, b))

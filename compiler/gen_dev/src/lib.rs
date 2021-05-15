@@ -401,7 +401,6 @@ where
                 self.set_last_seen(*sym, stmt);
                 match expr {
                     Expr::Literal(_) => {}
-                    Expr::FunctionPointer(sym, _) => self.set_last_seen(*sym, stmt),
 
                     Expr::Call(call) => self.scan_ast_call(call, stmt),
 

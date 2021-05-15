@@ -1095,7 +1095,6 @@ pub enum Expr<'a> {
     Literal(Literal<'a>),
 
     // Functions
-    FunctionPointer(Symbol, Layout<'a>),
     Call(Call<'a>),
 
     Tag {
@@ -1192,10 +1191,6 @@ impl<'a> Expr<'a> {
 
         match self {
             Literal(lit) => lit.to_doc(alloc),
-
-            FunctionPointer(symbol, _) => alloc
-                .text("FunctionPointer ")
-                .append(symbol_to_doc(alloc, *symbol)),
 
             Call(call) => call.to_doc(alloc),
 
@@ -5392,7 +5387,7 @@ fn substitute_in_expr<'a>(
     use Expr::*;
 
     match expr {
-        Literal(_) | FunctionPointer(_, _) | EmptyArray | RuntimeErrorFunction(_) => None,
+        Literal(_) | EmptyArray | RuntimeErrorFunction(_) => None,
 
         Call(call) => substitute_in_call(arena, call, subs).map(Expr::Call),
 

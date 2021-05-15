@@ -471,7 +471,7 @@ impl<'a> BorrowInfState<'a> {
 
             Call(call) => self.collect_call(z, call),
 
-            Literal(_) | FunctionPointer(_, _) | RuntimeErrorFunction(_) => {}
+            Literal(_) | RuntimeErrorFunction(_) => {}
         }
     }
 
@@ -545,18 +545,6 @@ impl<'a> BorrowInfState<'a> {
                 self.update_param_map(Key::JoinPoint(*j));
 
                 self.collect_stmt(b);
-            }
-
-            Let(x, Expr::FunctionPointer(fsymbol, layout), _, b) => {
-                // ensure that the function pointed to is in the param map
-                if let Some(params) = self.param_map.get_symbol(*fsymbol, *layout) {
-                    self.param_map
-                        .items
-                        .insert(Key::Declaration(*x, *layout), params);
-                }
-
-                self.collect_stmt(b);
-                self.preserve_tail_call(*x, &Expr::FunctionPointer(*fsymbol, *layout), b);
             }
 
             Let(x, v, _, b) => {
