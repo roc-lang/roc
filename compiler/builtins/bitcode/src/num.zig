@@ -1,4 +1,5 @@
 const std = @import("std");
+const dec = @import("dec");
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 const math = std.math;
 
