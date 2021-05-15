@@ -1,4 +1,4 @@
-use crate::borrow::{ParamMap, BORROWED, OWNED};
+use crate::borrow::ParamMap;
 use crate::ir::{Expr, JoinPointId, ModifyRc, Param, Proc, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;

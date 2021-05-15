@@ -1169,15 +1169,6 @@ fn flex(tvar: VarId) -> SolvedType {
 }
 
 #[inline(always)]
-fn top_level_function(arguments: Vec<SolvedType>, ret: Box<SolvedType>) -> SolvedType {
-    SolvedType::Func(
-        arguments,
-        Box::new(SolvedType::Flex(TOP_LEVEL_CLOSURE_VAR)),
-        ret,
-    )
-}
-
-#[inline(always)]
 fn closure(arguments: Vec<SolvedType>, closure_var: VarId, ret: Box<SolvedType>) -> SolvedType {
     SolvedType::Func(arguments, Box::new(SolvedType::Flex(closure_var)), ret)
 }

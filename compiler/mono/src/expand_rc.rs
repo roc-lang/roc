@@ -165,7 +165,7 @@ impl<'a, 'i> Env<'a, 'i> {
                 self.constructor_map.insert(symbol, 0);
                 self.layout_map.insert(symbol, Layout::Struct(fields));
             }
-            Closure(arguments, lambda_set, result) => {
+            Closure(_, lambda_set, _) => {
                 self.constructor_map.insert(symbol, 0);
                 self.layout_map
                     .insert(symbol, lambda_set.runtime_representation());
@@ -202,7 +202,7 @@ impl<'a, 'i> Env<'a, 'i> {
 }
 
 fn layout_for_constructor<'a>(
-    arena: &'a Bump,
+    _arena: &'a Bump,
     layout: &Layout<'a>,
     constructor: u64,
 ) -> ConstructorLayout<&'a [Layout<'a>]> {
@@ -244,7 +244,7 @@ fn layout_for_constructor<'a>(
             debug_assert_eq!(constructor, 0);
             HasFields(fields)
         }
-        Closure(arguments, lambda_set, result) => {
+        Closure(_arguments, _lambda_set, _result) => {
             // TODO can this be improved again?
             // let fpointer = Layout::FunctionPointer(arguments, result);
             // let fields = arena.alloc([fpointer, *lambda_set.layout]);

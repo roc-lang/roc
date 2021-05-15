@@ -157,9 +157,9 @@ impl fmt::Display for Symbol {
     }
 }
 
-impl Into<u64> for Symbol {
-    fn into(self) -> u64 {
-        self.0
+impl From<Symbol> for u64 {
+    fn from(symbol: Symbol) -> Self {
+        symbol.0
     }
 }
 
