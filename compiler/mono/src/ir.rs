@@ -1040,7 +1040,10 @@ impl<'a> Call<'a> {
                     .text("CallByPointer ")
                     .append(alloc.intersperse(it, " "))
             }
-            LowLevel { op: lowlevel } => {
+            LowLevel {
+                op: lowlevel,
+                opt_closure_layout: _,
+            } => {
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
 
                 alloc
@@ -1082,6 +1085,8 @@ pub enum CallType<'a> {
     },
     LowLevel {
         op: LowLevel,
+        /// the layout of the closure argument, if any
+        opt_closure_layout: Option<Layout<'a>>,
     },
 }
 
@@ -2671,8 +2676,8 @@ macro_rules! match_on_closure_argument {
                     $env,
                     lambda_set,
                     $closure_data_symbol,
-                    |top_level_function, closure_data| self::Call {
-                        call_type: CallType::LowLevel { op: $op },
+                    |top_level_function, closure_data, function_layout| self::Call {
+                        call_type: CallType::LowLevel { op: $op, opt_closure_layout: Some(function_layout) },
                         arguments: arena.alloc([$($x,)* top_level_function, closure_data]),
                     },
                     arena.alloc(top_level).full(),
@@ -4357,7 +4362,10 @@ pub fn with_hole<'a>(
                 }
                 _ => {
                     let call = self::Call {
-                        call_type: CallType::LowLevel { op },
+                        call_type: CallType::LowLevel {
+                            op,
+                            opt_closure_layout: None,
+                        },
                         arguments: arg_symbols,
                     };
 
@@ -4577,6 +4585,7 @@ pub fn from_can<'a>(
 
             let call_type = CallType::LowLevel {
                 op: LowLevel::ExpectTrue,
+                opt_closure_layout: None,
             };
             let arguments = env.arena.alloc([cond_symbol]);
             let call = self::Call {
@@ -7634,18 +7643,18 @@ pub fn num_argument_to_int_or_float(
 }
 
 /// Use the lambda set to figure out how to make a lowlevel call
-fn lowlevel_match_on_lambda_set<'a, F>(
+fn lowlevel_match_on_lambda_set<'a, ToLowLevelCall>(
     env: &mut Env<'a, '_>,
     lambda_set: LambdaSet<'a>,
     closure_data_symbol: Symbol,
-    to_lowlevel_call: F,
+    to_lowlevel_call: ToLowLevelCall,
     function_layout: Layout<'a>,
     return_layout: Layout<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a>
 where
-    F: Fn(Symbol, Symbol) -> Call<'a> + Copy,
+    ToLowLevelCall: Fn(Symbol, Symbol, Layout<'a>) -> Call<'a> + Copy,
 {
     match lambda_set.runtime_representation() {
         Layout::Union(_) => {
@@ -7687,7 +7696,11 @@ where
             // build the call
             let stmt = Stmt::Let(
                 assigned,
-                Expr::Call(to_lowlevel_call(bound, closure_data_symbol)),
+                Expr::Call(to_lowlevel_call(
+                    bound,
+                    closure_data_symbol,
+                    function_layout,
+                )),
                 return_layout,
                 env.arena.alloc(hole),
             );
@@ -7736,20 +7749,20 @@ where
     }
 }
 
-fn lowlevel_union_lambda_set_to_switch<'a, F>(
+fn lowlevel_union_lambda_set_to_switch<'a, ToLowLevelCall>(
     env: &mut Env<'a, '_>,
     lambda_set: &'a [(Symbol, &'a [Layout<'a>])],
     closure_tag_id_symbol: Symbol,
     closure_tag_id_layout: Layout<'a>,
     closure_data_symbol: Symbol,
-    to_lowlevel_call: F,
+    to_lowlevel_call: ToLowLevelCall,
     function_layout: Layout<'a>,
     return_layout: Layout<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a>
 where
-    F: Fn(Symbol, Symbol) -> Call<'a> + Copy,
+    ToLowLevelCall: Fn(Symbol, Symbol, Layout<'a>) -> Call<'a> + Copy,
 {
     debug_assert!(!lambda_set.is_empty());
 
@@ -7767,7 +7780,11 @@ where
         // build the call
         let stmt = Stmt::Let(
             assigned,
-            Expr::Call(to_lowlevel_call(bound, closure_data_symbol)),
+            Expr::Call(to_lowlevel_call(
+                bound,
+                closure_data_symbol,
+                function_layout,
+            )),
             return_layout,
             env.arena.alloc(hole),
         );
@@ -7810,18 +7827,18 @@ where
     }
 }
 
-fn lowlevel_union_lambda_set_branch<'a, F>(
+fn lowlevel_union_lambda_set_branch<'a, ToLowLevelCall>(
     env: &mut Env<'a, '_>,
     join_point_id: JoinPointId,
     function_symbol: Symbol,
     closure_data_symbol: Symbol,
     closure_data_layout: Layout<'a>,
     function_layout: Layout<'a>,
-    to_lowlevel_call: F,
+    to_lowlevel_call: ToLowLevelCall,
     return_layout: Layout<'a>,
 ) -> Stmt<'a>
 where
-    F: Fn(Symbol, Symbol) -> Call<'a> + Copy,
+    ToLowLevelCall: Fn(Symbol, Symbol, Layout<'a>) -> Call<'a> + Copy,
 {
     let assigned = env.unique_symbol();
 
@@ -7832,7 +7849,11 @@ where
     // build the call
     let stmt = Stmt::Let(
         assigned,
-        Expr::Call(to_lowlevel_call(bound, closure_data_symbol)),
+        Expr::Call(to_lowlevel_call(
+            bound,
+            closure_data_symbol,
+            function_layout,
+        )),
         return_layout,
         env.arena.alloc(hole),
     );
@@ -8225,20 +8246,20 @@ fn enum_lambda_set_branch_help<'a>(
     )
 }
 
-fn lowlevel_enum_lambda_set_to_switch<'a, F>(
+fn lowlevel_enum_lambda_set_to_switch<'a, ToLowLevelCall>(
     env: &mut Env<'a, '_>,
     lambda_set: &'a [(Symbol, &'a [Layout<'a>])],
     closure_tag_id_symbol: Symbol,
     closure_tag_id_layout: Layout<'a>,
     closure_data_symbol: Symbol,
-    to_lowlevel_call: F,
+    to_lowlevel_call: ToLowLevelCall,
     function_layout: Layout<'a>,
     return_layout: Layout<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a>
 where
-    F: Fn(Symbol, Symbol) -> Call<'a> + Copy,
+    ToLowLevelCall: Fn(Symbol, Symbol, Layout<'a>) -> Call<'a> + Copy,
 {
     debug_assert!(!lambda_set.is_empty());
 
@@ -8290,18 +8311,18 @@ where
     }
 }
 
-fn lowlevel_enum_lambda_set_branch<'a, F>(
+fn lowlevel_enum_lambda_set_branch<'a, ToLowLevelCall>(
     env: &mut Env<'a, '_>,
     join_point_id: JoinPointId,
     function_symbol: Symbol,
     closure_data_symbol: Symbol,
     closure_data_layout: Layout<'a>,
-    to_lowlevel_call: F,
+    to_lowlevel_call: ToLowLevelCall,
     function_layout: Layout<'a>,
     return_layout: Layout<'a>,
 ) -> Stmt<'a>
 where
-    F: Fn(Symbol, Symbol) -> Call<'a> + Copy,
+    ToLowLevelCall: Fn(Symbol, Symbol, Layout<'a>) -> Call<'a> + Copy,
 {
     let result_symbol = env.unique_symbol();
 
@@ -8312,7 +8333,11 @@ where
     // build the call
     let stmt = Stmt::Let(
         result_symbol,
-        Expr::Call(to_lowlevel_call(bound, closure_data_symbol)),
+        Expr::Call(to_lowlevel_call(
+            bound,
+            closure_data_symbol,
+            function_layout,
+        )),
         return_layout,
         env.arena.alloc(hole),
     );
