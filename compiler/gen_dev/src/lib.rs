@@ -302,6 +302,10 @@ where
     /// It only deals with inputs and outputs of i64 type.
     fn build_num_abs_i64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String>;
 
+    /// build_num_abs_f64 stores the absolute value of src into dst.
+    /// It only deals with inputs and outputs of f64 type.
+    fn build_num_abs_f64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String>;
+
     /// build_num_add_i64 stores the sum of src1 and src2 into dst.
     /// It only deals with inputs and outputs of i64 type.
     fn build_num_add_i64(
