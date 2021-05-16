@@ -836,35 +836,35 @@ mod gen_record {
     //     );
     // }
 
-    // #[test]
-    // fn update_record() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 rec = { foo: 42, bar: 6.28 }
+    #[test]
+    fn update_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    rec = { foo: 42, bar: 6 }
 
-    //                 { rec & foo: rec.foo + 1 }
-    //                 "#
-    //         ),
-    //         (6.28, 43),
-    //         (f64, i64)
-    //     );
-    // }
+                    { rec & foo: rec.foo + 1 }
+                    "#
+            ),
+            (6, 43),
+            (i64, i64)
+        );
+    }
 
-    // #[test]
-    // fn update_single_element_record() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 rec = { foo: 42}
+    #[test]
+    fn update_single_element_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    rec = { foo: 42}
 
-    //                 { rec & foo: rec.foo + 1 }
-    //                 "#
-    //         ),
-    //         43,
-    //         i64
-    //     );
-    // }
+                    { rec & foo: rec.foo + 1 }
+                    "#
+            ),
+            43,
+            i64
+        );
+    }
 
     // #[test]
     // fn booleans_in_record() {
