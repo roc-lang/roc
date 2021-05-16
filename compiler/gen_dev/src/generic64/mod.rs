@@ -51,6 +51,8 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
     fn load_args<'a>(
         symbol_map: &mut MutMap<Symbol, SymbolStorage<GeneralReg, FloatReg>>,
         args: &'a [(Layout<'a>, Symbol)],
+        // ret_layout is needed because if it is a complex type, we pass a pointer as the first arg.
+        ret_layout: &Layout<'a>,
     ) -> Result<(), String>;
 
     // store_args stores the args in registers and on the stack for function calling.
@@ -63,6 +65,16 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
         // ret_layout is needed because if it is a complex type, we pass a pointer as the first arg.
         ret_layout: &Layout<'a>,
     ) -> Result<u32, String>;
+
+    // return_struct returns a struct currently on the stack at `struct_offset`.
+    // It does so using registers and stack as necessary.
+    fn return_struct<'a>(
+        buf: &mut Vec<'a, u8>,
+        struct_offset: i32,
+        struct_size: u32,
+        field_layouts: &[Layout<'a>],
+        ret_reg: Option<GeneralReg>,
+    ) -> Result<(), String>;
 }
 
 /// Assembler contains calls to the backend assembly generator.
@@ -309,8 +321,12 @@ impl<
         Ok((out.into_bump_slice(), out_relocs.into_bump_slice()))
     }
 
-    fn load_args(&mut self, args: &'a [(Layout<'a>, Symbol)]) -> Result<(), String> {
-        CC::load_args(&mut self.symbol_storage_map, args)?;
+    fn load_args(
+        &mut self,
+        args: &'a [(Layout<'a>, Symbol)],
+        ret_layout: &Layout<'a>,
+    ) -> Result<(), String> {
+        CC::load_args(&mut self.symbol_storage_map, args, ret_layout)?;
         // Update used and free regs.
         for (sym, storage) in &self.symbol_storage_map {
             match storage {
@@ -625,36 +641,29 @@ impl<
                     ASM::mov_freg64_base32(&mut self.buf, CC::FLOAT_RETURN_REGS[0], *offset);
                     Ok(())
                 }
-                Layout::Struct(
-                    &[Layout::Builtin(Builtin::Int64), Layout::Builtin(Builtin::Int64)],
-                ) => {
-                    if let Some(SymbolStorage::Base(struct_offset)) =
-                        self.symbol_storage_map.get(sym)
-                    {
-                        ASM::mov_reg64_base32(
-                            &mut self.buf,
-                            CC::GENERAL_RETURN_REGS[0],
-                            *struct_offset,
-                        );
-                        ASM::mov_reg64_base32(
-                            &mut self.buf,
-                            CC::GENERAL_RETURN_REGS[1],
-                            *struct_offset + 8,
-                        );
-                        Ok(())
-                    } else {
-                        Err(format!("unknown struct: {:?}", sym))
-                    }
-                }
-                Layout::Struct(_field_layouts) => {
+                Layout::Struct(field_layouts) => {
                     let struct_size = layout.stack_size(PTR_SIZE);
                     if struct_size > 0 {
-                        // Need at actually dispatch to call conv here since struct return is specific to that.
-                        // CC::return_struct()
-                        Err(format!(
-                            "Returning struct with layout, {:?}, is not yet implemented",
-                            layout
-                        ))
+                        let struct_offset = if let Some(SymbolStorage::Base(offset)) =
+                            self.symbol_storage_map.get(sym)
+                        {
+                            Ok(*offset)
+                        } else {
+                            Err(format!("unknown struct: {:?}", sym))
+                        }?;
+                        let ret_reg = if self.symbol_storage_map.contains_key(&Symbol::RET_POINTER)
+                        {
+                            Some(self.load_to_general_reg(&Symbol::RET_POINTER)?)
+                        } else {
+                            None
+                        };
+                        CC::return_struct(
+                            &mut self.buf,
+                            struct_offset,
+                            struct_size,
+                            field_layouts,
+                            ret_reg,
+                        )
                     } else {
                         // Nothing to do for empty struct
                         Ok(())

@@ -1,4 +1,4 @@
-use crate::generic64::{Assembler, CallConv, RegTrait, SymbolStorage};
+use crate::generic64::{Assembler, CallConv, RegTrait, SymbolStorage, PTR_SIZE};
 use crate::Relocation;
 use bumpalo::collections::Vec;
 use roc_collections::all::MutMap;
@@ -54,6 +54,22 @@ pub struct X86_64WindowsFastcall {}
 pub struct X86_64SystemV {}
 
 const STACK_ALIGNMENT: u8 = 16;
+
+impl X86_64SystemV {
+    fn returns_via_arg_pointer<'a>(ret_layout: &Layout<'a>) -> Result<bool, String> {
+        // TODO: This may need to be more complex/extended to fully support the calling convention.
+        // details here: https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-1.0.pdf
+        return Ok(ret_layout.stack_size(PTR_SIZE) > 16);
+    }
+}
+
+impl X86_64WindowsFastcall {
+    fn returns_via_arg_pointer<'a>(ret_layout: &Layout<'a>) -> Result<bool, String> {
+        // TODO: This is not fully correct there are some exceptions for "vector" types.
+        // details here: https://docs.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-160#return-values
+        return Ok(ret_layout.stack_size(PTR_SIZE) > 8);
+    }
+}
 
 impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
     const GENERAL_PARAM_REGS: &'static [X86_64GeneralReg] = &[
@@ -177,10 +193,18 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
     fn load_args<'a>(
         symbol_map: &mut MutMap<Symbol, SymbolStorage<X86_64GeneralReg, X86_64FloatReg>>,
         args: &'a [(Layout<'a>, Symbol)],
+        ret_layout: &Layout<'a>,
     ) -> Result<(), String> {
         let mut base_offset = Self::SHADOW_SPACE_SIZE as i32 + 8; // 8 is the size of the pushed base pointer.
         let mut general_i = 0;
         let mut float_i = 0;
+        if X86_64SystemV::returns_via_arg_pointer(ret_layout)? {
+            symbol_map.insert(
+                Symbol::RET_POINTER,
+                SymbolStorage::GeneralReg(Self::GENERAL_PARAM_REGS[general_i]),
+            );
+            general_i += 1;
+        }
         for (layout, sym) in args.iter() {
             match layout {
                 Layout::Builtin(Builtin::Int64) => {
@@ -359,6 +383,16 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
         }
         Ok(stack_offset as u32)
     }
+
+    fn return_struct<'a>(
+        _buf: &mut Vec<'a, u8>,
+        _struct_offset: i32,
+        _struct_size: u32,
+        _field_layouts: &[Layout<'a>],
+        _ret_reg: Option<X86_64GeneralReg>,
+    ) -> Result<(), String> {
+        Err("Returning structs not yet implemented for X86_64".to_string())
+    }
 }
 
 impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
@@ -477,9 +511,18 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
     fn load_args<'a>(
         symbol_map: &mut MutMap<Symbol, SymbolStorage<X86_64GeneralReg, X86_64FloatReg>>,
         args: &'a [(Layout<'a>, Symbol)],
+        ret_layout: &Layout<'a>,
     ) -> Result<(), String> {
         let mut base_offset = Self::SHADOW_SPACE_SIZE as i32 + 8; // 8 is the size of the pushed base pointer.
-        for (i, (layout, sym)) in args.iter().enumerate() {
+        let mut i = 0;
+        if X86_64WindowsFastcall::returns_via_arg_pointer(ret_layout)? {
+            symbol_map.insert(
+                Symbol::RET_POINTER,
+                SymbolStorage::GeneralReg(Self::GENERAL_PARAM_REGS[i]),
+            );
+            i += 1;
+        }
+        for (layout, sym) in args.iter() {
             if i < Self::GENERAL_PARAM_REGS.len() {
                 match layout {
                     Layout::Builtin(Builtin::Int64) => {
@@ -496,6 +539,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
                         ));
                     }
                 }
+                i += 1;
             } else {
                 base_offset += match layout {
                     Layout::Builtin(Builtin::Int64) => 8,
@@ -652,6 +696,16 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
             }
         }
         Ok(stack_offset as u32)
+    }
+
+    fn return_struct<'a>(
+        _buf: &mut Vec<'a, u8>,
+        _struct_offset: i32,
+        _struct_size: u32,
+        _field_layouts: &[Layout<'a>],
+        _ret_reg: Option<X86_64GeneralReg>,
+    ) -> Result<(), String> {
+        Err("Returning structs not yet implemented for X86_64WindowsFastCall".to_string())
     }
 }
 

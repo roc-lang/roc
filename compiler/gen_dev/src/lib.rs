@@ -65,12 +65,16 @@ where
 
     // load_args is used to let the backend know what the args are.
     // The backend should track these args so it can use them as needed.
-    fn load_args(&mut self, args: &'a [(Layout<'a>, Symbol)]) -> Result<(), String>;
+    fn load_args(
+        &mut self,
+        args: &'a [(Layout<'a>, Symbol)],
+        ret_layout: &Layout<'a>,
+    ) -> Result<(), String>;
 
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
     fn build_proc(&mut self, proc: Proc<'a>) -> Result<(&'a [u8], &[Relocation]), String> {
         self.reset();
-        self.load_args(&proc.args)?;
+        self.load_args(&proc.args, &proc.ret_layout)?;
         // let start = std::time::Instant::now();
         self.scan_ast(&proc.body);
         self.create_free_map();

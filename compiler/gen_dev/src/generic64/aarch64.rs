@@ -228,6 +228,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
     fn load_args<'a>(
         _symbol_map: &mut MutMap<Symbol, SymbolStorage<AArch64GeneralReg, AArch64FloatReg>>,
         _args: &'a [(Layout<'a>, Symbol)],
+        _ret_layout: &Layout<'a>,
     ) -> Result<(), String> {
         Err("Loading args not yet implemented for AArch64".to_string())
     }
@@ -241,6 +242,16 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
         _ret_layout: &Layout<'a>,
     ) -> Result<u32, String> {
         Err("Storing args not yet implemented for AArch64".to_string())
+    }
+
+    fn return_struct<'a>(
+        _buf: &mut Vec<'a, u8>,
+        _struct_offset: i32,
+        _struct_size: u32,
+        _field_layouts: &[Layout<'a>],
+        _ret_reg: Option<AArch64GeneralReg>,
+    ) -> Result<(), String> {
+        Err("Returning structs not yet implemented for AArch64".to_string())
     }
 }
 

@@ -759,6 +759,9 @@ define_builtins! {
 
         // a caller (wrapper) for comparison
         21 GENERIC_COMPARE_REF: "#generic_compare_ref"
+
+        // used by the dev backend to store the pointer to where to store large return types
+        22 RET_POINTER: "#ret_pointer"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
