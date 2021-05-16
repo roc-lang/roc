@@ -2287,14 +2287,30 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 DecRef(symbol) => {
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
 
-                    if layout.is_refcounted() {
-                        if value.is_pointer_value() {
-                            // BasicValueEnum::PointerValue(value_ptr) => {
-                            let value_ptr = value.into_pointer_value();
-                            let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
+                    match layout {
+                        Layout::Builtin(Builtin::List(_, _)) => {
+                            debug_assert!(value.is_struct_value());
+
+                            let refcount_ptr = PointerToRefcount::from_list_wrapper(
+                                env,
+                                value.into_struct_value(),
+                            );
                             refcount_ptr.decrement(env, layout);
-                        } else {
-                            eprint!("we're likely leaking memory; see issue #985 for details");
+                        }
+
+                        _ if layout.is_refcounted() => {
+                            if value.is_pointer_value() {
+                                // BasicValueEnum::PointerValue(value_ptr) => {
+                                let value_ptr = value.into_pointer_value();
+                                let refcount_ptr =
+                                    PointerToRefcount::from_ptr_to_data(env, value_ptr);
+                                refcount_ptr.decrement(env, layout);
+                            } else {
+                                eprint!("we're likely leaking memory; see issue #985 for details");
+                            }
+                        }
+                        _ => {
+                            // nothing to do
                         }
                     }
 

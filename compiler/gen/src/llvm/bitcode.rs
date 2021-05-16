@@ -145,7 +145,6 @@ fn build_transform_caller_help_new<'a, 'ctx, 'env>(
         arguments_cast.push(argument);
     }
 
-    dbg!(closure_data_layout);
     match closure_data_layout {
         Layout::FunctionPointer(_, _) => {
             // do nothing

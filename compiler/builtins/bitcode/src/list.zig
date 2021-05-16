@@ -185,7 +185,7 @@ pub fn listMap(list: RocList, transform: Opaque, caller: Caller1, alignment: usi
             caller(transform, source_ptr + (i * old_element_width), target_ptr + (i * new_element_width));
         }
 
-        utils.decref(std.heap.c_allocator, alignment, list.bytes, size * old_element_width);
+        // utils.decref(std.heap.c_allocator, alignment, list.bytes, size * old_element_width);
 
         return output;
     } else {

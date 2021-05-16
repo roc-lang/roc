@@ -1,4 +1,4 @@
-use crate::borrow::ParamMap;
+use crate::borrow::{ParamMap, BORROWED, OWNED};
 use crate::ir::{Expr, JoinPointId, ModifyRc, Param, Proc, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
@@ -443,18 +443,48 @@ impl<'a> Context<'a> {
         match &call_type {
             LowLevel {
                 op,
-                opt_closure_layout: _,
-            } => {
-                let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
-                let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);
+                opt_closure_layout,
+            } => match op {
+                roc_module::low_level::LowLevel::ListMap => {
+                    match self
+                        .param_map
+                        .get_symbol(arguments[1], opt_closure_layout.unwrap())
+                    {
+                        Some(ps) => {
+                            let b = if ps[0].borrow {
+                                let ps = [BORROWED, BORROWED, BORROWED];
+                                self.add_dec_after_lowlevel(arguments, &ps, b, b_live_vars)
+                            } else {
+                                // let ps = [OWNED, BORROWED, BORROWED];
+                                // self.add_dec_after_lowlevel(arguments, &ps, b, b_live_vars)
+                                self.arena.alloc(Stmt::Refcounting(
+                                    ModifyRc::DecRef(arguments[0]),
+                                    self.arena.alloc(b),
+                                ))
+                            };
 
-                let v = Expr::Call(crate::ir::Call {
-                    call_type,
-                    arguments,
-                });
+                            let v = Expr::Call(crate::ir::Call {
+                                call_type,
+                                arguments,
+                            });
 
-                &*self.arena.alloc(Stmt::Let(z, v, l, b))
-            }
+                            &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                        }
+                        None => unreachable!(),
+                    }
+                }
+                _ => {
+                    let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
+                    let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);
+
+                    let v = Expr::Call(crate::ir::Call {
+                        call_type,
+                        arguments,
+                    });
+
+                    &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                }
+            },
 
             Foreign { .. } => {
                 let ps = crate::borrow::foreign_borrow_signature(self.arena, arguments.len());

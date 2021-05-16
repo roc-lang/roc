@@ -538,7 +538,12 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
 
                 &*env.arena.alloc(stmt)
             }
-            Refcounting(ModifyRc::DecRef(_symbol), _cont) => unreachable!("not introduced yet"),
+            Refcounting(ModifyRc::DecRef(symbol), cont) => {
+                // decref the current cell
+                env.deferred.decrefs.push(*symbol);
+
+                expand_and_cancel(env, cont)
+            }
 
             Refcounting(ModifyRc::Dec(symbol), cont) => {
                 use ConstructorLayout::*;
