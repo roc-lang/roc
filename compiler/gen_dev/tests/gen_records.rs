@@ -221,19 +221,19 @@ mod gen_record {
         );
     }
 
-    // #[test]
-    // fn when_on_record() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 when { x: 0x2 } is
-    //                     { x } -> x + 3
-    //                 "#
-    //         ),
-    //         5,
-    //         i64
-    //     );
-    // }
+    #[test]
+    fn when_on_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when { x: 0x2 } is
+                        { x } -> x + 3
+                    "#
+            ),
+            5,
+            i64
+        );
+    }
 
     #[test]
     fn when_record_with_guard_pattern() {
@@ -293,32 +293,46 @@ mod gen_record {
             i64
         );
     }
-    // #[test]
-    // fn empty_record() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 v = {}
+    #[test]
+    fn empty_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    v = {}
 
-    //                 v
-    //                 "#
-    //         ),
-    //         (),
-    //         ()
-    //     );
-    // }
-    // #[test]
-    // fn i64_record2_literal() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                    { x: 3, y: 5 }
-    //                 "#
-    //         ),
-    //         (3, 5),
-    //         (i64, i64)
-    //     );
-    // }
+                    v
+                    "#
+            ),
+            (),
+            ()
+        );
+    }
+
+    #[test]
+    fn i64_record1_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                       { x: 3 }
+                    "#
+            ),
+            3,
+            i64
+        );
+    }
+
+    #[test]
+    fn i64_record2_literal() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                       { x: 3, y: 5 }
+                    "#
+            ),
+            (3, 5),
+            (i64, i64)
+        );
+    }
 
     // // #[test]
     // // fn i64_record3_literal() {
@@ -427,22 +441,6 @@ mod gen_record {
     //         ),
     //         true,
     //         bool
-    //     );
-    // }
-
-    // #[test]
-    // fn return_record() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 x = 4
-    //                 y = 3
-
-    //                 { x, y }
-    //                 "#
-    //         ),
-    //         (4, 3),
-    //         (i64, i64)
     //     );
     // }
 

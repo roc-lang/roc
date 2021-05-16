@@ -523,19 +523,29 @@ impl<
     ) -> Result<(), String> {
         if let Layout::Struct(field_layouts) = layout {
             let struct_size = layout.stack_size(PTR_SIZE);
-            let offset = self.increase_stack_size(struct_size)?;
-            self.symbol_storage_map
-                .insert(*sym, SymbolStorage::Base(offset));
+            if struct_size > 0 {
+                let offset = self.increase_stack_size(struct_size)?;
+                self.symbol_storage_map
+                    .insert(*sym, SymbolStorage::Base(offset));
 
-            let mut current_offset = offset;
-            for (field, field_layout) in fields.iter().zip(field_layouts.iter()) {
-                self.copy_symbol_to_stack_offset(current_offset, field, field_layout)?;
-                let field_size = field_layout.stack_size(PTR_SIZE);
-                current_offset += field_size as i32;
+                let mut current_offset = offset;
+                for (field, field_layout) in fields.iter().zip(field_layouts.iter()) {
+                    self.copy_symbol_to_stack_offset(current_offset, field, field_layout)?;
+                    let field_size = field_layout.stack_size(PTR_SIZE);
+                    current_offset += field_size as i32;
+                }
+            } else {
+                self.symbol_storage_map.insert(*sym, SymbolStorage::Base(0));
             }
             Ok(())
         } else {
-            Err(format!("struct has invalid layout: {:?}", layout))
+            // This is a single element struct. Just copy the single field to the stack.
+            let struct_size = layout.stack_size(PTR_SIZE);
+            let offset = self.increase_stack_size(struct_size)?;
+            self.symbol_storage_map
+                .insert(*sym, SymbolStorage::Base(offset));
+            self.copy_symbol_to_stack_offset(offset, &fields[0], layout)?;
+            Ok(())
         }
     }
 
@@ -614,6 +624,41 @@ impl<
                 Layout::Builtin(Builtin::Float64) => {
                     ASM::mov_freg64_base32(&mut self.buf, CC::FLOAT_RETURN_REGS[0], *offset);
                     Ok(())
+                }
+                Layout::Struct(
+                    &[Layout::Builtin(Builtin::Int64), Layout::Builtin(Builtin::Int64)],
+                ) => {
+                    if let Some(SymbolStorage::Base(struct_offset)) =
+                        self.symbol_storage_map.get(sym)
+                    {
+                        ASM::mov_reg64_base32(
+                            &mut self.buf,
+                            CC::GENERAL_RETURN_REGS[0],
+                            *struct_offset,
+                        );
+                        ASM::mov_reg64_base32(
+                            &mut self.buf,
+                            CC::GENERAL_RETURN_REGS[1],
+                            *struct_offset + 8,
+                        );
+                        Ok(())
+                    } else {
+                        Err(format!("unknown struct: {:?}", sym))
+                    }
+                }
+                Layout::Struct(_field_layouts) => {
+                    let struct_size = layout.stack_size(PTR_SIZE);
+                    if struct_size > 0 {
+                        // Need at actually dispatch to call conv here since struct return is specific to that.
+                        // CC::return_struct()
+                        Err(format!(
+                            "Returning struct with layout, {:?}, is not yet implemented",
+                            layout
+                        ))
+                    } else {
+                        // Nothing to do for empty struct
+                        Ok(())
+                    }
                 }
                 x => Err(format!(
                     "returning symbol with layout, {:?}, is not yet implemented",

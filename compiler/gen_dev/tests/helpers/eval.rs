@@ -67,19 +67,17 @@ pub fn helper<'a>(
         ..
     } = loaded;
 
-    /*
-    println!("=========== Procedures ==========");
-    println!("{:?}", procedures);
-    println!("=================================\n");
+    // println!("=========== Procedures ==========");
+    // println!("{:?}", procedures);
+    // println!("=================================\n");
 
-    println!("=========== Interns    ==========");
-    println!("{:?}", interns);
-    println!("=================================\n");
+    // println!("=========== Interns    ==========");
+    // println!("{:?}", interns);
+    // println!("=================================\n");
 
-    println!("=========== Exposed    ==========");
-    println!("{:?}", exposed_to_host);
-    println!("=================================\n");
-    */
+    // println!("=========== Exposed    ==========");
+    // println!("{:?}", exposed_to_host);
+    // println!("=================================\n");
     debug_assert_eq!(exposed_to_host.len(), 1);
     let main_fn_symbol = exposed_to_host.keys().copied().next().unwrap();
 
