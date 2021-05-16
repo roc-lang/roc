@@ -441,15 +441,23 @@ impl<'a> Context<'a> {
         use crate::ir::CallType::*;
 
         match &call_type {
-            LowLevel {
-                op,
-                opt_closure_layout,
+            LowLevel { op } => {
+                let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
+                let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);
+
+                let v = Expr::Call(crate::ir::Call {
+                    call_type,
+                    arguments,
+                });
+
+                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
+
+            HigherOrderLowLevel {
+                op, closure_layout, ..
             } => match op {
                 roc_module::low_level::LowLevel::ListMap => {
-                    match self
-                        .param_map
-                        .get_symbol(arguments[1], opt_closure_layout.unwrap())
-                    {
+                    match self.param_map.get_symbol(arguments[1], *closure_layout) {
                         Some(ps) => {
                             let b = if ps[0].borrow {
                                 let ps = [BORROWED, BORROWED, BORROWED];
@@ -461,6 +469,18 @@ impl<'a> Context<'a> {
                                     ModifyRc::DecRef(arguments[0]),
                                     self.arena.alloc(b),
                                 ))
+                            };
+
+                            let call_type = {
+                                if ps[1].borrow {
+                                    call_type
+                                } else {
+                                    HigherOrderLowLevel {
+                                        op: *op,
+                                        closure_layout: *closure_layout,
+                                        function_owns_closure_data: true,
+                                    }
+                                }
                             };
 
                             let v = Expr::Call(crate::ir::Call {
@@ -790,12 +810,13 @@ impl<'a> Context<'a> {
 
                 use crate::ir::CallType;
                 let stmt = match &call.call_type {
-                    CallType::LowLevel {
-                        op,
-                        opt_closure_layout: _,
-                    } => {
+                    CallType::LowLevel { op } => {
                         let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
                         self.add_dec_after_lowlevel(call.arguments, ps, cont, &invoke_live_vars)
+                    }
+
+                    CallType::HigherOrderLowLevel { .. } => {
+                        todo!("copy the code for normal calls over to here");
                     }
 
                     CallType::Foreign { .. } => {

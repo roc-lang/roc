@@ -102,7 +102,9 @@ pub enum LowLevel {
 }
 
 impl LowLevel {
-    pub fn is_higher_order_function(&self) -> bool {
+    /// is one of the arguments always a function?
+    /// An example is List.map.
+    pub fn is_higher_order(&self) -> bool {
         use LowLevel::*;
 
         match self {

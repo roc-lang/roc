@@ -881,17 +881,23 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
                 .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
         }
 
-        CallType::LowLevel {
+        CallType::LowLevel { op } => {
+            run_low_level(env, layout_ids, scope, parent, layout, *op, arguments)
+        }
+
+        CallType::HigherOrderLowLevel {
             op,
-            opt_closure_layout,
-        } => run_low_level(
+            closure_layout,
+            function_owns_closure_data,
+        } => run_higher_order_low_level(
             env,
             layout_ids,
             scope,
             parent,
             layout,
             *op,
-            *opt_closure_layout,
+            *closure_layout,
+            *function_owns_closure_data,
             arguments,
         ),
 
@@ -2155,6 +2161,10 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             ),
 
             CallType::LowLevel { .. } => {
+                unreachable!("lowlevel itself never throws exceptions")
+            }
+
+            CallType::HigherOrderLowLevel { .. } => {
                 unreachable!("lowlevel itself never throws exceptions")
             }
         },
@@ -3577,22 +3587,24 @@ pub static FAST_CALL_CONV: u32 = 8;
 pub static COLD_CALL_CONV: u32 = 9;
 
 #[allow(clippy::too_many_arguments)]
-fn run_low_level<'a, 'ctx, 'env>(
+fn run_higher_order_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     layout: &Layout<'a>,
     op: LowLevel,
-    opt_closure_layout: Option<Layout<'a>>,
+    function_layout: Layout<'a>,
+    function_owns_closure_data: bool,
     args: &[Symbol],
 ) -> BasicValueEnum<'ctx> {
     use LowLevel::*;
 
+    debug_assert!(op.is_higher_order());
+
     // macros because functions cause lifetime issues related to the `env` or `layout_ids`
     macro_rules! passed_function_at_index {
         ($index:expr) => {{
-            let function_layout = opt_closure_layout.unwrap();
             let function_symbol = args[$index];
 
             let fn_name = layout_ids
@@ -3616,7 +3628,6 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (default, default_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            let function_layout = opt_closure_layout.unwrap();
             let function = passed_function_at_index!(2);
 
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
@@ -3643,6 +3654,285 @@ fn run_low_level<'a, 'ctx, 'env>(
             }
         }};
     }
+    match op {
+        ListMap => {
+            // List.map : List before, (before -> after) -> List after
+            debug_assert_eq!(args.len(), 3);
+
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            let function = passed_function_at_index!(1);
+
+            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
+
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::List(_, element_layout)) => list_map(
+                    env,
+                    function,
+                    function_layout,
+                    closure,
+                    *closure_layout,
+                    list,
+                    element_layout,
+                ),
+                _ => unreachable!("invalid list layout"),
+            }
+        }
+        ListMap2 => {
+            debug_assert_eq!(args.len(), 4);
+
+            let (list1, list1_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (list2, list2_layout) = load_symbol_and_layout(scope, &args[1]);
+
+            let function = passed_function_at_index!(2);
+            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
+
+            match (list1_layout, list2_layout) {
+                (
+                    Layout::Builtin(Builtin::List(_, element1_layout)),
+                    Layout::Builtin(Builtin::List(_, element2_layout)),
+                ) => list_map2(
+                    env,
+                    layout_ids,
+                    function,
+                    function_layout,
+                    closure,
+                    *closure_layout,
+                    list1,
+                    list2,
+                    element1_layout,
+                    element2_layout,
+                ),
+                (Layout::Builtin(Builtin::EmptyList), _)
+                | (_, Layout::Builtin(Builtin::EmptyList)) => empty_list(env),
+                _ => unreachable!("invalid list layout"),
+            }
+        }
+        ListMap3 => {
+            debug_assert_eq!(args.len(), 5);
+
+            let (list1, list1_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (list2, list2_layout) = load_symbol_and_layout(scope, &args[1]);
+            let (list3, list3_layout) = load_symbol_and_layout(scope, &args[2]);
+
+            let function = passed_function_at_index!(3);
+            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[4]);
+
+            match (list1_layout, list2_layout, list3_layout) {
+                (
+                    Layout::Builtin(Builtin::List(_, element1_layout)),
+                    Layout::Builtin(Builtin::List(_, element2_layout)),
+                    Layout::Builtin(Builtin::List(_, element3_layout)),
+                ) => list_map3(
+                    env,
+                    layout_ids,
+                    function,
+                    function_layout,
+                    closure,
+                    *closure_layout,
+                    list1,
+                    list2,
+                    list3,
+                    element1_layout,
+                    element2_layout,
+                    element3_layout,
+                ),
+                (Layout::Builtin(Builtin::EmptyList), _, _)
+                | (_, Layout::Builtin(Builtin::EmptyList), _)
+                | (_, _, Layout::Builtin(Builtin::EmptyList)) => empty_list(env),
+                _ => unreachable!("invalid list layout"),
+            }
+        }
+        ListMapWithIndex => {
+            // List.mapWithIndex : List before, (Nat, before -> after) -> List after
+            debug_assert_eq!(args.len(), 3);
+
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            let function = passed_function_at_index!(1);
+
+            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
+
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::List(_, element_layout)) => list_map_with_index(
+                    env,
+                    function,
+                    function_layout,
+                    closure,
+                    *closure_layout,
+                    list,
+                    element_layout,
+                ),
+                _ => unreachable!("invalid list layout"),
+            }
+        }
+        ListKeepIf => {
+            // List.keepIf : List elem, (elem -> Bool) -> List elem
+            debug_assert_eq!(args.len(), 3);
+
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            let function = passed_function_at_index!(1);
+
+            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
+
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::List(_, element_layout)) => list_keep_if(
+                    env,
+                    layout_ids,
+                    function,
+                    closure,
+                    *closure_layout,
+                    list,
+                    element_layout,
+                ),
+                _ => unreachable!("invalid list layout"),
+            }
+        }
+        ListKeepOks => {
+            // List.keepOks : List before, (before -> Result after *) -> List after
+            debug_assert_eq!(args.len(), 3);
+
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            let function = passed_function_at_index!(1);
+
+            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
+
+            match (list_layout, layout) {
+                (_, Layout::Builtin(Builtin::EmptyList))
+                | (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
+                (
+                    Layout::Builtin(Builtin::List(_, before_layout)),
+                    Layout::Builtin(Builtin::List(_, after_layout)),
+                ) => list_keep_oks(
+                    env,
+                    layout_ids,
+                    function,
+                    function_layout,
+                    closure,
+                    *closure_layout,
+                    list,
+                    before_layout,
+                    after_layout,
+                ),
+                (other1, other2) => {
+                    unreachable!("invalid list layouts:\n{:?}\n{:?}", other1, other2)
+                }
+            }
+        }
+        ListKeepErrs => {
+            // List.keepErrs : List before, (before -> Result * after) -> List after
+            debug_assert_eq!(args.len(), 3);
+
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            let function = passed_function_at_index!(1);
+
+            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
+
+            match (list_layout, layout) {
+                (_, Layout::Builtin(Builtin::EmptyList))
+                | (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
+                (
+                    Layout::Builtin(Builtin::List(_, before_layout)),
+                    Layout::Builtin(Builtin::List(_, after_layout)),
+                ) => list_keep_errs(
+                    env,
+                    layout_ids,
+                    function,
+                    function_layout,
+                    closure,
+                    *closure_layout,
+                    list,
+                    before_layout,
+                    after_layout,
+                ),
+                (other1, other2) => {
+                    unreachable!("invalid list layouts:\n{:?}\n{:?}", other1, other2)
+                }
+            }
+        }
+        ListWalk => {
+            list_walk!(crate::llvm::build_list::ListWalk::Walk)
+        }
+        ListWalkUntil => {
+            list_walk!(crate::llvm::build_list::ListWalk::WalkUntil)
+        }
+        ListWalkBackwards => {
+            list_walk!(crate::llvm::build_list::ListWalk::WalkBackwards)
+        }
+        ListSortWith => {
+            // List.sortWith : List a, (a, a -> Ordering) -> List a
+            debug_assert_eq!(args.len(), 3);
+
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            let function = passed_function_at_index!(1);
+
+            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
+
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::List(_, element_layout)) => list_sort_with(
+                    env,
+                    function,
+                    closure,
+                    *closure_layout,
+                    list,
+                    element_layout,
+                ),
+                _ => unreachable!("invalid list layout"),
+            }
+        }
+        DictWalk => {
+            debug_assert_eq!(args.len(), 4);
+
+            let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (default, default_layout) = load_symbol_and_layout(scope, &args[1]);
+            let function = passed_function_at_index!(2);
+            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
+
+            match dict_layout {
+                Layout::Builtin(Builtin::EmptyDict) => {
+                    // no elements, so `key` is not in here
+                    panic!("key type unknown")
+                }
+                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => dict_walk(
+                    env,
+                    layout_ids,
+                    dict,
+                    function,
+                    closure,
+                    *closure_layout,
+                    default,
+                    key_layout,
+                    value_layout,
+                    default_layout,
+                ),
+                _ => unreachable!("invalid dict layout"),
+            }
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_low_level<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    scope: &Scope<'a, 'ctx>,
+    parent: FunctionValue<'ctx>,
+    layout: &Layout<'a>,
+    op: LowLevel,
+    args: &[Symbol],
+) -> BasicValueEnum<'ctx> {
+    use LowLevel::*;
+
+    debug_assert!(!op.is_higher_order());
 
     match op {
         StrConcat => {
@@ -3784,213 +4074,6 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_concat(env, inplace, parent, first_list, second_list, list_layout)
         }
-        ListMap => {
-            // List.map : List before, (before -> after) -> List after
-            debug_assert_eq!(args.len(), 3);
-
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let function_layout = opt_closure_layout.unwrap();
-            let function = passed_function_at_index!(1);
-
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
-
-            match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(_, element_layout)) => list_map(
-                    env,
-                    function,
-                    function_layout,
-                    closure,
-                    *closure_layout,
-                    list,
-                    element_layout,
-                ),
-                _ => unreachable!("invalid list layout"),
-            }
-        }
-        ListMap2 => {
-            debug_assert_eq!(args.len(), 4);
-
-            let (list1, list1_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, &args[1]);
-
-            let function_layout = opt_closure_layout.unwrap();
-            let function = passed_function_at_index!(2);
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
-
-            match (list1_layout, list2_layout) {
-                (
-                    Layout::Builtin(Builtin::List(_, element1_layout)),
-                    Layout::Builtin(Builtin::List(_, element2_layout)),
-                ) => list_map2(
-                    env,
-                    layout_ids,
-                    function,
-                    function_layout,
-                    closure,
-                    *closure_layout,
-                    list1,
-                    list2,
-                    element1_layout,
-                    element2_layout,
-                ),
-                (Layout::Builtin(Builtin::EmptyList), _)
-                | (_, Layout::Builtin(Builtin::EmptyList)) => empty_list(env),
-                _ => unreachable!("invalid list layout"),
-            }
-        }
-        ListMap3 => {
-            debug_assert_eq!(args.len(), 5);
-
-            let (list1, list1_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, &args[1]);
-            let (list3, list3_layout) = load_symbol_and_layout(scope, &args[2]);
-
-            let function_layout = opt_closure_layout.unwrap();
-            let function = passed_function_at_index!(3);
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[4]);
-
-            match (list1_layout, list2_layout, list3_layout) {
-                (
-                    Layout::Builtin(Builtin::List(_, element1_layout)),
-                    Layout::Builtin(Builtin::List(_, element2_layout)),
-                    Layout::Builtin(Builtin::List(_, element3_layout)),
-                ) => list_map3(
-                    env,
-                    layout_ids,
-                    function,
-                    function_layout,
-                    closure,
-                    *closure_layout,
-                    list1,
-                    list2,
-                    list3,
-                    element1_layout,
-                    element2_layout,
-                    element3_layout,
-                ),
-                (Layout::Builtin(Builtin::EmptyList), _, _)
-                | (_, Layout::Builtin(Builtin::EmptyList), _)
-                | (_, _, Layout::Builtin(Builtin::EmptyList)) => empty_list(env),
-                _ => unreachable!("invalid list layout"),
-            }
-        }
-        ListMapWithIndex => {
-            // List.mapWithIndex : List before, (Nat, before -> after) -> List after
-            debug_assert_eq!(args.len(), 3);
-
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let function_layout = opt_closure_layout.unwrap();
-            let function = passed_function_at_index!(1);
-
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
-
-            match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(_, element_layout)) => list_map_with_index(
-                    env,
-                    function,
-                    function_layout,
-                    closure,
-                    *closure_layout,
-                    list,
-                    element_layout,
-                ),
-                _ => unreachable!("invalid list layout"),
-            }
-        }
-        ListKeepIf => {
-            // List.keepIf : List elem, (elem -> Bool) -> List elem
-            debug_assert_eq!(args.len(), 3);
-
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let function = passed_function_at_index!(1);
-
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
-
-            match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(_, element_layout)) => list_keep_if(
-                    env,
-                    layout_ids,
-                    function,
-                    closure,
-                    *closure_layout,
-                    list,
-                    element_layout,
-                ),
-                _ => unreachable!("invalid list layout"),
-            }
-        }
-        ListKeepOks => {
-            // List.keepOks : List before, (before -> Result after *) -> List after
-            debug_assert_eq!(args.len(), 3);
-
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let function_layout = opt_closure_layout.unwrap();
-            let function = passed_function_at_index!(1);
-
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
-
-            match (list_layout, layout) {
-                (_, Layout::Builtin(Builtin::EmptyList))
-                | (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
-                (
-                    Layout::Builtin(Builtin::List(_, before_layout)),
-                    Layout::Builtin(Builtin::List(_, after_layout)),
-                ) => list_keep_oks(
-                    env,
-                    layout_ids,
-                    function,
-                    function_layout,
-                    closure,
-                    *closure_layout,
-                    list,
-                    before_layout,
-                    after_layout,
-                ),
-                (other1, other2) => {
-                    unreachable!("invalid list layouts:\n{:?}\n{:?}", other1, other2)
-                }
-            }
-        }
-        ListKeepErrs => {
-            // List.keepErrs : List before, (before -> Result * after) -> List after
-            debug_assert_eq!(args.len(), 3);
-
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let function_layout = opt_closure_layout.unwrap();
-            let function = passed_function_at_index!(1);
-
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
-
-            match (list_layout, layout) {
-                (_, Layout::Builtin(Builtin::EmptyList))
-                | (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
-                (
-                    Layout::Builtin(Builtin::List(_, before_layout)),
-                    Layout::Builtin(Builtin::List(_, after_layout)),
-                ) => list_keep_errs(
-                    env,
-                    layout_ids,
-                    function,
-                    function_layout,
-                    closure,
-                    *closure_layout,
-                    list,
-                    before_layout,
-                    after_layout,
-                ),
-                (other1, other2) => {
-                    unreachable!("invalid list layouts:\n{:?}\n{:?}", other1, other2)
-                }
-            }
-        }
         ListContains => {
             // List.contains : List elem, elem -> Bool
             debug_assert_eq!(args.len(), 2);
@@ -4014,15 +4097,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             };
 
             list_range(env, *builtin, low.into_int_value(), high.into_int_value())
-        }
-        ListWalk => {
-            list_walk!(crate::llvm::build_list::ListWalk::Walk)
-        }
-        ListWalkUntil => {
-            list_walk!(crate::llvm::build_list::ListWalk::WalkUntil)
-        }
-        ListWalkBackwards => {
-            list_walk!(crate::llvm::build_list::ListWalk::WalkBackwards)
         }
         ListAppend => {
             // List.append : List elem, elem -> List elem
@@ -4055,29 +4129,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let inplace = get_inplace_from_layout(layout);
 
             list_join(env, inplace, parent, list, outer_list_layout)
-        }
-        ListSortWith => {
-            // List.sortWith : List a, (a, a -> Ordering) -> List a
-            debug_assert_eq!(args.len(), 3);
-
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let function = passed_function_at_index!(1);
-
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
-
-            match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(_, element_layout)) => list_sort_with(
-                    env,
-                    function,
-                    closure,
-                    *closure_layout,
-                    list,
-                    element_layout,
-                ),
-                _ => unreachable!("invalid list layout"),
-            }
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumLogUnchecked | NumSin | NumCos
         | NumCeiling | NumFloor | NumToFloat | NumIsFinite | NumAtan | NumAcos | NumAsin => {
@@ -4512,34 +4563,6 @@ fn run_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid dict layout"),
             }
         }
-        DictWalk => {
-            debug_assert_eq!(args.len(), 4);
-
-            let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (default, default_layout) = load_symbol_and_layout(scope, &args[1]);
-            let function = passed_function_at_index!(2);
-            let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
-
-            match dict_layout {
-                Layout::Builtin(Builtin::EmptyDict) => {
-                    // no elements, so `key` is not in here
-                    panic!("key type unknown")
-                }
-                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => dict_walk(
-                    env,
-                    layout_ids,
-                    dict,
-                    function,
-                    closure,
-                    *closure_layout,
-                    default,
-                    key_layout,
-                    value_layout,
-                    default_layout,
-                ),
-                _ => unreachable!("invalid dict layout"),
-            }
-        }
         SetFromList => {
             debug_assert_eq!(args.len(), 1);
 
@@ -4581,6 +4604,10 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             cond
         }
+
+        ListMap | ListMap2 | ListMap3 | ListMapWithIndex | ListKeepIf | ListWalk
+        | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
+        | DictWalk => unreachable!("these are higher order, and are handled elsewhere"),
     }
 }
 

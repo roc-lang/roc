@@ -1047,10 +1047,14 @@ impl<'a> Call<'a> {
                     .text("CallByPointer ")
                     .append(alloc.intersperse(it, " "))
             }
-            LowLevel {
-                op: lowlevel,
-                opt_closure_layout: _,
-            } => {
+            LowLevel { op: lowlevel } => {
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
+
+                alloc
+                    .text(format!("lowlevel {:?} ", lowlevel))
+                    .append(alloc.intersperse(it, " "))
+            }
+            HigherOrderLowLevel { op: lowlevel, .. } => {
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
 
                 alloc
@@ -1092,8 +1096,13 @@ pub enum CallType<'a> {
     },
     LowLevel {
         op: LowLevel,
+    },
+    HigherOrderLowLevel {
+        op: LowLevel,
         /// the layout of the closure argument, if any
-        opt_closure_layout: Option<Layout<'a>>,
+        closure_layout: Layout<'a>,
+        /// does the function need to own the closure data
+        function_owns_closure_data: bool,
     },
 }
 
@@ -2654,7 +2663,11 @@ macro_rules! match_on_closure_argument {
                     lambda_set,
                     $closure_data_symbol,
                     |top_level_function, closure_data, function_layout| self::Call {
-                        call_type: CallType::LowLevel { op: $op, opt_closure_layout: Some(function_layout) },
+                        call_type: CallType::HigherOrderLowLevel {
+                            op: $op,
+                            closure_layout: function_layout,
+                            function_owns_closure_data: false
+                        },
                         arguments: arena.alloc([$($x,)* top_level_function, closure_data]),
                     },
                     arena.alloc(top_level).full(),
@@ -4345,10 +4358,7 @@ pub fn with_hole<'a>(
                 }
                 _ => {
                     let call = self::Call {
-                        call_type: CallType::LowLevel {
-                            op,
-                            opt_closure_layout: None,
-                        },
+                        call_type: CallType::LowLevel { op },
                         arguments: arg_symbols,
                     };
 
@@ -4568,7 +4578,6 @@ pub fn from_can<'a>(
 
             let call_type = CallType::LowLevel {
                 op: LowLevel::ExpectTrue,
-                opt_closure_layout: None,
             };
             let arguments = env.arena.alloc([cond_symbol]);
             let call = self::Call {
@@ -5339,6 +5348,7 @@ fn substitute_in_call<'a>(
         }),
         CallType::Foreign { .. } => None,
         CallType::LowLevel { .. } => None,
+        CallType::HigherOrderLowLevel { .. } => None,
     };
 
     let mut did_change = false;
@@ -6052,6 +6062,12 @@ fn can_throw_exception(call: &Call) -> bool {
 
         CallType::LowLevel { .. } => {
             // lowlevel operations themselves don't throw
+            // TODO except for on allocation?
+            false
+        }
+        CallType::HigherOrderLowLevel { .. } => {
+            // TODO throwing is based on whether the HOF can throw
+            // or if there is (potentially) allocation in the lowlevel
             false
         }
     }

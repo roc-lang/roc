@@ -407,29 +407,36 @@ impl<'a> BorrowInfState<'a> {
                 self.own_args(arguments);
             }
 
-            LowLevel {
-                op,
-                opt_closure_layout,
+            LowLevel { op } => {
+                debug_assert!(!op.is_higher_order());
+
+                self.own_var(z);
+
+                let ps = lowlevel_borrow_signature(self.arena, *op);
+
+                self.own_args_using_bools(arguments, ps);
+            }
+
+            HigherOrderLowLevel {
+                op, closure_layout, ..
             } => {
                 use roc_module::low_level::LowLevel::*;
-                match op {
-                    ListMap => {
-                        match self
-                            .param_map
-                            .get_symbol(arguments[1], opt_closure_layout.unwrap())
-                        {
-                            Some(ps) => {
-                                if !ps[0].borrow {
-                                    self.own_var(arguments[0]);
-                                }
 
-                                if ps.len() > 1 && !ps[1].borrow {
-                                    self.own_var(arguments[2]);
-                                }
+                debug_assert!(op.is_higher_order());
+
+                match op {
+                    ListMap => match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                        Some(ps) => {
+                            if !ps[0].borrow {
+                                self.own_var(arguments[0]);
                             }
-                            None => unreachable!(),
+
+                            if ps.len() > 1 && !ps[1].borrow {
+                                self.own_var(arguments[2]);
+                            }
                         }
-                    }
+                        None => unreachable!(),
+                    },
                     _ => {
                         // very unsure what demand RunLowLevel should place upon its arguments
                         self.own_var(z);
