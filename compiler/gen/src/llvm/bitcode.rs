@@ -204,16 +204,16 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     function_value
 }
 
-fn build_inc_n_wrapper<'a, 'ctx, 'env>(
+/// a functin that accepts two arguments: the value to increment, and an amount to increment by
+pub fn build_inc_n_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     layout: &Layout<'a>,
-    n: u64,
 ) -> FunctionValue<'ctx> {
-    // build_rc_wrapper(env, layout_ids, layout, Mode::Inc(n))
-    todo!()
+    build_rc_wrapper(env, layout_ids, layout, Mode::Inc)
 }
 
+/// a functin that accepts two arguments: the value to increment; increments by 1
 pub fn build_inc_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
