@@ -369,13 +369,14 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     function_value
 }
 
-pub fn build_inc_n_wrapper<'a, 'ctx, 'env>(
+fn build_inc_n_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     layout: &Layout<'a>,
     n: u64,
 ) -> FunctionValue<'ctx> {
-    build_rc_wrapper(env, layout_ids, layout, Mode::Inc(n))
+    // build_rc_wrapper(env, layout_ids, layout, Mode::Inc(n))
+    todo!()
 }
 
 pub fn build_inc_wrapper<'a, 'ctx, 'env>(
@@ -383,7 +384,7 @@ pub fn build_inc_wrapper<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     layout: &Layout<'a>,
 ) -> FunctionValue<'ctx> {
-    build_rc_wrapper(env, layout_ids, layout, Mode::Inc(1))
+    build_rc_wrapper(env, layout_ids, layout, Mode::Inc)
 }
 
 pub fn build_dec_wrapper<'a, 'ctx, 'env>(
@@ -409,7 +410,7 @@ pub fn build_rc_wrapper<'a, 'ctx, 'env>(
         .to_symbol_string(symbol, &env.interns);
 
     let fn_name = match rc_operation {
-        Mode::Inc(n) => format!("{}_inc_{}", fn_name, n),
+        Mode::Inc => format!("{}_inc", fn_name),
         Mode::Dec => format!("{}_dec", fn_name),
     };
 
@@ -450,7 +451,9 @@ pub fn build_rc_wrapper<'a, 'ctx, 'env>(
             let value = env.builder.build_load(value_cast, "load_opaque");
 
             match rc_operation {
-                Mode::Inc(n) => {
+                Mode::Inc => {
+                    // we hardcode the 1 here
+                    let n = 1;
                     increment_refcount_layout(env, function_value, layout_ids, n, value, layout);
                 }
                 Mode::Dec => {
