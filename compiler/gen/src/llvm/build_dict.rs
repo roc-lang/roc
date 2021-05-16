@@ -397,9 +397,16 @@ pub fn dict_elements_rc<'a, 'ctx, 'env>(
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
     let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
 
-    use crate::llvm::bitcode::build_rc_wrapper;
-    let inc_key_fn = build_rc_wrapper(env, layout_ids, key_layout, rc_operation);
-    let inc_value_fn = build_rc_wrapper(env, layout_ids, value_layout, rc_operation);
+    let (key_fn, value_fn) = match rc_operation {
+        Mode::Inc => (
+            build_inc_wrapper(env, layout_ids, key_layout),
+            build_inc_wrapper(env, layout_ids, value_layout),
+        ),
+        Mode::Dec => (
+            build_dec_wrapper(env, layout_ids, key_layout),
+            build_dec_wrapper(env, layout_ids, value_layout),
+        ),
+    };
 
     call_void_bitcode_fn(
         env,
@@ -408,8 +415,8 @@ pub fn dict_elements_rc<'a, 'ctx, 'env>(
             alignment_iv.into(),
             key_width.into(),
             value_width.into(),
-            inc_key_fn.as_global_value().as_pointer_value().into(),
-            inc_value_fn.as_global_value().as_pointer_value().into(),
+            key_fn.as_global_value().as_pointer_value().into(),
+            value_fn.as_global_value().as_pointer_value().into(),
         ],
         &bitcode::DICT_ELEMENTS_RC,
     );

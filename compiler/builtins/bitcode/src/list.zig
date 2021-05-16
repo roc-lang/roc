@@ -11,6 +11,7 @@ const CompareFn = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) u8;
 const Opaque = ?[*]u8;
 
 const Inc = fn (?[*]u8) callconv(.C) void;
+const IncN = fn (?[*]u8, usize) callconv(.C) void;
 const Dec = fn (?[*]u8) callconv(.C) void;
 
 pub const RocList = extern struct {
@@ -616,7 +617,7 @@ pub fn listContains(list: RocList, key: Opaque, key_width: usize, is_eq: EqFn) c
     return false;
 }
 
-pub fn listRepeat(count: usize, alignment: usize, element: Opaque, element_width: usize, inc_n_element: Inc) callconv(.C) RocList {
+pub fn listRepeat(count: usize, alignment: usize, element: Opaque, element_width: usize, inc_n_element: IncN) callconv(.C) RocList {
     if (count == 0) {
         return RocList.empty();
     }
@@ -625,16 +626,13 @@ pub fn listRepeat(count: usize, alignment: usize, element: Opaque, element_width
     var output = RocList.allocate(allocator, alignment, count, element_width);
 
     if (output.bytes) |target_ptr| {
+        // increment the element's RC N times
+        inc_n_element(element, count);
+
         var i: usize = 0;
         const source = element orelse unreachable;
         while (i < count) : (i += 1) {
             @memcpy(target_ptr + i * element_width, source, element_width);
-        }
-
-        // TODO do all increments at once!
-        i = 0;
-        while (i < count) : (i += 1) {
-            inc_n_element(element);
         }
 
         return output;

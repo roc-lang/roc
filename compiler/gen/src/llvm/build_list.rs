@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 use crate::llvm::bitcode::{
-    build_compare_wrapper, build_dec_wrapper, build_eq_wrapper, build_inc_wrapper,
-    build_transform_caller_new, call_bitcode_fn, call_void_bitcode_fn,
+    build_compare_wrapper, build_dec_wrapper, build_eq_wrapper, build_inc_n_wrapper,
+    build_inc_wrapper, build_transform_caller_new, call_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
     allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, InPlace,
@@ -118,7 +118,7 @@ pub fn list_repeat<'a, 'ctx, 'env>(
     element: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let inc_element_fn = build_inc_wrapper(env, layout_ids, element_layout);
+    let inc_element_fn = build_inc_n_wrapper(env, layout_ids, element_layout);
 
     call_bitcode_fn_returns_list(
         env,
