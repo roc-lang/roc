@@ -1061,10 +1061,7 @@ impl<'a> Call<'a> {
                     .text("CallByPointer ")
                     .append(alloc.intersperse(it, " "))
             }
-            LowLevel {
-                op: lowlevel,
-                opt_closure_layout: _,
-            } => {
+            LowLevel { op: lowlevel, .. } => {
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
 
                 alloc
@@ -2668,7 +2665,9 @@ macro_rules! match_on_closure_argument {
                     lambda_set,
                     $closure_data_symbol,
                     |top_level_function, closure_data, function_layout| self::Call {
-                        call_type: CallType::LowLevel { op: $op, opt_closure_layout: Some(function_layout) },
+                        call_type: CallType::LowLevel {
+                                op: $op, opt_closure_layout: Some(function_layout),
+                            },
                         arguments: arena.alloc([$($x,)* top_level_function, closure_data]),
                     },
                     arena.alloc(top_level).full(),

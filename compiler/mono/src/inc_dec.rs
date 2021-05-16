@@ -1,4 +1,4 @@
-use crate::borrow::{ParamMap, BORROWED, OWNED};
+use crate::borrow::{ParamMap, BORROWED};
 use crate::ir::{Expr, JoinPointId, ModifyRc, Param, Proc, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
@@ -471,10 +471,11 @@ impl<'a> Context<'a> {
                             let mut b = Stmt::Let(z, v, l, b);
 
                             if !ps[1].borrow {
-                                b = Stmt::Refcounting(
-                                    ModifyRc::Inc(arguments[2], 2),
-                                    self.arena.alloc(b),
-                                )
+                                // b = Stmt::Refcounting(
+                                //     ModifyRc::Inc(arguments[2], 2),
+                                //     self.arena.alloc(b),
+                                // )
+                                todo!();
                             }
 
                             &*self.arena.alloc(b)
@@ -799,10 +800,7 @@ impl<'a> Context<'a> {
 
                 use crate::ir::CallType;
                 let stmt = match &call.call_type {
-                    CallType::LowLevel {
-                        op,
-                        opt_closure_layout: _,
-                    } => {
+                    CallType::LowLevel { op, .. } => {
                         let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
                         self.add_dec_after_lowlevel(call.arguments, ps, cont, &invoke_live_vars)
                     }

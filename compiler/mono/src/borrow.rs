@@ -410,6 +410,7 @@ impl<'a> BorrowInfState<'a> {
             LowLevel {
                 op,
                 opt_closure_layout,
+                ..
             } => {
                 use roc_module::low_level::LowLevel::*;
                 match op {
