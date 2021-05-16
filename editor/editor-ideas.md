@@ -138,6 +138,8 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * [Codota](https://www.codota.com) AI autocomplete and example searching.
 * [Aroma](https://ai.facebook.com/blog/aroma-ml-for-code-recommendation) showing examples similar to current code.
 * [MISM](https://arxiv.org/abs/2006.05265) neural network based code similarity scoring.
+* [Inquisitive code editor](https://web.eecs.utk.edu/~azh/blog/inquisitivecodeeditor.html) Interactive bug detection with doc+test generation.
+* [NextJournal](https://nextjournal.com/joe-loco/command-bar?token=DpU6ewNQnLhYtVkwhs9GeX) Discoverable commands and shortcuts.
 
 ### Non-Code Related Inspiration
 
