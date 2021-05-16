@@ -39,44 +39,97 @@ mod gen_record {
         );
     }
 
-    // #[test]
-    // fn f64_record() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                    rec = { y: 17.2, x: 15.1, z: 19.3 }
+    #[test]
+    fn nested_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { x: 15, y: { a: 12, b: 15, c: 2}, z: 19 }.x
+                "#
+            ),
+            15,
+            i64
+        );
 
-    //                    rec.x
-    //                 "#
-    //         ),
-    //         15.1,
-    //         f64
-    //     );
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { x: 15, y: { a: 12, b: 15, c: 2}, z: 19 }.y.a
+                "#
+            ),
+            12,
+            i64
+        );
 
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                    rec = { y: 17.2, x: 15.1, z: 19.3 }
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { x: 15, y: { a: 12, b: 15, c: 2}, z: 19 }.y.b
+                "#
+            ),
+            15,
+            i64
+        );
 
-    //                    rec.y
-    //                 "#
-    //         ),
-    //         17.2,
-    //         f64
-    //     );
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { x: 15, y: { a: 12, b: 15, c: 2}, z: 19 }.y.c
+                "#
+            ),
+            2,
+            i64
+        );
 
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                     rec = { y: 17.2, x: 15.1, z: 19.3 }
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { x: 15, y: { a: 12, b: 15, c: 2}, z: 19 }.z
+                "#
+            ),
+            19,
+            i64
+        );
+    }
 
-    //                     rec.z
-    //                 "#
-    //         ),
-    //         19.3,
-    //         f64
-    //     );
-    // }
+    #[test]
+    fn f64_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                       rec = { y: 17.2, x: 15.1, z: 19.3 }
+
+                       rec.x
+                    "#
+            ),
+            15.1,
+            f64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                       rec = { y: 17.2, x: 15.1, z: 19.3 }
+
+                       rec.y
+                    "#
+            ),
+            17.2,
+            f64
+        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                        rec = { y: 17.2, x: 15.1, z: 19.3 }
+
+                        rec.z
+                    "#
+            ),
+            19.3,
+            f64
+        );
+    }
 
     // #[test]
     // fn fn_record() {

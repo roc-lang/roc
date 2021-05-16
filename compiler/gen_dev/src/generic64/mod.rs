@@ -639,6 +639,25 @@ impl<
         CC: CallConv<GeneralReg, FloatReg>,
     > Backend64Bit<'a, GeneralReg, FloatReg, ASM, CC>
 {
+    fn get_tmp_general_reg(&mut self) -> Result<GeneralReg, String> {
+        if !self.general_free_regs.is_empty() {
+            let free_reg = *self
+                .general_free_regs
+                .get(self.general_free_regs.len() - 1)
+                .unwrap();
+            if CC::general_callee_saved(&free_reg) {
+                self.general_used_callee_saved_regs.insert(free_reg);
+            }
+            Ok(free_reg)
+        } else if !self.general_used_regs.is_empty() {
+            let (reg, sym) = self.general_used_regs.remove(0);
+            self.free_to_stack(&sym)?;
+            Ok(reg)
+        } else {
+            Err("completely out of general purpose registers".to_string())
+        }
+    }
+
     fn claim_general_reg(&mut self, sym: &Symbol) -> Result<GeneralReg, String> {
         let reg = if !self.general_free_regs.is_empty() {
             let free_reg = self.general_free_regs.pop().unwrap();
@@ -793,15 +812,32 @@ impl<
 
     fn copy_symbol_to_stack_offset(
         &mut self,
-        offset: i32,
+        to_offset: i32,
         sym: &Symbol,
         layout: &Layout<'a>,
     ) -> Result<(), String> {
         match layout {
             Layout::Builtin(Builtin::Int64) => {
                 let reg = self.load_to_general_reg(sym)?;
-                ASM::mov_base32_reg64(&mut self.buf, offset, reg);
+                ASM::mov_base32_reg64(&mut self.buf, to_offset, reg);
                 Ok(())
+            }
+            Layout::Builtin(Builtin::Float64) => {
+                let reg = self.load_to_float_reg(sym)?;
+                ASM::mov_base32_freg64(&mut self.buf, to_offset, reg);
+                Ok(())
+            }
+            Layout::Struct(_) if layout.safe_to_memcpy() => {
+                let tmp_reg = self.get_tmp_general_reg()?;
+                if let Some(SymbolStorage::Base(from_offset)) = self.symbol_storage_map.get(sym) {
+                    for i in 0..layout.stack_size(PTR_SIZE) as i32 {
+                        ASM::mov_reg64_base32(&mut self.buf, tmp_reg, from_offset + i);
+                        ASM::mov_base32_reg64(&mut self.buf, to_offset + i, tmp_reg);
+                    }
+                    Ok(())
+                } else {
+                    Err(format!("unknown struct: {:?}", sym))
+                }
             }
             x => Err(format!(
                 "copying data to the stack with layout, {:?}, not implemented yet",
