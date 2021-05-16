@@ -1428,6 +1428,35 @@ mod tests {
     }
 
     #[test]
+    fn test_andpd_freg64_freg64() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+
+        for ((dst, src), expected) in &[
+            (
+                (X86_64FloatReg::XMM0, X86_64FloatReg::XMM0),
+                vec![0x66, 0x0F, 0x54, 0xC0],
+            ),
+            (
+                (X86_64FloatReg::XMM0, X86_64FloatReg::XMM15),
+                vec![0x66, 0x41, 0x0F, 0x54, 0xC7],
+            ),
+            (
+                (X86_64FloatReg::XMM15, X86_64FloatReg::XMM0),
+                vec![0x66, 0x44, 0x0F, 0x54, 0xF8],
+            ),
+            (
+                (X86_64FloatReg::XMM15, X86_64FloatReg::XMM15),
+                vec![0x66, 0x45, 0x0F, 0x54, 0xFF],
+            ),
+        ] {
+            buf.clear();
+            andpd_freg64_freg64(&mut buf, *dst, *src);
+            assert_eq!(&expected[..], &buf[..]);
+        }
+    }
+
+    #[test]
     fn test_xor_reg64_reg64() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
