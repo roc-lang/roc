@@ -288,6 +288,12 @@ mod gen_num {
         );
     }
 
+    #[test]
+    fn f64_abs() {
+        assert_evals_to!("Num.abs -4.7", 4.7, f64);
+        assert_evals_to!("Num.abs 5.8", 5.8, f64);
+    }
+
     /*
     #[test]
     fn f64_sqrt() {
@@ -310,11 +316,7 @@ mod gen_num {
         assert_evals_to!("Num.round 3.6", 4, i64);
     }
 
-    #[test]
-    fn f64_abs() {
-        assert_evals_to!("Num.abs -4.7", 4.7, f64);
-        assert_evals_to!("Num.abs 5.8", 5.8, f64);
-    }
+
 
     #[test]
     fn gen_float_eq() {
