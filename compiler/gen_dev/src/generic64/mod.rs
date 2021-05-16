@@ -474,6 +474,15 @@ impl<
         Ok(())
     }
 
+    fn build_num_abs_f64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String> {
+        let dst_reg = self.claim_float_reg(dst)?;
+        let src_reg = self.load_to_float_reg(src)?;
+
+        ASM::abs_freg64_freg64(&mut self.buf, &mut self.relocs, dst_reg, src_reg);
+
+        Ok(())
+    }
+
     fn build_num_add_i64(
         &mut self,
         dst: &Symbol,
