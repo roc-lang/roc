@@ -453,7 +453,7 @@ pub fn build_rc_wrapper<'a, 'ctx, 'env>(
             match rc_operation {
                 Mode::Inc => {
                     // we hardcode the 1 here
-                    let n = env.ptr_int().const_int(1, false);
+                    let n = 1;
                     increment_refcount_layout(env, function_value, layout_ids, n, value, layout);
                 }
                 Mode::Dec => {

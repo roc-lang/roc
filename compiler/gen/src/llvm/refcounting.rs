@@ -423,15 +423,16 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
-    inc_amount: IntValue<'ctx>,
+    inc_amount: u64,
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
 ) {
+    let amount = env.ptr_int().const_int(inc_amount, false);
     modify_refcount_layout(
         env,
         parent,
         layout_ids,
-        CallMode::Inc(inc_amount),
+        CallMode::Inc(amount),
         value,
         layout,
     );
