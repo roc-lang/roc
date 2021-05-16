@@ -218,7 +218,7 @@ pub fn build_inc_n_wrapper<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     layout: &Layout<'a>,
 ) -> FunctionValue<'ctx> {
-    build_rc_wrapper(env, layout_ids, layout, Mode::Inc)
+    build_rc_wrapper(env, layout_ids, layout, Mode::IncN)
 }
 
 /// a functin that accepts two arguments: the value to increment; increments by 1
@@ -238,7 +238,7 @@ pub fn build_dec_wrapper<'a, 'ctx, 'env>(
     build_rc_wrapper(env, layout_ids, layout, Mode::Dec)
 }
 
-pub fn build_rc_wrapper<'a, 'ctx, 'env>(
+fn build_rc_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     layout: &Layout<'a>,
