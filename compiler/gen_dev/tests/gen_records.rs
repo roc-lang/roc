@@ -182,44 +182,44 @@ mod gen_record {
     //     );
     // }
 
-    // #[test]
-    // fn def_record() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                     rec = { y: 17, x: 15, z: 19 }
+    #[test]
+    fn def_record() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                        rec = { y: 17, x: 15, z: 19 }
 
-    //                     rec.x
-    //                 "#
-    //         ),
-    //         15,
-    //         i64
-    //     );
+                        rec.x
+                    "#
+            ),
+            15,
+            i64
+        );
 
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                     rec = { x: 15, y: 17, z: 19 }
+        assert_evals_to!(
+            indoc!(
+                r#"
+                        rec = { x: 15, y: 17, z: 19 }
 
-    //                     rec.y
-    //                 "#
-    //         ),
-    //         17,
-    //         i64
-    //     );
+                        rec.y
+                    "#
+            ),
+            17,
+            i64
+        );
 
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                     rec = { x: 15, y: 17, z: 19 }
+        assert_evals_to!(
+            indoc!(
+                r#"
+                        rec = { x: 15, y: 17, z: 19 }
 
-    //                     rec.z
-    //                 "#
-    //         ),
-    //         19,
-    //         i64
-    //     );
-    // }
+                        rec.z
+                    "#
+            ),
+            19,
+            i64
+        );
+    }
 
     // #[test]
     // fn when_on_record() {
@@ -235,64 +235,64 @@ mod gen_record {
     //     );
     // }
 
-    // #[test]
-    // fn when_record_with_guard_pattern() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 when { x: 0x2, y: 3.14 } is
-    //                     { x: var } -> var + 3
-    //                 "#
-    //         ),
-    //         5,
-    //         i64
-    //     );
-    // }
+    #[test]
+    fn when_record_with_guard_pattern() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when { x: 0x2, y: 3.14 } is
+                        { x: var } -> var + 3
+                    "#
+            ),
+            5,
+            i64
+        );
+    }
 
-    // #[test]
-    // fn let_with_record_pattern() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 { x } = { x: 0x2, y: 3.14 }
+    #[test]
+    fn let_with_record_pattern() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    { x } = { x: 0x2, y: 3.14 }
 
-    //                 x
-    //                 "#
-    //         ),
-    //         2,
-    //         i64
-    //     );
-    // }
+                    x
+                    "#
+            ),
+            2,
+            i64
+        );
+    }
 
-    // #[test]
-    // fn record_guard_pattern() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 when { x: 0x2, y: 3.14 } is
-    //                     { x: 0x4 } -> 5
-    //                     { x } -> x + 3
-    //                 "#
-    //         ),
-    //         5,
-    //         i64
-    //     );
-    // }
+    #[test]
+    fn record_guard_pattern() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    when { x: 0x2, y: 3.14 } is
+                        { x: 0x4 } -> 5
+                        { x } -> x + 3
+                    "#
+            ),
+            5,
+            i64
+        );
+    }
 
-    // #[test]
-    // fn twice_record_access() {
-    //     assert_evals_to!(
-    //         indoc!(
-    //             r#"
-    //                 x =  {a: 0x2, b: 0x3 }
+    #[test]
+    fn twice_record_access() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x =  {a: 0x2, b: 0x3 }
 
-    //                 x.a + x.b
-    //                 "#
-    //         ),
-    //         5,
-    //         i64
-    //     );
-    // }
+                    x.a + x.b
+                    "#
+            ),
+            5,
+            i64
+        );
+    }
     // #[test]
     // fn empty_record() {
     //     assert_evals_to!(
