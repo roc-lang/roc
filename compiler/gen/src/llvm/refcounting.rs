@@ -426,6 +426,17 @@ pub fn increment_refcount_layout<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
 ) {
     let amount = env.ptr_int().const_int(inc_amount, false);
+    increment_n_refcount_layout(env, parent, layout_ids, amount, value, layout);
+}
+
+pub fn increment_n_refcount_layout<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    layout_ids: &mut LayoutIds<'a>,
+    amount: IntValue<'ctx>,
+    value: BasicValueEnum<'ctx>,
+    layout: &Layout<'a>,
+) {
     modify_refcount_layout(
         env,
         parent,
