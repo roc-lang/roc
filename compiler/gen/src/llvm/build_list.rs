@@ -289,7 +289,8 @@ pub fn list_get_unsafe<'a, 'ctx, 'env>(
 
             let result = builder.build_load(elem_ptr, "List.get");
 
-            increment_refcount_layout(env, parent, layout_ids, 1, result, elem_layout);
+            let n = env.ptr_int().const_int(1, false);
+            increment_refcount_layout(env, parent, layout_ids, n, result, elem_layout);
 
             result
         }

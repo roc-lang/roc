@@ -902,6 +902,10 @@ impl<'a> BranchInfo<'a> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ModifyRc {
     Inc(Symbol, u64),
+    IncUnknown {
+        to_increment: Symbol,
+        amount: Symbol,
+    },
     Dec(Symbol),
     DecRef(Symbol),
 }
@@ -925,6 +929,15 @@ impl ModifyRc {
                 .append(alloc.text(format!("{}", n)))
                 .append(symbol_to_doc(alloc, *symbol))
                 .append(";"),
+            IncUnknown {
+                to_increment,
+                amount,
+            } => alloc
+                .text("inc ")
+                .append(symbol_to_doc(alloc, *to_increment))
+                .append(" by ")
+                .append(symbol_to_doc(alloc, *amount))
+                .append(";"),
             Dec(symbol) => alloc
                 .text("dec ")
                 .append(symbol_to_doc(alloc, *symbol))
@@ -941,6 +954,7 @@ impl ModifyRc {
 
         match self {
             Inc(symbol, _) => *symbol,
+            IncUnknown { to_increment, .. } => *to_increment,
             Dec(symbol) => *symbol,
             DecRef(symbol) => *symbol,
         }

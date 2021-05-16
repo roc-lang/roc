@@ -575,6 +575,17 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                 expand_and_cancel(env, cont)
             }
 
+            Refcounting(
+                ModifyRc::IncUnknown {
+                    to_increment: _,
+                    amount: _,
+                },
+                cont,
+            ) => {
+                // TODO
+                expand_and_cancel(env, cont)
+            }
+
             Refcounting(ModifyRc::Inc(symbol, inc_amount), cont) => {
                 let count = env.deferred.inc_dec_map.entry(*symbol).or_insert(0);
                 *count += *inc_amount as i64;

@@ -2263,14 +2263,22 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     let layout = *layout;
 
                     if layout.contains_refcounted() {
-                        increment_refcount_layout(
-                            env,
-                            parent,
-                            layout_ids,
-                            *inc_amount,
-                            value,
-                            &layout,
-                        );
+                        let amount = env.ptr_int().const_int(*inc_amount, false);
+                        increment_refcount_layout(env, parent, layout_ids, amount, value, &layout);
+                    }
+
+                    build_exp_stmt(env, layout_ids, scope, parent, cont)
+                }
+                IncUnknown {
+                    to_increment,
+                    amount: amount_symbol,
+                } => {
+                    let (value, layout) = load_symbol_and_layout(scope, to_increment);
+                    let layout = *layout;
+
+                    if layout.contains_refcounted() {
+                        let amount = load_symbol(scope, amount_symbol).into_int_value();
+                        increment_refcount_layout(env, parent, layout_ids, amount, value, &layout);
                     }
 
                     build_exp_stmt(env, layout_ids, scope, parent, cont)

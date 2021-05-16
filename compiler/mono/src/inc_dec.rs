@@ -468,7 +468,16 @@ impl<'a> Context<'a> {
                                 arguments,
                             });
 
-                            &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                            let mut b = Stmt::Let(z, v, l, b);
+
+                            if !ps[1].borrow {
+                                b = Stmt::Refcounting(
+                                    ModifyRc::Inc(arguments[2], 2),
+                                    self.arena.alloc(b),
+                                )
+                            }
+
+                            &*self.arena.alloc(b)
                         }
                         None => unreachable!(),
                     }
