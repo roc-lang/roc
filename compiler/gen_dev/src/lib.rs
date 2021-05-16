@@ -8,7 +8,7 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{ModuleName, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::ir::{BranchInfo, CallType, Expr, JoinPointId, Literal, Proc, Stmt};
+use roc_mono::ir::{BranchInfo, CallType, Expr, JoinPointId, Literal, Proc, Stmt, Wrapped};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 use target_lexicon::Triple;
 
@@ -77,22 +77,22 @@ where
         // let duration = start.elapsed();
         // println!("Time to calculate lifetimes: {:?}", duration);
         // println!("{:?}", self.last_seen_map());
-        self.build_stmt(&proc.body)?;
+        self.build_stmt(&proc.body, &proc.ret_layout)?;
         self.finalize()
     }
 
     /// build_stmt builds a statement and outputs at the end of the buffer.
-    fn build_stmt(&mut self, stmt: &Stmt<'a>) -> Result<(), String> {
+    fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) -> Result<(), String> {
         match stmt {
             Stmt::Let(sym, expr, layout, following) => {
                 self.build_expr(sym, expr, layout)?;
                 self.free_symbols(stmt);
-                self.build_stmt(following)?;
+                self.build_stmt(following, ret_layout)?;
                 Ok(())
             }
             Stmt::Ret(sym) => {
                 self.load_literal_symbols(&[*sym])?;
-                self.return_symbol(sym)?;
+                self.return_symbol(sym, ret_layout)?;
                 self.free_symbols(stmt);
                 Ok(())
             }
@@ -106,7 +106,7 @@ where
                 // for now, treat invoke as a normal call
 
                 let stmt = Stmt::Let(*symbol, Expr::Call(call.clone()), *layout, pass);
-                self.build_stmt(&stmt)
+                self.build_stmt(&stmt, ret_layout)
             }
             Stmt::Switch {
                 cond_symbol,
@@ -217,6 +217,16 @@ where
                     x => Err(format!("the call type, {:?}, is not yet implemented", x)),
                 }
             }
+            Expr::Struct(fields) => {
+                self.load_literal_symbols(fields)?;
+                self.create_struct(sym, layout, fields)
+            }
+            Expr::AccessAtIndex {
+                index,
+                field_layouts,
+                structure,
+                wrapped,
+            } => self.load_access_at_index(sym, structure, *index, field_layouts, wrapped),
             x => Err(format!("the expression, {:?}, is not yet implemented", x)),
         }
     }
@@ -347,11 +357,29 @@ where
         Ok(())
     }
 
+    /// create_struct creates a struct with the elements specified loaded into it as data.
+    fn create_struct(
+        &mut self,
+        sym: &Symbol,
+        layout: &Layout<'a>,
+        fields: &'a [Symbol],
+    ) -> Result<(), String>;
+
+    /// load_access_at_index loads into `sym` the value at `index` in `structure`.
+    fn load_access_at_index(
+        &mut self,
+        sym: &Symbol,
+        structure: &Symbol,
+        index: u64,
+        field_layouts: &'a [Layout<'a>],
+        wrapped: &Wrapped,
+    ) -> Result<(), String>;
+
     /// load_literal sets a symbol to be equal to a literal.
     fn load_literal(&mut self, sym: &Symbol, lit: &Literal<'a>) -> Result<(), String>;
 
     /// return_symbol moves a symbol to the correct return location for the backend.
-    fn return_symbol(&mut self, sym: &Symbol) -> Result<(), String>;
+    fn return_symbol(&mut self, sym: &Symbol, layout: &Layout<'a>) -> Result<(), String>;
 
     /// free_symbols will free all symbols for the given statement.
     fn free_symbols(&mut self, stmt: &Stmt<'a>) {
