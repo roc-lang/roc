@@ -237,6 +237,7 @@ where
                 // TODO: when this is expanded to floats. deal with typecasting here, and then call correct low level method.
                 match layout {
                     Layout::Builtin(Builtin::Int64) => self.build_num_abs_i64(sym, &args[0]),
+                    Layout::Builtin(Builtin::Float64) => self.build_num_abs_f64(sym, &args[0]),
                     x => Err(format!("layout, {:?}, not implemented yet", x)),
                 }
             }
