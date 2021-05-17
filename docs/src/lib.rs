@@ -411,11 +411,11 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
 }
 
 fn insert_doc_links(markdown: String) -> String {
-    insert_doc_links_help(markdown.clone())
+    insert_doc_links_help(markdown)
 }
 
 fn insert_doc_links_help(markdown: String) -> String {
-    let buf = &markdown.clone();
+    let buf = &markdown;
     let mut result = String::new();
 
     let mut chomping_from: Option<usize> = None;
@@ -461,7 +461,7 @@ fn make_doc_link(doc_item: String) -> String {
     let mut label = String::new();
     let mut link = String::new();
 
-    let mut parts = doc_item.split(".").into_iter().peekable();
+    let mut parts = doc_item.split('.').into_iter().peekable();
 
     while let Some(part) = parts.next() {
         label.push_str(part);
