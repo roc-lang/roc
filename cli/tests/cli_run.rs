@@ -7,11 +7,9 @@ extern crate roc_collections;
 extern crate roc_load;
 extern crate roc_module;
 
-mod helpers;
-
 #[cfg(test)]
 mod cli_run {
-    use crate::helpers::{
+    use roc_cli::helpers::{
         example_file, extract_valgrind_errors, fixture_file, run_cmd, run_roc, run_with_valgrind,
         ValgrindError, ValgrindErrorXWhat,
     };

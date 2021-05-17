@@ -2917,6 +2917,7 @@ dependencies = [
  "bumpalo",
  "clap 3.0.0-beta.1",
  "const_format",
+ "criterion",
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",

@@ -4,11 +4,9 @@ extern crate pretty_assertions;
 #[macro_use]
 extern crate indoc;
 
-mod helpers;
-
 #[cfg(test)]
 mod repl_eval {
-    use crate::helpers;
+    use roc_cli::helpers;
     use roc_gen::run_roc::RocCallResult;
 
     #[test]

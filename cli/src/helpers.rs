@@ -5,7 +5,7 @@ extern crate roc_load;
 extern crate roc_module;
 extern crate tempfile;
 
-use roc_cli::repl::{INSTRUCTIONS, WELCOME_MESSAGE};
+use crate::repl::{INSTRUCTIONS, WELCOME_MESSAGE};
 use serde::Deserialize;
 use serde_xml_rs::from_str;
 use std::env;

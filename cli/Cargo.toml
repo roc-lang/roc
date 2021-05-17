@@ -82,6 +82,9 @@ libloading = "0.6"
 inkwell = { git = "https://github.com/rtfeldman/inkwell", tag = "llvm10-0.release4", features = [ "llvm10-0" ] }
 target-lexicon = "0.10"
 tempfile = "3.1.0"
+serde = { version = "1.0", features = ["derive"] }
+strip-ansi-escapes = "0.1"
+serde-xml-rs = "0.4"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"
@@ -89,8 +92,10 @@ maplit = "1.0.1"
 indoc = "0.3.3"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
-strip-ansi-escapes = "0.1"
-serde = { version = "1.0", features = ["derive"] }
-serde-xml-rs = "0.4"
 serial_test = "0.5"
 tempfile = "3.1.0"
+criterion = "0.3.4"
+
+[[bench]]
+name = "main_benchmark"
+harness = false
