@@ -728,6 +728,25 @@ fn type_to_variable(
 
             register(subs, rank, pools, content)
         }
+        FunctionOrTagUnion(tag_name, symbol, ext) => {
+            let mut tag_vars = MutMap::default();
+
+            let temp_ext_var = type_to_variable(subs, rank, pools, cached, ext);
+            let mut ext_tag_vec = Vec::new();
+            let new_ext_var = match roc_types::pretty_print::chase_ext_tag_union(
+                subs,
+                temp_ext_var,
+                &mut ext_tag_vec,
+            ) {
+                Ok(()) => Variable::EMPTY_TAG_UNION,
+                Err((new, _)) => new,
+            };
+            tag_vars.extend(ext_tag_vec.into_iter());
+
+            let content = Content::Structure(FlatType::TagUnion(tag_vars, new_ext_var));
+
+            register(subs, rank, pools, content)
+        }
         RecursiveTagUnion(rec_var, tags, ext) => {
             let mut tag_vars = MutMap::default();
 

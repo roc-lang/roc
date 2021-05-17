@@ -816,6 +816,13 @@ pub fn constrain_expr(
             ext_var,
             name,
             arguments,
+        }
+        | ZeroArgumentTag {
+            variant_var,
+            ext_var,
+            name,
+            arguments,
+            ..
         } => {
             let mut vars = Vec::with_capacity(arguments.len());
             let mut types = Vec::with_capacity(arguments.len());
