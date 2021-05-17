@@ -467,15 +467,27 @@ impl FuncDefBuilder {
         block
     }
 
-    /// Add an expression with unknown semantics to a block.
+    /// Add an expression with unknown semantics to a block, operating on a given set of values.
     ///
     /// The analysis engine will conservatively treat this expression as if it could perform any
-    /// operation expressible in the modeling language except in-place mutations.
+    /// operation expressible in the modeling language mentioning `args`, except in-place mutations.
+    ///
+    /// The analysis engine will not consider any possible behaviors which would require access to
+    /// values in scope not appearing in `args`, or which would require access to any join point in
+    /// scope.
     ///
     /// This will significantly limit optimizations, but could be useful for prototyping.
-    pub fn add_unknown(&mut self, block: BlockId, result_type: TypeId) -> Result<ValueId> {
+    pub fn add_unknown_with(
+        &mut self,
+        block: BlockId,
+        args: &[ValueId],
+        result_type: TypeId,
+    ) -> Result<ValueId> {
         self.check_bid(block)?;
         self.check_tid(result_type)?;
+        for &arg in args {
+            self.check_vid(arg)?;
+        }
         Ok(ValueId(self.vid_gen.next()))
     }
 

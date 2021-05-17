@@ -271,10 +271,17 @@ fn call_spec(
         } => todo!(),
         Foreign {
             foreign_symbol: _,
-            ret_layout: _,
+            ret_layout,
         } => {
-            // NOTE foreign functions are those exposed by the platform
-            todo!()
+            let arguments: Vec<_> = call
+                .arguments
+                .iter()
+                .map(|symbol| env.symbols[symbol])
+                .collect();
+
+            let result_type = layout_spec(builder, ret_layout)?;
+
+            builder.add_unknown_with(block, &arguments, result_type)
         }
         LowLevel { op, update_mode } => lowlevel_spec(
             builder,

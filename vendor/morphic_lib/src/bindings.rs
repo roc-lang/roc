@@ -264,13 +264,19 @@ pub unsafe extern "C" fn Morphic_FuncDefBuilder_AddBlock(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn Morphic_FuncDefBuilder_AddUnknown(
+pub unsafe extern "C" fn Morphic_FuncDefBuilder_AddUnknownWith(
     self_: *mut FuncDefBuilder,
     block: BlockId,
+    args: *const ValueId,
+    args_len: usize,
     result_type: TypeId,
     out: *mut ValueId,
 ) -> *mut Error {
-    *out = check_err!((*self_).add_unknown(block, result_type));
+    *out = check_err!((*self_).add_unknown_with(
+        block,
+        slice::from_raw_parts(args, args_len),
+        result_type
+    ));
     ptr::null_mut()
 }
 
