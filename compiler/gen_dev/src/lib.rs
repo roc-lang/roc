@@ -240,6 +240,7 @@ where
                 // TODO: when this is expanded to floats. deal with typecasting here, and then call correct low level method.
                 match layout {
                     Layout::Builtin(Builtin::Int64) => self.build_num_abs_i64(sym, &args[0]),
+                    Layout::Builtin(Builtin::Float64) => self.build_num_abs_f64(sym, &args[0]),
                     x => Err(format!("layout, {:?}, not implemented yet", x)),
                 }
             }
@@ -313,6 +314,10 @@ where
     /// build_num_abs_i64 stores the absolute value of src into dst.
     /// It only deals with inputs and outputs of i64 type.
     fn build_num_abs_i64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String>;
+
+    /// build_num_abs_f64 stores the absolute value of src into dst.
+    /// It only deals with inputs and outputs of f64 type.
+    fn build_num_abs_f64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String>;
 
     /// build_num_add_i64 stores the sum of src1 and src2 into dst.
     /// It only deals with inputs and outputs of i64 type.

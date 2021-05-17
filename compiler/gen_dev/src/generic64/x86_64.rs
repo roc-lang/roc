@@ -741,6 +741,24 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn abs_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        dst: X86_64FloatReg,
+        src: X86_64FloatReg,
+    ) {
+        movsd_freg64_rip_offset32(buf, dst, 0);
+
+        // TODO: make sure this constant only loads once instead of every call to abs
+        relocs.push(Relocation::LocalData {
+            offset: buf.len() as u64 - 4,
+            data: 0x7fffffffffffffffu64.to_le_bytes().to_vec(),
+        });
+
+        andpd_freg64_freg64(buf, dst, src);
+    }
+
+    #[inline(always)]
     fn add_reg64_reg64_imm32(
         buf: &mut Vec<'_, u8>,
         dst: X86_64GeneralReg,
@@ -1045,6 +1063,26 @@ fn addsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64Fl
         ])
     } else {
         buf.extend(&[0xF2, 0x0F, 0x58, 0xC0 + (dst_mod << 3) + (src_mod)])
+    }
+}
+
+#[inline(always)]
+fn andpd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+
+    if dst_high || src_high {
+        buf.extend(&[
+            0x66,
+            0x40 + ((dst_high as u8) << 2) + (src_high as u8),
+            0x0F,
+            0x54,
+            0xC0 + (dst_mod << 3) + (src_mod),
+        ])
+    } else {
+        buf.extend(&[0x66, 0x0F, 0x54, 0xC0 + (dst_mod << 3) + (src_mod)])
     }
 }
 
@@ -1423,6 +1461,35 @@ mod tests {
         ] {
             buf.clear();
             addsd_freg64_freg64(&mut buf, *dst, *src);
+            assert_eq!(&expected[..], &buf[..]);
+        }
+    }
+
+    #[test]
+    fn test_andpd_freg64_freg64() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+
+        for ((dst, src), expected) in &[
+            (
+                (X86_64FloatReg::XMM0, X86_64FloatReg::XMM0),
+                vec![0x66, 0x0F, 0x54, 0xC0],
+            ),
+            (
+                (X86_64FloatReg::XMM0, X86_64FloatReg::XMM15),
+                vec![0x66, 0x41, 0x0F, 0x54, 0xC7],
+            ),
+            (
+                (X86_64FloatReg::XMM15, X86_64FloatReg::XMM0),
+                vec![0x66, 0x44, 0x0F, 0x54, 0xF8],
+            ),
+            (
+                (X86_64FloatReg::XMM15, X86_64FloatReg::XMM15),
+                vec![0x66, 0x45, 0x0F, 0x54, 0xFF],
+            ),
+        ] {
+            buf.clear();
+            andpd_freg64_freg64(&mut buf, *dst, *src);
             assert_eq!(&expected[..], &buf[..]);
         }
     }
