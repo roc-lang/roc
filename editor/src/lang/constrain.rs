@@ -9,7 +9,7 @@ use crate::lang::{
 
 use roc_can::expected::Expected;
 use roc_collections::all::{BumpMap, BumpMapDefault, Index};
-use roc_module::symbol::Symbol;
+use roc_module::{ident::TagName, symbol::Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::{
     subs::Variable,
@@ -21,7 +21,7 @@ use roc_types::{
 pub enum Constraint<'a> {
     Eq(Type2, Expected<Type2>, Category, Region),
     // Store(Type, Variable, &'static str, u32),
-    // Lookup(Symbol, Expected<Type>, Region),
+    Lookup(Symbol, Expected<Type2>, Region),
     // Pattern(Region, PatternCategory, Type, PExpected<Type>),
     And(BumpVec<'a, Constraint<'a>>),
     Let(&'a LetConstraint<'a>),
@@ -52,6 +52,7 @@ pub fn constrain_expr<'a>(
         Expr2::SmallStr(_) => Eq(str_type(env.pool), expected, Category::Str, region),
         Expr2::Blank => True,
         Expr2::EmptyRecord => constrain_empty_record(expected, region),
+        Expr2::Var(symbol) => Lookup(*symbol, expected, region),
         Expr2::SmallInt { var, .. } => {
             let mut flex_vars = BumpVec::with_capacity_in(1, arena);
 
@@ -216,6 +217,65 @@ pub fn constrain_expr<'a>(
                 exists(arena, field_vars, And(constraints))
             }
         }
+        Expr2::GlobalTag {
+            variant_var,
+            ext_var,
+            name,
+            arguments,
+        } => {
+            let mut flex_vars = BumpVec::with_capacity_in(arguments.len(), arena);
+            let types = PoolVec::with_capacity(arguments.len() as u32, env.pool);
+            let mut arg_cons = BumpVec::with_capacity_in(arguments.len(), arena);
+
+            for (argument_node_id, type_node_id) in
+                arguments.iter_node_ids().zip(types.iter_node_ids())
+            {
+                let (var, expr_node_id) = env.pool.get(argument_node_id);
+
+                let argument_expr = env.pool.get(*expr_node_id);
+
+                let arg_con = constrain_expr(
+                    arena,
+                    env,
+                    argument_expr,
+                    Expected::NoExpectation(Type2::Variable(*var)),
+                    region,
+                );
+
+                arg_cons.push(arg_con);
+                flex_vars.push(*var);
+
+                env.pool[type_node_id] = Type2::Variable(*var);
+            }
+
+            let union_con = Eq(
+                Type2::TagUnion(
+                    PoolVec::new(std::iter::once((*name, types)), env.pool),
+                    env.pool.add(Type2::Variable(*ext_var)),
+                ),
+                expected.shallow_clone(),
+                Category::TagApply {
+                    tag_name: TagName::Global(name.as_str(env.pool).into()),
+                    args_count: arguments.len(),
+                },
+                region,
+            );
+
+            let ast_con = Eq(
+                Type2::Variable(*variant_var),
+                expected,
+                Category::Storage(std::file!(), std::line!()),
+                region,
+            );
+
+            flex_vars.push(*variant_var);
+            flex_vars.push(*ext_var);
+
+            arg_cons.push(union_con);
+            arg_cons.push(ast_con);
+
+            exists(arena, flex_vars, And(arg_cons))
+        }
         _ => todo!("implement constaints for {:?}", expr),
     }
 }
@@ -268,13 +328,7 @@ fn empty_list_type(pool: &mut Pool, var: Variable) -> Type2 {
 
 #[inline(always)]
 fn list_type(pool: &mut Pool, typ: Type2) -> Type2 {
-    let args = PoolVec::with_capacity(1, pool);
-
-    for (arg_node_id, arg) in args.iter_node_ids().zip(vec![typ]) {
-        pool[arg_node_id] = arg;
-    }
-
-    builtin_type(Symbol::LIST_LIST, args)
+    builtin_type(Symbol::LIST_LIST, PoolVec::new(vec![typ].into_iter(), pool))
 }
 
 #[inline(always)]
