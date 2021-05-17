@@ -175,18 +175,34 @@ pub fn listReverse(list: RocList, alignment: usize, element_width: usize) callco
     }
 }
 
-pub fn listMap(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, old_element_width: usize, new_element_width: usize) callconv(.C) RocList {
+pub const RocFunctionCall1 = extern struct {
+    caller: Caller1,
+    data: Opaque,
+    inc_n_data: IncN,
+    data_is_owned: bool,
+};
+
+pub fn listMap(
+    list: RocList,
+    call: RocFunctionCall1,
+    alignment: usize,
+    old_element_width: usize,
+    new_element_width: usize,
+) callconv(.C) RocList {
     if (list.bytes) |source_ptr| {
         const size = list.len();
         var i: usize = 0;
         const output = RocList.allocate(std.heap.c_allocator, alignment, size, new_element_width);
         const target_ptr = output.bytes orelse unreachable;
 
-        while (i < size) : (i += 1) {
-            caller(transform, source_ptr + (i * old_element_width), target_ptr + (i * new_element_width));
-        }
+        // if (call.data_is_owned) {
+        // }
 
-        // utils.decref(std.heap.c_allocator, alignment, list.bytes, size * old_element_width);
+        call.inc_n_data(call.data, size);
+
+        while (i < size) : (i += 1) {
+            call.caller(call.data, source_ptr + (i * old_element_width), target_ptr + (i * new_element_width));
+        }
 
         return output;
     } else {

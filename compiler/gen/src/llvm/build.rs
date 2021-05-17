@@ -3669,10 +3669,12 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
                 Layout::Builtin(Builtin::List(_, element_layout)) => list_map(
                     env,
+                    layout_ids,
                     function,
                     function_layout,
                     closure,
                     *closure_layout,
+                    function_owns_closure_data,
                     list,
                     element_layout,
                 ),

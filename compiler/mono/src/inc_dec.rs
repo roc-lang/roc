@@ -416,6 +416,12 @@ impl<'a> Context<'a> {
             and it has been borrowed by the application.
             Remark: `x` may occur multiple times in the application (e.g., `f x y x`).
             This is why we check whether it is the first occurrence. */
+            dbg!(
+                self.must_consume(*x),
+                is_first_occurence(xs, i),
+                *is_borrow,
+                !b_live_vars.contains(x)
+            );
 
             if self.must_consume(*x)
                 && is_first_occurence(xs, i)
@@ -461,15 +467,20 @@ impl<'a> Context<'a> {
                         Some(ps) => {
                             let b = if ps[0].borrow {
                                 let ps = [BORROWED, BORROWED, BORROWED];
+                                println!("----------------");
                                 self.add_dec_after_lowlevel(arguments, &ps, b, b_live_vars)
                             } else {
-                                // let ps = [OWNED, BORROWED, BORROWED];
-                                // self.add_dec_after_lowlevel(arguments, &ps, b, b_live_vars)
+                                let ps = [OWNED, BORROWED, BORROWED];
+                                println!("----------------");
+                                let b = self.add_dec_after_lowlevel(arguments, &ps, b, b_live_vars);
+
                                 self.arena.alloc(Stmt::Refcounting(
                                     ModifyRc::DecRef(arguments[0]),
                                     self.arena.alloc(b),
                                 ))
                             };
+
+                            dbg!(self.must_consume(arguments[2]));
 
                             let call_type = {
                                 if ps[1].borrow {
