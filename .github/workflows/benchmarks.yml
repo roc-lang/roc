@@ -1,0 +1,24 @@
+on: [pull_request]
+
+name: Benchmarks
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  prep-dependency-container:
+    name: cd cli; cargo criterion
+    runs-on: [self-hosted, i7-6700K]
+    timeout-minutes: 60
+    env:
+      FORCE_COLOR: 1
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          clean: "true"
+
+      - name: Earthly version
+        run: earthly --version
+
+      - name: install dependencies, build, cd cli, cargo criterion
+        run: earthly +bench-roc
