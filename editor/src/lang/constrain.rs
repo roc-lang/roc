@@ -9,7 +9,7 @@ use crate::lang::{
 
 use roc_can::expected::Expected;
 use roc_collections::all::{BumpMap, BumpMapDefault, Index};
-use roc_module::symbol::Symbol;
+use roc_module::{ident::TagName, symbol::Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::{
     subs::Variable,
@@ -21,7 +21,7 @@ use roc_types::{
 pub enum Constraint<'a> {
     Eq(Type2, Expected<Type2>, Category, Region),
     // Store(Type, Variable, &'static str, u32),
-    // Lookup(Symbol, Expected<Type>, Region),
+    Lookup(Symbol, Expected<Type2>, Region),
     // Pattern(Region, PatternCategory, Type, PExpected<Type>),
     And(BumpVec<'a, Constraint<'a>>),
     Let(&'a LetConstraint<'a>),
@@ -52,6 +52,7 @@ pub fn constrain_expr<'a>(
         Expr2::SmallStr(_) => Eq(str_type(env.pool), expected, Category::Str, region),
         Expr2::Blank => True,
         Expr2::EmptyRecord => constrain_empty_record(expected, region),
+        Expr2::Var(symbol) => Lookup(*symbol, expected, region),
         Expr2::SmallInt { var, .. } => {
             let mut flex_vars = BumpVec::with_capacity_in(1, arena);
 
@@ -216,6 +217,220 @@ pub fn constrain_expr<'a>(
                 exists(arena, field_vars, And(constraints))
             }
         }
+        Expr2::GlobalTag {
+            variant_var,
+            ext_var,
+            name,
+            arguments,
+        } => {
+            let mut flex_vars = BumpVec::with_capacity_in(arguments.len(), arena);
+            let types = PoolVec::with_capacity(arguments.len() as u32, env.pool);
+            let mut arg_cons = BumpVec::with_capacity_in(arguments.len(), arena);
+
+            for (argument_node_id, type_node_id) in
+                arguments.iter_node_ids().zip(types.iter_node_ids())
+            {
+                let (var, expr_node_id) = env.pool.get(argument_node_id);
+
+                let argument_expr = env.pool.get(*expr_node_id);
+
+                let arg_con = constrain_expr(
+                    arena,
+                    env,
+                    argument_expr,
+                    Expected::NoExpectation(Type2::Variable(*var)),
+                    region,
+                );
+
+                arg_cons.push(arg_con);
+                flex_vars.push(*var);
+
+                env.pool[type_node_id] = Type2::Variable(*var);
+            }
+
+            let union_con = Eq(
+                Type2::TagUnion(
+                    PoolVec::new(std::iter::once((*name, types)), env.pool),
+                    env.pool.add(Type2::Variable(*ext_var)),
+                ),
+                expected.shallow_clone(),
+                Category::TagApply {
+                    tag_name: TagName::Global(name.as_str(env.pool).into()),
+                    args_count: arguments.len(),
+                },
+                region,
+            );
+
+            let ast_con = Eq(
+                Type2::Variable(*variant_var),
+                expected,
+                Category::Storage(std::file!(), std::line!()),
+                region,
+            );
+
+            flex_vars.push(*variant_var);
+            flex_vars.push(*ext_var);
+
+            arg_cons.push(union_con);
+            arg_cons.push(ast_con);
+
+            exists(arena, flex_vars, And(arg_cons))
+        }
+        Expr2::Call {
+            args,
+            expr_var,
+            expr: expr_node_id,
+            closure_var,
+            fn_var,
+            ..
+        } => {
+            // The expression that evaluates to the function being called, e.g. `foo` in
+            // (foo) bar baz
+            let expr = env.pool.get(*expr_node_id);
+
+            let opt_symbol = if let Expr2::Var(symbol) = expr {
+                Some(*symbol)
+            } else {
+                None
+            };
+
+            let fn_type = Type2::Variable(*fn_var);
+            let fn_region = region;
+            let fn_expected = Expected::NoExpectation(fn_type.shallow_clone());
+
+            let fn_reason = Reason::FnCall {
+                name: opt_symbol,
+                arity: args.len() as u8,
+            };
+
+            let fn_con = constrain_expr(arena, env, expr, fn_expected, region);
+
+            // The function's return type
+            // TODO: don't use expr_var?
+            let ret_type = Type2::Variable(*expr_var);
+
+            // type of values captured in the closure
+            let closure_type = Type2::Variable(*closure_var);
+
+            // This will be used in the occurs check
+            let mut vars = BumpVec::with_capacity_in(2 + args.len(), arena);
+
+            vars.push(*fn_var);
+            // TODO: don't use expr_var?
+            vars.push(*expr_var);
+            vars.push(*closure_var);
+
+            let mut arg_types = BumpVec::with_capacity_in(args.len(), arena);
+            let mut arg_cons = BumpVec::with_capacity_in(args.len(), arena);
+
+            for (index, arg_node_id) in args.iter_node_ids().enumerate() {
+                let (arg_var, arg) = env.pool.get(arg_node_id);
+                let arg_expr = env.pool.get(*arg);
+
+                let region = region;
+                let arg_type = Type2::Variable(*arg_var);
+
+                let reason = Reason::FnArg {
+                    name: opt_symbol,
+                    arg_index: Index::zero_based(index),
+                };
+
+                let expected_arg = Expected::ForReason(reason, arg_type.shallow_clone(), region);
+
+                let arg_con = constrain_expr(arena, env, arg_expr, expected_arg, region);
+
+                vars.push(*arg_var);
+                arg_types.push(arg_type);
+                arg_cons.push(arg_con);
+            }
+
+            let expected_fn_type = Expected::ForReason(
+                fn_reason,
+                Type2::Function(
+                    PoolVec::new(arg_types.into_iter(), env.pool),
+                    env.pool.add(closure_type),
+                    env.pool.add(ret_type.shallow_clone()),
+                ),
+                region,
+            );
+
+            let category = Category::CallResult(opt_symbol);
+
+            let mut and_constraints = BumpVec::with_capacity_in(4, arena);
+
+            and_constraints.push(fn_con);
+            and_constraints.push(Eq(fn_type, expected_fn_type, category.clone(), fn_region));
+            and_constraints.push(And(arg_cons));
+            and_constraints.push(Eq(ret_type, expected, category, region));
+
+            exists(arena, vars, And(and_constraints))
+        }
+        Expr2::Accessor {
+            function_var,
+            closure_var,
+            field,
+            record_var,
+            ext_var,
+            field_var,
+        } => {
+            let ext_var = *ext_var;
+            let ext_type = Type2::Variable(ext_var);
+
+            let field_var = *field_var;
+            let field_type = Type2::Variable(field_var);
+
+            let record_field =
+                types::RecordField::Demanded(env.pool.add(field_type.shallow_clone()));
+
+            let record_type = Type2::Record(
+                PoolVec::new(vec![(*field, record_field)].into_iter(), env.pool),
+                env.pool.add(ext_type),
+            );
+
+            let category = Category::Accessor(field.as_str(env.pool).into());
+
+            let record_expected = Expected::NoExpectation(record_type.shallow_clone());
+            let record_con = Eq(
+                Type2::Variable(*record_var),
+                record_expected,
+                category.clone(),
+                region,
+            );
+
+            let function_type = Type2::Function(
+                PoolVec::new(vec![record_type].into_iter(), env.pool),
+                env.pool.add(Type2::Variable(*closure_var)),
+                env.pool.add(field_type),
+            );
+
+            let mut flex_vars = BumpVec::with_capacity_in(5, arena);
+
+            flex_vars.push(*record_var);
+            flex_vars.push(*function_var);
+            flex_vars.push(*closure_var);
+            flex_vars.push(field_var);
+            flex_vars.push(ext_var);
+
+            let mut and_constraints = BumpVec::with_capacity_in(3, arena);
+
+            and_constraints.push(Eq(
+                function_type.shallow_clone(),
+                expected,
+                category.clone(),
+                region,
+            ));
+
+            and_constraints.push(Eq(
+                function_type,
+                Expected::NoExpectation(Type2::Variable(*function_var)),
+                category,
+                region,
+            ));
+
+            and_constraints.push(record_con);
+
+            exists(arena, flex_vars, And(and_constraints))
+        }
         _ => todo!("implement constaints for {:?}", expr),
     }
 }
@@ -268,13 +483,7 @@ fn empty_list_type(pool: &mut Pool, var: Variable) -> Type2 {
 
 #[inline(always)]
 fn list_type(pool: &mut Pool, typ: Type2) -> Type2 {
-    let args = PoolVec::with_capacity(1, pool);
-
-    for (arg_node_id, arg) in args.iter_node_ids().zip(vec![typ]) {
-        pool[arg_node_id] = arg;
-    }
-
-    builtin_type(Symbol::LIST_LIST, args)
+    builtin_type(Symbol::LIST_LIST, PoolVec::new(vec![typ].into_iter(), pool))
 }
 
 #[inline(always)]

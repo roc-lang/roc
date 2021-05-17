@@ -184,6 +184,9 @@ where
                             Symbol::NUM_ATAN => {
                                 self.build_run_low_level(sym, &LowLevel::NumAtan, arguments, layout)
                             }
+                            Symbol::NUM_MUL => {
+                                self.build_run_low_level(sym, &LowLevel::NumMul, arguments, layout)
+                            }
                             Symbol::NUM_POW_INT => self.build_run_low_level(
                                 sym,
                                 &LowLevel::NumPowInt,
@@ -237,6 +240,7 @@ where
                 // TODO: when this is expanded to floats. deal with typecasting here, and then call correct low level method.
                 match layout {
                     Layout::Builtin(Builtin::Int64) => self.build_num_abs_i64(sym, &args[0]),
+                    Layout::Builtin(Builtin::Float64) => self.build_num_abs_f64(sym, &args[0]),
                     x => Err(format!("layout, {:?}, not implemented yet", x)),
                 }
             }
@@ -260,6 +264,15 @@ where
             }
             LowLevel::NumAtan => {
                 self.build_fn_call(sym, bitcode::NUM_ATAN.to_string(), args, &[*layout], layout)
+            }
+            LowLevel::NumMul => {
+                // TODO: when this is expanded to floats. deal with typecasting here, and then call correct low level method.
+                match layout {
+                    Layout::Builtin(Builtin::Int64) => {
+                        self.build_num_mul_i64(sym, &args[0], &args[1])
+                    }
+                    x => Err(format!("layout, {:?}, not implemented yet", x)),
+                }
             }
             LowLevel::NumPowInt => self.build_fn_call(
                 sym,
@@ -302,6 +315,10 @@ where
     /// It only deals with inputs and outputs of i64 type.
     fn build_num_abs_i64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String>;
 
+    /// build_num_abs_f64 stores the absolute value of src into dst.
+    /// It only deals with inputs and outputs of f64 type.
+    fn build_num_abs_f64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String>;
+
     /// build_num_add_i64 stores the sum of src1 and src2 into dst.
     /// It only deals with inputs and outputs of i64 type.
     fn build_num_add_i64(
@@ -314,6 +331,15 @@ where
     /// build_num_add_f64 stores the sum of src1 and src2 into dst.
     /// It only deals with inputs and outputs of f64 type.
     fn build_num_add_f64(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+    ) -> Result<(), String>;
+
+    /// build_num_mul_i64 stores `src1 * src2` into dst.
+    /// It only deals with inputs and outputs of i64 type.
+    fn build_num_mul_i64(
         &mut self,
         dst: &Symbol,
         src1: &Symbol,

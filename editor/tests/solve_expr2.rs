@@ -238,3 +238,27 @@ fn constrain_list_of_records() {
         "List { x : Num * }",
     )
 }
+
+#[test]
+fn constrain_global_tag() {
+    infer_eq(
+        indoc!(
+            r#"
+            Foo
+            "#
+        ),
+        "[ Foo ]*",
+    )
+}
+
+#[test]
+fn constrain_call_and_accessor() {
+    infer_eq(
+        indoc!(
+            r#"
+            .foo { foo: "bar" }
+            "#
+        ),
+        "Str",
+    )
+}

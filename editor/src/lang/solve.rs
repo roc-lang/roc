@@ -1,7 +1,7 @@
 #![allow(clippy::all)]
 #![allow(dead_code)]
 use crate::lang::constrain::Constraint::{self, *};
-use crate::lang::pool::Pool;
+use crate::lang::pool::{Pool, ShallowClone};
 use crate::lang::types::Type2;
 use bumpalo::Bump;
 use roc_can::expected::{Expected, PExpected};
@@ -270,75 +270,79 @@ fn solve<'a>(
         //                }
         //            }
         //        }
-        //        Lookup(symbol, expectation, region) => {
-        //            match env.vars_by_symbol.get(&symbol) {
-        //                Some(var) => {
-        //                    // Deep copy the vars associated with this symbol before unifying them.
-        //                    // Otherwise, suppose we have this:
-        //                    //
-        //                    // identity = \a -> a
-        //                    //
-        //                    // x = identity 5
-        //                    //
-        //                    // When we call (identity 5), it's important that we not unify
-        //                    // on identity's original vars. If we do, the type of `identity` will be
-        //                    // mutated to be `Int -> Int` instead of `a -> `, which would be incorrect;
-        //                    // the type of `identity` is more general than that!
-        //                    //
-        //                    // Instead, we want to unify on a *copy* of its vars. If the copy unifies
-        //                    // successfully (in this case, to `Int -> Int`), we can use that to
-        //                    // infer the type of this lookup (in this case, `Int`) without ever
-        //                    // having mutated the original.
-        //                    //
-        //                    // If this Lookup is targeting a value in another module,
-        //                    // then we copy from that module's Subs into our own. If the value
-        //                    // is being looked up in this module, then we use our Subs as both
-        //                    // the source and destination.
-        //                    let actual = deep_copy_var(subs, rank, pools, *var);
-        //                    let expected = type_to_var(
-        //                        subs,
-        //                        rank,
-        //                        pools,
-        //                        cached_aliases,
-        //                        expectation.get_type_ref(),
-        //                    );
-        //                    match unify(subs, actual, expected) {
-        //                        Success(vars) => {
-        //                            introduce(subs, rank, pools, &vars);
-        //
-        //                            state
-        //                        }
-        //
-        //                        Failure(vars, actual_type, expected_type) => {
-        //                            introduce(subs, rank, pools, &vars);
-        //
-        //                            let problem = TypeError::BadExpr(
-        //                                *region,
-        //                                Category::Lookup(*symbol),
-        //                                actual_type,
-        //                                expectation.clone().replace(expected_type),
-        //                            );
-        //
-        //                            problems.push(problem);
-        //
-        //                            state
-        //                        }
-        //                        BadType(vars, problem) => {
-        //                            introduce(subs, rank, pools, &vars);
-        //
-        //                            problems.push(TypeError::BadType(problem));
-        //
-        //                            state
-        //                        }
-        //                    }
-        //                }
-        //                None => {
-        //                    problems.push(TypeError::UnexposedLookup(*symbol));
-        //
-        //                    state
-        //                }
-        //            }
-        //        }
+        Lookup(symbol, expectation, region) => {
+            match env.vars_by_symbol.get(&symbol) {
+                Some(var) => {
+                    // Deep copy the vars associated with this symbol before unifying them.
+                    // Otherwise, suppose we have this:
+                    //
+                    // identity = \a -> a
+                    //
+                    // x = identity 5
+                    //
+                    // When we call (identity 5), it's important that we not unify
+                    // on identity's original vars. If we do, the type of `identity` will be
+                    // mutated to be `Int -> Int` instead of `a -> `, which would be incorrect;
+                    // the type of `identity` is more general than that!
+                    //
+                    // Instead, we want to unify on a *copy* of its vars. If the copy unifies
+                    // successfully (in this case, to `Int -> Int`), we can use that to
+                    // infer the type of this lookup (in this case, `Int`) without ever
+                    // having mutated the original.
+                    //
+                    // If this Lookup is targeting a value in another module,
+                    // then we copy from that module's Subs into our own. If the value
+                    // is being looked up in this module, then we use our Subs as both
+                    // the source and destination.
+                    let actual = deep_copy_var(subs, rank, pools, *var);
+
+                    let expected = type_to_var(
+                        arena,
+                        mempool,
+                        subs,
+                        rank,
+                        pools,
+                        cached_aliases,
+                        expectation.get_type_ref(),
+                    );
+
+                    match unify(subs, actual, expected) {
+                        Success(vars) => {
+                            introduce(subs, rank, pools, &vars);
+
+                            state
+                        }
+
+                        Failure(vars, actual_type, expected_type) => {
+                            introduce(subs, rank, pools, &vars);
+
+                            let problem = TypeError::BadExpr(
+                                *region,
+                                Category::Lookup(*symbol),
+                                actual_type,
+                                expectation.shallow_clone().replace(expected_type),
+                            );
+
+                            problems.push(problem);
+
+                            state
+                        }
+                        BadType(vars, problem) => {
+                            introduce(subs, rank, pools, &vars);
+
+                            problems.push(TypeError::BadType(problem));
+
+                            state
+                        }
+                    }
+                }
+                None => {
+                    problems.push(TypeError::UnexposedLookup(*symbol));
+
+                    state
+                }
+            }
+        }
         And(sub_constraints) => {
             let mut state = state;
 
@@ -826,7 +830,7 @@ fn type_to_variable<'a>(
             let mut tag_vars = MutMap::default();
             let ext = mempool.get(*ext_id);
 
-            for (_tag, tag_argument_types) in tags.iter(mempool) {
+            for (tag, tag_argument_types) in tags.iter(mempool) {
                 let mut tag_argument_vars = Vec::with_capacity(tag_argument_types.len());
 
                 for arg_type in tag_argument_types.iter(mempool) {
@@ -836,7 +840,7 @@ fn type_to_variable<'a>(
                 }
 
                 tag_vars.insert(
-                    roc_module::ident::TagName::Private(Symbol::NUM_NUM),
+                    roc_module::ident::TagName::Global(tag.as_str(mempool).into()),
                     tag_argument_vars,
                 );
             }
@@ -857,22 +861,30 @@ fn type_to_variable<'a>(
 
             register(subs, rank, pools, content)
         }
+        // This case is important for the rank of boolean variables
+        Function(args, closure_type_id, ret_type_id) => {
+            let mut arg_vars = Vec::with_capacity(args.len());
+
+            let closure_type = mempool.get(*closure_type_id);
+            let ret_type = mempool.get(*ret_type_id);
+
+            for arg_id in args.iter_node_ids() {
+                let arg = mempool.get(arg_id);
+
+                arg_vars.push(type_to_variable(
+                    arena, mempool, subs, rank, pools, cached, arg,
+                ))
+            }
+
+            let ret_var = type_to_variable(arena, mempool, subs, rank, pools, cached, ret_type);
+            let closure_var =
+                type_to_variable(arena, mempool, subs, rank, pools, cached, closure_type);
+
+            let content = Content::Structure(FlatType::Func(arg_vars, closure_var, ret_var));
+
+            register(subs, rank, pools, content)
+        }
         other => todo!("not implemented {:?}", &other),
-        //
-        //        // This case is important for the rank of boolean variables
-        //        Function(args, closure_type, ret_type) => {
-        //            let mut arg_vars = Vec::with_capacity(args.len());
-        //
-        //            for arg in args {
-        //                arg_vars.push(type_to_variable(subs, rank, pools, cached, arg))
-        //            }
-        //
-        //            let ret_var = type_to_variable(subs, rank, pools, cached, ret_type);
-        //            let closure_var = type_to_variable(subs, rank, pools, cached, closure_type);
-        //            let content = Content::Structure(FlatType::Func(arg_vars, closure_var, ret_var));
-        //
-        //            register(subs, rank, pools, content)
-        //        }
         //        RecursiveTagUnion(rec_var, tags, ext) => {
         //            let mut tag_vars = MutMap::default();
         //

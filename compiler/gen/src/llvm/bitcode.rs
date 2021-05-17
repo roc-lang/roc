@@ -2,7 +2,9 @@
 use crate::debug_info_init;
 use crate::llvm::build::{set_name, Env, C_CALL_CONV, FAST_CALL_CONV};
 use crate::llvm::convert::basic_type_from_layout;
-use crate::llvm::refcounting::{decrement_refcount_layout, increment_refcount_layout, Mode};
+use crate::llvm::refcounting::{
+    decrement_refcount_layout, increment_n_refcount_layout, increment_refcount_layout,
+};
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, CallSiteValue, FunctionValue, InstructionValue};
@@ -204,21 +206,28 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     function_value
 }
 
+enum Mode {
+    Inc,
+    IncN,
+    Dec,
+}
+
+/// a functin that accepts two arguments: the value to increment, and an amount to increment by
 pub fn build_inc_n_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     layout: &Layout<'a>,
-    n: u64,
 ) -> FunctionValue<'ctx> {
-    build_rc_wrapper(env, layout_ids, layout, Mode::Inc(n))
+    build_rc_wrapper(env, layout_ids, layout, Mode::IncN)
 }
 
+/// a functin that accepts two arguments: the value to increment; increments by 1
 pub fn build_inc_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     layout: &Layout<'a>,
 ) -> FunctionValue<'ctx> {
-    build_rc_wrapper(env, layout_ids, layout, Mode::Inc(1))
+    build_rc_wrapper(env, layout_ids, layout, Mode::Inc)
 }
 
 pub fn build_dec_wrapper<'a, 'ctx, 'env>(
@@ -229,7 +238,7 @@ pub fn build_dec_wrapper<'a, 'ctx, 'env>(
     build_rc_wrapper(env, layout_ids, layout, Mode::Dec)
 }
 
-pub fn build_rc_wrapper<'a, 'ctx, 'env>(
+fn build_rc_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     layout: &Layout<'a>,
@@ -244,7 +253,8 @@ pub fn build_rc_wrapper<'a, 'ctx, 'env>(
         .to_symbol_string(symbol, &env.interns);
 
     let fn_name = match rc_operation {
-        Mode::Inc(n) => format!("{}_inc_{}", fn_name, n),
+        Mode::IncN => format!("{}_inc_n", fn_name),
+        Mode::Inc => format!("{}_inc", fn_name),
         Mode::Dec => format!("{}_dec", fn_name),
     };
 
@@ -253,12 +263,20 @@ pub fn build_rc_wrapper<'a, 'ctx, 'env>(
         None => {
             let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
-            let function_value = crate::llvm::refcounting::build_header_help(
-                env,
-                &fn_name,
-                env.context.void_type().into(),
-                &[arg_type.into()],
-            );
+            let function_value = match rc_operation {
+                Mode::Inc | Mode::Dec => crate::llvm::refcounting::build_header_help(
+                    env,
+                    &fn_name,
+                    env.context.void_type().into(),
+                    &[arg_type.into()],
+                ),
+                Mode::IncN => crate::llvm::refcounting::build_header_help(
+                    env,
+                    &fn_name,
+                    env.context.void_type().into(),
+                    &[arg_type.into(), env.ptr_int().into()],
+                ),
+            };
 
             let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
             debug_assert!(kind_id > 0);
@@ -285,8 +303,15 @@ pub fn build_rc_wrapper<'a, 'ctx, 'env>(
             let value = env.builder.build_load(value_cast, "load_opaque");
 
             match rc_operation {
-                Mode::Inc(n) => {
+                Mode::Inc => {
+                    let n = 1;
                     increment_refcount_layout(env, function_value, layout_ids, n, value, layout);
+                }
+                Mode::IncN => {
+                    let n = it.next().unwrap().into_int_value();
+                    set_name(n.into(), Symbol::ARG_2.ident_string(&env.interns));
+
+                    increment_n_refcount_layout(env, function_value, layout_ids, n, value, layout);
                 }
                 Mode::Dec => {
                     decrement_refcount_layout(env, function_value, layout_ids, value, layout);
