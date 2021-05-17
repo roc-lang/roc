@@ -286,9 +286,9 @@ pub fn constrain_expr<'a>(
         } => {
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
-            let expr = env.pool.get(*expr_node_id);
+            let call_expr = env.pool.get(*expr_node_id);
 
-            let opt_symbol = if let Expr2::Var(symbol) = expr {
+            let opt_symbol = if let Expr2::Var(symbol) = call_expr {
                 Some(*symbol)
             } else {
                 None
@@ -303,7 +303,7 @@ pub fn constrain_expr<'a>(
                 arity: args.len() as u8,
             };
 
-            let fn_con = constrain_expr(arena, env, expr, fn_expected, region);
+            let fn_con = constrain_expr(arena, env, call_expr, fn_expected, region);
 
             // The function's return type
             // TODO: don't use expr_var?
