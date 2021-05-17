@@ -284,8 +284,6 @@ pub fn constrain_expr<'a>(
             fn_var,
             ..
         } => {
-            // let (fn_var, loc_fn, closure_var, ret_var) = &**boxed;
-
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
             let expr = env.pool.get(*expr_node_id);
