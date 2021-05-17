@@ -251,6 +251,16 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn abs_freg64_freg64(
+        _buf: &mut Vec<'_, u8>,
+        _relocs: &mut Vec<'_, Relocation>,
+        _dst: AArch64FloatReg,
+        _src: AArch64FloatReg,
+    ) {
+        unimplemented!("abs_reg64_reg64 is not yet implement for AArch64");
+    }
+
+    #[inline(always)]
     fn add_reg64_reg64_imm32(
         buf: &mut Vec<'_, u8>,
         dst: AArch64GeneralReg,

@@ -71,6 +71,12 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
 /// dst should always come before sources.
 pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
     fn abs_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
+    fn abs_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        dst: FloatReg,
+        src: FloatReg,
+    );
 
     fn add_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src1: GeneralReg, imm32: i32);
     fn add_freg64_freg64_freg64(
@@ -465,6 +471,15 @@ impl<
         let dst_reg = self.claim_general_reg(dst)?;
         let src_reg = self.load_to_general_reg(src)?;
         ASM::abs_reg64_reg64(&mut self.buf, dst_reg, src_reg);
+        Ok(())
+    }
+
+    fn build_num_abs_f64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String> {
+        let dst_reg = self.claim_float_reg(dst)?;
+        let src_reg = self.load_to_float_reg(src)?;
+
+        ASM::abs_freg64_freg64(&mut self.buf, &mut self.relocs, dst_reg, src_reg);
+
         Ok(())
     }
 
