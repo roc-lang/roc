@@ -195,10 +195,9 @@ pub fn listMap(
         const output = RocList.allocate(std.heap.c_allocator, alignment, size, new_element_width);
         const target_ptr = output.bytes orelse unreachable;
 
-        // if (call.data_is_owned) {
-        // }
-
-        call.inc_n_data(call.data, size);
+        if (call.data_is_owned) {
+            call.inc_n_data(call.data, size);
+        }
 
         while (i < size) : (i += 1) {
             call.caller(call.data, source_ptr + (i * old_element_width), target_ptr + (i * new_element_width));

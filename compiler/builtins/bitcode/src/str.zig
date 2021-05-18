@@ -963,8 +963,6 @@ fn strConcat(allocator: *Allocator, result_in_place: InPlace, arg1: RocStr, arg2
         arg1.memcpy(result_ptr);
         arg2.memcpy(result_ptr + arg1.len());
 
-        arg1.deinit(allocator);
-
         return result;
     }
 }
