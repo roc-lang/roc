@@ -2061,12 +2061,13 @@ fn update<'a>(
 
                     println!("{}", result);
                 }
-                //                Proc::optimize_refcount_operations(
-                //                    arena,
-                //                    module_id,
-                //                    &mut ident_ids,
-                //                    &mut state.procedures,
-                //                );
+
+                Proc::optimize_refcount_operations(
+                    arena,
+                    module_id,
+                    &mut ident_ids,
+                    &mut state.procedures,
+                );
 
                 state.constrained_ident_ids.insert(module_id, ident_ids);
 
