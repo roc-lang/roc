@@ -1,4 +1,7 @@
-use cli_utils::bench_utils::{bench_astar, bench_base64, bench_cfold, bench_closure, bench_deriv, bench_nqueens, bench_rbtree, bench_rbtree_delete};
+use cli_utils::bench_utils::{
+    bench_astar, bench_base64, bench_cfold, bench_closure, bench_deriv, bench_nqueens,
+    bench_rbtree, bench_rbtree_delete,
+};
 
 fn bench_nqueens_iai() {
     bench_nqueens(None);
@@ -31,7 +34,6 @@ fn bench_base64_iai() {
 fn bench_closure_iai() {
     bench_closure(None);
 }
-
 
 iai::main!(
     bench_nqueens_iai,
