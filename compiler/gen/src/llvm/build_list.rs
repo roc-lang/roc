@@ -322,6 +322,42 @@ pub fn list_append<'a, 'ctx, 'env>(
     )
 }
 
+/// List.drop : List elem, Nat -> List elem
+pub fn list_drop<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    _inplace: InPlace,
+    original_wrapper: StructValue<'ctx>,
+    count: IntValue<'ctx>,
+    list_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let (_, element_layout) = match *list_layout {
+        Layout::Builtin(Builtin::EmptyList) => (
+            InPlace::InPlace,
+            // this pointer will never actually be dereferenced
+            Layout::Builtin(Builtin::Int64),
+        ),
+        Layout::Builtin(Builtin::List(memory_mode, elem_layout)) => (
+            match memory_mode {
+                MemoryMode::Unique => InPlace::InPlace,
+                MemoryMode::Refcounted => InPlace::Clone,
+            },
+            *elem_layout,
+        ),
+
+        _ => unreachable!("Invalid layout {:?} in List.drop", list_layout),
+    };
+    call_bitcode_fn_returns_list(
+        env,
+        &[
+            pass_list_as_i128(env, original_wrapper.into()),
+            alignment_intvalue(env, &element_layout),
+            layout_width(env, &element_layout),
+            count.into(),
+        ],
+        &bitcode::LIST_DROP,
+    )
+}
+
 /// List.set : List elem, Int, elem -> List elem
 pub fn list_set<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
