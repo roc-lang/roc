@@ -9,7 +9,7 @@ extern crate roc_module;
 
 #[cfg(test)]
 mod cli_run {
-    use roc_cli::helpers::{
+    use cli_utils::helpers::{
         example_file, extract_valgrind_errors, fixture_file, run_cmd, run_roc, run_with_valgrind,
         ValgrindError, ValgrindErrorXWhat,
     };

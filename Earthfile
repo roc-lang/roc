@@ -115,5 +115,5 @@ bench-roc:
     FROM +copy-dirs-and-cache
     RUN cargo criterion -V
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cd cli && cargo criterion && sccache --show-stats
+        cd cli && cargo bench instructions_bench && cargo criterion --bench time_bench && sccache --show-stats
     

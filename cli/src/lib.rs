@@ -15,7 +15,6 @@ use std::process::Command;
 use target_lexicon::Triple;
 
 pub mod build;
-pub mod helpers;
 pub mod repl;
 
 pub const CMD_RUN: &str = "run";

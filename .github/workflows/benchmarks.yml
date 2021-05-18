@@ -20,5 +20,5 @@ jobs:
       - name: Earthly version
         run: earthly --version
 
-      - name: install dependencies, build, cd cli, cargo criterion
+      - name: install dependencies, build, cd cli, benchmark with iai and criterion
         run: earthly +bench-roc

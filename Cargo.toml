@@ -25,6 +25,7 @@ members = [
     "vendor/pretty",
     "editor",
     "cli",
+    "cli/cli_utils",
     "roc_std",
     "docs"
 ]

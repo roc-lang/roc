@@ -6,7 +6,7 @@ extern crate indoc;
 
 #[cfg(test)]
 mod repl_eval {
-    use roc_cli::helpers;
+    use cli_utils::helpers;
     use roc_gen::run_roc::RocCallResult;
 
     #[test]

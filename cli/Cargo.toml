@@ -95,7 +95,13 @@ quickcheck_macros = "0.8"
 serial_test = "0.5"
 tempfile = "3.1.0"
 criterion = "0.3.4"
+cli_utils = { path = "cli_utils" }
+iai = "0.1"
 
 [[bench]]
-name = "main_benchmark"
+name = "time_bench"
+harness = false
+
+[[bench]]
+name = "instructions_bench"
 harness = false

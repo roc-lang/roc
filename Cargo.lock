@@ -375,6 +375,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cli_utils"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "criterion",
+ "inlinable_string",
+ "roc_cli",
+ "roc_collections",
+ "roc_load",
+ "roc_module",
+ "serde",
+ "serde-xml-rs",
+ "strip-ansi-escapes",
+ "tempfile",
+]
+
+[[package]]
 name = "clipboard-win"
 version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1438,6 +1455,12 @@ name = "humantime"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
+
+[[package]]
+name = "iai"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71a816c97c42258aa5834d07590b718b4c9a598944cd39a52dc25b351185d678"
 
 [[package]]
 name = "ident_case"
@@ -2916,8 +2939,10 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "clap 3.0.0-beta.1",
+ "cli_utils",
  "const_format",
  "criterion",
+ "iai",
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
