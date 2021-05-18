@@ -8,7 +8,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use std::convert::TryFrom;
 
-use crate::ir::{Call, CallType, Expr, Literal, Proc, Stmt};
+use crate::ir::{Call, CallType, Expr, Literal, ModifyRc, Proc, Stmt};
 use crate::layout::{Builtin, Layout, ListLayout, UnionLayout};
 
 // just using one module for now
@@ -144,7 +144,17 @@ fn stmt_spec(
             builder.add_choice(block, &cases)
         }
         Ret(symbol) => Ok(env.symbols[symbol]),
-        Refcounting(_, _) => unreachable!("not yet introduced"),
+        Refcounting(modify_rc, continuation) => match modify_rc {
+            ModifyRc::Inc(symbol, _) | ModifyRc::Dec(symbol) | ModifyRc::DecRef(symbol) => {
+                let result_type = builder.add_tuple_type(&[])?;
+                let argument = env.symbols[symbol];
+
+                // this is how RC is modelled; it recursively touches all heap cells
+                builder.add_unknown_with(block, &[argument], result_type)?;
+
+                stmt_spec(builder, env, block, layout, continuation)
+            }
+        },
         Join {
             id,
             parameters,
@@ -360,7 +370,6 @@ fn lowlevel_spec(
             let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
             let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
 
-            // even if this has been written to before, it's okay to write to it again
             let _unit = builder.add_update(block, update_mode_var, cell)?;
 
             builder.add_bag_insert(block, bag, to_insert)?;
