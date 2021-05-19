@@ -459,14 +459,14 @@ impl<'a> Context<'a> {
                 macro_rules! create_call {
                     ($borrows:expr) => {
                         Expr::Call(crate::ir::Call {
-                            call_type: if $borrows {
-                                call_type
-                            } else {
+                            call_type: if let Some(OWNED) = $borrows.map(|p| p.borrow) {
                                 HigherOrderLowLevel {
                                     op: *op,
                                     closure_layout: *closure_layout,
                                     function_owns_closure_data: true,
                                 }
+                            } else {
+                                call_type
                             },
                             arguments,
                         })
@@ -505,7 +505,7 @@ impl<'a> Context<'a> {
                                 // if the list is owned, then all elements have been consumed, but not the list itself
                                 let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
 
-                                let v = create_call!(function_ps[1].borrow);
+                                let v = create_call!(function_ps.get(1));
 
                                 &*self.arena.alloc(Stmt::Let(z, v, l, b))
                             }
@@ -526,7 +526,7 @@ impl<'a> Context<'a> {
 
                                 let b = decref_if_owned!(function_ps[1].borrow, arguments[0], b);
 
-                                let v = create_call!(function_ps[2].borrow);
+                                let v = create_call!(function_ps.get(2));
 
                                 &*self.arena.alloc(Stmt::Let(z, v, l, b))
                             }
@@ -537,8 +537,8 @@ impl<'a> Context<'a> {
                         match self.param_map.get_symbol(arguments[2], *closure_layout) {
                             Some(function_ps) => {
                                 let borrows = [
+                                    function_ps[0].borrow,
                                     function_ps[1].borrow,
-                                    function_ps[2].borrow,
                                     FUNCTION,
                                     CLOSURE_DATA,
                                 ];
@@ -550,10 +550,10 @@ impl<'a> Context<'a> {
                                     b_live_vars,
                                 );
 
-                                let b = decref_if_owned!(function_ps[1].borrow, arguments[0], b);
-                                let b = decref_if_owned!(function_ps[2].borrow, arguments[1], b);
+                                let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
+                                let b = decref_if_owned!(function_ps[1].borrow, arguments[1], b);
 
-                                let v = create_call!(function_ps[2].borrow);
+                                let v = create_call!(function_ps.get(2));
 
                                 &*self.arena.alloc(Stmt::Let(z, v, l, b))
                             }

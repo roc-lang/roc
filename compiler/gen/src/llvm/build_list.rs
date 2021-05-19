@@ -886,35 +886,13 @@ pub fn list_map<'a, 'ctx, 'env>(
 pub fn list_map2<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    transform: FunctionValue<'ctx>,
-    transform_layout: Layout<'a>,
-    closure_data: BasicValueEnum<'ctx>,
-    closure_data_layout: Layout<'a>,
+    roc_function_call: RocFunctionCall<'ctx>,
     list1: BasicValueEnum<'ctx>,
     list2: BasicValueEnum<'ctx>,
     element1_layout: &Layout<'a>,
     element2_layout: &Layout<'a>,
+    return_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
-    let return_layout = match transform_layout {
-        Layout::FunctionPointer(_, ret) => ret,
-        Layout::Closure(_, _, ret) => ret,
-        _ => unreachable!("not a callable layout"),
-    };
-
-    let closure_data_ptr = builder.build_alloca(closure_data.get_type(), "closure_data_ptr");
-    env.builder.build_store(closure_data_ptr, closure_data);
-
-    let stepper_caller = build_transform_caller_new(
-        env,
-        transform,
-        closure_data_layout,
-        &[*element1_layout, *element2_layout],
-    )
-    .as_global_value()
-    .as_pointer_value();
-
     let a_width = env
         .ptr_int()
         .const_int(element1_layout.stack_size(env.ptr_bytes) as u64, false);
@@ -935,9 +913,11 @@ pub fn list_map2<'a, 'ctx, 'env>(
         &[
             pass_list_as_i128(env, list1),
             pass_list_as_i128(env, list2),
-            pass_as_opaque(env, closure_data_ptr),
-            stepper_caller.into(),
-            alignment_intvalue(env, &transform_layout),
+            roc_function_call.caller.into(),
+            pass_as_opaque(env, roc_function_call.data),
+            roc_function_call.inc_n_data.into(),
+            roc_function_call.data_is_owned.into(),
+            alignment_intvalue(env, return_layout),
             a_width.into(),
             b_width.into(),
             c_width.into(),

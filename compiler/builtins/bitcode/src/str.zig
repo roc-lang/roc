@@ -930,7 +930,7 @@ fn strConcat(allocator: *Allocator, result_in_place: InPlace, arg1: RocStr, arg2
         return RocStr.clone(allocator, result_in_place, arg2);
     } else if (arg2.isEmpty()) {
         // the first argument is owned, so we can return it without cloning
-        return RocStr.clone(allocator, result_in_place, arg1);
+        return arg1;
     } else {
         const combined_length = arg1.len() + arg2.len();
 

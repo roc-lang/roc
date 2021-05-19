@@ -3743,18 +3743,30 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 (
                     Layout::Builtin(Builtin::List(_, element1_layout)),
                     Layout::Builtin(Builtin::List(_, element2_layout)),
-                ) => list_map2(
-                    env,
-                    layout_ids,
-                    function,
-                    function_layout,
-                    closure,
-                    *closure_layout,
-                    list1,
-                    list2,
-                    element1_layout,
-                    element2_layout,
-                ),
+                ) => {
+                    let argument_layouts = &[**element1_layout, **element2_layout];
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        *closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    list_map2(
+                        env,
+                        layout_ids,
+                        roc_function_call,
+                        list1,
+                        list2,
+                        element1_layout,
+                        element2_layout,
+                        return_layout,
+                    )
+                }
                 (Layout::Builtin(Builtin::EmptyList), _)
                 | (_, Layout::Builtin(Builtin::EmptyList)) => empty_list(env),
                 _ => unreachable!("invalid list layout"),
