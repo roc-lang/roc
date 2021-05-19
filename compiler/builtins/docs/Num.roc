@@ -4,7 +4,7 @@ interface Num2
 
 ## Types
 
-## Represents a number that could be either an #Int or a #Float.
+## Represents a number that could be either an [Int] or a [Frac].
 ##
 ## This is useful for functions that can work on either, for example #Num.add, whose type is:
 ##
@@ -52,6 +52,85 @@ interface Num2
 ## In practice, these are rarely needed. It's most common to write
 ## number literals without any suffix.
 Num range : [ @Num range ]
+
+## A decimal number.
+##
+## [Dec] is the best default choice for representing base-10 decimal numbers
+## like currency, because it is base-10 under the hood. In contrast,
+## [F64] and [F32] are base-2 under the hood, which can lead to decimal
+## precision loss even when doing addition and subtraction. For example, when
+## using [F64], running 0.1 + 0.2 returns 0.3000000000000000444089209850062616169452667236328125,
+## whereas when using [Dec], 0.1 + 0.2 returns 0.3.
+##
+## Under the hood, a [Dec] is an [I128], and operations on it perform
+## [base-10 fixed-point arithmetic](https://en.wikipedia.org/wiki/Fixed-point_arithmetic)
+## with 18 decimal places of precision.
+##
+## This means a [Dec] can represent whole numbers up to slightly over 170
+## quintillion, along with 18 decimal places. (To be precise, it can store
+## numbers betwween `-170_141_183_460_469_231_731.687303715884105728`
+## and `170_141_183_460_469_231_731.687303715884105727`.) Why 18
+## decimal places? It's the highest number of decimal places where you can still
+## convert any [U64] to a [Dec] without losing information.
+##
+## There are some use cases where [F64] and [F32] can be better choices than [Dec]
+## despite their precision issues. For example, in graphical applications they
+## can be a better choice for representing coordinates because they take up
+## less memory, certain relevant calculations run faster (see performance
+## details, below), and decimal precision loss isn't as big a concern when
+## dealing with screen coordinates as it is when dealing with currency.
+##
+## ## Performance
+##
+## [Dec] typically takes slightly less time than [F64] to perform addition and
+## subtraction, but 10-20 times longer to perform multiplication and division.
+## [sqrt] and trigonometry are massively slower with [Dec] than with [F64].
+Dec : Frac [ @Decimal128 ]
+
+## A fixed-size number with a fractional component.
+##
+## Roc fractions come in two flavors: fixed-point base-10 and floating-point base-2.
+##
+## * [Dec] is a 128-bit [fixed-point](https://en.wikipedia.org/wiki/Fixed-point_arithmetic) base-10 number. It's a great default choice, especially when precision is important - for example when representing currency. With [Dec], 0.1 + 0.2 returns 0.3.
+## * [F64] and [F32] are [floating-point](https://en.wikipedia.org/wiki/Floating-point_arithmetic) base-2 numbers. They sacrifice precision for lower memory usage and improved performance on some operations. This makes them a good fit for representing graphical coordinates. With [F64], 0.1 + 0.2 returns 0.3000000000000000444089209850062616169452667236328125.
+##
+## If you don't specify a type, Roc will default to using [Dec] because it's
+## the least error-prone overall. For example, suppose you write this:
+##
+##     wasItPrecise = 0.1 + 0.2 == 0.3
+##
+## The value of `wasItPrecise` here will be `True`, because Roc uses [Dec]
+## by default when there are no types specified.
+##
+## In contrast, suppose we use `f32` or `f64` for one of these numbers:
+##
+##     wasItPrecise = 0.1f64 + 0.2 == 0.3
+##
+## Here, `wasItPrecise` will be `False` because the entire calculation will have
+## been done in a base-2 floating point calculation, which causes noticeable
+## precision loss in this case.
+##
+## ## Performance Notes
+##
+## On typical modern CPUs, performance is similar between [Dec], [F64], and [F32]
+## for addition and subtraction. For example, [F32] and [F64] do addition using
+## a single CPU floating-point addition instruction, which typically takes a
+## few clock cycles to complete. In contrast, [Dec] does addition using a few
+## CPU integer arithmetic instructions, each of which typically takes only one
+## clock cycle to complete. Exact numbers will vary by CPU, but they should be
+## similar overall.
+##
+## [Dec] is significantly slower for multiplication and division. It not only
+## needs to do more arithmetic instructions than [F32] and [F64] do, but also
+## those instructions typically take more clock cycles to complete.
+##
+## With [Num.sqrt] and trigonometry functions like [Num.cos], there is
+## an even bigger performance difference. [F32] and [F64] can do these in a
+## single instruction, whereas [Dec] needs entire custom procedures - which use
+## loops and conditionals. If you need to do performance-critical trigonometry
+## or square roots, either [F32] or [F64] is probably a better choice than the
+## usual default choice of [Dec], despite the precision problems they bring.
+Frac a : Num [ @Fraction a ]
 
 ## A fixed-size integer - that is, a number with no fractional component.
 ##
@@ -102,21 +181,20 @@ Num range : [ @Num range ]
 ## * Start by deciding if this integer should allow negative numbers, and choose signed or unsigned accordingly.
 ## * Next, think about the range of numbers you expect this number to hold. Choose the smallest size you will never expect to overflow, no matter the inputs your program receives. (Validating inputs for size, and presenting the user with an error if they are too big, can help guard against overflow.)
 ## * Finally, if a particular numeric calculation is running too slowly, you can try experimenting with other number sizes. This rarely makes a meaningful difference, but some processors can operate on different number sizes at different speeds.
-Int size : Num [ @Int size ]
+Int size : Num [ @Integer size ]
 
 ## A signed 8-bit integer, ranging from -128 to 127
-I8 : Int [ @I8 ]
-U8 : Int [ @U8 ]
-U16 : Int [ @U16 ]
-I16 : Int [ @I16 ]
-U32 : Int [ @U32 ]
-I32 : Int [ @I32 ]
-I64 : Int [ @I64 ]
-U64 : Int [ @U64 ]
-I128 : Int [ @I128 ]
-U128 : Int [ @U128 ]
-Ilen : Int [ @Ilen ]
-Nat : Int [ @Nat ]
+I8 : Int [ @Signed8 ]
+U8 : Int [ @Unsigned8 ]
+I16 : Int [ @Signed16 ]
+U16 : Int [ @Unsigned16 ]
+I32 : Int [ @Signed32 ]
+U32 : Int [ @Unsigned32 ]
+I64 : Int [ @Signed64 ]
+U64 : Int [ @Unsigned64 ]
+I128 : Int [ @Signed128 ]
+U128 : Int [ @Unsigned128 ]
+Nat : Int [ @Natural ]
 
 ## A 64-bit signed integer. All number literals without decimal points are compatible with #Int values.
 ##
