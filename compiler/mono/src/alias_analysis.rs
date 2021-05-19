@@ -1,7 +1,8 @@
 use morphic_lib::TypeContext;
 use morphic_lib::{
-    BlockExpr, BlockId, CalleeSpecVar, EntryPointName, FuncDef, FuncDefBuilder, FuncName,
-    ModDefBuilder, ModName, ProgramBuilder, Result, TypeId, TypeName, UpdateModeVar, ValueId,
+    BlockExpr, BlockId, CalleeSpecVar, EntryPointName, ExprContext, FuncDef, FuncDefBuilder,
+    FuncName, ModDefBuilder, ModName, ProgramBuilder, Result, TypeId, TypeName, UpdateModeVar,
+    ValueId,
 };
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
@@ -60,7 +61,7 @@ fn proc_spec(proc: &Proc) -> Result<FuncDef> {
     // introduce the arguments
     let mut argument_layouts = Vec::new();
     for (i, (layout, symbol)) in proc.args.iter().enumerate() {
-        let value_id = builder.add_get_tuple_field(block, ValueId::ARGUMENT, i as u32)?;
+        let value_id = builder.add_get_tuple_field(block, builder.get_argument(), i as u32)?;
         env.symbols.insert(*symbol, value_id);
 
         argument_layouts.push(*layout);
