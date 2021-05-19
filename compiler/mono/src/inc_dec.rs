@@ -560,6 +560,35 @@ impl<'a> Context<'a> {
                             None => unreachable!(),
                         }
                     }
+                    roc_module::low_level::LowLevel::ListMap3 => {
+                        match self.param_map.get_symbol(arguments[3], *closure_layout) {
+                            Some(function_ps) => {
+                                let borrows = [
+                                    function_ps[0].borrow,
+                                    function_ps[1].borrow,
+                                    function_ps[2].borrow,
+                                    FUNCTION,
+                                    CLOSURE_DATA,
+                                ];
+
+                                let b = self.add_dec_after_lowlevel(
+                                    arguments,
+                                    &borrows,
+                                    b,
+                                    b_live_vars,
+                                );
+
+                                let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
+                                let b = decref_if_owned!(function_ps[1].borrow, arguments[1], b);
+                                let b = decref_if_owned!(function_ps[2].borrow, arguments[2], b);
+
+                                let v = create_call!(function_ps.get(3));
+
+                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                            }
+                            None => unreachable!(),
+                        }
+                    }
                     _ => {
                         let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
                         let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);

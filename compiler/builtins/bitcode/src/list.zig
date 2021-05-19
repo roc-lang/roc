@@ -299,9 +299,34 @@ pub fn listMap2(
     }
 }
 
-pub fn listMap3(list1: RocList, list2: RocList, list3: RocList, transform: Opaque, caller: Caller3, alignment: usize, a_width: usize, b_width: usize, c_width: usize, d_width: usize, dec_a: Dec, dec_b: Dec, dec_c: Dec) callconv(.C) RocList {
+pub fn listMap3(
+    list1: RocList,
+    list2: RocList,
+    list3: RocList,
+    transform: Opaque,
+    caller: Caller3,
+    data: Opaque,
+    inc_n_data: IncN,
+    data_is_owned: bool,
+    alignment: usize,
+    a_width: usize,
+    b_width: usize,
+    c_width: usize,
+    d_width: usize,
+    dec_a: Dec,
+    dec_b: Dec,
+    dec_c: Dec,
+) callconv(.C) RocList {
     const smaller_length = std.math.min(list1.len(), list2.len());
     const output_length = std.math.min(smaller_length, list3.len());
+
+    decrementTail(list1, output_length, a_width, dec_a);
+    decrementTail(list2, output_length, b_width, dec_b);
+    decrementTail(list3, output_length, c_width, dec_c);
+
+    if (data_is_owned) {
+        inc_n_data(data, output_length);
+    }
 
     if (list1.bytes) |source_a| {
         if (list2.bytes) |source_b| {
@@ -316,108 +341,17 @@ pub fn listMap3(list1: RocList, list2: RocList, list3: RocList, transform: Opaqu
                     const element_c = source_c + i * c_width;
                     const target = target_ptr + i * d_width;
 
-                    caller(transform, element_a, element_b, element_c, target);
+                    caller(data, element_a, element_b, element_c, target);
                 }
-
-                // if the lists don't have equal length, we must consume the remaining elements
-                // In this case we consume by (recursively) decrementing the elements
-                if (list1.len() > output_length) {
-                    i = output_length;
-                    while (i < list1.len()) : (i += 1) {
-                        const element_a = source_a + i * a_width;
-                        dec_a(element_a);
-                    }
-                }
-
-                if (list2.len() > output_length) {
-                    i = output_length;
-                    while (i < list2.len()) : (i += 1) {
-                        const element_b = source_b + i * b_width;
-                        dec_b(element_b);
-                    }
-                }
-
-                if (list3.len() > output_length) {
-                    i = output_length;
-                    while (i < list3.len()) : (i += 1) {
-                        const element_c = source_c + i * c_width;
-                        dec_c(element_c);
-                    }
-                }
-
-                utils.decref(std.heap.c_allocator, alignment, list1.bytes, list1.len() * a_width);
-                utils.decref(std.heap.c_allocator, alignment, list2.bytes, list2.len() * b_width);
-                utils.decref(std.heap.c_allocator, alignment, list3.bytes, list3.len() * c_width);
 
                 return output;
             } else {
-                // consume list1 elements (we know there is at least one because the list1.bytes pointer is non-null
-                var i: usize = 0;
-                while (i < list1.len()) : (i += 1) {
-                    const element_a = source_a + i * a_width;
-                    dec_a(element_a);
-                }
-                utils.decref(std.heap.c_allocator, alignment, list1.bytes, list1.len() * a_width);
-
-                // consume list2 elements (we know there is at least one because the list1.bytes pointer is non-null
-                i = 0;
-                while (i < list2.len()) : (i += 1) {
-                    const element_b = source_b + i * b_width;
-                    dec_b(element_b);
-                }
-                utils.decref(std.heap.c_allocator, alignment, list2.bytes, list2.len() * b_width);
-
                 return RocList.empty();
             }
         } else {
-            // consume list1 elements (we know there is at least one because the list1.bytes pointer is non-null
-            var i: usize = 0;
-            while (i < list1.len()) : (i += 1) {
-                const element_a = source_a + i * a_width;
-                dec_a(element_a);
-            }
-
-            utils.decref(std.heap.c_allocator, alignment, list1.bytes, list1.len() * a_width);
-
-            // consume list3 elements (if any)
-            if (list3.bytes) |source_c| {
-                i = 0;
-
-                while (i < list2.len()) : (i += 1) {
-                    const element_c = source_c + i * c_width;
-                    dec_c(element_c);
-                }
-
-                utils.decref(std.heap.c_allocator, alignment, list3.bytes, list3.len() * c_width);
-            }
-
             return RocList.empty();
         }
     } else {
-        // consume list2 elements (if any)
-        if (list2.bytes) |source_b| {
-            var i: usize = 0;
-
-            while (i < list2.len()) : (i += 1) {
-                const element_b = source_b + i * b_width;
-                dec_b(element_b);
-            }
-
-            utils.decref(std.heap.c_allocator, alignment, list2.bytes, list2.len() * b_width);
-        }
-
-        // consume list3 elements (if any)
-        if (list3.bytes) |source_c| {
-            var i: usize = 0;
-
-            while (i < list2.len()) : (i += 1) {
-                const element_c = source_c + i * c_width;
-                dec_c(element_c);
-            }
-
-            utils.decref(std.heap.c_allocator, alignment, list3.bytes, list3.len() * c_width);
-        }
-
         return RocList.empty();
     }
 }
