@@ -2332,6 +2332,40 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             env.builder.build_unconditional_branch(done);
                             env.builder.position_at_end(done);
                         }
+                        Layout::Builtin(Builtin::Dict(_, _)) => {
+                            debug_assert!(value.is_struct_value());
+
+                            let refcount_ptr = PointerToRefcount::from_list_wrapper(
+                                env,
+                                value.into_struct_value(),
+                            );
+
+                            // because of how we insert DECREF for lists, we can't guarantee that
+                            // the list is non-empty. When the list is empty, the pointer to the
+                            // elements is NULL, and trying to get to the RC address will
+                            // underflow, causing a segfault. Therefore, in this case we must
+                            // manually check that the list is non-empty
+                            let not_empty = env.context.append_basic_block(parent, "not_null");
+                            let done = env.context.append_basic_block(parent, "done");
+
+                            let length = dict_len(env, scope, *symbol).into_int_value();
+                            let is_empty = env.builder.build_int_compare(
+                                IntPredicate::EQ,
+                                length,
+                                length.get_type().const_zero(),
+                                "",
+                            );
+
+                            env.builder
+                                .build_conditional_branch(is_empty, done, not_empty);
+
+                            env.builder.position_at_end(not_empty);
+
+                            refcount_ptr.decrement(env, layout);
+
+                            env.builder.build_unconditional_branch(done);
+                            env.builder.position_at_end(done);
+                        }
 
                         _ if layout.is_refcounted() => {
                             if value.is_pointer_value() {
@@ -4066,18 +4100,30 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     // no elements, so `key` is not in here
                     panic!("key type unknown")
                 }
-                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => dict_walk(
-                    env,
-                    layout_ids,
-                    dict,
-                    function,
-                    closure,
-                    *closure_layout,
-                    default,
-                    key_layout,
-                    value_layout,
-                    default_layout,
-                ),
+                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
+                    let argument_layouts = &[**key_layout, **value_layout, *default_layout];
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        *closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    dict_walk(
+                        env,
+                        layout_ids,
+                        roc_function_call,
+                        dict,
+                        default,
+                        key_layout,
+                        value_layout,
+                        default_layout,
+                    )
+                }
                 _ => unreachable!("invalid dict layout"),
             }
         }
@@ -4584,7 +4630,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         DictEmpty => {
             debug_assert_eq!(args.len(), 0);
-            dict_empty(env, scope)
+            dict_empty(env)
         }
         DictInsert => {
             debug_assert_eq!(args.len(), 3);
@@ -4734,7 +4780,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
             match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => dict_empty(env, scope),
+                Layout::Builtin(Builtin::EmptyList) => dict_empty(env),
                 Layout::Builtin(Builtin::List(_, key_layout)) => {
                     set_from_list(env, layout_ids, list, key_layout)
                 }

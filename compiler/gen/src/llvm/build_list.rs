@@ -72,7 +72,7 @@ fn pass_list_as_i128<'a, 'ctx, 'env>(
     complex_bitcast(env.builder, list, env.context.i128_type().into(), "to_i128")
 }
 
-fn layout_width<'a, 'ctx, 'env>(
+pub fn layout_width<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -81,7 +81,7 @@ fn layout_width<'a, 'ctx, 'env>(
         .into()
 }
 
-fn pass_as_opaque<'a, 'ctx, 'env>(
+pub fn pass_as_opaque<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     ptr: PointerValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
