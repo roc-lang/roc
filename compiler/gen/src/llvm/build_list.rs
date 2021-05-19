@@ -865,7 +865,7 @@ pub fn list_map3<'a, 'ctx, 'env>(
     element1_layout: &Layout<'a>,
     element2_layout: &Layout<'a>,
     element3_layout: &Layout<'a>,
-    return_layout: &Layout<'a>,
+    result_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let dec_a = build_dec_wrapper(env, layout_ids, element1_layout);
     let dec_b = build_dec_wrapper(env, layout_ids, element2_layout);
@@ -881,11 +881,11 @@ pub fn list_map3<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            alignment_intvalue(env, return_layout),
+            alignment_intvalue(env, result_layout),
             layout_width(env, element1_layout),
             layout_width(env, element2_layout),
             layout_width(env, element3_layout),
-            layout_width(env, return_layout),
+            layout_width(env, result_layout),
             dec_a.as_global_value().as_pointer_value().into(),
             dec_b.as_global_value().as_pointer_value().into(),
             dec_c.as_global_value().as_pointer_value().into(),

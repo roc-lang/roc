@@ -3777,9 +3777,12 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
-            match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(_, element_layout)) => {
+            match (list_layout, return_layout) {
+                (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
+                (
+                    Layout::Builtin(Builtin::List(_, element_layout)),
+                    Layout::Builtin(Builtin::List(_, result_layout)),
+                ) => {
                     let argument_layouts = &[**element_layout];
 
                     let roc_function_call = roc_function_call(
@@ -3792,7 +3795,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         argument_layouts,
                     );
 
-                    list_map(env, roc_function_call, list, element_layout, return_layout)
+                    list_map(env, roc_function_call, list, element_layout, result_layout)
                 }
                 _ => unreachable!("invalid list layout"),
             }
@@ -3806,10 +3809,11 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let function = passed_function_at_index!(2);
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
 
-            match (list1_layout, list2_layout) {
+            match (list1_layout, list2_layout, return_layout) {
                 (
                     Layout::Builtin(Builtin::List(_, element1_layout)),
                     Layout::Builtin(Builtin::List(_, element2_layout)),
+                    Layout::Builtin(Builtin::List(_, result_layout)),
                 ) => {
                     let argument_layouts = &[**element1_layout, **element2_layout];
 
@@ -3831,11 +3835,11 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         list2,
                         element1_layout,
                         element2_layout,
-                        return_layout,
+                        result_layout,
                     )
                 }
-                (Layout::Builtin(Builtin::EmptyList), _)
-                | (_, Layout::Builtin(Builtin::EmptyList)) => empty_list(env),
+                (Layout::Builtin(Builtin::EmptyList), _, _)
+                | (_, Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
                 _ => unreachable!("invalid list layout"),
             }
         }
@@ -3849,11 +3853,12 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let function = passed_function_at_index!(3);
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[4]);
 
-            match (list1_layout, list2_layout, list3_layout) {
+            match (list1_layout, list2_layout, list3_layout, return_layout) {
                 (
                     Layout::Builtin(Builtin::List(_, element1_layout)),
                     Layout::Builtin(Builtin::List(_, element2_layout)),
                     Layout::Builtin(Builtin::List(_, element3_layout)),
+                    Layout::Builtin(Builtin::List(_, result_layout)),
                 ) => {
                     let argument_layouts =
                         &[**element1_layout, **element2_layout, **element3_layout];
@@ -3878,12 +3883,12 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         element1_layout,
                         element2_layout,
                         element3_layout,
-                        return_layout,
+                        result_layout,
                     )
                 }
-                (Layout::Builtin(Builtin::EmptyList), _, _)
-                | (_, Layout::Builtin(Builtin::EmptyList), _)
-                | (_, _, Layout::Builtin(Builtin::EmptyList)) => empty_list(env),
+                (Layout::Builtin(Builtin::EmptyList), _, _, _)
+                | (_, Layout::Builtin(Builtin::EmptyList), _, _)
+                | (_, _, Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
                 _ => unreachable!("invalid list layout"),
             }
         }
@@ -3897,9 +3902,12 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
-            match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(_, element_layout)) => {
+            match (list_layout, return_layout) {
+                (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
+                (
+                    Layout::Builtin(Builtin::List(_, element_layout)),
+                    Layout::Builtin(Builtin::List(_, result_layout)),
+                ) => {
                     let argument_layouts = &[Layout::Builtin(Builtin::Usize), **element_layout];
 
                     let roc_function_call = roc_function_call(
@@ -3912,7 +3920,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         argument_layouts,
                     );
 
-                    list_map_with_index(env, roc_function_call, list, element_layout, return_layout)
+                    list_map_with_index(env, roc_function_call, list, element_layout, result_layout)
                 }
                 _ => unreachable!("invalid list layout"),
             }

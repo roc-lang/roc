@@ -303,7 +303,6 @@ pub fn listMap3(
     list1: RocList,
     list2: RocList,
     list3: RocList,
-    transform: Opaque,
     caller: Caller3,
     data: Opaque,
     inc_n_data: IncN,
