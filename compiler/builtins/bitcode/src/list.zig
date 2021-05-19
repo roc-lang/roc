@@ -356,19 +356,33 @@ pub fn listMap3(
     }
 }
 
-pub fn listKeepIf(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, element_width: usize, inc: Inc, dec: Dec) callconv(.C) RocList {
+pub fn listKeepIf(
+    list: RocList,
+    caller: Caller1,
+    data: Opaque,
+    inc_n_data: IncN,
+    data_is_owned: bool,
+    alignment: usize,
+    element_width: usize,
+    inc: Inc,
+    dec: Dec,
+) callconv(.C) RocList {
     if (list.bytes) |source_ptr| {
         const size = list.len();
         var i: usize = 0;
         var output = RocList.allocate(std.heap.c_allocator, alignment, list.len(), list.len() * element_width);
         const target_ptr = output.bytes orelse unreachable;
 
+        if (data_is_owned) {
+            inc_n_data(data, size);
+        }
+
         var kept: usize = 0;
         while (i < size) : (i += 1) {
             var keep = false;
             const element = source_ptr + (i * element_width);
             inc(element);
-            caller(transform, element, @ptrCast(?[*]u8, &keep));
+            caller(data, element, @ptrCast(?[*]u8, &keep));
 
             if (keep) {
                 @memcpy(target_ptr + (kept * element_width), element, element_width);
@@ -378,9 +392,6 @@ pub fn listKeepIf(list: RocList, transform: Opaque, caller: Caller1, alignment: 
                 dec(element);
             }
         }
-
-        // consume the input list
-        utils.decref(std.heap.c_allocator, alignment, list.bytes, size * element_width);
 
         if (kept == 0) {
             // if the output is empty, deallocate the space we made for the result
@@ -396,15 +407,73 @@ pub fn listKeepIf(list: RocList, transform: Opaque, caller: Caller1, alignment: 
     }
 }
 
-pub fn listKeepOks(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, before_width: usize, result_width: usize, after_width: usize, inc_closure: Inc, dec_result: Dec) callconv(.C) RocList {
-    return listKeepResult(list, RocResult.isOk, transform, caller, alignment, before_width, result_width, after_width, inc_closure, dec_result);
+pub fn listKeepOks(
+    list: RocList,
+    caller: Caller1,
+    data: Opaque,
+    inc_n_data: IncN,
+    data_is_owned: bool,
+    alignment: usize,
+    before_width: usize,
+    result_width: usize,
+    after_width: usize,
+    dec_result: Dec,
+) callconv(.C) RocList {
+    return listKeepResult(
+        list,
+        RocResult.isOk,
+        caller,
+        data,
+        inc_n_data,
+        data_is_owned,
+        alignment,
+        before_width,
+        result_width,
+        after_width,
+        dec_result,
+    );
 }
 
-pub fn listKeepErrs(list: RocList, transform: Opaque, caller: Caller1, alignment: usize, before_width: usize, result_width: usize, after_width: usize, inc_closure: Inc, dec_result: Dec) callconv(.C) RocList {
-    return listKeepResult(list, RocResult.isErr, transform, caller, alignment, before_width, result_width, after_width, inc_closure, dec_result);
+pub fn listKeepErrs(
+    list: RocList,
+    caller: Caller1,
+    data: Opaque,
+    inc_n_data: IncN,
+    data_is_owned: bool,
+    alignment: usize,
+    before_width: usize,
+    result_width: usize,
+    after_width: usize,
+    dec_result: Dec,
+) callconv(.C) RocList {
+    return listKeepResult(
+        list,
+        RocResult.isErr,
+        caller,
+        data,
+        inc_n_data,
+        data_is_owned,
+        alignment,
+        before_width,
+        result_width,
+        after_width,
+        dec_result,
+    );
 }
 
-pub fn listKeepResult(list: RocList, is_good_constructor: fn (RocResult) bool, transform: Opaque, caller: Caller1, alignment: usize, before_width: usize, result_width: usize, after_width: usize, inc_closure: Inc, dec_result: Dec) RocList {
+pub fn listKeepResult(
+    list: RocList,
+    is_good_constructor: fn (RocResult) bool,
+    caller: Caller1,
+    data: Opaque,
+    inc_n_data: IncN,
+    data_is_owned: bool,
+    alignment: usize,
+    before_width: usize,
+    result_width: usize,
+    after_width: usize,
+    dec_result: Dec,
+) RocList {
     if (list.bytes) |source_ptr| {
         const size = list.len();
         var i: usize = 0;
@@ -413,11 +482,14 @@ pub fn listKeepResult(list: RocList, is_good_constructor: fn (RocResult) bool, t
 
         var temporary = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, result_width) catch unreachable);
 
+        if (data_is_owned) {
+            inc_n_data(data, size);
+        }
+
         var kept: usize = 0;
         while (i < size) : (i += 1) {
             const before_element = source_ptr + (i * before_width);
-            inc_closure(transform);
-            caller(transform, before_element, temporary);
+            caller(data, before_element, temporary);
 
             const result = utils.RocResult{ .bytes = temporary };
 
@@ -430,7 +502,6 @@ pub fn listKeepResult(list: RocList, is_good_constructor: fn (RocResult) bool, t
             }
         }
 
-        utils.decref(std.heap.c_allocator, alignment, list.bytes, size * before_width);
         std.heap.c_allocator.free(temporary[0..result_width]);
 
         if (kept == 0) {
@@ -746,13 +817,25 @@ fn quicksort(source_ptr: [*]u8, transform: Opaque, wrapper: CompareFn, element_w
     }
 }
 
-pub fn listSortWith(input: RocList, transform: Opaque, wrapper: CompareFn, alignment: usize, element_width: usize) callconv(.C) RocList {
+pub fn listSortWith(
+    input: RocList,
+    caller: CompareFn,
+    data: Opaque,
+    inc_n_data: IncN,
+    data_is_owned: bool,
+    alignment: usize,
+    element_width: usize,
+) callconv(.C) RocList {
     var list = input.makeUnique(std.heap.c_allocator, alignment, element_width);
+
+    if (data_is_owned) {
+        inc_n_data(data, list.len());
+    }
 
     if (list.bytes) |source_ptr| {
         const low = 0;
         const high: isize = @intCast(isize, list.len()) - 1;
-        quicksort(source_ptr, transform, wrapper, element_width, low, high);
+        quicksort(source_ptr, data, caller, element_width, low, high);
     }
 
     return list;

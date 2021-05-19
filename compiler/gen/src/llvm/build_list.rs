@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 use crate::llvm::bitcode::{
-    build_compare_wrapper, build_dec_wrapper, build_eq_wrapper, build_inc_n_wrapper,
-    build_inc_wrapper, build_transform_caller_new, call_bitcode_fn, call_void_bitcode_fn,
+    build_dec_wrapper, build_eq_wrapper, build_inc_n_wrapper, build_inc_wrapper,
+    build_transform_caller_new, call_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
     allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, InPlace, RocFunctionCall,
@@ -444,56 +444,12 @@ pub enum ListWalk {
     WalkBackwardsUntil,
 }
 
-pub fn list_walk_help<'a, 'ctx, 'env>(
-    env: &'ctx Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    scope: &crate::llvm::build::Scope<'a, 'ctx>,
-    parent: FunctionValue<'ctx>,
-    args: &[roc_module::symbol::Symbol],
-    function: FunctionValue<'a>,
-    function_layout: Layout<'a>,
-    variant: ListWalk,
-) -> BasicValueEnum<'ctx> {
-    use crate::llvm::build::load_symbol_and_layout;
-
-    debug_assert_eq!(args.len(), 4);
-
-    let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-    let (default, default_layout) = load_symbol_and_layout(scope, &args[1]);
-
-    let (closure, closure_layout) = load_symbol_and_layout(scope, &args[3]);
-
-    match list_layout {
-        Layout::Builtin(Builtin::EmptyList) => default,
-        Layout::Builtin(Builtin::List(_, element_layout)) => list_walk_generic(
-            env,
-            layout_ids,
-            parent,
-            list,
-            element_layout,
-            function,
-            function_layout,
-            closure,
-            *closure_layout,
-            default,
-            default_layout,
-            variant,
-        ),
-        _ => unreachable!("invalid list layout"),
-    }
-}
-
 pub fn list_walk_generic<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    _parent: FunctionValue<'ctx>,
+    roc_function_call: RocFunctionCall<'ctx>,
     list: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
-    transform: FunctionValue<'ctx>,
-    _transform_layout: Layout<'a>,
-    closure_data: BasicValueEnum<'ctx>,
-    closure_data_layout: Layout<'a>,
     default: BasicValueEnum<'ctx>,
     default_layout: &Layout<'a>,
     variant: ListWalk,
@@ -507,20 +463,8 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
         ListWalk::WalkBackwardsUntil => todo!(),
     };
 
-    let closure_data_ptr = builder.build_alloca(closure_data.get_type(), "closure_data_ptr");
-    env.builder.build_store(closure_data_ptr, closure_data);
-
     let default_ptr = builder.build_alloca(default.get_type(), "default_ptr");
     env.builder.build_store(default_ptr, default);
-
-    let stepper_caller = build_transform_caller_new(
-        env,
-        transform,
-        closure_data_layout,
-        &[*element_layout, *default_layout],
-    )
-    .as_global_value()
-    .as_pointer_value();
 
     let result_ptr = env.builder.build_alloca(default.get_type(), "result");
 
@@ -530,8 +474,10 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
                 env,
                 &[
                     pass_list_as_i128(env, list),
-                    pass_as_opaque(env, closure_data_ptr),
-                    stepper_caller.into(),
+                    roc_function_call.caller.into(),
+                    pass_as_opaque(env, roc_function_call.data),
+                    roc_function_call.inc_n_data.into(),
+                    roc_function_call.data_is_owned.into(),
                     pass_as_opaque(env, default_ptr),
                     alignment_intvalue(env, &element_layout),
                     layout_width(env, element_layout),
@@ -547,8 +493,10 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
                 env,
                 &[
                     pass_list_as_i128(env, list),
-                    pass_as_opaque(env, closure_data_ptr),
-                    stepper_caller.into(),
+                    roc_function_call.caller.into(),
+                    pass_as_opaque(env, roc_function_call.data),
+                    roc_function_call.inc_n_data.into(),
+                    roc_function_call.data_is_owned.into(),
                     pass_as_opaque(env, default_ptr),
                     alignment_intvalue(env, &element_layout),
                     layout_width(env, element_layout),
@@ -657,22 +605,10 @@ pub fn list_contains<'a, 'ctx, 'env>(
 pub fn list_keep_if<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    transform: FunctionValue<'ctx>,
-    closure_data: BasicValueEnum<'ctx>,
-    closure_data_layout: Layout<'a>,
+    roc_function_call: RocFunctionCall<'ctx>,
     list: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
-    let closure_data_ptr = builder.build_alloca(closure_data.get_type(), "closure_data_ptr");
-    env.builder.build_store(closure_data_ptr, closure_data);
-
-    let stepper_caller =
-        build_transform_caller_new(env, transform, closure_data_layout, &[*element_layout])
-            .as_global_value()
-            .as_pointer_value();
-
     let inc_element_fn = build_inc_wrapper(env, layout_ids, element_layout);
     let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
 
@@ -680,8 +616,10 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
         env,
         &[
             pass_list_as_i128(env, list),
-            pass_as_opaque(env, closure_data_ptr),
-            stepper_caller.into(),
+            roc_function_call.caller.into(),
+            pass_as_opaque(env, roc_function_call.data),
+            roc_function_call.inc_n_data.into(),
+            roc_function_call.data_is_owned.into(),
             alignment_intvalue(env, &element_layout),
             layout_width(env, element_layout),
             inc_element_fn.as_global_value().as_pointer_value().into(),
@@ -695,24 +633,35 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
 pub fn list_keep_oks<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    transform: FunctionValue<'ctx>,
-    transform_layout: Layout<'a>,
-    closure_data: BasicValueEnum<'ctx>,
-    closure_data_layout: Layout<'a>,
+    roc_function_call: RocFunctionCall<'ctx>,
+    function_layout: &Layout<'a>,
     list: BasicValueEnum<'ctx>,
     before_layout: &Layout<'a>,
     after_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    list_keep_result(
+    // Layout of the `Result after *`
+    let result_layout = match function_layout {
+        Layout::FunctionPointer(_, ret) => ret,
+        Layout::Closure(_, _, ret) => ret,
+        _ => unreachable!("not a callable layout"),
+    };
+
+    let dec_result_fn = build_dec_wrapper(env, layout_ids, result_layout);
+
+    call_bitcode_fn(
         env,
-        layout_ids,
-        transform,
-        transform_layout,
-        closure_data,
-        closure_data_layout,
-        list,
-        before_layout,
-        after_layout,
+        &[
+            pass_list_as_i128(env, list),
+            roc_function_call.caller.into(),
+            pass_as_opaque(env, roc_function_call.data),
+            roc_function_call.inc_n_data.into(),
+            roc_function_call.data_is_owned.into(),
+            alignment_intvalue(env, &before_layout),
+            layout_width(env, before_layout),
+            layout_width(env, result_layout),
+            layout_width(env, after_layout),
+            dec_result_fn.as_global_value().as_pointer_value().into(),
+        ],
         bitcode::LIST_KEEP_OKS,
     )
 }
@@ -721,24 +670,35 @@ pub fn list_keep_oks<'a, 'ctx, 'env>(
 pub fn list_keep_errs<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    transform: FunctionValue<'ctx>,
-    transform_layout: Layout<'a>,
-    closure_data: BasicValueEnum<'ctx>,
-    closure_data_layout: Layout<'a>,
+    roc_function_call: RocFunctionCall<'ctx>,
+    function_layout: &Layout<'a>,
     list: BasicValueEnum<'ctx>,
     before_layout: &Layout<'a>,
     after_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    list_keep_result(
+    // Layout of the `Result after *`
+    let result_layout = match function_layout {
+        Layout::FunctionPointer(_, ret) => ret,
+        Layout::Closure(_, _, ret) => ret,
+        _ => unreachable!("not a callable layout"),
+    };
+
+    let dec_result_fn = build_dec_wrapper(env, layout_ids, result_layout);
+
+    call_bitcode_fn(
         env,
-        layout_ids,
-        transform,
-        transform_layout,
-        closure_data,
-        closure_data_layout,
-        list,
-        before_layout,
-        after_layout,
+        &[
+            pass_list_as_i128(env, list),
+            roc_function_call.caller.into(),
+            pass_as_opaque(env, roc_function_call.data),
+            roc_function_call.inc_n_data.into(),
+            roc_function_call.data_is_owned.into(),
+            alignment_intvalue(env, &before_layout),
+            layout_width(env, before_layout),
+            layout_width(env, result_layout),
+            layout_width(env, after_layout),
+            dec_result_fn.as_global_value().as_pointer_value().into(),
+        ],
         bitcode::LIST_KEEP_ERRS,
     )
 }
@@ -771,18 +731,6 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
             .as_global_value()
             .as_pointer_value();
 
-    let before_width = env
-        .ptr_int()
-        .const_int(before_layout.stack_size(env.ptr_bytes) as u64, false);
-
-    let after_width = env
-        .ptr_int()
-        .const_int(after_layout.stack_size(env.ptr_bytes) as u64, false);
-
-    let result_width = env
-        .ptr_int()
-        .const_int(result_layout.stack_size(env.ptr_bytes) as u64, false);
-
     let inc_closure = build_inc_wrapper(env, layout_ids, &transform_layout);
     let dec_result_fn = build_dec_wrapper(env, layout_ids, result_layout);
 
@@ -793,9 +741,9 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
             pass_as_opaque(env, closure_data_ptr),
             stepper_caller.into(),
             alignment_intvalue(env, &before_layout),
-            before_width.into(),
-            result_width.into(),
-            after_width.into(),
+            layout_width(env, before_layout),
+            layout_width(env, after_layout),
+            layout_width(env, result_layout),
             inc_closure.as_global_value().as_pointer_value().into(),
             dec_result_fn.as_global_value().as_pointer_value().into(),
         ],
@@ -806,28 +754,19 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
 /// List.sortWith : List a, (a, a -> Ordering) -> List a
 pub fn list_sort_with<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    transform: FunctionValue<'ctx>,
-    closure_data: BasicValueEnum<'ctx>,
-    closure_data_layout: Layout<'a>,
+    roc_function_call: RocFunctionCall<'ctx>,
+    compare_wrapper: PointerValue<'ctx>,
     list: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let compare_wrapper =
-        build_compare_wrapper(env, transform, closure_data_layout, element_layout)
-            .as_global_value()
-            .as_pointer_value();
-
-    let closure_data_ptr = env
-        .builder
-        .build_alloca(closure_data.get_type(), "closure_data_ptr");
-    env.builder.build_store(closure_data_ptr, closure_data);
-
     call_bitcode_fn_returns_list(
         env,
         &[
             pass_list_as_i128(env, list),
-            pass_as_opaque(env, closure_data_ptr),
             compare_wrapper.into(),
+            pass_as_opaque(env, roc_function_call.data),
+            roc_function_call.inc_n_data.into(),
+            roc_function_call.data_is_owned.into(),
             alignment_intvalue(env, &element_layout),
             layout_width(env, element_layout),
         ],

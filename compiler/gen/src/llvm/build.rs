@@ -2305,7 +2305,32 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                                 env,
                                 value.into_struct_value(),
                             );
+
+                            // because of how we insert DECREF for lists, we can't guarantee that
+                            // the list is non-empty. When the list is empty, the pointer to the
+                            // elements is NULL, and trying to get to the RC address will
+                            // underflow, causing a segfault. Therefore, in this case we must
+                            // manually check that the list is non-empty
+                            let not_empty = env.context.append_basic_block(parent, "not_null");
+                            let done = env.context.append_basic_block(parent, "done");
+
+                            let length = list_len(env.builder, value.into_struct_value());
+                            let is_empty = env.builder.build_int_compare(
+                                IntPredicate::EQ,
+                                length,
+                                length.get_type().const_zero(),
+                                "",
+                            );
+
+                            env.builder
+                                .build_conditional_branch(is_empty, done, not_empty);
+
+                            env.builder.position_at_end(not_empty);
+
                             refcount_ptr.decrement(env, layout);
+
+                            env.builder.build_unconditional_branch(done);
+                            env.builder.position_at_end(done);
                         }
 
                         _ if layout.is_refcounted() => {
@@ -3680,16 +3705,24 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => default,
                 Layout::Builtin(Builtin::List(_, element_layout)) => {
+                    let argument_layouts = &[**element_layout, *default_layout];
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        *closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
                     crate::llvm::build_list::list_walk_generic(
                         env,
                         layout_ids,
-                        parent,
+                        roc_function_call,
                         list,
                         element_layout,
-                        function,
-                        function_layout,
-                        closure,
-                        *closure_layout,
                         default,
                         default_layout,
                         $variant,
@@ -3862,15 +3895,21 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(_, element_layout)) => list_keep_if(
-                    env,
-                    layout_ids,
-                    function,
-                    closure,
-                    *closure_layout,
-                    list,
-                    element_layout,
-                ),
+                Layout::Builtin(Builtin::List(_, element_layout)) => {
+                    let argument_layouts = &[**element_layout];
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        *closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    list_keep_if(env, layout_ids, roc_function_call, list, element_layout)
+                }
                 _ => unreachable!("invalid list layout"),
             }
         }
@@ -3890,17 +3929,29 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 (
                     Layout::Builtin(Builtin::List(_, before_layout)),
                     Layout::Builtin(Builtin::List(_, after_layout)),
-                ) => list_keep_oks(
-                    env,
-                    layout_ids,
-                    function,
-                    function_layout,
-                    closure,
-                    *closure_layout,
-                    list,
-                    before_layout,
-                    after_layout,
-                ),
+                ) => {
+                    let argument_layouts = &[**before_layout];
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        *closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    list_keep_oks(
+                        env,
+                        layout_ids,
+                        roc_function_call,
+                        &function_layout,
+                        list,
+                        before_layout,
+                        after_layout,
+                    )
+                }
                 (other1, other2) => {
                     unreachable!("invalid list layouts:\n{:?}\n{:?}", other1, other2)
                 }
@@ -3922,17 +3973,29 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 (
                     Layout::Builtin(Builtin::List(_, before_layout)),
                     Layout::Builtin(Builtin::List(_, after_layout)),
-                ) => list_keep_errs(
-                    env,
-                    layout_ids,
-                    function,
-                    function_layout,
-                    closure,
-                    *closure_layout,
-                    list,
-                    before_layout,
-                    after_layout,
-                ),
+                ) => {
+                    let argument_layouts = &[**before_layout];
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        *closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    list_keep_errs(
+                        env,
+                        layout_ids,
+                        roc_function_call,
+                        &function_layout,
+                        list,
+                        before_layout,
+                        after_layout,
+                    )
+                }
                 (other1, other2) => {
                     unreachable!("invalid list layouts:\n{:?}\n{:?}", other1, other2)
                 }
@@ -3959,14 +4022,34 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(_, element_layout)) => list_sort_with(
-                    env,
-                    function,
-                    closure,
-                    *closure_layout,
-                    list,
-                    element_layout,
-                ),
+                Layout::Builtin(Builtin::List(_, element_layout)) => {
+                    use crate::llvm::bitcode::build_compare_wrapper;
+
+                    let argument_layouts = &[**element_layout, **element_layout];
+
+                    let compare_wrapper =
+                        build_compare_wrapper(env, function, *closure_layout, element_layout)
+                            .as_global_value()
+                            .as_pointer_value();
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        *closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    list_sort_with(
+                        env,
+                        roc_function_call,
+                        compare_wrapper,
+                        list,
+                        element_layout,
+                    )
+                }
                 _ => unreachable!("invalid list layout"),
             }
         }
