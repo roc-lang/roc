@@ -268,9 +268,7 @@ fn constrain_access() {
     infer_eq(
         indoc!(
             r#"
-            foo = { bar: "foo" }
-
-            foo.bar
+            { foo: "bar" }.foo
             "#
         ),
         "Str",
