@@ -1,7 +1,5 @@
-use criterion::{
-    black_box, measurement::WallTime, BenchmarkGroup
-};
 use crate::helpers::{example_file, run_cmd, run_roc};
+use criterion::{black_box, measurement::WallTime, BenchmarkGroup};
 use std::path::Path;
 
 // run without optimization, without input
@@ -92,7 +90,6 @@ fn bench_cmd(
             &[],
         );
     }
-
 }
 
 pub fn bench_nqueens(bench_group_opt: Option<&mut BenchmarkGroup<WallTime>>) {

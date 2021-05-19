@@ -113,7 +113,8 @@ test-all:
 
 bench-roc:
     FROM +copy-dirs-and-cache
+    ENV RUST_BACKTRACE=full
     RUN cargo criterion -V
-    RUN --mount=type=cache,target=$SCCACHE_DIR \
+    RUN --privileged --mount=type=cache,target=$SCCACHE_DIR \
         cd cli && cargo bench instructions_bench && cargo criterion --bench time_bench && sccache --show-stats
     
