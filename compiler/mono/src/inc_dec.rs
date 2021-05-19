@@ -416,12 +416,6 @@ impl<'a> Context<'a> {
             and it has been borrowed by the application.
             Remark: `x` may occur multiple times in the application (e.g., `f x y x`).
             This is why we check whether it is the first occurrence. */
-            dbg!(
-                self.must_consume(*x),
-                is_first_occurence(xs, i),
-                *is_borrow,
-                !b_live_vars.contains(x)
-            );
 
             if self.must_consume(*x)
                 && is_first_occurence(xs, i)
@@ -461,61 +455,124 @@ impl<'a> Context<'a> {
 
             HigherOrderLowLevel {
                 op, closure_layout, ..
-            } => match op {
-                roc_module::low_level::LowLevel::ListMap => {
-                    match self.param_map.get_symbol(arguments[1], *closure_layout) {
-                        Some(ps) => {
-                            let b = if ps[0].borrow {
-                                let ps = [BORROWED, BORROWED, BORROWED];
-                                println!("----------------");
-                                self.add_dec_after_lowlevel(arguments, &ps, b, b_live_vars)
+            } => {
+                macro_rules! create_call {
+                    ($borrows:expr) => {
+                        Expr::Call(crate::ir::Call {
+                            call_type: if $borrows {
+                                call_type
                             } else {
-                                let ps = [OWNED, BORROWED, BORROWED];
-                                println!("----------------");
-                                let b = self.add_dec_after_lowlevel(arguments, &ps, b, b_live_vars);
-
-                                self.arena.alloc(Stmt::Refcounting(
-                                    ModifyRc::DecRef(arguments[0]),
-                                    self.arena.alloc(b),
-                                ))
-                            };
-
-                            dbg!(self.must_consume(arguments[2]));
-
-                            let call_type = {
-                                if ps[1].borrow {
-                                    call_type
-                                } else {
-                                    HigherOrderLowLevel {
-                                        op: *op,
-                                        closure_layout: *closure_layout,
-                                        function_owns_closure_data: true,
-                                    }
+                                HigherOrderLowLevel {
+                                    op: *op,
+                                    closure_layout: *closure_layout,
+                                    function_owns_closure_data: true,
                                 }
-                            };
+                            },
+                            arguments,
+                        })
+                    };
+                }
 
-                            let v = Expr::Call(crate::ir::Call {
-                                call_type,
-                                arguments,
-                            });
-
-                            &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                macro_rules! decref_if_owned {
+                    ($borrows:expr, $argument:expr, $stmt:expr) => {
+                        if !$borrows {
+                            self.arena.alloc(Stmt::Refcounting(
+                                ModifyRc::DecRef($argument),
+                                self.arena.alloc($stmt),
+                            ))
+                        } else {
+                            $stmt
                         }
-                        None => unreachable!(),
+                    };
+                }
+
+                const FUNCTION: bool = BORROWED;
+                const CLOSURE_DATA: bool = BORROWED;
+
+                match op {
+                    roc_module::low_level::LowLevel::ListMap => {
+                        match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                            Some(function_ps) => {
+                                let borrows = [function_ps[0].borrow, FUNCTION, CLOSURE_DATA];
+
+                                let b = self.add_dec_after_lowlevel(
+                                    arguments,
+                                    &borrows,
+                                    b,
+                                    b_live_vars,
+                                );
+
+                                // if the list is owned, then all elements have been consumed, but not the list itself
+                                let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
+
+                                let v = create_call!(function_ps[1].borrow);
+
+                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                            }
+                            None => unreachable!(),
+                        }
+                    }
+                    roc_module::low_level::LowLevel::ListMapWithIndex => {
+                        match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                            Some(function_ps) => {
+                                let borrows = [function_ps[1].borrow, FUNCTION, CLOSURE_DATA];
+
+                                let b = self.add_dec_after_lowlevel(
+                                    arguments,
+                                    &borrows,
+                                    b,
+                                    b_live_vars,
+                                );
+
+                                let b = decref_if_owned!(function_ps[1].borrow, arguments[0], b);
+
+                                let v = create_call!(function_ps[2].borrow);
+
+                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                            }
+                            None => unreachable!(),
+                        }
+                    }
+                    roc_module::low_level::LowLevel::ListMap2 => {
+                        match self.param_map.get_symbol(arguments[2], *closure_layout) {
+                            Some(function_ps) => {
+                                let borrows = [
+                                    function_ps[1].borrow,
+                                    function_ps[2].borrow,
+                                    FUNCTION,
+                                    CLOSURE_DATA,
+                                ];
+
+                                let b = self.add_dec_after_lowlevel(
+                                    arguments,
+                                    &borrows,
+                                    b,
+                                    b_live_vars,
+                                );
+
+                                let b = decref_if_owned!(function_ps[1].borrow, arguments[0], b);
+                                let b = decref_if_owned!(function_ps[2].borrow, arguments[1], b);
+
+                                let v = create_call!(function_ps[2].borrow);
+
+                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                            }
+                            None => unreachable!(),
+                        }
+                    }
+                    _ => {
+                        let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
+                        let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);
+
+                        let v = Expr::Call(crate::ir::Call {
+                            call_type,
+                            arguments,
+                        });
+
+                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
                     }
                 }
-                _ => {
-                    let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
-                    let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);
-
-                    let v = Expr::Call(crate::ir::Call {
-                        call_type,
-                        arguments,
-                    });
-
-                    &*self.arena.alloc(Stmt::Let(z, v, l, b))
-                }
-            },
+            }
 
             Foreign { .. } => {
                 let ps = crate::borrow::foreign_borrow_signature(self.arena, arguments.len());

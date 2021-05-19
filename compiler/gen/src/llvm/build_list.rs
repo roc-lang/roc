@@ -4,7 +4,7 @@ use crate::llvm::bitcode::{
     build_inc_wrapper, build_transform_caller_new, call_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
-    allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, InPlace,
+    allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, InPlace, RocFunctionCall,
 };
 use crate::llvm::convert::{basic_type_from_layout, get_ptr_type};
 use crate::llvm::refcounting::{
@@ -838,161 +838,48 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
 /// List.mapWithIndex : List before, (Nat, before -> after) -> List after
 pub fn list_map_with_index<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    transform: FunctionValue<'ctx>,
-    transform_layout: Layout<'a>,
-    closure_data: BasicValueEnum<'ctx>,
-    closure_data_layout: Layout<'a>,
+    roc_function_call: RocFunctionCall<'ctx>,
     list: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
+    return_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    list_map_generic(
+    call_bitcode_fn_returns_list(
         env,
-        transform,
-        transform_layout,
-        list,
-        element_layout,
-        closure_data,
-        closure_data_layout,
+        &[
+            pass_list_as_i128(env, list),
+            roc_function_call.caller.into(),
+            pass_as_opaque(env, roc_function_call.data),
+            roc_function_call.inc_n_data.into(),
+            roc_function_call.data_is_owned.into(),
+            alignment_intvalue(env, &element_layout),
+            layout_width(env, element_layout),
+            layout_width(env, return_layout),
+        ],
         bitcode::LIST_MAP_WITH_INDEX,
-        &[Layout::Builtin(Builtin::Usize), *element_layout],
     )
-}
-
-fn roc_function_call_1<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    transform: FunctionValue<'ctx>,
-    closure_data: BasicValueEnum<'ctx>,
-    closure_data_layout: Layout<'a>,
-    closure_data_is_owned: bool,
-    argument_layouts: &[Layout<'a>],
-) -> PointerValue<'ctx> {
-    // %list.RocFunctionCall1 = type { void (i8*, i8*, i8*)*, i8*, void (i8*, i64)*, i1 }
-    let struct_type = env.module.get_struct_type("list.RocFunctionCall1").unwrap();
-
-    let builder = env.builder;
-
-    let closure_data_ptr = builder.build_alloca(closure_data.get_type(), "closure_data_ptr");
-    env.builder.build_store(closure_data_ptr, closure_data);
-
-    let stepper_caller =
-        build_transform_caller_new(env, transform, closure_data_layout, argument_layouts)
-            .as_global_value()
-            .as_pointer_value();
-
-    let inc_closure_data = build_inc_n_wrapper(env, layout_ids, &closure_data_layout)
-        .as_global_value()
-        .as_pointer_value();
-
-    let closure_data_is_owned = env
-        .context
-        .bool_type()
-        .const_int(closure_data_is_owned as u64, false);
-
-    let mut struct_value = builder
-        .build_insert_value(struct_type.get_undef(), stepper_caller, 0, "")
-        .unwrap();
-
-    struct_value = builder
-        .build_insert_value(struct_value, pass_as_opaque(env, closure_data_ptr), 1, "")
-        .unwrap();
-
-    struct_value = builder
-        .build_insert_value(struct_value, inc_closure_data, 2, "")
-        .unwrap();
-
-    struct_value = builder
-        .build_insert_value(struct_value, closure_data_is_owned, 3, "")
-        .unwrap();
-
-    let ptr = env.builder.build_alloca(struct_type, "roc_function_call_1");
-
-    env.builder.build_store(ptr, struct_value);
-
-    ptr
 }
 
 /// List.map : List before, (before -> after) -> List after
 pub fn list_map<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    transform: FunctionValue<'ctx>,
-    transform_layout: Layout<'a>,
-    closure_data: BasicValueEnum<'ctx>,
-    closure_data_layout: Layout<'a>,
-    closure_data_is_owned: bool,
+    roc_function_call: RocFunctionCall<'ctx>,
     list: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
+    return_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let argument_layouts = &[*element_layout];
-
-    let return_layout = match transform_layout {
-        Layout::FunctionPointer(_, ret) => ret,
-        Layout::Closure(_, _, ret) => ret,
-        _ => unreachable!("not a callable layout"),
-    };
-
-    let roc_function_call = roc_function_call_1(
-        env,
-        layout_ids,
-        transform,
-        closure_data,
-        closure_data_layout,
-        closure_data_is_owned,
-        argument_layouts,
-    );
-
     call_bitcode_fn_returns_list(
         env,
         &[
             pass_list_as_i128(env, list),
-            roc_function_call.into(),
+            roc_function_call.caller.into(),
+            pass_as_opaque(env, roc_function_call.data),
+            roc_function_call.inc_n_data.into(),
+            roc_function_call.data_is_owned.into(),
             alignment_intvalue(env, &element_layout),
             layout_width(env, element_layout),
             layout_width(env, return_layout),
         ],
         bitcode::LIST_MAP,
-    )
-}
-
-fn list_map_generic<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    transform: FunctionValue<'ctx>,
-    transform_layout: Layout<'a>,
-    list: BasicValueEnum<'ctx>,
-    element_layout: &Layout<'a>,
-    closure_data: BasicValueEnum<'ctx>,
-    closure_data_layout: Layout<'a>,
-    op: &str,
-    argument_layouts: &[Layout<'a>],
-) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
-    let return_layout = match transform_layout {
-        Layout::FunctionPointer(_, ret) => ret,
-        Layout::Closure(_, _, ret) => ret,
-        _ => unreachable!("not a callable layout"),
-    };
-
-    let closure_data_ptr = builder.build_alloca(closure_data.get_type(), "closure_data_ptr");
-    env.builder.build_store(closure_data_ptr, closure_data);
-
-    let stepper_caller =
-        build_transform_caller_new(env, transform, closure_data_layout, argument_layouts)
-            .as_global_value()
-            .as_pointer_value();
-
-    call_bitcode_fn_returns_list(
-        env,
-        &[
-            pass_list_as_i128(env, list),
-            pass_as_opaque(env, closure_data_ptr),
-            stepper_caller.into(),
-            alignment_intvalue(env, &element_layout),
-            layout_width(env, element_layout),
-            layout_width(env, return_layout),
-        ],
-        op,
     )
 }
 

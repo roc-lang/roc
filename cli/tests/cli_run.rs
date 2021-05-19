@@ -275,6 +275,18 @@ mod cli_run {
         );
     }
 
+    #[test]
+    #[serial(hof)]
+    fn hof_closures() {
+        check_output(
+            &example_file("benchmarks", "HofClosures.roc"),
+            "hof-closures",
+            &["--optimize"],
+            "",
+            false,
+        );
+    }
+
     //    #[test]
     //    #[serial(effect)]
     //    fn run_effect_unoptimized() {

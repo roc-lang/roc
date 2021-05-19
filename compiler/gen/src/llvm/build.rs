@@ -558,7 +558,7 @@ pub fn construct_optimization_passes<'a>(
             pmb.set_optimization_level(OptimizationLevel::None);
         }
         OptLevel::Optimize => {
-            pmb.set_optimization_level(OptimizationLevel::Aggressive);
+            pmb.set_optimization_level(OptimizationLevel::Less);
             // this threshold seems to do what we want
             pmb.set_inliner_with_threshold(275);
 
@@ -3586,13 +3586,58 @@ pub static C_CALL_CONV: u32 = 0;
 pub static FAST_CALL_CONV: u32 = 8;
 pub static COLD_CALL_CONV: u32 = 9;
 
+pub struct RocFunctionCall<'ctx> {
+    pub caller: PointerValue<'ctx>,
+    pub data: PointerValue<'ctx>,
+    pub inc_n_data: PointerValue<'ctx>,
+    pub data_is_owned: IntValue<'ctx>,
+}
+
+fn roc_function_call<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    transform: FunctionValue<'ctx>,
+    closure_data: BasicValueEnum<'ctx>,
+    closure_data_layout: Layout<'a>,
+    closure_data_is_owned: bool,
+    argument_layouts: &[Layout<'a>],
+) -> RocFunctionCall<'ctx> {
+    use crate::llvm::bitcode::{build_inc_n_wrapper, build_transform_caller_new};
+
+    let closure_data_ptr = env
+        .builder
+        .build_alloca(closure_data.get_type(), "closure_data_ptr");
+    env.builder.build_store(closure_data_ptr, closure_data);
+
+    let stepper_caller =
+        build_transform_caller_new(env, transform, closure_data_layout, argument_layouts)
+            .as_global_value()
+            .as_pointer_value();
+
+    let inc_closure_data = build_inc_n_wrapper(env, layout_ids, &closure_data_layout)
+        .as_global_value()
+        .as_pointer_value();
+
+    let closure_data_is_owned = env
+        .context
+        .bool_type()
+        .const_int(closure_data_is_owned as u64, false);
+
+    RocFunctionCall {
+        caller: stepper_caller,
+        inc_n_data: inc_closure_data,
+        data_is_owned: closure_data_is_owned,
+        data: closure_data_ptr,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_higher_order_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
-    layout: &Layout<'a>,
+    return_layout: &Layout<'a>,
     op: LowLevel,
     function_layout: Layout<'a>,
     function_owns_closure_data: bool,
@@ -3667,17 +3712,21 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(_, element_layout)) => list_map(
-                    env,
-                    layout_ids,
-                    function,
-                    function_layout,
-                    closure,
-                    *closure_layout,
-                    function_owns_closure_data,
-                    list,
-                    element_layout,
-                ),
+                Layout::Builtin(Builtin::List(_, element_layout)) => {
+                    let argument_layouts = &[**element_layout];
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        *closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    list_map(env, roc_function_call, list, element_layout, return_layout)
+                }
                 _ => unreachable!("invalid list layout"),
             }
         }
@@ -3758,15 +3807,21 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(_, element_layout)) => list_map_with_index(
-                    env,
-                    function,
-                    function_layout,
-                    closure,
-                    *closure_layout,
-                    list,
-                    element_layout,
-                ),
+                Layout::Builtin(Builtin::List(_, element_layout)) => {
+                    let argument_layouts = &[Layout::Builtin(Builtin::Usize), **element_layout];
+
+                    let roc_function_call = roc_function_call(
+                        env,
+                        layout_ids,
+                        function,
+                        closure,
+                        *closure_layout,
+                        function_owns_closure_data,
+                        argument_layouts,
+                    );
+
+                    list_map_with_index(env, roc_function_call, list, element_layout, return_layout)
+                }
                 _ => unreachable!("invalid list layout"),
             }
         }
@@ -3804,7 +3859,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
-            match (list_layout, layout) {
+            match (list_layout, return_layout) {
                 (_, Layout::Builtin(Builtin::EmptyList))
                 | (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
                 (
@@ -3836,7 +3891,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             let (closure, closure_layout) = load_symbol_and_layout(scope, &args[2]);
 
-            match (list_layout, layout) {
+            match (list_layout, return_layout) {
                 (_, Layout::Builtin(Builtin::EmptyList))
                 | (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
                 (

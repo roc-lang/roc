@@ -184,7 +184,10 @@ pub const RocFunctionCall1 = extern struct {
 
 pub fn listMap(
     list: RocList,
-    call: RocFunctionCall1,
+    caller: Caller1,
+    data: Opaque,
+    inc_n_data: IncN,
+    data_is_owned: bool,
     alignment: usize,
     old_element_width: usize,
     new_element_width: usize,
@@ -195,12 +198,12 @@ pub fn listMap(
         const output = RocList.allocate(std.heap.c_allocator, alignment, size, new_element_width);
         const target_ptr = output.bytes orelse unreachable;
 
-        if (call.data_is_owned) {
-            call.inc_n_data(call.data, size);
+        if (data_is_owned) {
+            inc_n_data(data, size);
         }
 
         while (i < size) : (i += 1) {
-            call.caller(call.data, source_ptr + (i * old_element_width), target_ptr + (i * new_element_width));
+            caller(data, source_ptr + (i * old_element_width), target_ptr + (i * new_element_width));
         }
 
         return output;
@@ -209,18 +212,29 @@ pub fn listMap(
     }
 }
 
-pub fn listMapWithIndex(list: RocList, transform: Opaque, caller: Caller2, alignment: usize, old_element_width: usize, new_element_width: usize) callconv(.C) RocList {
+pub fn listMapWithIndex(
+    list: RocList,
+    caller: Caller2,
+    data: Opaque,
+    inc_n_data: IncN,
+    data_is_owned: bool,
+    alignment: usize,
+    old_element_width: usize,
+    new_element_width: usize,
+) callconv(.C) RocList {
     if (list.bytes) |source_ptr| {
         const size = list.len();
         var i: usize = 0;
         const output = RocList.allocate(std.heap.c_allocator, alignment, size, new_element_width);
         const target_ptr = output.bytes orelse unreachable;
 
-        while (i < size) : (i += 1) {
-            caller(transform, @ptrCast(?[*]u8, &i), source_ptr + (i * old_element_width), target_ptr + (i * new_element_width));
+        if (data_is_owned) {
+            inc_n_data(data, size);
         }
 
-        utils.decref(std.heap.c_allocator, alignment, list.bytes, size * old_element_width);
+        while (i < size) : (i += 1) {
+            caller(data, @ptrCast(?[*]u8, &i), source_ptr + (i * old_element_width), target_ptr + (i * new_element_width));
+        }
 
         return output;
     } else {
