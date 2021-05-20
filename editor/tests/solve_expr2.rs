@@ -250,3 +250,15 @@ fn constrain_global_tag() {
         "[ Foo ]*",
     )
 }
+
+#[test]
+fn constrain_call_and_accessor() {
+    infer_eq(
+        indoc!(
+            r#"
+            .foo { foo: "bar" }
+            "#
+        ),
+        "Str",
+    )
+}

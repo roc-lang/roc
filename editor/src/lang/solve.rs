@@ -861,22 +861,30 @@ fn type_to_variable<'a>(
 
             register(subs, rank, pools, content)
         }
+        // This case is important for the rank of boolean variables
+        Function(args, closure_type_id, ret_type_id) => {
+            let mut arg_vars = Vec::with_capacity(args.len());
+
+            let closure_type = mempool.get(*closure_type_id);
+            let ret_type = mempool.get(*ret_type_id);
+
+            for arg_id in args.iter_node_ids() {
+                let arg = mempool.get(arg_id);
+
+                arg_vars.push(type_to_variable(
+                    arena, mempool, subs, rank, pools, cached, arg,
+                ))
+            }
+
+            let ret_var = type_to_variable(arena, mempool, subs, rank, pools, cached, ret_type);
+            let closure_var =
+                type_to_variable(arena, mempool, subs, rank, pools, cached, closure_type);
+
+            let content = Content::Structure(FlatType::Func(arg_vars, closure_var, ret_var));
+
+            register(subs, rank, pools, content)
+        }
         other => todo!("not implemented {:?}", &other),
-        //
-        //        // This case is important for the rank of boolean variables
-        //        Function(args, closure_type, ret_type) => {
-        //            let mut arg_vars = Vec::with_capacity(args.len());
-        //
-        //            for arg in args {
-        //                arg_vars.push(type_to_variable(subs, rank, pools, cached, arg))
-        //            }
-        //
-        //            let ret_var = type_to_variable(subs, rank, pools, cached, ret_type);
-        //            let closure_var = type_to_variable(subs, rank, pools, cached, closure_type);
-        //            let content = Content::Structure(FlatType::Func(arg_vars, closure_var, ret_var));
-        //
-        //            register(subs, rank, pools, content)
-        //        }
         //        RecursiveTagUnion(rec_var, tags, ext) => {
         //            let mut tag_vars = MutMap::default();
         //

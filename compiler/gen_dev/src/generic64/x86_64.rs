@@ -741,6 +741,24 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn abs_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        dst: X86_64FloatReg,
+        src: X86_64FloatReg,
+    ) {
+        movsd_freg64_rip_offset32(buf, dst, 0);
+
+        // TODO: make sure this constant only loads once instead of every call to abs
+        relocs.push(Relocation::LocalData {
+            offset: buf.len() as u64 - 4,
+            data: 0x7fffffffffffffffu64.to_le_bytes().to_vec(),
+        });
+
+        andpd_freg64_freg64(buf, dst, src);
+    }
+
+    #[inline(always)]
     fn add_reg64_reg64_imm32(
         buf: &mut Vec<'_, u8>,
         dst: X86_64GeneralReg,
@@ -794,6 +812,21 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
             offset: buf.len() as u64 - 4,
             name: fn_name,
         });
+    }
+
+    #[inline(always)]
+    fn imul_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) {
+        if dst == src1 {
+            imul_reg64_reg64(buf, dst, src2);
+        } else {
+            mov_reg64_reg64(buf, dst, src1);
+            imul_reg64_reg64(buf, dst, src2);
+        }
     }
 
     #[inline(always)]
@@ -976,6 +1009,21 @@ fn binop_reg64_reg64(
     buf.extend(&[rex, op_code, 0xC0 + dst_mod + src_mod]);
 }
 
+#[inline(always)]
+fn extended_binop_reg64_reg64(
+    op_code1: u8,
+    op_code2: u8,
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    src: X86_64GeneralReg,
+) {
+    let rex = add_rm_extension(dst, REX_W);
+    let rex = add_reg_extension(src, rex);
+    let dst_mod = dst as u8 % 8;
+    let src_mod = (src as u8 % 8) << 3;
+    buf.extend(&[rex, op_code1, op_code2, 0xC0 + dst_mod + src_mod]);
+}
+
 // Below here are the functions for all of the assembly instructions.
 // Their names are based on the instruction and operators combined.
 // You should call `buf.reserve()` if you push or extend more than once.
@@ -1018,6 +1066,26 @@ fn addsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64Fl
     }
 }
 
+#[inline(always)]
+fn andpd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+
+    if dst_high || src_high {
+        buf.extend(&[
+            0x66,
+            0x40 + ((dst_high as u8) << 2) + (src_high as u8),
+            0x0F,
+            0x54,
+            0xC0 + (dst_mod << 3) + (src_mod),
+        ])
+    } else {
+        buf.extend(&[0x66, 0x0F, 0x54, 0xC0 + (dst_mod << 3) + (src_mod)])
+    }
+}
+
 /// r/m64 AND imm8 (sign-extended).
 #[inline(always)]
 fn and_reg64_imm8(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i8) {
@@ -1050,6 +1118,14 @@ fn cmp_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
 #[inline(always)]
 fn cmp_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
     binop_reg64_reg64(0x39, buf, dst, src);
+}
+
+/// `IMUL r64,r/m64` -> Signed Multiply r/m64 to r64.
+#[inline(always)]
+fn imul_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    // IMUL is strange, the parameters are reversed from must other binary ops.
+    // The final encoding is (src, dst) instead of (dst, src).
+    extended_binop_reg64_reg64(0x0F, 0xAF, buf, src, dst);
 }
 
 /// Jump near, relative, RIP = RIP + 32-bit displacement sign extended to 64-bits.
@@ -1390,6 +1466,35 @@ mod tests {
     }
 
     #[test]
+    fn test_andpd_freg64_freg64() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+
+        for ((dst, src), expected) in &[
+            (
+                (X86_64FloatReg::XMM0, X86_64FloatReg::XMM0),
+                vec![0x66, 0x0F, 0x54, 0xC0],
+            ),
+            (
+                (X86_64FloatReg::XMM0, X86_64FloatReg::XMM15),
+                vec![0x66, 0x41, 0x0F, 0x54, 0xC7],
+            ),
+            (
+                (X86_64FloatReg::XMM15, X86_64FloatReg::XMM0),
+                vec![0x66, 0x44, 0x0F, 0x54, 0xF8],
+            ),
+            (
+                (X86_64FloatReg::XMM15, X86_64FloatReg::XMM15),
+                vec![0x66, 0x45, 0x0F, 0x54, 0xFF],
+            ),
+        ] {
+            buf.clear();
+            andpd_freg64_freg64(&mut buf, *dst, *src);
+            assert_eq!(&expected[..], &buf[..]);
+        }
+    }
+
+    #[test]
     fn test_xor_reg64_reg64() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
@@ -1457,6 +1562,34 @@ mod tests {
             cmp_reg64_imm32(&mut buf, *dst, TEST_I32);
             assert_eq!(expected, &buf[..3]);
             assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
+        }
+    }
+
+    #[test]
+    fn test_imul_reg64_reg64() {
+        let arena = bumpalo::Bump::new();
+        let mut buf = bumpalo::vec![in &arena];
+        for ((dst, src), expected) in &[
+            (
+                (X86_64GeneralReg::RAX, X86_64GeneralReg::RAX),
+                [0x48, 0x0F, 0xAF, 0xC0],
+            ),
+            (
+                (X86_64GeneralReg::RAX, X86_64GeneralReg::R15),
+                [0x49, 0x0F, 0xAF, 0xC7],
+            ),
+            (
+                (X86_64GeneralReg::R15, X86_64GeneralReg::RAX),
+                [0x4C, 0x0F, 0xAF, 0xF8],
+            ),
+            (
+                (X86_64GeneralReg::R15, X86_64GeneralReg::R15),
+                [0x4D, 0x0F, 0xAF, 0xFF],
+            ),
+        ] {
+            buf.clear();
+            imul_reg64_reg64(&mut buf, *dst, *src);
+            assert_eq!(expected, &buf[..]);
         }
     }
 

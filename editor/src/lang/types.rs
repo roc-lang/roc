@@ -62,9 +62,15 @@ impl ShallowClone for Type2 {
     fn shallow_clone(&self) -> Self {
         match self {
             Self::Variable(var) => Self::Variable(*var),
-            Self::Alias(symbol, pool_vec, type_id) => {
-                Self::Alias(*symbol, pool_vec.shallow_clone(), type_id.clone())
+            Self::Alias(symbol, args, alias_type_id) => {
+                Self::Alias(*symbol, args.shallow_clone(), alias_type_id.clone())
             }
+            Self::Record(fields, ext_id) => Self::Record(fields.shallow_clone(), ext_id.clone()),
+            Self::Function(args, closure_type_id, ret_type_id) => Self::Function(
+                args.shallow_clone(),
+                closure_type_id.clone(),
+                ret_type_id.clone(),
+            ),
             rest => todo!("{:?}", rest),
         }
     }
