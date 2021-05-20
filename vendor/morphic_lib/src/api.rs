@@ -262,6 +262,12 @@ pub struct TypeDefBuilder {
     inner: TypeBuilder,
 }
 
+impl Default for TypeDefBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypeDefBuilder {
     pub fn new() -> Self {
         Self {
@@ -936,6 +942,12 @@ pub struct FuncDefBuilder {
     argument: ValueId,
 }
 
+impl Default for FuncDefBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FuncDefBuilder {
     pub fn new() -> Self {
         let mut expr_builder = ExprBuilder::new();
@@ -977,6 +989,12 @@ pub struct ConstDef {
 
 pub struct ConstDefBuilder {
     expr_builder: ExprBuilder,
+}
+
+impl Default for ConstDefBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ConstDefBuilder {
