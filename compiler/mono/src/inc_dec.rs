@@ -397,7 +397,7 @@ impl<'a> Context<'a> {
                 && is_borrow_param(*x, xs, ps)
                 && !b_live_vars.contains(x)
             {
-                b = self.add_dec(*x, b)
+                b = self.add_dec(*x, b);
             }
         }
 
@@ -784,10 +784,7 @@ impl<'a> Context<'a> {
     fn update_var_info(&self, symbol: Symbol, layout: &Layout<'a>, expr: &Expr<'a>) -> Self {
         // is this value a constant?
         // TODO do function pointers also fall into this category?
-        let persistent = match expr {
-            Expr::Call(crate::ir::Call { arguments, .. }) => arguments.is_empty(),
-            _ => false,
-        };
+        let persistent = false;
 
         // must this value be consumed?
         let consume = consume_expr(&self.vars, expr);
