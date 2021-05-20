@@ -1813,6 +1813,7 @@ mod test_mono {
                     dec Test.14;
                     let Test.8 = CallByName Test.1;
                     let Test.6 = CallByName List.7 Test.8;
+                    dec Test.8;
                     let Test.4 = CallByName Num.24 Test.5 Test.6;
                     ret Test.4;
                 "#
