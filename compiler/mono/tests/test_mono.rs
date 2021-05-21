@@ -152,7 +152,7 @@ mod test_mono {
     #[cfg(not(debug_assertions))]
     fn verify_procedures(
         _expected: &str,
-        _procedures: MutMap<(Symbol, roc_mono::layout::Layout<'_>), Proc<'_>>,
+        _procedures: MutMap<(Symbol, TopLevelFunctionLayout<'_>), Proc<'_>>,
         _main_fn_symbol: Symbol,
     ) {
         // Do nothing
