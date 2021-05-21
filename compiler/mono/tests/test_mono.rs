@@ -17,7 +17,6 @@ mod test_mono {
     use roc_module::symbol::Symbol;
     use roc_mono::ir::Proc;
 
-    #[cfg(debug_assertions)]
     use roc_mono::ir::TopLevelFunctionLayout;
 
     fn promote_expr_to_module(src: &str) -> String {
