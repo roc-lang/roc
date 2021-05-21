@@ -325,27 +325,12 @@ pub fn list_append<'a, 'ctx, 'env>(
 /// List.drop : List elem, Nat -> List elem
 pub fn list_drop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    _inplace: InPlace,
+    layout_ids: &mut LayoutIds<'a>,
     original_wrapper: StructValue<'ctx>,
     count: IntValue<'ctx>,
-    list_layout: &Layout<'a>,
+    element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let (_, element_layout) = match *list_layout {
-        Layout::Builtin(Builtin::EmptyList) => (
-            InPlace::InPlace,
-            // this pointer will never actually be dereferenced
-            Layout::Builtin(Builtin::Int64),
-        ),
-        Layout::Builtin(Builtin::List(memory_mode, elem_layout)) => (
-            match memory_mode {
-                MemoryMode::Unique => InPlace::InPlace,
-                MemoryMode::Refcounted => InPlace::Clone,
-            },
-            *elem_layout,
-        ),
-
-        _ => unreachable!("Invalid layout {:?} in List.drop", list_layout),
-    };
+    let dec_element_fn = build_dec_wrapper(env, layout_ids, &element_layout);
     call_bitcode_fn_returns_list(
         env,
         &[
@@ -353,6 +338,7 @@ pub fn list_drop<'a, 'ctx, 'env>(
             alignment_intvalue(env, &element_layout),
             layout_width(env, &element_layout),
             count.into(),
+            dec_element_fn.as_global_value().as_pointer_value().into(),
         ],
         &bitcode::LIST_DROP,
     )

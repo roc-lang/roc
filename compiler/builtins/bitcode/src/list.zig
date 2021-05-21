@@ -665,26 +665,25 @@ pub fn listAppend(list: RocList, alignment: usize, element: Opaque, element_widt
     return output;
 }
 
-pub fn listDrop(list: RocList, alignment: usize, element_width: usize, count: usize) callconv(.C) RocList {
+pub fn listDrop(list: RocList, alignment: usize, element_width: usize, drop_count: usize, dec: Dec) callconv(.C) RocList {
     const size = list.len();
-    if (size <= count) {
+    const keep_count = size - drop_count;
+    if (size <= drop_count) {
         return RocList.empty();
     }
     if (list.bytes) |source_ptr| {
-        var i: usize = 0;
-
-        const output = RocList.allocate(std.heap.c_allocator, alignment, size - count, element_width);
+        const output = RocList.allocate(std.heap.c_allocator, alignment, keep_count, element_width);
         const target_ptr = output.bytes orelse unreachable;
 
-        while (i < size - count) : (i += 1) {
-            @memcpy(target_ptr + (i * element_width), source_ptr + ((i + count) * element_width), element_width);
+        @memcpy(target_ptr, source_ptr + drop_count * element_width, keep_count * element_width);
+
+        var i: usize = 0;
+        while (i < drop_count) : (i += 1) {
+            const element = source_ptr + i * element_width;
+            dec(element);
         }
 
-        // if (list.isUnique()) {
-        //     std.heap.c_allocator.free(source_ptr);
-        // } else {
-        //     utils.decref(std.heap.c_allocator, alignment, list.bytes, size * element_width);
-        // }
+        utils.decref(std.heap.c_allocator, alignment, list.bytes, size * element_width);
 
         return output;
     } else {

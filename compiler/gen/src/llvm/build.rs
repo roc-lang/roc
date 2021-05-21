@@ -3891,15 +3891,18 @@ fn run_low_level<'a, 'ctx, 'env>(
             let original_wrapper = list.into_struct_value();
 
             let count = load_symbol(scope, &args[1]);
-            let inplace = get_inplace_from_layout(layout);
 
-            list_drop(
-                env,
-                inplace,
-                original_wrapper,
-                count.into_int_value(),
-                list_layout,
-            )
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::List(_, element_layout)) => list_drop(
+                    env,
+                    layout_ids,
+                    original_wrapper,
+                    count.into_int_value(),
+                    element_layout,
+                ),
+                _ => unreachable!("Invalid layout {:?} in List.drop", list_layout),
+            }
         }
         ListPrepend => {
             // List.prepend : List elem, elem -> List elem
