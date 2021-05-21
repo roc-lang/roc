@@ -466,8 +466,8 @@ fn link_macos(
                 "-lc++",
                 // "-lc++abi",
                 // "-lunwind", // TODO will eventually need this, see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
-                //"-framework",
-                //"Security", // This "-framework Security" arg is needed for the `rand` crate in examples/cli
+                "-framework",
+                "Security", // This "-framework Security" arg is needed for the `rand` crate in examples/cli
                 // Output
                 "-o",
                 output_path.to_str().unwrap(), // app
