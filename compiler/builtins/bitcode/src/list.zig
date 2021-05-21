@@ -665,23 +665,31 @@ pub fn listAppend(list: RocList, alignment: usize, element: Opaque, element_widt
     return output;
 }
 
-pub fn listDrop(list: RocList, alignment: usize, element_width: usize, drop_count: usize, dec: Dec) callconv(.C) RocList {
-    const size = list.len();
-    const keep_count = size - drop_count;
-    if (size <= drop_count) {
-        return RocList.empty();
-    }
+pub fn listDrop(
+    list: RocList,
+    alignment: usize,
+    element_width: usize,
+    drop_count: usize,
+    dec: Dec,
+) callconv(.C) RocList {
     if (list.bytes) |source_ptr| {
+        const size = list.len();
+        const keep_count = size - drop_count;
+
+        var i: usize = 0;
+        while (i < std.math.min(drop_count, size)) : (i += 1) {
+            const element = source_ptr + i * element_width;
+            dec(element);
+        }
+
+        if (drop_count >= size) {
+            return RocList.empty();
+        }
+
         const output = RocList.allocate(std.heap.c_allocator, alignment, keep_count, element_width);
         const target_ptr = output.bytes orelse unreachable;
 
         @memcpy(target_ptr, source_ptr + drop_count * element_width, keep_count * element_width);
-
-        var i: usize = 0;
-        while (i < drop_count) : (i += 1) {
-            const element = source_ptr + i * element_width;
-            dec(element);
-        }
 
         utils.decref(std.heap.c_allocator, alignment, list.bytes, size * element_width);
 
