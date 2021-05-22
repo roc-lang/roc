@@ -2442,3 +2442,26 @@ fn module_thunk_is_function() {
         RocStr
     );
 }
+
+#[test]
+#[should_panic(expected = "Roc failed with message: ")]
+fn hit_unresolved_type_variable() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                main : Str
+                main =
+                    (accept Bool.isEq) "B"
+
+
+                accept : * -> (b -> b)
+                accept = \_ ->
+                    \input -> input
+            "#
+        ),
+        RocStr::from_slice(b"B"),
+        RocStr
+    );
+}
