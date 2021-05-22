@@ -151,7 +151,7 @@ pub fn gen_from_mono_module(
         if proc.args.is_empty() {
             // this is a 0-argument thunk, i.e. a top-level constant definition
             // it must be in-scope everywhere in the module!
-            scope.insert_top_level_thunk_new(symbol, arena.alloc(layout), fn_val);
+            scope.insert_top_level_thunk(symbol, arena.alloc(layout), fn_val);
         }
 
         headers.push((proc, fn_val));

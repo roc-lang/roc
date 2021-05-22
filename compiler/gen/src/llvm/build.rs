@@ -145,15 +145,6 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
     pub fn insert_top_level_thunk(
         &mut self,
         symbol: Symbol,
-        layout: Layout<'a>,
-        function_value: FunctionValue<'ctx>,
-    ) {
-        self.top_level_thunks
-            .insert(symbol, (layout, function_value));
-    }
-    pub fn insert_top_level_thunk_new(
-        &mut self,
-        symbol: Symbol,
         layout: &'a TopLevelFunctionLayout<'a>,
         function_value: FunctionValue<'ctx>,
     ) {
