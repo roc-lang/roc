@@ -21,8 +21,7 @@ use crate::llvm::convert::{
     get_fn_type, get_ptr_type, ptr_int,
 };
 use crate::llvm::refcounting::{
-    decrement_refcount_layout, increment_refcount_layout, refcount_is_one_comparison,
-    PointerToRefcount,
+    decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -4576,45 +4575,6 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
 
             call_result
         }
-    }
-}
-
-fn maybe_inplace_list<'a, 'ctx, 'env, InPlace, CloneFirst, Empty>(
-    env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    list_layout: &Layout<'a>,
-    original_wrapper: StructValue<'ctx>,
-    mut in_place: InPlace,
-    clone: CloneFirst,
-    mut empty: Empty,
-) -> BasicValueEnum<'ctx>
-where
-    InPlace: FnMut() -> BasicValueEnum<'ctx>,
-    CloneFirst: FnMut() -> BasicValueEnum<'ctx>,
-    Empty: FnMut() -> BasicValueEnum<'ctx>,
-{
-    match list_layout {
-        Layout::Builtin(Builtin::List(MemoryMode::Unique, _)) => {
-            // the layout tells us this List.set can be done in-place
-            in_place()
-        }
-        Layout::Builtin(Builtin::List(MemoryMode::Refcounted, _)) => {
-            // no static guarantees, but all is not lost: we can check the refcount
-            // if it is one, we hold the final reference, and can mutate it in-place!
-
-            let ret_type = basic_type_from_layout(env, list_layout);
-
-            let refcount_ptr = PointerToRefcount::from_list_wrapper(env, original_wrapper);
-            let refcount = refcount_ptr.get_refcount(env);
-
-            let comparison = refcount_is_one_comparison(env, refcount);
-
-            crate::llvm::build_list::build_basic_phi2(
-                env, parent, comparison, in_place, clone, ret_type,
-            )
-        }
-        Layout::Builtin(Builtin::EmptyList) => empty(),
-        other => unreachable!("Attempting list operation on invalid layout {:?}", other),
     }
 }
 

@@ -7,9 +7,7 @@ use crate::llvm::build::{
     allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, InPlace,
 };
 use crate::llvm::convert::{basic_type_from_layout, get_ptr_type};
-use crate::llvm::refcounting::{
-    increment_refcount_layout, refcount_is_one_comparison, PointerToRefcount,
-};
+use crate::llvm::refcounting::increment_refcount_layout;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::types::{BasicTypeEnum, PointerType};
@@ -322,6 +320,7 @@ pub fn list_append<'a, 'ctx, 'env>(
     )
 }
 
+/// List.set : List elem, Int, elem -> List elem
 pub fn list_set<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -343,98 +342,6 @@ pub fn list_set<'a, 'ctx, 'env>(
             dec_element_fn.as_global_value().as_pointer_value().into(),
         ],
         &bitcode::LIST_SET,
-    )
-}
-
-/// List.set : List elem, Int, elem -> List elem
-pub fn list_set_old<'a, 'ctx, 'env>(
-    parent: FunctionValue<'ctx>,
-    args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
-    env: &Env<'a, 'ctx, 'env>,
-    input_inplace: InPlace,
-    output_inplace: InPlace,
-) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
-    debug_assert_eq!(args.len(), 3);
-
-    let original_wrapper = args[0].0.into_struct_value();
-    let elem_index = args[1].0.into_int_value();
-
-    // Load the usize length from the wrapper. We need it for bounds checking.
-    let list_len = list_len(builder, original_wrapper);
-
-    // Bounds check: only proceed if index < length.
-    // Otherwise, return the list unaltered.
-    let comparison = bounds_check_comparison(builder, elem_index, list_len);
-
-    // If the index is in bounds, clone and mutate in place.
-    let build_then = || {
-        let (elem, elem_layout) = args[2];
-        let ctx = env.context;
-        let elem_type = basic_type_from_layout(env, elem_layout);
-        let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
-
-        let (new_wrapper, array_data_ptr) = match input_inplace {
-            InPlace::InPlace => (
-                original_wrapper,
-                load_list_ptr(builder, original_wrapper, ptr_type),
-            ),
-            InPlace::Clone => {
-                let list_ptr = load_list_ptr(builder, original_wrapper, ptr_type);
-
-                let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, list_ptr);
-                let refcount = refcount_ptr.get_refcount(env);
-
-                let rc_is_one = refcount_is_one_comparison(env, refcount);
-
-                let source_block = env.builder.get_insert_block().unwrap();
-                let clone_block = ctx.append_basic_block(parent, "clone");
-                let done_block = ctx.append_basic_block(parent, "done");
-
-                env.builder
-                    .build_conditional_branch(rc_is_one, done_block, clone_block);
-
-                env.builder.position_at_end(clone_block);
-
-                let cloned =
-                    clone_nonempty_list(env, output_inplace, list_len, list_ptr, elem_layout).0;
-
-                env.builder.build_unconditional_branch(done_block);
-
-                env.builder.position_at_end(done_block);
-
-                let list_type = original_wrapper.get_type();
-                let merged = env.builder.build_phi(list_type, "writable_list");
-                merged.add_incoming(&[(&original_wrapper, source_block), (&cloned, clone_block)]);
-
-                let result = merged.as_basic_value().into_struct_value();
-
-                (result, load_list_ptr(builder, result, ptr_type))
-            }
-        };
-
-        // If we got here, we passed the bounds check, so this is an in-bounds GEP
-        let elem_ptr =
-            unsafe { builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "load_index") };
-
-        // Mutate the new array in-place to change the element.
-        builder.build_store(elem_ptr, elem);
-
-        BasicValueEnum::StructValue(new_wrapper)
-    };
-
-    // If the index was out of bounds, return the original list unaltered.
-    let build_else = || BasicValueEnum::StructValue(original_wrapper);
-    let ret_type = original_wrapper.get_type();
-
-    build_basic_phi2(
-        env,
-        parent,
-        comparison,
-        build_then,
-        build_else,
-        ret_type.into(),
     )
 }
 
@@ -1314,71 +1221,6 @@ pub fn load_list_ptr<'ctx>(
 
     // cast to the expected pointer type
     cast_basic_basic(builder, generic_ptr.into(), ptr_type.into()).into_pointer_value()
-}
-
-fn clone_nonempty_list<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    inplace: InPlace,
-    list_len: IntValue<'ctx>,
-    elems_ptr: PointerValue<'ctx>,
-    elem_layout: &Layout<'_>,
-) -> (StructValue<'ctx>, PointerValue<'ctx>) {
-    let builder = env.builder;
-    let ptr_bytes = env.ptr_bytes;
-
-    // Calculate the number of bytes we'll need to allocate.
-    let elem_bytes = env
-        .ptr_int()
-        .const_int(elem_layout.stack_size(env.ptr_bytes) as u64, false);
-    let size = env
-        .builder
-        .build_int_mul(elem_bytes, list_len, "clone_mul_len_by_elem_bytes");
-
-    // Allocate space for the new array that we'll copy into.
-    let clone_ptr = allocate_list(env, inplace, elem_layout, list_len);
-
-    // TODO check if malloc returned null; if so, runtime error for OOM!
-
-    // Either memcpy or deep clone the array elements
-    if elem_layout.safe_to_memcpy() {
-        // Copy the bytes from the original array into the new
-        // one we just malloc'd.
-        //
-        // TODO how do we decide when to do the small memcpy vs the normal one?
-        builder
-            .build_memcpy(clone_ptr, ptr_bytes, elems_ptr, ptr_bytes, size)
-            .unwrap();
-    } else {
-        panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
-    }
-
-    let struct_type = super::convert::zig_list_type(env);
-    let mut struct_val;
-
-    // Store the pointer
-    struct_val = builder
-        .build_insert_value(
-            struct_type.get_undef(),
-            pass_as_opaque(env, clone_ptr),
-            Builtin::WRAPPER_PTR,
-            "insert_ptr_clone_nonempty_list",
-        )
-        .unwrap();
-
-    // Store the length
-    struct_val = builder
-        .build_insert_value(struct_val, list_len, Builtin::WRAPPER_LEN, "insert_len")
-        .unwrap();
-
-    let answer = builder
-        .build_bitcast(
-            struct_val.into_struct_value(),
-            super::convert::zig_list_type(env),
-            "cast_collection",
-        )
-        .into_struct_value();
-
-    (answer, clone_ptr)
 }
 
 pub fn allocate_list<'a, 'ctx, 'env>(
