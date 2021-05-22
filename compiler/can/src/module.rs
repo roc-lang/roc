@@ -36,6 +36,7 @@ pub struct ModuleOutput {
     pub problems: Vec<Problem>,
     pub ident_ids: IdentIds,
     pub references: MutSet<Symbol>,
+    pub scope: Scope,
 }
 
 // TODO trim these down
@@ -309,6 +310,7 @@ where
             }
 
             Ok(ModuleOutput {
+                scope,
                 aliases,
                 rigid_variables,
                 declarations,

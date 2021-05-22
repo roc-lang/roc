@@ -4,18 +4,22 @@ use roc_can::builtins::builtin_defs_map;
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::file::LoadingProblem;
+use roc_module::symbol::{Interns, ModuleId};
 
 use std::fs;
 extern crate roc_load;
 use bumpalo::Bump;
+use roc_can::scope::Scope;
 use roc_collections::all::MutMap;
+use roc_region::all::Region;
 use std::path::{Path, PathBuf};
 
 pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
     let files_docs = files_to_documentations(filenames, std_lib);
+
     //
     // TODO: get info from a file like "elm.json"
-    let package = roc_load::docs::Documentation {
+    let mut package = roc_load::docs::Documentation {
         name: "roc/builtins".to_string(),
         version: "1.0.0".to_string(),
         docs: "Package introduction or README.".to_string(),
@@ -45,36 +49,44 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
     )
     .expect("TODO gracefully handle failing to make the favicon");
 
-    let template_html = include_str!("./static/index.html");
+    let template_html = include_str!("./static/index.html").replace(
+        "<!-- Module links -->",
+        render_sidebar(
+            package
+                .modules
+                .iter()
+                .flat_map(|(docs_by_id, _)| docs_by_id.values()),
+        )
+        .as_str(),
+    );
 
     // Write each package's module docs html file
-    for module in &package.modules {
-        let mut filename = String::new();
-        filename.push_str(module.name.as_str());
-        filename.push_str(".html");
+    for (docs_by_id, interns) in package.modules.iter_mut() {
+        for module in docs_by_id.values_mut() {
+            let mut filename = String::new();
+            filename.push_str(module.name.as_str());
+            filename.push_str(".html");
 
-        let rendered_module = template_html
-            .replace(
-                "<!-- Module links -->",
-                render_module_links(&package.modules).as_str(),
-            )
-            .replace(
-                "<!-- Package Name and Version -->",
-                render_name_and_version(package.name.as_str(), package.version.as_str()).as_str(),
-            )
-            .replace(
-                "<!-- Module Docs -->",
-                render_main_content(&module).as_str(),
-            );
+            let rendered_module = template_html
+                .replace(
+                    "<!-- Package Name and Version -->",
+                    render_name_and_version(package.name.as_str(), package.version.as_str())
+                        .as_str(),
+                )
+                .replace(
+                    "<!-- Module Docs -->",
+                    render_main_content(interns, module).as_str(),
+                );
 
-        fs::write(build_dir.join(filename), rendered_module)
-            .expect("TODO gracefully handle failing to write html");
+            fs::write(build_dir.join(filename), rendered_module)
+                .expect("TODO gracefully handle failing to write html");
+        }
     }
 
     println!("🎉 Docs generated in {}", build_dir.display());
 }
 
-fn render_main_content(module: &ModuleDocumentation) -> String {
+fn render_main_content(interns: &Interns, module: &mut ModuleDocumentation) -> String {
     let mut buf = String::new();
 
     buf.push_str(
@@ -119,11 +131,15 @@ fn render_main_content(module: &ModuleDocumentation) -> String {
                 );
 
                 if let Some(docs) = &doc_def.docs {
-                    buf.push_str(markdown_to_html(docs.to_string()).as_str());
+                    buf.push_str(
+                        markdown_to_html(&mut module.scope, interns, docs.to_string()).as_str(),
+                    );
                 }
             }
             DocEntry::DetatchedDoc(docs) => {
-                buf.push_str(markdown_to_html(docs.to_string()).as_str());
+                buf.push_str(
+                    markdown_to_html(&mut module.scope, interns, docs.to_string()).as_str(),
+                );
             }
         };
     }
@@ -195,7 +211,7 @@ fn render_name_and_version(name: &str, version: &str) -> String {
     buf
 }
 
-fn render_module_links(modules: &[ModuleDocumentation]) -> String {
+fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -> String {
     let mut buf = String::new();
 
     for module in modules {
@@ -269,7 +285,7 @@ fn render_module_links(modules: &[ModuleDocumentation]) -> String {
 pub fn files_to_documentations(
     filenames: Vec<PathBuf>,
     std_lib: StdLib,
-) -> Vec<ModuleDocumentation> {
+) -> Vec<(MutMap<ModuleId, ModuleDocumentation>, Interns)> {
     let arena = Bump::new();
     let mut files_docs = vec![];
 
@@ -286,7 +302,7 @@ pub fn files_to_documentations(
             8, // TODO: Is it okay to hardcode ptr_bytes here? I think it should be fine since we'er only type checking (also, 8 => 32bit system)
             builtin_defs_map,
         ) {
-            Ok(mut loaded) => files_docs.extend(loaded.documentation.drain().map(|x| x.1)),
+            Ok(loaded) => files_docs.push((loaded.documentation, loaded.interns)),
             Err(LoadingProblem::FormattedReport(report)) => {
                 println!("{}", report);
                 panic!();
@@ -294,6 +310,7 @@ pub fn files_to_documentations(
             Err(e) => panic!("{:?}", e),
         }
     }
+
     files_docs
 }
 
@@ -410,11 +427,7 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
     }
 }
 
-fn insert_doc_links(markdown: String) -> String {
-    insert_doc_links_help(markdown)
-}
-
-fn insert_doc_links_help(markdown: String) -> String {
+fn insert_doc_links(scope: &mut Scope, interns: &Interns, markdown: String) -> String {
     let buf = &markdown;
     let mut result = String::new();
 
@@ -440,12 +453,18 @@ fn insert_doc_links_help(markdown: String) -> String {
 
                     result = buf.chars().take(from).collect();
 
-                    let doc_link =
-                        make_doc_link(buf.chars().skip(from + 1).take(index - from).collect());
+                    let doc_link = make_doc_link(
+                        scope,
+                        interns,
+                        &buf.chars()
+                            .skip(from + 1)
+                            .take(index - from)
+                            .collect::<String>(),
+                    );
 
                     result.insert_str(from, doc_link.as_str());
 
-                    let remainder = insert_doc_links_help(after_link.collect());
+                    let remainder = insert_doc_links(scope, interns, after_link.collect());
 
                     result.push_str(remainder.as_str());
                     break;
@@ -457,48 +476,45 @@ fn insert_doc_links_help(markdown: String) -> String {
     result
 }
 
-fn make_doc_link(doc_item: String) -> String {
-    let mut label = String::new();
-    let mut link = String::new();
+fn make_doc_link(scope: &mut Scope, interns: &Interns, doc_item: &str) -> String {
+    match scope.lookup(&doc_item.into(), Region::zero()) {
+        Ok(symbol) => {
+            let module_str = symbol.module_string(interns);
+            let ident_str = symbol.ident_string(interns);
 
-    let mut parts = doc_item.split('.').into_iter().peekable();
+            let mut link = String::new();
 
-    while let Some(part) = parts.next() {
-        label.push_str(part);
+            link.push_str(module_str);
+            link.push_str(".html#");
+            link.push_str(ident_str);
 
-        match parts.peek() {
-            None => {
-                link.push_str(".html#");
-                link.push_str(part);
-            }
-            Some(_) => {
-                link.push_str(part);
-                link.push('.');
+            let mut buf = String::new();
 
-                label.push('.');
-            }
+            buf.push('[');
+            buf.push_str(doc_item);
+            buf.push_str("](");
+
+            buf.push_str(link.as_str());
+            buf.push(')');
+
+            buf
+        }
+        Err(_) => {
+            panic!(
+                "Could not find symbol in scope for module link : {}",
+                doc_item
+            )
         }
     }
-
-    let mut buf = String::new();
-
-    buf.push('[');
-    buf.push_str(label.as_str());
-    buf.push_str("](");
-
-    buf.push_str(link.as_str());
-    buf.push(')');
-
-    buf
 }
 
-fn markdown_to_html(markdown: String) -> String {
+fn markdown_to_html(scope: &mut Scope, interns: &Interns, markdown: String) -> String {
     use pulldown_cmark::CodeBlockKind;
     use pulldown_cmark::CowStr;
     use pulldown_cmark::Event;
     use pulldown_cmark::Tag::*;
 
-    let markdown_with_links = insert_doc_links(markdown);
+    let markdown_with_links = insert_doc_links(scope, interns, markdown);
 
     let markdown_options = pulldown_cmark::Options::empty();
     let mut docs_parser = vec![];

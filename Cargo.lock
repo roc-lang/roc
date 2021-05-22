@@ -3013,6 +3013,8 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_load",
+ "roc_module",
+ "roc_region",
 ]
 
 [[package]]

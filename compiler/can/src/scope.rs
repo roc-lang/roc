@@ -1,4 +1,4 @@
-use roc_collections::all::{ImMap, MutSet};
+use roc_collections::all::{MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
@@ -10,14 +10,14 @@ use roc_types::types::{Alias, Type};
 pub struct Scope {
     /// All the identifiers in scope, mapped to were they were defined and
     /// the Symbol they resolve to.
-    idents: ImMap<Ident, (Symbol, Region)>,
+    idents: SendMap<Ident, (Symbol, Region)>,
 
     /// A cache of all the symbols in scope. This makes lookups much
     /// faster when checking for unused defs and unused arguments.
-    symbols: ImMap<Symbol, Region>,
+    symbols: SendMap<Symbol, Region>,
 
     /// The type aliases currently in scope
-    aliases: ImMap<Symbol, Alias>,
+    aliases: SendMap<Symbol, Alias>,
 
     /// The current module being processed. This will be used to turn
     /// unqualified idents into Symbols.
@@ -28,7 +28,7 @@ impl Scope {
     pub fn new(home: ModuleId, var_store: &mut VarStore) -> Scope {
         use roc_types::solved_types::{BuiltinAlias, FreeVars};
         let solved_aliases = roc_types::builtin_aliases::aliases();
-        let mut aliases = ImMap::default();
+        let mut aliases = SendMap::default();
 
         for (symbol, builtin_alias) in solved_aliases {
             let BuiltinAlias { region, vars, typ } = builtin_alias;
@@ -58,7 +58,7 @@ impl Scope {
         Scope {
             home,
             idents: Symbol::default_in_scope(),
-            symbols: ImMap::default(),
+            symbols: SendMap::default(),
             aliases,
         }
     }
