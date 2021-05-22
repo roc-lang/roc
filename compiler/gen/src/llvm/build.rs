@@ -829,58 +829,6 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
             )
         }
 
-        CallType::ByPointer {
-            name, full_layout, ..
-        } => {
-            let sub_expr = load_symbol(scope, name);
-
-            let mut arg_vals: Vec<BasicValueEnum> =
-                Vec::with_capacity_in(arguments.len(), env.arena);
-
-            for arg in arguments.iter() {
-                arg_vals.push(load_symbol(scope, arg));
-            }
-
-            let call = match (full_layout, sub_expr) {
-                (_, BasicValueEnum::PointerValue(ptr)) => {
-                    env.builder.build_call(ptr, arg_vals.as_slice(), "tmp")
-                }
-                (Layout::Closure(_, _, _), BasicValueEnum::StructValue(closure_struct)) => {
-                    let fpointer = env
-                        .builder
-                        .build_extract_value(closure_struct, 0, "fpointer")
-                        .unwrap()
-                        .into_pointer_value();
-
-                    let closure_data = env
-                        .builder
-                        .build_extract_value(closure_struct, 1, "closure_data")
-                        .unwrap();
-
-                    arg_vals.push(closure_data);
-                    env.builder.build_call(fpointer, arg_vals.as_slice(), "tmp")
-                }
-                non_ptr => {
-                    panic!(
-                        "Tried to call by pointer, but encountered a non-pointer: {:?} {:?} {:?}",
-                        name, non_ptr, full_layout
-                    );
-                }
-            };
-
-            if env.exposed_to_host.contains(name) {
-                // If this is an external-facing function, use the C calling convention.
-                call.set_call_convention(C_CALL_CONV);
-            } else {
-                // If it's an internal-only function, use the fast calling convention.
-                call.set_call_convention(FAST_CALL_CONV);
-            }
-
-            call.try_as_basic_value()
-                .left()
-                .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
-        }
-
         CallType::LowLevel { op } => {
             run_low_level(env, layout_ids, scope, parent, layout, *op, arguments)
         }
@@ -2086,61 +2034,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     fail,
                 )
             }
-            CallType::ByPointer { name, .. } => {
-                let sub_expr = load_symbol(scope, &name);
 
-                match sub_expr {
-                    BasicValueEnum::PointerValue(function_ptr) => {
-                        // basic call by pointer
-                        invoke_roc_function(
-                            env,
-                            layout_ids,
-                            scope,
-                            parent,
-                            *symbol,
-                            *layout,
-                            function_ptr.into(),
-                            call.arguments,
-                            None,
-                            pass,
-                            fail,
-                        )
-                    }
-                    BasicValueEnum::StructValue(ptr_and_data) => {
-                        // this is a closure
-                        let builder = env.builder;
-
-                        let function_ptr = builder
-                            .build_extract_value(ptr_and_data, 0, "function_ptr")
-                            .unwrap()
-                            .into_pointer_value();
-
-                        let closure_data = builder
-                            .build_extract_value(ptr_and_data, 1, "closure_data")
-                            .unwrap();
-
-                        invoke_roc_function(
-                            env,
-                            layout_ids,
-                            scope,
-                            parent,
-                            *symbol,
-                            *layout,
-                            function_ptr.into(),
-                            call.arguments,
-                            Some(closure_data),
-                            pass,
-                            fail,
-                        )
-                    }
-                    non_ptr => {
-                        panic!(
-                            "Tried to call by pointer, but encountered a non-pointer: {:?}",
-                            non_ptr
-                        );
-                    }
-                }
-            }
             CallType::Foreign {
                 ref foreign_symbol,
                 ref ret_layout,

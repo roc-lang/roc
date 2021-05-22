@@ -399,14 +399,6 @@ impl<'a> BorrowInfState<'a> {
                 }
             }
 
-            ByPointer { .. } => {
-                // the return value will be owned
-                self.own_var(z);
-
-                // if the function exects an owned argument (ps), the argument must be owned (args)
-                self.own_args(arguments);
-            }
-
             LowLevel { op } => {
                 debug_assert!(!op.is_higher_order());
 
@@ -599,42 +591,27 @@ impl<'a> BorrowInfState<'a> {
 
     #[allow(clippy::many_single_char_names)]
     fn preserve_tail_call(&mut self, x: Symbol, v: &Expr<'a>, b: &Stmt<'a>) {
-        match (v, b) {
-            (
-                Expr::Call(crate::ir::Call {
-                    call_type:
-                        crate::ir::CallType::ByName {
-                            name: g,
-                            full_layout,
-                            ..
-                        },
-                    arguments: ys,
-                    ..
-                }),
-                Stmt::Ret(z),
-            )
-            | (
-                Expr::Call(crate::ir::Call {
-                    call_type:
-                        crate::ir::CallType::ByPointer {
-                            name: g,
-                            full_layout,
-                            ..
-                        },
-                    arguments: ys,
-                    ..
-                }),
-                Stmt::Ret(z),
-            ) => {
-                if self.current_proc == *g && x == *z {
-                    // anonymous functions (for which the ps may not be known)
-                    // can never be tail-recursive, so this is fine
-                    if let Some(ps) = self.param_map.get_symbol(*g, *full_layout) {
-                        self.own_params_using_args(ys, ps)
-                    }
+        if let (
+            Expr::Call(crate::ir::Call {
+                call_type:
+                    crate::ir::CallType::ByName {
+                        name: g,
+                        full_layout,
+                        ..
+                    },
+                arguments: ys,
+                ..
+            }),
+            Stmt::Ret(z),
+        ) = (v, b)
+        {
+            if self.current_proc == *g && x == *z {
+                // anonymous functions (for which the ps may not be known)
+                // can never be tail-recursive, so this is fine
+                if let Some(ps) = self.param_map.get_symbol(*g, *full_layout) {
+                    self.own_params_using_args(ys, ps)
                 }
             }
-            _ => {}
         }
     }
 

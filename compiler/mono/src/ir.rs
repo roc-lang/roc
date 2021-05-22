@@ -1038,15 +1038,6 @@ impl<'a> Call<'a> {
 
                 alloc.text("CallByName ").append(alloc.intersperse(it, " "))
             }
-            CallType::ByPointer { name, .. } => {
-                let it = std::iter::once(name)
-                    .chain(arguments.iter().copied())
-                    .map(|s| symbol_to_doc(alloc, s));
-
-                alloc
-                    .text("CallByPointer ")
-                    .append(alloc.intersperse(it, " "))
-            }
             LowLevel { op: lowlevel } => {
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
 
@@ -1077,13 +1068,6 @@ impl<'a> Call<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum CallType<'a> {
     ByName {
-        name: Symbol,
-
-        full_layout: Layout<'a>,
-        ret_layout: Layout<'a>,
-        arg_layouts: &'a [Layout<'a>],
-    },
-    ByPointer {
         name: Symbol,
 
         full_layout: Layout<'a>,
@@ -4102,20 +4086,7 @@ pub fn with_hole<'a>(
                                     hole,
                                 );
                             } else {
-                                result = Stmt::Let(
-                                    assigned,
-                                    Expr::Call(self::Call {
-                                        call_type: CallType::ByPointer {
-                                            name: function_symbol,
-                                            full_layout,
-                                            ret_layout,
-                                            arg_layouts,
-                                        },
-                                        arguments: arg_symbols,
-                                    }),
-                                    ret_layout,
-                                    hole,
-                                );
+                                unreachable!("calling a non-closure layout")
                             }
                         }
                         NotASymbol => {
@@ -5335,17 +5306,6 @@ fn substitute_in_call<'a>(
             ret_layout: *ret_layout,
             full_layout: *full_layout,
         }),
-        CallType::ByPointer {
-            name,
-            arg_layouts,
-            ret_layout,
-            full_layout,
-        } => substitute(subs, *name).map(|new| CallType::ByPointer {
-            name: new,
-            arg_layouts,
-            ret_layout: *ret_layout,
-            full_layout: *full_layout,
-        }),
         CallType::Foreign { .. } => None,
         CallType::LowLevel { .. } => None,
         CallType::HigherOrderLowLevel { .. } => None,
@@ -6050,10 +6010,6 @@ fn can_throw_exception(call: &Call) -> bool {
                 | Symbol::NUM_ABS
                 | Symbol::NUM_NEG
         ),
-        CallType::ByPointer { .. } => {
-            // we don't know what we're calling; it might throw, so better be safe than sorry
-            true
-        }
 
         CallType::Foreign { .. } => {
             // calling foreign functions is very unsafe

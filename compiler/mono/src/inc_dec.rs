@@ -700,18 +700,6 @@ impl<'a> Context<'a> {
                     }
                 }
             }
-            ByPointer { .. } => {
-                let v = Expr::Call(crate::ir::Call {
-                    call_type,
-                    arguments,
-                });
-
-                self.add_inc_before_consume_all(
-                    arguments,
-                    self.arena.alloc(Stmt::Let(z, v, l, b)),
-                    b_live_vars,
-                )
-            }
         }
     }
 
@@ -992,9 +980,6 @@ impl<'a> Context<'a> {
                                 &invoke_live_vars,
                             ),
                         }
-                    }
-                    CallType::ByPointer { .. } => {
-                        self.add_inc_before_consume_all(call.arguments, cont, &invoke_live_vars)
                     }
                 };
 

@@ -545,9 +545,6 @@ where
 
         match call_type {
             CallType::ByName { .. } => {}
-            CallType::ByPointer { name: sym, .. } => {
-                self.set_last_seen(*sym, stmt);
-            }
             CallType::LowLevel { .. } => {}
             CallType::HigherOrderLowLevel { .. } => {}
             CallType::Foreign { .. } => {}
