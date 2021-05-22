@@ -3339,7 +3339,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
 
                         let evaluator_layout = env.arena.alloc(top_level).full();
                         let evaluator_name = layout_ids
-                            .get_new(symbol, evaluator_layout)
+                            .get(symbol, &evaluator_layout)
                             .to_symbol_string(symbol, &env.interns);
 
                         let evaluator = function_value_by_name_help(
@@ -3416,7 +3416,7 @@ fn function_value_by_name<'a, 'ctx, 'env>(
     symbol: Symbol,
 ) -> FunctionValue<'ctx> {
     let fn_name = layout_ids
-        .get_new(symbol, layout)
+        .get(symbol, &layout)
         .to_symbol_string(symbol, &env.interns);
     let fn_name = fn_name.as_str();
 
