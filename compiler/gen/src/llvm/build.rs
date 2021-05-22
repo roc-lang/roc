@@ -1912,6 +1912,32 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
     call_result
 }
 
+fn decrement_with_size_check<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    size: IntValue<'ctx>,
+    layout: Layout<'a>,
+    refcount_ptr: PointerToRefcount<'ctx>,
+) {
+    let not_empty = env.context.append_basic_block(parent, "not_null");
+
+    let done = env.context.append_basic_block(parent, "done");
+
+    let is_empty =
+        env.builder
+            .build_int_compare(IntPredicate::EQ, size, size.get_type().const_zero(), "");
+
+    env.builder
+        .build_conditional_branch(is_empty, done, not_empty);
+
+    env.builder.position_at_end(not_empty);
+
+    refcount_ptr.decrement(env, &layout);
+
+    env.builder.build_unconditional_branch(done);
+    env.builder.position_at_end(done);
+}
+
 pub fn build_exp_stmt<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -2173,38 +2199,21 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         Layout::Builtin(Builtin::List(_, _)) => {
                             debug_assert!(value.is_struct_value());
 
-                            let refcount_ptr = PointerToRefcount::from_list_wrapper(
-                                env,
-                                value.into_struct_value(),
-                            );
-
                             // because of how we insert DECREF for lists, we can't guarantee that
                             // the list is non-empty. When the list is empty, the pointer to the
                             // elements is NULL, and trying to get to the RC address will
                             // underflow, causing a segfault. Therefore, in this case we must
                             // manually check that the list is non-empty
-                            let not_empty = env.context.append_basic_block(parent, "not_null");
-                            let done = env.context.append_basic_block(parent, "done");
-
-                            let length = list_len(env.builder, value.into_struct_value());
-                            let is_empty = env.builder.build_int_compare(
-                                IntPredicate::EQ,
-                                length,
-                                length.get_type().const_zero(),
-                                "",
+                            let refcount_ptr = PointerToRefcount::from_list_wrapper(
+                                env,
+                                value.into_struct_value(),
                             );
 
-                            env.builder
-                                .build_conditional_branch(is_empty, done, not_empty);
+                            let length = list_len(env.builder, value.into_struct_value());
 
-                            env.builder.position_at_end(not_empty);
-
-                            refcount_ptr.decrement(env, layout);
-
-                            env.builder.build_unconditional_branch(done);
-                            env.builder.position_at_end(done);
+                            decrement_with_size_check(env, parent, length, *layout, refcount_ptr);
                         }
-                        Layout::Builtin(Builtin::Dict(_, _)) => {
+                        Layout::Builtin(Builtin::Dict(_, _)) | Layout::Builtin(Builtin::Set(_)) => {
                             debug_assert!(value.is_struct_value());
 
                             let refcount_ptr = PointerToRefcount::from_list_wrapper(
@@ -2212,31 +2221,9 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                                 value.into_struct_value(),
                             );
 
-                            // because of how we insert DECREF for lists, we can't guarantee that
-                            // the list is non-empty. When the list is empty, the pointer to the
-                            // elements is NULL, and trying to get to the RC address will
-                            // underflow, causing a segfault. Therefore, in this case we must
-                            // manually check that the list is non-empty
-                            let not_empty = env.context.append_basic_block(parent, "not_null");
-                            let done = env.context.append_basic_block(parent, "done");
-
                             let length = dict_len(env, scope, *symbol).into_int_value();
-                            let is_empty = env.builder.build_int_compare(
-                                IntPredicate::EQ,
-                                length,
-                                length.get_type().const_zero(),
-                                "",
-                            );
 
-                            env.builder
-                                .build_conditional_branch(is_empty, done, not_empty);
-
-                            env.builder.position_at_end(not_empty);
-
-                            refcount_ptr.decrement(env, layout);
-
-                            env.builder.build_unconditional_branch(done);
-                            env.builder.position_at_end(done);
+                            decrement_with_size_check(env, parent, length, *layout, refcount_ptr);
                         }
 
                         _ if layout.is_refcounted() => {
