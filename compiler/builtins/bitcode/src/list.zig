@@ -175,13 +175,6 @@ pub fn listReverse(list: RocList, alignment: usize, element_width: usize) callco
     }
 }
 
-pub const RocFunctionCall1 = extern struct {
-    caller: Caller1,
-    data: Opaque,
-    inc_n_data: IncN,
-    data_is_owned: bool,
-};
-
 pub fn listMap(
     list: RocList,
     caller: Caller1,
