@@ -677,7 +677,9 @@ pub fn listDrop(
         const keep_count = size - drop_count;
 
         var i: usize = 0;
-        while (i < std.math.min(drop_count, size)) : (i += 1) {
+        const iterations = std.math.min(drop_count, size);
+
+        while (i < iterations) : (i += 1) {
             const element = source_ptr + i * element_width;
             dec(element);
         }
