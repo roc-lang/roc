@@ -665,7 +665,6 @@ impl<'a> Context<'a> {
                     arguments,
                 });
 
-                // self.add_inc_before_help(arguments, |_| OWNED, b, b_live_vars)
                 &*self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 

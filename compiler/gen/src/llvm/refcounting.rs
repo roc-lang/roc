@@ -369,12 +369,6 @@ fn modify_refcount_struct_help<'a, 'ctx, 'env>(
     layouts: &[Layout<'a>],
     fn_val: FunctionValue<'ctx>,
 ) {
-    debug_assert_eq!(
-        when_recursive,
-        &WhenRecursive::Unreachable,
-        "TODO pipe when_recursive through the dict key/value inc/dec"
-    );
-
     let builder = env.builder;
     let ctx = env.context;
 
