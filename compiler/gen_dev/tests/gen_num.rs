@@ -10,7 +10,7 @@ extern crate libc;
 #[macro_use]
 mod helpers;
 
-#[cfg(all(test, target_os = "linux", any(target_arch = "x86_64"/*, target_arch = "aarch64"*/)))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos"), any(target_arch = "x86_64"/*, target_arch = "aarch64"*/)))]
 mod gen_num {
     #[test]
     fn i64_values() {
