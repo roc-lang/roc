@@ -1,6 +1,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+pub const Inc = fn (?[*]u8) callconv(.C) void;
+pub const IncN = fn (?[*]u8, u64) callconv(.C) void;
+pub const Dec = fn (?[*]u8) callconv(.C) void;
+
 const REFCOUNT_MAX_ISIZE: comptime isize = 0;
 const REFCOUNT_ONE_ISIZE: comptime isize = std.math.minInt(isize);
 pub const REFCOUNT_ONE: usize = @bitCast(usize, REFCOUNT_ONE_ISIZE);
