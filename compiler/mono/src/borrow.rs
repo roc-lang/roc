@@ -311,16 +311,6 @@ impl<'a> BorrowInfState<'a> {
         }
     }
 
-    fn own_arg(&mut self, x: Symbol) {
-        self.own_var(x);
-    }
-
-    fn own_args(&mut self, xs: &[Symbol]) {
-        for x in xs.iter() {
-            self.own_arg(*x);
-        }
-    }
-
     /// For each xs[i], if xs[i] is owned, then mark ps[i] as owned.
     /// We use this action to preserve tail calls. That is, if we have
     /// a tail call `f xs`, if the i-th parameter is borrowed, but `xs[i]` is owned
@@ -372,31 +362,24 @@ impl<'a> BorrowInfState<'a> {
                 name, full_layout, ..
             } => {
                 // get the borrow signature of the applied function
-                match self.param_map.get_symbol(*name, *full_layout) {
-                    Some(ps) => {
-                        // the return value will be owned
-                        self.own_var(z);
+                let ps = self
+                    .param_map
+                    .get_symbol(*name, *full_layout)
+                    .expect("function is defined");
 
-                        // if the function exects an owned argument (ps), the argument must be owned (args)
-                        debug_assert_eq!(
-                            arguments.len(),
-                            ps.len(),
-                            "{:?} has {} parameters, but was applied to {} arguments",
-                            name,
-                            ps.len(),
-                            arguments.len()
-                        );
-                        self.own_args_using_params(arguments, ps);
-                    }
-                    None => {
-                        // this is really an indirect call, but the function was bound to a symbol
-                        // the return value will be owned
-                        self.own_var(z);
+                // the return value will be owned
+                self.own_var(z);
 
-                        // if the function exects an owned argument (ps), the argument must be owned (args)
-                        self.own_args(arguments);
-                    }
-                }
+                // if the function exects an owned argument (ps), the argument must be owned (args)
+                debug_assert_eq!(
+                    arguments.len(),
+                    ps.len(),
+                    "{:?} has {} parameters, but was applied to {} arguments",
+                    name,
+                    ps.len(),
+                    arguments.len()
+                );
+                self.own_args_using_params(arguments, ps);
             }
 
             LowLevel { op } => {

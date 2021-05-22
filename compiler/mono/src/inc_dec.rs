@@ -673,32 +673,20 @@ impl<'a> Context<'a> {
                 name, full_layout, ..
             } => {
                 // get the borrow signature
-                match self.param_map.get_symbol(*name, *full_layout) {
-                    Some(ps) => {
-                        let v = Expr::Call(crate::ir::Call {
-                            call_type,
-                            arguments,
-                        });
+                let ps = self
+                    .param_map
+                    .get_symbol(*name, *full_layout)
+                    .expect("function is defined");
 
-                        let b = self.add_dec_after_application(arguments, ps, b, b_live_vars);
-                        let b = self.arena.alloc(Stmt::Let(z, v, l, b));
+                let v = Expr::Call(crate::ir::Call {
+                    call_type,
+                    arguments,
+                });
 
-                        self.add_inc_before(arguments, ps, b, b_live_vars)
-                    }
-                    None => {
-                        // an indirect call that was bound to a name
-                        let v = Expr::Call(crate::ir::Call {
-                            call_type,
-                            arguments,
-                        });
+                let b = self.add_dec_after_application(arguments, ps, b, b_live_vars);
+                let b = self.arena.alloc(Stmt::Let(z, v, l, b));
 
-                        self.add_inc_before_consume_all(
-                            arguments,
-                            self.arena.alloc(Stmt::Let(z, v, l, b)),
-                            b_live_vars,
-                        )
-                    }
-                }
+                self.add_inc_before(arguments, ps, b, b_live_vars)
             }
         }
     }
@@ -967,19 +955,11 @@ impl<'a> Context<'a> {
                         name, full_layout, ..
                     } => {
                         // get the borrow signature
-                        match self.param_map.get_symbol(*name, *full_layout) {
-                            Some(ps) => self.add_dec_after_application(
-                                call.arguments,
-                                ps,
-                                cont,
-                                &invoke_live_vars,
-                            ),
-                            None => self.add_inc_before_consume_all(
-                                call.arguments,
-                                cont,
-                                &invoke_live_vars,
-                            ),
-                        }
+                        let ps = self
+                            .param_map
+                            .get_symbol(*name, *full_layout)
+                            .expect("function is defined");
+                        self.add_dec_after_application(call.arguments, ps, cont, &invoke_live_vars)
                     }
                 };
 
