@@ -6079,17 +6079,65 @@ fn call_by_name<'a>(
         }
         Ok(layout) if procs.module_thunks.contains(&proc_name) => {
             // here we turn a call to a module thunk into  forcing of that thunk
-            debug_assert!(loc_args.is_empty());
-            call_by_name_module_thunk(
-                env,
-                procs,
-                fn_var,
-                proc_name,
-                env.arena.alloc(layout),
-                layout_cache,
-                assigned,
-                hole,
-            )
+            if loc_args.is_empty() {
+                call_by_name_module_thunk(
+                    env,
+                    procs,
+                    fn_var,
+                    proc_name,
+                    env.arena.alloc(layout),
+                    layout_cache,
+                    assigned,
+                    hole,
+                )
+            } else if let Layout::Closure(arg_layouts, lambda_set, ret_layout) = layout {
+                // here we turn a call to a module thunk into forcing of that thunk
+                // the thunk represents the closure environment for the body, so we then match
+                // on the closure environment to perform the call that the body represents.
+                //
+                // Example:
+                //
+                // > main = parseA  "foo" "bar"
+                // > parseA = Str.concat
+
+                let closure_data_symbol = env.unique_symbol();
+
+                let arena = env.arena;
+                let arg_symbols = Vec::from_iter_in(
+                    loc_args
+                        .iter()
+                        .map(|(_, arg_expr)| possible_reuse_symbol(env, procs, &arg_expr.value)),
+                    arena,
+                )
+                .into_bump_slice();
+
+                let result = match_on_lambda_set(
+                    env,
+                    lambda_set,
+                    closure_data_symbol,
+                    arg_symbols,
+                    arg_layouts,
+                    *ret_layout,
+                    assigned,
+                    hole,
+                );
+
+                let result = call_by_name_module_thunk(
+                    env,
+                    procs,
+                    fn_var,
+                    proc_name,
+                    env.arena.alloc(layout),
+                    layout_cache,
+                    closure_data_symbol,
+                    env.arena.alloc(result),
+                );
+
+                let iter = loc_args.into_iter().rev().zip(arg_symbols.iter().rev());
+                assign_to_symbols(env, procs, layout_cache, iter, result)
+            } else {
+                unreachable!("calling a non-closure layout")
+            }
         }
         Ok(Layout::FunctionPointer(argument_layouts, ret_layout)) => call_by_name_help(
             env,

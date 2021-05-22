@@ -2426,3 +2426,19 @@ fn increment_or_double_closure() {
         i64
     );
 }
+
+#[test]
+fn module_thunk_is_function() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                main = helper "foo" "bar"
+                helper = Str.concat
+            "#
+        ),
+        RocStr::from_slice(b"foobar"),
+        RocStr
+    );
+}
