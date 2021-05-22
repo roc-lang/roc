@@ -911,3 +911,33 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: usize, element_wi
 
     return output;
 }
+
+pub fn listSet(
+    input: RocList,
+    alignment: usize,
+    index: usize,
+    element: Opaque,
+    element_width: usize,
+    dec: Dec,
+) callconv(.C) RocList {
+    if (index < input.len()) {
+        var list = input.makeUnique(std.heap.c_allocator, alignment, element_width);
+
+        // the element we will replace
+        var element_at_index = (list.bytes orelse undefined) + (index * element_width);
+
+        // decrement its refcount
+        dec(element_at_index);
+
+        // copy in the new element
+        @memcpy(element_at_index, element orelse undefined, element_width);
+
+        return list;
+    } else {
+        // we're out of bounds, and will not be using the `element`.
+        // but we must consume the RC token, so explicitly decrement
+        dec(element);
+
+        return input;
+    }
+}

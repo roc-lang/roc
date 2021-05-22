@@ -82,3 +82,4 @@ pub const LIST_RANGE: &str = "roc_builtins.list.range";
 pub const LIST_REVERSE: &str = "roc_builtins.list.reverse";
 pub const LIST_SORT_WITH: &str = "roc_builtins.list.sort_with";
 pub const LIST_CONCAT: &str = "roc_builtins.list.concat";
+pub const LIST_SET: &str = "roc_builtins.list.set";

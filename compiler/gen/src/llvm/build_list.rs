@@ -322,8 +322,32 @@ pub fn list_append<'a, 'ctx, 'env>(
     )
 }
 
-/// List.set : List elem, Int, elem -> List elem
 pub fn list_set<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    list: BasicValueEnum<'ctx>,
+    index: IntValue<'ctx>,
+    element: BasicValueEnum<'ctx>,
+    element_layout: &'a Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
+
+    call_bitcode_fn_returns_list(
+        env,
+        &[
+            pass_list_as_i128(env, list),
+            alignment_intvalue(env, &element_layout),
+            index.into(),
+            pass_element_as_opaque(env, element),
+            layout_width(env, element_layout),
+            dec_element_fn.as_global_value().as_pointer_value().into(),
+        ],
+        &bitcode::LIST_SET,
+    )
+}
+
+/// List.set : List elem, Int, elem -> List elem
+pub fn list_set_old<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
     env: &Env<'a, 'ctx, 'env>,

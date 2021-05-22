@@ -4153,46 +4153,46 @@ fn run_low_level<'a, 'ctx, 'env>(
             )
         }
         ListSetInPlace => {
-            let (list_symbol, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (index, _) = load_symbol_and_layout(scope, &args[1]);
+            let (element, _) = load_symbol_and_layout(scope, &args[2]);
 
-            let output_inplace = get_inplace_from_layout(layout);
-
-            list_set(
-                parent,
-                &[
-                    (list_symbol, list_layout),
-                    (load_symbol_and_layout(scope, &args[1])),
-                    (load_symbol_and_layout(scope, &args[2])),
-                ],
-                env,
-                InPlace::InPlace,
-                output_inplace,
-            )
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => {
+                    // no elements, so nothing to remove
+                    empty_list(env)
+                }
+                Layout::Builtin(Builtin::List(_, element_layout)) => list_set(
+                    env,
+                    layout_ids,
+                    list,
+                    index.into_int_value(),
+                    element,
+                    element_layout,
+                ),
+                _ => unreachable!("invalid dict layout"),
+            }
         }
         ListSet => {
-            let (list_symbol, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (index, _) = load_symbol_and_layout(scope, &args[1]);
+            let (element, _) = load_symbol_and_layout(scope, &args[2]);
 
-            let arguments = &[
-                (list_symbol, list_layout),
-                (load_symbol_and_layout(scope, &args[1])),
-                (load_symbol_and_layout(scope, &args[2])),
-            ];
-
-            let output_inplace = get_inplace_from_layout(layout);
-
-            let in_place = || list_set(parent, arguments, env, InPlace::InPlace, output_inplace);
-            let clone = || list_set(parent, arguments, env, InPlace::Clone, output_inplace);
-            let empty = || list_symbol;
-
-            maybe_inplace_list(
-                env,
-                parent,
-                list_layout,
-                list_symbol.into_struct_value(),
-                in_place,
-                clone,
-                empty,
-            )
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => {
+                    // no elements, so nothing to remove
+                    empty_list(env)
+                }
+                Layout::Builtin(Builtin::List(_, element_layout)) => list_set(
+                    env,
+                    layout_ids,
+                    list,
+                    index.into_int_value(),
+                    element,
+                    element_layout,
+                ),
+                _ => unreachable!("invalid dict layout"),
+            }
         }
         Hash => {
             debug_assert_eq!(args.len(), 2);
