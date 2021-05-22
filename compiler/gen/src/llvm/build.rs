@@ -895,30 +895,18 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 }
             }
 
-            // If the record has only one field that isn't zero-sized,
-            // unwrap it. This is what the layout expects us to do.
-            //            if field_vals.len() == 1 {
-            //                field_vals.pop().unwrap()
-            //            } else {
-            {
-                // Create the struct_type
-                let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-                let mut struct_val = struct_type.const_zero().into();
+            // Create the struct_type
+            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+            let mut struct_val = struct_type.const_zero().into();
 
-                // Insert field exprs into struct_val
-                for (index, field_val) in field_vals.into_iter().enumerate() {
-                    struct_val = builder
-                        .build_insert_value(
-                            struct_val,
-                            field_val,
-                            index as u32,
-                            "insert_record_field",
-                        )
-                        .unwrap();
-                }
-
-                BasicValueEnum::StructValue(struct_val.into_struct_value())
+            // Insert field exprs into struct_val
+            for (index, field_val) in field_vals.into_iter().enumerate() {
+                struct_val = builder
+                    .build_insert_value(struct_val, field_val, index as u32, "insert_record_field")
+                    .unwrap();
             }
+
+            BasicValueEnum::StructValue(struct_val.into_struct_value())
         }
 
         Tag {
