@@ -66,7 +66,7 @@ const ARGUMENT_SYMBOLS: [Symbol; 8] = [
     Symbol::ARG_8,
 ];
 
-pub fn build_transform_caller_new<'a, 'ctx, 'env>(
+pub fn build_transform_caller<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     function: FunctionValue<'ctx>,
     closure_data_layout: Layout<'a>,
@@ -79,7 +79,7 @@ pub fn build_transform_caller_new<'a, 'ctx, 'env>(
 
     match env.module.get_function(fn_name) {
         Some(function_value) => function_value,
-        None => build_transform_caller_help_new(
+        None => build_transform_caller_help(
             env,
             function,
             closure_data_layout,
@@ -89,7 +89,7 @@ pub fn build_transform_caller_new<'a, 'ctx, 'env>(
     }
 }
 
-fn build_transform_caller_help_new<'a, 'ctx, 'env>(
+fn build_transform_caller_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     roc_function: FunctionValue<'ctx>,
     closure_data_layout: Layout<'a>,
@@ -202,146 +202,6 @@ fn build_transform_caller_help_new<'a, 'ctx, 'env>(
             .build_call(roc_function, arguments_cast.as_slice(), "tmp")
     };
 
-    call.set_call_convention(FAST_CALL_CONV);
-
-    let result = call
-        .try_as_basic_value()
-        .left()
-        .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."));
-
-    let result_u8_ptr = function_value
-        .get_nth_param(argument_layouts.len() as u32 + 1)
-        .unwrap();
-    let result_ptr = env
-        .builder
-        .build_bitcast(
-            result_u8_ptr,
-            result.get_type().ptr_type(AddressSpace::Generic),
-            "write_result",
-        )
-        .into_pointer_value();
-
-    env.builder.build_store(result_ptr, result);
-    env.builder.build_return(None);
-
-    env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
-
-    function_value
-}
-
-pub fn build_transform_caller<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    function_layout: &Layout<'a>,
-    argument_layouts: &[Layout<'a>],
-) -> FunctionValue<'ctx> {
-    let symbol = Symbol::ZIG_FUNCTION_CALLER;
-    let fn_name = layout_ids
-        .get(symbol, &function_layout)
-        .to_symbol_string(symbol, &env.interns);
-
-    match env.module.get_function(fn_name.as_str()) {
-        Some(function_value) => function_value,
-        None => build_transform_caller_help(env, function_layout, argument_layouts, &fn_name),
-    }
-}
-
-fn build_transform_caller_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    function_layout: &Layout<'a>,
-    argument_layouts: &[Layout<'a>],
-    fn_name: &str,
-) -> FunctionValue<'ctx> {
-    debug_assert!(argument_layouts.len() <= 7);
-
-    let block = env.builder.get_insert_block().expect("to be in a function");
-    let di_location = env.builder.get_current_debug_location().unwrap();
-
-    let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
-
-    let function_value = crate::llvm::refcounting::build_header_help(
-        env,
-        &fn_name,
-        env.context.void_type().into(),
-        &(bumpalo::vec![ in env.arena; BasicTypeEnum::PointerType(arg_type); argument_layouts.len() + 2 ]),
-    );
-
-    let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
-    debug_assert!(kind_id > 0);
-    let attr = env.context.create_enum_attribute(kind_id, 1);
-    function_value.add_attribute(AttributeLoc::Function, attr);
-
-    let entry = env.context.append_basic_block(function_value, "entry");
-    env.builder.position_at_end(entry);
-
-    debug_info_init!(env, function_value);
-
-    let mut it = function_value.get_param_iter();
-    let closure_ptr = it.next().unwrap().into_pointer_value();
-    set_name(closure_ptr.into(), Symbol::ARG_1.ident_string(&env.interns));
-
-    let arguments =
-        bumpalo::collections::Vec::from_iter_in(it.take(argument_layouts.len()), env.arena);
-
-    for (argument, name) in arguments.iter().zip(ARGUMENT_SYMBOLS[1..].iter()) {
-        set_name(*argument, name.ident_string(&env.interns));
-    }
-
-    let closure_type = basic_type_from_layout(env, function_layout).ptr_type(AddressSpace::Generic);
-
-    let mut arguments_cast =
-        bumpalo::collections::Vec::with_capacity_in(arguments.len(), env.arena);
-
-    for (argument_ptr, layout) in arguments.iter().zip(argument_layouts) {
-        let basic_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
-
-        let argument_cast = env
-            .builder
-            .build_bitcast(*argument_ptr, basic_type, "load_opaque")
-            .into_pointer_value();
-
-        let argument = env.builder.build_load(argument_cast, "load_opaque");
-
-        arguments_cast.push(argument);
-    }
-
-    let closure_cast = env
-        .builder
-        .build_bitcast(closure_ptr, closure_type, "load_opaque")
-        .into_pointer_value();
-
-    let fpointer = env.builder.build_load(closure_cast, "load_opaque");
-
-    let call = match function_layout {
-        Layout::FunctionPointer(_, _) => env.builder.build_call(
-            fpointer.into_pointer_value(),
-            arguments_cast.as_slice(),
-            "tmp",
-        ),
-        Layout::Closure(_, _, _) | Layout::Struct(_) => {
-            let pair = fpointer.into_struct_value();
-
-            let fpointer = env
-                .builder
-                .build_extract_value(pair, 0, "get_fpointer")
-                .unwrap();
-
-            let closure_data = env
-                .builder
-                .build_extract_value(pair, 1, "get_closure_data")
-                .unwrap();
-
-            arguments_cast.push(closure_data);
-            env.builder.build_call(
-                fpointer.into_pointer_value(),
-                arguments_cast.as_slice(),
-                "tmp",
-            )
-        }
-        _ => unreachable!("layout is not callable {:?}", function_layout),
-    };
     call.set_call_convention(FAST_CALL_CONV);
 
     let result = call

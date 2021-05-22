@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 use crate::llvm::bitcode::{
     build_dec_wrapper, build_eq_wrapper, build_inc_n_wrapper, build_inc_wrapper,
-    build_transform_caller_new, call_bitcode_fn, call_void_bitcode_fn,
+    build_transform_caller, call_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
     allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, InPlace, RocFunctionCall,
@@ -727,7 +727,7 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
     env.builder.build_store(closure_data_ptr, closure_data);
 
     let stepper_caller =
-        build_transform_caller_new(env, transform, closure_data_layout, &[*before_layout])
+        build_transform_caller(env, transform, closure_data_layout, &[*before_layout])
             .as_global_value()
             .as_pointer_value();
 

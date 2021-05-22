@@ -3554,7 +3554,7 @@ fn roc_function_call<'a, 'ctx, 'env>(
     closure_data_is_owned: bool,
     argument_layouts: &[Layout<'a>],
 ) -> RocFunctionCall<'ctx> {
-    use crate::llvm::bitcode::{build_inc_n_wrapper, build_transform_caller_new};
+    use crate::llvm::bitcode::{build_inc_n_wrapper, build_transform_caller};
 
     let closure_data_ptr = env
         .builder
@@ -3562,7 +3562,7 @@ fn roc_function_call<'a, 'ctx, 'env>(
     env.builder.build_store(closure_data_ptr, closure_data);
 
     let stepper_caller =
-        build_transform_caller_new(env, transform, closure_data_layout, argument_layouts)
+        build_transform_caller(env, transform, closure_data_layout, argument_layouts)
             .as_global_value()
             .as_pointer_value();
 
