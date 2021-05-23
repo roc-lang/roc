@@ -32,15 +32,15 @@ extern fn malloc(size: usize) callconv(.C) ?*c_void;
 extern fn realloc(c_ptr: [*]align(@alignOf(u128)) u8, size: usize) callconv(.C) ?*c_void;
 extern fn free(c_ptr: [*]align(@alignOf(u128)) u8) callconv(.C) void;
 
-export fn roc_alloc(alignment: usize, size: usize) callconv(.C) ?*c_void {
+export fn roc_alloc(alignment: u32, size: usize) callconv(.C) ?*c_void {
     return malloc(size);
 }
 
-export fn roc_realloc(alignment: usize, c_ptr: *c_void, old_size: usize, new_size: usize) callconv(.C) ?*c_void {
+export fn roc_realloc(alignment: u32, c_ptr: *c_void, old_size: usize, new_size: usize) callconv(.C) ?*c_void {
     return realloc(@alignCast(16, @ptrCast([*]u8, c_ptr)), new_size);
 }
 
-export fn roc_dealloc(alignment: usize, c_ptr: *c_void) callconv(.C) void {
+export fn roc_dealloc(alignment: u32, c_ptr: *c_void) callconv(.C) void {
     free(@alignCast(16, @ptrCast([*]u8, c_ptr)));
 }
 

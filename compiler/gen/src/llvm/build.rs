@@ -363,8 +363,8 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         ROC_ALLOC_64,
         i8_ptr_type.fn_type(
             &[
-                // alignment: usize
-                i64_type.into(),
+                // alignment: u32
+                i32_type.into(),
                 // size: usize
                 i64_type.into(),
             ],
@@ -377,7 +377,7 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         ROC_ALLOC_32,
         i8_ptr_type.fn_type(
             &[
-                // alignment: usize
+                // alignment: u32
                 i32_type.into(),
                 // size: usize
                 i32_type.into(),
@@ -391,8 +391,8 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         ROC_REALLOC_64,
         i8_ptr_type.fn_type(
             &[
-                // alignment: usize
-                i64_type.into(),
+                // alignment: u32
+                i32_type.into(),
                 // ptr: *c_void
                 i8_ptr_type.into(),
                 // old_size: usize
@@ -409,7 +409,7 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         ROC_REALLOC_32,
         i8_ptr_type.fn_type(
             &[
-                // alignment: usize
+                // alignment: u32
                 i32_type.into(),
                 // ptr: *c_void
                 i8_ptr_type.into(),
@@ -427,8 +427,8 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         ROC_DEALLOC_64,
         void_type.fn_type(
             &[
-                // alignment: usize
-                i64_type.into(),
+                // alignment: u32
+                i32_type.into(),
                 // ptr: *c_void
                 i8_ptr_type.into(),
             ],
@@ -441,7 +441,7 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         ROC_DEALLOC_32,
         void_type.fn_type(
             &[
-                // alignment: usize
+                // alignment: u32
                 i32_type.into(),
                 // ptr: *c_void
                 i8_ptr_type.into(),
