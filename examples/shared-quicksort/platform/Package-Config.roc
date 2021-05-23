@@ -11,6 +11,5 @@ platform examples/shared-quicksort
             getLine : Effect Str
         }
 
-mainForHost : List I64 -> List I64 
+mainForHost : List I64 -> List I64
 mainForHost = \list -> quicksort list
-    

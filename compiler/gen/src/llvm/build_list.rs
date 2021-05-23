@@ -322,6 +322,28 @@ pub fn list_append<'a, 'ctx, 'env>(
     )
 }
 
+/// List.drop : List elem, Nat -> List elem
+pub fn list_drop<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    original_wrapper: StructValue<'ctx>,
+    count: IntValue<'ctx>,
+    element_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let dec_element_fn = build_dec_wrapper(env, layout_ids, &element_layout);
+    call_bitcode_fn_returns_list(
+        env,
+        &[
+            pass_list_as_i128(env, original_wrapper.into()),
+            alignment_intvalue(env, &element_layout),
+            layout_width(env, &element_layout),
+            count.into(),
+            dec_element_fn.as_global_value().as_pointer_value().into(),
+        ],
+        &bitcode::LIST_DROP,
+    )
+}
+
 /// List.set : List elem, Int, elem -> List elem
 pub fn list_set<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,

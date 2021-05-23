@@ -1,12 +1,8 @@
 
-[[location(0)]]
-var<in> in_position: vec2<f32>;
-[[location(1)]]
-var<in> in_color: vec4<f32>;
-[[location(0)]]
-var<out> out_color: vec4<f32>;
-[[builtin(position)]]
-var<out> out_pos: vec4<f32>;
+struct VertexOutput {
+    [[location(0)]] color: vec4<f32>;
+    [[builtin(position)]] position: vec4<f32>;
+};
 
 [[block]]
 struct Globals {
@@ -17,17 +13,19 @@ struct Globals {
 var<uniform> u_globals: Globals;
 
 [[stage(vertex)]]
-fn vs_main() {
-    out_pos = u_globals.ortho * vec4<f32>(in_position, 0.0, 1.0);
-    out_color = in_color;
+fn vs_main(
+    [[location(0)]] in_position: vec2<f32>,
+    [[location(1)]] in_color: vec4<f32>,
+) -> VertexOutput {
+    var out: VertexOutput;
+    
+    out.position = u_globals.ortho * vec4<f32>(in_position, 0.0, 1.0);
+    out.color = in_color;
+    
+    return out;
 }
 
-[[location(0)]]
-var<in> in_color: vec4<f32>;
-[[location(0)]]
-var<out> out_color: vec4<f32>;
-
 [[stage(fragment)]]
-fn fs_main() {
-    out_color = in_color;
+fn fs_main(in: VertexOutput) -> [[location(0)]] vec4<f32> {
+    return in.color;
 }

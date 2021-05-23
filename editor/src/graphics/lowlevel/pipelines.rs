@@ -53,12 +53,14 @@ pub fn create_render_pipeline(
             entry_point: "fs_main",
             targets: &[wgpu::ColorTargetState {
                 format: color_format,
-                color_blend: wgpu::BlendState {
-                    operation: wgpu::BlendOperation::Add,
-                    src_factor: wgpu::BlendFactor::SrcAlpha,
-                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                },
-                alpha_blend: wgpu::BlendState::REPLACE,
+                blend: Some(wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        operation: wgpu::BlendOperation::Add,
+                        src_factor: wgpu::BlendFactor::SrcAlpha,
+                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    },
+                    alpha: wgpu::BlendComponent::REPLACE,
+                }),
                 write_mask: wgpu::ColorWrite::ALL,
             }],
         }),
