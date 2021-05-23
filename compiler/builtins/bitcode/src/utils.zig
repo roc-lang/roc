@@ -1,6 +1,10 @@
 const std = @import("std");
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 
+// Throwing an exception, from libc++
+// https://github.com/llvm-mirror/libcxxabi/blob/ce3db128f9e4d6d19d1cdbe39bb45fcc64a5adb0/src/cxa_exception.cpp#L230
+extern fn __cxa_throw(thrown_exception: *c_void, type_info: *c_void, dest: *c_void) callconv(.C) void;
+
 // If allocation fails, this must cxa_throw - it must not return a null pointer!
 extern fn roc_alloc(alignment: usize, size: usize) callconv(.C) *c_void;
 
@@ -13,10 +17,15 @@ extern fn roc_dealloc(alignment: usize, c_ptr: *c_void) callconv(.C) void;
 
 comptime {
     if (std.builtin.is_test) {
+        @export(testing_cxa_throw, .{ .name = "__cxa_throw", .linkage = .Strong });
         @export(testing_roc_alloc, .{ .name = "roc_alloc", .linkage = .Strong });
         @export(testing_roc_realloc, .{ .name = "roc_realloc", .linkage = .Strong });
         @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
     }
+}
+
+fn testing_cxa_throw(thrown_exception: *c_void, type_info: *c_void, dest: *c_void) callconv(.C) void {
+    std.debug.panic("An exception was thrown during this test!");
 }
 
 fn testing_roc_alloc(alignment: usize, size: usize) callconv(.C) *c_void {
