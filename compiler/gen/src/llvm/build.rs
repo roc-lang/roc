@@ -3105,12 +3105,6 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
         expose_function_to_host(env, fn_val);
     }
 
-    let will_return = inkwell::attributes::Attribute::get_named_enum_kind_id("willreturn");
-    debug_assert!(will_return > 0);
-
-    let attr = env.context.create_enum_attribute(will_return, 1);
-    fn_val.add_attribute(inkwell::attributes::AttributeLoc::Function, attr);
-
     fn_val
 }
 
