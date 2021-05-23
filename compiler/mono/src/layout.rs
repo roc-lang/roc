@@ -1155,6 +1155,14 @@ fn layout_from_flat_type<'a>(
 
             Ok(layout_from_tag_union(arena, tags, subs))
         }
+        FunctionOrTagUnion(tag_name, _, ext_var) => {
+            debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
+
+            let mut tags = MutMap::default();
+            tags.insert(tag_name, vec![]);
+
+            Ok(layout_from_tag_union(arena, tags, subs))
+        }
         RecursiveTagUnion(rec_var, tags, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 

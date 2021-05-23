@@ -179,6 +179,9 @@ fn find_names_needed(
 
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
         }
+        Structure(FunctionOrTagUnion(_, _, ext_var)) => {
+            find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
+        }
         Structure(RecursiveTagUnion(rec_var, tags, ext_var)) => {
             let mut sorted_tags: Vec<_> = tags.iter().collect();
             sorted_tags.sort();
@@ -485,6 +488,17 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
                 // or the "r" at the end of `{ x: I64 }r`
                 write_content(env, content, subs, buf, parens)
             }
+        }
+
+        FunctionOrTagUnion(tag_name, _, _) => {
+            let interns = &env.interns;
+            let home = env.home;
+
+            buf.push_str("[ ");
+
+            buf.push_str(&tag_name.as_string(&interns, home));
+
+            buf.push_str(" ]");
         }
 
         RecursiveTagUnion(rec_var, tags, ext_var) => {

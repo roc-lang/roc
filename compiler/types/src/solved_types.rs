@@ -432,6 +432,11 @@ impl SolvedType {
 
                 SolvedType::TagUnion(new_tags, Box::new(ext))
             }
+            FunctionOrTagUnion(tag_name, symbol, ext_var) => {
+                let ext = Self::from_var_help(subs, recursion_vars, ext_var);
+
+                SolvedType::FunctionOrTagUnion(tag_name, symbol, Box::new(ext))
+            }
             RecursiveTagUnion(rec_var, tags, ext_var) => {
                 recursion_vars.insert(subs, rec_var);
 

@@ -729,8 +729,6 @@ fn type_to_variable(
             register(subs, rank, pools, content)
         }
         FunctionOrTagUnion(tag_name, symbol, ext) => {
-            let mut tag_vars = MutMap::default();
-
             let temp_ext_var = type_to_variable(subs, rank, pools, cached, ext);
             let mut ext_tag_vec = Vec::new();
             let new_ext_var = match roc_types::pretty_print::chase_ext_tag_union(
@@ -741,9 +739,13 @@ fn type_to_variable(
                 Ok(()) => Variable::EMPTY_TAG_UNION,
                 Err((new, _)) => new,
             };
-            tag_vars.extend(ext_tag_vec.into_iter());
+            debug_assert!(ext_tag_vec.is_empty());
 
-            let content = Content::Structure(FlatType::TagUnion(tag_vars, new_ext_var));
+            let content = Content::Structure(FlatType::FunctionOrTagUnion(
+                tag_name.clone(),
+                *symbol,
+                new_ext_var,
+            ));
 
             register(subs, rank, pools, content)
         }
@@ -1153,6 +1155,10 @@ fn adjust_rank_content(
                     rank
                 }
 
+                FunctionOrTagUnion(_, _, ext_var) => {
+                    adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var)
+                }
+
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
 
@@ -1327,6 +1333,12 @@ fn instantiate_rigids_help(
                         instantiate_rigids_help(subs, max_rank, pools, ext_var),
                     )
                 }
+
+                FunctionOrTagUnion(tag_name, symbol, ext_var) => FunctionOrTagUnion(
+                    tag_name,
+                    symbol,
+                    instantiate_rigids_help(subs, max_rank, pools, ext_var),
+                ),
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
                     let mut new_tags = MutMap::default();
@@ -1513,6 +1525,12 @@ fn deep_copy_var_help(
 
                     TagUnion(new_tags, deep_copy_var_help(subs, max_rank, pools, ext_var))
                 }
+
+                FunctionOrTagUnion(tag_name, symbol, ext_var) => FunctionOrTagUnion(
+                    tag_name,
+                    symbol,
+                    deep_copy_var_help(subs, max_rank, pools, ext_var),
+                ),
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
                     let mut new_tags = MutMap::default();
