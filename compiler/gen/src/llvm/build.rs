@@ -1944,7 +1944,7 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
                         "get_data_ptr",
                     ),
                     ptr_type,
-                    "malloc_cast_to_desired",
+                    "alloc_cast_to_desired",
                 )
                 .into_pointer_value()
         }
@@ -1952,12 +1952,12 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
 
     let refcount_ptr = match extra_bytes {
         n if n == env.ptr_bytes => {
-            // the malloced pointer is the same as the refcounted pointer
+            // the allocated pointer is the same as the refcounted pointer
             unsafe { PointerToRefcount::from_ptr(env, ptr) }
         }
         n if n == 2 * env.ptr_bytes => {
             // the refcount is stored just before the start of the actual data
-            // but in this case (because of alignment) not at the start of the malloced buffer
+            // but in this case (because of alignment) not at the start of the allocated buffer
             PointerToRefcount::from_ptr_to_data(env, data_ptr)
         }
         n => unreachable!("invalid extra_bytes {}", n),
@@ -1986,8 +1986,6 @@ fn list_literal<'a, 'ctx, 'env>(
         let len = len_type.const_int(len_u64, false);
 
         allocate_list(env, inplace, elem_layout, len)
-
-        // TODO check if malloc returned null; if so, runtime error for OOM!
     };
 
     // Copy the elements from the list literal into the array

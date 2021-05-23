@@ -40,8 +40,8 @@ impl<'ctx> PointerToRefcount<'ctx> {
     /// # Safety
     ///
     /// the invariant is that the given pointer really points to the refcount,
-    /// not the data, and only is the start of the malloced buffer if the alignment
-    /// works out that way.
+    /// not the data, and only is the start of the allocated buffer if the
+    /// alignment works out that way.
     pub unsafe fn from_ptr<'a, 'env>(env: &Env<'a, 'ctx, 'env>, ptr: PointerValue<'ctx>) -> Self {
         // must make sure it's a pointer to usize
         let refcount_type = ptr_int(env.context, env.ptr_bytes);
@@ -277,13 +277,13 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
                 match alignment {
                     n if env.ptr_bytes == n => {
-                        // the refcount ptr is also the ptr to the malloced region
+                        // the refcount ptr is also the ptr to the allocated region
                         env.call_dealloc(alignment, ptr);
                     }
                     n if 2 * env.ptr_bytes == n => {
-                        // we need to step back another ptr_bytes to get the malloced ptr
-                        let malloced = Self::from_ptr_to_data(env, ptr);
-                        env.call_dealloc(alignment, malloced.value);
+                        // we need to step back another ptr_bytes to get the allocated ptr
+                        let allocated = Self::from_ptr_to_data(env, ptr);
+                        env.call_dealloc(alignment, allocated.value);
                     }
                     n => unreachable!("invalid extra_bytes {:?}", n),
                 }

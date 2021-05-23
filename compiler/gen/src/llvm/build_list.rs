@@ -185,7 +185,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
 
     if elem_layout.safe_to_memcpy() {
         // Copy the bytes from the original array into the new
-        // one we just malloc'd.
+        // one we just allocated
         //
         // TODO how do we decide when to do the small memcpy vs the normal one?
         builder
@@ -1335,12 +1335,10 @@ fn clone_nonempty_list<'a, 'ctx, 'env>(
     // Allocate space for the new array that we'll copy into.
     let clone_ptr = allocate_list(env, inplace, elem_layout, list_len);
 
-    // TODO check if malloc returned null; if so, runtime error for OOM!
-
     // Either memcpy or deep clone the array elements
     if elem_layout.safe_to_memcpy() {
         // Copy the bytes from the original array into the new
-        // one we just malloc'd.
+        // one we just allocated
         //
         // TODO how do we decide when to do the small memcpy vs the normal one?
         builder
