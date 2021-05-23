@@ -1,9 +1,9 @@
 #![allow(non_snake_case)]
 
-use roc_std::alloca;
 use roc_std::RocCallResult;
 use roc_std::RocStr;
 use std::alloc::Layout;
+use std::ffi::c_void;
 use std::time::SystemTime;
 
 type Model = *const u8;
@@ -60,6 +60,30 @@ extern "C" {
 
     #[link_name = "roc__mainForHost_1_Model_size"]
     fn size_Model() -> i64;
+
+    fn malloc(size: usize) -> *mut c_void;
+    fn realloc(c_ptr: *mut c_void, size: usize) -> *mut c_void;
+    fn free(c_ptr: *mut c_void);
+}
+
+#[no_mangle]
+pub unsafe fn roc_alloc(_alignment: usize, size: usize) -> *mut c_void {
+    return malloc(size);
+}
+
+#[no_mangle]
+pub unsafe fn roc_realloc(
+    _alignment: usize,
+    c_ptr: *mut c_void,
+    _old_size: usize,
+    new_size: usize,
+) -> *mut c_void {
+    return realloc(c_ptr, new_size);
+}
+
+#[no_mangle]
+pub unsafe fn roc_dealloc(_alignment: usize, c_ptr: *mut c_void) {
+    return free(c_ptr);
 }
 
 unsafe fn call_Fx(function_pointer: *const u8, closure_data: *const u8, output: *mut u8) -> () {
