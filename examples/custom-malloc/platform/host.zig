@@ -64,7 +64,7 @@ pub export fn malloc(size: usize) callconv(.C) ?*c_void {
     const stdout = std.io.getStdOut().writer();
     const allocator = testing.allocator;
 
-    // Perfo,m the actual malloc
+    // Perform the actual malloc
     const startNs = std.time.nanoTimestamp();
     const ptr = allocator.alignedAlloc(u8, 16, size) catch unreachable;
     const endNs = std.time.nanoTimestamp();
