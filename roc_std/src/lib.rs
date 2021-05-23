@@ -144,8 +144,8 @@ impl<T> RocList<T> {
             let raw_ptr = Self::get_element_ptr(raw_ptr as *mut T) as *mut T;
 
             // write the refcount
-            let capacity_ptr = raw_ptr as *mut isize;
-            *(capacity_ptr.offset(-1)) = isize::MIN;
+            let refcount_ptr = raw_ptr as *mut isize;
+            *(refcount_ptr.offset(-1)) = isize::MIN;
 
             {
                 // NOTE: using a memcpy here causes weird issues
