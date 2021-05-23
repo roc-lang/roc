@@ -269,14 +269,20 @@ impl<'ctx> PointerToRefcount<'ctx> {
         {
             builder.position_at_end(then_block);
             if !env.leak {
+                let ptr = builder.build_pointer_cast(
+                    refcount_ptr.value,
+                    ctx.i8_type().ptr_type(AddressSpace::Generic),
+                    "cast_to_i8_ptr",
+                );
+
                 match alignment {
                     n if env.ptr_bytes == n => {
                         // the refcount ptr is also the ptr to the malloced region
-                        env.call_dealloc(alignment, refcount_ptr.value);
+                        env.call_dealloc(alignment, ptr);
                     }
                     n if 2 * env.ptr_bytes == n => {
                         // we need to step back another ptr_bytes to get the malloced ptr
-                        let malloced = Self::from_ptr_to_data(env, refcount_ptr.value);
+                        let malloced = Self::from_ptr_to_data(env, ptr);
                         env.call_dealloc(alignment, malloced.value);
                     }
                     n => unreachable!("invalid extra_bytes {:?}", n),
