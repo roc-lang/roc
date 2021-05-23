@@ -53,7 +53,7 @@ quicksort = \originalList ->
                     |> List.set j atI
 
             _ ->
-                []
+                list
 
     n = List.len originalList
     quicksortHelp originalList 0 (n - 1)
