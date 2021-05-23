@@ -25,6 +25,7 @@ comptime {
     exportListFn(list.listReverse, "reverse");
     exportListFn(list.listSortWith, "sort_with");
     exportListFn(list.listConcat, "concat");
+    exportListFn(list.listDrop, "drop");
     exportListFn(list.listSet, "set");
 }
 
