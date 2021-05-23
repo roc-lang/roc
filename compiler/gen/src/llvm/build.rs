@@ -39,8 +39,8 @@ use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicTypeEnum, FunctionType, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
-    BasicValue, CallSiteValue, FloatValue, FunctionValue, InstructionOpcode, IntValue,
-    PointerValue, StructValue,
+    BasicValue, CallSiteValue, FloatValue, FunctionValue, InstructionOpcode, InstructionValue,
+    IntValue, PointerValue, StructValue,
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
@@ -195,6 +195,61 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         })
     }
 
+    pub fn call_alloc(
+        &self,
+        alignment: u32,
+        number_of_bytes: IntValue<'ctx>,
+    ) -> PointerValue<'ctx> {
+        let function = match self.ptr_bytes {
+            8 => self.module.get_function(ROC_ALLOC_64).unwrap(),
+            4 => self.module.get_function(ROC_ALLOC_32).unwrap(),
+            bytes => {
+                panic!(
+                    "{} is an unsupported number of pointer bytes for a Roc target.",
+                    bytes
+                );
+            }
+        };
+
+        let alignment = self.ptr_int().const_int(alignment as u64, false);
+        let call = self.builder.build_call(
+            function,
+            &[alignment.into(), number_of_bytes.into()],
+            "roc_alloc",
+        );
+
+        call.set_call_convention(C_CALL_CONV);
+
+        call.try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_pointer_value()
+        // TODO check if malloc returned null; if so, runtime error for OOM!
+    }
+
+    pub fn call_dealloc(&self, alignment: u32, ptr: PointerValue<'ctx>) -> InstructionValue<'ctx> {
+        let function = match self.ptr_bytes {
+            8 => self.module.get_function(ROC_DEALLOC_64).unwrap(),
+            4 => self.module.get_function(ROC_DEALLOC_32).unwrap(),
+            bytes => {
+                panic!(
+                    "{} is an unsupported number of pointer bytes for a Roc target.",
+                    bytes
+                );
+            }
+        };
+
+        let alignment = self.ptr_int().const_int(alignment as u64, false);
+        let call =
+            self.builder
+                .build_call(function, &[alignment.into(), ptr.into()], "roc_dealloc");
+
+        call.set_call_convention(C_CALL_CONV);
+
+        call.try_as_basic_value().right().unwrap()
+        // TODO check if malloc returned null; if so, runtime error for OOM!
+    }
+
     pub fn call_memset(
         &self,
         bytes_ptr: PointerValue<'ctx>,
@@ -302,7 +357,99 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     let i32_type = ctx.i32_type();
     let i16_type = ctx.i16_type();
     let i8_type = ctx.i8_type();
-    let i8_ptr_type = i8_type.ptr_type(AddressSpace::Generic);
+    let i8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
+
+    add_intrinsic(
+        module,
+        ROC_ALLOC_64,
+        i8_ptr_type.fn_type(
+            &[
+                // alignment: usize
+                i64_type.into(),
+                // size: usize
+                i64_type.into(),
+            ],
+            false,
+        ),
+    );
+
+    add_intrinsic(
+        module,
+        ROC_ALLOC_32,
+        i8_ptr_type.fn_type(
+            &[
+                // alignment: usize
+                i32_type.into(),
+                // size: usize
+                i32_type.into(),
+            ],
+            false,
+        ),
+    );
+
+    add_intrinsic(
+        module,
+        ROC_REALLOC_64,
+        i8_ptr_type.fn_type(
+            &[
+                // alignment: usize
+                i64_type.into(),
+                // ptr: *c_void
+                i8_ptr_type.into(),
+                // old_size: usize
+                i64_type.into(),
+                // new_size: usize
+                i64_type.into(),
+            ],
+            false,
+        ),
+    );
+
+    add_intrinsic(
+        module,
+        ROC_REALLOC_32,
+        i8_ptr_type.fn_type(
+            &[
+                // alignment: usize
+                i32_type.into(),
+                // ptr: *c_void
+                i8_ptr_type.into(),
+                // old_size: usize
+                i32_type.into(),
+                // new_size: usize
+                i32_type.into(),
+            ],
+            false,
+        ),
+    );
+
+    add_intrinsic(
+        module,
+        ROC_DEALLOC_64,
+        void_type.fn_type(
+            &[
+                // alignment: usize
+                i64_type.into(),
+                // ptr: *c_void
+                i8_ptr_type.into(),
+            ],
+            false,
+        ),
+    );
+
+    add_intrinsic(
+        module,
+        ROC_DEALLOC_32,
+        void_type.fn_type(
+            &[
+                // alignment: usize
+                i32_type.into(),
+                // ptr: *c_void
+                i8_ptr_type.into(),
+            ],
+            false,
+        ),
+    );
 
     add_intrinsic(
         module,
@@ -459,6 +606,12 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     });
 }
 
+static ROC_ALLOC_64: &str = "roc_alloc";
+static ROC_REALLOC_64: &str = "roc_realloc";
+static ROC_DEALLOC_64: &str = "roc_dealloc";
+static ROC_ALLOC_32: &str = "roc_alloc";
+static ROC_REALLOC_32: &str = "roc_realloc";
+static ROC_DEALLOC_32: &str = "roc_dealloc";
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
 static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
 static LLVM_SQRT_F64: &str = "llvm.sqrt.f64";
