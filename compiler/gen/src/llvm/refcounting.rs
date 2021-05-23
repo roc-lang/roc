@@ -197,7 +197,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
     fn _build_decrement_function_body<'a, 'env>(
         env: &Env<'a, 'ctx, 'env>,
         parent: FunctionValue<'ctx>,
-        extra_bytes: u32,
+        alignment: u32,
     ) {
         let builder = env.builder;
         let ctx = env.context;
@@ -269,15 +269,15 @@ impl<'ctx> PointerToRefcount<'ctx> {
         {
             builder.position_at_end(then_block);
             if !env.leak {
-                match extra_bytes {
+                match alignment {
                     n if env.ptr_bytes == n => {
                         // the refcount ptr is also the ptr to the malloced region
-                        builder.build_free(refcount_ptr.value);
+                        env.call_dealloc(alignment, refcount_ptr.value);
                     }
                     n if 2 * env.ptr_bytes == n => {
                         // we need to step back another ptr_bytes to get the malloced ptr
                         let malloced = Self::from_ptr_to_data(env, refcount_ptr.value);
-                        builder.build_free(malloced.value);
+                        env.call_dealloc(alignment, malloced.value);
                     }
                     n => unreachable!("invalid extra_bytes {:?}", n),
                 }

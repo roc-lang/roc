@@ -1912,11 +1912,7 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
             "add_extra_bytes",
         );
 
-        env.builder
-            .build_array_malloc(ctx.i8_type(), number_of_bytes, "create_ptr")
-            .unwrap()
-
-        // TODO check if malloc returned null; if so, runtime error for OOM!
+        env.call_alloc(layout.alignment_bytes(env.ptr_bytes), number_of_bytes)
     };
 
     // We must return a pointer to the first element:
