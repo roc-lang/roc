@@ -8,7 +8,7 @@ use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
 use roc_fmt::annotation::Formattable;
 use roc_fmt::annotation::{Newlines, Parens};
-use roc_gen::llvm::build::{build_proc, build_proc_header, OptLevel};
+use roc_gen::llvm::build::{add_intrinsics, build_proc, build_proc_header, OptLevel};
 use roc_gen::llvm::externs::add_default_roc_externs;
 use roc_load::file::LoadingProblem;
 use roc_parse::parser::SyntaxError;
@@ -128,10 +128,16 @@ pub fn gen_and_eval<'a>(
         Ok(ReplOutput::Problems(lines))
     } else {
         let context = Context::create();
-
+        let builder = context.create_builder();
         let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
-
         let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(&context, ""));
+
+        // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
+        // platform to provide them. These must be added *before* adding intrinsics!
+        add_default_roc_externs(&context, module, &builder, ptr_bytes);
+
+        // Add LLVM intrinsics.
+        add_intrinsics(&context, &module);
 
         // mark our zig-defined builtins as internal
         for function in FunctionIterator::from_module(module) {
@@ -140,12 +146,6 @@ pub fn gen_and_eval<'a>(
                 function.set_linkage(Linkage::Internal);
             }
         }
-
-        // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
-        // platform to provide them.
-        let builder = context.create_builder();
-
-        add_default_roc_externs(&context, module, &builder, ptr_bytes);
 
         debug_assert_eq!(exposed_to_host.len(), 1);
         let (main_fn_symbol, main_fn_var) = exposed_to_host.iter().next().unwrap();
@@ -262,13 +262,16 @@ pub fn gen_and_eval<'a>(
 
         module_pass.run_on(env.module);
 
-        // Verify the module
-        if let Err(errors) = env.module.verify() {
-            panic!("Errors defining module: {:?}", errors);
-        }
-
         // Uncomment this to see the module's optimized LLVM instruction output:
         // env.module.print_to_stderr();
+
+        // Verify the module
+        if let Err(errors) = env.module.verify() {
+            panic!(
+                "Errors defining module: {}\n\nUncomment things nearby to see more details.",
+                errors
+            );
+        }
 
         let lib = module_to_dylib(&env.module, &target, opt_level)
             .expect("Error loading compiled dylib for test");

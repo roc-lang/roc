@@ -338,13 +338,10 @@ pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Modu
     let module = Module::parse_bitcode_from_buffer(&memory_buffer, ctx)
         .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {:?}", err));
 
-    // Add LLVM intrinsics.
-    add_intrinsics(ctx, &module);
-
     module
 }
 
-fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
+pub fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     // List of all supported LLVM intrinsics:
     //
     // https://releases.llvm.org/10.0.0/docs/LangRef.html#standard-c-library-intrinsics
@@ -358,33 +355,41 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     let i8_type = ctx.i8_type();
     let i8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
 
-    add_intrinsic(
-        module,
-        ROC_ALLOC_64,
-        i8_ptr_type.fn_type(
-            &[
-                // alignment: u32
-                i32_type.into(),
-                // size: usize
-                i64_type.into(),
-            ],
-            false,
-        ),
-    );
+    // In the repl, this may already be defined (because there's no platform
+    // in the repl). Redefining it causes linker errors!
+    if module.get_function(ROC_ALLOC_64).is_none() {
+        add_intrinsic(
+            module,
+            ROC_ALLOC_64,
+            i8_ptr_type.fn_type(
+                &[
+                    // alignment: u32
+                    i32_type.into(),
+                    // size: usize
+                    i64_type.into(),
+                ],
+                false,
+            ),
+        );
+    }
 
-    add_intrinsic(
-        module,
-        ROC_ALLOC_32,
-        i8_ptr_type.fn_type(
-            &[
-                // alignment: u32
-                i32_type.into(),
-                // size: usize
-                i32_type.into(),
-            ],
-            false,
-        ),
-    );
+    // In the repl, this may already be defined (because there's no platform
+    // in the repl). Redefining it causes linker errors!
+    if module.get_function(ROC_ALLOC_32).is_none() {
+        add_intrinsic(
+            module,
+            ROC_ALLOC_32,
+            i8_ptr_type.fn_type(
+                &[
+                    // alignment: u32
+                    i32_type.into(),
+                    // size: usize
+                    i32_type.into(),
+                ],
+                false,
+            ),
+        );
+    }
 
     add_intrinsic(
         module,
