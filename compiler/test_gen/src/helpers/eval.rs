@@ -4,6 +4,7 @@ use roc_build::program::FunctionIterator;
 use roc_can::builtins::builtin_defs_map;
 use roc_can::def::Def;
 use roc_collections::all::{MutMap, MutSet};
+use roc_gen::llvm::externs::add_default_roc_externs;
 use roc_module::symbol::Symbol;
 use roc_types::subs::VarStore;
 
@@ -184,7 +185,6 @@ pub fn helper<'a>(
     // strip Zig debug stuff
     module.strip_debug_info();
 
-    let builder = context.create_builder();
     let opt_level = if cfg!(debug_assertions) {
         roc_gen::llvm::build::OptLevel::Normal
     } else {
@@ -215,6 +215,11 @@ pub fn helper<'a>(
             function.add_attribute(AttributeLoc::Function, attr);
         }
     }
+
+    // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
+    // platform to provide them.
+    let builder = context.create_builder();
+    add_default_roc_externs(&context, module, &builder, ptr_bytes);
 
     // Compile and add all the Procs before adding main
     let env = roc_gen::llvm::build::Env {
