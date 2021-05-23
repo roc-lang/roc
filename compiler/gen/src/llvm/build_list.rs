@@ -331,10 +331,18 @@ pub fn list_set<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
 
-    call_bitcode_fn_returns_list(
+    let (length, bytes) = load_list(
+        env.builder,
+        list.into_struct_value(),
+        env.context.i8_type().ptr_type(AddressSpace::Generic),
+    );
+
+    let new_bytes = call_bitcode_fn(
         env,
         &[
-            pass_list_as_i128(env, list),
+            // pass_list_as_i128(env, list),
+            bytes.into(),
+            length.into(),
             alignment_intvalue(env, &element_layout),
             index.into(),
             pass_element_as_opaque(env, element),
@@ -342,7 +350,9 @@ pub fn list_set<'a, 'ctx, 'env>(
             dec_element_fn.as_global_value().as_pointer_value().into(),
         ],
         &bitcode::LIST_SET,
-    )
+    );
+
+    store_list(env, new_bytes.into_pointer_value(), length)
 }
 
 fn bounds_check_comparison<'ctx>(
