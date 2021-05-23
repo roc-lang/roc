@@ -224,7 +224,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
             .left()
             .unwrap()
             .into_pointer_value()
-        // TODO check if malloc returned null; if so, runtime error for OOM!
+        // TODO check if alloc returned null; if so, runtime error for OOM!
     }
 
     pub fn call_dealloc(&self, alignment: u32, ptr: PointerValue<'ctx>) -> InstructionValue<'ctx> {
@@ -247,7 +247,6 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         call.set_call_convention(C_CALL_CONV);
 
         call.try_as_basic_value().right().unwrap()
-        // TODO check if malloc returned null; if so, runtime error for OOM!
     }
 
     pub fn call_memset(
