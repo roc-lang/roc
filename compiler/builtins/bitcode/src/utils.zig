@@ -12,6 +12,7 @@ extern fn roc_realloc(alignment: usize, c_ptr: *c_void, old_size: usize, new_siz
 extern fn roc_dealloc(alignment: usize, c_ptr: *c_void) callconv(.C) void;
 
 comptime {
+    // During tetsts, use the testing allocators to satisfy these functions.
     if (std.builtin.is_test) {
         @export(testing_roc_alloc, .{ .name = "roc_alloc", .linkage = .Strong });
         @export(testing_roc_realloc, .{ .name = "roc_realloc", .linkage = .Strong });
