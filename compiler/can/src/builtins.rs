@@ -84,6 +84,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_MAP => list_map,
         LIST_MAP2 => list_map2,
         LIST_MAP3 => list_map3,
+        LIST_DROP => list_drop,
         LIST_MAP_WITH_INDEX => list_map_with_index,
         LIST_KEEP_IF => list_keep_if,
         LIST_KEEP_OKS => list_keep_oks,
@@ -1879,6 +1880,28 @@ fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         list_ret_var,
+    )
+}
+/// List.drop : List elem, Nat -> List elem
+fn list_drop(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let index_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::ListDrop,
+        args: vec![
+            (list_var, Var(Symbol::ARG_1)),
+            (index_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var: list_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1), (index_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        list_var,
     )
 }
 

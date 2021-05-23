@@ -6,5 +6,5 @@ platform examples/quicksort
     provides [ mainForHost ]
     effects fx.Effect {}
 
-mainForHost : List I64 -> List I64 
+mainForHost : List I64 -> List I64
 mainForHost = \list -> quicksort list
