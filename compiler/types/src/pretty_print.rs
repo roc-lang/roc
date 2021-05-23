@@ -490,7 +490,7 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
             }
         }
 
-        FunctionOrTagUnion(tag_name, _, _) => {
+        FunctionOrTagUnion(tag_name, _, ext_var) => {
             let interns = &env.interns;
             let home = env.home;
 
@@ -499,6 +499,17 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
             buf.push_str(&tag_name.as_string(&interns, home));
 
             buf.push_str(" ]");
+
+            let mut sorted_fields = vec![(tag_name, vec![])];
+            let ext_content = chase_ext_tag_union(subs, ext_var, &mut sorted_fields);
+            if let Err((_, content)) = ext_content {
+                // This is an open tag union, so print the variable
+                // right after the ']'
+                //
+                // e.g. the "*" at the end of `{ x: I64 }*`
+                // or the "r" at the end of `{ x: I64 }r`
+                write_content(env, content, subs, buf, parens)
+            }
         }
 
         RecursiveTagUnion(rec_var, tags, ext_var) => {

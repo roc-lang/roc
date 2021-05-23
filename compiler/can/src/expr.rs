@@ -634,11 +634,14 @@ pub fn canonicalize_expr<'a>(
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
 
+            let symbol = env.gen_unique_symbol();
+
             (
-                Tag {
+                ZeroArgumentTag {
                     name: TagName::Global((*tag).into()),
                     arguments: vec![],
                     variant_var,
+                    closure_name: symbol,
                     ext_var,
                 },
                 Output::default(),
