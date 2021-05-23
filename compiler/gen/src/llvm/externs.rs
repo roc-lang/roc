@@ -14,35 +14,18 @@ pub fn add_default_roc_externs<'ctx>(
     ptr_bytes: u32,
 ) {
     let usize_type = ptr_int(ctx, ptr_bytes);
-    let i32_type = ctx.i32_type();
     let i8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
 
     // roc_alloc
     {
-        let fn_val = add_func(
-            module,
-            "roc_alloc",
-            i8_ptr_type.fn_type(
-                &[
-                    // alignment: u32
-                    i32_type.into(),
-                    // size: usize
-                    usize_type.into(),
-                ],
-                false,
-            ),
-            Linkage::External,
-            C_CALL_CONV,
-        );
-
+        // The type of this function (but not the implementation) should have
+        // already been defined by the builtins, which rely on it.
+        let fn_val = module.get_function("roc_alloc").unwrap();
         let mut params = fn_val.get_param_iter();
-        let alignment_arg = params.next().unwrap();
+        let _alignment_arg = params.next().unwrap();
         let size_arg = params.next().unwrap();
 
         debug_assert!(params.next().is_none());
-
-        set_name(alignment_arg, "alignment");
-        set_name(size_arg, "size");
 
         // Add a basic block for the entry point
         let entry = ctx.append_basic_block(fn_val, "entry");
@@ -96,38 +79,16 @@ pub fn add_default_roc_externs<'ctx>(
             fn_val
         };
 
-        let fn_val = add_func(
-            module,
-            "roc_realloc",
-            i8_ptr_type.fn_type(
-                &[
-                    // alignment: u32
-                    i32_type.into(),
-                    // ptr: *void
-                    i8_ptr_type.into(),
-                    // old_size: usize
-                    usize_type.into(),
-                    // new_size: usize
-                    usize_type.into(),
-                ],
-                false,
-            ),
-            Linkage::External,
-            C_CALL_CONV,
-        );
-
+        // The type of this function (but not the implementation) should have
+        // already been defined by the builtins, which rely on it.
+        let fn_val = module.get_function("roc_realloc").unwrap();
         let mut params = fn_val.get_param_iter();
-        let alignment_arg = params.next().unwrap();
+        let _alignment_arg = params.next().unwrap();
         let ptr_arg = params.next().unwrap();
-        let old_size_arg = params.next().unwrap();
+        let _old_size_arg = params.next().unwrap();
         let new_size_arg = params.next().unwrap();
 
         debug_assert!(params.next().is_none());
-
-        set_name(alignment_arg, "alignment");
-        set_name(ptr_arg, "ptr");
-        set_name(old_size_arg, "old_size");
-        set_name(new_size_arg, "new_size");
 
         // Add a basic block for the entry point
         let entry = ctx.append_basic_block(fn_val, "entry");
@@ -154,30 +115,14 @@ pub fn add_default_roc_externs<'ctx>(
 
     // roc_dealloc
     {
-        let fn_val = add_func(
-            module,
-            "roc_dealloc",
-            ctx.void_type().fn_type(
-                &[
-                    // alignment: u32
-                    i32_type.into(),
-                    // ptr: *void
-                    i8_ptr_type.into(),
-                ],
-                false,
-            ),
-            Linkage::External,
-            C_CALL_CONV,
-        );
-
+        // The type of this function (but not the implementation) should have
+        // already been defined by the builtins, which rely on it.
+        let fn_val = module.get_function("roc_dealloc").unwrap();
         let mut params = fn_val.get_param_iter();
-        let alignment_arg = params.next().unwrap();
+        let _alignment_arg = params.next().unwrap();
         let ptr_arg = params.next().unwrap();
 
         debug_assert!(params.next().is_none());
-
-        set_name(alignment_arg, "alignment");
-        set_name(ptr_arg, "ptr");
 
         // Add a basic block for the entry point
         let entry = ctx.append_basic_block(fn_val, "entry");

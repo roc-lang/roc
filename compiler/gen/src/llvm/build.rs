@@ -200,17 +200,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         alignment: u32,
         number_of_bytes: IntValue<'ctx>,
     ) -> PointerValue<'ctx> {
-        let function = match self.ptr_bytes {
-            8 => self.module.get_function(ROC_ALLOC_64).unwrap(),
-            4 => self.module.get_function(ROC_ALLOC_32).unwrap(),
-            bytes => {
-                panic!(
-                    "{} is an unsupported number of pointer bytes for a Roc target.",
-                    bytes
-                );
-            }
-        };
-
+        let function = self.module.get_function("roc_alloc").unwrap();
         let alignment = self.ptr_int().const_int(alignment as u64, false);
         let call = self.builder.build_call(
             function,
@@ -228,17 +218,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     }
 
     pub fn call_dealloc(&self, alignment: u32, ptr: PointerValue<'ctx>) -> InstructionValue<'ctx> {
-        let function = match self.ptr_bytes {
-            8 => self.module.get_function(ROC_DEALLOC_64).unwrap(),
-            4 => self.module.get_function(ROC_DEALLOC_32).unwrap(),
-            bytes => {
-                panic!(
-                    "{} is an unsupported number of pointer bytes for a Roc target.",
-                    bytes
-                );
-            }
-        };
-
+        let function = self.module.get_function("roc_dealloc").unwrap();
         let alignment = self.ptr_int().const_int(alignment as u64, false);
         let call =
             self.builder
@@ -345,7 +325,6 @@ pub fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     // List of all supported LLVM intrinsics:
     //
     // https://releases.llvm.org/10.0.0/docs/LangRef.html#standard-c-library-intrinsics
-    let void_type = ctx.void_type();
     let i1_type = ctx.bool_type();
     let f64_type = ctx.f64_type();
     let i128_type = ctx.i128_type();
@@ -353,141 +332,6 @@ pub fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     let i32_type = ctx.i32_type();
     let i16_type = ctx.i16_type();
     let i8_type = ctx.i8_type();
-    let i8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
-
-    // In the repl, this may already be defined (because there's no platform
-    // in the repl). Redefining it causes linker errors!
-    if module.get_function(ROC_ALLOC_64).is_none() {
-        add_intrinsic(
-            module,
-            ROC_ALLOC_64,
-            i8_ptr_type.fn_type(
-                &[
-                    // alignment: u32
-                    i32_type.into(),
-                    // size: usize
-                    i64_type.into(),
-                ],
-                false,
-            ),
-        );
-    }
-
-    // In the repl, this may already be defined (because there's no platform
-    // in the repl). Redefining it causes linker errors!
-    if module.get_function(ROC_ALLOC_32).is_none() {
-        add_intrinsic(
-            module,
-            ROC_ALLOC_32,
-            i8_ptr_type.fn_type(
-                &[
-                    // alignment: u32
-                    i32_type.into(),
-                    // size: usize
-                    i32_type.into(),
-                ],
-                false,
-            ),
-        );
-    }
-
-    add_intrinsic(
-        module,
-        ROC_REALLOC_64,
-        i8_ptr_type.fn_type(
-            &[
-                // alignment: u32
-                i32_type.into(),
-                // ptr: *c_void
-                i8_ptr_type.into(),
-                // old_size: usize
-                i64_type.into(),
-                // new_size: usize
-                i64_type.into(),
-            ],
-            false,
-        ),
-    );
-
-    add_intrinsic(
-        module,
-        ROC_REALLOC_32,
-        i8_ptr_type.fn_type(
-            &[
-                // alignment: u32
-                i32_type.into(),
-                // ptr: *c_void
-                i8_ptr_type.into(),
-                // old_size: usize
-                i32_type.into(),
-                // new_size: usize
-                i32_type.into(),
-            ],
-            false,
-        ),
-    );
-
-    add_intrinsic(
-        module,
-        ROC_DEALLOC_64,
-        void_type.fn_type(
-            &[
-                // alignment: u32
-                i32_type.into(),
-                // ptr: *c_void
-                i8_ptr_type.into(),
-            ],
-            false,
-        ),
-    );
-
-    add_intrinsic(
-        module,
-        ROC_DEALLOC_32,
-        void_type.fn_type(
-            &[
-                // alignment: u32
-                i32_type.into(),
-                // ptr: *c_void
-                i8_ptr_type.into(),
-            ],
-            false,
-        ),
-    );
-
-    add_intrinsic(
-        module,
-        LLVM_MEMSET_I64,
-        void_type.fn_type(
-            &[
-                i8_ptr_type.into(),
-                i8_type.into(),
-                i64_type.into(),
-                i1_type.into(),
-            ],
-            false,
-        ),
-    );
-
-    add_intrinsic(
-        module,
-        LLVM_MEMSET_I32,
-        void_type.fn_type(
-            &[
-                i8_ptr_type.into(),
-                i8_type.into(),
-                i32_type.into(),
-                i1_type.into(),
-            ],
-            false,
-        ),
-    );
-
-    add_intrinsic(
-        module,
-        LLVM_SQRT_F64,
-        f64_type.fn_type(&[f64_type.into()], false),
-    );
 
     add_intrinsic(
         module,
@@ -600,22 +444,8 @@ pub fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         ctx.struct_type(&fields, false)
             .fn_type(&[i128_type.into(), i128_type.into()], false)
     });
-
-    // mul with overflow
-
-    add_intrinsic(module, LLVM_SMUL_WITH_OVERFLOW_I64, {
-        let fields = [i64_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i64_type.into(), i64_type.into()], false)
-    });
 }
 
-static ROC_ALLOC_64: &str = "roc_alloc";
-static ROC_REALLOC_64: &str = "roc_realloc";
-static ROC_DEALLOC_64: &str = "roc_dealloc";
-static ROC_ALLOC_32: &str = "roc_alloc";
-static ROC_REALLOC_32: &str = "roc_realloc";
-static ROC_DEALLOC_32: &str = "roc_dealloc";
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
 static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
 static LLVM_SQRT_F64: &str = "llvm.sqrt.f64";
