@@ -37,25 +37,15 @@ fn testing_roc_dealloc(alignment: usize, c_ptr: *c_void) callconv(.C) void {
 }
 
 pub fn alloc(alignment: usize, size: usize) [*]u8 {
-    return @ptrCast(
-        [*]u8,
-        @call(.{ .modifier = always_inline }, roc_alloc, .{ alignment, size })
-    );
+    return @ptrCast([*]u8, @call(.{ .modifier = always_inline }, roc_alloc, .{ alignment, size }));
 }
 
 pub fn realloc(alignment: usize, c_ptr: [*]u8, old_size: usize, new_size: usize) [*]u8 {
-    return @ptrCast(
-        [*]u8,
-        @call(.{ .modifier = always_inline }, roc_realloc, .{ alignment, c_ptr, old_size, new_size })
-    );
+    return @ptrCast([*]u8, @call(.{ .modifier = always_inline }, roc_realloc, .{ alignment, c_ptr, old_size, new_size }));
 }
 
 pub fn dealloc(alignment: usize, c_ptr: [*]u8) void {
-    return @call(
-        .{ .modifier = always_inline },
-        roc_dealloc,
-        .{ alignment, c_ptr }
-    );
+    return @call(.{ .modifier = always_inline }, roc_dealloc, .{ alignment, c_ptr });
 }
 
 pub const Inc = fn (?[*]u8) callconv(.C) void;

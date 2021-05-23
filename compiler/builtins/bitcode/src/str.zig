@@ -1064,7 +1064,7 @@ test "RocStr.joinWith: result is big" {
 
 // Str.toBytes
 pub fn strToBytesC(arg: RocStr) callconv(.C) RocList {
-    return @call(.{ .modifier = always_inline }, strToBytes, .{ arg });
+    return @call(.{ .modifier = always_inline }, strToBytes, .{arg});
 }
 
 fn strToBytes(arg: RocStr) RocList {
@@ -1090,7 +1090,7 @@ const FromUtf8Result = extern struct {
 };
 
 pub fn fromUtf8C(arg: RocList, output: *FromUtf8Result) callconv(.C) void {
-    output.* = @call(.{ .modifier = always_inline }, fromUtf8, .{ arg });
+    output.* = @call(.{ .modifier = always_inline }, fromUtf8, .{arg});
 }
 
 fn fromUtf8(arg: RocList) FromUtf8Result {
