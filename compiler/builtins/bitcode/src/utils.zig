@@ -11,6 +11,31 @@ extern fn roc_realloc(alignment: usize, c_ptr: *c_void, old_size: usize, new_siz
 // This should never be passed a null pointer.
 extern fn roc_dealloc(alignment: usize, c_ptr: *c_void) callconv(.C) void;
 
+comptime {
+    if (std.builtin.is_test) {
+        @export(testing_roc_alloc, .{ .name = "roc_alloc", .linkage = .Strong });
+        @export(testing_roc_realloc, .{ .name = "roc_realloc", .linkage = .Strong });
+        @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
+    }
+}
+
+fn testing_roc_alloc(alignment: usize, size: usize) callconv(.C) *c_void {
+    return @ptrCast(*c_void, std.testing.allocator.alloc(u8, size) catch unreachable);
+}
+
+fn testing_roc_realloc(alignment: usize, c_ptr: *c_void, old_size: usize, new_size: usize) callconv(.C) *c_void {
+    const ptr = @ptrCast([*]u8, @alignCast(16, c_ptr));
+    const slice = ptr[0..old_size];
+
+    return @ptrCast(*c_void, std.testing.allocator.realloc(slice, new_size) catch unreachable);
+}
+
+fn testing_roc_dealloc(alignment: usize, c_ptr: *c_void) callconv(.C) void {
+    const ptr = @ptrCast([*]u8, @alignCast(16, c_ptr));
+
+    std.testing.allocator.destroy(ptr);
+}
+
 pub fn alloc(alignment: usize, size: usize) [*]u8 {
     return @ptrCast(
         [*]u8,
