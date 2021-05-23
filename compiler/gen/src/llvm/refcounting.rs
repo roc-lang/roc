@@ -1,6 +1,6 @@
 use crate::debug_info_init;
 use crate::llvm::build::{
-    cast_basic_basic, cast_block_of_memory_to_tag, set_name, Env, FAST_CALL_CONV,
+    add_func, cast_basic_basic, cast_block_of_memory_to_tag, set_name, Env, FAST_CALL_CONV,
     LLVM_SADD_WITH_OVERFLOW_I64,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
@@ -165,12 +165,13 @@ impl<'ctx> PointerToRefcount<'ctx> {
                     false,
                 );
 
-                let function_value =
-                    env.module
-                        .add_function(fn_name, fn_type, Some(Linkage::Private));
-
-                // Because it's an internal-only function, it should use the fast calling convention.
-                function_value.set_call_conventions(FAST_CALL_CONV);
+                let function_value = add_func(
+                    env.module,
+                    fn_name,
+                    fn_type,
+                    Linkage::Private,
+                    FAST_CALL_CONV, // Because it's an internal-only function, it should use the fast calling convention.
+                );
 
                 let subprogram = env.new_subprogram(fn_name);
                 function_value.set_subprogram(subprogram);
@@ -1171,12 +1172,13 @@ pub fn build_header_help<'a, 'ctx, 'env>(
         VoidType(t) => t.fn_type(arguments, false),
     };
 
-    let fn_val = env
-        .module
-        .add_function(fn_name, fn_type, Some(Linkage::Private));
-
-    // Because it's an internal-only function, it should use the fast calling convention.
-    fn_val.set_call_conventions(FAST_CALL_CONV);
+    let fn_val = add_func(
+        env.module,
+        fn_name,
+        fn_type,
+        Linkage::Private,
+        FAST_CALL_CONV, // Because it's an internal-only function, it should use the fast calling convention.
+    );
 
     let subprogram = env.new_subprogram(&fn_name);
     fn_val.set_subprogram(subprogram);

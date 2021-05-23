@@ -1,4 +1,4 @@
-use crate::llvm::build::{set_name, C_CALL_CONV};
+use crate::llvm::build::{add_func, set_name, C_CALL_CONV};
 use crate::llvm::convert::ptr_int;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -19,7 +19,8 @@ pub fn add_default_roc_externs<'ctx>(
 
     // roc_alloc
     {
-        let fn_val = module.add_function(
+        let fn_val = add_func(
+            module,
             "roc_alloc",
             i8_ptr_type.fn_type(
                 &[
@@ -30,10 +31,9 @@ pub fn add_default_roc_externs<'ctx>(
                 ],
                 false,
             ),
-            Some(Linkage::External),
+            Linkage::External,
+            C_CALL_CONV,
         );
-
-        fn_val.set_call_conventions(C_CALL_CONV);
 
         let mut params = fn_val.get_param_iter();
         let alignment_arg = params.next().unwrap();
@@ -64,7 +64,8 @@ pub fn add_default_roc_externs<'ctx>(
     // roc_realloc
     {
         let libc_realloc_val = {
-            let fn_val = module.add_function(
+            let fn_val = add_func(
+                module,
                 "realloc",
                 i8_ptr_type.fn_type(
                     &[
@@ -75,10 +76,9 @@ pub fn add_default_roc_externs<'ctx>(
                     ],
                     false,
                 ),
-                Some(Linkage::External),
+                Linkage::External,
+                C_CALL_CONV,
             );
-
-            fn_val.set_call_conventions(C_CALL_CONV);
 
             let mut params = fn_val.get_param_iter();
             let ptr_arg = params.next().unwrap();
@@ -96,7 +96,8 @@ pub fn add_default_roc_externs<'ctx>(
             fn_val
         };
 
-        let fn_val = module.add_function(
+        let fn_val = add_func(
+            module,
             "roc_realloc",
             i8_ptr_type.fn_type(
                 &[
@@ -111,10 +112,9 @@ pub fn add_default_roc_externs<'ctx>(
                 ],
                 false,
             ),
-            Some(Linkage::External),
+            Linkage::External,
+            C_CALL_CONV,
         );
-
-        fn_val.set_call_conventions(C_CALL_CONV);
 
         let mut params = fn_val.get_param_iter();
         let alignment_arg = params.next().unwrap();
@@ -154,7 +154,8 @@ pub fn add_default_roc_externs<'ctx>(
 
     // roc_dealloc
     {
-        let fn_val = module.add_function(
+        let fn_val = add_func(
+            module,
             "roc_dealloc",
             ctx.void_type().fn_type(
                 &[
@@ -165,10 +166,9 @@ pub fn add_default_roc_externs<'ctx>(
                 ],
                 false,
             ),
-            Some(Linkage::External),
+            Linkage::External,
+            C_CALL_CONV,
         );
-
-        fn_val.set_call_conventions(C_CALL_CONV);
 
         let mut params = fn_val.get_param_iter();
         let alignment_arg = params.next().unwrap();
@@ -178,6 +178,11 @@ pub fn add_default_roc_externs<'ctx>(
 
         set_name(alignment_arg, "alignment");
         set_name(ptr_arg, "ptr");
+
+        // Add a basic block for the entry point
+        let entry = ctx.append_basic_block(fn_val, "entry");
+
+        builder.position_at_end(entry);
 
         // Call libc free()
         builder.build_free(ptr_arg.into_pointer_value());
