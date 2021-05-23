@@ -29,6 +29,22 @@ extern fn roc__mainForHost_1_Fx_caller(*const u8, *const u8, [*]u8, [*]u8) void;
 extern fn roc__mainForHost_1_Fx_size() i64;
 extern fn roc__mainForHost_1_Fx_result_size() i64;
 
+extern fn malloc(size: usize) callconv(.C) ?*c_void;
+extern fn realloc(c_ptr: [*]align(@alignOf(u128)) u8, size: usize) callconv(.C) ?*c_void;
+extern fn free(c_ptr: [*]align(@alignOf(u128)) u8) callconv(.C) void;
+
+export fn roc_alloc(alignment: usize, size: usize) callconv(.C) *c_void {
+    return malloc(size) orelse unreachable;
+}
+
+export fn roc_realloc(alignment: usize, c_ptr: *c_void, old_size: usize, new_size: usize) callconv(.C) *c_void {
+    return realloc(@alignCast(16, @ptrCast([*]u8, c_ptr)), new_size) orelse unreachable;
+}
+
+export fn roc_dealloc(alignment: usize, c_ptr: *c_void) callconv(.C) void {
+    free(@alignCast(16, @ptrCast([*]u8, c_ptr)));
+}
+
 const Unit = extern struct {};
 
 pub export fn main() u8 {

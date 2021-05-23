@@ -28,6 +28,10 @@ extern fn roc__mainForHost_1_Fx_caller(*const u8, *const u8, [*]u8, [*]u8) void;
 extern fn roc__mainForHost_1_Fx_size() i64;
 extern fn roc__mainForHost_1_Fx_result_size() i64;
 
+extern fn malloc(size: usize) callconv(.C) ?*c_void;
+extern fn realloc(c_ptr: [*]align(@alignOf(u128)) u8, size: usize) callconv(.C) ?*c_void;
+extern fn free(c_ptr: [*]align(@alignOf(u128)) u8) callconv(.C) void;
+
 const Unit = extern struct {};
 
 pub export fn main() u8 {
@@ -60,28 +64,33 @@ pub export fn main() u8 {
     return 0;
 }
 
-pub export fn malloc(size: usize) callconv(.C) ?*c_void {
+export fn roc_alloc(alignment: usize, size: usize) callconv(.C) *c_void {
     const stdout = std.io.getStdOut().writer();
     const allocator = testing.allocator;
 
     // Perform the actual malloc
     const startNs = std.time.nanoTimestamp();
-    const ptr = allocator.alignedAlloc(u8, 16, size) catch unreachable;
+    const ptr = malloc(size) orelse unreachable;
     const endNs = std.time.nanoTimestamp();
 
     const totalMs = @divTrunc(endNs - startNs, 1000);
 
     stdout.print("\x1B[36m{} | \x1B[39m Custom malloc allocated {} bytes in {} ms!\n", .{startNs, size, totalMs}) catch unreachable;
 
-    return @ptrCast(?*c_void, ptr);
+    return ptr;
 }
-pub export fn free(c_ptr: *u128) callconv(.C) void {
+
+export fn roc_realloc(alignment: usize, c_ptr: *c_void, old_size: usize, new_size: usize) callconv(.C) *c_void {
+    return realloc(@alignCast(16, @ptrCast([*]u8, c_ptr)), new_size) orelse unreachable;
+}
+
+export fn roc_dealloc(alignment: usize, c_ptr: *c_void) callconv(.C) void {
     const stdout = std.io.getStdOut().writer();
     const allocator = testing.allocator;
 
     // Perform the actual free
     const startNs = std.time.nanoTimestamp();
-    allocator.destroy(c_ptr);
+    free(@alignCast(16, @ptrCast([*]u8, c_ptr)));
     const endNs = std.time.nanoTimestamp();
 
     const totalMs = @divTrunc(endNs - startNs, 1000);
@@ -149,7 +158,7 @@ pub export fn roc_fx_readAllUtf8(rocPath: RocStr) callconv(.C) ReadResult {
     };
 
     var str_ptr = @ptrCast([*]u8, content);
-    var roc_str3 = RocStr.init(testing.allocator, str_ptr, content.len);
+    var roc_str3 = RocStr.init(str_ptr, content.len);
 
     return .{ .bytes = roc_str3, .errno = 0 };
 }
