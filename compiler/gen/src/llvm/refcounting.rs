@@ -175,7 +175,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
                 let subprogram = env.new_subprogram(fn_name);
                 function_value.set_subprogram(subprogram);
 
-                Self::_build_decrement_function_body(env, function_value, alignment);
+                Self::build_decrement_function_body(env, function_value, alignment);
 
                 function_value
             }
@@ -194,7 +194,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         call.set_call_convention(FAST_CALL_CONV);
     }
 
-    fn _build_decrement_function_body<'a, 'env>(
+    fn build_decrement_function_body<'a, 'env>(
         env: &Env<'a, 'ctx, 'env>,
         parent: FunctionValue<'ctx>,
         alignment: u32,
