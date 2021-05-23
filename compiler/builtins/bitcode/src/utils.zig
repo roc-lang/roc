@@ -6,7 +6,7 @@ extern fn roc_alloc(alignment: usize, size: usize) callconv(.C) *c_void;
 
 // This should never be passed a null pointer.
 // If allocation fails, this must cxa_throw - it must not return a null pointer!
-extern fn roc_realloc(alignment: usize, c_ptr: *c_void, new_size: usize) callconv(.C) *c_void;
+extern fn roc_realloc(alignment: usize, c_ptr: *c_void, old_size: usize, new_size: usize) callconv(.C) *c_void;
 
 // This should never be passed a null pointer.
 extern fn roc_dealloc(alignment: usize, c_ptr: *c_void) callconv(.C) void;
@@ -18,10 +18,10 @@ pub fn alloc(alignment: usize, size: usize) [*]u8 {
     );
 }
 
-pub fn realloc(alignment: usize, c_ptr: [*]u8, new_size: usize) [*]u8 {
+pub fn realloc(alignment: usize, c_ptr: [*]u8, old_size: usize, new_size: usize) [*]u8 {
     return @ptrCast(
         [*]u8,
-        @call(.{ .modifier = always_inline }, roc_realloc, .{ alignment, c_ptr, new_size })
+        @call(.{ .modifier = always_inline }, roc_realloc, .{ alignment, c_ptr, old_size, new_size })
     );
 }
 
@@ -195,7 +195,7 @@ pub fn unsafeReallocate(
     // TODO handle out of memory
     // NOTE realloc will dealloc the original allocation
     const old_allocation = source_ptr - align_width;
-    const new_allocation = realloc(alignment, old_allocation, new_width);
+    const new_allocation = realloc(alignment, old_allocation, old_width, new_width);
 
     const new_source = @ptrCast([*]u8, new_allocation) + align_width;
     return new_source;
