@@ -844,7 +844,7 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
                 .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
         }
 
-        CallType::LowLevel { op } => {
+        CallType::LowLevel { op, update_mode: _ } => {
             run_low_level(env, layout_ids, scope, parent, layout, *op, arguments)
         }
 
