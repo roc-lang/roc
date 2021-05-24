@@ -640,7 +640,8 @@ fn list_map2_pair() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.map2 [1,2,3] [3,2,1] (\a,b -> Pair a b)
+            f = (\a,b -> Pair a b)
+            List.map2 [1,2,3] [3,2,1] f
             "#
         ),
         RocList::from_slice(&[(1, 3), (2, 2), (3, 1)]),
@@ -656,7 +657,7 @@ fn list_map2_different_lengths() {
             List.map2
                 ["a", "b", "lllllllllllllongnggg" ]
                 ["b"]
-                Str.concat
+                (\a, b -> Str.concat a b)
             "#
         ),
         RocList::from_slice(&[RocStr::from_slice("ab".as_bytes()),]),
@@ -1817,10 +1818,15 @@ fn list_keep_errs() {
     assert_evals_to!("List.keepErrs [] (\\x -> x)", 0, i64);
     assert_evals_to!("List.keepErrs [1,2] (\\x -> Err x)", &[1, 2], &[i64]);
     assert_evals_to!(
-        "List.keepErrs [0,1,2] (\\x -> x % 0 |> Result.mapErr (\\_ -> 32))",
+        indoc!(
+            r#"
+            List.keepErrs [0,1,2] (\x -> x % 0 |> Result.mapErr (\_ -> 32))
+            "#
+        ),
         &[32, 32, 32],
         &[i64]
     );
+
     assert_evals_to!("List.keepErrs [Ok 1, Err 2] (\\x -> x)", &[2], &[i64]);
 }
 

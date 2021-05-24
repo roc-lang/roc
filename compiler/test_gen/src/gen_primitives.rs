@@ -913,7 +913,7 @@ fn annotation_without_body() {
 }
 
 #[test]
-fn closure() {
+fn simple_closure() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -992,18 +992,19 @@ fn specialize_closure() {
 
             foo = \{} ->
                 x = 41
-                y = 1
+                y = [1]
 
                 f = \{} -> x
-                g = \{} -> x + y
+                g = \{} -> x + List.len y
 
                 [ f, g ]
+
+            apply = \f -> f {}
 
             main =
                 items = foo {}
 
-                # List.len items
-                List.map items (\f -> f {})
+                List.map items apply
             "#
         ),
         RocList::from_slice(&[41, 42]),
@@ -1026,7 +1027,7 @@ fn io_poc_effect() {
             runEffect : Effect a -> a
             runEffect = \@Effect thunk -> thunk {}
 
-            foo : Effect F64 
+            foo : Effect F64
             foo =
                 succeed 3.14
 
@@ -1049,16 +1050,16 @@ fn io_poc_desugared() {
             app "test" provides [ main ] to "./platform"
 
             # succeed : a -> ({} -> a)
-            succeed = \x -> \{} -> x
+            succeed = \x -> \_ -> x
 
-            foo : {} -> F64 
+            foo : Str -> F64
             foo =
                 succeed 3.14
 
             # runEffect : ({} ->  a) -> a
-            runEffect = \thunk -> thunk {}
+            runEffect = \thunk -> thunk ""
 
-            main : F64 
+            main : F64
             main =
                 runEffect foo
             "#
@@ -1081,6 +1082,27 @@ fn return_wrapped_function_pointer() {
             foo = @Effect \{} -> {}
 
             main : Effect {}
+            main = foo
+            "#
+        ),
+        1,
+        i64,
+        |_| 1
+    );
+}
+
+#[test]
+fn return_wrapped_function_pointer_b() {
+    assert_non_opt_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+
+            foo : { x: (I64 -> Str) }
+            foo = { x:  (\_ -> "foobar") }
+
+            main : { x:  (I64 -> Str) }
             main = foo
             "#
         ),
@@ -1243,7 +1265,7 @@ fn recursive_functon_with_rigid() {
 
             State a : { count : I64, x : a }
 
-            foo : State a -> Int * 
+            foo : State a -> Int *
             foo = \state ->
                 if state.count == 0 then
                     0
@@ -1634,13 +1656,13 @@ fn binary_tree_double_pattern_match() {
 
             BTree : [ Node BTree BTree, Leaf I64 ]
 
-            foo : BTree -> I64 
+            foo : BTree -> I64
             foo = \btree ->
                 when btree is
                     Node (Node (Leaf x) _) _ -> x
                     _ -> 0
 
-            main : I64 
+            main : I64
             main =
                 foo (Node (Node (Leaf 32) (Leaf 0)) (Leaf 0))
             "#
@@ -1651,7 +1673,7 @@ fn binary_tree_double_pattern_match() {
 }
 
 #[test]
-fn unified_empty_closure() {
+fn unified_empty_closure_bool() {
     // none of the Closure tags will have a payload
     // this was not handled correctly in the past
     assert_non_opt_evals_to!(
@@ -1663,6 +1685,31 @@ fn unified_empty_closure() {
                 when A is
                     A -> (\_ -> 3.14)
                     B -> (\_ -> 3.14)
+
+            main : Float *
+            main =
+                (foo {}) 0
+            "#
+        ),
+        3.14,
+        f64
+    );
+}
+
+#[test]
+fn unified_empty_closure_byte() {
+    // none of the Closure tags will have a payload
+    // this was not handled correctly in the past
+    assert_non_opt_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            foo = \{} ->
+                when A is
+                    A -> (\_ -> 3.14)
+                    B -> (\_ -> 3.14)
+                    C -> (\_ -> 3.14)
 
             main : Float *
             main =
@@ -2227,6 +2274,37 @@ fn build_then_apply_closure() {
 }
 
 #[test]
+fn expanded_result() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            a : Result I64 Str
+            a = Ok 4
+
+            after = \x, f ->
+                when x is
+                    Ok v -> f v
+                    Err e -> Err e
+
+            main : I64
+            main =
+                helper = after a (\x -> Ok x)
+
+                when helper is
+                    Ok v -> v
+                    Err _ -> 0
+
+            "#
+        ),
+        4,
+        i64
+    );
+}
+
+#[test]
+#[ignore]
 fn backpassing_result() {
     assert_evals_to!(
         indoc!(
@@ -2242,7 +2320,7 @@ fn backpassing_result() {
             main : I64
             main =
                 helper =
-                    x <- Result.after a 
+                    x <- Result.after a
                     y <- Result.after (f x)
                     z <- Result.after (g y)
 
@@ -2250,7 +2328,7 @@ fn backpassing_result() {
 
                 helper
                     |> Result.withDefault 0
-                
+
             "#
         ),
         4,
@@ -2309,5 +2387,81 @@ fn expect_fail() {
         ),
         3,
         i64
+    );
+}
+
+#[test]
+fn increment_or_double_closure() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+
+                apply : (a -> a), a -> a
+                apply = \f, x -> f x
+
+                main =
+                    one : I64
+                    one = 1
+
+                    two : I64
+                    two = 2
+
+                    b : Bool
+                    b = True
+
+                    increment : I64 -> I64
+                    increment = \x -> x + one
+
+                    double : I64 -> I64
+                    double = \x -> if b then x * two else x
+
+                    f = (if True then increment else double)
+
+                    apply f 42
+            "#
+        ),
+        43,
+        i64
+    );
+}
+
+#[test]
+fn module_thunk_is_function() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                main = helper "foo" "bar"
+                helper = Str.concat
+            "#
+        ),
+        RocStr::from_slice(b"foobar"),
+        RocStr
+    );
+}
+
+#[test]
+#[should_panic(expected = "Roc failed with message: ")]
+fn hit_unresolved_type_variable() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                main : Str
+                main =
+                    (accept Bool.isEq) "B"
+
+
+                accept : * -> (b -> b)
+                accept = \_ ->
+                    \input -> input
+            "#
+        ),
+        RocStr::from_slice(b"B"),
+        RocStr
     );
 }

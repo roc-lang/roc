@@ -104,9 +104,9 @@ where
                 fail: _,
             } => {
                 // for now, treat invoke as a normal call
-
-                let stmt = Stmt::Let(*symbol, Expr::Call(call.clone()), *layout, pass);
-                self.build_stmt(&stmt)
+                self.build_expr(symbol, &Expr::Call(call.clone()), layout)?;
+                self.free_symbols(stmt);
+                self.build_stmt(pass)
             }
             Stmt::Switch {
                 cond_symbol,
@@ -426,7 +426,6 @@ where
                 self.set_last_seen(*sym, stmt);
                 match expr {
                     Expr::Literal(_) => {}
-                    Expr::FunctionPointer(sym, _) => self.set_last_seen(*sym, stmt),
 
                     Expr::Call(call) => self.scan_ast_call(call, stmt),
 
@@ -479,15 +478,15 @@ where
 
             Stmt::Invoke {
                 symbol,
-                layout,
+                layout: _,
                 call,
                 pass,
                 fail: _,
             } => {
                 // for now, treat invoke as a normal call
-
-                let stmt = Stmt::Let(*symbol, Expr::Call(call.clone()), *layout, pass);
-                self.scan_ast(&stmt);
+                self.set_last_seen(*symbol, stmt);
+                self.scan_ast_call(call, stmt);
+                self.scan_ast(pass);
             }
 
             Stmt::Switch {
@@ -546,10 +545,8 @@ where
 
         match call_type {
             CallType::ByName { .. } => {}
-            CallType::ByPointer { name: sym, .. } => {
-                self.set_last_seen(*sym, stmt);
-            }
             CallType::LowLevel { .. } => {}
+            CallType::HigherOrderLowLevel { .. } => {}
             CallType::Foreign { .. } => {}
         }
     }

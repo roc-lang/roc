@@ -52,7 +52,13 @@ pub unsafe fn jit_to_ast<'a>(
         home,
     };
 
-    jit_to_ast_help(&env, lib, main_fn_name, layout, content)
+    match layout {
+        Layout::FunctionPointer(&[], result) => {
+            // this is a thunk
+            jit_to_ast_help(&env, lib, main_fn_name, result, content)
+        }
+        _ => jit_to_ast_help(&env, lib, main_fn_name, layout, content),
+    }
 }
 
 fn jit_to_ast_help<'a>(
@@ -239,9 +245,8 @@ fn jit_to_ast_help<'a>(
             todo!("add support for rendering recursive tag unions in the REPL")
         }
 
-        Layout::FunctionPointer(_, _) | Layout::Closure(_, _, _) => {
-            Err(ToAstProblem::FunctionLayout)
-        }
+        Layout::Closure(_, _, _) => Err(ToAstProblem::FunctionLayout),
+        Layout::FunctionPointer(_, _) => Err(ToAstProblem::FunctionLayout),
         Layout::Pointer(_) => todo!("add support for rendering pointers in the REPL"),
     }
 }

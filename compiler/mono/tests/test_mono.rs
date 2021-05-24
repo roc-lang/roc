@@ -16,7 +16,8 @@ mod test_mono {
     use roc_collections::all::MutMap;
     use roc_module::symbol::Symbol;
     use roc_mono::ir::Proc;
-    use roc_mono::layout::Layout;
+
+    use roc_mono::ir::TopLevelFunctionLayout;
 
     fn promote_expr_to_module(src: &str) -> String {
         let mut buffer =
@@ -105,7 +106,7 @@ mod test_mono {
     #[cfg(debug_assertions)]
     fn verify_procedures(
         expected: &str,
-        procedures: MutMap<(Symbol, Layout<'_>), Proc<'_>>,
+        procedures: MutMap<(Symbol, TopLevelFunctionLayout<'_>), Proc<'_>>,
         main_fn_symbol: Symbol,
     ) {
         let index = procedures
@@ -150,7 +151,7 @@ mod test_mono {
     #[cfg(not(debug_assertions))]
     fn verify_procedures(
         _expected: &str,
-        _procedures: MutMap<(Symbol, Layout<'_>), Proc<'_>>,
+        _procedures: MutMap<(Symbol, TopLevelFunctionLayout<'_>), Proc<'_>>,
         _main_fn_symbol: Symbol,
     ) {
         // Do nothing
@@ -471,8 +472,7 @@ mod test_mono {
                 r#"
                 procedure Test.0 ():
                     let Test.4 = 2i64;
-                    let Test.1 = Struct {Test.4};
-                    ret Test.1;
+                    ret Test.4;
                 "#
             ),
         )
@@ -536,8 +536,7 @@ mod test_mono {
 
                 procedure Test.0 ():
                     let Test.6 = 2i64;
-                    let Test.2 = Struct {Test.6};
-                    let Test.1 = Index 0 Test.2;
+                    let Test.1 = Index 0 Test.6;
                     let Test.4 = 3i64;
                     let Test.3 = CallByName Num.24 Test.1 Test.4;
                     ret Test.3;
@@ -658,7 +657,7 @@ mod test_mono {
                     ret Test.3;
 
                 procedure Test.0 ():
-                    let Test.2 = FunctionPointer Dict.2;
+                    let Test.2 = CallByName Dict.2;
                     let Test.1 = CallByName Dict.8 Test.2;
                     ret Test.1;
                 "#
@@ -1177,8 +1176,7 @@ mod test_mono {
 
                 procedure Test.0 ():
                     let Test.9 = 9i64;
-                    let Test.6 = Struct {Test.9};
-                    let Test.5 = CallByName Test.1 Test.6;
+                    let Test.5 = CallByName Test.1 Test.9;
                     ret Test.5;
                 "#
             ),
@@ -1246,8 +1244,7 @@ mod test_mono {
 
                 procedure Test.0 ():
                     let Test.9 = 9i64;
-                    let Test.6 = Struct {Test.9};
-                    let Test.5 = CallByName Test.1 Test.6;
+                    let Test.5 = CallByName Test.1 Test.9;
                     ret Test.5;
                 "#
             ),
@@ -1809,11 +1806,11 @@ mod test_mono {
                     ret Test.16;
 
                 procedure Test.0 ():
-                    let Test.15 = FunctionPointer Test.1;
+                    let Test.15 = CallByName Test.1;
                     let Test.14 = CallByName Test.2 Test.15;
                     let Test.5 = CallByName List.7 Test.14;
                     dec Test.14;
-                    let Test.8 = FunctionPointer Test.1;
+                    let Test.8 = CallByName Test.1;
                     let Test.6 = CallByName List.7 Test.8;
                     dec Test.8;
                     let Test.4 = CallByName Num.24 Test.5 Test.6;
@@ -2039,11 +2036,9 @@ mod test_mono {
 
                 procedure Test.0 ():
                     let Test.38 = true;
-                    let Test.37 = Struct {Test.38};
-                    let Test.5 = CallByName Test.1 Test.37;
+                    let Test.5 = CallByName Test.1 Test.38;
                     let Test.36 = false;
-                    let Test.30 = Struct {Test.36};
-                    let Test.3 = CallByName Test.1 Test.30;
+                    let Test.3 = CallByName Test.1 Test.36;
                     let Test.28 = 11i64;
                     let Test.29 = true;
                     let Test.27 = Struct {Test.28, Test.29};
@@ -2349,20 +2344,18 @@ mod test_mono {
                 r#"
                 procedure Test.1 (Test.5):
                     let Test.2 = 42i64;
-                    let Test.13 = FunctionPointer Test.3;
-                    let Test.3 = Struct {Test.13, Test.2};
+                    let Test.3 = Struct {Test.2};
                     ret Test.3;
 
-                procedure Test.3 (Test.11, #Attr.12):
-                    ret #Attr.12;
+                procedure Test.3 (Test.9, #Attr.12):
+                    let Test.2 = Index 0 #Attr.12;
+                    ret Test.2;
 
                 procedure Test.0 ():
-                    let Test.10 = Struct {};
-                    let Test.4 = CallByName Test.1 Test.10;
+                    let Test.8 = Struct {};
+                    let Test.4 = CallByName Test.1 Test.8;
                     let Test.7 = Struct {};
-                    let Test.8 = Index 1 Test.4;
-                    let Test.9 = Index 0 Test.4;
-                    let Test.6 = CallByPointer Test.9 Test.7 Test.8;
+                    let Test.6 = CallByName Test.3 Test.7 Test.4;
                     ret Test.6;
                 "#
             ),
@@ -2397,13 +2390,13 @@ mod test_mono {
 
                 procedure Test.1 (Test.5):
                     let Test.2 = 41i64;
-                    let Test.12 = FunctionPointer Test.3;
-                    let Test.11 = Struct {Test.12, Test.2};
+                    let Test.11 = Struct {Test.2};
                     let Test.10 = Array [Test.11];
                     ret Test.10;
 
                 procedure Test.3 (Test.9, #Attr.12):
-                    ret #Attr.12;
+                    let Test.2 = Index 0 #Attr.12;
+                    ret Test.2;
 
                 procedure Test.0 ():
                     let Test.8 = Struct {};
@@ -2411,6 +2404,195 @@ mod test_mono {
                     let Test.6 = CallByName List.7 Test.4;
                     dec Test.4;
                     ret Test.6;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn somehow_drops_definitions() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                one : I64 
+                one = 1
+
+                two : I64
+                two = 2
+
+                increment : I64 -> I64
+                increment = \x -> x + one
+
+                double : I64 -> I64
+                double = \x -> x * two
+
+                apply : (a -> a), a -> a
+                apply = \f, x -> f x
+
+                main =
+                    apply (if True then increment else double) 42
+                "#
+            ),
+            indoc!(
+                r#"
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn specialize_closures() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+
+                apply : (a -> a), a -> a
+                apply = \f, x -> f x
+
+                main =
+                    one : I64 
+                    one = 1
+
+                    two : I64
+                    two = 2
+
+                    b : Bool
+                    b = True
+
+                    increment : I64 -> I64
+                    increment = \x -> x + one
+
+                    double : I64 -> I64
+                    double = \x -> if b then x * two else x
+
+                    apply (if True then increment else double) 42
+                "#
+            ),
+            indoc!(
+                r#"
+                procedure Num.24 (#Attr.2, #Attr.3):
+                    let Test.29 = lowlevel NumAdd #Attr.2 #Attr.3;
+                    ret Test.29;
+
+                procedure Num.26 (#Attr.2, #Attr.3):
+                    let Test.25 = lowlevel NumMul #Attr.2 #Attr.3;
+                    ret Test.25;
+
+                procedure Test.1 (Test.2, Test.3):
+                    let Test.17 = Index 0 Test.2;
+                    joinpoint Test.18 Test.16:
+                        ret Test.16;
+                    in
+                    switch Test.17:
+                        case 0:
+                            let Test.19 = CallByName Test.7 Test.3 Test.2;
+                            jump Test.18 Test.19;
+                    
+                        default:
+                            let Test.20 = CallByName Test.8 Test.3 Test.2;
+                            jump Test.18 Test.20;
+                    
+
+                procedure Test.7 (Test.10, #Attr.12):
+                    let Test.4 = Index 1 #Attr.12;
+                    let Test.28 = CallByName Num.24 Test.10 Test.4;
+                    ret Test.28;
+
+                procedure Test.8 (Test.11, #Attr.12):
+                    let Test.6 = Index 2 #Attr.12;
+                    let Test.5 = Index 1 #Attr.12;
+                    if Test.6 then
+                        let Test.24 = CallByName Num.26 Test.11 Test.5;
+                        ret Test.24;
+                    else
+                        ret Test.11;
+
+                procedure Test.0 ():
+                    let Test.6 = true;
+                    let Test.4 = 1i64;
+                    let Test.5 = 2i64;
+                    joinpoint Test.22 Test.14:
+                        let Test.15 = 42i64;
+                        let Test.13 = CallByName Test.1 Test.14 Test.15;
+                        ret Test.13;
+                    in
+                    let Test.27 = true;
+                    if Test.27 then
+                        let Test.30 = 0i64;
+                        let Test.7 = ClosureTag(Test.7) Test.30 Test.4;
+                        jump Test.22 Test.7;
+                    else
+                        let Test.26 = 1i64;
+                        let Test.8 = ClosureTag(Test.8) Test.26 Test.5 Test.6;
+                        jump Test.22 Test.8;
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn specialize_lowlevel() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+
+                apply : (a -> a), a -> a
+                apply = \f, x -> f x
+
+                main =
+                    one : I64 
+                    one = 1
+
+                    two : I64
+                    two = 2
+
+                    increment : I64 -> I64
+                    increment = \x -> x + 1
+
+                    double : I64 -> I64
+                    double = \x -> x * two
+
+                    when 3 is 
+                        1 -> increment 0
+                        2 -> double 0
+                        _ -> List.map [] (if True then increment else double) |> List.len 
+                "#
+            ),
+            indoc!(
+                r#"
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn static_str_closure() {
+        compiles_to_ir(
+            indoc!(
+                r#"
+                app "test" provides [ main ] to "./platform"
+
+                main : Str
+                main =
+                    x = "long string that is malloced"
+
+                    f : {} -> Str
+                    f = (\_ -> x)
+
+                    f {}
+                "#
+            ),
+            indoc!(
+                r#"
                 "#
             ),
         )
