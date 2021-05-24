@@ -3510,9 +3510,14 @@ fn fabricate_effects_module<'a>(
         problems: can_env.problems,
         ident_ids: can_env.ident_ids,
         references: MutSet::default(),
+        scope,
     };
 
-    let constraint = constrain_module(&module_output, module_id);
+    let constraint = constrain_module(
+        &module_output.aliases,
+        &module_output.declarations,
+        module_id,
+    );
 
     let module = Module {
         module_id,
@@ -3529,6 +3534,7 @@ fn fabricate_effects_module<'a>(
     let module_docs = ModuleDocumentation {
         name: String::from(name),
         entries: Vec::new(),
+        scope: module_output.scope,
     };
 
     let constrained_module = ConstrainedModule {
@@ -3610,18 +3616,6 @@ where
         ..
     } = parsed;
 
-    // Generate documentation information
-    // TODO: store timing information?
-    let module_docs = match module_name {
-        ModuleNameEnum::PkgConfig => None,
-        ModuleNameEnum::App(_) => None,
-        ModuleNameEnum::Interface(name) => Some(crate::docs::generate_module_docs(
-            name.as_str().into(),
-            &exposed_ident_ids,
-            &parsed_defs,
-        )),
-    };
-
     let mut var_store = VarStore::default();
     let canonicalized = canonicalize_module_defs(
         &arena,
@@ -3642,7 +3636,24 @@ where
 
     match canonicalized {
         Ok(module_output) => {
-            let constraint = constrain_module(&module_output, module_id);
+            // Generate documentation information
+            // TODO: store timing information?
+            let module_docs = match module_name {
+                ModuleNameEnum::PkgConfig => None,
+                ModuleNameEnum::App(_) => None,
+                ModuleNameEnum::Interface(name) => Some(crate::docs::generate_module_docs(
+                    module_output.scope,
+                    name.as_str().into(),
+                    &module_output.ident_ids,
+                    &parsed_defs,
+                )),
+            };
+
+            let constraint = constrain_module(
+                &module_output.aliases,
+                &module_output.declarations,
+                module_id,
+            );
 
             let module = Module {
                 module_id,
