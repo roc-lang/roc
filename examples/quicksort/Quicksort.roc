@@ -46,37 +46,6 @@ partitionHelp = \i, j, list, high, pivot ->
         Pair i list
 
 
-<<<<<<< HEAD
-            Err _ ->
-                Pair (low - 1) initialList
-
-    partitionHelp : Nat, Nat, List (Num c), Nat, (Num c) -> [ Pair Nat (List (Num c)) ]
-    partitionHelp = \i, j, list, high, pivot ->
-        if j < high then
-            when List.get list j is
-                Ok value ->
-                    if value <= pivot then
-                        partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
-                    else
-                        partitionHelp i (j + 1) list high pivot
-
-                Err _ ->
-                    Pair i list
-        else
-            Pair i list
-
-
-    swap : Nat, Nat, List a -> List a
-    swap = \i, j, list ->
-        when Pair (List.get list i) (List.get list j) is
-            Pair (Ok atI) (Ok atJ) ->
-                list
-                    |> List.set i atJ
-                    |> List.set j atI
-
-            _ ->
-                list
-=======
 swap : Nat, Nat, List a -> List a
 swap = \i, j, list ->
     when Pair (List.get list i) (List.get list j) is
@@ -87,5 +56,3 @@ swap = \i, j, list ->
 
         _ ->
             []
->>>>>>> origin/trunk
-

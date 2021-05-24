@@ -25,6 +25,22 @@ const Allocator = mem.Allocator;
 
 extern fn roc__mainForHost_1_exposed(*RocCallResult) void;
 
+extern fn malloc(size: usize) callconv(.C) ?*c_void;
+extern fn realloc(c_ptr: [*]align(@alignOf(u128)) u8, size: usize) callconv(.C) ?*c_void;
+extern fn free(c_ptr: [*]align(@alignOf(u128)) u8) callconv(.C) void;
+
+export fn roc_alloc(alignment: u32, size: usize) callconv(.C) ?*c_void {
+    return malloc(size);
+}
+
+export fn roc_realloc(alignment: u32, c_ptr: *c_void, old_size: usize, new_size: usize) callconv(.C) ?*c_void {
+    return realloc(@alignCast(16, @ptrCast([*]u8, c_ptr)), new_size);
+}
+
+export fn roc_dealloc(alignment: u32, c_ptr: *c_void) callconv(.C) void {
+    free(@alignCast(16, @ptrCast([*]u8, c_ptr)));
+}
+
 const RocCallResult = extern struct { flag: usize, content: RocStr };
 
 const Unit = extern struct {};
@@ -46,7 +62,7 @@ pub export fn main() i32 {
     // stdout the result
     stdout.print("{}\n", .{callresult.content.asSlice()}) catch unreachable;
 
-    callresult.content.deinit(std.heap.c_allocator);
+    callresult.content.deinit();
 
     // end time
     var ts2: std.os.timespec = undefined;

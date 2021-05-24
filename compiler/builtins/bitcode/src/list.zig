@@ -2,7 +2,6 @@ const std = @import("std");
 const utils = @import("utils.zig");
 const RocResult = utils.RocResult;
 const mem = std.mem;
-const Allocator = mem.Allocator;
 
 const TAG_WIDTH = 8;
 
@@ -42,7 +41,6 @@ pub const RocList = extern struct {
     }
 
     pub fn allocate(
-        allocator: *Allocator,
         alignment: usize,
         length: usize,
         element_size: usize,
@@ -50,12 +48,12 @@ pub const RocList = extern struct {
         const data_bytes = length * element_size;
 
         return RocList{
-            .bytes = utils.allocateWithRefcount(allocator, alignment, data_bytes),
+            .bytes = utils.allocateWithRefcount(alignment, data_bytes),
             .length = length,
         };
     }
 
-    pub fn makeUnique(self: RocList, allocator: *Allocator, alignment: usize, element_width: usize) RocList {
+    pub fn makeUnique(self: RocList, alignment: usize, element_width: usize) RocList {
         if (self.isEmpty()) {
             return self;
         }
@@ -65,7 +63,7 @@ pub const RocList = extern struct {
         }
 
         // unfortunately, we have to clone
-        var new_list = RocList.allocate(allocator, alignment, self.length, element_width);
+        var new_list = RocList.allocate(alignment, self.length, element_width);
 
         var old_bytes: [*]u8 = @ptrCast([*]u8, self.bytes);
         var new_bytes: [*]u8 = @ptrCast([*]u8, new_list.bytes);
@@ -75,33 +73,31 @@ pub const RocList = extern struct {
 
         // NOTE we fuse an increment of all keys/values with a decrement of the input dict
         const data_bytes = self.len() * element_width;
-        utils.decref(allocator, alignment, self.bytes, data_bytes);
+        utils.decref(alignment, self.bytes, data_bytes);
 
         return new_list;
     }
 
     pub fn reallocate(
         self: RocList,
-        allocator: *Allocator,
         alignment: usize,
         new_length: usize,
         element_width: usize,
     ) RocList {
         if (self.bytes) |source_ptr| {
             if (self.isUnique()) {
-                const new_source = utils.unsafeReallocate(source_ptr, allocator, alignment, self.len(), new_length, element_width);
+                const new_source = utils.unsafeReallocate(source_ptr, alignment, self.len(), new_length, element_width);
 
                 return RocList{ .bytes = new_source, .length = new_length };
             }
         }
 
-        return self.reallocateFresh(allocator, alignment, new_length, element_width);
+        return self.reallocateFresh(alignment, new_length, element_width);
     }
 
     /// reallocate by explicitly making a new allocation and copying elements over
     fn reallocateFresh(
         self: RocList,
-        allocator: *Allocator,
         alignment: usize,
         new_length: usize,
         element_width: usize,
@@ -110,7 +106,7 @@ pub const RocList = extern struct {
         const delta_length = new_length - old_length;
 
         const data_bytes = new_length * element_width;
-        const first_slot = utils.allocateWithRefcount(allocator, alignment, data_bytes);
+        const first_slot = utils.allocateWithRefcount(alignment, data_bytes);
 
         // transfer the memory
 
@@ -126,7 +122,7 @@ pub const RocList = extern struct {
             .length = new_length,
         };
 
-        utils.decref(allocator, alignment, self.bytes, old_length * element_width);
+        utils.decref(alignment, self.bytes, old_length * element_width);
 
         return result;
     }
@@ -155,7 +151,7 @@ pub fn listReverse(list: RocList, alignment: usize, element_width: usize) callco
 
             return list;
         } else {
-            const output = RocList.allocate(std.heap.c_allocator, alignment, size, element_width);
+            const output = RocList.allocate(alignment, size, element_width);
 
             const target_ptr = output.bytes orelse unreachable;
 
@@ -165,7 +161,7 @@ pub fn listReverse(list: RocList, alignment: usize, element_width: usize) callco
                 @memcpy(target_ptr + (i * element_width), source_ptr + (last_position * element_width), element_width);
             }
 
-            utils.decref(std.heap.c_allocator, alignment, list.bytes, size * element_width);
+            utils.decref(alignment, list.bytes, size * element_width);
 
             return output;
         }
@@ -178,14 +174,14 @@ pub fn listMap(list: RocList, transform: Opaque, caller: Caller1, alignment: usi
     if (list.bytes) |source_ptr| {
         const size = list.len();
         var i: usize = 0;
-        const output = RocList.allocate(std.heap.c_allocator, alignment, size, new_element_width);
+        const output = RocList.allocate(alignment, size, new_element_width);
         const target_ptr = output.bytes orelse unreachable;
 
         while (i < size) : (i += 1) {
             caller(transform, source_ptr + (i * old_element_width), target_ptr + (i * new_element_width));
         }
 
-        utils.decref(std.heap.c_allocator, alignment, list.bytes, size * old_element_width);
+        utils.decref(alignment, list.bytes, size * old_element_width);
 
         return output;
     } else {
@@ -197,14 +193,14 @@ pub fn listMapWithIndex(list: RocList, transform: Opaque, caller: Caller2, align
     if (list.bytes) |source_ptr| {
         const size = list.len();
         var i: usize = 0;
-        const output = RocList.allocate(std.heap.c_allocator, alignment, size, new_element_width);
+        const output = RocList.allocate(alignment, size, new_element_width);
         const target_ptr = output.bytes orelse unreachable;
 
         while (i < size) : (i += 1) {
             caller(transform, @ptrCast(?[*]u8, &i), source_ptr + (i * old_element_width), target_ptr + (i * new_element_width));
         }
 
-        utils.decref(std.heap.c_allocator, alignment, list.bytes, size * old_element_width);
+        utils.decref(alignment, list.bytes, size * old_element_width);
 
         return output;
     } else {
@@ -217,7 +213,7 @@ pub fn listMap2(list1: RocList, list2: RocList, transform: Opaque, caller: Calle
 
     if (list1.bytes) |source_a| {
         if (list2.bytes) |source_b| {
-            const output = RocList.allocate(std.heap.c_allocator, alignment, output_length, c_width);
+            const output = RocList.allocate(alignment, output_length, c_width);
             const target_ptr = output.bytes orelse unreachable;
 
             var i: usize = 0;
@@ -242,8 +238,8 @@ pub fn listMap2(list1: RocList, list2: RocList, transform: Opaque, caller: Calle
                 }
             }
 
-            utils.decref(std.heap.c_allocator, alignment, list1.bytes, list1.len() * a_width);
-            utils.decref(std.heap.c_allocator, alignment, list2.bytes, list2.len() * b_width);
+            utils.decref(alignment, list1.bytes, list1.len() * a_width);
+            utils.decref(alignment, list2.bytes, list2.len() * b_width);
 
             return output;
         } else {
@@ -253,7 +249,7 @@ pub fn listMap2(list1: RocList, list2: RocList, transform: Opaque, caller: Calle
                 const element_a = source_a + i * a_width;
                 dec_a(element_a);
             }
-            utils.decref(std.heap.c_allocator, alignment, list1.bytes, list1.len() * a_width);
+            utils.decref(alignment, list1.bytes, list1.len() * a_width);
 
             return RocList.empty();
         }
@@ -265,7 +261,7 @@ pub fn listMap2(list1: RocList, list2: RocList, transform: Opaque, caller: Calle
                 const element_b = source_b + i * b_width;
                 dec_b(element_b);
             }
-            utils.decref(std.heap.c_allocator, alignment, list2.bytes, list2.len() * b_width);
+            utils.decref(alignment, list2.bytes, list2.len() * b_width);
         }
 
         return RocList.empty();
@@ -279,7 +275,7 @@ pub fn listMap3(list1: RocList, list2: RocList, list3: RocList, transform: Opaqu
     if (list1.bytes) |source_a| {
         if (list2.bytes) |source_b| {
             if (list3.bytes) |source_c| {
-                const output = RocList.allocate(std.heap.c_allocator, alignment, output_length, d_width);
+                const output = RocList.allocate(alignment, output_length, d_width);
                 const target_ptr = output.bytes orelse unreachable;
 
                 var i: usize = 0;
@@ -318,9 +314,9 @@ pub fn listMap3(list1: RocList, list2: RocList, list3: RocList, transform: Opaqu
                     }
                 }
 
-                utils.decref(std.heap.c_allocator, alignment, list1.bytes, list1.len() * a_width);
-                utils.decref(std.heap.c_allocator, alignment, list2.bytes, list2.len() * b_width);
-                utils.decref(std.heap.c_allocator, alignment, list3.bytes, list3.len() * c_width);
+                utils.decref(alignment, list1.bytes, list1.len() * a_width);
+                utils.decref(alignment, list2.bytes, list2.len() * b_width);
+                utils.decref(alignment, list3.bytes, list3.len() * c_width);
 
                 return output;
             } else {
@@ -330,7 +326,7 @@ pub fn listMap3(list1: RocList, list2: RocList, list3: RocList, transform: Opaqu
                     const element_a = source_a + i * a_width;
                     dec_a(element_a);
                 }
-                utils.decref(std.heap.c_allocator, alignment, list1.bytes, list1.len() * a_width);
+                utils.decref(alignment, list1.bytes, list1.len() * a_width);
 
                 // consume list2 elements (we know there is at least one because the list1.bytes pointer is non-null
                 i = 0;
@@ -338,7 +334,7 @@ pub fn listMap3(list1: RocList, list2: RocList, list3: RocList, transform: Opaqu
                     const element_b = source_b + i * b_width;
                     dec_b(element_b);
                 }
-                utils.decref(std.heap.c_allocator, alignment, list2.bytes, list2.len() * b_width);
+                utils.decref(alignment, list2.bytes, list2.len() * b_width);
 
                 return RocList.empty();
             }
@@ -350,7 +346,7 @@ pub fn listMap3(list1: RocList, list2: RocList, list3: RocList, transform: Opaqu
                 dec_a(element_a);
             }
 
-            utils.decref(std.heap.c_allocator, alignment, list1.bytes, list1.len() * a_width);
+            utils.decref(alignment, list1.bytes, list1.len() * a_width);
 
             // consume list3 elements (if any)
             if (list3.bytes) |source_c| {
@@ -361,7 +357,7 @@ pub fn listMap3(list1: RocList, list2: RocList, list3: RocList, transform: Opaqu
                     dec_c(element_c);
                 }
 
-                utils.decref(std.heap.c_allocator, alignment, list3.bytes, list3.len() * c_width);
+                utils.decref(alignment, list3.bytes, list3.len() * c_width);
             }
 
             return RocList.empty();
@@ -376,7 +372,7 @@ pub fn listMap3(list1: RocList, list2: RocList, list3: RocList, transform: Opaqu
                 dec_b(element_b);
             }
 
-            utils.decref(std.heap.c_allocator, alignment, list2.bytes, list2.len() * b_width);
+            utils.decref(alignment, list2.bytes, list2.len() * b_width);
         }
 
         // consume list3 elements (if any)
@@ -388,7 +384,7 @@ pub fn listMap3(list1: RocList, list2: RocList, list3: RocList, transform: Opaqu
                 dec_c(element_c);
             }
 
-            utils.decref(std.heap.c_allocator, alignment, list3.bytes, list3.len() * c_width);
+            utils.decref(alignment, list3.bytes, list3.len() * c_width);
         }
 
         return RocList.empty();
@@ -399,7 +395,7 @@ pub fn listKeepIf(list: RocList, transform: Opaque, caller: Caller1, alignment: 
     if (list.bytes) |source_ptr| {
         const size = list.len();
         var i: usize = 0;
-        var output = RocList.allocate(std.heap.c_allocator, alignment, list.len(), list.len() * element_width);
+        var output = RocList.allocate(alignment, list.len(), list.len() * element_width);
         const target_ptr = output.bytes orelse unreachable;
 
         var kept: usize = 0;
@@ -419,11 +415,11 @@ pub fn listKeepIf(list: RocList, transform: Opaque, caller: Caller1, alignment: 
         }
 
         // consume the input list
-        utils.decref(std.heap.c_allocator, alignment, list.bytes, size * element_width);
+        utils.decref(alignment, list.bytes, size * element_width);
 
         if (kept == 0) {
             // if the output is empty, deallocate the space we made for the result
-            utils.decref(std.heap.c_allocator, alignment, output.bytes, size * element_width);
+            utils.decref(alignment, output.bytes, size * element_width);
             return RocList.empty();
         } else {
             output.length = kept;
@@ -447,10 +443,10 @@ pub fn listKeepResult(list: RocList, is_good_constructor: fn (RocResult) bool, t
     if (list.bytes) |source_ptr| {
         const size = list.len();
         var i: usize = 0;
-        var output = RocList.allocate(std.heap.c_allocator, alignment, list.len(), list.len() * after_width);
+        var output = RocList.allocate(alignment, list.len(), list.len() * after_width);
         const target_ptr = output.bytes orelse unreachable;
 
-        var temporary = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, result_width) catch unreachable);
+        var temporary = @ptrCast([*]u8, utils.alloc(alignment, result_width));
 
         var kept: usize = 0;
         while (i < size) : (i += 1) {
@@ -469,11 +465,11 @@ pub fn listKeepResult(list: RocList, is_good_constructor: fn (RocResult) bool, t
             }
         }
 
-        utils.decref(std.heap.c_allocator, alignment, list.bytes, size * before_width);
-        std.heap.c_allocator.free(temporary[0..result_width]);
+        utils.decref(alignment, list.bytes, size * before_width);
+        utils.dealloc(alignment, temporary);
 
         if (kept == 0) {
-            utils.decref(std.heap.c_allocator, alignment, output.bytes, size * after_width);
+            utils.decref(alignment, output.bytes, size * after_width);
             return RocList.empty();
         } else {
             output.length = kept;
@@ -494,9 +490,9 @@ pub fn listWalk(list: RocList, stepper: Opaque, stepper_caller: Caller2, accum: 
         return;
     }
 
-    const alloc: [*]u8 = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, accum_width) catch unreachable);
+    const bytes_ptr: [*]u8 = utils.alloc(alignment, accum_width);
     var b1 = output orelse unreachable;
-    var b2 = alloc;
+    var b2 = bytes_ptr;
 
     @memcpy(b2, accum orelse unreachable, accum_width);
 
@@ -514,10 +510,10 @@ pub fn listWalk(list: RocList, stepper: Opaque, stepper_caller: Caller2, accum: 
     }
 
     @memcpy(output orelse unreachable, b2, accum_width);
-    std.heap.c_allocator.free(alloc[0..accum_width]);
+    utils.dealloc(alignment, bytes_ptr);
 
     const data_bytes = list.len() * element_width;
-    utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
+    utils.decref(alignment, list.bytes, data_bytes);
 }
 
 pub fn listWalkBackwards(list: RocList, stepper: Opaque, stepper_caller: Caller2, accum: Opaque, alignment: usize, element_width: usize, accum_width: usize, output: Opaque) callconv(.C) void {
@@ -530,9 +526,9 @@ pub fn listWalkBackwards(list: RocList, stepper: Opaque, stepper_caller: Caller2
         return;
     }
 
-    const alloc: [*]u8 = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, accum_width) catch unreachable);
+    const bytes_ptr: [*]u8 = utils.alloc(alignment, accum_width);
     var b1 = output orelse unreachable;
-    var b2 = alloc;
+    var b2 = bytes_ptr;
 
     @memcpy(b2, accum orelse unreachable, accum_width);
 
@@ -551,10 +547,10 @@ pub fn listWalkBackwards(list: RocList, stepper: Opaque, stepper_caller: Caller2
     }
 
     @memcpy(output orelse unreachable, b2, accum_width);
-    std.heap.c_allocator.free(alloc[0..accum_width]);
+    utils.dealloc(alignment, bytes_ptr);
 
     const data_bytes = list.len() * element_width;
-    utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
+    utils.decref(alignment, list.bytes, data_bytes);
 }
 
 pub fn listWalkUntil(list: RocList, stepper: Opaque, stepper_caller: Caller2, accum: Opaque, alignment: usize, element_width: usize, accum_width: usize, dec: Dec, output: Opaque) callconv(.C) void {
@@ -570,18 +566,18 @@ pub fn listWalkUntil(list: RocList, stepper: Opaque, stepper_caller: Caller2, ac
         return;
     }
 
-    const alloc: [*]u8 = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, TAG_WIDTH + accum_width) catch unreachable);
+    const bytes_ptr: [*]u8 = utils.alloc(alignment, TAG_WIDTH + accum_width);
 
-    @memcpy(alloc + TAG_WIDTH, accum orelse unreachable, accum_width);
+    @memcpy(bytes_ptr + TAG_WIDTH, accum orelse unreachable, accum_width);
 
     if (list.bytes) |source_ptr| {
         var i: usize = 0;
         const size = list.len();
         while (i < size) : (i += 1) {
             const element = source_ptr + i * element_width;
-            stepper_caller(stepper, element, alloc + TAG_WIDTH, alloc);
+            stepper_caller(stepper, element, bytes_ptr + TAG_WIDTH, bytes_ptr);
 
-            const usizes: [*]usize = @ptrCast([*]usize, @alignCast(8, alloc));
+            const usizes: [*]usize = @ptrCast([*]usize, @alignCast(8, bytes_ptr));
             if (usizes[0] != 0) {
                 // decrement refcount of the remaining items
                 i += 1;
@@ -593,11 +589,11 @@ pub fn listWalkUntil(list: RocList, stepper: Opaque, stepper_caller: Caller2, ac
         }
     }
 
-    @memcpy(output orelse unreachable, alloc + TAG_WIDTH, accum_width);
-    std.heap.c_allocator.free(alloc[0 .. TAG_WIDTH + accum_width]);
+    @memcpy(output orelse unreachable, bytes_ptr + TAG_WIDTH, accum_width);
+    utils.dealloc(alignment, bytes_ptr);
 
     const data_bytes = list.len() * element_width;
-    utils.decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
+    utils.decref(alignment, list.bytes, data_bytes);
 }
 
 // List.contains : List k, k -> Bool
@@ -621,8 +617,7 @@ pub fn listRepeat(count: usize, alignment: usize, element: Opaque, element_width
         return RocList.empty();
     }
 
-    const allocator = std.heap.c_allocator;
-    var output = RocList.allocate(allocator, alignment, count, element_width);
+    var output = RocList.allocate(alignment, count, element_width);
 
     if (output.bytes) |target_ptr| {
         // increment the element's RC N times
@@ -641,7 +636,7 @@ pub fn listRepeat(count: usize, alignment: usize, element: Opaque, element_width
 }
 
 pub fn listSingle(alignment: usize, element: Opaque, element_width: usize) callconv(.C) RocList {
-    var output = RocList.allocate(std.heap.c_allocator, alignment, 1, element_width);
+    var output = RocList.allocate(alignment, 1, element_width);
 
     if (output.bytes) |target| {
         if (element) |source| {
@@ -654,7 +649,7 @@ pub fn listSingle(alignment: usize, element: Opaque, element_width: usize) callc
 
 pub fn listAppend(list: RocList, alignment: usize, element: Opaque, element_width: usize) callconv(.C) RocList {
     const old_length = list.len();
-    var output = list.reallocate(std.heap.c_allocator, alignment, old_length + 1, element_width);
+    var output = list.reallocate(alignment, old_length + 1, element_width);
 
     if (output.bytes) |target| {
         if (element) |source| {
@@ -688,12 +683,12 @@ pub fn listDrop(
             return RocList.empty();
         }
 
-        const output = RocList.allocate(std.heap.c_allocator, alignment, keep_count, element_width);
+        const output = RocList.allocate(alignment, keep_count, element_width);
         const target_ptr = output.bytes orelse unreachable;
 
         @memcpy(target_ptr, source_ptr + drop_count * element_width, keep_count * element_width);
 
-        utils.decref(std.heap.c_allocator, alignment, list.bytes, size * element_width);
+        utils.decref(alignment, list.bytes, size * element_width);
 
         return output;
     } else {
@@ -702,54 +697,53 @@ pub fn listDrop(
 }
 
 pub fn listRange(width: utils.IntWidth, low: Opaque, high: Opaque) callconv(.C) RocList {
-    const allocator = std.heap.c_allocator;
     const IntWidth = utils.IntWidth;
 
     switch (width) {
         IntWidth.U8 => {
-            return helper1(allocator, u8, low, high);
+            return helper1(u8, low, high);
         },
         IntWidth.U16 => {
-            return helper1(allocator, u16, low, high);
+            return helper1(u16, low, high);
         },
         IntWidth.U32 => {
-            return helper1(allocator, u32, low, high);
+            return helper1(u32, low, high);
         },
         IntWidth.U64 => {
-            return helper1(allocator, u64, low, high);
+            return helper1(u64, low, high);
         },
         IntWidth.U128 => {
-            return helper1(allocator, u128, low, high);
+            return helper1(u128, low, high);
         },
         IntWidth.I8 => {
-            return helper1(allocator, i8, low, high);
+            return helper1(i8, low, high);
         },
         IntWidth.I16 => {
-            return helper1(allocator, i16, low, high);
+            return helper1(i16, low, high);
         },
         IntWidth.I32 => {
-            return helper1(allocator, i32, low, high);
+            return helper1(i32, low, high);
         },
         IntWidth.I64 => {
-            return helper1(allocator, i64, low, high);
+            return helper1(i64, low, high);
         },
         IntWidth.I128 => {
-            return helper1(allocator, i128, low, high);
+            return helper1(i128, low, high);
         },
         IntWidth.Usize => {
-            return helper1(allocator, usize, low, high);
+            return helper1(usize, low, high);
         },
     }
 }
 
-fn helper1(allocator: *Allocator, comptime T: type, low: Opaque, high: Opaque) RocList {
+fn helper1(comptime T: type, low: Opaque, high: Opaque) RocList {
     const ptr1 = @ptrCast(*T, @alignCast(@alignOf(T), low));
     const ptr2 = @ptrCast(*T, @alignCast(@alignOf(T), high));
 
-    return listRangeHelp(allocator, T, ptr1.*, ptr2.*);
+    return listRangeHelp(T, ptr1.*, ptr2.*);
 }
 
-fn listRangeHelp(allocator: *Allocator, comptime T: type, low: T, high: T) RocList {
+fn listRangeHelp(comptime T: type, low: T, high: T) RocList {
     const Order = std.math.Order;
 
     switch (std.math.order(low, high)) {
@@ -758,7 +752,7 @@ fn listRangeHelp(allocator: *Allocator, comptime T: type, low: T, high: T) RocLi
         },
 
         Order.eq => {
-            const list = RocList.allocate(allocator, @alignOf(usize), 1, @sizeOf(T));
+            const list = RocList.allocate(@alignOf(usize), 1, @sizeOf(T));
             const buffer = @ptrCast([*]T, @alignCast(@alignOf(T), list.bytes orelse unreachable));
 
             buffer[0] = low;
@@ -768,7 +762,7 @@ fn listRangeHelp(allocator: *Allocator, comptime T: type, low: T, high: T) RocLi
 
         Order.lt => {
             const length: usize = @intCast(usize, high - low);
-            const list = RocList.allocate(allocator, @alignOf(usize), length, @sizeOf(T));
+            const list = RocList.allocate(@alignOf(usize), length, @sizeOf(T));
 
             const buffer = @ptrCast([*]T, @alignCast(@alignOf(T), list.bytes orelse unreachable));
 
@@ -822,7 +816,7 @@ fn quicksort(source_ptr: [*]u8, transform: Opaque, wrapper: CompareFn, element_w
 }
 
 pub fn listSortWith(input: RocList, transform: Opaque, wrapper: CompareFn, alignment: usize, element_width: usize) callconv(.C) RocList {
-    var list = input.makeUnique(std.heap.c_allocator, alignment, element_width);
+    var list = input.makeUnique(alignment, element_width);
 
     if (list.bytes) |source_ptr| {
         const low = 0;
@@ -889,7 +883,7 @@ pub fn listJoin(list_of_lists: RocList, alignment: usize, element_width: usize) 
         total_length += slice_of_lists[i].len();
     }
 
-    const output = RocList.allocate(std.heap.c_allocator, alignment, total_length, element_width);
+    const output = RocList.allocate(alignment, total_length, element_width);
 
     if (output.bytes) |target| {
         var elements_copied: usize = 0;
@@ -918,7 +912,6 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: usize, element_wi
         if (list_a.bytes) |source| {
             const new_source = utils.unsafeReallocate(
                 source,
-                std.heap.c_allocator,
                 alignment,
                 list_a.len(),
                 total_length,
@@ -934,7 +927,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: usize, element_wi
     }
     const total_length: usize = list_a.len() + list_b.len();
 
-    const output = RocList.allocate(std.heap.c_allocator, alignment, total_length, element_width);
+    const output = RocList.allocate(alignment, total_length, element_width);
 
     if (output.bytes) |target| {
         if (list_a.bytes) |source| {

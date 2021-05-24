@@ -3,8 +3,29 @@
 use crate::assert_evals_to;
 use crate::assert_llvm_evals_to;
 use crate::helpers::with_larger_debug_stack;
+use core::ffi::c_void;
 use indoc::indoc;
 use roc_std::{RocList, RocStr};
+
+#[no_mangle]
+pub unsafe fn roc_alloc(_alignment: u32, size: usize) -> *mut c_void {
+    libc::malloc(size)
+}
+
+#[no_mangle]
+pub unsafe fn roc_realloc(
+    _alignment: u32,
+    c_ptr: *mut c_void,
+    _old_size: usize,
+    new_size: usize,
+) -> *mut c_void {
+    libc::realloc(c_ptr, new_size)
+}
+
+#[no_mangle]
+pub unsafe fn roc_dealloc(_alignment: u32, c_ptr: *mut c_void) {
+    libc::free(c_ptr)
+}
 
 #[test]
 fn roc_list_construction() {

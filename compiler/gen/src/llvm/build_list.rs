@@ -183,7 +183,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
 
     if elem_layout.safe_to_memcpy() {
         // Copy the bytes from the original array into the new
-        // one we just malloc'd.
+        // one we just allocated
         //
         // TODO how do we decide when to do the small memcpy vs the normal one?
         builder

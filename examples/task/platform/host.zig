@@ -28,6 +28,22 @@ extern fn roc__mainForHost_1_Fx_caller(*const u8, *const u8, [*]u8, [*]u8) void;
 extern fn roc__mainForHost_1_Fx_size() i64;
 extern fn roc__mainForHost_1_Fx_result_size() i64;
 
+extern fn malloc(size: usize) callconv(.C) ?*c_void;
+extern fn realloc(c_ptr: [*]align(@alignOf(u128)) u8, size: usize) callconv(.C) ?*c_void;
+extern fn free(c_ptr: [*]align(@alignOf(u128)) u8) callconv(.C) void;
+
+export fn roc_alloc(alignment: u32, size: usize) callconv(.C) ?*c_void {
+    return malloc(size);
+}
+
+export fn roc_realloc(alignment: u32, c_ptr: *c_void, old_size: usize, new_size: usize) callconv(.C) ?*c_void {
+    return realloc(@alignCast(16, @ptrCast([*]u8, c_ptr)), new_size);
+}
+
+export fn roc_dealloc(alignment: u32, c_ptr: *c_void) callconv(.C) void {
+    free(@alignCast(16, @ptrCast([*]u8, c_ptr)));
+}
+
 const Unit = extern struct {};
 
 pub export fn main() u8 {
@@ -120,7 +136,7 @@ pub export fn roc_fx_readAllUtf8(rocPath: RocStr) callconv(.C) ReadResult {
     };
 
     var str_ptr = @ptrCast([*]u8, content);
-    var roc_str3 = RocStr.init(testing.allocator, str_ptr, content.len);
+    var roc_str3 = RocStr.init(str_ptr, content.len);
 
     return .{ .bytes = roc_str3, .errno = 0 };
 }

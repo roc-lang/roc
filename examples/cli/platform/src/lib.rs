@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use core::ffi::c_void;
 use roc_std::{alloca, RocCallResult, RocResult, RocStr};
 use std::alloc::Layout;
 
@@ -24,6 +25,30 @@ extern "C" {
 
     #[link_name = "roc__mainForHost_1_Fx_result_size"]
     fn size_Fx_result() -> i64;
+
+    fn malloc(size: usize) -> *mut c_void;
+    fn realloc(c_ptr: *mut c_void, size: usize) -> *mut c_void;
+    fn free(c_ptr: *mut c_void);
+}
+
+#[no_mangle]
+pub unsafe fn roc_alloc(_alignment: u32, size: usize) -> *mut c_void {
+    return malloc(size);
+}
+
+#[no_mangle]
+pub unsafe fn roc_realloc(
+    _alignment: u32,
+    c_ptr: *mut c_void,
+    _old_size: usize,
+    new_size: usize,
+) -> *mut c_void {
+    return realloc(c_ptr, new_size);
+}
+
+#[no_mangle]
+pub unsafe fn roc_dealloc(_alignment: u32, c_ptr: *mut c_void) {
+    return free(c_ptr);
 }
 
 #[no_mangle]
