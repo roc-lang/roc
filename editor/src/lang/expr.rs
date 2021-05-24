@@ -780,6 +780,10 @@ pub fn to_expr2<'a>(
             (expr, output)
         }
 
+        Defs(loc_defs, loc_ret) => {
+            todo!("{:?} {:?}", loc_defs, loc_ret)
+        }
+
         PrecedenceConflict { .. } => {
             //            use roc_problem::can::RuntimeError::*;
             //
