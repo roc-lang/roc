@@ -179,6 +179,9 @@ fn find_names_needed(
 
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
         }
+        Structure(FunctionOrTagUnion(_, _, ext_var)) => {
+            find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
+        }
         Structure(RecursiveTagUnion(rec_var, tags, ext_var)) => {
             let mut sorted_tags: Vec<_> = tags.iter().collect();
             sorted_tags.sort();
@@ -487,6 +490,28 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
             }
         }
 
+        FunctionOrTagUnion(tag_name, _, ext_var) => {
+            let interns = &env.interns;
+            let home = env.home;
+
+            buf.push_str("[ ");
+
+            buf.push_str(&tag_name.as_string(&interns, home));
+
+            buf.push_str(" ]");
+
+            let mut sorted_fields = vec![(tag_name, vec![])];
+            let ext_content = chase_ext_tag_union(subs, ext_var, &mut sorted_fields);
+            if let Err((_, content)) = ext_content {
+                // This is an open tag union, so print the variable
+                // right after the ']'
+                //
+                // e.g. the "*" at the end of `{ x: I64 }*`
+                // or the "r" at the end of `{ x: I64 }r`
+                write_content(env, content, subs, buf, parens)
+            }
+        }
+
         RecursiveTagUnion(rec_var, tags, ext_var) => {
             let interns = &env.interns;
             let home = env.home;
@@ -567,6 +592,11 @@ pub fn chase_ext_tag_union(
             for (label, vars) in tags {
                 fields.push((label.clone(), vars.to_vec()));
             }
+
+            chase_ext_tag_union(subs, ext_var, fields)
+        }
+        Content::Structure(FunctionOrTagUnion(tag_name, _, ext_var)) => {
+            fields.push((tag_name, vec![]));
 
             chase_ext_tag_union(subs, ext_var, fields)
         }

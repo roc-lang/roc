@@ -860,6 +860,58 @@ pub fn constrain_expr(
 
             exists(vars, And(arg_cons))
         }
+        ZeroArgumentTag {
+            variant_var,
+            ext_var,
+            name,
+            arguments,
+            closure_name,
+        } => {
+            let mut vars = Vec::with_capacity(arguments.len());
+            let mut types = Vec::with_capacity(arguments.len());
+            let mut arg_cons = Vec::with_capacity(arguments.len());
+
+            for (var, loc_expr) in arguments {
+                let arg_con = constrain_expr(
+                    env,
+                    loc_expr.region,
+                    &loc_expr.value,
+                    Expected::NoExpectation(Type::Variable(*var)),
+                );
+
+                arg_cons.push(arg_con);
+                vars.push(*var);
+                types.push(Type::Variable(*var));
+            }
+
+            let union_con = Eq(
+                Type::FunctionOrTagUnion(
+                    name.clone(),
+                    *closure_name,
+                    Box::new(Type::Variable(*ext_var)),
+                ),
+                expected.clone(),
+                Category::TagApply {
+                    tag_name: name.clone(),
+                    args_count: arguments.len(),
+                },
+                region,
+            );
+            let ast_con = Eq(
+                Type::Variable(*variant_var),
+                expected,
+                Category::Storage(std::file!(), std::line!()),
+                region,
+            );
+
+            vars.push(*variant_var);
+            vars.push(*ext_var);
+            arg_cons.push(union_con);
+            arg_cons.push(ast_con);
+
+            exists(vars, And(arg_cons))
+        }
+
         RunLowLevel { args, ret_var, op } => {
             // This is a modified version of what we do for function calls.
 
