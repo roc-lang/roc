@@ -595,6 +595,11 @@ pub fn chase_ext_tag_union(
 
             chase_ext_tag_union(subs, ext_var, fields)
         }
+        Content::Structure(FunctionOrTagUnion(tag_name, _, ext_var)) => {
+            fields.push((tag_name, vec![]));
+
+            chase_ext_tag_union(subs, ext_var, fields)
+        }
         Content::Alias(_, _, var) => chase_ext_tag_union(subs, var, fields),
 
         content => Err((var, content)),

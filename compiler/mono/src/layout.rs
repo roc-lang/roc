@@ -423,6 +423,12 @@ impl<'a, 'b> Env<'a, 'b> {
 
         self.seen.insert(var)
     }
+
+    fn remove_seen(&mut self, var: Variable) -> bool {
+        let var = self.subs.get_root_key_without_compacting(var);
+
+        self.seen.remove(&var)
+    }
 }
 
 impl<'a> Layout<'a> {
@@ -1247,6 +1253,8 @@ fn layout_from_flat_type<'a>(
             } else {
                 UnionLayout::Recursive(tag_layouts.into_bump_slice())
             };
+
+            env.remove_seen(rec_var);
 
             Ok(Layout::Union(union_layout))
         }

@@ -1051,13 +1051,14 @@ fn unify_flat_type(
         }
 
         (RecursiveTagUnion(recursion_var, tags1, ext1), FunctionOrTagUnion(tag_name, _, ext2)) => {
+            // this never happens in type-correct programs, but may happen if there is a type error
             debug_assert!(is_recursion_var(subs, *recursion_var));
-
-            let union1 = gather_tags(subs, tags1.clone(), *ext1);
 
             let mut tags2 = MutMap::default();
             tags2.insert(tag_name.clone(), vec![]);
-            let union2 = gather_tags(subs, tags2, *ext2);
+
+            let union1 = gather_tags(subs, tags1.clone(), *ext1);
+            let union2 = gather_tags(subs, tags2.clone(), *ext2);
 
             unify_tag_union(
                 subs,
@@ -1074,12 +1075,13 @@ fn unify_flat_type(
 
             let mut tags1 = MutMap::default();
             tags1.insert(tag_name.clone(), vec![]);
-            let union1 = gather_tags(subs, tags1, *ext1);
 
+            let union1 = gather_tags(subs, tags1.clone(), *ext1);
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
 
             unify_tag_union_not_recursive_recursive(subs, pool, ctx, union1, union2, *recursion_var)
         }
+
         (other1, other2) => mismatch!(
             "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
             other1,
