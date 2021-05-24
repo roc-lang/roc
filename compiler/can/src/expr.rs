@@ -400,6 +400,17 @@ pub fn canonicalize_expr<'a>(
                     name,
                     arguments: args,
                 },
+                ZeroArgumentTag {
+                    variant_var,
+                    ext_var,
+                    name,
+                    ..
+                } => Tag {
+                    variant_var,
+                    ext_var,
+                    name,
+                    arguments: args,
+                },
                 _ => {
                     // This could be something like ((if True then fn1 else fn2) arg1 arg2).
                     Call(
@@ -652,13 +663,15 @@ pub fn canonicalize_expr<'a>(
             let ext_var = var_store.fresh();
             let tag_ident = env.ident_ids.get_or_insert(&(*tag).into());
             let symbol = Symbol::new(env.home, tag_ident);
+            let lambda_set_symbol = env.gen_unique_symbol();
 
             (
-                Tag {
+                ZeroArgumentTag {
                     name: TagName::Private(symbol),
                     arguments: vec![],
                     variant_var,
                     ext_var,
+                    closure_name: lambda_set_symbol,
                 },
                 Output::default(),
             )
