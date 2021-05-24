@@ -158,6 +158,14 @@ pub enum Expr {
         arguments: Vec<(Variable, Located<Expr>)>,
     },
 
+    ZeroArgumentTag {
+        closure_name: Symbol,
+        variant_var: Variable,
+        ext_var: Variable,
+        name: TagName,
+        arguments: Vec<(Variable, Located<Expr>)>,
+    },
+
     // Test
     Expect(Box<Located<Expr>>, Box<Located<Expr>>),
 
@@ -382,6 +390,17 @@ pub fn canonicalize_expr<'a>(
                     return (fn_expr, output);
                 }
                 Tag {
+                    variant_var,
+                    ext_var,
+                    name,
+                    ..
+                } => Tag {
+                    variant_var,
+                    ext_var,
+                    name,
+                    arguments: args,
+                },
+                ZeroArgumentTag {
                     variant_var,
                     ext_var,
                     name,
@@ -626,11 +645,14 @@ pub fn canonicalize_expr<'a>(
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
 
+            let symbol = env.gen_unique_symbol();
+
             (
-                Tag {
+                ZeroArgumentTag {
                     name: TagName::Global((*tag).into()),
                     arguments: vec![],
                     variant_var,
+                    closure_name: symbol,
                     ext_var,
                 },
                 Output::default(),
@@ -641,13 +663,15 @@ pub fn canonicalize_expr<'a>(
             let ext_var = var_store.fresh();
             let tag_ident = env.ident_ids.get_or_insert(&(*tag).into());
             let symbol = Symbol::new(env.home, tag_ident);
+            let lambda_set_symbol = env.gen_unique_symbol();
 
             (
-                Tag {
+                ZeroArgumentTag {
                     name: TagName::Private(symbol),
                     arguments: vec![],
                     variant_var,
                     ext_var,
+                    closure_name: lambda_set_symbol,
                 },
                 Output::default(),
             )
@@ -1420,6 +1444,23 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         } => {
             todo!(
                 "Inlining for Tag with variant_var {:?}, ext_var {:?}, name {:?}, arguments {:?}",
+                variant_var,
+                ext_var,
+                name,
+                arguments
+            );
+        }
+
+        ZeroArgumentTag {
+            closure_name,
+            variant_var,
+            ext_var,
+            name,
+            arguments,
+        } => {
+            todo!(
+                "Inlining for ZeroArgumentTag with closure_name {:?}, variant_var {:?}, ext_var {:?}, name {:?}, arguments {:?}",
+                closure_name,
                 variant_var,
                 ext_var,
                 name,

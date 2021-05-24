@@ -606,6 +606,7 @@ pub enum FlatType {
     Func(Vec<Variable>, Variable, Variable),
     Record(MutMap<Lowercase, RecordField<Variable>>, Variable),
     TagUnion(MutMap<TagName, Vec<Variable>>, Variable),
+    FunctionOrTagUnion(TagName, Symbol, Variable),
     RecursiveTagUnion(Variable, MutMap<TagName, Vec<Variable>>, Variable),
     Erroneous(Problem),
     EmptyRecord,
@@ -660,6 +661,10 @@ fn occurs(
                     }
                     TagUnion(tags, ext_var) => {
                         let it = once(&ext_var).chain(tags.values().flatten());
+                        short_circuit(subs, root_var, &new_seen, it)
+                    }
+                    FunctionOrTagUnion(_, _, ext_var) => {
+                        let it = once(&ext_var);
                         short_circuit(subs, root_var, &new_seen, it)
                     }
                     RecursiveTagUnion(_rec_var, tags, ext_var) => {
@@ -751,6 +756,13 @@ fn explicit_substitute(
                                 }
                             }
                             subs.set_content(in_var, Structure(TagUnion(tags, new_ext_var)));
+                        }
+                        FunctionOrTagUnion(tag_name, symbol, ext_var) => {
+                            let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
+                            subs.set_content(
+                                in_var,
+                                Structure(FunctionOrTagUnion(tag_name, symbol, new_ext_var)),
+                            );
                         }
                         RecursiveTagUnion(rec_var, mut tags, ext_var) => {
                             // NOTE rec_var is not substituted, verify that this is correct!
@@ -889,6 +901,10 @@ fn get_var_names(
                     }
 
                     taken_names
+                }
+
+                FlatType::FunctionOrTagUnion(_, _, ext_var) => {
+                    get_var_names(subs, ext_var, taken_names)
                 }
 
                 FlatType::RecursiveTagUnion(rec_var, tags, ext_var) => {
@@ -1142,6 +1158,32 @@ fn flat_type_to_err_type(
             }
         }
 
+        FunctionOrTagUnion(tag_name, _, ext_var) => {
+            let mut err_tags = SendMap::default();
+
+            err_tags.insert(tag_name, vec![]);
+
+            match var_to_err_type(subs, state, ext_var).unwrap_alias() {
+                ErrorType::TagUnion(sub_tags, sub_ext) => {
+                    ErrorType::TagUnion(sub_tags.union(err_tags), sub_ext)
+                }
+                ErrorType::RecursiveTagUnion(_, sub_tags, sub_ext) => {
+                    ErrorType::TagUnion(sub_tags.union(err_tags), sub_ext)
+                }
+
+                ErrorType::FlexVar(var) => {
+                    ErrorType::TagUnion(err_tags, TypeExt::FlexOpen(var))
+                }
+
+                ErrorType::RigidVar(var) => {
+                    ErrorType::TagUnion(err_tags, TypeExt::RigidOpen(var))
+                }
+
+                other =>
+                    panic!("Tried to convert a tag union extension to an error, but the tag union extension had the ErrorType of {:?}", other)
+            }
+        }
+
         RecursiveTagUnion(rec_var, tags, ext_var) => {
             let mut err_tags = SendMap::default();
 
@@ -1234,6 +1276,9 @@ fn restore_content(subs: &mut Subs, content: &Content) {
                     subs.restore(*var);
                 }
 
+                subs.restore(*ext_var);
+            }
+            FunctionOrTagUnion(_, _, ext_var) => {
                 subs.restore(*ext_var);
             }
 

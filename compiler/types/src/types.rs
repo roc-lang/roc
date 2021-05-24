@@ -141,6 +141,7 @@ pub enum Type {
     Function(Vec<Type>, Box<Type>, Box<Type>),
     Record(SendMap<Lowercase, RecordField<Type>>, Box<Type>),
     TagUnion(Vec<(TagName, Vec<Type>)>, Box<Type>),
+    FunctionOrTagUnion(TagName, Symbol, Box<Type>),
     Alias(Symbol, Vec<(Lowercase, Type)>, Box<Type>),
     HostExposedAlias {
         name: Symbol,
@@ -308,6 +309,26 @@ impl fmt::Debug for Type {
                     }
                 }
             }
+            Type::FunctionOrTagUnion(tag_name, _, ext) => {
+                write!(f, "[")?;
+                write!(f, "{:?}", tag_name)?;
+                write!(f, "]")?;
+
+                match *ext.clone() {
+                    Type::EmptyTagUnion => {
+                        // This is a closed variant. We're done!
+                        Ok(())
+                    }
+                    other => {
+                        // This is an open tag union, so print the variable
+                        // right after the ']'
+                        //
+                        // e.g. the "*" at the end of `[ Foo ]*`
+                        // or the "r" at the end of `[ DivByZero ]r`
+                        other.fmt(f)
+                    }
+                }
+            }
             Type::RecursiveTagUnion(rec, tags, ext) => {
                 write!(f, "[")?;
 
@@ -404,6 +425,9 @@ impl Type {
                 }
                 ext.substitute(substitutions);
             }
+            FunctionOrTagUnion(_, _, ext) => {
+                ext.substitute(substitutions);
+            }
             RecursiveTagUnion(_, tags, ext) => {
                 for (_, args) in tags {
                     for x in args {
@@ -456,6 +480,9 @@ impl Type {
                 closure.substitute_alias(rep_symbol, actual);
                 ret.substitute_alias(rep_symbol, actual);
             }
+            FunctionOrTagUnion(_, _, ext) => {
+                ext.substitute_alias(rep_symbol, actual);
+            }
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 for (_, args) in tags {
                     for x in args {
@@ -506,6 +533,7 @@ impl Type {
                     || closure.contains_symbol(rep_symbol)
                     || args.iter().any(|arg| arg.contains_symbol(rep_symbol))
             }
+            FunctionOrTagUnion(_, _, ext) => ext.contains_symbol(rep_symbol),
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 ext.contains_symbol(rep_symbol)
                     || tags
@@ -541,6 +569,7 @@ impl Type {
                     || closure.contains_variable(rep_variable)
                     || args.iter().any(|arg| arg.contains_variable(rep_variable))
             }
+            FunctionOrTagUnion(_, _, ext) => ext.contains_variable(rep_variable),
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 ext.contains_variable(rep_variable)
                     || tags
@@ -594,6 +623,9 @@ impl Type {
                 }
                 closure.instantiate_aliases(region, aliases, var_store, introduced);
                 ret.instantiate_aliases(region, aliases, var_store, introduced);
+            }
+            FunctionOrTagUnion(_, _, ext) => {
+                ext.instantiate_aliases(region, aliases, var_store, introduced);
             }
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 for (_, args) in tags {
@@ -734,6 +766,9 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
             symbols_help(&closure, accum);
             args.iter().for_each(|arg| symbols_help(arg, accum));
         }
+        FunctionOrTagUnion(_, _, ext) => {
+            symbols_help(&ext, accum);
+        }
         RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
             symbols_help(&ext, accum);
             tags.iter()
@@ -805,6 +840,9 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
                     variables_help(x, accum);
                 }
             }
+            variables_help(ext, accum);
+        }
+        FunctionOrTagUnion(_, _, ext) => {
             variables_help(ext, accum);
         }
         RecursiveTagUnion(rec, tags, ext) => {
@@ -898,6 +936,9 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
                     variables_help_detailed(x, accum);
                 }
             }
+            variables_help_detailed(ext, accum);
+        }
+        FunctionOrTagUnion(_, _, ext) => {
             variables_help_detailed(ext, accum);
         }
         RecursiveTagUnion(rec, tags, ext) => {
