@@ -735,6 +735,8 @@ pub struct Env<'a, 'i> {
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
     pub ptr_bytes: u32,
+    pub update_mode_counter: u64,
+    pub call_specialization_counter: u64,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -744,6 +746,26 @@ impl<'a, 'i> Env<'a, 'i> {
         self.home.register_debug_idents(&self.ident_ids);
 
         Symbol::new(self.home, ident_id)
+    }
+
+    pub fn next_update_mode_id(&mut self) -> UpdateModeId {
+        let id = UpdateModeId {
+            id: self.update_mode_counter,
+        };
+
+        self.update_mode_counter += 1;
+
+        id
+    }
+
+    pub fn next_call_specialization_id(&mut self) -> CallSpecId {
+        let id = CallSpecId {
+            id: self.call_specialization_counter,
+        };
+
+        self.call_specialization_counter += 1;
+
+        id
     }
 
     pub fn is_imported_symbol(&self, symbol: Symbol) -> bool {
@@ -1004,7 +1026,7 @@ impl<'a> Call<'a> {
                     .text("CallByPointer ")
                     .append(alloc.intersperse(it, " "))
             }
-            LowLevel { op: lowlevel } => {
+            LowLevel { op: lowlevel, .. } => {
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
 
                 alloc
@@ -1024,18 +1046,39 @@ impl<'a> Call<'a> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CallSpecId {
+    id: u64,
+}
+
+impl CallSpecId {
+    pub fn to_bytes(self) -> [u8; 8] {
+        self.id.to_ne_bytes()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UpdateModeId {
+    id: u64,
+}
+
+impl UpdateModeId {
+    pub fn to_bytes(self) -> [u8; 8] {
+        self.id.to_ne_bytes()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum CallType<'a> {
     ByName {
         name: Symbol,
-
         full_layout: Layout<'a>,
         ret_layout: Layout<'a>,
         arg_layouts: &'a [Layout<'a>],
+        specialization_id: CallSpecId,
     },
     ByPointer {
         name: Symbol,
-
         full_layout: Layout<'a>,
         ret_layout: Layout<'a>,
         arg_layouts: &'a [Layout<'a>],
@@ -1046,6 +1089,7 @@ pub enum CallType<'a> {
     },
     LowLevel {
         op: LowLevel,
+        update_mode: UpdateModeId,
     },
 }
 
@@ -2849,346 +2893,63 @@ pub fn with_hole<'a>(
             variant_var,
             name: tag_name,
             arguments: args,
-            ext_var,
+            ..
         } => {
-            use crate::layout::UnionVariant::*;
+            let arena = env.arena;
+
+            debug_assert!(!matches!(
+                env.subs.get_without_compacting(variant_var).content,
+                Content::Structure(FlatType::Func(_, _, _))
+            ));
+            convert_tag_union(
+                env,
+                variant_var,
+                assigned,
+                hole,
+                tag_name,
+                procs,
+                layout_cache,
+                args,
+                arena,
+            )
+        }
+
+        ZeroArgumentTag {
+            variant_var,
+            name: tag_name,
+            arguments: args,
+            ext_var,
+            ..
+        } => {
             let arena = env.arena;
 
             let desc = env.subs.get_without_compacting(variant_var);
 
             if let Content::Structure(FlatType::Func(arg_vars, _, ret_var)) = desc.content {
-                let mut loc_pattern_args = vec![];
-                let mut loc_expr_args = vec![];
-
-                let proc_symbol = env.unique_symbol();
-
-                for arg_var in arg_vars {
-                    let arg_symbol = env.unique_symbol();
-
-                    let loc_pattern =
-                        Located::at_zero(roc_can::pattern::Pattern::Identifier(arg_symbol));
-
-                    let loc_expr = Located::at_zero(roc_can::expr::Expr::Var(arg_symbol));
-
-                    loc_pattern_args.push((arg_var, loc_pattern));
-                    loc_expr_args.push((arg_var, loc_expr));
-                }
-
-                let loc_body = Located::at_zero(roc_can::expr::Expr::Tag {
-                    variant_var: ret_var,
-                    name: tag_name,
-                    arguments: loc_expr_args,
-                    ext_var,
-                });
-
-                let inserted = procs.insert_anonymous(
+                tag_union_to_function(
                     env,
-                    proc_symbol,
-                    variant_var,
-                    loc_pattern_args,
-                    loc_body,
-                    CapturedSymbols::None,
+                    arg_vars,
                     ret_var,
+                    tag_name,
+                    ext_var,
+                    procs,
+                    variant_var,
                     layout_cache,
-                );
-
-                match inserted {
-                    Ok(layout) => {
-                        return Stmt::Let(
-                            assigned,
-                            call_by_pointer(env, procs, proc_symbol, layout),
-                            layout,
-                            hole,
-                        );
-                    }
-                    Err(runtime_error) => {
-                        return Stmt::RuntimeError(env.arena.alloc(format!(
-                            "RuntimeError {} line {} {:?}",
-                            file!(),
-                            line!(),
-                            runtime_error,
-                        )));
-                    }
-                }
-            }
-
-            let res_variant = crate::layout::union_sorted_tags(env.arena, variant_var, env.subs);
-
-            let variant = match res_variant {
-                Ok(cached) => cached,
-                Err(LayoutProblem::UnresolvedTypeVar(_)) => {
-                    return Stmt::RuntimeError(env.arena.alloc(format!(
-                        "UnresolvedTypeVar {} line {}",
-                        file!(),
-                        line!()
-                    )));
-                }
-                Err(LayoutProblem::Erroneous) => {
-                    return Stmt::RuntimeError(env.arena.alloc(format!(
-                        "Erroneous {} line {}",
-                        file!(),
-                        line!()
-                    )));
-                }
-            };
-
-            match variant {
-                Never => unreachable!(
-                    "The `[]` type has no constructors, source var {:?}",
-                    variant_var
-                ),
-                Unit | UnitWithArguments => {
-                    Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole)
-                }
-                BoolUnion { ttrue, .. } => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Bool(tag_name == ttrue)),
-                    Layout::Builtin(Builtin::Int1),
                     hole,
-                ),
-                ByteUnion(tag_names) => {
-                    let tag_id = tag_names
-                        .iter()
-                        .position(|key| key == &tag_name)
-                        .expect("tag must be in its own type");
-
-                    Stmt::Let(
-                        assigned,
-                        Expr::Literal(Literal::Byte(tag_id as u8)),
-                        Layout::Builtin(Builtin::Int8),
-                        hole,
-                    )
-                }
-
-                Unwrapped(field_layouts) => {
-                    let field_symbols_temp = sorted_field_symbols(env, procs, layout_cache, args);
-
-                    let mut field_symbols = Vec::with_capacity_in(field_layouts.len(), env.arena);
-                    field_symbols.extend(field_symbols_temp.iter().map(|r| r.1));
-                    let field_symbols = field_symbols.into_bump_slice();
-
-                    // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
-                    let layout = layout_cache
-                        .from_var(env.arena, variant_var, env.subs)
-                        .unwrap_or_else(|err| {
-                            panic!("TODO turn fn_var into a RuntimeError {:?}", err)
-                        });
-
-                    // even though this was originally a Tag, we treat it as a Struct from now on
-                    let stmt = Stmt::Let(assigned, Expr::Struct(field_symbols), layout, hole);
-
-                    let iter = field_symbols_temp.into_iter().map(|(_, _, data)| data);
-                    assign_to_symbols(env, procs, layout_cache, iter, stmt)
-                }
-                Wrapped(variant) => {
-                    let union_size = variant.number_of_tags() as u8;
-                    let (tag_id, _) = variant.tag_name_to_id(&tag_name);
-
-                    let field_symbols_temp = sorted_field_symbols(env, procs, layout_cache, args);
-
-                    let field_symbols;
-                    let opt_tag_id_symbol;
-
-                    use WrappedVariant::*;
-                    let (tag, layout) = match variant {
-                        Recursive { sorted_tag_layouts } => {
-                            debug_assert!(sorted_tag_layouts.len() > 1);
-                            let tag_id_symbol = env.unique_symbol();
-                            opt_tag_id_symbol = Some(tag_id_symbol);
-
-                            field_symbols = {
-                                let mut temp =
-                                    Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
-                                temp.push(tag_id_symbol);
-
-                                temp.extend(field_symbols_temp.iter().map(|r| r.1));
-
-                                temp.into_bump_slice()
-                            };
-
-                            let mut layouts: Vec<&'a [Layout<'a>]> =
-                                Vec::with_capacity_in(sorted_tag_layouts.len(), env.arena);
-
-                            for (_, arg_layouts) in sorted_tag_layouts.into_iter() {
-                                layouts.push(arg_layouts);
-                            }
-
-                            debug_assert!(layouts.len() > 1);
-                            let layout =
-                                Layout::Union(UnionLayout::Recursive(layouts.into_bump_slice()));
-
-                            let tag = Expr::Tag {
-                                tag_layout: layout,
-                                tag_name,
-                                tag_id: tag_id as u8,
-                                union_size,
-                                arguments: field_symbols,
-                            };
-
-                            (tag, layout)
-                        }
-                        NonNullableUnwrapped {
-                            fields,
-                            tag_name: wrapped_tag_name,
-                        } => {
-                            debug_assert_eq!(tag_name, wrapped_tag_name);
-
-                            opt_tag_id_symbol = None;
-
-                            field_symbols = {
-                                let mut temp =
-                                    Vec::with_capacity_in(field_symbols_temp.len(), arena);
-
-                                temp.extend(field_symbols_temp.iter().map(|r| r.1));
-
-                                temp.into_bump_slice()
-                            };
-
-                            let layout = Layout::Union(UnionLayout::NonNullableUnwrapped(fields));
-
-                            let tag = Expr::Tag {
-                                tag_layout: layout,
-                                tag_name,
-                                tag_id: tag_id as u8,
-                                union_size,
-                                arguments: field_symbols,
-                            };
-
-                            (tag, layout)
-                        }
-                        NonRecursive { sorted_tag_layouts } => {
-                            let tag_id_symbol = env.unique_symbol();
-                            opt_tag_id_symbol = Some(tag_id_symbol);
-
-                            field_symbols = {
-                                let mut temp =
-                                    Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
-                                temp.push(tag_id_symbol);
-
-                                temp.extend(field_symbols_temp.iter().map(|r| r.1));
-
-                                temp.into_bump_slice()
-                            };
-
-                            let mut layouts: Vec<&'a [Layout<'a>]> =
-                                Vec::with_capacity_in(sorted_tag_layouts.len(), env.arena);
-
-                            for (_, arg_layouts) in sorted_tag_layouts.into_iter() {
-                                layouts.push(arg_layouts);
-                            }
-
-                            let layout =
-                                Layout::Union(UnionLayout::NonRecursive(layouts.into_bump_slice()));
-
-                            let tag = Expr::Tag {
-                                tag_layout: layout,
-                                tag_name,
-                                tag_id: tag_id as u8,
-                                union_size,
-                                arguments: field_symbols,
-                            };
-
-                            (tag, layout)
-                        }
-                        NullableWrapped {
-                            nullable_id,
-                            nullable_name: _,
-                            sorted_tag_layouts,
-                        } => {
-                            let tag_id_symbol = env.unique_symbol();
-                            opt_tag_id_symbol = Some(tag_id_symbol);
-
-                            field_symbols = {
-                                let mut temp =
-                                    Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
-                                temp.push(tag_id_symbol);
-
-                                temp.extend(field_symbols_temp.iter().map(|r| r.1));
-
-                                temp.into_bump_slice()
-                            };
-
-                            let mut layouts: Vec<&'a [Layout<'a>]> =
-                                Vec::with_capacity_in(sorted_tag_layouts.len(), env.arena);
-
-                            for (_, arg_layouts) in sorted_tag_layouts.into_iter() {
-                                layouts.push(arg_layouts);
-                            }
-
-                            let layout = Layout::Union(UnionLayout::NullableWrapped {
-                                nullable_id,
-                                other_tags: layouts.into_bump_slice(),
-                            });
-
-                            let tag = Expr::Tag {
-                                tag_layout: layout,
-                                tag_name,
-                                tag_id: tag_id as u8,
-                                union_size,
-                                arguments: field_symbols,
-                            };
-
-                            (tag, layout)
-                        }
-                        NullableUnwrapped {
-                            nullable_id,
-                            nullable_name: _,
-                            other_name: _,
-                            other_fields,
-                        } => {
-                            // FIXME drop tag
-                            let tag_id_symbol = env.unique_symbol();
-                            opt_tag_id_symbol = Some(tag_id_symbol);
-
-                            field_symbols = {
-                                let mut temp =
-                                    Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
-                                // FIXME drop tag
-                                temp.push(tag_id_symbol);
-
-                                temp.extend(field_symbols_temp.iter().map(|r| r.1));
-
-                                temp.into_bump_slice()
-                            };
-
-                            let layout = Layout::Union(UnionLayout::NullableUnwrapped {
-                                nullable_id,
-                                other_fields,
-                            });
-
-                            let tag = Expr::Tag {
-                                tag_layout: layout,
-                                tag_name,
-                                tag_id: tag_id as u8,
-                                union_size,
-                                arguments: field_symbols,
-                            };
-
-                            (tag, layout)
-                        }
-                    };
-
-                    let mut stmt = Stmt::Let(assigned, tag, layout, hole);
-                    let iter = field_symbols_temp
-                        .into_iter()
-                        .map(|x| x.2 .0)
-                        .rev()
-                        .zip(field_symbols.iter().rev());
-
-                    stmt = assign_to_symbols(env, procs, layout_cache, iter, stmt);
-
-                    if let Some(tag_id_symbol) = opt_tag_id_symbol {
-                        // define the tag id
-                        stmt = Stmt::Let(
-                            tag_id_symbol,
-                            Expr::Literal(Literal::Int(tag_id as i128)),
-                            Layout::Builtin(TAG_SIZE),
-                            arena.alloc(stmt),
-                        );
-                    }
-
-                    stmt
-                }
+                )
+            } else {
+                convert_tag_union(
+                    env,
+                    variant_var,
+                    assigned,
+                    hole,
+                    tag_name,
+                    procs,
+                    layout_cache,
+                    args,
+                    arena,
+                )
             }
         }
 
@@ -4168,7 +3929,10 @@ pub fn with_hole<'a>(
                 return_on_layout_error!(env, layout_cache.from_var(env.arena, ret_var, env.subs));
 
             let call = self::Call {
-                call_type: CallType::LowLevel { op },
+                call_type: CallType::LowLevel {
+                    op,
+                    update_mode: env.next_update_mode_id(),
+                },
                 arguments: arg_symbols,
             };
 
@@ -4186,6 +3950,347 @@ pub fn with_hole<'a>(
 
             Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e)))
         }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn convert_tag_union<'a>(
+    env: &mut Env<'a, '_>,
+    variant_var: Variable,
+    assigned: Symbol,
+    hole: &'a Stmt<'a>,
+    tag_name: TagName,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
+    arena: &'a Bump,
+) -> Stmt<'a> {
+    use crate::layout::UnionVariant::*;
+    let res_variant = crate::layout::union_sorted_tags(env.arena, variant_var, env.subs);
+    let variant = match res_variant {
+        Ok(cached) => cached,
+        Err(LayoutProblem::UnresolvedTypeVar(_)) => {
+            return Stmt::RuntimeError(env.arena.alloc(format!(
+                "UnresolvedTypeVar {} line {}",
+                file!(),
+                line!()
+            )))
+        }
+        Err(LayoutProblem::Erroneous) => {
+            return Stmt::RuntimeError(env.arena.alloc(format!(
+                "Erroneous {} line {}",
+                file!(),
+                line!()
+            )));
+        }
+    };
+    match variant {
+        Never => unreachable!(
+            "The `[]` type has no constructors, source var {:?}",
+            variant_var
+        ),
+        Unit | UnitWithArguments => {
+            Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole)
+        }
+        BoolUnion { ttrue, .. } => Stmt::Let(
+            assigned,
+            Expr::Literal(Literal::Bool(tag_name == ttrue)),
+            Layout::Builtin(Builtin::Int1),
+            hole,
+        ),
+        ByteUnion(tag_names) => {
+            let tag_id = tag_names
+                .iter()
+                .position(|key| key == &tag_name)
+                .expect("tag must be in its own type");
+
+            Stmt::Let(
+                assigned,
+                Expr::Literal(Literal::Byte(tag_id as u8)),
+                Layout::Builtin(Builtin::Int8),
+                hole,
+            )
+        }
+
+        Unwrapped(field_layouts) => {
+            let field_symbols_temp = sorted_field_symbols(env, procs, layout_cache, args);
+
+            let mut field_symbols = Vec::with_capacity_in(field_layouts.len(), env.arena);
+            field_symbols.extend(field_symbols_temp.iter().map(|r| r.1));
+            let field_symbols = field_symbols.into_bump_slice();
+
+            // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
+            let layout = layout_cache
+                .from_var(env.arena, variant_var, env.subs)
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+            // even though this was originally a Tag, we treat it as a Struct from now on
+            let stmt = Stmt::Let(assigned, Expr::Struct(field_symbols), layout, hole);
+
+            let iter = field_symbols_temp.into_iter().map(|(_, _, data)| data);
+            assign_to_symbols(env, procs, layout_cache, iter, stmt)
+        }
+        Wrapped(variant) => {
+            let union_size = variant.number_of_tags() as u8;
+            let (tag_id, _) = variant.tag_name_to_id(&tag_name);
+
+            let field_symbols_temp = sorted_field_symbols(env, procs, layout_cache, args);
+
+            let field_symbols;
+            let opt_tag_id_symbol;
+
+            use WrappedVariant::*;
+            let (tag, layout) = match variant {
+                Recursive { sorted_tag_layouts } => {
+                    debug_assert!(sorted_tag_layouts.len() > 1);
+                    let tag_id_symbol = env.unique_symbol();
+                    opt_tag_id_symbol = Some(tag_id_symbol);
+
+                    field_symbols = {
+                        let mut temp = Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
+                        temp.push(tag_id_symbol);
+
+                        temp.extend(field_symbols_temp.iter().map(|r| r.1));
+
+                        temp.into_bump_slice()
+                    };
+
+                    let mut layouts: Vec<&'a [Layout<'a>]> =
+                        Vec::with_capacity_in(sorted_tag_layouts.len(), env.arena);
+
+                    for (_, arg_layouts) in sorted_tag_layouts.into_iter() {
+                        layouts.push(arg_layouts);
+                    }
+
+                    debug_assert!(layouts.len() > 1);
+                    let layout = Layout::Union(UnionLayout::Recursive(layouts.into_bump_slice()));
+
+                    let tag = Expr::Tag {
+                        tag_layout: layout,
+                        tag_name,
+                        tag_id: tag_id as u8,
+                        union_size,
+                        arguments: field_symbols,
+                    };
+
+                    (tag, layout)
+                }
+                NonNullableUnwrapped {
+                    fields,
+                    tag_name: wrapped_tag_name,
+                } => {
+                    debug_assert_eq!(tag_name, wrapped_tag_name);
+
+                    opt_tag_id_symbol = None;
+
+                    field_symbols = {
+                        let mut temp = Vec::with_capacity_in(field_symbols_temp.len(), arena);
+
+                        temp.extend(field_symbols_temp.iter().map(|r| r.1));
+
+                        temp.into_bump_slice()
+                    };
+
+                    let layout = Layout::Union(UnionLayout::NonNullableUnwrapped(fields));
+
+                    let tag = Expr::Tag {
+                        tag_layout: layout,
+                        tag_name,
+                        tag_id: tag_id as u8,
+                        union_size,
+                        arguments: field_symbols,
+                    };
+
+                    (tag, layout)
+                }
+                NonRecursive { sorted_tag_layouts } => {
+                    let tag_id_symbol = env.unique_symbol();
+                    opt_tag_id_symbol = Some(tag_id_symbol);
+
+                    field_symbols = {
+                        let mut temp = Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
+                        temp.push(tag_id_symbol);
+
+                        temp.extend(field_symbols_temp.iter().map(|r| r.1));
+
+                        temp.into_bump_slice()
+                    };
+
+                    let mut layouts: Vec<&'a [Layout<'a>]> =
+                        Vec::with_capacity_in(sorted_tag_layouts.len(), env.arena);
+
+                    for (_, arg_layouts) in sorted_tag_layouts.into_iter() {
+                        layouts.push(arg_layouts);
+                    }
+
+                    let layout =
+                        Layout::Union(UnionLayout::NonRecursive(layouts.into_bump_slice()));
+
+                    let tag = Expr::Tag {
+                        tag_layout: layout,
+                        tag_name,
+                        tag_id: tag_id as u8,
+                        union_size,
+                        arguments: field_symbols,
+                    };
+
+                    (tag, layout)
+                }
+                NullableWrapped {
+                    nullable_id,
+                    nullable_name: _,
+                    sorted_tag_layouts,
+                } => {
+                    let tag_id_symbol = env.unique_symbol();
+                    opt_tag_id_symbol = Some(tag_id_symbol);
+
+                    field_symbols = {
+                        let mut temp = Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
+                        temp.push(tag_id_symbol);
+
+                        temp.extend(field_symbols_temp.iter().map(|r| r.1));
+
+                        temp.into_bump_slice()
+                    };
+
+                    let mut layouts: Vec<&'a [Layout<'a>]> =
+                        Vec::with_capacity_in(sorted_tag_layouts.len(), env.arena);
+
+                    for (_, arg_layouts) in sorted_tag_layouts.into_iter() {
+                        layouts.push(arg_layouts);
+                    }
+
+                    let layout = Layout::Union(UnionLayout::NullableWrapped {
+                        nullable_id,
+                        other_tags: layouts.into_bump_slice(),
+                    });
+
+                    let tag = Expr::Tag {
+                        tag_layout: layout,
+                        tag_name,
+                        tag_id: tag_id as u8,
+                        union_size,
+                        arguments: field_symbols,
+                    };
+
+                    (tag, layout)
+                }
+                NullableUnwrapped {
+                    nullable_id,
+                    nullable_name: _,
+                    other_name: _,
+                    other_fields,
+                } => {
+                    // FIXME drop tag
+                    let tag_id_symbol = env.unique_symbol();
+                    opt_tag_id_symbol = Some(tag_id_symbol);
+
+                    field_symbols = {
+                        let mut temp = Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
+                        // FIXME drop tag
+                        temp.push(tag_id_symbol);
+
+                        temp.extend(field_symbols_temp.iter().map(|r| r.1));
+
+                        temp.into_bump_slice()
+                    };
+
+                    let layout = Layout::Union(UnionLayout::NullableUnwrapped {
+                        nullable_id,
+                        other_fields,
+                    });
+
+                    let tag = Expr::Tag {
+                        tag_layout: layout,
+                        tag_name,
+                        tag_id: tag_id as u8,
+                        union_size,
+                        arguments: field_symbols,
+                    };
+
+                    (tag, layout)
+                }
+            };
+
+            let mut stmt = Stmt::Let(assigned, tag, layout, hole);
+            let iter = field_symbols_temp
+                .into_iter()
+                .map(|x| x.2 .0)
+                .rev()
+                .zip(field_symbols.iter().rev());
+
+            stmt = assign_to_symbols(env, procs, layout_cache, iter, stmt);
+
+            if let Some(tag_id_symbol) = opt_tag_id_symbol {
+                // define the tag id
+                stmt = Stmt::Let(
+                    tag_id_symbol,
+                    Expr::Literal(Literal::Int(tag_id as i128)),
+                    Layout::Builtin(TAG_SIZE),
+                    arena.alloc(stmt),
+                );
+            }
+
+            stmt
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn tag_union_to_function<'a>(
+    env: &mut Env<'a, '_>,
+    arg_vars: std::vec::Vec<Variable>,
+    ret_var: Variable,
+    tag_name: TagName,
+    ext_var: Variable,
+    procs: &mut Procs<'a>,
+    variant_var: Variable,
+    layout_cache: &mut LayoutCache<'a>,
+    assigned: Symbol,
+    hole: &'a Stmt<'a>,
+) -> Stmt<'a> {
+    let mut loc_pattern_args = vec![];
+    let mut loc_expr_args = vec![];
+    let proc_symbol = env.unique_symbol();
+    for arg_var in arg_vars {
+        let arg_symbol = env.unique_symbol();
+
+        let loc_pattern = Located::at_zero(roc_can::pattern::Pattern::Identifier(arg_symbol));
+
+        let loc_expr = Located::at_zero(roc_can::expr::Expr::Var(arg_symbol));
+
+        loc_pattern_args.push((arg_var, loc_pattern));
+        loc_expr_args.push((arg_var, loc_expr));
+    }
+    let loc_body = Located::at_zero(roc_can::expr::Expr::Tag {
+        variant_var: ret_var,
+        name: tag_name,
+        arguments: loc_expr_args,
+        ext_var,
+    });
+    let inserted = procs.insert_anonymous(
+        env,
+        proc_symbol,
+        variant_var,
+        loc_pattern_args,
+        loc_body,
+        CapturedSymbols::None,
+        ret_var,
+        layout_cache,
+    );
+    match inserted {
+        Ok(layout) => Stmt::Let(
+            assigned,
+            call_by_pointer(env, procs, proc_symbol, layout),
+            layout,
+            hole,
+        ),
+        Err(runtime_error) => Stmt::RuntimeError(env.arena.alloc(format!(
+            "RuntimeError {} line {} {:?}",
+            file!(),
+            line!(),
+            runtime_error,
+        ))),
     }
 }
 
@@ -4316,8 +4421,10 @@ pub fn from_can<'a>(
             let bool_layout = Layout::Builtin(Builtin::Int1);
             let cond_symbol = env.unique_symbol();
 
+            let op = LowLevel::ExpectTrue;
             let call_type = CallType::LowLevel {
-                op: LowLevel::ExpectTrue,
+                op,
+                update_mode: env.next_update_mode_id(),
             };
             let arguments = env.arena.alloc([cond_symbol]);
             let call = self::Call {
@@ -5054,11 +5161,13 @@ fn substitute_in_call<'a>(
             arg_layouts,
             ret_layout,
             full_layout,
+            specialization_id,
         } => substitute(subs, *name).map(|new| CallType::ByName {
             name: new,
             arg_layouts,
             ret_layout: *ret_layout,
             full_layout: *full_layout,
+            specialization_id: *specialization_id,
         }),
         CallType::ByPointer {
             name,
@@ -5840,6 +5949,7 @@ fn call_by_pointer<'a>(
                         full_layout: layout,
                         ret_layout: *ret_layout,
                         arg_layouts,
+                        specialization_id: env.next_call_specialization_id(),
                     };
                     let call = Call {
                         call_type,
@@ -6098,6 +6208,7 @@ fn call_by_name<'a>(
                         ret_layout: *ret_layout,
                         full_layout,
                         arg_layouts,
+                        specialization_id: env.next_call_specialization_id(),
                     },
                     arguments: field_symbols,
                 };
@@ -6142,6 +6253,7 @@ fn call_by_name<'a>(
                                 ret_layout: *ret_layout,
                                 full_layout,
                                 arg_layouts,
+                                specialization_id: env.next_call_specialization_id(),
                             },
                             arguments: field_symbols,
                         };
@@ -6248,6 +6360,7 @@ fn call_by_name<'a>(
                                             ret_layout: *ret_layout,
                                             full_layout,
                                             arg_layouts,
+                                            specialization_id: env.next_call_specialization_id(),
                                         },
                                         arguments: field_symbols,
                                     }
@@ -6311,6 +6424,7 @@ fn call_specialized_proc<'a>(
                         ret_layout: function_layout.result,
                         full_layout: function_layout.full,
                         arg_layouts: function_layout.arguments,
+                        specialization_id: env.next_call_specialization_id(),
                     },
                     arguments: field_symbols,
                 };
@@ -6332,6 +6446,7 @@ fn call_specialized_proc<'a>(
                         ret_layout: function_layout.result,
                         full_layout: function_layout.full,
                         arg_layouts: function_layout.arguments,
+                        specialization_id: env.next_call_specialization_id(),
                     },
                     arguments: field_symbols,
                 };
@@ -6351,6 +6466,7 @@ fn call_specialized_proc<'a>(
                 ret_layout: function_layout.result,
                 full_layout: function_layout.full,
                 arg_layouts: function_layout.arguments,
+                specialization_id: env.next_call_specialization_id(),
             },
             arguments: field_symbols,
         };
