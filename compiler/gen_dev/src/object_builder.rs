@@ -13,7 +13,9 @@ use roc_mono::ir::Proc;
 use roc_mono::layout::Layout;
 use target_lexicon::{Architecture as TargetArch, BinaryFormat as TargetBF, Triple};
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+// This is used by some code below which is currently commented out.
+// See that code for more details!
+// const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// build_module is the high level builder/delegator.
 /// It takes the request to build a module and output the object file for the module.
