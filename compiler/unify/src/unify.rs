@@ -982,14 +982,6 @@ fn unify_flat_type(
                 problems
             }
         }
-        (TagUnion(tags, ext), Func(args, closure, ret)) if tags.len() == 1 => {
-            // unify_tag_union_and_func(tags, args, subs, pool, ctx, ext, ret, closure, true)
-            panic!()
-        }
-        (Func(args, closure, ret), TagUnion(tags, ext)) if tags.len() == 1 => {
-            // unify_tag_union_and_func(tags, args, subs, pool, ctx, ext, ret, closure, false)
-            panic!()
-        }
         (FunctionOrTagUnion(tag_name, _, ext), Func(args, closure, ret)) => {
             unify_function_or_tag_union_and_func(
                 tag_name, args, subs, pool, ctx, ext, ret, closure, true,
@@ -1047,7 +1039,7 @@ fn unify_flat_type(
 
             let mut tags2 = MutMap::default();
             tags2.insert(tag_name.clone(), vec![]);
-            let union2 = gather_tags(subs, tags2.clone(), *ext2);
+            let union2 = gather_tags(subs, tags2, *ext2);
 
             unify_tag_union(
                 subs,
@@ -1064,7 +1056,7 @@ fn unify_flat_type(
 
             let mut tags1 = MutMap::default();
             tags1.insert(tag_name.clone(), vec![]);
-            let union1 = gather_tags(subs, tags1.clone(), *ext1);
+            let union1 = gather_tags(subs, tags1, *ext1);
 
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
 
@@ -1252,57 +1244,6 @@ fn is_recursion_var(subs: &Subs, var: Variable) -> bool {
     )
 }
 
-#[allow(clippy::too_many_arguments, clippy::ptr_arg)]
-fn unify_tag_union_and_func(
-    tags: &MutMap<TagName, Vec<Variable>>,
-    args: &Vec<Variable>,
-    subs: &mut Subs,
-    pool: &mut Pool,
-    ctx: &Context,
-    ext: &Variable,
-    ret: &Variable,
-    closure: &Variable,
-    left: bool,
-) -> Outcome {
-    use FlatType::*;
-
-    let (tag_name, payload) = tags.iter().next().unwrap();
-
-    if payload.is_empty() {
-        let mut new_tags = MutMap::with_capacity_and_hasher(1, default_hasher());
-
-        new_tags.insert(tag_name.clone(), args.to_owned());
-
-        let content = Structure(TagUnion(new_tags, *ext));
-
-        let new_tag_union_var = fresh(subs, pool, ctx, content);
-
-        let problems = if left {
-            unify_pool(subs, pool, new_tag_union_var, *ret)
-        } else {
-            unify_pool(subs, pool, *ret, new_tag_union_var)
-        };
-
-        if problems.is_empty() {
-            let desc = if left {
-                subs.get(ctx.second)
-            } else {
-                subs.get(ctx.first)
-            };
-
-            subs.union(ctx.first, ctx.second, desc);
-        }
-
-        problems
-    } else {
-        mismatch!(
-            "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
-            TagUnion(tags.clone(), *ext),
-            Func(args.to_owned(), *closure, *ret)
-        )
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn unify_function_or_tag_union_and_func(
     tag_name: &TagName,
@@ -1312,7 +1253,7 @@ fn unify_function_or_tag_union_and_func(
     ctx: &Context,
     ext: &Variable,
     ret: &Variable,
-    closure: &Variable,
+    _closure: &Variable,
     left: bool,
 ) -> Outcome {
     use FlatType::*;
