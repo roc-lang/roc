@@ -104,6 +104,10 @@ fn hash_solved_type_help<H: Hasher>(
             hash_solved_type_help(ext, flex_vars, state);
         }
 
+        FunctionOrTagUnion(_, _, ext) => {
+            hash_solved_type_help(ext, flex_vars, state);
+        }
+
         RecursiveTagUnion(rec, tags, ext) => {
             var_id_hash_help(*rec, flex_vars, state);
             for (name, arguments) in tags {
@@ -172,6 +176,7 @@ pub enum SolvedType {
     },
     EmptyRecord,
     TagUnion(Vec<(TagName, Vec<SolvedType>)>, Box<SolvedType>),
+    FunctionOrTagUnion(TagName, Symbol, Box<SolvedType>),
     RecursiveTagUnion(VarId, Vec<(TagName, Vec<SolvedType>)>, Box<SolvedType>),
     EmptyTagUnion,
     /// A type from an Invalid module
@@ -262,6 +267,10 @@ impl SolvedType {
                 }
 
                 SolvedType::TagUnion(solved_tags, Box::new(solved_ext))
+            }
+            FunctionOrTagUnion(tag_name, symbol, box_ext) => {
+                let solved_ext = Self::from_type(solved_subs, box_ext);
+                SolvedType::FunctionOrTagUnion(tag_name.clone(), *symbol, Box::new(solved_ext))
             }
             RecursiveTagUnion(rec_var, tags, box_ext) => {
                 let solved_ext = Self::from_type(solved_subs, box_ext);
@@ -423,6 +432,11 @@ impl SolvedType {
 
                 SolvedType::TagUnion(new_tags, Box::new(ext))
             }
+            FunctionOrTagUnion(tag_name, symbol, ext_var) => {
+                let ext = Self::from_var_help(subs, recursion_vars, ext_var);
+
+                SolvedType::FunctionOrTagUnion(tag_name, symbol, Box::new(ext))
+            }
             RecursiveTagUnion(rec_var, tags, ext_var) => {
                 recursion_vars.insert(subs, rec_var);
 
@@ -562,6 +576,11 @@ pub fn to_type(
 
             Type::TagUnion(new_tags, Box::new(to_type(ext, free_vars, var_store)))
         }
+        FunctionOrTagUnion(tag_name, symbol, ext) => Type::FunctionOrTagUnion(
+            tag_name.clone(),
+            *symbol,
+            Box::new(to_type(ext, free_vars, var_store)),
+        ),
         RecursiveTagUnion(rec_var_id, tags, ext) => {
             let mut new_tags = Vec::with_capacity(tags.len());
 

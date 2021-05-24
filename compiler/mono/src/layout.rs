@@ -357,6 +357,12 @@ impl<'a, 'b> Env<'a, 'b> {
 
         self.seen.insert(var)
     }
+
+    fn remove_seen(&mut self, var: Variable) -> bool {
+        let var = self.subs.get_root_key_without_compacting(var);
+
+        self.seen.remove(&var)
+    }
 }
 
 impl<'a> Layout<'a> {
@@ -1090,6 +1096,14 @@ fn layout_from_flat_type<'a>(
 
             Ok(layout_from_tag_union(arena, tags, subs))
         }
+        FunctionOrTagUnion(tag_name, _, ext_var) => {
+            debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
+
+            let mut tags = MutMap::default();
+            tags.insert(tag_name, vec![]);
+
+            Ok(layout_from_tag_union(arena, tags, subs))
+        }
         RecursiveTagUnion(rec_var, tags, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
@@ -1174,6 +1188,8 @@ fn layout_from_flat_type<'a>(
             } else {
                 UnionLayout::Recursive(tag_layouts.into_bump_slice())
             };
+
+            env.remove_seen(rec_var);
 
             Ok(Layout::Union(union_layout))
         }
