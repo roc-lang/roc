@@ -148,6 +148,17 @@ fn list_append() {
 }
 
 #[test]
+fn list_drop() {
+    assert_evals_to!(
+        "List.drop [1,2,3] 2",
+        RocList::from_slice(&[3]),
+        RocList<i64>
+    );
+    assert_evals_to!("List.drop [] 1", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!("List.drop [1,2] 5", RocList::from_slice(&[]), RocList<i64>);
+}
+
+#[test]
 fn list_append_to_empty_list() {
     assert_evals_to!("List.append [] 3", RocList::from_slice(&[3]), RocList<i64>);
 }

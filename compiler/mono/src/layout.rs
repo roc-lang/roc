@@ -1915,3 +1915,21 @@ impl<'a> LayoutIds<'a> {
         LayoutId(answer)
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ListLayout<'a> {
+    EmptyList,
+    List(&'a Layout<'a>),
+}
+
+impl<'a> std::convert::TryFrom<&Layout<'a>> for ListLayout<'a> {
+    type Error = ();
+
+    fn try_from(value: &Layout<'a>) -> Result<Self, Self::Error> {
+        match value {
+            Layout::Builtin(Builtin::EmptyList) => Ok(ListLayout::EmptyList),
+            Layout::Builtin(Builtin::List(_, element)) => Ok(ListLayout::List(element)),
+            _ => Err(()),
+        }
+    }
+}

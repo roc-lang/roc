@@ -777,6 +777,8 @@ pub struct Env<'a, 'i> {
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
     pub ptr_bytes: u32,
+    pub update_mode_counter: u64,
+    pub call_specialization_counter: u64,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -786,6 +788,26 @@ impl<'a, 'i> Env<'a, 'i> {
         self.home.register_debug_idents(&self.ident_ids);
 
         Symbol::new(self.home, ident_id)
+    }
+
+    pub fn next_update_mode_id(&mut self) -> UpdateModeId {
+        let id = UpdateModeId {
+            id: self.update_mode_counter,
+        };
+
+        self.update_mode_counter += 1;
+
+        id
+    }
+
+    pub fn next_call_specialization_id(&mut self) -> CallSpecId {
+        let id = CallSpecId {
+            id: self.call_specialization_counter,
+        };
+
+        self.call_specialization_counter += 1;
+
+        id
     }
 
     pub fn is_imported_symbol(&self, symbol: Symbol) -> bool {
@@ -1038,7 +1060,7 @@ impl<'a> Call<'a> {
 
                 alloc.text("CallByName ").append(alloc.intersperse(it, " "))
             }
-            LowLevel { op: lowlevel } => {
+            LowLevel { op: lowlevel, .. } => {
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
 
                 alloc
@@ -1065,14 +1087,36 @@ impl<'a> Call<'a> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CallSpecId {
+    id: u64,
+}
+
+impl CallSpecId {
+    pub fn to_bytes(self) -> [u8; 8] {
+        self.id.to_ne_bytes()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UpdateModeId {
+    id: u64,
+}
+
+impl UpdateModeId {
+    pub fn to_bytes(self) -> [u8; 8] {
+        self.id.to_ne_bytes()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum CallType<'a> {
     ByName {
         name: Symbol,
-
         full_layout: Layout<'a>,
         ret_layout: Layout<'a>,
         arg_layouts: &'a [Layout<'a>],
+        specialization_id: CallSpecId,
     },
     Foreign {
         foreign_symbol: ForeignSymbol,
@@ -1080,6 +1124,7 @@ pub enum CallType<'a> {
     },
     LowLevel {
         op: LowLevel,
+        update_mode: UpdateModeId,
     },
     HigherOrderLowLevel {
         op: LowLevel,
@@ -4329,7 +4374,10 @@ pub fn with_hole<'a>(
                 }
                 _ => {
                     let call = self::Call {
-                        call_type: CallType::LowLevel { op },
+                        call_type: CallType::LowLevel {
+                            op,
+                            update_mode: env.next_update_mode_id(),
+                        },
                         arguments: arg_symbols,
                     };
 
@@ -4547,8 +4595,10 @@ pub fn from_can<'a>(
             let bool_layout = Layout::Builtin(Builtin::Int1);
             let cond_symbol = env.unique_symbol();
 
+            let op = LowLevel::ExpectTrue;
             let call_type = CallType::LowLevel {
-                op: LowLevel::ExpectTrue,
+                op,
+                update_mode: env.next_update_mode_id(),
             };
             let arguments = env.arena.alloc([cond_symbol]);
             let call = self::Call {
@@ -5300,11 +5350,13 @@ fn substitute_in_call<'a>(
             arg_layouts,
             ret_layout,
             full_layout,
+            specialization_id,
         } => substitute(subs, *name).map(|new| CallType::ByName {
             name: new,
             arg_layouts,
             ret_layout: *ret_layout,
             full_layout: *full_layout,
+            specialization_id: *specialization_id,
         }),
         CallType::Foreign { .. } => None,
         CallType::LowLevel { .. } => None,
@@ -5774,6 +5826,7 @@ fn force_thunk<'a>(
             ret_layout: layout,
             full_layout,
             arg_layouts: &[],
+            specialization_id: env.next_call_specialization_id(),
         },
         arguments: &[],
     };
@@ -6248,6 +6301,7 @@ fn call_by_name_help<'a>(
                 ret_layout: *ret_layout,
                 full_layout: function_layout,
                 arg_layouts: argument_layouts,
+                specialization_id: env.next_call_specialization_id(),
             },
             arguments: field_symbols,
         };
@@ -6280,6 +6334,7 @@ fn call_by_name_help<'a>(
                     ret_layout: *ret_layout,
                     full_layout: function_layout,
                     arg_layouts: argument_layouts,
+                    specialization_id: env.next_call_specialization_id(),
                 },
                 arguments: field_symbols,
             };
@@ -6332,6 +6387,7 @@ fn call_by_name_help<'a>(
                         ret_layout: *ret_layout,
                         full_layout: function_layout,
                         arg_layouts: argument_layouts,
+                        specialization_id: env.next_call_specialization_id(),
                     },
                     arguments: field_symbols,
                 };
@@ -6582,6 +6638,7 @@ fn call_specialized_proc<'a>(
                         ret_layout: function_layout.result,
                         full_layout: function_layout.full(),
                         arg_layouts: function_layout.arguments,
+                        specialization_id: env.next_call_specialization_id(),
                     },
                     arguments: field_symbols,
                 };
@@ -6601,6 +6658,7 @@ fn call_specialized_proc<'a>(
                         ret_layout: function_layout.result,
                         full_layout: function_layout.full(),
                         arg_layouts: function_layout.arguments,
+                        specialization_id: env.next_call_specialization_id(),
                     },
                     arguments: field_symbols,
                 };
@@ -6624,6 +6682,7 @@ fn call_specialized_proc<'a>(
                 ret_layout: function_layout.result,
                 full_layout: function_layout.full(),
                 arg_layouts: function_layout.arguments,
+                specialization_id: env.next_call_specialization_id(),
             },
             arguments: field_symbols,
         };
@@ -7907,6 +7966,7 @@ fn union_lambda_set_branch_help<'a>(
                 full_layout,
                 ret_layout: return_layout,
                 arg_layouts: argument_layouts,
+                specialization_id: env.next_call_specialization_id(),
             },
             arguments: argument_symbols,
         }),
@@ -8030,6 +8090,7 @@ fn enum_lambda_set_branch<'a>(
                 full_layout,
                 ret_layout: return_layout,
                 arg_layouts: argument_layouts,
+                specialization_id: env.next_call_specialization_id(),
             },
             arguments: argument_symbols,
         }),

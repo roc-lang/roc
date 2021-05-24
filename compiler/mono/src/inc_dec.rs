@@ -441,7 +441,7 @@ impl<'a> Context<'a> {
         use crate::ir::CallType::*;
 
         match &call_type {
-            LowLevel { op } => {
+            LowLevel { op, .. } => {
                 let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
                 let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);
 
@@ -932,7 +932,7 @@ impl<'a> Context<'a> {
 
                 use crate::ir::CallType;
                 let stmt = match &call.call_type {
-                    CallType::LowLevel { op } => {
+                    CallType::LowLevel { op, .. } => {
                         let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
                         self.add_dec_after_lowlevel(call.arguments, ps, cont, &invoke_live_vars)
                     }

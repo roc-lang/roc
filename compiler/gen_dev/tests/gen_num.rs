@@ -10,7 +10,7 @@ extern crate libc;
 #[macro_use]
 mod helpers;
 
-#[cfg(all(test, target_os = "linux", any(target_arch = "x86_64"/*, target_arch = "aarch64"*/)))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos"), any(target_arch = "x86_64"/*, target_arch = "aarch64"*/)))]
 mod gen_num {
     #[test]
     fn i64_values() {
@@ -128,9 +128,7 @@ mod gen_num {
                     af = 31
                     ag = 32
 
-                    # This can't be one line because it causes a stack overflow in the frontend :(
-                    tmp = a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p + q
-                    tmp + r + s + t + u + v + w + x + y + z + aa + ab + ac + ad + ae + af + ag
+                    a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p + q + r + s + t + u + v + w + x + y + z + aa + ab + ac + ad + ae + af + ag
                 "#
             ),
             528,

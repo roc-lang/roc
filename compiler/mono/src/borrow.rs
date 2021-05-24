@@ -382,7 +382,7 @@ impl<'a> BorrowInfState<'a> {
                 self.own_args_using_params(arguments, ps);
             }
 
-            LowLevel { op } => {
+            LowLevel { op, .. } => {
                 debug_assert!(!op.is_higher_order());
 
                 self.own_var(z);
@@ -747,6 +747,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         // TODO when we have lists with capacity (if ever)
         // List.append should own its first argument
         ListAppend => arena.alloc_slice_copy(&[owned, owned]),
+        ListDrop => arena.alloc_slice_copy(&[owned, irrelevant]),
 
         Eq | NotEq => arena.alloc_slice_copy(&[borrowed, borrowed]),
 

@@ -39,6 +39,7 @@ pub enum LowLevel {
     ListKeepOks,
     ListKeepErrs,
     ListSortWith,
+    ListDrop,
     DictSize,
     DictEmpty,
     DictInsert,
@@ -124,6 +125,7 @@ impl LowLevel {
             | ListGetUnsafe
             | ListSet
             | ListSetInPlace
+            | ListDrop
             | ListSingle
             | ListRepeat
             | ListReverse
