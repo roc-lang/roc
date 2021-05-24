@@ -105,6 +105,10 @@ impl Symbol {
             .into()
         }
     }
+
+    pub const fn to_ne_bytes(self) -> [u8; 8] {
+        self.0.to_ne_bytes()
+    }
 }
 
 /// Rather than displaying as this:
