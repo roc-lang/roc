@@ -4,7 +4,6 @@ use roc_build::program::FunctionIterator;
 use roc_can::builtins::builtin_defs_map;
 use roc_can::def::Def;
 use roc_collections::all::{MutMap, MutSet};
-use roc_gen::llvm::build::add_intrinsics;
 use roc_gen::llvm::externs::add_default_roc_externs;
 use roc_module::symbol::Symbol;
 use roc_types::subs::VarStore;
@@ -185,11 +184,8 @@ pub fn helper<'a>(
     let module = roc_gen::llvm::build::module_from_builtins(context, "app");
 
     // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
-    // platform to provide them. These must be added *before* adding intrinsics!
+    // platform to provide them.
     add_default_roc_externs(context, &module, &builder, ptr_bytes);
-
-    // Add LLVM intrinsics.
-    add_intrinsics(context, &module);
 
     // strip Zig debug stuff
     module.strip_debug_info();

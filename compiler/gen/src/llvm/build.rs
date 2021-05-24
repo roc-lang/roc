@@ -318,10 +318,13 @@ pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Modu
     let module = Module::parse_bitcode_from_buffer(&memory_buffer, ctx)
         .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {:?}", err));
 
+    // Add LLVM intrinsics.
+    add_intrinsics(ctx, &module);
+
     module
 }
 
-pub fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
+fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     // List of all supported LLVM intrinsics:
     //
     // https://releases.llvm.org/10.0.0/docs/LangRef.html#standard-c-library-intrinsics

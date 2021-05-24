@@ -3,9 +3,7 @@ use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::targets::{CodeModel, FileType, RelocMode};
 use inkwell::values::FunctionValue;
-use roc_gen::llvm::build::{
-    add_intrinsics, build_proc, build_proc_header, module_from_builtins, OptLevel, Scope,
-};
+use roc_gen::llvm::build::{build_proc, build_proc_header, module_from_builtins, OptLevel, Scope};
 use roc_load::file::MonomorphizedModule;
 use roc_mono::layout::LayoutIds;
 use std::path::{Path, PathBuf};
@@ -85,9 +83,6 @@ pub fn gen_from_mono_module(
     // Generate the binary
     let context = Context::create();
     let module = arena.alloc(module_from_builtins(&context, "app"));
-
-    // Add LLVM intrinsics.
-    add_intrinsics(&context, &module);
 
     // strip Zig debug stuff
     // module.strip_debug_info();

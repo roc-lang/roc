@@ -8,7 +8,7 @@ use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
 use roc_fmt::annotation::Formattable;
 use roc_fmt::annotation::{Newlines, Parens};
-use roc_gen::llvm::build::{add_intrinsics, build_proc, build_proc_header, OptLevel};
+use roc_gen::llvm::build::{build_proc, build_proc_header, OptLevel};
 use roc_gen::llvm::externs::add_default_roc_externs;
 use roc_load::file::LoadingProblem;
 use roc_parse::parser::SyntaxError;
@@ -133,11 +133,8 @@ pub fn gen_and_eval<'a>(
         let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(&context, ""));
 
         // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
-        // platform to provide them. These must be added *before* adding intrinsics!
+        // platform to provide them.
         add_default_roc_externs(&context, module, &builder, ptr_bytes);
-
-        // Add LLVM intrinsics.
-        add_intrinsics(&context, &module);
 
         // mark our zig-defined builtins as internal
         for function in FunctionIterator::from_module(module) {
