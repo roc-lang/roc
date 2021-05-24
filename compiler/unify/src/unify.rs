@@ -982,14 +982,32 @@ fn unify_flat_type(
                 problems
             }
         }
-        (FunctionOrTagUnion(tag_name, _, ext), Func(args, closure, ret)) => {
+        (FunctionOrTagUnion(tag_name, tag_symbol, ext), Func(args, closure, ret)) => {
             unify_function_or_tag_union_and_func(
-                tag_name, args, subs, pool, ctx, ext, ret, closure, true,
+                subs,
+                pool,
+                ctx,
+                tag_name,
+                *tag_symbol,
+                *ext,
+                args,
+                *ret,
+                *closure,
+                true,
             )
         }
-        (Func(args, closure, ret), FunctionOrTagUnion(tag_name, _, ext)) => {
+        (Func(args, closure, ret), FunctionOrTagUnion(tag_name, tag_symbol, ext)) => {
             unify_function_or_tag_union_and_func(
-                tag_name, args, subs, pool, ctx, ext, ret, closure, false,
+                subs,
+                pool,
+                ctx,
+                tag_name,
+                *tag_symbol,
+                *ext,
+                args,
+                *ret,
+                *closure,
+                false,
             )
         }
         (FunctionOrTagUnion(tag_name_1, _, ext_1), FunctionOrTagUnion(tag_name_2, _, ext_2)) => {
@@ -1246,30 +1264,31 @@ fn is_recursion_var(subs: &Subs, var: Variable) -> bool {
 
 #[allow(clippy::too_many_arguments)]
 fn unify_function_or_tag_union_and_func(
-    tag_name: &TagName,
-    args: &[Variable],
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    ext: &Variable,
-    ret: &Variable,
-    _closure: &Variable,
+    tag_name: &TagName,
+    _tag_symbol: Symbol,
+    tag_ext: Variable,
+    function_arguments: &[Variable],
+    function_return: Variable,
+    _function_lambda_set: Variable,
     left: bool,
 ) -> Outcome {
     use FlatType::*;
 
     let mut new_tags = MutMap::with_capacity_and_hasher(1, default_hasher());
 
-    new_tags.insert(tag_name.clone(), args.to_owned());
+    new_tags.insert(tag_name.clone(), function_arguments.to_owned());
 
-    let content = Structure(TagUnion(new_tags, *ext));
+    let content = Structure(TagUnion(new_tags, tag_ext));
 
     let new_tag_union_var = fresh(subs, pool, ctx, content);
 
     let problems = if left {
-        unify_pool(subs, pool, new_tag_union_var, *ret)
+        unify_pool(subs, pool, new_tag_union_var, function_return)
     } else {
-        unify_pool(subs, pool, *ret, new_tag_union_var)
+        unify_pool(subs, pool, function_return, new_tag_union_var)
     };
 
     if problems.is_empty() {
