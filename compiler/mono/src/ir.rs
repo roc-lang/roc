@@ -2862,7 +2862,7 @@ pub fn with_hole<'a>(
                 variant_var,
                 assigned,
                 hole,
-                tag_name.clone(),
+                tag_name,
                 procs,
                 layout_cache,
                 args,
@@ -2886,7 +2886,7 @@ pub fn with_hole<'a>(
                     env,
                     arg_vars,
                     ret_var,
-                    tag_name.clone(),
+                    tag_name,
                     ext_var,
                     procs,
                     variant_var,
@@ -2900,7 +2900,7 @@ pub fn with_hole<'a>(
                     variant_var,
                     assigned,
                     hole,
-                    tag_name.clone(),
+                    tag_name,
                     procs,
                     layout_cache,
                     args,
@@ -3906,6 +3906,7 @@ pub fn with_hole<'a>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn convert_tag_union<'a>(
     env: &mut Env<'a, '_>,
     variant_var: Variable,
@@ -4188,6 +4189,7 @@ fn convert_tag_union<'a>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn tag_union_to_function<'a>(
     env: &mut Env<'a, '_>,
     arg_vars: std::vec::Vec<Variable>,
