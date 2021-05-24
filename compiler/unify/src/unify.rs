@@ -237,6 +237,10 @@ fn unify_structure(
                 // unify the structure with this recursive tag union
                 unify_pool(subs, pool, ctx.first, *structure)
             }
+            FlatType::FunctionOrTagUnion(_, _, _) => {
+                // unify the structure with this unrecursive tag union
+                unify_pool(subs, pool, ctx.first, *structure)
+            }
             _ => todo!("rec structure {:?}", &flat_type),
         },
 
@@ -978,12 +982,106 @@ fn unify_flat_type(
                 problems
             }
         }
-        (TagUnion(tags, ext), Func(args, closure, ret)) if tags.len() == 1 => {
-            unify_tag_union_and_func(tags, args, subs, pool, ctx, ext, ret, closure, true)
+        (FunctionOrTagUnion(tag_name, tag_symbol, ext), Func(args, closure, ret)) => {
+            unify_function_or_tag_union_and_func(
+                subs,
+                pool,
+                ctx,
+                tag_name,
+                *tag_symbol,
+                *ext,
+                args,
+                *ret,
+                *closure,
+                true,
+            )
         }
-        (Func(args, closure, ret), TagUnion(tags, ext)) if tags.len() == 1 => {
-            unify_tag_union_and_func(tags, args, subs, pool, ctx, ext, ret, closure, false)
+        (Func(args, closure, ret), FunctionOrTagUnion(tag_name, tag_symbol, ext)) => {
+            unify_function_or_tag_union_and_func(
+                subs,
+                pool,
+                ctx,
+                tag_name,
+                *tag_symbol,
+                *ext,
+                args,
+                *ret,
+                *closure,
+                false,
+            )
         }
+        (FunctionOrTagUnion(tag_name_1, _, ext_1), FunctionOrTagUnion(tag_name_2, _, ext_2)) => {
+            if tag_name_1 == tag_name_2 {
+                let problems = unify_pool(subs, pool, *ext_1, *ext_2);
+                if problems.is_empty() {
+                    let desc = subs.get(ctx.second);
+                    merge(subs, ctx, desc.content)
+                } else {
+                    problems
+                }
+            } else {
+                let mut tags1 = MutMap::default();
+                tags1.insert(tag_name_1.clone(), vec![]);
+                let union1 = gather_tags(subs, tags1, *ext_1);
+
+                let mut tags2 = MutMap::default();
+                tags2.insert(tag_name_2.clone(), vec![]);
+                let union2 = gather_tags(subs, tags2, *ext_2);
+
+                unify_tag_union(subs, pool, ctx, union1, union2, (None, None))
+            }
+        }
+        (TagUnion(tags1, ext1), FunctionOrTagUnion(tag_name, _, ext2)) => {
+            let union1 = gather_tags(subs, tags1.clone(), *ext1);
+
+            let mut tags2 = MutMap::default();
+            tags2.insert(tag_name.clone(), vec![]);
+            let union2 = gather_tags(subs, tags2, *ext2);
+
+            unify_tag_union(subs, pool, ctx, union1, union2, (None, None))
+        }
+        (FunctionOrTagUnion(tag_name, _, ext1), TagUnion(tags2, ext2)) => {
+            let mut tags1 = MutMap::default();
+            tags1.insert(tag_name.clone(), vec![]);
+            let union1 = gather_tags(subs, tags1, *ext1);
+
+            let union2 = gather_tags(subs, tags2.clone(), *ext2);
+
+            unify_tag_union(subs, pool, ctx, union1, union2, (None, None))
+        }
+
+        (RecursiveTagUnion(recursion_var, tags1, ext1), FunctionOrTagUnion(tag_name, _, ext2)) => {
+            // this never happens in type-correct programs, but may happen if there is a type error
+            debug_assert!(is_recursion_var(subs, *recursion_var));
+
+            let mut tags2 = MutMap::default();
+            tags2.insert(tag_name.clone(), vec![]);
+
+            let union1 = gather_tags(subs, tags1.clone(), *ext1);
+            let union2 = gather_tags(subs, tags2, *ext2);
+
+            unify_tag_union(
+                subs,
+                pool,
+                ctx,
+                union1,
+                union2,
+                (Some(*recursion_var), None),
+            )
+        }
+
+        (FunctionOrTagUnion(tag_name, _, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
+            debug_assert!(is_recursion_var(subs, *recursion_var));
+
+            let mut tags1 = MutMap::default();
+            tags1.insert(tag_name.clone(), vec![]);
+
+            let union1 = gather_tags(subs, tags1, *ext1);
+            let union2 = gather_tags(subs, tags2.clone(), *ext2);
+
+            unify_tag_union_not_recursive_recursive(subs, pool, ctx, union1, union2, *recursion_var)
+        }
+
         (other1, other2) => mismatch!(
             "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
             other1,
@@ -1166,53 +1264,72 @@ fn is_recursion_var(subs: &Subs, var: Variable) -> bool {
     )
 }
 
-#[allow(clippy::too_many_arguments, clippy::ptr_arg)]
-fn unify_tag_union_and_func(
-    tags: &MutMap<TagName, Vec<Variable>>,
-    args: &Vec<Variable>,
+#[allow(clippy::too_many_arguments)]
+fn unify_function_or_tag_union_and_func(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    ext: &Variable,
-    ret: &Variable,
-    closure: &Variable,
+    tag_name: &TagName,
+    tag_symbol: Symbol,
+    tag_ext: Variable,
+    function_arguments: &[Variable],
+    function_return: Variable,
+    function_lambda_set: Variable,
     left: bool,
 ) -> Outcome {
     use FlatType::*;
 
-    let (tag_name, payload) = tags.iter().next().unwrap();
+    let mut new_tags = MutMap::with_capacity_and_hasher(1, default_hasher());
 
-    if payload.is_empty() {
-        let mut new_tags = MutMap::with_capacity_and_hasher(1, default_hasher());
+    new_tags.insert(tag_name.clone(), function_arguments.to_owned());
 
-        new_tags.insert(tag_name.clone(), args.to_owned());
+    let content = Structure(TagUnion(new_tags, tag_ext));
 
-        let content = Structure(TagUnion(new_tags, *ext));
+    let new_tag_union_var = fresh(subs, pool, ctx, content);
 
-        let new_tag_union_var = fresh(subs, pool, ctx, content);
+    let mut problems = if left {
+        unify_pool(subs, pool, new_tag_union_var, function_return)
+    } else {
+        unify_pool(subs, pool, function_return, new_tag_union_var)
+    };
 
-        let problems = if left {
-            unify_pool(subs, pool, new_tag_union_var, *ret)
+    {
+        let lambda_set_ext = subs.fresh_unnamed_flex_var();
+
+        let mut closure_tags = MutMap::with_capacity_and_hasher(1, default_hasher());
+        closure_tags.insert(TagName::Closure(tag_symbol), vec![]);
+
+        let lambda_set_content = Structure(TagUnion(closure_tags, lambda_set_ext));
+
+        let tag_lambda_set = register(
+            subs,
+            Descriptor {
+                content: lambda_set_content,
+                rank: ctx.first_desc.rank.min(ctx.second_desc.rank),
+                mark: Mark::NONE,
+                copy: OptVariable::NONE,
+            },
+            pool,
+        );
+
+        let closure_problems = if left {
+            unify_pool(subs, pool, tag_lambda_set, function_lambda_set)
         } else {
-            unify_pool(subs, pool, *ret, new_tag_union_var)
+            unify_pool(subs, pool, function_lambda_set, tag_lambda_set)
         };
 
-        if problems.is_empty() {
-            let desc = if left {
-                subs.get(ctx.second)
-            } else {
-                subs.get(ctx.first)
-            };
-
-            subs.union(ctx.first, ctx.second, desc);
-        }
-
-        problems
-    } else {
-        mismatch!(
-            "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
-            TagUnion(tags.clone(), *ext),
-            Func(args.to_owned(), *closure, *ret)
-        )
+        problems.extend(closure_problems);
     }
+
+    if problems.is_empty() {
+        let desc = if left {
+            subs.get(ctx.second)
+        } else {
+            subs.get(ctx.first)
+        };
+
+        subs.union(ctx.first, ctx.second, desc);
+    }
+
+    problems
 }

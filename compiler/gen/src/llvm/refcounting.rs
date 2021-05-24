@@ -369,12 +369,6 @@ fn modify_refcount_struct_help<'a, 'ctx, 'env>(
     layouts: &[Layout<'a>],
     fn_val: FunctionValue<'ctx>,
 ) {
-    debug_assert_eq!(
-        when_recursive,
-        &WhenRecursive::Unreachable,
-        "TODO pipe when_recursive through the dict key/value inc/dec"
-    );
-
     let builder = env.builder;
     let ctx = env.context;
 
@@ -699,26 +693,16 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
                 }
             }
         }
-        Closure(argument_layouts, closure_layout, return_layout) => {
-            if closure_layout.contains_refcounted() {
-                // Temporary hack to make this work for now. With defunctionalization, none of this
-                // will matter
-                let p2 = closure_layout.as_block_of_memory_layout();
-                let mut argument_layouts =
-                    Vec::from_iter_in(argument_layouts.iter().copied(), env.arena);
-                argument_layouts.push(p2);
-                let argument_layouts = argument_layouts.into_bump_slice();
 
-                let p1 = Layout::FunctionPointer(argument_layouts, return_layout);
-                let actual_layout = Layout::Struct(env.arena.alloc([p1, p2]));
-
+        Closure(_, lambda_set, _) => {
+            if lambda_set.contains_refcounted() {
                 let function = modify_refcount_layout_build_function(
                     env,
                     parent,
                     layout_ids,
                     mode,
                     when_recursive,
-                    &actual_layout,
+                    &lambda_set.runtime_representation(),
                 )?;
 
                 Some(function)

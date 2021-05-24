@@ -52,7 +52,13 @@ pub unsafe fn jit_to_ast<'a>(
         home,
     };
 
-    jit_to_ast_help(&env, lib, main_fn_name, layout, content)
+    match layout {
+        Layout::FunctionPointer(&[], result) => {
+            // this is a thunk
+            jit_to_ast_help(&env, lib, main_fn_name, result, content)
+        }
+        _ => jit_to_ast_help(&env, lib, main_fn_name, layout, content),
+    }
 }
 
 fn jit_to_ast_help<'a>(
@@ -139,6 +145,9 @@ fn jit_to_ast_help<'a>(
                     let (tag_name, payload_vars) = tags.iter().next().unwrap();
 
                     single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), payload_vars)
+                }
+                Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
+                    single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), &[])
                 }
                 other => {
                     unreachable!(
@@ -236,9 +245,8 @@ fn jit_to_ast_help<'a>(
             todo!("add support for rendering recursive tag unions in the REPL")
         }
 
-        Layout::FunctionPointer(_, _) | Layout::Closure(_, _, _) => {
-            Err(ToAstProblem::FunctionLayout)
-        }
+        Layout::Closure(_, _, _) => Err(ToAstProblem::FunctionLayout),
+        Layout::FunctionPointer(_, _) => Err(ToAstProblem::FunctionLayout),
         Layout::Pointer(_) => todo!("add support for rendering pointers in the REPL"),
     }
 }
@@ -312,6 +320,9 @@ fn ptr_to_ast<'a>(
 
                 let (tag_name, payload_vars) = tags.iter().next().unwrap();
                 single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), payload_vars)
+            }
+            Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
+                single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), &[])
             }
             Content::Structure(FlatType::EmptyRecord) => {
                 struct_to_ast(env, ptr, &[], &MutMap::default())

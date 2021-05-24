@@ -86,6 +86,10 @@ impl Symbol {
         })
     }
 
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
+
     pub fn fully_qualified(self, interns: &Interns, home: ModuleId) -> InlinableString {
         let module_id = self.module_id();
 
@@ -158,6 +162,12 @@ impl fmt::Display for Symbol {
         match ident_id {
             IdentId(value) => write!(f, "{:?}.{:?}", module_id, value),
         }
+    }
+}
+
+impl From<Symbol> for u64 {
+    fn from(symbol: Symbol) -> Self {
+        symbol.0
     }
 }
 
@@ -928,6 +938,7 @@ define_builtins! {
         29 LIST_WALK_UNTIL: "walkUntil"
         30 LIST_RANGE: "range"
         31 LIST_SORT_WITH: "sortWith"
+        32 LIST_DROP: "drop"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

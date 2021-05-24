@@ -92,14 +92,15 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
             );
 
             let ext = Box::new(SolvedType::Flex(TOP_LEVEL_CLOSURE_VAR));
-            // in the future, we will enable the line below
-            // let closure_var = Box::new(SolvedType::TagUnion(
-            //         vec![(TagName::Closure($symbol), vec![])],
-            //         ext,
-            //     ));
-            let closure_var = ext;
 
-            let typ = SolvedType::Func($arguments, closure_var, $result);
+            let typ = SolvedType::Func(
+                $arguments,
+                Box::new(SolvedType::TagUnion(
+                    vec![(TagName::Closure($symbol), vec![])],
+                    ext,
+                )),
+                $result,
+            );
 
             // TODO instead of using Region::zero for all of these,
             // instead use the Region where they were defined in their
@@ -845,6 +846,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_top_level_function_type!(
         Symbol::LIST_APPEND,
         vec![list_type(flex(TVAR1)), flex(TVAR1)],
+        Box::new(list_type(flex(TVAR1))),
+    );
+
+    // drop : List elem, Nat -> List elem
+    add_top_level_function_type!(
+        Symbol::LIST_DROP,
+        vec![list_type(flex(TVAR1)), nat_type()],
         Box::new(list_type(flex(TVAR1))),
     );
 

@@ -20,6 +20,7 @@ use roc_module::symbol::{
 };
 use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
+    TopLevelFunctionLayout,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, StrLiteral, TypeAnnotation};
@@ -51,7 +52,7 @@ const DEFAULT_APP_OUTPUT_PATH: &str = "app";
 const ROC_FILE_EXTENSION: &str = "roc";
 
 /// Roc-Config file name
-const PKG_CONFIG_FILE_NAME: &str = "Pkg-Config";
+const PKG_CONFIG_FILE_NAME: &str = "Package-Config";
 
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
@@ -704,7 +705,7 @@ pub struct MonomorphizedModule<'a> {
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
-    pub procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
+    pub procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
     pub header_sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
@@ -775,7 +776,7 @@ enum Msg<'a> {
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
         external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations<'a>>,
-        procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
+        procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         module_timing: ModuleTiming,
         subs: Subs,
@@ -817,7 +818,7 @@ struct State<'a> {
 
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
-    pub procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
+    pub procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
@@ -847,7 +848,8 @@ struct State<'a> {
     /// pending specializations in the same thread.
     pub needs_specialization: MutSet<ModuleId>,
 
-    pub all_pending_specializations: MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>,
+    pub all_pending_specializations:
+        MutMap<Symbol, MutMap<TopLevelFunctionLayout<'a>, PendingSpecialization<'a>>>,
 
     pub specializations_in_flight: u32,
 
@@ -1892,7 +1894,7 @@ fn update<'a>(
 
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
 
-            // if there is a platform, the Pkg-Config module provides host-exposed,
+            // if there is a platform, the Package-Config module provides host-exposed,
             // otherwise the App module exposes host-exposed
             let is_host_exposed = match state.platform_id {
                 None => module_id == state.root_id,
@@ -2046,6 +2048,19 @@ fn update<'a>(
                 && state.dependencies.solved_all()
                 && state.goal_phase == Phase::MakeSpecializations
             {
+                // display the mono IR of the module, for debug purposes
+                if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
+                    let procs_string = state
+                        .procedures
+                        .values()
+                        .map(|proc| proc.to_pretty(200))
+                        .collect::<Vec<_>>();
+
+                    let result = procs_string.join("\n");
+
+                    println!("{}", result);
+                }
+
                 if false {
                     let it = state.procedures.iter().map(|x| x.1);
 
@@ -2076,19 +2091,6 @@ fn update<'a>(
                     };
 
                     existing.extend(requested);
-                }
-
-                // display the mono IR of the module, for debug purposes
-                if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
-                    let procs_string = state
-                        .procedures
-                        .values()
-                        .map(|proc| proc.to_pretty(200))
-                        .collect::<Vec<_>>();
-
-                    let result = procs_string.join("\n");
-
-                    println!("{}", result);
                 }
 
                 msg_tx
@@ -2320,7 +2322,7 @@ fn load_pkg_config<'a>(
                     let chomped = &bytes[..delta];
                     let header_src = unsafe { std::str::from_utf8_unchecked(chomped) };
 
-                    // make a Pkg-Config module that ultimately exposes `main` to the host
+                    // make a Package-Config module that ultimately exposes `main` to the host
                     let pkg_config_module_msg = fabricate_pkg_config_module(
                         arena,
                         shorthand,
@@ -2559,7 +2561,7 @@ fn parse_header<'a>(
                         }) => {
                             match package_or_path {
                                 PackageOrPath::Path(StrLiteral::PlainLine(package)) => {
-                                    // check whether we can find a Pkg-Config.roc file
+                                    // check whether we can find a Package-Config.roc file
                                     let mut pkg_config_roc = pkg_config_dir;
                                     pkg_config_roc.push(package);
                                     pkg_config_roc.push(PKG_CONFIG_FILE_NAME);
@@ -3990,7 +3992,7 @@ fn add_def_to_module<'a>(
 
                         procs.insert_exposed(
                             symbol,
-                            layout,
+                            TopLevelFunctionLayout::from_layout(mono_env.arena, layout),
                             mono_env.arena,
                             mono_env.subs,
                             def.annotation,
@@ -4011,6 +4013,9 @@ fn add_def_to_module<'a>(
                     );
                 }
                 body => {
+                    // mark this symbols as a top-level thunk before any other work on the procs
+                    procs.module_thunks.insert(symbol);
+
                     // If this is an exposed symbol, we need to
                     // register it as such. Otherwise, since it
                     // never gets called by Roc code, it will never
@@ -4023,7 +4028,10 @@ fn add_def_to_module<'a>(
                             annotation,
                             mono_env.subs,
                         ) {
-                            Ok(l) => l,
+                            Ok(l) => {
+                                // remember, this is a 0-argument thunk
+                                Layout::FunctionPointer(&[], mono_env.arena.alloc(l))
+                            }
                             Err(LayoutProblem::Erroneous) => {
                                 let message = "top level function has erroneous type";
                                 procs.runtime_errors.insert(symbol, message);
@@ -4043,7 +4051,7 @@ fn add_def_to_module<'a>(
 
                         procs.insert_exposed(
                             symbol,
-                            layout,
+                            TopLevelFunctionLayout::from_layout(mono_env.arena, layout),
                             mono_env.arena,
                             mono_env.subs,
                             def.annotation,
@@ -4063,7 +4071,6 @@ fn add_def_to_module<'a>(
                     };
 
                     procs.partial_procs.insert(symbol, proc);
-                    procs.module_thunks.insert(symbol);
                 }
             };
         }

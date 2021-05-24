@@ -1243,6 +1243,10 @@ fn adjust_rank_content(
                     rank
                 }
 
+                FunctionOrTagUnion(_, _, ext_var) => {
+                    adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var)
+                }
+
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
 
@@ -1417,6 +1421,12 @@ fn instantiate_rigids_help(
                         instantiate_rigids_help(subs, max_rank, pools, ext_var),
                     )
                 }
+
+                FunctionOrTagUnion(tag_name, symbol, ext_var) => FunctionOrTagUnion(
+                    tag_name,
+                    symbol,
+                    instantiate_rigids_help(subs, max_rank, pools, ext_var),
+                ),
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
                     let mut new_tags = MutMap::default();
@@ -1603,6 +1613,12 @@ fn deep_copy_var_help(
 
                     TagUnion(new_tags, deep_copy_var_help(subs, max_rank, pools, ext_var))
                 }
+
+                FunctionOrTagUnion(tag_name, symbol, ext_var) => FunctionOrTagUnion(
+                    tag_name,
+                    symbol,
+                    deep_copy_var_help(subs, max_rank, pools, ext_var),
+                ),
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
                     let mut new_tags = MutMap::default();
