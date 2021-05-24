@@ -4212,6 +4212,7 @@ fn convert_tag_union<'a>(
             )));
         }
     };
+
     match variant {
         Never => unreachable!(
             "The `[]` type has no constructors, source var {:?}",
@@ -4253,7 +4254,13 @@ fn convert_tag_union<'a>(
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             // even though this was originally a Tag, we treat it as a Struct from now on
-            let stmt = Stmt::Let(assigned, Expr::Struct(field_symbols), layout, hole);
+            let stmt = if let [only_field] = field_symbols {
+                let mut hole = hole.clone();
+                substitute_in_exprs(env.arena, &mut hole, assigned, *only_field);
+                hole
+            } else {
+                Stmt::Let(assigned, Expr::Struct(field_symbols), layout, hole)
+            };
 
             let iter = field_symbols_temp.into_iter().map(|(_, _, data)| data);
             assign_to_symbols(env, procs, layout_cache, iter, stmt)
@@ -4480,6 +4487,7 @@ fn tag_union_to_function<'a>(
 ) -> Stmt<'a> {
     let mut loc_pattern_args = vec![];
     let mut loc_expr_args = vec![];
+
     for arg_var in argument_variables {
         let arg_symbol = env.unique_symbol();
 
@@ -4490,12 +4498,14 @@ fn tag_union_to_function<'a>(
         loc_pattern_args.push((arg_var, loc_pattern));
         loc_expr_args.push((arg_var, loc_expr));
     }
+
     let loc_body = Located::at_zero(roc_can::expr::Expr::Tag {
         variant_var: return_variable,
         name: tag_name,
         arguments: loc_expr_args,
         ext_var,
     });
+
     let inserted = procs.insert_anonymous(
         env,
         proc_symbol,
@@ -4506,8 +4516,9 @@ fn tag_union_to_function<'a>(
         return_variable,
         layout_cache,
     );
+
     match inserted {
-        Ok(layout) => {
+        Ok(_layout) => {
             // only need to construct closure data
             let full_layout =
                 return_on_layout_error!(env, layout_cache.from_var(env.arena, whole_var, env.subs));
