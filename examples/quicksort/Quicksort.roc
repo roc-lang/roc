@@ -55,4 +55,6 @@ swap = \i, j, list ->
                 |> List.set j atI
 
         _ ->
-            []
+            # to prevent a decrement on list
+            # turns out this is very important for optimizations
+            list
