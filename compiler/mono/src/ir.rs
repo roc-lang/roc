@@ -3048,7 +3048,7 @@ pub fn with_hole<'a>(
             name: tag_name,
             arguments: args,
             ext_var,
-            ..
+            closure_name,
         } => {
             let arena = env.arena;
 
@@ -3060,6 +3060,7 @@ pub fn with_hole<'a>(
                     arg_vars,
                     ret_var,
                     tag_name,
+                    closure_name,
                     ext_var,
                     procs,
                     variant_var,
@@ -4239,7 +4240,7 @@ fn convert_tag_union<'a>(
             )
         }
 
-        Unwrapped(field_layouts) => {
+        Unwrapped(_, field_layouts) => {
             let field_symbols_temp = sorted_field_symbols(env, procs, layout_cache, args);
 
             let mut field_symbols = Vec::with_capacity_in(field_layouts.len(), env.arena);
@@ -4466,20 +4467,20 @@ fn convert_tag_union<'a>(
 #[allow(clippy::too_many_arguments)]
 fn tag_union_to_function<'a>(
     env: &mut Env<'a, '_>,
-    arg_vars: std::vec::Vec<Variable>,
-    ret_var: Variable,
+    argument_variables: std::vec::Vec<Variable>,
+    return_variable: Variable,
     tag_name: TagName,
+    proc_symbol: Symbol,
     ext_var: Variable,
     procs: &mut Procs<'a>,
-    variant_var: Variable,
+    whole_var: Variable,
     layout_cache: &mut LayoutCache<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     let mut loc_pattern_args = vec![];
     let mut loc_expr_args = vec![];
-    let proc_symbol = env.unique_symbol();
-    for arg_var in arg_vars {
+    for arg_var in argument_variables {
         let arg_symbol = env.unique_symbol();
 
         let loc_pattern = Located::at_zero(roc_can::pattern::Pattern::Identifier(arg_symbol));
@@ -4490,7 +4491,7 @@ fn tag_union_to_function<'a>(
         loc_expr_args.push((arg_var, loc_expr));
     }
     let loc_body = Located::at_zero(roc_can::expr::Expr::Tag {
-        variant_var: ret_var,
+        variant_var: return_variable,
         name: tag_name,
         arguments: loc_expr_args,
         ext_var,
@@ -4498,20 +4499,27 @@ fn tag_union_to_function<'a>(
     let inserted = procs.insert_anonymous(
         env,
         proc_symbol,
-        variant_var,
+        whole_var,
         loc_pattern_args,
         loc_body,
         CapturedSymbols::None,
-        ret_var,
+        return_variable,
         layout_cache,
     );
     match inserted {
-        Ok(layout) => Stmt::Let(
-            assigned,
-            call_by_pointer(env, procs, proc_symbol, layout),
-            layout,
-            hole,
-        ),
+        Ok(layout) => {
+            // only need to construct closure data
+            let full_layout =
+                return_on_layout_error!(env, layout_cache.from_var(env.arena, whole_var, env.subs));
+
+            match full_layout {
+                Layout::Closure(_, lambda_set, _) => {
+                    construct_closure_data(env, lambda_set, proc_symbol, &[], assigned, hole)
+                }
+                _ => unreachable!(),
+            }
+        }
+
         Err(runtime_error) => Stmt::RuntimeError(env.arena.alloc(format!(
             "RuntimeError {} line {} {:?}",
             file!(),

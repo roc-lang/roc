@@ -977,7 +977,6 @@ fn newtype_wrapper() {
 }
 
 #[test]
-#[ignore]
 fn applied_tag_function() {
     assert_evals_to!(
         indoc!(
