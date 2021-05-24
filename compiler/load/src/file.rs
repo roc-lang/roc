@@ -2046,6 +2046,14 @@ fn update<'a>(
                 && state.dependencies.solved_all()
                 && state.goal_phase == Phase::MakeSpecializations
             {
+                if false {
+                    let it = state.procedures.iter().map(|x| x.1);
+
+                    if let Err(e) = roc_mono::alias_analysis::spec_program(it) {
+                        println!("Error in alias analysis: {:?}", e)
+                    }
+                }
+
                 Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 Proc::optimize_refcount_operations(
@@ -3799,6 +3807,8 @@ fn make_specializations<'a>(
         home,
         ident_ids: &mut ident_ids,
         ptr_bytes,
+        update_mode_counter: 0,
+        call_specialization_counter: 0,
     };
 
     // TODO: for now this final specialization pass is sequential,
@@ -3860,6 +3870,8 @@ fn build_pending_specializations<'a>(
         home,
         ident_ids: &mut ident_ids,
         ptr_bytes,
+        update_mode_counter: 0,
+        call_specialization_counter: 0,
     };
 
     // Add modules' decls to Procs
