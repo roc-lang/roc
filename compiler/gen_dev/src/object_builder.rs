@@ -42,6 +42,28 @@ pub fn build_module<'a>(
             )
         }
         Triple {
+            architecture: TargetArch::X86_64,
+            binary_format: TargetBF::Macho,
+            ..
+        } => {
+            let backend: Backend64Bit<
+                x86_64::X86_64GeneralReg,
+                x86_64::X86_64FloatReg,
+                x86_64::X86_64Assembler,
+                x86_64::X86_64SystemV,
+            > = Backend::new(env, target)?;
+            build_object(
+                env,
+                procedures,
+                backend,
+                Object::new(
+                    BinaryFormat::MachO,
+                    Architecture::X86_64,
+                    Endianness::Little,
+                ),
+            )
+        }
+        Triple {
             architecture: TargetArch::Aarch64(_),
             binary_format: TargetBF::Elf,
             ..
@@ -72,12 +94,16 @@ fn build_object<'a, B: Backend<'a>>(
     mut output: Object,
 ) -> Result<Object, String> {
     let data_section = output.section_id(StandardSection::Data);
-    let comment = output.add_section(vec![], b"comment".to_vec(), SectionKind::OtherString);
+
+    /*
+    // Commented out because we couldn't figure out how to get it to work on mac - see https://github.com/rtfeldman/roc/pull/1323
+    let comment = output.add_section(vec![], b".comment".to_vec(), SectionKind::OtherString);
     output.append_section_data(
         comment,
         format!("\0roc dev backend version {} \0", VERSION).as_bytes(),
         1,
     );
+    */
 
     // Setup layout_ids for procedure calls.
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
@@ -89,7 +115,7 @@ fn build_object<'a, B: Backend<'a>>(
 
         let section_id = output.add_section(
             output.segment_name(StandardSegment::Text).to_vec(),
-            format!(".text.{}", fn_name).as_bytes().to_vec(),
+            format!(".text.{:x}", sym.as_u64()).as_bytes().to_vec(),
             SectionKind::Text,
         );
 
@@ -182,7 +208,7 @@ fn build_object<'a, B: Backend<'a>>(
                             offset: offset + proc_offset,
                             size: 32,
                             kind: RelocationKind::PltRelative,
-                            encoding: RelocationEncoding::Generic,
+                            encoding: RelocationEncoding::X86Branch,
                             symbol: sym_id,
                             addend: -4,
                         }
