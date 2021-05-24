@@ -1,4 +1,4 @@
-#![warn(clippy::all, clippy::dbg_macro)]
+#![warn(clippy::dbg_macro)]
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant, clippy::upper_case_acronyms)]
 
@@ -214,7 +214,7 @@ where
                         }
                     }
 
-                    CallType::LowLevel { op: lowlevel } => {
+                    CallType::LowLevel { op: lowlevel, .. } => {
                         self.build_run_low_level(sym, lowlevel, arguments, layout)
                     }
                     x => Err(format!("the call type, {:?}, is not yet implemented", x)),
