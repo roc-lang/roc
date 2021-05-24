@@ -190,52 +190,6 @@ pub fn allocateWithRefcount(
     }
 }
 
-pub fn mallocWithRefcount(
-    alignment: usize,
-    data_bytes: usize,
-) [*]u8 {
-    comptime const result_in_place = false;
-
-    switch (alignment) {
-        16 => {
-            const length = 2 * @sizeOf(usize) + data_bytes;
-
-            var new_bytes: [*]align(16) u8 = @ptrCast([*]u8, @alignCast(16, std.c.malloc(length)));
-
-            var as_usize_array = @ptrCast([*]usize, new_bytes);
-            if (result_in_place) {
-                as_usize_array[0] = 0;
-                as_usize_array[1] = @intCast(usize, number_of_slots);
-            } else {
-                as_usize_array[0] = 0;
-                as_usize_array[1] = REFCOUNT_ONE;
-            }
-
-            var as_u8_array = @ptrCast([*]u8, new_bytes);
-            const first_slot = as_u8_array + 2 * @sizeOf(usize);
-
-            return first_slot;
-        },
-        else => {
-            const length = @sizeOf(usize) + data_bytes;
-
-            var new_bytes: [*]align(8) u8 = @ptrCast([*]u8, @alignCast(8, std.c.malloc(length)));
-
-            var as_usize_array = @ptrCast([*]isize, new_bytes);
-            if (result_in_place) {
-                as_usize_array[0] = @intCast(isize, number_of_slots);
-            } else {
-                as_usize_array[0] = REFCOUNT_ONE_ISIZE;
-            }
-
-            var as_u8_array = @ptrCast([*]u8, new_bytes);
-            const first_slot = as_u8_array + @sizeOf(usize);
-
-            return first_slot;
-        },
-    }
-}
-
 pub fn unsafeReallocate(
     source_ptr: [*]u8,
     alignment: usize,

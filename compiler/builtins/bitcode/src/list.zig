@@ -989,7 +989,7 @@ inline fn listSetClone(
 
     const data_bytes = length * element_width;
 
-    var new_bytes = utils.mallocWithRefcount(alignment, data_bytes);
+    var new_bytes = utils.allocateWithRefcount(alignment, data_bytes);
 
     @memcpy(new_bytes, old_bytes orelse undefined, data_bytes);
 
@@ -1002,7 +1002,8 @@ inline fn listSetClone(
     // copy in the new element
     @memcpy(element_at_index, element orelse undefined, element_width);
 
-    // TODO decref the input list!
+    // consume RC token of original
+    utils.decref(alignment, old_bytes, data_bytes);
 
     //return list;
     return new_bytes;
