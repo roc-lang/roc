@@ -51,7 +51,7 @@ const DEFAULT_APP_OUTPUT_PATH: &str = "app";
 const ROC_FILE_EXTENSION: &str = "roc";
 
 /// Roc-Config file name
-const PKG_CONFIG_FILE_NAME: &str = "Pkg-Config";
+const PKG_CONFIG_FILE_NAME: &str = "Package-Config";
 
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
@@ -1892,7 +1892,7 @@ fn update<'a>(
 
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
 
-            // if there is a platform, the Pkg-Config module provides host-exposed,
+            // if there is a platform, the Package-Config module provides host-exposed,
             // otherwise the App module exposes host-exposed
             let is_host_exposed = match state.platform_id {
                 None => module_id == state.root_id,
@@ -2320,7 +2320,7 @@ fn load_pkg_config<'a>(
                     let chomped = &bytes[..delta];
                     let header_src = unsafe { std::str::from_utf8_unchecked(chomped) };
 
-                    // make a Pkg-Config module that ultimately exposes `main` to the host
+                    // make a Package-Config module that ultimately exposes `main` to the host
                     let pkg_config_module_msg = fabricate_pkg_config_module(
                         arena,
                         shorthand,
@@ -2559,7 +2559,7 @@ fn parse_header<'a>(
                         }) => {
                             match package_or_path {
                                 PackageOrPath::Path(StrLiteral::PlainLine(package)) => {
-                                    // check whether we can find a Pkg-Config.roc file
+                                    // check whether we can find a Package-Config.roc file
                                     let mut pkg_config_roc = pkg_config_dir;
                                     pkg_config_roc.push(package);
                                     pkg_config_roc.push(PKG_CONFIG_FILE_NAME);

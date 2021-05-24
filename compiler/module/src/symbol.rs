@@ -86,6 +86,10 @@ impl Symbol {
         })
     }
 
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
+
     pub fn fully_qualified(self, interns: &Interns, home: ModuleId) -> InlinableString {
         let module_id = self.module_id();
 
