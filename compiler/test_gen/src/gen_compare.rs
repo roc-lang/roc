@@ -12,7 +12,7 @@ extern crate roc_gen;
 mod helpers;
 
 #[cfg(test)]
-mod gen_num {
+mod gen_compare {
 
     #[test]
     fn eq_i64() {
