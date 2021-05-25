@@ -1,11 +1,11 @@
 use crate::debug_info_init;
 use crate::llvm::bitcode::{
-    build_dec_wrapper, build_eq_wrapper, build_inc_wrapper, build_transform_caller,
-    call_bitcode_fn, call_void_bitcode_fn,
+    build_dec_wrapper, build_eq_wrapper, build_inc_wrapper, call_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
-    complex_bitcast, load_symbol, load_symbol_and_layout, set_name, Env, Scope,
+    complex_bitcast, load_symbol, load_symbol_and_layout, set_name, Env, RocFunctionCall, Scope,
 };
+use crate::llvm::build_list::{layout_width, pass_as_opaque};
 use crate::llvm::convert::{as_const_zero, basic_type_from_layout};
 use crate::llvm::refcounting::Mode;
 use inkwell::attributes::{Attribute, AttributeLoc};
@@ -71,10 +71,7 @@ pub fn dict_len<'a, 'ctx, 'env>(
     }
 }
 
-pub fn dict_empty<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    _scope: &Scope<'a, 'ctx>,
-) -> BasicValueEnum<'ctx> {
+pub fn dict_empty<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
     // get the RocDict type defined by zig
     let roc_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
 
@@ -639,10 +636,9 @@ fn dict_intersect_or_difference<'a, 'ctx, 'env>(
 pub fn dict_walk<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
+    roc_function_call: RocFunctionCall<'ctx>,
     dict: BasicValueEnum<'ctx>,
-    stepper: BasicValueEnum<'ctx>,
     accum: BasicValueEnum<'ctx>,
-    stepper_layout: &Layout<'a>,
     key_layout: &Layout<'a>,
     value_layout: &Layout<'a>,
     accum_layout: &Layout<'a>,
@@ -655,33 +651,9 @@ pub fn dict_walk<'a, 'ctx, 'env>(
     let dict_ptr = builder.build_alloca(zig_dict_type, "dict_ptr");
     env.builder.build_store(dict_ptr, dict);
 
-    let stepper_ptr = builder.build_alloca(stepper.get_type(), "stepper_ptr");
-    env.builder.build_store(stepper_ptr, stepper);
-
-    let stepper_caller = build_transform_caller(
-        env,
-        layout_ids,
-        stepper_layout,
-        &[*key_layout, *value_layout, *accum_layout],
-    )
-    .as_global_value()
-    .as_pointer_value();
-
     let accum_bt = basic_type_from_layout(env, accum_layout);
     let accum_ptr = builder.build_alloca(accum_bt, "accum_ptr");
     env.builder.build_store(accum_ptr, accum);
-
-    let key_width = env
-        .ptr_int()
-        .const_int(key_layout.stack_size(env.ptr_bytes) as u64, false);
-
-    let value_width = env
-        .ptr_int()
-        .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
-
-    let accum_width = env
-        .ptr_int()
-        .const_int(accum_layout.stack_size(env.ptr_bytes) as u64, false);
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
     let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
@@ -695,13 +667,15 @@ pub fn dict_walk<'a, 'ctx, 'env>(
         env,
         &[
             dict_ptr.into(),
-            env.builder.build_bitcast(stepper_ptr, u8_ptr, "to_opaque"),
-            stepper_caller.into(),
+            roc_function_call.caller.into(),
+            pass_as_opaque(env, roc_function_call.data),
+            roc_function_call.inc_n_data.into(),
+            roc_function_call.data_is_owned.into(),
             env.builder.build_bitcast(accum_ptr, u8_ptr, "to_opaque"),
             alignment_iv.into(),
-            key_width.into(),
-            value_width.into(),
-            accum_width.into(),
+            layout_width(env, key_layout),
+            layout_width(env, value_layout),
+            layout_width(env, accum_layout),
             inc_key_fn.as_global_value().as_pointer_value().into(),
             inc_value_fn.as_global_value().as_pointer_value().into(),
             env.builder.build_bitcast(output_ptr, u8_ptr, "to_opaque"),

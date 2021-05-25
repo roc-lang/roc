@@ -1270,11 +1270,11 @@ fn unify_function_or_tag_union_and_func(
     pool: &mut Pool,
     ctx: &Context,
     tag_name: &TagName,
-    _tag_symbol: Symbol,
+    tag_symbol: Symbol,
     tag_ext: Variable,
     function_arguments: &[Variable],
     function_return: Variable,
-    _function_lambda_set: Variable,
+    function_lambda_set: Variable,
     left: bool,
 ) -> Outcome {
     use FlatType::*;
@@ -1287,11 +1287,39 @@ fn unify_function_or_tag_union_and_func(
 
     let new_tag_union_var = fresh(subs, pool, ctx, content);
 
-    let problems = if left {
+    let mut problems = if left {
         unify_pool(subs, pool, new_tag_union_var, function_return)
     } else {
         unify_pool(subs, pool, function_return, new_tag_union_var)
     };
+
+    {
+        let lambda_set_ext = subs.fresh_unnamed_flex_var();
+
+        let mut closure_tags = MutMap::with_capacity_and_hasher(1, default_hasher());
+        closure_tags.insert(TagName::Closure(tag_symbol), vec![]);
+
+        let lambda_set_content = Structure(TagUnion(closure_tags, lambda_set_ext));
+
+        let tag_lambda_set = register(
+            subs,
+            Descriptor {
+                content: lambda_set_content,
+                rank: ctx.first_desc.rank.min(ctx.second_desc.rank),
+                mark: Mark::NONE,
+                copy: OptVariable::NONE,
+            },
+            pool,
+        );
+
+        let closure_problems = if left {
+            unify_pool(subs, pool, tag_lambda_set, function_lambda_set)
+        } else {
+            unify_pool(subs, pool, function_lambda_set, tag_lambda_set)
+        };
+
+        problems.extend(closure_problems);
+    }
 
     if problems.is_empty() {
         let desc = if left {

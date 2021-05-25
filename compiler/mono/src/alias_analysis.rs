@@ -274,12 +274,6 @@ fn call_spec(
             let module = MOD_APP;
             builder.add_call(block, spec_var, module, name, arg_value_id)
         }
-        ByPointer {
-            name: _,
-            full_layout: _,
-            ret_layout: _,
-            arg_layouts: _,
-        } => todo!(),
         Foreign {
             foreign_symbol: _,
             ret_layout,
@@ -303,6 +297,7 @@ fn call_spec(
             *update_mode,
             call.arguments,
         ),
+        HigherOrderLowLevel { .. } => todo!(),
     }
 }
 
@@ -431,7 +426,6 @@ fn expr_spec(
 
     match expr {
         Literal(literal) => literal_spec(builder, block, literal),
-        FunctionPointer(_, _) => todo!(),
         Call(call) => call_spec(builder, env, block, layout, call),
         Tag {
             tag_layout,

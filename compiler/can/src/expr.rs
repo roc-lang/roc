@@ -135,9 +135,12 @@ pub enum Expr {
     },
     /// field accessor as a function, e.g. (.foo) expr
     Accessor {
+        /// accessors are desugared to closures; they need to have a name
+        /// so the closure can have a correct lambda set
+        name: Symbol,
         function_var: Variable,
         record_var: Variable,
-        closure_var: Variable,
+        closure_ext_var: Variable,
         ext_var: Variable,
         field_var: Variable,
         field: Lowercase,
@@ -632,10 +635,11 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::AccessorFunction(field) => (
             Accessor {
+                name: env.gen_unique_symbol(),
                 function_var: var_store.fresh(),
                 record_var: var_store.fresh(),
                 ext_var: var_store.fresh(),
-                closure_var: var_store.fresh(),
+                closure_ext_var: var_store.fresh(),
                 field_var: var_store.fresh(),
                 field: (*field).into(),
             },

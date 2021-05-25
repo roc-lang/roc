@@ -14,7 +14,6 @@ comptime {
     // -fcompiler-rt in link.rs instead of doing this. Note that this
     // workaround is present in many host.zig files, so make sure to undo
     // it everywhere!
-
     if (std.builtin.os.tag == .macos) {
         _ = @import("compiler_rt");
     }

@@ -920,7 +920,7 @@ fn strConcat(result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
         return RocStr.clone(result_in_place, arg2);
     } else if (arg2.isEmpty()) {
         // the first argument is owned, so we can return it without cloning
-        return RocStr.clone(result_in_place, arg1);
+        return arg1;
     } else {
         const combined_length = arg1.len() + arg2.len();
 
@@ -947,8 +947,6 @@ fn strConcat(result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
 
         arg1.memcpy(result_ptr);
         arg2.memcpy(result_ptr + arg1.len());
-
-        arg1.deinit();
 
         return result;
     }

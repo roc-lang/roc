@@ -409,7 +409,10 @@ const HashFn = fn (u64, ?[*]u8) callconv(.C) u64;
 const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
 
 const Inc = fn (?[*]u8) callconv(.C) void;
+const IncN = fn (?[*]u8, usize) callconv(.C) void;
 const Dec = fn (?[*]u8) callconv(.C) void;
+
+const Caller3 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 
 // Dict.insert : Dict k v, k, v -> Dict k v
 pub fn dictInsert(input: RocDict, alignment: Alignment, key: Opaque, key_width: usize, value: Opaque, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_key: Dec, dec_value: Dec, output: *RocDict) callconv(.C) void {
@@ -754,14 +757,31 @@ pub fn setFromList(list: RocList, alignment: Alignment, key_width: usize, value_
     decref(alignment, list.bytes, data_bytes);
 }
 
-const StepperCaller = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
-pub fn dictWalk(dict: RocDict, stepper: Opaque, stepper_caller: StepperCaller, accum: Opaque, alignment: Alignment, key_width: usize, value_width: usize, accum_width: usize, inc_key: Inc, inc_value: Inc, output: Opaque) callconv(.C) void {
+pub fn dictWalk(
+    dict: RocDict,
+    caller: Caller3,
+    data: Opaque,
+    inc_n_data: IncN,
+    data_is_owned: bool,
+    accum: Opaque,
+    alignment: Alignment,
+    key_width: usize,
+    value_width: usize,
+    accum_width: usize,
+    inc_key: Inc,
+    inc_value: Inc,
+    output: Opaque,
+) callconv(.C) void {
     const alignment_usize = alignment.toUsize();
     // allocate space to write the result of the stepper into
     // experimentally aliasing the accum and output pointers is not a good idea
     const bytes_ptr: [*]u8 = utils.alloc(alignment_usize, accum_width);
     var b1 = output orelse unreachable;
     var b2 = bytes_ptr;
+
+    if (data_is_owned) {
+        inc_n_data(data, dict.len());
+    }
 
     @memcpy(b2, accum orelse unreachable, accum_width);
 
@@ -773,7 +793,7 @@ pub fn dictWalk(dict: RocDict, stepper: Opaque, stepper_caller: StepperCaller, a
                 const key = dict.getKey(i, alignment, key_width, value_width);
                 const value = dict.getValue(i, alignment, key_width, value_width);
 
-                stepper_caller(stepper, key, value, b2, b1);
+                caller(data, key, value, b2, b1);
 
                 const temp = b1;
                 b2 = b1;
@@ -785,7 +805,4 @@ pub fn dictWalk(dict: RocDict, stepper: Opaque, stepper_caller: StepperCaller, a
 
     @memcpy(output orelse unreachable, b2, accum_width);
     utils.dealloc(alignment_usize, bytes_ptr);
-
-    const data_bytes = dict.capacity() * slotSize(key_width, value_width);
-    decref(alignment, dict.dict_bytes, data_bytes);
 }

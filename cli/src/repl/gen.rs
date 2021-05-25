@@ -193,12 +193,12 @@ pub fn gen_and_eval<'a>(
         // because their bodies may reference each other.
         let mut scope = roc_gen::llvm::build::Scope::default();
         for ((symbol, layout), proc) in procedures.drain() {
-            let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+            let fn_val = build_proc_header(&env, &mut layout_ids, symbol, layout, &proc);
 
             if proc.args.is_empty() {
                 // this is a 0-argument thunk, i.e. a top-level constant definition
                 // it must be in-scope everywhere in the module!
-                scope.insert_top_level_thunk(symbol, layout, fn_val);
+                scope.insert_top_level_thunk(symbol, arena.alloc(layout), fn_val);
             }
 
             headers.push((proc, fn_val));
@@ -243,7 +243,7 @@ pub fn gen_and_eval<'a>(
             &env,
             &mut layout_ids,
             main_fn_symbol,
-            &main_fn_layout,
+            main_fn_layout,
         );
 
         env.dibuilder.finalize();
@@ -277,7 +277,7 @@ pub fn gen_and_eval<'a>(
                 &arena,
                 lib,
                 main_fn_name,
-                &main_fn_layout,
+                &arena.alloc(main_fn_layout).full(),
                 &content,
                 &env.interns,
                 home,
