@@ -66,11 +66,10 @@ pub export fn main() u8 {
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
     const stdout = std.io.getStdOut().writer();
-    const allocator = testing.allocator;
 
     // Perform the actual malloc
     const startNs = std.time.nanoTimestamp();
-    const ptr = malloc(size) orelse return null;
+    const ptr = malloc(size);
     const endNs = std.time.nanoTimestamp();
 
     const totalMs = @divTrunc(endNs - startNs, 1000);
@@ -86,7 +85,6 @@ export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignmen
 
 export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
     const stdout = std.io.getStdOut().writer();
-    const allocator = testing.allocator;
 
     // Perform the actual free
     const startNs = std.time.nanoTimestamp();
