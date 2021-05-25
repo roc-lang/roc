@@ -423,7 +423,10 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                 // prevent long chains of `Let`s from blowing the stack
                 let mut literal_stack = Vec::new_in(env.arena);
 
-                while !matches!(&expr, Expr::AccessAtIndex { .. } | Expr::Struct(_)) {
+                while !matches!(
+                    &expr,
+                    Expr::AccessAtIndex { .. } | Expr::Struct(_) | Expr::Call(_)
+                ) {
                     if let Stmt::Let(symbol1, expr1, layout1, cont1) = cont {
                         literal_stack.push((symbol, expr.clone(), *layout));
 
@@ -475,6 +478,17 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                             .and_then(|map| map.remove(index));
                     }
                     Expr::Struct(_) => {
+                        if let Layout::Struct(fields) = layout {
+                            env.insert_struct_info(symbol, fields);
+
+                            new_cont = expand_and_cancel(env, cont);
+
+                            env.remove_struct_info(symbol);
+                        } else {
+                            new_cont = expand_and_cancel(env, cont);
+                        }
+                    }
+                    Expr::Call(_) => {
                         if let Layout::Struct(fields) = layout {
                             env.insert_struct_info(symbol, fields);
 
