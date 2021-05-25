@@ -341,6 +341,16 @@ impl<
         Ok(())
     }
 
+    /// Used for generating wrappers for malloc/realloc/free
+    fn build_wrapped_jmp(&mut self) -> Result<(&'a [u8], u64), String> {
+        let mut out = bumpalo::vec![in self.env.arena];
+
+        ASM::jmp_imm32(&mut out, 0);
+
+        let offset = out.len() as u64 - 4;
+        Ok((out.into_bump_slice(), offset))
+    }
+
     fn build_fn_call(
         &mut self,
         dst: &Symbol,
