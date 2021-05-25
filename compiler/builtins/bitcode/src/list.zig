@@ -1019,7 +1019,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
 pub fn listSet(
     bytes: ?[*]u8,
     length: usize,
-    alignment: usize,
+    alignment: u32,
     index: usize,
     element: Opaque,
     element_width: usize,
@@ -1053,7 +1053,7 @@ pub fn listSet(
 inline fn listSetClone(
     old_bytes: ?[*]u8,
     length: usize,
-    alignment: usize,
+    alignment: u32,
     index: usize,
     element: Opaque,
     element_width: usize,
@@ -1063,7 +1063,7 @@ inline fn listSetClone(
 
     const data_bytes = length * element_width;
 
-    var new_bytes = utils.allocateWithRefcount(alignment, data_bytes);
+    var new_bytes = utils.allocateWithRefcount(data_bytes, alignment);
 
     @memcpy(new_bytes, old_bytes orelse undefined, data_bytes);
 
@@ -1077,7 +1077,7 @@ inline fn listSetClone(
     @memcpy(element_at_index, element orelse undefined, element_width);
 
     // consume RC token of original
-    utils.decref(alignment, old_bytes, data_bytes);
+    utils.decref(old_bytes, data_bytes, alignment);
 
     //return list;
     return new_bytes;

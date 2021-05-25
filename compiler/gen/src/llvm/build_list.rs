@@ -352,10 +352,9 @@ pub fn list_set<'a, 'ctx, 'env>(
     let new_bytes = call_bitcode_fn(
         env,
         &[
-            // pass_list_as_i128(env, list),
             bytes.into(),
             length.into(),
-            alignment_intvalue(env, &element_layout),
+            env.alignment_intvalue(&element_layout),
             index.into(),
             pass_element_as_opaque(env, element),
             layout_width(env, element_layout),
