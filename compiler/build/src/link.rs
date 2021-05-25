@@ -63,14 +63,18 @@ fn build_zig_host(
     zig_host_src: &str,
     zig_str_path: &str,
 ) -> Output {
+    // "zig" "build-obj" "/home/folkertdev/roc/roc/examples/quicksort/platform/host.zig" "-femit-bin=/home/folkertdev/roc/roc/examples/quicksort/platform/host.o" "--pkg-begin" "str" "compiler/builtins/bitcode/src/str.zig" "--pkg-end" "-fcompiler-rt" "--library" "c"
+    // "-femit-llvm-ir=/home/folkertdev/roc/roc/examples/quicksort/platform/host.ll",
     Command::new("zig")
         .env_clear()
         .env("PATH", env_path)
         .env("HOME", env_home)
         .args(&[
-            "build-obj",
+            "build-lib",
             zig_host_src,
             emit_bin,
+            "-O",
+            "ReleaseFast",
             "--pkg-begin",
             "str",
             zig_str_path,
@@ -158,7 +162,13 @@ fn build_zig_host(
         .unwrap()
 }
 
-pub fn rebuild_host(host_input_path: &Path) {
+#[derive(Clone, Copy)]
+pub enum HostBuildMode {
+    ObjectFile,
+    LLVMBitcode,
+}
+
+pub fn rebuild_host(host_input_path: &Path, host_build_mode: HostBuildMode) {
     let c_host_src = host_input_path.with_file_name("host.c");
     let c_host_dest = host_input_path.with_file_name("c_host.o");
     let zig_host_src = host_input_path.with_file_name("host.zig");
@@ -172,7 +182,17 @@ pub fn rebuild_host(host_input_path: &Path) {
 
     if zig_host_src.exists() {
         // Compile host.zig
-        let emit_bin = format!("-femit-bin={}", host_dest.to_str().unwrap());
+        let zig_host_dest = match host_build_mode {
+            HostBuildMode::LLVMBitcode => host_input_path.with_file_name("host.ll"),
+            HostBuildMode::ObjectFile => host_input_path.with_file_name("host.o"),
+        };
+
+        let emit_bin = match host_build_mode {
+            HostBuildMode::LLVMBitcode => {
+                format!("-femit-llvm-ir={}", zig_host_dest.to_str().unwrap())
+            }
+            HostBuildMode::ObjectFile => format!("-femit-bin={}", zig_host_dest.to_str().unwrap()),
+        };
 
         let zig_str_path = find_zig_str_path();
 
@@ -193,6 +213,19 @@ pub fn rebuild_host(host_input_path: &Path) {
                 zig_str_path.to_str().unwrap(),
             ),
         );
+
+        if let HostBuildMode::LLVMBitcode = host_build_mode {
+            let bc = host_input_path.with_file_name("host.bc");
+
+            let output = Command::new("llvm-as")
+                .env_clear()
+                .env("PATH", &env_path)
+                .args(&[zig_host_dest.to_str().unwrap(), "-o", bc.to_str().unwrap()])
+                .output()
+                .unwrap();
+
+            validate_output("host.zig", "llvm-as", output);
+        }
     } else {
         // Compile host.c
         let output = Command::new("clang")
