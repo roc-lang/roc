@@ -834,6 +834,13 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         jmp_imm32(buf, offset);
         buf.len()
     }
+
+    #[inline(always)]
+    fn tail_call(buf: &mut Vec<'_, u8>) -> u64 {
+        Self::jmp_imm32(buf, 0);
+        buf.len() as u64 - 4
+    }
+
     #[inline(always)]
     fn jne_reg64_imm64_imm32(
         buf: &mut Vec<'_, u8>,

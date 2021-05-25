@@ -39,8 +39,8 @@ use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicTypeEnum, FunctionType, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
-    BasicValue, CallSiteValue, FloatValue, FunctionValue, InstructionOpcode, IntValue,
-    PointerValue, StructValue,
+    BasicValue, CallSiteValue, FloatValue, FunctionValue, InstructionOpcode, InstructionValue,
+    IntValue, PointerValue, StructValue,
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
@@ -223,6 +223,55 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         })
     }
 
+    pub fn alignment_type(&self) -> IntType<'ctx> {
+        self.context.i32_type()
+    }
+
+    pub fn alignment_const(&self, alignment: u32) -> IntValue<'ctx> {
+        self.alignment_type().const_int(alignment as u64, false)
+    }
+
+    pub fn alignment_intvalue(&self, element_layout: &Layout<'a>) -> BasicValueEnum<'ctx> {
+        let alignment = element_layout.alignment_bytes(self.ptr_bytes);
+        let alignment_iv = self.alignment_const(alignment);
+
+        alignment_iv.into()
+    }
+
+    pub fn call_alloc(
+        &self,
+        number_of_bytes: IntValue<'ctx>,
+        alignment: u32,
+    ) -> PointerValue<'ctx> {
+        let function = self.module.get_function("roc_alloc").unwrap();
+        let alignment = self.alignment_const(alignment);
+        let call = self.builder.build_call(
+            function,
+            &[number_of_bytes.into(), alignment.into()],
+            "roc_alloc",
+        );
+
+        call.set_call_convention(C_CALL_CONV);
+
+        call.try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_pointer_value()
+        // TODO check if alloc returned null; if so, runtime error for OOM!
+    }
+
+    pub fn call_dealloc(&self, ptr: PointerValue<'ctx>, alignment: u32) -> InstructionValue<'ctx> {
+        let function = self.module.get_function("roc_dealloc").unwrap();
+        let alignment = self.alignment_const(alignment);
+        let call =
+            self.builder
+                .build_call(function, &[ptr.into(), alignment.into()], "roc_dealloc");
+
+        call.set_call_convention(C_CALL_CONV);
+
+        call.try_as_basic_value().right().unwrap()
+    }
+
     pub fn call_memset(
         &self,
         bytes_ptr: PointerValue<'ctx>,
@@ -322,7 +371,6 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     // List of all supported LLVM intrinsics:
     //
     // https://releases.llvm.org/10.0.0/docs/LangRef.html#standard-c-library-intrinsics
-    let void_type = ctx.void_type();
     let i1_type = ctx.bool_type();
     let f64_type = ctx.f64_type();
     let i128_type = ctx.i128_type();
@@ -330,41 +378,6 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     let i32_type = ctx.i32_type();
     let i16_type = ctx.i16_type();
     let i8_type = ctx.i8_type();
-    let i8_ptr_type = i8_type.ptr_type(AddressSpace::Generic);
-
-    add_intrinsic(
-        module,
-        LLVM_MEMSET_I64,
-        void_type.fn_type(
-            &[
-                i8_ptr_type.into(),
-                i8_type.into(),
-                i64_type.into(),
-                i1_type.into(),
-            ],
-            false,
-        ),
-    );
-
-    add_intrinsic(
-        module,
-        LLVM_MEMSET_I32,
-        void_type.fn_type(
-            &[
-                i8_ptr_type.into(),
-                i8_type.into(),
-                i32_type.into(),
-                i1_type.into(),
-            ],
-            false,
-        ),
-    );
-
-    add_intrinsic(
-        module,
-        LLVM_SQRT_F64,
-        f64_type.fn_type(&[f64_type.into()], false),
-    );
 
     add_intrinsic(
         module,
@@ -477,14 +490,6 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         ctx.struct_type(&fields, false)
             .fn_type(&[i128_type.into(), i128_type.into()], false)
     });
-
-    // mul with overflow
-
-    add_intrinsic(module, LLVM_SMUL_WITH_OVERFLOW_I64, {
-        let fields = [i64_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i64_type.into(), i64_type.into()], false)
-    });
 }
 
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
@@ -518,13 +523,15 @@ fn add_intrinsic<'ctx>(
     intrinsic_name: &'static str,
     fn_type: FunctionType<'ctx>,
 ) -> FunctionValue<'ctx> {
-    let fn_val = module.add_function(intrinsic_name, fn_type, None);
-
-    // LLVM intrinsics always use the C calling convention, because
-    // they are implemented in C libraries
-    fn_val.set_call_conventions(C_CALL_CONV);
-
-    fn_val
+    add_func(
+        module,
+        intrinsic_name,
+        fn_type,
+        Linkage::External,
+        // LLVM intrinsics always use the C calling convention, because
+        // they are implemented in C libraries
+        C_CALL_CONV,
+    )
 }
 
 pub fn construct_optimization_passes<'a>(
@@ -1706,11 +1713,7 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
             "add_extra_bytes",
         );
 
-        env.builder
-            .build_array_malloc(ctx.i8_type(), number_of_bytes, "create_ptr")
-            .unwrap()
-
-        // TODO check if malloc returned null; if so, runtime error for OOM!
+        env.call_alloc(number_of_bytes, layout.alignment_bytes(env.ptr_bytes))
     };
 
     // We must return a pointer to the first element:
@@ -1743,7 +1746,7 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
                         "get_data_ptr",
                     ),
                     ptr_type,
-                    "malloc_cast_to_desired",
+                    "alloc_cast_to_desired",
                 )
                 .into_pointer_value()
         }
@@ -1751,12 +1754,12 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
 
     let refcount_ptr = match extra_bytes {
         n if n == env.ptr_bytes => {
-            // the malloced pointer is the same as the refcounted pointer
+            // the allocated pointer is the same as the refcounted pointer
             unsafe { PointerToRefcount::from_ptr(env, ptr) }
         }
         n if n == 2 * env.ptr_bytes => {
             // the refcount is stored just before the start of the actual data
-            // but in this case (because of alignment) not at the start of the malloced buffer
+            // but in this case (because of alignment) not at the start of the allocated buffer
             PointerToRefcount::from_ptr_to_data(env, data_ptr)
         }
         n => unreachable!("invalid extra_bytes {}", n),
@@ -1785,8 +1788,6 @@ fn list_literal<'a, 'ctx, 'env>(
         let len = len_type.const_int(len_u64, false);
 
         allocate_list(env, inplace, elem_layout, len)
-
-        // TODO check if malloc returned null; if so, runtime error for OOM!
     };
 
     // Copy the elements from the list literal into the array
@@ -2715,9 +2716,13 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
 
     let c_function_type = env.context.void_type().fn_type(&argument_types, false);
 
-    let c_function =
-        env.module
-            .add_function(c_function_name, c_function_type, Some(Linkage::External));
+    let c_function = add_func(
+        env.module,
+        c_function_name,
+        c_function_type,
+        Linkage::External,
+        C_CALL_CONV,
+    );
 
     let subprogram = env.new_subprogram(c_function_name);
     c_function.set_subprogram(subprogram);
@@ -2759,10 +2764,12 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
     let size_function_name: String =
         format!("roc_{}_size", roc_function.get_name().to_str().unwrap());
 
-    let size_function = env.module.add_function(
+    let size_function = add_func(
+        env.module,
         size_function_name.as_str(),
         size_function_type,
-        Some(Linkage::External),
+        Linkage::External,
+        C_CALL_CONV,
     );
 
     let subprogram = env.new_subprogram(&size_function_name);
@@ -2968,9 +2975,13 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
     let wrapper_function_type = wrapper_return_type.fn_type(&argument_types, false);
 
     // Add main to the module.
-    let wrapper_function =
-        env.module
-            .add_function(&wrapper_function_name, wrapper_function_type, None);
+    let wrapper_function = add_func(
+        env.module,
+        &wrapper_function_name,
+        wrapper_function_type,
+        Linkage::External,
+        C_CALL_CONV,
+    );
 
     let subprogram = env.new_subprogram(wrapper_function_name);
     wrapper_function.set_subprogram(subprogram);
@@ -3031,11 +3042,13 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
 
     let fn_type = get_fn_type(&ret_type, &arg_basic_types);
 
-    let fn_val = env
-        .module
-        .add_function(fn_name.as_str(), fn_type, Some(Linkage::Private));
-
-    fn_val.set_call_conventions(FAST_CALL_CONV);
+    let fn_val = add_func(
+        env.module,
+        fn_name.as_str(),
+        fn_type,
+        Linkage::Private,
+        FAST_CALL_CONV,
+    );
 
     let subprogram = env.new_subprogram(&fn_name);
     fn_val.set_subprogram(subprogram);
@@ -3096,13 +3109,13 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
     let function_type = context.void_type().fn_type(&argument_types, false);
 
-    let function_value = env.module.add_function(
+    let function_value = add_func(
+        env.module,
         function_name.as_str(),
         function_type,
-        Some(Linkage::External),
+        Linkage::External,
+        C_CALL_CONV,
     );
-
-    function_value.set_call_conventions(C_CALL_CONV);
 
     // STEP 2: build function body
 
@@ -3205,13 +3218,13 @@ fn build_function_caller<'a, 'ctx, 'env>(
 
     let function_type = context.void_type().fn_type(&argument_types, false);
 
-    let function_value = env.module.add_function(
+    let function_value = add_func(
+        env.module,
         function_name.as_str(),
         function_type,
-        Some(Linkage::External),
+        Linkage::External,
+        C_CALL_CONV,
     );
-
-    function_value.set_call_conventions(C_CALL_CONV);
 
     // STEP 2: build function body
 
@@ -3301,10 +3314,12 @@ fn build_host_exposed_alias_size_help<'a, 'ctx, 'env>(
         )
     };
 
-    let size_function = env.module.add_function(
+    let size_function = add_func(
+        env.module,
         size_function_name.as_str(),
         size_function_type,
-        Some(Linkage::External),
+        Linkage::External,
+        C_CALL_CONV,
     );
 
     let entry = context.append_basic_block(size_function, "entry");
@@ -5729,12 +5744,13 @@ fn cxa_allocate_exception<'a, 'ctx, 'env>(
         Some(gvalue) => gvalue,
         None => {
             // void *__cxa_allocate_exception(size_t thrown_size);
-            let cxa_allocate_exception = module.add_function(
+            let cxa_allocate_exception = add_func(
+                module,
                 name,
                 u8_ptr.fn_type(&[context.i64_type().into()], false),
-                Some(Linkage::External),
+                Linkage::External,
+                C_CALL_CONV,
             );
-            cxa_allocate_exception.set_call_conventions(C_CALL_CONV);
 
             cxa_allocate_exception
         }
@@ -5762,14 +5778,15 @@ fn cxa_throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, info: BasicVal
         Some(value) => value,
         None => {
             // void __cxa_throw (void *thrown_exception, std::type_info *tinfo, void (*dest) (void *) );
-            let cxa_throw = module.add_function(
+            let cxa_throw = add_func(
+                module,
                 name,
                 context
                     .void_type()
                     .fn_type(&[u8_ptr.into(), u8_ptr.into(), u8_ptr.into()], false),
-                Some(Linkage::External),
+                Linkage::External,
+                C_CALL_CONV,
             );
-            cxa_throw.set_call_conventions(C_CALL_CONV);
 
             cxa_throw
         }
@@ -5803,12 +5820,13 @@ fn cxa_rethrow_exception(env: &Env<'_, '_, '_>) {
     let function = match module.get_function(&name) {
         Some(gvalue) => gvalue,
         None => {
-            let cxa_rethrow = module.add_function(
+            let cxa_rethrow = add_func(
+                module,
                 name,
                 context.void_type().fn_type(&[], false),
-                Some(Linkage::External),
+                Linkage::External,
+                C_CALL_CONV,
             );
-            cxa_rethrow.set_call_conventions(C_CALL_CONV);
 
             cxa_rethrow
         }
@@ -5829,12 +5847,13 @@ fn get_foreign_symbol<'a, 'ctx, 'env>(
     match module.get_function(foreign_symbol.as_str()) {
         Some(gvalue) => gvalue,
         None => {
-            let foreign_function = module.add_function(
+            let foreign_function = add_func(
+                module,
                 foreign_symbol.as_str(),
                 function_type,
-                Some(Linkage::External),
+                Linkage::External,
+                C_CALL_CONV,
             );
-            foreign_function.set_call_conventions(C_CALL_CONV);
 
             foreign_function
         }
@@ -5850,12 +5869,13 @@ fn get_gxx_personality_v0<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> Function
     match module.get_function(&name) {
         Some(gvalue) => gvalue,
         None => {
-            let personality_func = module.add_function(
+            let personality_func = add_func(
+                module,
                 "__gxx_personality_v0",
                 context.i64_type().fn_type(&[], false),
-                Some(Linkage::External),
+                Linkage::External,
+                C_CALL_CONV,
             );
-            personality_func.set_call_conventions(C_CALL_CONV);
 
             personality_func
         }
@@ -5871,12 +5891,13 @@ fn cxa_end_catch(env: &Env<'_, '_, '_>) {
     let function = match module.get_function(&name) {
         Some(gvalue) => gvalue,
         None => {
-            let cxa_end_catch = module.add_function(
+            let cxa_end_catch = add_func(
+                module,
                 name,
                 context.void_type().fn_type(&[], false),
-                Some(Linkage::External),
+                Linkage::External,
+                C_CALL_CONV,
             );
-            cxa_end_catch.set_call_conventions(C_CALL_CONV);
 
             cxa_end_catch
         }
@@ -5900,12 +5921,13 @@ fn cxa_begin_catch<'a, 'ctx, 'env>(
         None => {
             let u8_ptr = context.i8_type().ptr_type(AddressSpace::Generic);
 
-            let cxa_begin_catch = module.add_function(
+            let cxa_begin_catch = add_func(
+                module,
                 "__cxa_begin_catch",
                 u8_ptr.fn_type(&[u8_ptr.into()], false),
-                Some(Linkage::External),
+                Linkage::External,
+                C_CALL_CONV,
             );
-            cxa_begin_catch.set_call_conventions(C_CALL_CONV);
 
             cxa_begin_catch
         }
@@ -5916,4 +5938,27 @@ fn cxa_begin_catch<'a, 'ctx, 'env>(
 
     call.set_call_convention(C_CALL_CONV);
     call.try_as_basic_value().left().unwrap()
+}
+
+/// Add a function to a module, after asserting that the function is unique.
+/// We never want to define the same function twice in the same module!
+/// The result can be bugs that are difficult to track down.
+pub fn add_func<'ctx>(
+    module: &Module<'ctx>,
+    name: &str,
+    typ: FunctionType<'ctx>,
+    linkage: Linkage,
+    call_conv: u32,
+) -> FunctionValue<'ctx> {
+    if cfg!(debug_assertions) {
+        if let Some(func) = module.get_function(name) {
+            panic!("Attempting to redefine LLVM function {}, which was already defined in this module as:\n\n{:?}", name, func);
+        }
+    }
+
+    let fn_val = module.add_function(name, typ, Some(linkage));
+
+    fn_val.set_call_conventions(call_conv);
+
+    fn_val
 }
