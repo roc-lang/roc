@@ -16,7 +16,7 @@ use bumpalo::Bump;
 
 // just using one module for now
 const MOD_LIST: ModName = ModName(b"UserApp");
-const MOD_APP: ModName = ModName(b"UserApp");
+pub const MOD_APP: ModName = ModName(b"UserApp");
 
 pub fn spec_program<'a, I>(procs: I) -> Result<morphic_lib::Solutions>
 where
@@ -182,13 +182,17 @@ fn stmt_spec(
         }
         Ret(symbol) => Ok(env.symbols[symbol]),
         Refcounting(modify_rc, continuation) => match modify_rc {
-            ModifyRc::Inc(symbol, _) | ModifyRc::Dec(symbol) | ModifyRc::DecRef(symbol) => {
+            ModifyRc::Inc(symbol, _) | ModifyRc::Dec(symbol) => {
                 let result_type = builder.add_tuple_type(&[])?;
                 let argument = env.symbols[symbol];
 
                 // this is how RC is modelled; it recursively touches all heap cells
                 builder.add_unknown_with(block, &[argument], result_type)?;
 
+                stmt_spec(builder, env, block, layout, continuation)
+            }
+            ModifyRc::DecRef(_symbol) => {
+                // TODO a decref is a non-recursive decrement of a structure
                 stmt_spec(builder, env, block, layout, continuation)
             }
         },
