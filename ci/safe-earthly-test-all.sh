@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 
-LOG_FILE="earthly_err.txt"
+LOG_FILE="earthly_log.txt"
+touch $LOG_FILE
 
-script -efq output.log -c "earthly +test-all"
+script -efq $LOG_FILE -c "earthly --buildkit-cache-size-mb 25000 +test-all"
 
-if grep -q "unexpected closing delimiter" "$LOG_FILE"; then
+if grep -q "failed to mount" "$LOG_FILE"; then
   echo ""
   echo ""
   echo "------<<<<<<!!!!!!>>>>>>------"
@@ -12,7 +13,7 @@ if grep -q "unexpected closing delimiter" "$LOG_FILE"; then
   echo "------<<<<<<!!!!!!>>>>>>------"
   echo ""
   echo ""
-  earthly --no-cache +test-all
+  earthly --no-cache --buildkit-cache-size-mb 25000 +test-all
 else
-    cat $ERR_FILE
+  return 1
 fi
