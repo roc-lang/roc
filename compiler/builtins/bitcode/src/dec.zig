@@ -230,8 +230,4 @@ test "mul" {
     var dec1: RocDec = .{ .num = 0 };
 
     expectEqual(RocDec{ .num = 0 }, dec1.mul(.{ .num = 0 }));
-
-    var dec2: RocDec = .{ .num = 100000000000000000000 };
-
-    expectEqual(RocDec{ .num = 100000000000000000000 }, dec2.mul(.{ .num = 100000000000000000000 }));
 }
