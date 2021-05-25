@@ -53,7 +53,7 @@ pub const RocStr = extern struct {
     }
 
     pub fn initBig(in_place: InPlace, number_of_chars: u64) RocStr {
-        const first_element = utils.allocateWithRefcount(@sizeOf(usize), number_of_chars);
+        const first_element = utils.allocateWithRefcount(number_of_chars, @sizeOf(usize));
 
         return RocStr{
             .str_bytes = first_element,
@@ -99,7 +99,7 @@ pub const RocStr = extern struct {
         if (length < roc_str_size) {
             return RocStr.empty();
         } else {
-            var new_bytes: []T = utils.alloc(RocStr.alignment, length) catch unreachable;
+            var new_bytes: []T = utils.alloc(length, RocStr.alignment) catch unreachable;
 
             var new_bytes_ptr: [*]u8 = @ptrCast([*]u8, &new_bytes);
 
@@ -1070,7 +1070,7 @@ fn strToBytes(arg: RocStr) RocList {
         return RocList.empty();
     } else if (arg.isSmallStr()) {
         const length = arg.len();
-        const ptr = utils.allocateWithRefcount(RocStr.alignment, length);
+        const ptr = utils.allocateWithRefcount(length, RocStr.alignment);
 
         @memcpy(ptr, arg.asU8ptr(), length);
 

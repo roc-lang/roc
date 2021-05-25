@@ -18,16 +18,6 @@ use inkwell::{AddressSpace, IntPredicate};
 use roc_builtins::bitcode;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, MemoryMode};
 
-fn alignment_intvalue<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    element_layout: &Layout<'a>,
-) -> BasicValueEnum<'ctx> {
-    let alignment = element_layout.alignment_bytes(env.ptr_bytes);
-    let alignment_iv = env.ptr_int().const_int(alignment as u64, false);
-
-    alignment_iv.into()
-}
-
 fn list_returned_from_zig<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     output: BasicValueEnum<'ctx>,
@@ -102,7 +92,7 @@ pub fn list_single<'a, 'ctx, 'env>(
     call_bitcode_fn_returns_list(
         env,
         &[
-            alignment_intvalue(env, element_layout),
+            env.alignment_intvalue(element_layout),
             pass_element_as_opaque(env, element),
             layout_width(env, element_layout),
         ],
@@ -124,7 +114,7 @@ pub fn list_repeat<'a, 'ctx, 'env>(
         env,
         &[
             list_len.into(),
-            alignment_intvalue(env, element_layout),
+            env.alignment_intvalue(element_layout),
             pass_element_as_opaque(env, element),
             layout_width(env, element_layout),
             inc_element_fn.as_global_value().as_pointer_value().into(),
@@ -218,7 +208,7 @@ pub fn list_join<'a, 'ctx, 'env>(
                 env,
                 &[
                     pass_list_as_i128(env, outer_list),
-                    alignment_intvalue(env, element_layout),
+                    env.alignment_intvalue(element_layout),
                     layout_width(env, element_layout),
                 ],
                 &bitcode::LIST_JOIN,
@@ -258,7 +248,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
         env,
         &[
             pass_list_as_i128(env, list),
-            alignment_intvalue(env, &element_layout),
+            env.alignment_intvalue(&element_layout),
             layout_width(env, &element_layout),
         ],
         &bitcode::LIST_REVERSE,
@@ -314,7 +304,7 @@ pub fn list_append<'a, 'ctx, 'env>(
         env,
         &[
             pass_list_as_i128(env, original_wrapper.into()),
-            alignment_intvalue(env, &element_layout),
+            env.alignment_intvalue(&element_layout),
             pass_element_as_opaque(env, element),
             layout_width(env, element_layout),
         ],
@@ -335,7 +325,7 @@ pub fn list_drop<'a, 'ctx, 'env>(
         env,
         &[
             pass_list_as_i128(env, original_wrapper.into()),
-            alignment_intvalue(env, &element_layout),
+            env.alignment_intvalue(&element_layout),
             layout_width(env, &element_layout),
             count.into(),
             dec_element_fn.as_global_value().as_pointer_value().into(),
@@ -344,7 +334,7 @@ pub fn list_drop<'a, 'ctx, 'env>(
     )
 }
 
-/// List.set : List elem, Int, elem -> List elem
+/// List.set : List elem, Nat, elem -> List elem
 pub fn list_set<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     args: &[(BasicValueEnum<'ctx>, &'a Layout<'a>)],
@@ -501,7 +491,7 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
                     roc_function_call.inc_n_data.into(),
                     roc_function_call.data_is_owned.into(),
                     pass_as_opaque(env, default_ptr),
-                    alignment_intvalue(env, &element_layout),
+                    env.alignment_intvalue(&element_layout),
                     layout_width(env, element_layout),
                     layout_width(env, default_layout),
                     pass_as_opaque(env, result_ptr),
@@ -520,7 +510,7 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
                     roc_function_call.inc_n_data.into(),
                     roc_function_call.data_is_owned.into(),
                     pass_as_opaque(env, default_ptr),
-                    alignment_intvalue(env, &element_layout),
+                    env.alignment_intvalue(&element_layout),
                     layout_width(env, element_layout),
                     layout_width(env, default_layout),
                     dec_element_fn.as_global_value().as_pointer_value().into(),
@@ -642,7 +632,7 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            alignment_intvalue(env, &element_layout),
+            env.alignment_intvalue(&element_layout),
             layout_width(env, element_layout),
             inc_element_fn.as_global_value().as_pointer_value().into(),
             dec_element_fn.as_global_value().as_pointer_value().into(),
@@ -678,7 +668,7 @@ pub fn list_keep_oks<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            alignment_intvalue(env, &before_layout),
+            env.alignment_intvalue(&before_layout),
             layout_width(env, before_layout),
             layout_width(env, result_layout),
             layout_width(env, after_layout),
@@ -715,7 +705,7 @@ pub fn list_keep_errs<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            alignment_intvalue(env, &before_layout),
+            env.alignment_intvalue(&before_layout),
             layout_width(env, before_layout),
             layout_width(env, result_layout),
             layout_width(env, after_layout),
@@ -762,7 +752,7 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
             pass_list_as_i128(env, list),
             pass_as_opaque(env, closure_data_ptr),
             stepper_caller.into(),
-            alignment_intvalue(env, &before_layout),
+            env.alignment_intvalue(&before_layout),
             layout_width(env, before_layout),
             layout_width(env, after_layout),
             layout_width(env, result_layout),
@@ -789,7 +779,7 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            alignment_intvalue(env, &element_layout),
+            env.alignment_intvalue(&element_layout),
             layout_width(env, element_layout),
         ],
         bitcode::LIST_SORT_WITH,
@@ -812,7 +802,7 @@ pub fn list_map_with_index<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            alignment_intvalue(env, &element_layout),
+            env.alignment_intvalue(&element_layout),
             layout_width(env, element_layout),
             layout_width(env, return_layout),
         ],
@@ -836,7 +826,7 @@ pub fn list_map<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            alignment_intvalue(env, &element_layout),
+            env.alignment_intvalue(&element_layout),
             layout_width(env, element_layout),
             layout_width(env, return_layout),
         ],
@@ -866,7 +856,7 @@ pub fn list_map2<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            alignment_intvalue(env, return_layout),
+            env.alignment_intvalue(return_layout),
             layout_width(env, element1_layout),
             layout_width(env, element2_layout),
             layout_width(env, return_layout),
@@ -903,7 +893,7 @@ pub fn list_map3<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            alignment_intvalue(env, result_layout),
+            env.alignment_intvalue(result_layout),
             layout_width(env, element1_layout),
             layout_width(env, element2_layout),
             layout_width(env, element3_layout),
@@ -936,7 +926,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
             &[
                 pass_list_as_i128(env, first_list),
                 pass_list_as_i128(env, second_list),
-                alignment_intvalue(env, elem_layout),
+                env.alignment_intvalue(elem_layout),
                 layout_width(env, elem_layout),
             ],
             &bitcode::LIST_CONCAT,

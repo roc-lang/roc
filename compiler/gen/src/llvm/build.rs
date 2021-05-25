@@ -223,16 +223,31 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         })
     }
 
+    pub fn alignment_type(&self) -> IntType<'ctx> {
+        self.context.i32_type()
+    }
+
+    pub fn alignment_const(&self, alignment: u32) -> IntValue<'ctx> {
+        self.alignment_type().const_int(alignment as u64, false)
+    }
+
+    pub fn alignment_intvalue(&self, element_layout: &Layout<'a>) -> BasicValueEnum<'ctx> {
+        let alignment = element_layout.alignment_bytes(self.ptr_bytes);
+        let alignment_iv = self.alignment_const(alignment);
+
+        alignment_iv.into()
+    }
+
     pub fn call_alloc(
         &self,
-        alignment: u32,
         number_of_bytes: IntValue<'ctx>,
+        alignment: u32,
     ) -> PointerValue<'ctx> {
         let function = self.module.get_function("roc_alloc").unwrap();
-        let alignment = self.ptr_int().const_int(alignment as u64, false);
+        let alignment = self.alignment_const(alignment);
         let call = self.builder.build_call(
             function,
-            &[alignment.into(), number_of_bytes.into()],
+            &[number_of_bytes.into(), alignment.into()],
             "roc_alloc",
         );
 
@@ -245,12 +260,12 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         // TODO check if alloc returned null; if so, runtime error for OOM!
     }
 
-    pub fn call_dealloc(&self, alignment: u32, ptr: PointerValue<'ctx>) -> InstructionValue<'ctx> {
+    pub fn call_dealloc(&self, ptr: PointerValue<'ctx>, alignment: u32) -> InstructionValue<'ctx> {
         let function = self.module.get_function("roc_dealloc").unwrap();
-        let alignment = self.ptr_int().const_int(alignment as u64, false);
+        let alignment = self.alignment_const(alignment);
         let call =
             self.builder
-                .build_call(function, &[alignment.into(), ptr.into()], "roc_dealloc");
+                .build_call(function, &[ptr.into(), alignment.into()], "roc_dealloc");
 
         call.set_call_convention(C_CALL_CONV);
 
@@ -1698,7 +1713,7 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
             "add_extra_bytes",
         );
 
-        env.call_alloc(layout.alignment_bytes(env.ptr_bytes), number_of_bytes)
+        env.call_alloc(number_of_bytes, layout.alignment_bytes(env.ptr_bytes))
     };
 
     // We must return a pointer to the first element:

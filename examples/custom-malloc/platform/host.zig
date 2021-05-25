@@ -64,7 +64,7 @@ pub export fn main() u8 {
     return 0;
 }
 
-export fn roc_alloc(alignment: u32, size: usize) callconv(.C) ?*c_void {
+export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
     const stdout = std.io.getStdOut().writer();
     const allocator = testing.allocator;
 
@@ -80,11 +80,11 @@ export fn roc_alloc(alignment: u32, size: usize) callconv(.C) ?*c_void {
     return ptr;
 }
 
-export fn roc_realloc(alignment: u32, c_ptr: *c_void, old_size: usize, new_size: usize) callconv(.C) ?*c_void {
+export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void {
     return realloc(@alignCast(16, @ptrCast([*]u8, c_ptr)), new_size);
 }
 
-export fn roc_dealloc(alignment: u32, c_ptr: *c_void) callconv(.C) void {
+export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
     const stdout = std.io.getStdOut().writer();
     const allocator = testing.allocator;
 

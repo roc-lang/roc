@@ -279,12 +279,12 @@ impl<'ctx> PointerToRefcount<'ctx> {
                 match alignment {
                     n if env.ptr_bytes == n => {
                         // the refcount ptr is also the ptr to the allocated region
-                        env.call_dealloc(alignment, ptr);
+                        env.call_dealloc(ptr, alignment);
                     }
                     n if 2 * env.ptr_bytes == n => {
                         // we need to step back another ptr_bytes to get the allocated ptr
                         let allocated = Self::from_ptr_to_data(env, ptr);
-                        env.call_dealloc(alignment, allocated.value);
+                        env.call_dealloc(allocated.value, alignment);
                     }
                     n => unreachable!("invalid extra_bytes {:?}", n),
                 }
