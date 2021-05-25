@@ -4,7 +4,7 @@ use crate::llvm::bitcode::{
     build_transform_caller, call_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
-    allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, InPlace, RocFunctionCall,
+    allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, RocFunctionCall,
 };
 use crate::llvm::convert::{basic_type_from_layout, get_ptr_type};
 use crate::llvm::refcounting::increment_refcount_layout;
@@ -14,7 +14,7 @@ use inkwell::types::{BasicTypeEnum, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
 use roc_builtins::bitcode;
-use roc_mono::layout::{Builtin, Layout, LayoutIds, MemoryMode};
+use roc_mono::layout::{Builtin, InPlace, Layout, LayoutIds, MemoryMode};
 
 fn list_returned_from_zig<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
