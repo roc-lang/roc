@@ -113,7 +113,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let render_format = wgpu::TextureFormat::Bgra8Unorm;
     let mut size = window.inner_size();
 
-    //let swap_chain_descr = wgpu::SwapChainDescriptor {
+    let swap_chain_descr = wgpu::SwapChainDescriptor {
         usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
         format: render_format,
         width: size.width,
