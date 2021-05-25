@@ -25,7 +25,7 @@ const Allocator = mem.Allocator;
 
 extern fn roc__mainForHost_1_exposed([*]u8) void;
 extern fn roc__mainForHost_1_size() i64;
-extern fn roc__mainForHost_1_Fx_caller(*const u8, *const u8, [*]u8, [*]u8) void;
+extern fn roc__mainForHost_1_Fx_caller(*const u8, [*]u8, [*]u8) void;
 extern fn roc__mainForHost_1_Fx_size() i64;
 extern fn roc__mainForHost_1_Fx_result_size() i64;
 
@@ -33,15 +33,15 @@ extern fn malloc(size: usize) callconv(.C) ?*c_void;
 extern fn realloc(c_ptr: [*]align(@alignOf(u128)) u8, size: usize) callconv(.C) ?*c_void;
 extern fn free(c_ptr: [*]align(@alignOf(u128)) u8) callconv(.C) void;
 
-export fn roc_alloc(alignment: u32, size: usize) callconv(.C) ?*c_void {
+export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
     return malloc(size);
 }
 
-export fn roc_realloc(alignment: u32, c_ptr: *c_void, old_size: usize, new_size: usize) callconv(.C) ?*c_void {
+export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void {
     return realloc(@alignCast(16, @ptrCast([*]u8, c_ptr)), new_size);
 }
 
-export fn roc_dealloc(alignment: u32, c_ptr: *c_void) callconv(.C) void {
+export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
     free(@alignCast(16, @ptrCast([*]u8, c_ptr)));
 }
 
@@ -70,10 +70,9 @@ pub export fn main() u8 {
 
     if (flag == 0) {
         // all is well
-        const function_pointer = @intToPtr(*const u8, elements[1]);
-        const closure_data_pointer = @ptrCast([*]u8, output[16..size]);
+        const closure_data_pointer = @ptrCast([*]u8, output[8..size]);
 
-        call_the_closure(function_pointer, closure_data_pointer);
+        call_the_closure(closure_data_pointer);
     } else {
         const msg = @intToPtr([*:0]const u8, elements[1]);
         stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
@@ -95,7 +94,7 @@ fn to_seconds(tms: std.os.timespec) f64 {
     return @intToFloat(f64, tms.tv_sec) + (@intToFloat(f64, tms.tv_nsec) / 1_000_000_000.0);
 }
 
-fn call_the_closure(function_pointer: *const u8, closure_data_pointer: [*]u8) void {
+fn call_the_closure(closure_data_pointer: [*]u8) void {
     const size = roc__mainForHost_1_Fx_result_size();
     const raw_output = std.heap.c_allocator.alloc(u8, @intCast(usize, size)) catch unreachable;
     var output = @ptrCast([*]u8, raw_output);
@@ -106,7 +105,7 @@ fn call_the_closure(function_pointer: *const u8, closure_data_pointer: [*]u8) vo
 
     const flags: u8 = 0;
 
-    roc__mainForHost_1_Fx_caller(&flags, function_pointer, closure_data_pointer, output);
+    roc__mainForHost_1_Fx_caller(&flags, closure_data_pointer, output);
 
     const elements = @ptrCast([*]u64, @alignCast(8, output));
 

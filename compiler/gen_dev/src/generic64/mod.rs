@@ -99,6 +99,8 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
     // It returns the base offset to calculate the jump from (generally the instruction after the jump).
     fn jmp_imm32(buf: &mut Vec<'_, u8>, offset: i32) -> usize;
 
+    fn tail_call(buf: &mut Vec<'_, u8>) -> u64;
+
     // Jumps by an offset of offset bytes if reg is not equal to imm.
     // It should always generate the same number of bytes to enable replacement if offset changes.
     // It returns the base offset to calculate the jump from (generally the instruction after the jump).
@@ -339,6 +341,14 @@ impl<
             }
         }
         Ok(())
+    }
+
+    /// Used for generating wrappers for malloc/realloc/free
+    fn build_wrapped_jmp(&mut self) -> Result<(&'a [u8], u64), String> {
+        let mut out = bumpalo::vec![in self.env.arena];
+        let offset = ASM::tail_call(&mut out);
+
+        Ok((out.into_bump_slice(), offset))
     }
 
     fn build_fn_call(

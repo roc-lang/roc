@@ -73,7 +73,7 @@ const Alignment = packed enum(u8) {
     Align8KeyFirst,
     Align8ValueFirst,
 
-    fn toUsize(self: Alignment) usize {
+    fn toU32(self: Alignment) u32 {
         switch (self) {
             .Align16KeyFirst => return 16,
             .Align16ValueFirst => return 16,
@@ -93,18 +93,18 @@ const Alignment = packed enum(u8) {
 };
 
 pub fn decref(
-    alignment: Alignment,
     bytes_or_null: ?[*]u8,
     data_bytes: usize,
+    alignment: Alignment,
 ) void {
-    return utils.decref(alignment.toUsize(), bytes_or_null, data_bytes);
+    return utils.decref(bytes_or_null, data_bytes, alignment.toU32());
 }
 
 pub fn allocateWithRefcount(
-    alignment: Alignment,
     data_bytes: usize,
+    alignment: Alignment,
 ) [*]u8 {
-    return utils.allocateWithRefcount(alignment.toUsize(), data_bytes);
+    return utils.allocateWithRefcount(data_bytes, alignment.toU32());
 }
 
 pub const RocDict = extern struct {
@@ -132,7 +132,7 @@ pub const RocDict = extern struct {
         const data_bytes = number_of_slots * slot_size;
 
         return RocDict{
-            .dict_bytes = allocateWithRefcount(alignment, data_bytes),
+            .dict_bytes = allocateWithRefcount(data_bytes, alignment),
             .number_of_levels = number_of_levels,
             .dict_entries_len = number_of_entries,
         };
@@ -152,7 +152,7 @@ pub const RocDict = extern struct {
         const delta_capacity = new_capacity - old_capacity;
 
         const data_bytes = new_capacity * slot_size;
-        const first_slot = allocateWithRefcount(alignment, data_bytes);
+        const first_slot = allocateWithRefcount(data_bytes, alignment);
 
         // transfer the memory
 
@@ -199,7 +199,7 @@ pub const RocDict = extern struct {
         };
 
         // NOTE we fuse an increment of all keys/values with a decrement of the input dict
-        decref(alignment, self.dict_bytes, self.capacity() * slotSize(key_width, value_width));
+        decref(self.dict_bytes, self.capacity() * slotSize(key_width, value_width), alignment);
 
         return result;
     }
@@ -251,7 +251,7 @@ pub const RocDict = extern struct {
 
         // NOTE we fuse an increment of all keys/values with a decrement of the input dict
         const data_bytes = self.capacity() * slotSize(key_width, value_width);
-        decref(alignment, self.dict_bytes, data_bytes);
+        decref(self.dict_bytes, data_bytes, alignment);
 
         return new_dict;
     }
@@ -409,7 +409,10 @@ const HashFn = fn (u64, ?[*]u8) callconv(.C) u64;
 const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
 
 const Inc = fn (?[*]u8) callconv(.C) void;
+const IncN = fn (?[*]u8, usize) callconv(.C) void;
 const Dec = fn (?[*]u8) callconv(.C) void;
+
+const Caller3 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 
 // Dict.insert : Dict k v, k, v -> Dict k v
 pub fn dictInsert(input: RocDict, alignment: Alignment, key: Opaque, key_width: usize, value: Opaque, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_key: Dec, dec_value: Dec, output: *RocDict) callconv(.C) void {
@@ -494,7 +497,7 @@ pub fn dictRemove(input: RocDict, alignment: Alignment, key: Opaque, key_width: 
             // if the dict is now completely empty, free its allocation
             if (dict.dict_entries_len == 0) {
                 const data_bytes = dict.capacity() * slotSize(key_width, value_width);
-                decref(alignment, dict.dict_bytes, data_bytes);
+                decref(dict.dict_bytes, data_bytes, alignment);
                 output.* = RocDict.empty();
                 return;
             }
@@ -567,7 +570,7 @@ pub fn dictKeys(dict: RocDict, alignment: Alignment, key_width: usize, value_wid
     }
 
     const data_bytes = length * key_width;
-    var ptr = allocateWithRefcount(alignment, data_bytes);
+    var ptr = allocateWithRefcount(data_bytes, alignment);
 
     var offset = blk: {
         if (alignment.keyFirst()) {
@@ -616,7 +619,7 @@ pub fn dictValues(dict: RocDict, alignment: Alignment, key_width: usize, value_w
     }
 
     const data_bytes = length * value_width;
-    var ptr = allocateWithRefcount(alignment, data_bytes);
+    var ptr = allocateWithRefcount(data_bytes, alignment);
 
     var offset = blk: {
         if (alignment.keyFirst()) {
@@ -751,17 +754,34 @@ pub fn setFromList(list: RocList, alignment: Alignment, key_width: usize, value_
 
     // NOTE: decref checks for the empty case
     const data_bytes = size * key_width;
-    decref(alignment, list.bytes, data_bytes);
+    decref(list.bytes, data_bytes, alignment);
 }
 
-const StepperCaller = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
-pub fn dictWalk(dict: RocDict, stepper: Opaque, stepper_caller: StepperCaller, accum: Opaque, alignment: Alignment, key_width: usize, value_width: usize, accum_width: usize, inc_key: Inc, inc_value: Inc, output: Opaque) callconv(.C) void {
-    const alignment_usize = alignment.toUsize();
+pub fn dictWalk(
+    dict: RocDict,
+    caller: Caller3,
+    data: Opaque,
+    inc_n_data: IncN,
+    data_is_owned: bool,
+    accum: Opaque,
+    alignment: Alignment,
+    key_width: usize,
+    value_width: usize,
+    accum_width: usize,
+    inc_key: Inc,
+    inc_value: Inc,
+    output: Opaque,
+) callconv(.C) void {
+    const alignment_u32 = alignment.toU32();
     // allocate space to write the result of the stepper into
     // experimentally aliasing the accum and output pointers is not a good idea
-    const bytes_ptr: [*]u8 = utils.alloc(alignment_usize, accum_width);
+    const bytes_ptr: [*]u8 = utils.alloc(accum_width, alignment_u32);
     var b1 = output orelse unreachable;
     var b2 = bytes_ptr;
+
+    if (data_is_owned) {
+        inc_n_data(data, dict.len());
+    }
 
     @memcpy(b2, accum orelse unreachable, accum_width);
 
@@ -773,7 +793,7 @@ pub fn dictWalk(dict: RocDict, stepper: Opaque, stepper_caller: StepperCaller, a
                 const key = dict.getKey(i, alignment, key_width, value_width);
                 const value = dict.getValue(i, alignment, key_width, value_width);
 
-                stepper_caller(stepper, key, value, b2, b1);
+                caller(data, key, value, b2, b1);
 
                 const temp = b1;
                 b2 = b1;
@@ -784,8 +804,5 @@ pub fn dictWalk(dict: RocDict, stepper: Opaque, stepper_caller: StepperCaller, a
     }
 
     @memcpy(output orelse unreachable, b2, accum_width);
-    utils.dealloc(alignment_usize, bytes_ptr);
-
-    const data_bytes = dict.capacity() * slotSize(key_width, value_width);
-    decref(alignment, dict.dict_bytes, data_bytes);
+    utils.dealloc(bytes_ptr, alignment_u32);
 }

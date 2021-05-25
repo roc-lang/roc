@@ -53,7 +53,7 @@ pub const RocStr = extern struct {
     }
 
     pub fn initBig(in_place: InPlace, number_of_chars: u64) RocStr {
-        const first_element = utils.allocateWithRefcount(@sizeOf(usize), number_of_chars);
+        const first_element = utils.allocateWithRefcount(number_of_chars, @sizeOf(usize));
 
         return RocStr{
             .str_bytes = first_element,
@@ -81,7 +81,7 @@ pub const RocStr = extern struct {
 
     pub fn deinit(self: RocStr) void {
         if (!self.isSmallStr() and !self.isEmpty()) {
-            utils.decref(RocStr.alignment, self.str_bytes, self.str_len);
+            utils.decref(self.str_bytes, self.str_len, RocStr.alignment);
         }
     }
 
@@ -99,7 +99,7 @@ pub const RocStr = extern struct {
         if (length < roc_str_size) {
             return RocStr.empty();
         } else {
-            var new_bytes: []T = utils.alloc(RocStr.alignment, length) catch unreachable;
+            var new_bytes: []T = utils.alloc(length, RocStr.alignment) catch unreachable;
 
             var new_bytes_ptr: [*]u8 = @ptrCast([*]u8, &new_bytes);
 
@@ -920,7 +920,7 @@ fn strConcat(result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
         return RocStr.clone(result_in_place, arg2);
     } else if (arg2.isEmpty()) {
         // the first argument is owned, so we can return it without cloning
-        return RocStr.clone(result_in_place, arg1);
+        return arg1;
     } else {
         const combined_length = arg1.len() + arg2.len();
 
@@ -947,8 +947,6 @@ fn strConcat(result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
 
         arg1.memcpy(result_ptr);
         arg2.memcpy(result_ptr + arg1.len());
-
-        arg1.deinit();
 
         return result;
     }
@@ -1072,7 +1070,7 @@ fn strToBytes(arg: RocStr) RocList {
         return RocList.empty();
     } else if (arg.isSmallStr()) {
         const length = arg.len();
-        const ptr = utils.allocateWithRefcount(RocStr.alignment, length);
+        const ptr = utils.allocateWithRefcount(length, RocStr.alignment);
 
         @memcpy(ptr, arg.asU8ptr(), length);
 
@@ -1104,7 +1102,7 @@ fn fromUtf8(arg: RocList) FromUtf8Result {
 
             // then decrement the input list
             const data_bytes = arg.len();
-            utils.decref(RocStr.alignment, arg.bytes, data_bytes);
+            utils.decref(arg.bytes, data_bytes, RocStr.alignment);
 
             return FromUtf8Result{ .is_ok = true, .string = string, .byte_index = 0, .problem_code = Utf8ByteProblem.InvalidStartByte };
         } else {
@@ -1119,7 +1117,7 @@ fn fromUtf8(arg: RocList) FromUtf8Result {
 
         // consume the input list
         const data_bytes = arg.len();
-        utils.decref(RocStr.alignment, arg.bytes, data_bytes);
+        utils.decref(arg.bytes, data_bytes, RocStr.alignment);
 
         return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = temp.index, .problem_code = temp.problem };
     }

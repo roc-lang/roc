@@ -9,14 +9,14 @@ pub mod alloca;
 extern "C" {
     pub fn printf(format: *const u8, ...) -> i32;
 
-    pub fn roc_alloc(alignment: usize, size: usize) -> *mut c_void;
+    pub fn roc_alloc(size: usize, alignment: u32) -> *mut c_void;
     pub fn roc_realloc(
-        alignment: usize,
         ptr: *mut c_void,
-        old_size: usize,
         new_size: usize,
+        old_size: usize,
+        alignment: u32,
     ) -> *mut c_void;
-    pub fn roc_dealloc(alignment: usize, ptr: *mut c_void);
+    pub fn roc_dealloc(ptr: *mut c_void, alignment: u32);
 }
 
 const REFCOUNT_1: usize = isize::MIN as usize;
@@ -148,7 +148,7 @@ impl<T> RocList<T> {
         let num_bytes = core::mem::size_of::<usize>() + padding + element_bytes;
 
         let elements = unsafe {
-            let raw_ptr = roc_alloc(core::mem::size_of::<usize>(), num_bytes) as *mut u8;
+            let raw_ptr = roc_alloc(num_bytes, core::mem::size_of::<usize>() as u32) as *mut u8;
 
             // pointer to the first element
             let raw_ptr = Self::get_element_ptr(raw_ptr as *mut T) as *mut T;
@@ -379,7 +379,7 @@ impl RocStr {
             let num_bytes = core::mem::size_of::<usize>() + element_bytes;
 
             let elements = unsafe {
-                let raw_ptr = roc_alloc(core::mem::size_of::<usize>(), num_bytes) as *mut u8;
+                let raw_ptr = roc_alloc(num_bytes, core::mem::size_of::<usize>() as u32) as *mut u8;
                 // write the capacity
                 let capacity_ptr = raw_ptr as *mut usize;
                 *capacity_ptr = capacity;
@@ -461,7 +461,7 @@ impl Clone for RocStr {
             let capacity_size = core::mem::size_of::<usize>();
             let copy_length = self.length + capacity_size;
             let elements = unsafe {
-                let raw = roc_alloc(core::mem::size_of::<usize>(), copy_length);
+                let raw = roc_alloc(copy_length, core::mem::size_of::<usize>() as u32);
 
                 libc::memcpy(
                     raw,

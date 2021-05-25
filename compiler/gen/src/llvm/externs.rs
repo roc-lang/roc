@@ -22,8 +22,8 @@ pub fn add_default_roc_externs<'ctx>(
         // already been defined by the builtins, which rely on it.
         let fn_val = module.get_function("roc_alloc").unwrap();
         let mut params = fn_val.get_param_iter();
-        let _alignment_arg = params.next().unwrap();
         let size_arg = params.next().unwrap();
+        let _alignment_arg = params.next().unwrap();
 
         debug_assert!(params.next().is_none());
 
@@ -83,10 +83,10 @@ pub fn add_default_roc_externs<'ctx>(
         // already been defined by the builtins, which rely on it.
         let fn_val = module.get_function("roc_realloc").unwrap();
         let mut params = fn_val.get_param_iter();
-        let _alignment_arg = params.next().unwrap();
         let ptr_arg = params.next().unwrap();
-        let _old_size_arg = params.next().unwrap();
         let new_size_arg = params.next().unwrap();
+        let _old_size_arg = params.next().unwrap();
+        let _alignment_arg = params.next().unwrap();
 
         debug_assert!(params.next().is_none());
 
@@ -119,8 +119,8 @@ pub fn add_default_roc_externs<'ctx>(
         // already been defined by the builtins, which rely on it.
         let fn_val = module.get_function("roc_dealloc").unwrap();
         let mut params = fn_val.get_param_iter();
-        let _alignment_arg = params.next().unwrap();
         let ptr_arg = params.next().unwrap();
+        let _alignment_arg = params.next().unwrap();
 
         debug_assert!(params.next().is_none());
 

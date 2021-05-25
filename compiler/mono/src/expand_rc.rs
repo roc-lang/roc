@@ -165,11 +165,10 @@ impl<'a, 'i> Env<'a, 'i> {
                 self.constructor_map.insert(symbol, 0);
                 self.layout_map.insert(symbol, Layout::Struct(fields));
             }
-            Closure(arguments, closure_layout, result) => {
-                let fpointer = Layout::FunctionPointer(arguments, result);
-                let fields = self.arena.alloc([fpointer, *closure_layout.layout]);
+            Closure(_, lambda_set, _) => {
                 self.constructor_map.insert(symbol, 0);
-                self.layout_map.insert(symbol, Layout::Struct(fields));
+                self.layout_map
+                    .insert(symbol, lambda_set.runtime_representation());
             }
             _ => {}
         }
@@ -203,7 +202,7 @@ impl<'a, 'i> Env<'a, 'i> {
 }
 
 fn layout_for_constructor<'a>(
-    arena: &'a Bump,
+    _arena: &'a Bump,
     layout: &Layout<'a>,
     constructor: u64,
 ) -> ConstructorLayout<&'a [Layout<'a>]> {
@@ -245,10 +244,12 @@ fn layout_for_constructor<'a>(
             debug_assert_eq!(constructor, 0);
             HasFields(fields)
         }
-        Closure(arguments, closure_layout, result) => {
-            let fpointer = Layout::FunctionPointer(arguments, result);
-            let fields = arena.alloc([fpointer, *closure_layout.layout]);
-            HasFields(fields)
+        Closure(_arguments, _lambda_set, _result) => {
+            // TODO can this be improved again?
+            // let fpointer = Layout::FunctionPointer(arguments, result);
+            // let fields = arena.alloc([fpointer, *lambda_set.layout]);
+            // HasFields(fields)
+            ConstructorLayout::Unknown
         }
         other => unreachable!("weird layout {:?}", other),
     }
@@ -373,11 +374,12 @@ pub fn expand_and_cancel_proc<'a>(
 
                 introduced.push(*symbol);
             }
-            Layout::Closure(arguments, closure_layout, result) => {
-                let fpointer = Layout::FunctionPointer(arguments, result);
-                let fields = env.arena.alloc([fpointer, *closure_layout.layout]);
-                env.insert_struct_info(*symbol, fields);
-                introduced.push(*symbol);
+            Layout::Closure(_arguments, _lambda_set, _result) => {
+                // TODO can this be improved again?
+                // let fpointer = Layout::FunctionPointer(arguments, result);
+                // let fields = env.arena.alloc([fpointer, *closure_layout.layout]);
+                // env.insert_struct_info(*symbol, fields);
+                // introduced.push(*symbol);
             }
             _ => {}
         }
@@ -550,7 +552,12 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
 
                 &*env.arena.alloc(stmt)
             }
-            Refcounting(ModifyRc::DecRef(_symbol), _cont) => unreachable!("not introduced yet"),
+            Refcounting(ModifyRc::DecRef(symbol), cont) => {
+                // decref the current cell
+                env.deferred.decrefs.push(*symbol);
+
+                expand_and_cancel(env, cont)
+            }
 
             Refcounting(ModifyRc::Dec(symbol), cont) => {
                 use ConstructorLayout::*;

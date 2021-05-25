@@ -2,7 +2,7 @@ use crate::target;
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::targets::{CodeModel, FileType, RelocMode};
-use inkwell::values::FunctionValue;
+pub use roc_gen::llvm::build::FunctionIterator;
 use roc_gen::llvm::build::{build_proc, build_proc_header, module_from_builtins, OptLevel, Scope};
 use roc_load::file::MonomorphizedModule;
 use roc_mono::layout::LayoutIds;
@@ -146,12 +146,12 @@ pub fn gen_from_mono_module(
 
     let mut scope = Scope::default();
     for ((symbol, layout), proc) in loaded.procedures {
-        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, layout, &proc);
 
         if proc.args.is_empty() {
             // this is a 0-argument thunk, i.e. a top-level constant definition
             // it must be in-scope everywhere in the module!
-            scope.insert_top_level_thunk(symbol, layout, fn_val);
+            scope.insert_top_level_thunk(symbol, arena.alloc(layout), fn_val);
         }
 
         headers.push((proc, fn_val));
@@ -285,32 +285,5 @@ pub fn gen_from_mono_module(
     CodeGenTiming {
         code_gen,
         emit_o_file,
-    }
-}
-
-pub struct FunctionIterator<'ctx> {
-    next: Option<FunctionValue<'ctx>>,
-}
-
-impl<'ctx> FunctionIterator<'ctx> {
-    pub fn from_module(module: &inkwell::module::Module<'ctx>) -> Self {
-        Self {
-            next: module.get_first_function(),
-        }
-    }
-}
-
-impl<'ctx> Iterator for FunctionIterator<'ctx> {
-    type Item = FunctionValue<'ctx>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.next {
-            Some(function) => {
-                self.next = function.get_next_function();
-
-                Some(function)
-            }
-            None => None,
-        }
     }
 }
