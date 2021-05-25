@@ -2,11 +2,11 @@ const std = @import("std");
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 
 // If allocation fails, this must cxa_throw - it must not return a null pointer!
-extern fn roc_alloc(size: usize, alignment: u32) callconv(.C) *c_void;
+extern fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void;
 
 // This should never be passed a null pointer.
 // If allocation fails, this must cxa_throw - it must not return a null pointer!
-extern fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) *c_void;
+extern fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void;
 
 // This should never be passed a null pointer.
 extern fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void;
@@ -20,15 +20,15 @@ comptime {
     }
 }
 
-fn testing_roc_alloc(size: usize, alignment: u32) callconv(.C) *c_void {
-    return @ptrCast(*c_void, std.testing.allocator.alloc(u8, size) catch unreachable);
+fn testing_roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
+    return @ptrCast(?*c_void, std.testing.allocator.alloc(u8, size) catch unreachable);
 }
 
-fn testing_roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) *c_void {
+fn testing_roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void {
     const ptr = @ptrCast([*]u8, @alignCast(16, c_ptr));
     const slice = ptr[0..old_size];
 
-    return @ptrCast(*c_void, std.testing.allocator.realloc(slice, new_size) catch unreachable);
+    return @ptrCast(?*c_void, std.testing.allocator.realloc(slice, new_size) catch unreachable);
 }
 
 fn testing_roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
