@@ -110,9 +110,9 @@ pub fn intWidth(width: IntWidth) anytype {
 }
 
 pub fn decref(
-    alignment: u32,
     bytes_or_null: ?[*]u8,
     data_bytes: usize,
+    alignment: u32,
 ) void {
     if (data_bytes == 0) {
         return;

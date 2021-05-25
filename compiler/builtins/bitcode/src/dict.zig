@@ -93,11 +93,11 @@ const Alignment = packed enum(u8) {
 };
 
 pub fn decref(
-    alignment: Alignment,
     bytes_or_null: ?[*]u8,
     data_bytes: usize,
+    alignment: Alignment,
 ) void {
-    return utils.decref(alignment.toU32(), bytes_or_null, data_bytes);
+    return utils.decref(bytes_or_null, data_bytes, alignment.toU32());
 }
 
 pub fn allocateWithRefcount(
@@ -199,7 +199,7 @@ pub const RocDict = extern struct {
         };
 
         // NOTE we fuse an increment of all keys/values with a decrement of the input dict
-        decref(alignment, self.dict_bytes, self.capacity() * slotSize(key_width, value_width));
+        decref(self.dict_bytes, self.capacity() * slotSize(key_width, value_width), alignment);
 
         return result;
     }
@@ -251,7 +251,7 @@ pub const RocDict = extern struct {
 
         // NOTE we fuse an increment of all keys/values with a decrement of the input dict
         const data_bytes = self.capacity() * slotSize(key_width, value_width);
-        decref(alignment, self.dict_bytes, data_bytes);
+        decref(self.dict_bytes, data_bytes, alignment);
 
         return new_dict;
     }
@@ -497,7 +497,7 @@ pub fn dictRemove(input: RocDict, alignment: Alignment, key: Opaque, key_width: 
             // if the dict is now completely empty, free its allocation
             if (dict.dict_entries_len == 0) {
                 const data_bytes = dict.capacity() * slotSize(key_width, value_width);
-                decref(alignment, dict.dict_bytes, data_bytes);
+                decref(dict.dict_bytes, data_bytes, alignment);
                 output.* = RocDict.empty();
                 return;
             }
@@ -754,7 +754,7 @@ pub fn setFromList(list: RocList, alignment: Alignment, key_width: usize, value_
 
     // NOTE: decref checks for the empty case
     const data_bytes = size * key_width;
-    decref(alignment, list.bytes, data_bytes);
+    decref(list.bytes, data_bytes, alignment);
 }
 
 pub fn dictWalk(

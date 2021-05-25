@@ -73,7 +73,7 @@ pub const RocList = extern struct {
 
         // NOTE we fuse an increment of all keys/values with a decrement of the input dict
         const data_bytes = self.len() * element_width;
-        utils.decref(alignment, self.bytes, data_bytes);
+        utils.decref(self.bytes, data_bytes, alignment);
 
         return new_list;
     }
@@ -122,7 +122,7 @@ pub const RocList = extern struct {
             .length = new_length,
         };
 
-        utils.decref(alignment, self.bytes, old_length * element_width);
+        utils.decref(self.bytes, old_length * element_width, alignment);
 
         return result;
     }
@@ -162,7 +162,7 @@ pub fn listReverse(list: RocList, alignment: u32, element_width: usize) callconv
                 @memcpy(target_ptr + (i * element_width), source_ptr + (last_position * element_width), element_width);
             }
 
-            utils.decref(alignment, list.bytes, size * element_width);
+            utils.decref(list.bytes, size * element_width, alignment);
 
             return output;
         }
@@ -383,7 +383,7 @@ pub fn listKeepIf(
 
         if (kept == 0) {
             // if the output is empty, deallocate the space we made for the result
-            utils.decref(alignment, output.bytes, size * element_width);
+            utils.decref(output.bytes, size * element_width, alignment);
             return RocList.empty();
         } else {
             output.length = kept;
@@ -493,7 +493,7 @@ pub fn listKeepResult(
         utils.dealloc(temporary, alignment);
 
         if (kept == 0) {
-            utils.decref(alignment, output.bytes, size * after_width);
+            utils.decref(output.bytes, size * after_width, alignment);
             return RocList.empty();
         } else {
             output.length = kept;
@@ -750,7 +750,7 @@ pub fn listDrop(
 
         @memcpy(target_ptr, source_ptr + drop_count * element_width, keep_count * element_width);
 
-        utils.decref(alignment, list.bytes, size * element_width);
+        utils.decref(list.bytes, size * element_width, alignment);
 
         return output;
     } else {

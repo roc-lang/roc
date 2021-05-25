@@ -81,7 +81,7 @@ pub const RocStr = extern struct {
 
     pub fn deinit(self: RocStr) void {
         if (!self.isSmallStr() and !self.isEmpty()) {
-            utils.decref(RocStr.alignment, self.str_bytes, self.str_len);
+            utils.decref(self.str_bytes, self.str_len, RocStr.alignment);
         }
     }
 
@@ -1102,7 +1102,7 @@ fn fromUtf8(arg: RocList) FromUtf8Result {
 
             // then decrement the input list
             const data_bytes = arg.len();
-            utils.decref(RocStr.alignment, arg.bytes, data_bytes);
+            utils.decref(arg.bytes, data_bytes, RocStr.alignment);
 
             return FromUtf8Result{ .is_ok = true, .string = string, .byte_index = 0, .problem_code = Utf8ByteProblem.InvalidStartByte };
         } else {
@@ -1117,7 +1117,7 @@ fn fromUtf8(arg: RocList) FromUtf8Result {
 
         // consume the input list
         const data_bytes = arg.len();
-        utils.decref(RocStr.alignment, arg.bytes, data_bytes);
+        utils.decref(arg.bytes, data_bytes, RocStr.alignment);
 
         return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = temp.index, .problem_code = temp.problem };
     }
