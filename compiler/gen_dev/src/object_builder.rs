@@ -117,8 +117,8 @@ fn generate_wrapper<'a, B: Backend<'a>>(
         value: 0,
         size: 0,
         kind: SymbolKind::Text,
-        scope: SymbolScope::Linkage,
-        weak: false,
+        scope: SymbolScope::Dynamic,
+        weak: true,
         section: SymbolSection::Undefined,
         flags: SymbolFlags::None,
     };
