@@ -44,7 +44,7 @@ pub fn build_file<'a>(
     let compilation_start = SystemTime::now();
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
 
-    // Step 1: compile the app
+    // Step 1: compile the app and generate the .o file
     let subs_by_module = MutMap::default();
 
     // Release builds use uniqueness optimizations
@@ -64,51 +64,6 @@ pub fn build_file<'a>(
     )?;
 
     let path_to_platform = loaded.platform_path.clone();
-
-    // Step 2: build the host
-    let cwd = roc_file_path.parent().unwrap();
-    let mut host_input_path = PathBuf::from(cwd);
-
-    host_input_path.push(&*path_to_platform);
-    use roc_build::link::HostBuildMode;
-    let host_build_mode = match opt_level {
-        OptLevel::Normal => {
-            if true {
-                host_input_path.push("host.o");
-                HostBuildMode::ObjectFile
-            } else {
-                host_input_path.push("host.bc");
-                HostBuildMode::LLVMBitcode
-            }
-        }
-        OptLevel::Optimize => {
-            if false {
-                host_input_path.push("host.o");
-                HostBuildMode::ObjectFile
-            } else {
-                host_input_path.push("host.bc");
-                HostBuildMode::LLVMBitcode
-            }
-        }
-    };
-
-    // TODO we should no longer need to do this once we have platforms on
-    // a package repository, as we can then get precompiled hosts from there.
-    let rebuild_host_start = SystemTime::now();
-    rebuild_host(host_input_path.as_path(), host_build_mode);
-    let rebuild_host_end = rebuild_host_start.elapsed().unwrap();
-
-    if emit_debug_info {
-        println!(
-            "Finished rebuilding the host in {} ms\n",
-            rebuild_host_end.as_millis()
-        );
-    }
-
-    dbg!("built host");
-
-    // step 3: generate the .o file
-
     let app_o_file = Builder::new()
         .prefix("roc_app")
         .suffix(".o")
@@ -159,6 +114,7 @@ pub fn build_file<'a>(
         }
     }
 
+    let cwd = roc_file_path.parent().unwrap();
     let binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
     let code_gen_timing = program::gen_from_mono_module(
         &arena,
@@ -166,14 +122,9 @@ pub fn build_file<'a>(
         &roc_file_path,
         Triple::host(),
         &app_o_file,
-        match host_build_mode {
-            HostBuildMode::ObjectFile => None,
-            HostBuildMode::LLVMBitcode => Some(host_input_path.as_path()),
-        },
         opt_level,
         emit_debug_info,
     );
-    dbg!("code gen done");
 
     buf.push('\n');
     buf.push_str("    ");
@@ -207,35 +158,38 @@ pub fn build_file<'a>(
         );
     }
 
-    // Step 3: link them together
+    // Step 2: link the precompiled host and compiled app
+    let mut host_input_path = PathBuf::from(cwd);
+
+    host_input_path.push(&*path_to_platform);
+    host_input_path.push("host.o");
+
+    // TODO we should no longer need to do this once we have platforms on
+    // a package repository, as we can then get precompiled hosts from there.
+    let rebuild_host_start = SystemTime::now();
+    rebuild_host(host_input_path.as_path());
+    let rebuild_host_end = rebuild_host_start.elapsed().unwrap();
+
+    if emit_debug_info {
+        println!(
+            "Finished rebuilding the host in {} ms\n",
+            rebuild_host_end.as_millis()
+        );
+    }
+
     // TODO try to move as much of this linking as possible to the precompiled
     // host, to minimize the amount of host-application linking required.
     let link_start = SystemTime::now();
-    let (mut child, binary_path) = {
-        // TODO use lld
-
-        let linked = match host_build_mode {
-            HostBuildMode::ObjectFile => link(
-                target,
-                binary_path,
-                &[
-                    dbg!(host_input_path.as_path().to_str().unwrap()),
-                    app_o_file.to_str().unwrap(),
-                ],
-                link_type,
-            ),
-            HostBuildMode::LLVMBitcode => link(
-                target,
-                binary_path,
-                &[app_o_file.to_str().unwrap()],
-                link_type,
-            ),
-        };
-
-        linked.map_err(|_| {
+    let (mut child, binary_path) =  // TODO use lld
+        link(
+            target,
+            binary_path,
+            &[host_input_path.as_path().to_str().unwrap(), app_o_file.to_str().unwrap()],
+            link_type
+        )
+        .map_err(|_| {
             todo!("gracefully handle `rustc` failing to spawn.");
-        })?
-    };
+        })?;
 
     let cmd_result = child.wait().map_err(|_| {
         todo!("gracefully handle error after `rustc` spawned");

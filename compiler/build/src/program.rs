@@ -19,14 +19,13 @@ pub struct CodeGenTiming {
 // TODO how should imported modules factor into this? What if those use builtins too?
 // TODO this should probably use more helper functions
 // TODO make this polymorphic in the llvm functions so it can be reused for another backend.
-#[allow(clippy::cognitive_complexity, clippy::clippy::too_many_arguments)]
+#[allow(clippy::cognitive_complexity)]
 pub fn gen_from_mono_module(
     arena: &Bump,
     mut loaded: MonomorphizedModule,
     roc_file_path: &Path,
     target: Triple,
     app_o_file: &Path,
-    host_llvm_ir: Option<&Path>,
     opt_level: OptLevel,
     emit_debug_info: bool,
 ) -> CodeGenTiming {
@@ -191,25 +190,6 @@ pub fn gen_from_mono_module(
 
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
-
-    if let Some(host_llvm_ir) = host_llvm_ir {
-        let host_module =
-            inkwell::module::Module::parse_bitcode_from_path(host_llvm_ir, &context).unwrap();
-
-        // host_module.link_in_module(module.clone()).unwrap();
-        module.link_in_module(host_module).unwrap();
-
-        // Verify the module
-        if let Err(errors) = env.module.verify() {
-            // write the ll code to a file, so we can modify it
-            env.module.print_to_file(&app_ll_file).unwrap();
-
-            panic!(
-                "😱 LLVM errors linking in the HOST MODULE; I wrote the full LLVM IR to {:?}\n\n {:?}",
-                app_ll_file, errors,
-            );
-        }
-    }
 
     mpm.run_on(module);
 
