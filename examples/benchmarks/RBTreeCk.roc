@@ -48,7 +48,7 @@ resultWithDefault = \res, default ->
 main : Task.Task {} []
 main =
     ms : ConsList Map
-    ms = makeMap 5 5 # 42_000_00
+    ms = makeMap 5 5600 # 4_200_000
 
     when ms is
         Cons head _ ->

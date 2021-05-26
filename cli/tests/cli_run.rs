@@ -179,7 +179,7 @@ mod cli_run {
     fn run_nqueens_not_optimized() {
         check_output_with_stdin(
             &example_file("benchmarks", "NQueens.roc"),
-            "",
+            "6",
             "nqueens",
             &[],
             "4\n",

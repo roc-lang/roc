@@ -15,7 +15,7 @@ ConsList a : [ Nil, Cons a (ConsList a) ]
 main : Task.Task {} []
 main =
     # benchmarks use 4_200_000
-    m = makeMap 420
+    m = makeMap 6000
 
     val = fold (\_, v, r -> if v then r + 1 else r) m 0
 

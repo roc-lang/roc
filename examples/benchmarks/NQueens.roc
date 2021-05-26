@@ -5,10 +5,10 @@ app "nqueens"
 
 main : Task.Task {} []
 main =
-    # Task.after Task.getInt \n ->
-    queens 6
-        |> Str.fromInt
-        |> Task.putLine
+    Task.after Task.getInt \n ->
+        queens n
+            |> Str.fromInt
+            |> Task.putLine
 
 ConsList a : [ Nil, Cons a (ConsList a) ]
 

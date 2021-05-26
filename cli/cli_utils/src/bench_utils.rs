@@ -1,5 +1,5 @@
 use crate::helpers::{example_file, run_cmd, run_roc};
-use criterion::{black_box, measurement::WallTime, BenchmarkGroup};
+use criterion::{BenchmarkGroup, black_box, measurement::{Measurement, WallTime}};
 use std::path::Path;
 
 // run without optimization, without input
@@ -9,23 +9,23 @@ fn exec_bench_simple(
     expected_ending: &str,
     bench_group_opt: Option<&mut BenchmarkGroup<WallTime>>,
 ) {
-    exec_benchmark(
+    exec_bench_w_input(
         file,
         "",
         executable_filename,
         expected_ending,
-        false,
+        true,
         bench_group_opt,
     )
 }
 
-fn exec_benchmark(
+fn exec_bench_w_input<T: Measurement>(
     file: &Path,
     stdin_str: &str,
     executable_filename: &str,
     expected_ending: &str,
     run_optimized: bool,
-    bench_group_opt: Option<&mut BenchmarkGroup<WallTime>>,
+    bench_group_opt: Option<&mut BenchmarkGroup<T>>,
 ) {
     let flags: &[&str] = if run_optimized { &["--optimize"] } else { &[] };
 
@@ -67,11 +67,11 @@ fn check_cmd_output(
     assert!(out.status.success());
 }
 
-fn bench_cmd(
+fn bench_cmd<T: Measurement>(
     file: &Path,
     stdin_str: &str,
     executable_filename: &str,
-    bench_group_opt: Option<&mut BenchmarkGroup<WallTime>>,
+    bench_group_opt: Option<&mut BenchmarkGroup<T>>,
 ) {
     if let Some(bench_group) = bench_group_opt {
         bench_group.bench_function(&format!("Benchmarking {:?}", executable_filename), |b| {
@@ -92,11 +92,13 @@ fn bench_cmd(
     }
 }
 
-pub fn bench_nqueens(bench_group_opt: Option<&mut BenchmarkGroup<WallTime>>) {
-    exec_bench_simple(
+pub fn bench_nqueens<T: Measurement>(bench_group_opt: Option<&mut BenchmarkGroup<T>>) {
+    exec_bench_w_input(
         &example_file("benchmarks", "NQueens.roc"),
+        "11",
         "nqueens",
-        "4\n",
+        "2680\n",
+        true,
         bench_group_opt,
     );
 }
@@ -105,7 +107,7 @@ pub fn bench_cfold(bench_group_opt: Option<&mut BenchmarkGroup<WallTime>>) {
     exec_bench_simple(
         &example_file("benchmarks", "CFold.roc"),
         "cfold",
-        "11 & 11\n",
+        "10426 & 10426\n",
         bench_group_opt,
     );
 }
@@ -114,16 +116,16 @@ pub fn bench_deriv(bench_group_opt: Option<&mut BenchmarkGroup<WallTime>>) {
     exec_bench_simple(
         &example_file("benchmarks", "Deriv.roc"),
         "deriv",
-        "1 count: 6\n2 count: 22\n",
+        "1 count: 6\n2 count: 22\n3 count: 90\n4 count: 420\n5 count: 2202\n6 count: 12886\n7 count: 83648\n",
         bench_group_opt,
     );
 }
 
-pub fn bench_rbtree(bench_group_opt: Option<&mut BenchmarkGroup<WallTime>>) {
+pub fn bench_rbtree_ck(bench_group_opt: Option<&mut BenchmarkGroup<WallTime>>) {
     exec_bench_simple(
-        &example_file("benchmarks", "RBTreeInsert.roc"),
-        "rbtree-insert",
-        "Node Black 0 {} Empty Empty\n",
+        &example_file("benchmarks", "RBTreeCk.roc"),
+        "rbtree-ck",
+        "560\n",
         bench_group_opt,
     );
 }
@@ -132,34 +134,9 @@ pub fn bench_rbtree_delete(bench_group_opt: Option<&mut BenchmarkGroup<WallTime>
     exec_bench_simple(
         &example_file("benchmarks", "RBTreeDel.roc"),
         "rbtree-del",
-        "30\n",
+        "420\n",
         bench_group_opt,
     );
 }
 
-pub fn bench_astar(bench_group_opt: Option<&mut BenchmarkGroup<WallTime>>) {
-    exec_bench_simple(
-        &example_file("benchmarks", "TestAStar.roc"),
-        "test-astar",
-        "True\n",
-        bench_group_opt,
-    );
-}
-
-pub fn bench_base64(bench_group_opt: Option<&mut BenchmarkGroup<WallTime>>) {
-    exec_bench_simple(
-        &example_file("benchmarks", "TestBase64.roc"),
-        "test-base64",
-        "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
-        bench_group_opt,
-    );
-}
-
-pub fn bench_closure(bench_group_opt: Option<&mut BenchmarkGroup<WallTime>>) {
-    exec_bench_simple(
-        &example_file("benchmarks", "Closure.roc"),
-        "closure",
-        "",
-        bench_group_opt,
-    );
-}
+// TODO quicksort

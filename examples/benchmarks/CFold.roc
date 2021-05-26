@@ -7,7 +7,7 @@ app "cfold"
 
 main : Task.Task {} []
 main =
-    e = mkExpr 3 1
+    e = mkExpr 12 1
     unoptimized = eval e
     optimized = eval (constFolding (reassoc e))
 

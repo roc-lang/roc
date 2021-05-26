@@ -15,7 +15,7 @@ main =
     f : Expr
     f = pow x x
 
-    nest deriv 2 f
+    nest deriv 7 f
         |> Task.map (\_ -> {})
 
 Expr : [ Val I64, Var Str, Add Expr Expr, Mul Expr Expr, Pow Expr Expr, Ln Expr ]
