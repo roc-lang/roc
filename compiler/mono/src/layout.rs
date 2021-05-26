@@ -48,10 +48,7 @@ impl<'a> Layout<'a> {
     pub fn in_place(&self) -> InPlace {
         match self {
             Layout::Builtin(Builtin::EmptyList) => InPlace::InPlace,
-            Layout::Builtin(Builtin::List(memory_mode, _)) => match memory_mode {
-                MemoryMode::Unique => InPlace::InPlace,
-                MemoryMode::Refcounted => InPlace::Clone,
-            },
+            Layout::Builtin(Builtin::List(_)) => InPlace::Clone,
             Layout::Builtin(Builtin::EmptyStr) => InPlace::InPlace,
             Layout::Builtin(Builtin::Str) => InPlace::Clone,
             Layout::Builtin(Builtin::Int1) => InPlace::Clone,
@@ -331,12 +328,6 @@ impl<'a> LambdaSet<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Copy)]
-pub enum MemoryMode {
-    Unique,
-    Refcounted,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Builtin<'a> {
     Int128,
@@ -353,7 +344,7 @@ pub enum Builtin<'a> {
     Str,
     Dict(&'a Layout<'a>, &'a Layout<'a>),
     Set(&'a Layout<'a>),
-    List(MemoryMode, &'a Layout<'a>),
+    List(&'a Layout<'a>),
     EmptyStr,
     EmptyList,
     EmptyDict,
@@ -606,7 +597,7 @@ impl<'a> Layout<'a> {
 
             RecursivePointer => true,
 
-            Builtin(List(MemoryMode::Refcounted, _)) | Builtin(Str) => true,
+            Builtin(List(_)) | Builtin(Str) => true,
 
             _ => false,
         }
@@ -855,7 +846,7 @@ impl<'a> Builtin<'a> {
             Str | EmptyStr => Builtin::STR_WORDS * pointer_size,
             Dict(_, _) | EmptyDict => Builtin::DICT_WORDS * pointer_size,
             Set(_) | EmptySet => Builtin::SET_WORDS * pointer_size,
-            List(_, _) | EmptyList => Builtin::LIST_WORDS * pointer_size,
+            List(_) | EmptyList => Builtin::LIST_WORDS * pointer_size,
         }
     }
 
@@ -881,7 +872,7 @@ impl<'a> Builtin<'a> {
             Str | EmptyStr => pointer_size,
             Dict(_, _) | EmptyDict => pointer_size,
             Set(_) | EmptySet => pointer_size,
-            List(_, _) | EmptyList => pointer_size,
+            List(_) | EmptyList => pointer_size,
         }
     }
 
@@ -891,7 +882,7 @@ impl<'a> Builtin<'a> {
         match self {
             Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize | Float128 | Float64 | Float32
             | Float16 | EmptyStr | EmptyDict | EmptyList | EmptySet => true,
-            Str | Dict(_, _) | Set(_) | List(_, _) => false,
+            Str | Dict(_, _) | Set(_) | List(_) => false,
         }
     }
 
@@ -902,10 +893,7 @@ impl<'a> Builtin<'a> {
         match self {
             Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize | Float128 | Float64 | Float32
             | Float16 | EmptyStr | EmptyDict | EmptyList | EmptySet => false,
-            List(mode, element_layout) => match mode {
-                MemoryMode::Refcounted => true,
-                MemoryMode::Unique => element_layout.contains_refcounted(),
-            },
+            List(_) => true,
 
             Str | Dict(_, _) | Set(_) => true,
         }
@@ -938,7 +926,7 @@ impl<'a> Builtin<'a> {
             EmptySet => alloc.text("EmptySet"),
 
             Str => alloc.text("Str"),
-            List(_, layout) => alloc
+            List(layout) => alloc
                 .text("List ")
                 .append(layout.to_doc(alloc, Parens::InTypeParam)),
             Set(layout) => alloc
@@ -1878,11 +1866,7 @@ pub fn list_layout_from_elem<'a>(
         _ => {
             let elem_layout = Layout::from_var(env, elem_var)?;
 
-            // This is a normal list.
-            Ok(Layout::Builtin(Builtin::List(
-                MemoryMode::Refcounted,
-                env.arena.alloc(elem_layout),
-            )))
+            Ok(Layout::Builtin(Builtin::List(env.arena.alloc(elem_layout))))
         }
     }
 }
@@ -1948,7 +1932,7 @@ impl<'a> std::convert::TryFrom<&Layout<'a>> for ListLayout<'a> {
     fn try_from(value: &Layout<'a>) -> Result<Self, Self::Error> {
         match value {
             Layout::Builtin(Builtin::EmptyList) => Ok(ListLayout::EmptyList),
-            Layout::Builtin(Builtin::List(_, element)) => Ok(ListLayout::List(element)),
+            Layout::Builtin(Builtin::List(element)) => Ok(ListLayout::List(element)),
             _ => Err(()),
         }
     }

@@ -15,7 +15,7 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, Str
 use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, Layout, LayoutIds, MemoryMode, UnionLayout};
+use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
 pub const REFCOUNT_MAX: usize = 0_usize;
 
@@ -469,21 +469,17 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
     use Builtin::*;
 
     match builtin {
-        List(memory_mode, element_layout) => {
-            if let MemoryMode::Refcounted = memory_mode {
-                let function = modify_refcount_list(
-                    env,
-                    layout_ids,
-                    mode,
-                    when_recursive,
-                    layout,
-                    element_layout,
-                );
+        List(element_layout) => {
+            let function = modify_refcount_list(
+                env,
+                layout_ids,
+                mode,
+                when_recursive,
+                layout,
+                element_layout,
+            );
 
-                Some(function)
-            } else {
-                None
-            }
+            Some(function)
         }
         Set(element_layout) => {
             let key_layout = &Layout::Struct(&[]);
@@ -1687,7 +1683,7 @@ pub fn refcount_offset<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layou
     let value_bytes = layout.stack_size(env.ptr_bytes) as u64;
 
     match layout {
-        Layout::Builtin(Builtin::List(_, _)) => env.ptr_bytes as u64,
+        Layout::Builtin(Builtin::List(_)) => env.ptr_bytes as u64,
         Layout::Builtin(Builtin::Str) => env.ptr_bytes as u64,
         Layout::RecursivePointer | Layout::Union(_) => env.ptr_bytes as u64,
         _ => (env.ptr_bytes as u64).max(value_bytes),

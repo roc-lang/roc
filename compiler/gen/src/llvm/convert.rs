@@ -170,7 +170,7 @@ pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
         Float16 => context.f16_type().as_basic_type_enum(),
         Dict(_, _) | EmptyDict => zig_dict_type(env).into(),
         Set(_) | EmptySet => zig_dict_type(env).into(),
-        List(_, _) | EmptyList => zig_list_type(env).into(),
+        List(_) | EmptyList => zig_list_type(env).into(),
         Str | EmptyStr => zig_str_type(env).into(),
     }
 }

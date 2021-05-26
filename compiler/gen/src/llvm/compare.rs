@@ -99,7 +99,7 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
         Builtin::Float16 => float_cmp(FloatPredicate::OEQ, "eq_f16"),
 
         Builtin::Str => str_equal(env, lhs_val, rhs_val),
-        Builtin::List(_, elem) => build_list_eq(
+        Builtin::List(elem) => build_list_eq(
             env,
             layout_ids,
             &Layout::Builtin(*builtin),
@@ -249,7 +249,7 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
 
             result.into()
         }
-        Builtin::List(_, elem) => {
+        Builtin::List(elem) => {
             let is_equal = build_list_eq(
                 env,
                 layout_ids,

@@ -2180,7 +2180,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
 
                     match layout {
-                        Layout::Builtin(Builtin::List(_, _)) => {
+                        Layout::Builtin(Builtin::List(_)) => {
                             debug_assert!(value.is_struct_value());
 
                             // because of how we insert DECREF for lists, we can't guarantee that
@@ -3585,7 +3585,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => default,
-                Layout::Builtin(Builtin::List(_, element_layout)) => {
+                Layout::Builtin(Builtin::List(element_layout)) => {
                     let argument_layouts = &[**element_layout, *default_layout];
 
                     let roc_function_call = roc_function_call(
@@ -3627,8 +3627,8 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             match (list_layout, return_layout) {
                 (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
                 (
-                    Layout::Builtin(Builtin::List(_, element_layout)),
-                    Layout::Builtin(Builtin::List(_, result_layout)),
+                    Layout::Builtin(Builtin::List(element_layout)),
+                    Layout::Builtin(Builtin::List(result_layout)),
                 ) => {
                     let argument_layouts = &[**element_layout];
 
@@ -3658,9 +3658,9 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             match (list1_layout, list2_layout, return_layout) {
                 (
-                    Layout::Builtin(Builtin::List(_, element1_layout)),
-                    Layout::Builtin(Builtin::List(_, element2_layout)),
-                    Layout::Builtin(Builtin::List(_, result_layout)),
+                    Layout::Builtin(Builtin::List(element1_layout)),
+                    Layout::Builtin(Builtin::List(element2_layout)),
+                    Layout::Builtin(Builtin::List(result_layout)),
                 ) => {
                     let argument_layouts = &[**element1_layout, **element2_layout];
 
@@ -3702,10 +3702,10 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             match (list1_layout, list2_layout, list3_layout, return_layout) {
                 (
-                    Layout::Builtin(Builtin::List(_, element1_layout)),
-                    Layout::Builtin(Builtin::List(_, element2_layout)),
-                    Layout::Builtin(Builtin::List(_, element3_layout)),
-                    Layout::Builtin(Builtin::List(_, result_layout)),
+                    Layout::Builtin(Builtin::List(element1_layout)),
+                    Layout::Builtin(Builtin::List(element2_layout)),
+                    Layout::Builtin(Builtin::List(element3_layout)),
+                    Layout::Builtin(Builtin::List(result_layout)),
                 ) => {
                     let argument_layouts =
                         &[**element1_layout, **element2_layout, **element3_layout];
@@ -3752,8 +3752,8 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             match (list_layout, return_layout) {
                 (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
                 (
-                    Layout::Builtin(Builtin::List(_, element_layout)),
-                    Layout::Builtin(Builtin::List(_, result_layout)),
+                    Layout::Builtin(Builtin::List(element_layout)),
+                    Layout::Builtin(Builtin::List(result_layout)),
                 ) => {
                     let argument_layouts = &[Layout::Builtin(Builtin::Usize), **element_layout];
 
@@ -3784,7 +3784,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(_, element_layout)) => {
+                Layout::Builtin(Builtin::List(element_layout)) => {
                     let argument_layouts = &[**element_layout];
 
                     let roc_function_call = roc_function_call(
@@ -3816,8 +3816,8 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 (_, Layout::Builtin(Builtin::EmptyList))
                 | (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
                 (
-                    Layout::Builtin(Builtin::List(_, before_layout)),
-                    Layout::Builtin(Builtin::List(_, after_layout)),
+                    Layout::Builtin(Builtin::List(before_layout)),
+                    Layout::Builtin(Builtin::List(after_layout)),
                 ) => {
                     let argument_layouts = &[**before_layout];
 
@@ -3860,8 +3860,8 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 (_, Layout::Builtin(Builtin::EmptyList))
                 | (Layout::Builtin(Builtin::EmptyList), _) => empty_list(env),
                 (
-                    Layout::Builtin(Builtin::List(_, before_layout)),
-                    Layout::Builtin(Builtin::List(_, after_layout)),
+                    Layout::Builtin(Builtin::List(before_layout)),
+                    Layout::Builtin(Builtin::List(after_layout)),
                 ) => {
                     let argument_layouts = &[**before_layout];
 
@@ -3911,7 +3911,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(_, element_layout)) => {
+                Layout::Builtin(Builtin::List(element_layout)) => {
                     use crate::llvm::bitcode::build_compare_wrapper;
 
                     let argument_layouts = &[**element_layout, **element_layout];
@@ -4179,7 +4179,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
-                Layout::Builtin(Builtin::List(_, element_layout)) => list_drop(
+                Layout::Builtin(Builtin::List(element_layout)) => list_drop(
                     env,
                     layout_ids,
                     original_wrapper,
@@ -4448,7 +4448,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     // no elements, so nothing to remove
                     empty_list(env)
                 }
-                Layout::Builtin(Builtin::List(_, element_layout)) => list_set(
+                Layout::Builtin(Builtin::List(element_layout)) => list_set(
                     env,
                     layout_ids,
                     list,
@@ -4469,7 +4469,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     // no elements, so nothing to remove
                     empty_list(env)
                 }
-                Layout::Builtin(Builtin::List(_, element_layout)) => list_set(
+                Layout::Builtin(Builtin::List(element_layout)) => list_set(
                     env,
                     layout_ids,
                     list,
@@ -4646,7 +4646,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => dict_empty(env),
-                Layout::Builtin(Builtin::List(_, key_layout)) => {
+                Layout::Builtin(Builtin::List(key_layout)) => {
                     set_from_list(env, layout_ids, list, key_layout)
                 }
                 _ => unreachable!("invalid dict layout"),

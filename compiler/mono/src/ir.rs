@@ -3,8 +3,8 @@
 use self::InProgressProc::*;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{
-    Builtin, ClosureRepresentation, LambdaSet, Layout, LayoutCache, LayoutProblem, MemoryMode,
-    UnionLayout, WrappedVariant, TAG_SIZE,
+    Builtin, ClosureRepresentation, LambdaSet, Layout, LayoutCache, LayoutProblem, UnionLayout,
+    WrappedVariant, TAG_SIZE,
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -3364,10 +3364,7 @@ pub fn with_hole<'a>(
                     Stmt::Let(
                         assigned,
                         expr,
-                        Layout::Builtin(Builtin::List(
-                            MemoryMode::Refcounted,
-                            env.arena.alloc(elem_layout),
-                        )),
+                        Layout::Builtin(Builtin::List(env.arena.alloc(elem_layout))),
                         hole,
                     )
                 }
@@ -3399,12 +3396,10 @@ pub fn with_hole<'a>(
                 elems: arg_symbols,
             };
 
-            let mode = MemoryMode::Refcounted;
-
             let stmt = Stmt::Let(
                 assigned,
                 expr,
-                Layout::Builtin(Builtin::List(mode, env.arena.alloc(elem_layout))),
+                Layout::Builtin(Builtin::List(env.arena.alloc(elem_layout))),
                 hole,
             );
 

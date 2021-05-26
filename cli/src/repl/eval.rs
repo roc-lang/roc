@@ -116,7 +116,7 @@ fn jit_to_ast_help<'a>(
                 }
             }))
         }
-        Layout::Builtin(Builtin::List(_, elem_layout)) => Ok(run_jit_function!(
+        Layout::Builtin(Builtin::List(elem_layout)) => Ok(run_jit_function!(
             lib,
             main_fn_name,
             (*const u8, usize),
@@ -291,7 +291,7 @@ fn ptr_to_ast<'a>(
             items: &[],
             final_comments: &[],
         },
-        Layout::Builtin(Builtin::List(_, elem_layout)) => {
+        Layout::Builtin(Builtin::List(elem_layout)) => {
             // Turn the (ptr, len) wrapper struct into actual ptr and len values.
             let len = unsafe { *(ptr.offset(env.ptr_bytes as isize) as *const usize) };
             let ptr = unsafe { *(ptr as *const *const u8) };

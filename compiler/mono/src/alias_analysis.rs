@@ -548,7 +548,7 @@ fn builtin_spec(builder: &mut FuncDefBuilder, builtin: &Builtin) -> Result<TypeI
         Str => todo!(),
         Dict(_, _) => todo!(),
         Set(_) => todo!(),
-        List(_, _) => {
+        List(_) => {
             // TODO should incorporate the element type into the name
             Ok(builder.add_named_type(MOD_LIST, TypeName(b"List")))
         }

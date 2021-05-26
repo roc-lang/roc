@@ -148,7 +148,7 @@ fn hash_builtin<'a, 'ctx, 'env>(
         Builtin::Set(_) => {
             todo!("Implement Hash for Set")
         }
-        Builtin::List(_, element_layout) => build_hash_list(
+        Builtin::List(element_layout) => build_hash_list(
             env,
             layout_ids,
             layout,
