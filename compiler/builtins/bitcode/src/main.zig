@@ -2,6 +2,9 @@ const builtin = @import("builtin");
 const std = @import("std");
 const testing = std.testing;
 
+// Dec Module
+const dec = @import("dec.zig");
+
 // List Module
 const list = @import("list.zig");
 
