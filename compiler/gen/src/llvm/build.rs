@@ -906,9 +906,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             arguments,
             tag_layout,
             ..
-        } if *union_size == 1
-            && matches!(tag_layout, Layout::Union(UnionLayout::NonRecursive(_))) =>
-        {
+        } if *union_size == 1 && matches!(tag_layout, UnionLayout::NonRecursive(_)) => {
             let it = arguments.iter();
 
             let ctx = env.context;
@@ -956,7 +954,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
         Tag {
             arguments,
-            tag_layout: Layout::Union(UnionLayout::NonRecursive(fields)),
+            tag_layout: UnionLayout::NonRecursive(fields),
             union_size,
             tag_id,
             ..
@@ -1044,7 +1042,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         }
         Tag {
             arguments,
-            tag_layout: Layout::Union(UnionLayout::Recursive(fields)),
+            tag_layout: UnionLayout::Recursive(fields),
             union_size,
             tag_id,
             ..
@@ -1119,7 +1117,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
         Tag {
             arguments,
-            tag_layout: Layout::Union(UnionLayout::NonNullableUnwrapped(fields)),
+            tag_layout: UnionLayout::NonNullableUnwrapped(fields),
             union_size,
             tag_id,
             ..
@@ -1195,10 +1193,10 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         Tag {
             arguments,
             tag_layout:
-                Layout::Union(UnionLayout::NullableWrapped {
+                UnionLayout::NullableWrapped {
                     nullable_id,
                     other_tags: fields,
-                }),
+                },
             union_size,
             tag_id,
             ..
@@ -1287,11 +1285,11 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         Tag {
             arguments,
             tag_layout:
-                Layout::Union(UnionLayout::NullableUnwrapped {
+                UnionLayout::NullableUnwrapped {
                     nullable_id,
                     other_fields,
                     ..
-                }),
+                },
             union_size,
             tag_id,
             tag_name,
@@ -1386,8 +1384,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             data_ptr.into()
         }
-
-        Tag { .. } => unreachable!("tags should have a Union or RecursiveUnion layout"),
 
         Reset(_) => todo!(),
         Reuse { .. } => todo!(),
