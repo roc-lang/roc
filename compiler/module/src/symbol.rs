@@ -1,6 +1,6 @@
 use crate::ident::Ident;
 use inlinable_string::InlinableString;
-use roc_collections::all::{default_hasher, ImMap, MutMap};
+use roc_collections::all::{default_hasher, MutMap, SendMap};
 use roc_region::all::Region;
 use std::collections::HashMap;
 use std::{fmt, u32};
@@ -711,8 +711,8 @@ macro_rules! define_builtins {
             /// and what symbols they should resolve to.
             ///
             /// This is for type aliases like `Int` and `Str` and such.
-            pub fn default_in_scope() -> ImMap<Ident, (Symbol, Region)> {
-                let mut scope = ImMap::default();
+            pub fn default_in_scope() -> SendMap<Ident, (Symbol, Region)> {
+                let mut scope = SendMap::default();
 
                 $(
                     $(

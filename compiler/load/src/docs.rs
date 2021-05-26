@@ -1,8 +1,10 @@
 use crate::docs::DocEntry::DetatchedDoc;
 use crate::docs::TypeAnnotation::{Apply, BoundVariable, Record, TagUnion};
 use inlinable_string::InlinableString;
+use roc_can::scope::Scope;
+use roc_collections::all::MutMap;
 use roc_module::ident::ModuleName;
-use roc_module::symbol::IdentIds;
+use roc_module::symbol::{IdentIds, Interns, ModuleId};
 use roc_parse::ast;
 use roc_parse::ast::CommentOrNewline;
 use roc_parse::ast::{AssignedField, Def};
@@ -10,18 +12,19 @@ use roc_region::all::Located;
 
 // Documentation generation requirements
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Documentation {
     pub name: String,
     pub version: String,
     pub docs: String,
-    pub modules: Vec<ModuleDocumentation>,
+    pub modules: Vec<(MutMap<ModuleId, ModuleDocumentation>, Interns)>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ModuleDocumentation {
     pub name: String,
     pub entries: Vec<DocEntry>,
+    pub scope: Scope,
 }
 
 #[derive(Debug, Clone)]
@@ -75,19 +78,21 @@ pub struct Tag {
 }
 
 pub fn generate_module_docs<'a>(
+    scope: Scope,
     module_name: ModuleName,
-    exposed_ident_ids: &'a IdentIds,
+    ident_ids: &'a IdentIds,
     parsed_defs: &'a [Located<ast::Def<'a>>],
 ) -> ModuleDocumentation {
     let (entries, _) =
         parsed_defs
             .iter()
             .fold((vec![], None), |(acc, maybe_comments_after), def| {
-                generate_entry_doc(exposed_ident_ids, acc, maybe_comments_after, &def.value)
+                generate_entry_doc(ident_ids, acc, maybe_comments_after, &def.value)
             });
 
     ModuleDocumentation {
         name: module_name.as_str().to_string(),
+        scope,
         entries,
     }
 }
@@ -117,7 +122,7 @@ fn detatched_docs_from_comments_and_new_lines<'a>(
 }
 
 fn generate_entry_doc<'a>(
-    exposed_ident_ids: &'a IdentIds,
+    ident_ids: &'a IdentIds,
     mut acc: Vec<DocEntry>,
     before_comments_or_new_lines: Option<&'a [roc_parse::ast::CommentOrNewline<'a>]>,
     def: &'a ast::Def<'a>,
@@ -135,13 +140,13 @@ fn generate_entry_doc<'a>(
                 acc.push(DetatchedDoc(detatched_doc));
             }
 
-            generate_entry_doc(exposed_ident_ids, acc, Some(comments_or_new_lines), sub_def)
+            generate_entry_doc(ident_ids, acc, Some(comments_or_new_lines), sub_def)
         }
 
         Def::SpaceAfter(sub_def, comments_or_new_lines) => {
             let (new_acc, _) =
                 // If there are comments before, attach to this definition
-                generate_entry_doc(exposed_ident_ids, acc, before_comments_or_new_lines, sub_def);
+                generate_entry_doc(ident_ids, acc, before_comments_or_new_lines, sub_def);
 
             // Comments after a definition are attached to the next definition
             (new_acc, Some(comments_or_new_lines))
@@ -150,7 +155,7 @@ fn generate_entry_doc<'a>(
         Def::Annotation(loc_pattern, _loc_ann) => match loc_pattern.value {
             Pattern::Identifier(identifier) => {
                 // Check if the definition is exposed
-                if exposed_ident_ids
+                if ident_ids
                     .get_id(&InlinableString::from(identifier))
                     .is_some()
                 {
@@ -170,7 +175,7 @@ fn generate_entry_doc<'a>(
         Def::AnnotatedBody { ann_pattern, .. } => match ann_pattern.value {
             Pattern::Identifier(identifier) => {
                 // Check if the definition is exposed
-                if exposed_ident_ids
+                if ident_ids
                     .get_id(&InlinableString::from(identifier))
                     .is_some()
                 {
