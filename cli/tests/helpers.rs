@@ -65,7 +65,7 @@ pub fn run_roc(args: &[&str]) -> Out {
 }
 
 #[allow(dead_code)]
-pub fn run_cmd(cmd_name: &str, stdin_str: &str, args: &[&str]) -> Out {
+pub fn run_cmd(cmd_name: &str, stdin_vals: &[&str], args: &[&str]) -> Out {
     let mut cmd = Command::new(cmd_name);
 
     for arg in args {
@@ -81,9 +81,12 @@ pub fn run_cmd(cmd_name: &str, stdin_str: &str, args: &[&str]) -> Out {
 
     {
         let stdin = child.stdin.as_mut().expect("Failed to open stdin");
-        stdin
-            .write_all(stdin_str.as_bytes())
-            .expect("Failed to write to stdin");
+
+        for stdin_str in stdin_vals {
+            stdin
+                .write_all(stdin_str.as_bytes())
+                .expect("Failed to write to stdin");
+        }
     }
 
     let output = child
@@ -98,7 +101,7 @@ pub fn run_cmd(cmd_name: &str, stdin_str: &str, args: &[&str]) -> Out {
 }
 
 #[allow(dead_code)]
-pub fn run_with_valgrind(stdin_str: &str, args: &[&str]) -> (Out, String) {
+pub fn run_with_valgrind(stdin_vals: &[&str], args: &[&str]) -> (Out, String) {
     //TODO: figure out if there is a better way to get the valgrind executable.
     let mut cmd = Command::new("valgrind");
     let named_tempfile =
@@ -142,9 +145,12 @@ pub fn run_with_valgrind(stdin_str: &str, args: &[&str]) -> (Out, String) {
 
     {
         let stdin = child.stdin.as_mut().expect("Failed to open stdin");
-        stdin
-            .write_all(stdin_str.as_bytes())
-            .expect("Failed to write to stdin");
+
+        for stdin_str in stdin_vals {
+            stdin
+                .write_all(stdin_str.as_bytes())
+                .expect("Failed to write to stdin");
+        }
     }
 
     let output = child
