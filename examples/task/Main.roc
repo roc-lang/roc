@@ -5,7 +5,7 @@ app "task-example"
 
 main : Task.Task {} []
 main =
-    when Path.fromStr "thing.txt" is
+    when Path.fromStr "examples/task/thing.txt" is
         Ok path ->
             {} <- Task.await (Task.putLine "Writing to file")
 
