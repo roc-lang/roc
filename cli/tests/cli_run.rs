@@ -132,6 +132,15 @@ mod cli_run {
                     use_valgrind: true,
                 }
             ],
+            "shared-quicksort" => vec![
+                Example {
+                    filename: "Quicksort.roc",
+                    executable_filename: "quicksort",
+                    stdin: &[],
+                    expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
+                    use_valgrind: true,
+                }
+            ],
             "effect" => vec![
                 Example {
                     filename: "Main.roc",
