@@ -1681,12 +1681,33 @@ fn decide_to_branching<'a>(
 
             // We have learned more about the exact layout of the cond (based on the path)
             // but tests are still relative to the original cond symbol
-            let mut switch = Stmt::Switch {
-                cond_layout: inner_cond_layout,
-                cond_symbol: inner_cond_symbol,
-                branches: branches.into_bump_slice(),
-                default_branch: (default_branch_info, env.arena.alloc(default_branch)),
-                ret_layout,
+            let mut switch = if let Layout::Union(_) = inner_cond_layout {
+                let tag_id_symbol = env.unique_symbol();
+
+                let temp = Stmt::Switch {
+                    cond_layout: Layout::TAG_SIZE,
+                    cond_symbol: tag_id_symbol,
+                    branches: branches.into_bump_slice(),
+                    default_branch: (default_branch_info, env.arena.alloc(default_branch)),
+                    ret_layout,
+                };
+
+                let expr = Expr::AccessAtIndex {
+                    index: 0,
+                    field_layouts: &[Layout::TAG_SIZE],
+                    structure: inner_cond_symbol,
+                    wrapped: Wrapped::MultiTagUnion,
+                };
+
+                Stmt::Let(tag_id_symbol, expr, Layout::TAG_SIZE, env.arena.alloc(temp))
+            } else {
+                Stmt::Switch {
+                    cond_layout: inner_cond_layout,
+                    cond_symbol: inner_cond_symbol,
+                    branches: branches.into_bump_slice(),
+                    default_branch: (default_branch_info, env.arena.alloc(default_branch)),
+                    ret_layout,
+                }
             };
 
             for (symbol, layout, expr) in cond_stores_vec.into_iter().rev() {
