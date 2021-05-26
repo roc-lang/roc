@@ -724,8 +724,6 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
             Some(function)
         }
 
-        PhantomEmptyStruct => None,
-
         Layout::RecursivePointer => match when_recursive {
             WhenRecursive::Unreachable => {
                 unreachable!("recursion pointers should never be hashed directly")

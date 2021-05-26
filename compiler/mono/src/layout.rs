@@ -36,7 +36,6 @@ pub enum Layout<'a> {
     /// A layout that is empty (turns into the empty struct in LLVM IR
     /// but for our purposes, not zero-sized, so it does not get dropped from data structures
     /// this is important for closures that capture zero-sized values
-    PhantomEmptyStruct,
     Struct(&'a [Layout<'a>]),
     Union(UnionLayout<'a>),
     RecursivePointer,
@@ -479,7 +478,6 @@ impl<'a> Layout<'a> {
 
         match self {
             Builtin(builtin) => builtin.safe_to_memcpy(),
-            PhantomEmptyStruct => true,
             Struct(fields) => fields
                 .iter()
                 .all(|field_layout| field_layout.safe_to_memcpy()),
@@ -519,12 +517,7 @@ impl<'a> Layout<'a> {
         // For this calculation, we don't need an accurate
         // stack size, we just need to know whether it's zero,
         // so it's fine to use a pointer size of 1.
-        if let Layout::PhantomEmptyStruct = self {
-            false
-        } else {
-            // self.stack_size(1) == 0
-            false
-        }
+        false
     }
 
     pub fn stack_size(&self, pointer_size: u32) -> u32 {
@@ -532,7 +525,6 @@ impl<'a> Layout<'a> {
 
         match self {
             Builtin(builtin) => builtin.stack_size(pointer_size),
-            PhantomEmptyStruct => 0,
             Struct(fields) => {
                 let mut sum = 0;
 
@@ -596,7 +588,6 @@ impl<'a> Layout<'a> {
                 }
             }
             Layout::Builtin(builtin) => builtin.alignment_bytes(pointer_size),
-            Layout::PhantomEmptyStruct => 0,
             Layout::RecursivePointer => pointer_size,
             Layout::FunctionPointer(_, _) => pointer_size,
             Layout::Pointer(_) => pointer_size,
@@ -636,7 +627,6 @@ impl<'a> Layout<'a> {
 
         match self {
             Builtin(builtin) => builtin.is_refcounted(),
-            PhantomEmptyStruct => false,
             Struct(fields) => fields.iter().any(|f| f.contains_refcounted()),
             Union(variant) => {
                 use UnionLayout::*;
@@ -669,7 +659,6 @@ impl<'a> Layout<'a> {
 
         match self {
             Builtin(builtin) => builtin.to_doc(alloc, parens),
-            PhantomEmptyStruct => alloc.text("{}"),
             Struct(fields) => {
                 let fields_doc = fields.iter().map(|x| x.to_doc(alloc, parens));
 

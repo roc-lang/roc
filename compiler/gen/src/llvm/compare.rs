@@ -159,11 +159,6 @@ fn build_eq<'a, 'ctx, 'env>(
             rhs_val,
         ),
 
-        Layout::PhantomEmptyStruct => {
-            // always equal to itself
-            env.context.bool_type().const_int(1, false).into()
-        }
-
         Layout::RecursivePointer => match when_recursive {
             WhenRecursive::Unreachable => {
                 unreachable!("recursion pointers should never be compared directly")
@@ -336,11 +331,6 @@ fn build_neq<'a, 'ctx, 'env>(
             let result: IntValue = env.builder.build_not(is_equal, "negate");
 
             result.into()
-        }
-
-        Layout::PhantomEmptyStruct => {
-            // always equal to itself
-            env.context.bool_type().const_int(1, false).into()
         }
 
         Layout::RecursivePointer => {

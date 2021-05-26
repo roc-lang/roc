@@ -525,7 +525,6 @@ fn layout_spec(builder: &mut FuncDefBuilder, layout: &Layout) -> Result<TypeId> 
 
     match layout {
         Builtin(builtin) => builtin_spec(builder, builtin),
-        PhantomEmptyStruct => todo!(),
         Struct(fields) => build_tuple_type(builder, fields),
         Union(union_layout) => {
             let variant_types = build_variant_types_help(builder, union_layout)?;

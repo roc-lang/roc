@@ -56,11 +56,6 @@ fn build_hash_layout<'a, 'ctx, 'env>(
             val.into_struct_value(),
         ),
 
-        Layout::PhantomEmptyStruct => {
-            // just does nothing and returns the seed
-            seed
-        }
-
         Layout::Union(union_layout) => {
             build_hash_tag(env, layout_ids, layout, union_layout, seed, val)
         }

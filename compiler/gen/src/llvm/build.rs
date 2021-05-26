@@ -3360,7 +3360,6 @@ pub fn build_proc<'a, 'ctx, 'env>(
                     }
 
                     Layout::Builtin(_) => {}
-                    Layout::PhantomEmptyStruct => {}
                     Layout::Struct(_) => {}
                     Layout::Union(_) => {}
                     Layout::RecursivePointer => {}

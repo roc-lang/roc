@@ -115,7 +115,6 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
         Pointer(layout) => basic_type_from_layout(env, &layout)
             .ptr_type(AddressSpace::Generic)
             .into(),
-        PhantomEmptyStruct => env.context.struct_type(&[], false).into(),
         Struct(sorted_fields) => basic_type_from_record(env, sorted_fields),
         Union(variant) => {
             use UnionLayout::*;

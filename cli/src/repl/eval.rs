@@ -125,12 +125,6 @@ fn jit_to_ast_help<'a>(
         Layout::Builtin(other) => {
             todo!("add support for rendering builtin {:?} to the REPL", other)
         }
-        Layout::PhantomEmptyStruct => Ok(run_jit_function!(lib, main_fn_name, &u8, |_| {
-            Expr::Record {
-                fields: &[],
-                final_comments: env.arena.alloc([]),
-            }
-        })),
         Layout::Struct(field_layouts) => {
             let ptr_to_ast = |ptr: *const u8| match content {
                 Content::Structure(FlatType::Record(fields, _)) => {
