@@ -1,5 +1,6 @@
 #![crate_type = "lib"]
 #![no_std]
+use core::ffi::c_void;
 use core::fmt;
 
 pub mod alloca;
@@ -7,6 +8,15 @@ pub mod alloca;
 // A list of C functions that are being imported
 extern "C" {
     pub fn printf(format: *const u8, ...) -> i32;
+
+    pub fn roc_alloc(size: usize, alignment: u32) -> *mut c_void;
+    pub fn roc_realloc(
+        ptr: *mut c_void,
+        new_size: usize,
+        old_size: usize,
+        alignment: u32,
+    ) -> *mut c_void;
+    pub fn roc_dealloc(ptr: *mut c_void, alignment: u32);
 }
 
 const REFCOUNT_1: usize = isize::MIN as usize;
@@ -138,14 +148,14 @@ impl<T> RocList<T> {
         let num_bytes = core::mem::size_of::<usize>() + padding + element_bytes;
 
         let elements = unsafe {
-            let raw_ptr = libc::malloc(num_bytes) as *mut u8;
+            let raw_ptr = roc_alloc(num_bytes, core::mem::size_of::<usize>() as u32) as *mut u8;
 
             // pointer to the first element
             let raw_ptr = Self::get_element_ptr(raw_ptr as *mut T) as *mut T;
 
-            // write the capacity
-            let capacity_ptr = raw_ptr as *mut usize;
-            *(capacity_ptr.offset(-1)) = capacity;
+            // write the refcount
+            let refcount_ptr = raw_ptr as *mut isize;
+            *(refcount_ptr.offset(-1)) = isize::MIN;
 
             {
                 // NOTE: using a memcpy here causes weird issues
@@ -369,8 +379,7 @@ impl RocStr {
             let num_bytes = core::mem::size_of::<usize>() + element_bytes;
 
             let elements = unsafe {
-                let raw_ptr = libc::malloc(num_bytes);
-
+                let raw_ptr = roc_alloc(num_bytes, core::mem::size_of::<usize>() as u32) as *mut u8;
                 // write the capacity
                 let capacity_ptr = raw_ptr as *mut usize;
                 *capacity_ptr = capacity;
@@ -452,7 +461,7 @@ impl Clone for RocStr {
             let capacity_size = core::mem::size_of::<usize>();
             let copy_length = self.length + capacity_size;
             let elements = unsafe {
-                let raw = libc::malloc(copy_length);
+                let raw = roc_alloc(copy_length, core::mem::size_of::<usize>() as u32);
 
                 libc::memcpy(
                     raw,

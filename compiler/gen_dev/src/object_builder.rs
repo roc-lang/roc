@@ -89,6 +89,60 @@ pub fn build_module<'a>(
     }
 }
 
+fn generate_wrapper<'a, B: Backend<'a>>(
+    backend: &mut B,
+    output: &mut Object,
+    wrapper_name: String,
+    wraps: String,
+) -> Result<(), String> {
+    let text_section = output.section_id(StandardSection::Text);
+    let proc_symbol = Symbol {
+        name: wrapper_name.as_bytes().to_vec(),
+        value: 0,
+        size: 0,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Dynamic,
+        weak: false,
+        section: SymbolSection::Section(text_section),
+        flags: SymbolFlags::None,
+    };
+    let proc_id = output.add_symbol(proc_symbol);
+    let (proc_data, offset) = backend.build_wrapped_jmp()?;
+    let proc_offset = output.add_symbol_data(proc_id, text_section, proc_data, 16);
+
+    let name = wraps.as_str().as_bytes();
+    // If the symbol is an undefined zig builtin, we need to add it here.
+    let symbol = Symbol {
+        name: name.to_vec(),
+        value: 0,
+        size: 0,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Dynamic,
+        weak: true,
+        section: SymbolSection::Undefined,
+        flags: SymbolFlags::None,
+    };
+    output.add_symbol(symbol);
+    if let Some(sym_id) = output.symbol_id(name) {
+        let reloc = write::Relocation {
+            offset: offset + proc_offset,
+            size: 32,
+            kind: RelocationKind::PltRelative,
+            encoding: RelocationEncoding::X86Branch,
+            symbol: sym_id,
+            addend: -4,
+        };
+
+        output
+            .add_relocation(text_section, reloc)
+            .map_err(|e| format!("{:?}", e))?;
+
+        Ok(())
+    } else {
+        Err(format!("failed to find fn symbol for {:?}", wraps))
+    }
+}
+
 fn build_object<'a, B: Backend<'a>>(
     env: &'a Env,
     procedures: MutMap<(symbol::Symbol, Layout<'a>), Proc<'a>>,
@@ -106,6 +160,27 @@ fn build_object<'a, B: Backend<'a>>(
         1,
     );
     */
+
+    if env.generate_allocators {
+        generate_wrapper(
+            &mut backend,
+            &mut output,
+            "roc_alloc".into(),
+            "malloc".into(),
+        )?;
+        generate_wrapper(
+            &mut backend,
+            &mut output,
+            "roc_realloc".into(),
+            "realloc".into(),
+        )?;
+        generate_wrapper(
+            &mut backend,
+            &mut output,
+            "roc_dealloc".into(),
+            "free".into(),
+        )?;
+    }
 
     // Setup layout_ids for procedure calls.
     let mut layout_ids = roc_mono::layout::LayoutIds::default();

@@ -1,6 +1,6 @@
 use crate::debug_info_init;
 use crate::llvm::build::{
-    cast_basic_basic, cast_block_of_memory_to_tag, set_name, Env, FAST_CALL_CONV,
+    add_func, cast_basic_basic, cast_block_of_memory_to_tag, set_name, Env, FAST_CALL_CONV,
     LLVM_SADD_WITH_OVERFLOW_I64,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
@@ -40,8 +40,8 @@ impl<'ctx> PointerToRefcount<'ctx> {
     /// # Safety
     ///
     /// the invariant is that the given pointer really points to the refcount,
-    /// not the data, and only is the start of the malloced buffer if the alignment
-    /// works out that way.
+    /// not the data, and only is the start of the allocated buffer if the
+    /// alignment works out that way.
     pub unsafe fn from_ptr<'a, 'env>(env: &Env<'a, 'ctx, 'env>, ptr: PointerValue<'ctx>) -> Self {
         // must make sure it's a pointer to usize
         let refcount_type = ptr_int(env.context, env.ptr_bytes);
@@ -165,17 +165,18 @@ impl<'ctx> PointerToRefcount<'ctx> {
                     false,
                 );
 
-                let function_value =
-                    env.module
-                        .add_function(fn_name, fn_type, Some(Linkage::Private));
-
-                // Because it's an internal-only function, it should use the fast calling convention.
-                function_value.set_call_conventions(FAST_CALL_CONV);
+                let function_value = add_func(
+                    env.module,
+                    fn_name,
+                    fn_type,
+                    Linkage::Private,
+                    FAST_CALL_CONV, // Because it's an internal-only function, it should use the fast calling convention.
+                );
 
                 let subprogram = env.new_subprogram(fn_name);
                 function_value.set_subprogram(subprogram);
 
-                Self::_build_decrement_function_body(env, function_value, alignment);
+                Self::build_decrement_function_body(env, function_value, alignment);
 
                 function_value
             }
@@ -194,10 +195,10 @@ impl<'ctx> PointerToRefcount<'ctx> {
         call.set_call_convention(FAST_CALL_CONV);
     }
 
-    fn _build_decrement_function_body<'a, 'env>(
+    fn build_decrement_function_body<'a, 'env>(
         env: &Env<'a, 'ctx, 'env>,
         parent: FunctionValue<'ctx>,
-        extra_bytes: u32,
+        alignment: u32,
     ) {
         let builder = env.builder;
         let ctx = env.context;
@@ -269,15 +270,21 @@ impl<'ctx> PointerToRefcount<'ctx> {
         {
             builder.position_at_end(then_block);
             if !env.leak {
-                match extra_bytes {
+                let ptr = builder.build_pointer_cast(
+                    refcount_ptr.value,
+                    ctx.i8_type().ptr_type(AddressSpace::Generic),
+                    "cast_to_i8_ptr",
+                );
+
+                match alignment {
                     n if env.ptr_bytes == n => {
-                        // the refcount ptr is also the ptr to the malloced region
-                        builder.build_free(refcount_ptr.value);
+                        // the refcount ptr is also the ptr to the allocated region
+                        env.call_dealloc(ptr, alignment);
                     }
                     n if 2 * env.ptr_bytes == n => {
-                        // we need to step back another ptr_bytes to get the malloced ptr
-                        let malloced = Self::from_ptr_to_data(env, refcount_ptr.value);
-                        builder.build_free(malloced.value);
+                        // we need to step back another ptr_bytes to get the allocated ptr
+                        let allocated = Self::from_ptr_to_data(env, ptr);
+                        env.call_dealloc(allocated.value, alignment);
                     }
                     n => unreachable!("invalid extra_bytes {:?}", n),
                 }
@@ -1149,12 +1156,13 @@ pub fn build_header_help<'a, 'ctx, 'env>(
         VoidType(t) => t.fn_type(arguments, false),
     };
 
-    let fn_val = env
-        .module
-        .add_function(fn_name, fn_type, Some(Linkage::Private));
-
-    // Because it's an internal-only function, it should use the fast calling convention.
-    fn_val.set_call_conventions(FAST_CALL_CONV);
+    let fn_val = add_func(
+        env.module,
+        fn_name,
+        fn_type,
+        Linkage::Private,
+        FAST_CALL_CONV, // Because it's an internal-only function, it should use the fast calling convention.
+    );
 
     let subprogram = env.new_subprogram(&fn_name);
     fn_val.set_subprogram(subprogram);

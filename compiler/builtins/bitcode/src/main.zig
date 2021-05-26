@@ -2,6 +2,9 @@ const builtin = @import("builtin");
 const std = @import("std");
 const testing = std.testing;
 
+// Dec Module
+const dec = @import("dec.zig");
+
 // List Module
 const list = @import("list.zig");
 
@@ -26,6 +29,7 @@ comptime {
     exportListFn(list.listSortWith, "sort_with");
     exportListFn(list.listConcat, "concat");
     exportListFn(list.listDrop, "drop");
+    exportListFn(list.listSet, "set");
 }
 
 // Dict Module

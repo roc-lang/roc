@@ -2,7 +2,6 @@ const std = @import("std");
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
 const mem = std.mem;
-const Allocator = mem.Allocator;
 const assert = std.debug.assert;
 
 const utils = @import("utils.zig");
@@ -74,7 +73,7 @@ const Alignment = packed enum(u8) {
     Align8KeyFirst,
     Align8ValueFirst,
 
-    fn toUsize(self: Alignment) usize {
+    fn toU32(self: Alignment) u32 {
         switch (self) {
             .Align16KeyFirst => return 16,
             .Align16ValueFirst => return 16,
@@ -94,20 +93,18 @@ const Alignment = packed enum(u8) {
 };
 
 pub fn decref(
-    allocator: *Allocator,
-    alignment: Alignment,
     bytes_or_null: ?[*]u8,
     data_bytes: usize,
+    alignment: Alignment,
 ) void {
-    return utils.decref(allocator, alignment.toUsize(), bytes_or_null, data_bytes);
+    return utils.decref(bytes_or_null, data_bytes, alignment.toU32());
 }
 
 pub fn allocateWithRefcount(
-    allocator: *Allocator,
-    alignment: Alignment,
     data_bytes: usize,
+    alignment: Alignment,
 ) [*]u8 {
-    return utils.allocateWithRefcount(allocator, alignment.toUsize(), data_bytes);
+    return utils.allocateWithRefcount(data_bytes, alignment.toU32());
 }
 
 pub const RocDict = extern struct {
@@ -124,7 +121,6 @@ pub const RocDict = extern struct {
     }
 
     pub fn allocate(
-        allocator: *Allocator,
         number_of_levels: usize,
         number_of_entries: usize,
         alignment: Alignment,
@@ -136,7 +132,7 @@ pub const RocDict = extern struct {
         const data_bytes = number_of_slots * slot_size;
 
         return RocDict{
-            .dict_bytes = allocateWithRefcount(allocator, alignment, data_bytes),
+            .dict_bytes = allocateWithRefcount(data_bytes, alignment),
             .number_of_levels = number_of_levels,
             .dict_entries_len = number_of_entries,
         };
@@ -144,7 +140,6 @@ pub const RocDict = extern struct {
 
     pub fn reallocate(
         self: RocDict,
-        allocator: *Allocator,
         alignment: Alignment,
         key_width: usize,
         value_width: usize,
@@ -157,7 +152,7 @@ pub const RocDict = extern struct {
         const delta_capacity = new_capacity - old_capacity;
 
         const data_bytes = new_capacity * slot_size;
-        const first_slot = allocateWithRefcount(allocator, alignment, data_bytes);
+        const first_slot = allocateWithRefcount(data_bytes, alignment);
 
         // transfer the memory
 
@@ -204,7 +199,7 @@ pub const RocDict = extern struct {
         };
 
         // NOTE we fuse an increment of all keys/values with a decrement of the input dict
-        decref(allocator, alignment, self.dict_bytes, self.capacity() * slotSize(key_width, value_width));
+        decref(self.dict_bytes, self.capacity() * slotSize(key_width, value_width), alignment);
 
         return result;
     }
@@ -236,7 +231,7 @@ pub const RocDict = extern struct {
         return totalCapacityAtLevel(self.number_of_levels);
     }
 
-    pub fn makeUnique(self: RocDict, allocator: *Allocator, alignment: Alignment, key_width: usize, value_width: usize) RocDict {
+    pub fn makeUnique(self: RocDict, alignment: Alignment, key_width: usize, value_width: usize) RocDict {
         if (self.isEmpty()) {
             return self;
         }
@@ -246,7 +241,7 @@ pub const RocDict = extern struct {
         }
 
         // unfortunately, we have to clone
-        var new_dict = RocDict.allocate(allocator, self.number_of_levels, self.dict_entries_len, alignment, key_width, value_width);
+        var new_dict = RocDict.allocate(self.number_of_levels, self.dict_entries_len, alignment, key_width, value_width);
 
         var old_bytes: [*]u8 = @ptrCast([*]u8, self.dict_bytes);
         var new_bytes: [*]u8 = @ptrCast([*]u8, new_dict.dict_bytes);
@@ -256,7 +251,7 @@ pub const RocDict = extern struct {
 
         // NOTE we fuse an increment of all keys/values with a decrement of the input dict
         const data_bytes = self.capacity() * slotSize(key_width, value_width);
-        decref(allocator, alignment, self.dict_bytes, data_bytes);
+        decref(self.dict_bytes, data_bytes, alignment);
 
         return new_dict;
     }
@@ -423,7 +418,7 @@ const Caller3 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 pub fn dictInsert(input: RocDict, alignment: Alignment, key: Opaque, key_width: usize, value: Opaque, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_key: Dec, dec_value: Dec, output: *RocDict) callconv(.C) void {
     var seed: u64 = INITIAL_SEED;
 
-    var result = input.makeUnique(std.heap.c_allocator, alignment, key_width, value_width);
+    var result = input.makeUnique(alignment, key_width, value_width);
 
     var current_level: usize = 1;
     var current_level_size: usize = 8;
@@ -431,7 +426,7 @@ pub fn dictInsert(input: RocDict, alignment: Alignment, key: Opaque, key_width: 
 
     while (true) {
         if (current_level > result.number_of_levels) {
-            result = result.reallocate(std.heap.c_allocator, alignment, key_width, value_width);
+            result = result.reallocate(alignment, key_width, value_width);
         }
 
         const hash = hash_fn(seed, key);
@@ -487,7 +482,7 @@ pub fn dictRemove(input: RocDict, alignment: Alignment, key: Opaque, key_width: 
             return;
         },
         MaybeIndex.index => |index| {
-            var dict = input.makeUnique(std.heap.c_allocator, alignment, key_width, value_width);
+            var dict = input.makeUnique(alignment, key_width, value_width);
 
             assert(index < dict.capacity());
 
@@ -502,7 +497,7 @@ pub fn dictRemove(input: RocDict, alignment: Alignment, key: Opaque, key_width: 
             // if the dict is now completely empty, free its allocation
             if (dict.dict_entries_len == 0) {
                 const data_bytes = dict.capacity() * slotSize(key_width, value_width);
-                decref(std.heap.c_allocator, alignment, dict.dict_bytes, data_bytes);
+                decref(dict.dict_bytes, data_bytes, alignment);
                 output.* = RocDict.empty();
                 return;
             }
@@ -575,7 +570,7 @@ pub fn dictKeys(dict: RocDict, alignment: Alignment, key_width: usize, value_wid
     }
 
     const data_bytes = length * key_width;
-    var ptr = allocateWithRefcount(std.heap.c_allocator, alignment, data_bytes);
+    var ptr = allocateWithRefcount(data_bytes, alignment);
 
     var offset = blk: {
         if (alignment.keyFirst()) {
@@ -624,7 +619,7 @@ pub fn dictValues(dict: RocDict, alignment: Alignment, key_width: usize, value_w
     }
 
     const data_bytes = length * value_width;
-    var ptr = allocateWithRefcount(std.heap.c_allocator, alignment, data_bytes);
+    var ptr = allocateWithRefcount(data_bytes, alignment);
 
     var offset = blk: {
         if (alignment.keyFirst()) {
@@ -658,7 +653,7 @@ fn doNothing(ptr: Opaque) callconv(.C) void {
 }
 
 pub fn dictUnion(dict1: RocDict, dict2: RocDict, alignment: Alignment, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, inc_key: Inc, inc_value: Inc, output: *RocDict) callconv(.C) void {
-    output.* = dict1.makeUnique(std.heap.c_allocator, alignment, key_width, value_width);
+    output.* = dict1.makeUnique(alignment, key_width, value_width);
 
     var i: usize = 0;
     while (i < dict2.capacity()) : (i += 1) {
@@ -693,7 +688,7 @@ pub fn dictUnion(dict1: RocDict, dict2: RocDict, alignment: Alignment, key_width
 }
 
 pub fn dictIntersection(dict1: RocDict, dict2: RocDict, alignment: Alignment, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_key: Inc, dec_value: Inc, output: *RocDict) callconv(.C) void {
-    output.* = dict1.makeUnique(std.heap.c_allocator, alignment, key_width, value_width);
+    output.* = dict1.makeUnique(alignment, key_width, value_width);
 
     var i: usize = 0;
     const size = dict1.capacity();
@@ -718,7 +713,7 @@ pub fn dictIntersection(dict1: RocDict, dict2: RocDict, alignment: Alignment, ke
 }
 
 pub fn dictDifference(dict1: RocDict, dict2: RocDict, alignment: Alignment, key_width: usize, value_width: usize, hash_fn: HashFn, is_eq: EqFn, dec_key: Dec, dec_value: Dec, output: *RocDict) callconv(.C) void {
-    output.* = dict1.makeUnique(std.heap.c_allocator, alignment, key_width, value_width);
+    output.* = dict1.makeUnique(alignment, key_width, value_width);
 
     var i: usize = 0;
     const size = dict1.capacity();
@@ -759,7 +754,7 @@ pub fn setFromList(list: RocList, alignment: Alignment, key_width: usize, value_
 
     // NOTE: decref checks for the empty case
     const data_bytes = size * key_width;
-    decref(std.heap.c_allocator, alignment, list.bytes, data_bytes);
+    decref(list.bytes, data_bytes, alignment);
 }
 
 pub fn dictWalk(
@@ -777,11 +772,12 @@ pub fn dictWalk(
     inc_value: Inc,
     output: Opaque,
 ) callconv(.C) void {
+    const alignment_u32 = alignment.toU32();
     // allocate space to write the result of the stepper into
     // experimentally aliasing the accum and output pointers is not a good idea
-    const alloc: [*]u8 = @ptrCast([*]u8, std.heap.c_allocator.alloc(u8, accum_width) catch unreachable);
+    const bytes_ptr: [*]u8 = utils.alloc(accum_width, alignment_u32);
     var b1 = output orelse unreachable;
-    var b2 = alloc;
+    var b2 = bytes_ptr;
 
     if (data_is_owned) {
         inc_n_data(data, dict.len());
@@ -808,5 +804,5 @@ pub fn dictWalk(
     }
 
     @memcpy(output orelse unreachable, b2, accum_width);
-    std.heap.c_allocator.free(alloc[0..accum_width]);
+    utils.dealloc(bytes_ptr, alignment_u32);
 }

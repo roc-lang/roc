@@ -16,6 +16,13 @@ const GENERATE_NULLABLE: bool = true;
 const DEFAULT_NUM_BUILTIN: Builtin<'_> = Builtin::Int64;
 pub const TAG_SIZE: Builtin<'_> = Builtin::Int64;
 
+#[derive(Copy, Clone)]
+#[repr(u8)]
+pub enum InPlace {
+    InPlace,
+    Clone,
+}
+
 #[derive(Debug, Clone)]
 pub enum LayoutProblem {
     UnresolvedTypeVar(Variable),
@@ -37,6 +44,22 @@ pub enum Layout<'a> {
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
     Closure(&'a [Layout<'a>], LambdaSet<'a>, &'a Layout<'a>),
     Pointer(&'a Layout<'a>),
+}
+
+impl<'a> Layout<'a> {
+    pub fn in_place(&self) -> InPlace {
+        match self {
+            Layout::Builtin(Builtin::EmptyList) => InPlace::InPlace,
+            Layout::Builtin(Builtin::List(memory_mode, _)) => match memory_mode {
+                MemoryMode::Unique => InPlace::InPlace,
+                MemoryMode::Refcounted => InPlace::Clone,
+            },
+            Layout::Builtin(Builtin::EmptyStr) => InPlace::InPlace,
+            Layout::Builtin(Builtin::Str) => InPlace::Clone,
+            Layout::Builtin(Builtin::Int1) => InPlace::Clone,
+            _ => unreachable!("Layout {:?} does not have an inplace", self),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

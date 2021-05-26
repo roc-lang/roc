@@ -173,6 +173,7 @@ pub fn helper<'a>(
         interns,
         exposed_to_host: exposed_to_host.keys().copied().collect(),
         lazy_literals,
+        generate_allocators: true, // Needed for testing, since we don't have a platform
     };
 
     let target = target_lexicon::Triple::host();

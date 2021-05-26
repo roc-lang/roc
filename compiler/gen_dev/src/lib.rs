@@ -22,6 +22,7 @@ pub struct Env<'a> {
     pub interns: Interns,
     pub exposed_to_host: MutSet<Symbol>,
     pub lazy_literals: bool,
+    pub generate_allocators: bool,
 }
 
 // These relocations likely will need a length.
@@ -66,6 +67,9 @@ where
     // load_args is used to let the backend know what the args are.
     // The backend should track these args so it can use them as needed.
     fn load_args(&mut self, args: &'a [(Layout<'a>, Symbol)]) -> Result<(), String>;
+
+    /// Used for generating wrappers for malloc/realloc/free
+    fn build_wrapped_jmp(&mut self) -> Result<(&'a [u8], u64), String>;
 
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
     fn build_proc(&mut self, proc: Proc<'a>) -> Result<(&'a [u8], &[Relocation]), String> {
