@@ -533,7 +533,6 @@ fn layout_spec(builder: &mut FuncDefBuilder, layout: &Layout) -> Result<TypeId> 
         RecursivePointer => todo!(),
         FunctionPointer(_, _) => todo!(),
         Closure(_, _, _) => todo!(),
-        Pointer(_) => todo!(),
     }
 }
 

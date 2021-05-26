@@ -3363,7 +3363,6 @@ pub fn build_proc<'a, 'ctx, 'env>(
                     Layout::Struct(_) => {}
                     Layout::Union(_) => {}
                     Layout::RecursivePointer => {}
-                    Layout::Pointer(_) => {}
                 }
             }
         }

@@ -744,7 +744,7 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
             }
         },
 
-        FunctionPointer(_, _) | Pointer(_) => None,
+        FunctionPointer(_, _) => None,
     }
 }
 

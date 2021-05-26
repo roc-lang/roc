@@ -86,10 +86,6 @@ fn build_hash_layout<'a, 'ctx, 'env>(
             }
         },
 
-        Layout::Pointer(_) => {
-            unreachable!("unused")
-        }
-
         Layout::FunctionPointer(_, _) | Layout::Closure(_, _, _) => {
             unreachable!("the type system will guarantee these are never hashed")
         }

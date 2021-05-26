@@ -112,9 +112,6 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
             let closure_data_layout = closure_layout.runtime_representation();
             basic_type_from_layout(env, &closure_data_layout)
         }
-        Pointer(layout) => basic_type_from_layout(env, &layout)
-            .ptr_type(AddressSpace::Generic)
-            .into(),
         Struct(sorted_fields) => basic_type_from_record(env, sorted_fields),
         Union(variant) => {
             use UnionLayout::*;

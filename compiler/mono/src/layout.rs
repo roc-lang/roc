@@ -42,7 +42,6 @@ pub enum Layout<'a> {
     /// A function. The types of its arguments, then the type of its return value.
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
     Closure(&'a [Layout<'a>], LambdaSet<'a>, &'a Layout<'a>),
-    Pointer(&'a Layout<'a>),
 }
 
 impl<'a> Layout<'a> {
@@ -502,10 +501,6 @@ impl<'a> Layout<'a> {
                 true
             }
             Closure(_, closure_layout, _) => closure_layout.safe_to_memcpy(),
-            Pointer(_) => {
-                // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
-                false
-            }
             RecursivePointer => {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
@@ -558,7 +553,6 @@ impl<'a> Layout<'a> {
             Closure(_, lambda_set, _) => lambda_set.stack_size(pointer_size),
             FunctionPointer(_, _) => pointer_size,
             RecursivePointer => pointer_size,
-            Pointer(_) => pointer_size,
         }
     }
 
@@ -590,7 +584,6 @@ impl<'a> Layout<'a> {
             Layout::Builtin(builtin) => builtin.alignment_bytes(pointer_size),
             Layout::RecursivePointer => pointer_size,
             Layout::FunctionPointer(_, _) => pointer_size,
-            Layout::Pointer(_) => pointer_size,
             Layout::Closure(_, captured, _) => {
                 pointer_size.max(captured.alignment_bytes(pointer_size))
             }
@@ -645,7 +638,7 @@ impl<'a> Layout<'a> {
             }
             RecursivePointer => true,
             Closure(_, closure_layout, _) => closure_layout.contains_refcounted(),
-            FunctionPointer(_, _) | Pointer(_) => false,
+            FunctionPointer(_, _) => false,
         }
     }
 
@@ -691,7 +684,6 @@ impl<'a> Layout<'a> {
                     .append(" |} -> ")
                     .append(result.to_doc(alloc, Parens::InFunction))
             }
-            Pointer(_) => todo!(),
         }
     }
 }

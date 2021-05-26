@@ -241,7 +241,6 @@ fn jit_to_ast_help<'a>(
 
         Layout::Closure(_, _, _) => Err(ToAstProblem::FunctionLayout),
         Layout::FunctionPointer(_, _) => Err(ToAstProblem::FunctionLayout),
-        Layout::Pointer(_) => todo!("add support for rendering pointers in the REPL"),
     }
 }
 
