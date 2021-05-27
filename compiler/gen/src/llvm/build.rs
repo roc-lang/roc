@@ -353,7 +353,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
 }
 
 pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Module<'ctx> {
-    let bitcode_bytes = bitcode::get_bytes();
+    let bitcode_bytes = bitcode::as_bytes();
 
     let memory_buffer = MemoryBuffer::create_from_memory_range(&bitcode_bytes, module_name);
 
