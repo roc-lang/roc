@@ -1,26 +1,12 @@
-use std::fs::File;
-use std::io::prelude::Read;
-use std::vec::Vec;
-
-const BC_PATH: &str = env!(
-    "BUILTINS_BC",
-    "Env var BUILTINS_BC not found. Is there a problem with the build script?"
-);
-
 pub const OBJ_PATH: &str = env!(
     "BUILTINS_O",
     "Env var BUILTINS_O not found. Is there a problem with the build script?"
 );
 
-pub fn get_bytes() -> Vec<u8> {
-    // In the build script for the builtins module, we compile the builtins bitcode and set
-    // BUILTINS_BC to the path to the compiled output.
-    let mut builtins_bitcode = File::open(BC_PATH).expect("Unable to find builtins bitcode source");
-    let mut buffer = Vec::new();
-    builtins_bitcode
-        .read_to_end(&mut buffer)
-        .expect("Unable to read builtins bitcode");
-    buffer
+pub fn as_bytes() -> &'static [u8] {
+    // In the build script for the builtins module,
+    // we compile the builtins into LLVM bitcode
+    include_bytes!("../bitcode/builtins.bc")
 }
 
 pub const NUM_ASIN: &str = "roc_builtins.num.asin";
