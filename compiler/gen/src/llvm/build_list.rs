@@ -14,7 +14,7 @@ use inkwell::types::{BasicTypeEnum, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
 use roc_builtins::bitcode;
-use roc_mono::layout::{Builtin, InPlace, Layout, LayoutIds, MemoryMode};
+use roc_mono::layout::{Builtin, InPlace, Layout, LayoutIds};
 
 fn list_returned_from_zig<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -196,12 +196,12 @@ pub fn list_join<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     match outer_list_layout {
         Layout::Builtin(Builtin::EmptyList)
-        | Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::EmptyList))) => {
+        | Layout::Builtin(Builtin::List(Layout::Builtin(Builtin::EmptyList))) => {
             // If the input list is empty, or if it is a list of empty lists
             // then simply return an empty list
             empty_list(env)
         }
-        Layout::Builtin(Builtin::List(_, Layout::Builtin(Builtin::List(_, element_layout)))) => {
+        Layout::Builtin(Builtin::List(Layout::Builtin(Builtin::List(element_layout)))) => {
             call_bitcode_fn_returns_list(
                 env,
                 &[
@@ -231,13 +231,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
             // this pointer will never actually be dereferenced
             Layout::Builtin(Builtin::Int64),
         ),
-        Layout::Builtin(Builtin::List(memory_mode, elem_layout)) => (
-            match memory_mode {
-                MemoryMode::Unique => InPlace::InPlace,
-                MemoryMode::Refcounted => InPlace::Clone,
-            },
-            *elem_layout,
-        ),
+        Layout::Builtin(Builtin::List(elem_layout)) => (InPlace::Clone, *elem_layout),
 
         _ => unreachable!("Invalid layout {:?} in List.reverse", list_layout),
     };
@@ -264,7 +258,7 @@ pub fn list_get_unsafe<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     match list_layout {
-        Layout::Builtin(Builtin::List(_, elem_layout)) => {
+        Layout::Builtin(Builtin::List(elem_layout)) => {
             let elem_type = basic_type_from_layout(env, elem_layout);
             let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
             // Load the pointer to the array data
@@ -861,7 +855,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
             // then simply return an empty list
             empty_list(env)
         }
-        Layout::Builtin(Builtin::List(_, elem_layout)) => call_bitcode_fn_returns_list(
+        Layout::Builtin(Builtin::List(elem_layout)) => call_bitcode_fn_returns_list(
             env,
             &[
                 pass_list_as_i128(env, first_list),

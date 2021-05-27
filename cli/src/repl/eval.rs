@@ -116,7 +116,7 @@ fn jit_to_ast_help<'a>(
                 }
             }))
         }
-        Layout::Builtin(Builtin::List(_, elem_layout)) => Ok(run_jit_function!(
+        Layout::Builtin(Builtin::List(elem_layout)) => Ok(run_jit_function!(
             lib,
             main_fn_name,
             (*const u8, usize),
@@ -125,12 +125,6 @@ fn jit_to_ast_help<'a>(
         Layout::Builtin(other) => {
             todo!("add support for rendering builtin {:?} to the REPL", other)
         }
-        Layout::PhantomEmptyStruct => Ok(run_jit_function!(lib, main_fn_name, &u8, |_| {
-            Expr::Record {
-                fields: &[],
-                final_comments: env.arena.alloc([]),
-            }
-        })),
         Layout::Struct(field_layouts) => {
             let ptr_to_ast = |ptr: *const u8| match content {
                 Content::Structure(FlatType::Record(fields, _)) => {
@@ -247,7 +241,6 @@ fn jit_to_ast_help<'a>(
 
         Layout::Closure(_, _, _) => Err(ToAstProblem::FunctionLayout),
         Layout::FunctionPointer(_, _) => Err(ToAstProblem::FunctionLayout),
-        Layout::Pointer(_) => todo!("add support for rendering pointers in the REPL"),
     }
 }
 
@@ -298,7 +291,7 @@ fn ptr_to_ast<'a>(
             items: &[],
             final_comments: &[],
         },
-        Layout::Builtin(Builtin::List(_, elem_layout)) => {
+        Layout::Builtin(Builtin::List(elem_layout)) => {
             // Turn the (ptr, len) wrapper struct into actual ptr and len values.
             let len = unsafe { *(ptr.offset(env.ptr_bytes as isize) as *const usize) };
             let ptr = unsafe { *(ptr as *const *const u8) };

@@ -1101,7 +1101,13 @@ fn test_to_equality<'a>(
     cond_layout: &Layout<'a>,
     path: &[PathInstruction],
     test: Test<'a>,
-) -> (StoresVec<'a>, Symbol, Symbol, Layout<'a>) {
+) -> (
+    StoresVec<'a>,
+    Symbol,
+    Symbol,
+    Layout<'a>,
+    Option<ConstructorKnown<'a>>,
+) {
     let (rhs_symbol, mut stores, _layout) =
         path_to_expr_help(env, cond_symbol, &path, *cond_layout);
 
@@ -1148,6 +1154,11 @@ fn test_to_equality<'a>(
                 lhs_symbol,
                 rhs_symbol,
                 Layout::Builtin(Builtin::Int64),
+                Some(ConstructorKnown::OnlyPass {
+                    scrutinee: path_symbol,
+                    layout: *cond_layout,
+                    tag_id,
+                }),
             )
         }
         Test::IsInt(test_int) => {
@@ -1162,6 +1173,7 @@ fn test_to_equality<'a>(
                 lhs_symbol,
                 rhs_symbol,
                 Layout::Builtin(Builtin::Int64),
+                None,
             )
         }
 
@@ -1177,6 +1189,7 @@ fn test_to_equality<'a>(
                 lhs_symbol,
                 rhs_symbol,
                 Layout::Builtin(Builtin::Float64),
+                None,
             )
         }
 
@@ -1192,6 +1205,7 @@ fn test_to_equality<'a>(
                 lhs_symbol,
                 rhs_symbol,
                 Layout::Builtin(Builtin::Int8),
+                None,
             )
         }
 
@@ -1205,6 +1219,7 @@ fn test_to_equality<'a>(
                 lhs_symbol,
                 rhs_symbol,
                 Layout::Builtin(Builtin::Int1),
+                None,
             )
         }
 
@@ -1219,6 +1234,7 @@ fn test_to_equality<'a>(
                 lhs_symbol,
                 rhs_symbol,
                 Layout::Builtin(Builtin::Str),
+                None,
             )
         }
 
@@ -1231,6 +1247,7 @@ type Tests<'a> = std::vec::Vec<(
     Symbol,
     Symbol,
     Layout<'a>,
+    Option<ConstructorKnown<'a>>,
 )>;
 
 fn stores_and_condition<'a>(
@@ -1239,7 +1256,7 @@ fn stores_and_condition<'a>(
     cond_layout: &Layout<'a>,
     test_chain: Vec<(Vec<PathInstruction>, Test<'a>)>,
 ) -> (Tests<'a>, Option<(Symbol, JoinPointId, Stmt<'a>)>) {
-    let mut tests = Vec::with_capacity(test_chain.len());
+    let mut tests: Tests = Vec::with_capacity(test_chain.len());
 
     let mut guard = None;
 
@@ -1444,12 +1461,20 @@ fn compile_tests<'a>(
         cond = compile_guard(env, ret_layout, id, arena.alloc(stmt), fail, cond);
     }
 
-    for (new_stores, lhs, rhs, _layout) in tests.into_iter() {
-        cond = compile_test(env, ret_layout, new_stores, lhs, rhs, fail, cond);
+    for (new_stores, lhs, rhs, _layout, opt_constructor_info) in tests.into_iter() {
+        match opt_constructor_info {
+            None => {
+                cond = compile_test(env, ret_layout, new_stores, lhs, rhs, fail, cond);
+            }
+            Some(cinfo) => {
+                cond = compile_test_help(env, cinfo, ret_layout, new_stores, lhs, rhs, fail, cond);
+            }
+        }
     }
     cond
 }
 
+#[derive(Debug)]
 enum ConstructorKnown<'a> {
     Both {
         scrutinee: Symbol,
@@ -1571,7 +1596,7 @@ fn decide_to_branching<'a>(
                     // use knowledge about constructors for optimization
                     debug_assert_eq!(tests.len(), 1);
 
-                    let (new_stores, lhs, rhs, _layout) = tests.into_iter().next().unwrap();
+                    let (new_stores, lhs, rhs, _layout, _cinfo) = tests.into_iter().next().unwrap();
 
                     compile_test_help(
                         env,
@@ -1681,12 +1706,33 @@ fn decide_to_branching<'a>(
 
             // We have learned more about the exact layout of the cond (based on the path)
             // but tests are still relative to the original cond symbol
-            let mut switch = Stmt::Switch {
-                cond_layout: inner_cond_layout,
-                cond_symbol: inner_cond_symbol,
-                branches: branches.into_bump_slice(),
-                default_branch: (default_branch_info, env.arena.alloc(default_branch)),
-                ret_layout,
+            let mut switch = if let Layout::Union(_) = inner_cond_layout {
+                let tag_id_symbol = env.unique_symbol();
+
+                let temp = Stmt::Switch {
+                    cond_layout: Layout::TAG_SIZE,
+                    cond_symbol: tag_id_symbol,
+                    branches: branches.into_bump_slice(),
+                    default_branch: (default_branch_info, env.arena.alloc(default_branch)),
+                    ret_layout,
+                };
+
+                let expr = Expr::AccessAtIndex {
+                    index: 0,
+                    field_layouts: &[Layout::TAG_SIZE],
+                    structure: inner_cond_symbol,
+                    wrapped: Wrapped::MultiTagUnion,
+                };
+
+                Stmt::Let(tag_id_symbol, expr, Layout::TAG_SIZE, env.arena.alloc(temp))
+            } else {
+                Stmt::Switch {
+                    cond_layout: inner_cond_layout,
+                    cond_symbol: inner_cond_symbol,
+                    branches: branches.into_bump_slice(),
+                    default_branch: (default_branch_info, env.arena.alloc(default_branch)),
+                    ret_layout,
+                }
             };
 
             for (symbol, layout, expr) in cond_stores_vec.into_iter().rev() {

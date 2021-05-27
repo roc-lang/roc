@@ -533,7 +533,10 @@ mul : Num range, Num range -> Num range
 
 ## Convert
 
-## Convert a number to a string, formatted as the traditional base 10 (decimal).
+## Convert a number to a [Str].
+##
+## This is the same as calling `Num.format {}` - so for more details on
+## exact formatting, see [Num.format].
 ##
 ## >>> Num.toStr 42
 ##
@@ -545,6 +548,68 @@ mul : Num range, Num range -> Num range
 ##
 ## For other bases see #toHexStr, #toOctalStr, and #toBinaryStr.
 toStr : Num * -> Str
+
+## Convert a number into a [Str], formatted with the given options.
+##
+## Default options:
+## * `base: Decimal`
+## * `notation: Standard`
+## * `decimalMark: HideForIntegers "."`
+## * `decimalDigits: { min: 0, max: All }`
+## * `minIntDigits: 1`
+## * `wholeSep: { mark: ",", places: 3 }`
+##
+## ## Options
+##
+##
+## ### decimalMark
+##
+## * `AlwaysShow` always shows the decimal mark, no matter what.
+## * `HideForIntegers` hides the decimal mark if all the numbers after the decimal mark are 0.
+##
+## The [Str] included in either of these represents the mark itself.
+##
+## ### `decimalDigits
+##
+## With 0 decimal digits, the decimal mark will still be rendered if
+## `decimalMark` is set to `AlwaysShow`.
+##
+## If `max` is less than `min`, then first the number will be truncated to `max`
+## digits, and then zeroes will be added afterwards until it reaches `min` digits.
+##
+## >>> Num.format 1.23 { decPlaces: 0, decPointVis: AlwaysShow }
+##
+## ### minIntDigits
+##
+## If the integer portion of number is fewer than this many digits, zeroes will
+## be added in front of it until there are at least `minWholeDigits` digits.
+##
+## If this is set to zero, then numbers less than 1 will begin with `"."`
+## rather than `"0."`.
+##
+## ### wholeSep
+##
+## Examples:
+##
+## In some countries (e.g. USA and UK), a comma is used to separate thousands:
+## >>> Num.format 1_000_000 { base: Decimal, wholeSep: { mark: ",", places: 3 } }
+##
+## Sometimes when rendering bits, it's nice to group them into groups of 4:
+## >>> Num.format 1_000_000 { base: Binary, wholeSep: { mark: " ", places: 4 } }
+##
+## It's also common to render hexadecimal in groups of 2:
+## >>> Num.format 1_000_000 { base: Hexadecimal, wholeSep: { mark: " ", places: 2 } }
+format :
+    Num *,
+    {
+        base ? [ Decimal, Hexadecimal, Octal, Binary ],
+        notation ? [ Standard, Scientific ],
+        decimalMark ? [ AlwaysShow Str, HideForIntegers ],
+        decimalDigits ? { min : U16, max : [ All, Trunc U16, Round U16, Floor U16, Ceil U16 ] },
+        minWholeDigits ? U16,
+        wholeSep ? { mark : Str, places : U64 }
+    }
+    -> Str
 
 ## Round off the given float to the nearest integer.
 round : Float * -> Int *

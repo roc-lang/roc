@@ -434,16 +434,6 @@ fn lowlevel_spec(
 
 fn build_variant_types(
     builder: &mut FuncDefBuilder,
-    layout: &Layout,
-) -> Option<Result<Vec<TypeId>>> {
-    match layout {
-        Layout::Union(union_layout) => Some(build_variant_types_help(builder, union_layout)),
-        _ => None,
-    }
-}
-
-fn build_variant_types_help(
-    builder: &mut FuncDefBuilder,
     union_layout: &UnionLayout,
 ) -> Result<Vec<TypeId>> {
     use UnionLayout::*;
@@ -494,7 +484,7 @@ fn expr_spec(
             arguments,
         } => {
             let value_id = build_tuple_value(builder, env, block, arguments)?;
-            let variant_types = build_variant_types(builder, tag_layout).unwrap()?;
+            let variant_types = build_variant_types(builder, tag_layout)?;
             builder.add_make_union(block, &variant_types, *tag_id as u32, value_id)
         }
         Struct(fields) => build_tuple_value(builder, env, block, fields),
@@ -587,16 +577,14 @@ fn layout_spec(builder: &mut FuncDefBuilder, layout: &Layout) -> Result<TypeId> 
 
     match layout {
         Builtin(builtin) => builtin_spec(builder, builtin),
-        PhantomEmptyStruct => todo!(),
         Struct(fields) => build_tuple_type(builder, fields),
         Union(union_layout) => {
-            let variant_types = build_variant_types_help(builder, union_layout)?;
+            let variant_types = build_variant_types(builder, union_layout)?;
             builder.add_union_type(&variant_types)
         }
         RecursivePointer => todo!(),
         FunctionPointer(_, _) => todo!(),
         Closure(_, _, _) => todo!(),
-        Pointer(_) => todo!(),
     }
 }
 
@@ -625,7 +613,7 @@ fn builtin_spec(builder: &mut FuncDefBuilder, builtin: &Builtin) -> Result<TypeI
             let bag = builder.add_bag_type(element_type)?;
             builder.add_tuple_type(&[cell, bag])
         }
-        List(_, element_layout) => {
+        List(element_layout) => {
             let element_type = layout_spec(builder, element_layout)?;
 
             let cell = builder.add_heap_cell_type();
