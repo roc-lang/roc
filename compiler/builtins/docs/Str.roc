@@ -429,16 +429,22 @@ chompCodePoint : Str, U32 -> Result Str [ Expected [ ExactCodePoint U32 ]* Str ]
 
 ## If the string begins with digits which can represent a valid #U8, return
 ## that number along with the rest of the string after the digits.
-parseU8 : Str -> Result { val : U8, rest : Str } [ Expected [ NumU8 ]* Str ]*
-parseI8 : Str -> Result { val : I8, rest : Str } [ Expected [ NumI8 ]* Str ]*
-parseU16 : Str -> Result { val : U16, rest : Str } [ Expected [ NumU16 ]* Str ]*
-parseI16 : Str -> Result { val : I16, rest : Str } [ Expected [ NumI16 ]* Str ]*
-parseU32 : Str -> Result { val : U32, rest : Str } [ Expected [ NumU32 ]* Str ]*
-parseI32 : Str -> Result { val : I32, rest : Str } [ Expected [ NumI32 ]* Str ]*
-parseU64 : Str -> Result { val : U64, rest : Str } [ Expected [ NumU64 ]* Str ]*
-parseI64 : Str -> Result { val : I64, rest : Str } [ Expected [ NumI64 ]* Str ]*
-parseU128 : Str -> Result { val : U128, rest : Str } [ Expected [ NumU128 ]* Str ]*
-parseI128 : Str -> Result { val : I128, rest : Str } [ Expected [ NumI128 ]* Str ]*
+parseU8 : Str, NumFormat -> Result { val : U8, rest : Str } [ Expected [ NumU8 ]* Str ]*
+parseI8 : Str, NumFormat -> Result { val : I8, rest : Str } [ Expected [ NumI8 ]* Str ]*
+parseU16 : Str, NumFormat -> Result { val : U16, rest : Str } [ Expected [ NumU16 ]* Str ]*
+parseI16 : Str, NumFormat -> Result { val : I16, rest : Str } [ Expected [ NumI16 ]* Str ]*
+parseU32 : Str, NumFormat -> Result { val : U32, rest : Str } [ Expected [ NumU32 ]* Str ]*
+parseI32 : Str, NumFormat -> Result { val : I32, rest : Str } [ Expected [ NumI32 ]* Str ]*
+parseU64 : Str, NumFormat -> Result { val : U64, rest : Str } [ Expected [ NumU64 ]* Str ]*
+parseI64 : Str, NumFormat -> Result { val : I64, rest : Str } [ Expected [ NumI64 ]* Str ]*
+parseU128 : Str, NumFormat -> Result { val : U128, rest : Str } [ Expected [ NumU128 ]* Str ]*
+parseI128 : Str, NumFormat -> Result { val : I128, rest : Str } [ Expected [ NumI128 ]* Str ]*
 
-parseF64 : Str -> Result { val : U128, rest : Str } [ Expected [ NumF64 ]* Str ]*
-parseF32 : Str -> Result { val : I128, rest : Str } [ Expected [ NumF32 ]* Str ]*
+parseF64 : Str, NumFormat -> Result { val : U128, rest : Str } [ Expected [ NumF64 ]* Str ]*
+parseF32 : Str, NumFormat -> Result { val : I128, rest : Str } [ Expected [ NumF32 ]* Str ]*
+
+## TODO make this similar to the Num.format argument
+## except more flexible - e.g. the policy for whole number separators
+## might be to allow them, to require them, or to allow them only every N digits
+## (e.g. 3 for thousands, 4 for bits, 2 for hex)
+NumFormat : { }
