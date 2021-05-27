@@ -3,8 +3,8 @@
 use self::InProgressProc::*;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{
-    Builtin, ClosureRepresentation, LambdaSet, Layout, LayoutCache, LayoutProblem, MemoryMode,
-    UnionLayout, WrappedVariant, TAG_SIZE,
+    Builtin, ClosureRepresentation, LambdaSet, Layout, LayoutCache, LayoutProblem, UnionLayout,
+    WrappedVariant, TAG_SIZE,
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -1150,7 +1150,7 @@ pub enum Expr<'a> {
     Call(Call<'a>),
 
     Tag {
-        tag_layout: Layout<'a>,
+        tag_layout: UnionLayout<'a>,
         tag_name: TagName,
         tag_id: u8,
         union_size: u8,
@@ -3371,10 +3371,7 @@ pub fn with_hole<'a>(
                     Stmt::Let(
                         assigned,
                         expr,
-                        Layout::Builtin(Builtin::List(
-                            MemoryMode::Refcounted,
-                            env.arena.alloc(elem_layout),
-                        )),
+                        Layout::Builtin(Builtin::List(env.arena.alloc(elem_layout))),
                         hole,
                     )
                 }
@@ -3406,12 +3403,10 @@ pub fn with_hole<'a>(
                 elems: arg_symbols,
             };
 
-            let mode = MemoryMode::Refcounted;
-
             let stmt = Stmt::Let(
                 assigned,
                 expr,
-                Layout::Builtin(Builtin::List(mode, env.arena.alloc(elem_layout))),
+                Layout::Builtin(Builtin::List(env.arena.alloc(elem_layout))),
                 hole,
             );
 
@@ -4140,10 +4135,15 @@ fn construct_closure_data<'a>(
             tag_symbols.push(tag_id_symbol);
             tag_symbols.extend(symbols);
 
+            let tag_layout = match lambda_set.runtime_representation() {
+                Layout::Union(inner) => inner,
+                _ => unreachable!(),
+            };
+
             let expr1 = Expr::Literal(Literal::Int(tag_id as i128));
             let expr2 = Expr::Tag {
                 tag_id,
-                tag_layout: lambda_set.runtime_representation(),
+                tag_layout,
                 union_size,
                 tag_name,
                 arguments: tag_symbols.into_bump_slice(),
@@ -4305,17 +4305,17 @@ fn convert_tag_union<'a>(
                     }
 
                     debug_assert!(layouts.len() > 1);
-                    let layout = Layout::Union(UnionLayout::Recursive(layouts.into_bump_slice()));
+                    let union_layout = UnionLayout::Recursive(layouts.into_bump_slice());
 
                     let tag = Expr::Tag {
-                        tag_layout: layout,
+                        tag_layout: union_layout,
                         tag_name,
                         tag_id: tag_id as u8,
                         union_size,
                         arguments: field_symbols,
                     };
 
-                    (tag, layout)
+                    (tag, Layout::Union(union_layout))
                 }
                 NonNullableUnwrapped {
                     fields,
@@ -4333,17 +4333,17 @@ fn convert_tag_union<'a>(
                         temp.into_bump_slice()
                     };
 
-                    let layout = Layout::Union(UnionLayout::NonNullableUnwrapped(fields));
+                    let union_layout = UnionLayout::NonNullableUnwrapped(fields);
 
                     let tag = Expr::Tag {
-                        tag_layout: layout,
+                        tag_layout: union_layout,
                         tag_name,
                         tag_id: tag_id as u8,
                         union_size,
                         arguments: field_symbols,
                     };
 
-                    (tag, layout)
+                    (tag, Layout::Union(union_layout))
                 }
                 NonRecursive { sorted_tag_layouts } => {
                     let tag_id_symbol = env.unique_symbol();
@@ -4365,18 +4365,17 @@ fn convert_tag_union<'a>(
                         layouts.push(arg_layouts);
                     }
 
-                    let layout =
-                        Layout::Union(UnionLayout::NonRecursive(layouts.into_bump_slice()));
+                    let union_layout = UnionLayout::NonRecursive(layouts.into_bump_slice());
 
                     let tag = Expr::Tag {
-                        tag_layout: layout,
+                        tag_layout: union_layout,
                         tag_name,
                         tag_id: tag_id as u8,
                         union_size,
                         arguments: field_symbols,
                     };
 
-                    (tag, layout)
+                    (tag, Layout::Union(union_layout))
                 }
                 NullableWrapped {
                     nullable_id,
@@ -4402,20 +4401,20 @@ fn convert_tag_union<'a>(
                         layouts.push(arg_layouts);
                     }
 
-                    let layout = Layout::Union(UnionLayout::NullableWrapped {
+                    let union_layout = UnionLayout::NullableWrapped {
                         nullable_id,
                         other_tags: layouts.into_bump_slice(),
-                    });
+                    };
 
                     let tag = Expr::Tag {
-                        tag_layout: layout,
+                        tag_layout: union_layout,
                         tag_name,
                         tag_id: tag_id as u8,
                         union_size,
                         arguments: field_symbols,
                     };
 
-                    (tag, layout)
+                    (tag, Layout::Union(union_layout))
                 }
                 NullableUnwrapped {
                     nullable_id,
@@ -4437,20 +4436,20 @@ fn convert_tag_union<'a>(
                         temp.into_bump_slice()
                     };
 
-                    let layout = Layout::Union(UnionLayout::NullableUnwrapped {
+                    let union_layout = UnionLayout::NullableUnwrapped {
                         nullable_id,
                         other_fields,
-                    });
+                    };
 
                     let tag = Expr::Tag {
-                        tag_layout: layout,
+                        tag_layout: union_layout,
                         tag_name,
                         tag_id: tag_id as u8,
                         union_size,
                         arguments: field_symbols,
                     };
 
-                    (tag, layout)
+                    (tag, Layout::Union(union_layout))
                 }
             };
 
