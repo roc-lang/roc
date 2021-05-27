@@ -916,7 +916,14 @@ impl<'a> BranchInfo<'a> {
                 .append(", tag_id: ")
                 .append(format!("{}", tag_id))
                 .append("} "),
-            _ => alloc.text(""),
+
+            _ => {
+                if PRETTY_PRINT_IR_SYMBOLS {
+                    alloc.text(" <no branch info>")
+                } else {
+                    alloc.text("")
+                }
+            }
         }
     }
 }

@@ -16,6 +16,10 @@ const GENERATE_NULLABLE: bool = true;
 const DEFAULT_NUM_BUILTIN: Builtin<'_> = Builtin::Int64;
 pub const TAG_SIZE: Builtin<'_> = Builtin::Int64;
 
+impl Layout<'_> {
+    pub const TAG_SIZE: Layout<'static> = Layout::Builtin(Builtin::Int64);
+}
+
 #[derive(Copy, Clone)]
 #[repr(u8)]
 pub enum InPlace {
