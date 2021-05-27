@@ -112,10 +112,6 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
             let closure_data_layout = closure_layout.runtime_representation();
             basic_type_from_layout(env, &closure_data_layout)
         }
-        Pointer(layout) => basic_type_from_layout(env, &layout)
-            .ptr_type(AddressSpace::Generic)
-            .into(),
-        PhantomEmptyStruct => env.context.struct_type(&[], false).into(),
         Struct(sorted_fields) => basic_type_from_record(env, sorted_fields),
         Union(variant) => {
             use UnionLayout::*;
@@ -174,7 +170,7 @@ pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
         Float16 => context.f16_type().as_basic_type_enum(),
         Dict(_, _) | EmptyDict => zig_dict_type(env).into(),
         Set(_) | EmptySet => zig_dict_type(env).into(),
-        List(_, _) | EmptyList => zig_list_type(env).into(),
+        List(_) | EmptyList => zig_list_type(env).into(),
         Str | EmptyStr => zig_str_type(env).into(),
     }
 }
