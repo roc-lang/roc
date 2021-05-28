@@ -1,3 +1,4 @@
+const formatfloat = @import("formatfloat.zig");
 const utils = @import("utils.zig");
 const roc_mem = @import("mem.zig");
 const RocList = @import("list.zig").RocList;
@@ -357,14 +358,9 @@ fn strFromIntHelp(comptime T: type, int: T) RocStr {
 pub fn strFromFloatC(float: f64) callconv(.C) RocStr {
     // NOTE the compiled zig for float formatting seems to use LLVM11-specific features
     // hopefully we can use zig instead of snprintf in the future when we upgrade
-    const c = @cImport({
-        // See https://github.com/ziglang/zig/issues/515
-        @cDefine("_NO_CRT_STDIO_INLINE", "1");
-        @cInclude("stdio.h");
-    });
     var buf: [100]u8 = undefined;
 
-    const result = c.snprintf(&buf, 100, "%f", float);
+    const result = formatfloat.formatF64(&buf, 100, "%f", float);
 
     return RocStr.init(&buf, @intCast(usize, result));
 }
