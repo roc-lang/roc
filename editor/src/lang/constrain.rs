@@ -13,7 +13,7 @@ use roc_module::{ident::TagName, symbol::Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::{
     subs::Variable,
-    types,
+    types::{self, AnnotationSource},
     types::{Category, Reason},
 };
 
