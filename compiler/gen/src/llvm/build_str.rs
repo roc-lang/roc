@@ -1,12 +1,12 @@
 use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
-use crate::llvm::build::{complex_bitcast, Env, InPlace, Scope};
+use crate::llvm::build::{complex_bitcast, Env, Scope};
 use crate::llvm::build_list::{allocate_list, call_bitcode_fn_returns_list, store_list};
 use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, Layout};
+use roc_mono::layout::{Builtin, InPlace, Layout};
 
 use super::build::load_symbol;
 

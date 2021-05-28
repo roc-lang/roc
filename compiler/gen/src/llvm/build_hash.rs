@@ -56,11 +56,6 @@ fn build_hash_layout<'a, 'ctx, 'env>(
             val.into_struct_value(),
         ),
 
-        Layout::PhantomEmptyStruct => {
-            // just does nothing and returns the seed
-            seed
-        }
-
         Layout::Union(union_layout) => {
             build_hash_tag(env, layout_ids, layout, union_layout, seed, val)
         }
@@ -90,10 +85,6 @@ fn build_hash_layout<'a, 'ctx, 'env>(
                 )
             }
         },
-
-        Layout::Pointer(_) => {
-            unreachable!("unused")
-        }
 
         Layout::FunctionPointer(_, _) | Layout::Closure(_, _, _) => {
             unreachable!("the type system will guarantee these are never hashed")
@@ -157,7 +148,7 @@ fn hash_builtin<'a, 'ctx, 'env>(
         Builtin::Set(_) => {
             todo!("Implement Hash for Set")
         }
-        Builtin::List(_, element_layout) => build_hash_list(
+        Builtin::List(element_layout) => build_hash_list(
             env,
             layout_ids,
             layout,

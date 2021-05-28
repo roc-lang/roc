@@ -396,8 +396,8 @@ fn begin_render_pass<'a>(
     let bg_color = to_wgpu_color(ed_theme.background);
 
     encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-            attachment: texture_view,
+        color_attachments: &[wgpu::RenderPassColorAttachment {
+            view: texture_view,
             resolve_target: None,
             ops: wgpu::Operations {
                 load: wgpu::LoadOp::Clear(bg_color),

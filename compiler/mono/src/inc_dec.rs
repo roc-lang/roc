@@ -1,4 +1,4 @@
-use crate::borrow::ParamMap;
+use crate::borrow::{ParamMap, BORROWED, OWNED};
 use crate::ir::{Expr, JoinPointId, ModifyRc, Param, Proc, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
@@ -103,8 +103,7 @@ pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
     use Expr::*;
 
     match expr {
-        FunctionPointer(symbol, _)
-        | AccessAtIndex {
+        AccessAtIndex {
             structure: symbol, ..
         } => {
             result.insert(*symbol);
@@ -398,7 +397,7 @@ impl<'a> Context<'a> {
                 && is_borrow_param(*x, xs, ps)
                 && !b_live_vars.contains(x)
             {
-                b = self.add_dec(*x, b)
+                b = self.add_dec(*x, b);
             }
         }
 
@@ -442,7 +441,7 @@ impl<'a> Context<'a> {
         use crate::ir::CallType::*;
 
         match &call_type {
-            LowLevel { op } => {
+            LowLevel { op, .. } => {
                 let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
                 let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);
 
@@ -452,6 +451,209 @@ impl<'a> Context<'a> {
                 });
 
                 &*self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
+
+            HigherOrderLowLevel {
+                op, closure_layout, ..
+            } => {
+                macro_rules! create_call {
+                    ($borrows:expr) => {
+                        Expr::Call(crate::ir::Call {
+                            call_type: if let Some(OWNED) = $borrows.map(|p| p.borrow) {
+                                HigherOrderLowLevel {
+                                    op: *op,
+                                    closure_layout: *closure_layout,
+                                    function_owns_closure_data: true,
+                                }
+                            } else {
+                                call_type
+                            },
+                            arguments,
+                        })
+                    };
+                }
+
+                macro_rules! decref_if_owned {
+                    ($borrows:expr, $argument:expr, $stmt:expr) => {
+                        if !$borrows {
+                            self.arena.alloc(Stmt::Refcounting(
+                                ModifyRc::DecRef($argument),
+                                self.arena.alloc($stmt),
+                            ))
+                        } else {
+                            $stmt
+                        }
+                    };
+                }
+
+                const FUNCTION: bool = BORROWED;
+                const CLOSURE_DATA: bool = BORROWED;
+
+                match op {
+                    roc_module::low_level::LowLevel::ListMap
+                    | roc_module::low_level::LowLevel::ListKeepIf
+                    | roc_module::low_level::LowLevel::ListKeepOks
+                    | roc_module::low_level::LowLevel::ListKeepErrs => {
+                        match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                            Some(function_ps) => {
+                                let borrows = [function_ps[0].borrow, FUNCTION, CLOSURE_DATA];
+
+                                let b = self.add_dec_after_lowlevel(
+                                    arguments,
+                                    &borrows,
+                                    b,
+                                    b_live_vars,
+                                );
+
+                                // if the list is owned, then all elements have been consumed, but not the list itself
+                                let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
+
+                                let v = create_call!(function_ps.get(1));
+
+                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                            }
+                            None => unreachable!(),
+                        }
+                    }
+                    roc_module::low_level::LowLevel::ListMapWithIndex => {
+                        match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                            Some(function_ps) => {
+                                let borrows = [function_ps[1].borrow, FUNCTION, CLOSURE_DATA];
+
+                                let b = self.add_dec_after_lowlevel(
+                                    arguments,
+                                    &borrows,
+                                    b,
+                                    b_live_vars,
+                                );
+
+                                let b = decref_if_owned!(function_ps[1].borrow, arguments[0], b);
+
+                                let v = create_call!(function_ps.get(2));
+
+                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                            }
+                            None => unreachable!(),
+                        }
+                    }
+                    roc_module::low_level::LowLevel::ListMap2 => {
+                        match self.param_map.get_symbol(arguments[2], *closure_layout) {
+                            Some(function_ps) => {
+                                let borrows = [
+                                    function_ps[0].borrow,
+                                    function_ps[1].borrow,
+                                    FUNCTION,
+                                    CLOSURE_DATA,
+                                ];
+
+                                let b = self.add_dec_after_lowlevel(
+                                    arguments,
+                                    &borrows,
+                                    b,
+                                    b_live_vars,
+                                );
+
+                                let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
+                                let b = decref_if_owned!(function_ps[1].borrow, arguments[1], b);
+
+                                let v = create_call!(function_ps.get(2));
+
+                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                            }
+                            None => unreachable!(),
+                        }
+                    }
+                    roc_module::low_level::LowLevel::ListMap3 => {
+                        match self.param_map.get_symbol(arguments[3], *closure_layout) {
+                            Some(function_ps) => {
+                                let borrows = [
+                                    function_ps[0].borrow,
+                                    function_ps[1].borrow,
+                                    function_ps[2].borrow,
+                                    FUNCTION,
+                                    CLOSURE_DATA,
+                                ];
+
+                                let b = self.add_dec_after_lowlevel(
+                                    arguments,
+                                    &borrows,
+                                    b,
+                                    b_live_vars,
+                                );
+
+                                let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
+                                let b = decref_if_owned!(function_ps[1].borrow, arguments[1], b);
+                                let b = decref_if_owned!(function_ps[2].borrow, arguments[2], b);
+
+                                let v = create_call!(function_ps.get(3));
+
+                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                            }
+                            None => unreachable!(),
+                        }
+                    }
+                    roc_module::low_level::LowLevel::ListSortWith => {
+                        match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                            Some(function_ps) => {
+                                let borrows = [OWNED, FUNCTION, CLOSURE_DATA];
+
+                                let b = self.add_dec_after_lowlevel(
+                                    arguments,
+                                    &borrows,
+                                    b,
+                                    b_live_vars,
+                                );
+
+                                let v = create_call!(function_ps.get(2));
+
+                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                            }
+                            None => unreachable!(),
+                        }
+                    }
+                    roc_module::low_level::LowLevel::ListWalk
+                    | roc_module::low_level::LowLevel::ListWalkUntil
+                    | roc_module::low_level::LowLevel::ListWalkBackwards
+                    | roc_module::low_level::LowLevel::DictWalk => {
+                        match self.param_map.get_symbol(arguments[2], *closure_layout) {
+                            Some(function_ps) => {
+                                // borrow data structure based on first argument of the folded function
+                                // borrow the default based on second argument of the folded function
+                                let borrows = [
+                                    function_ps[0].borrow,
+                                    function_ps[1].borrow,
+                                    FUNCTION,
+                                    CLOSURE_DATA,
+                                ];
+
+                                let b = self.add_dec_after_lowlevel(
+                                    arguments,
+                                    &borrows,
+                                    b,
+                                    b_live_vars,
+                                );
+
+                                let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
+
+                                let v = create_call!(function_ps.get(2));
+
+                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                            }
+                            None => unreachable!(),
+                        }
+                    }
+                    _ => {
+                        let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
+                        let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);
+
+                        let v = Expr::Call(crate::ir::Call {
+                            call_type,
+                            arguments,
+                        });
+
+                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                    }
+                }
             }
 
             Foreign { .. } => {
@@ -470,44 +672,20 @@ impl<'a> Context<'a> {
                 name, full_layout, ..
             } => {
                 // get the borrow signature
-                match self.param_map.get_symbol(*name, *full_layout) {
-                    Some(ps) => {
-                        let v = Expr::Call(crate::ir::Call {
-                            call_type,
-                            arguments,
-                        });
+                let ps = self
+                    .param_map
+                    .get_symbol(*name, *full_layout)
+                    .expect("function is defined");
 
-                        let b = self.add_dec_after_application(arguments, ps, b, b_live_vars);
-                        let b = self.arena.alloc(Stmt::Let(z, v, l, b));
-
-                        self.add_inc_before(arguments, ps, b, b_live_vars)
-                    }
-                    None => {
-                        // an indirect call that was bound to a name
-                        let v = Expr::Call(crate::ir::Call {
-                            call_type,
-                            arguments,
-                        });
-
-                        self.add_inc_before_consume_all(
-                            arguments,
-                            self.arena.alloc(Stmt::Let(z, v, l, b)),
-                            b_live_vars,
-                        )
-                    }
-                }
-            }
-            ByPointer { .. } => {
                 let v = Expr::Call(crate::ir::Call {
                     call_type,
                     arguments,
                 });
 
-                self.add_inc_before_consume_all(
-                    arguments,
-                    self.arena.alloc(Stmt::Let(z, v, l, b)),
-                    b_live_vars,
-                )
+                let b = self.add_dec_after_application(arguments, ps, b, b_live_vars);
+                let b = self.arena.alloc(Stmt::Let(z, v, l, b));
+
+                self.add_inc_before(arguments, ps, b, b_live_vars)
             }
         }
     }
@@ -552,11 +730,7 @@ impl<'a> Context<'a> {
                 arguments,
             }) => self.visit_call(z, call_type, arguments, l, b, b_live_vars),
 
-            EmptyArray
-            | FunctionPointer(_, _)
-            | Literal(_)
-            | Reset(_)
-            | RuntimeErrorFunction(_) => {
+            EmptyArray | Literal(_) | Reset(_) | RuntimeErrorFunction(_) => {
                 // EmptyArray is always stack-allocated
                 // function pointers are persistent
                 self.arena.alloc(Stmt::Let(z, v, l, b))
@@ -585,10 +759,7 @@ impl<'a> Context<'a> {
     fn update_var_info(&self, symbol: Symbol, layout: &Layout<'a>, expr: &Expr<'a>) -> Self {
         // is this value a constant?
         // TODO do function pointers also fall into this category?
-        let persistent = match expr {
-            Expr::Call(crate::ir::Call { arguments, .. }) => arguments.is_empty(),
-            _ => false,
-        };
+        let persistent = false;
 
         // must this value be consumed?
         let consume = consume_expr(&self.vars, expr);
@@ -722,38 +893,31 @@ impl<'a> Context<'a> {
                 fail,
                 layout,
             } => {
-                // TODO this combines parts of Let and Switch. Did this happen correctly?
-                let mut case_live_vars = collect_stmt(pass, &self.jp_live_vars, MutSet::default());
-                case_live_vars.extend(collect_stmt(fail, &self.jp_live_vars, MutSet::default()));
+                // live vars of the whole expression
+                let invoke_live_vars = collect_stmt(stmt, &self.jp_live_vars, MutSet::default());
 
                 // the result of an invoke should not be touched in the fail branch
                 // but it should be present in the pass branch (otherwise it would be dead)
                 // NOTE: we cheat a bit here to allow `invoke` when generating code for `expect`
-                let is_dead = !case_live_vars.contains(symbol);
+                let is_dead = !invoke_live_vars.contains(symbol);
 
                 if is_dead && layout.is_refcounted() {
                     panic!("A variable of a reference-counted layout is dead; that's a bug!");
                 }
 
-                case_live_vars.remove(symbol);
-
                 let fail = {
                     // TODO should we use ctor info like Lean?
                     let ctx = self.clone();
                     let (b, alt_live_vars) = ctx.visit_stmt(fail);
-                    ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b)
+                    ctx.add_dec_for_alt(&invoke_live_vars, &alt_live_vars, b)
                 };
-
-                if !is_dead {
-                    case_live_vars.insert(*symbol);
-                }
 
                 let pass = {
                     // TODO should we use ctor info like Lean?
                     let ctx = self.clone();
                     let ctx = ctx.update_var_info_invoke(*symbol, layout, call);
                     let (b, alt_live_vars) = ctx.visit_stmt(pass);
-                    ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b)
+                    ctx.add_dec_for_alt(&invoke_live_vars, &alt_live_vars, b)
                 };
 
                 let invoke = Invoke {
@@ -768,9 +932,13 @@ impl<'a> Context<'a> {
 
                 use crate::ir::CallType;
                 let stmt = match &call.call_type {
-                    CallType::LowLevel { op } => {
+                    CallType::LowLevel { op, .. } => {
                         let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
-                        self.add_dec_after_lowlevel(call.arguments, ps, cont, &case_live_vars)
+                        self.add_dec_after_lowlevel(call.arguments, ps, cont, &invoke_live_vars)
+                    }
+
+                    CallType::HigherOrderLowLevel { .. } => {
+                        todo!("copy the code for normal calls over to here");
                     }
 
                     CallType::Foreign { .. } => {
@@ -778,34 +946,21 @@ impl<'a> Context<'a> {
                             self.arena,
                             call.arguments.len(),
                         );
-                        self.add_dec_after_lowlevel(call.arguments, ps, cont, &case_live_vars)
+
+                        self.add_dec_after_lowlevel(call.arguments, ps, cont, &invoke_live_vars)
                     }
 
                     CallType::ByName {
                         name, full_layout, ..
                     } => {
                         // get the borrow signature
-                        match self.param_map.get_symbol(*name, *full_layout) {
-                            Some(ps) => self.add_dec_after_application(
-                                call.arguments,
-                                ps,
-                                cont,
-                                &case_live_vars,
-                            ),
-                            None => self.add_inc_before_consume_all(
-                                call.arguments,
-                                cont,
-                                &case_live_vars,
-                            ),
-                        }
-                    }
-                    CallType::ByPointer { .. } => {
-                        self.add_inc_before_consume_all(call.arguments, cont, &case_live_vars)
+                        let ps = self
+                            .param_map
+                            .get_symbol(*name, *full_layout)
+                            .expect("function is defined");
+                        self.add_dec_after_application(call.arguments, ps, cont, &invoke_live_vars)
                     }
                 };
-
-                let mut invoke_live_vars = case_live_vars;
-                occuring_variables_call(call, &mut invoke_live_vars);
 
                 (stmt, invoke_live_vars)
             }

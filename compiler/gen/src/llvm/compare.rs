@@ -99,7 +99,7 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
         Builtin::Float16 => float_cmp(FloatPredicate::OEQ, "eq_f16"),
 
         Builtin::Str => str_equal(env, lhs_val, rhs_val),
-        Builtin::List(_, elem) => build_list_eq(
+        Builtin::List(elem) => build_list_eq(
             env,
             layout_ids,
             &Layout::Builtin(*builtin),
@@ -159,11 +159,6 @@ fn build_eq<'a, 'ctx, 'env>(
             rhs_val,
         ),
 
-        Layout::PhantomEmptyStruct => {
-            // always equal to itself
-            env.context.bool_type().const_int(1, false).into()
-        }
-
         Layout::RecursivePointer => match when_recursive {
             WhenRecursive::Unreachable => {
                 unreachable!("recursion pointers should never be compared directly")
@@ -196,10 +191,6 @@ fn build_eq<'a, 'ctx, 'env>(
                 )
             }
         },
-
-        Layout::Pointer(_) => {
-            unreachable!("unused")
-        }
 
         Layout::FunctionPointer(_, _) | Layout::Closure(_, _, _) => {
             unreachable!("the type system will guarantee these are never compared")
@@ -258,7 +249,7 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
 
             result.into()
         }
-        Builtin::List(_, elem) => {
+        Builtin::List(elem) => {
             let is_equal = build_list_eq(
                 env,
                 layout_ids,
@@ -338,17 +329,8 @@ fn build_neq<'a, 'ctx, 'env>(
             result.into()
         }
 
-        Layout::PhantomEmptyStruct => {
-            // always equal to itself
-            env.context.bool_type().const_int(1, false).into()
-        }
-
         Layout::RecursivePointer => {
             unreachable!("recursion pointers should never be compared directly")
-        }
-
-        Layout::Pointer(_) => {
-            unreachable!("unused")
         }
 
         Layout::FunctionPointer(_, _) | Layout::Closure(_, _, _) => {

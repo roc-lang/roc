@@ -6,6 +6,7 @@ zig-cache
 
 # llvm human-readable output 
 *.ll
+*.bc
 
 #valgrind
 vgcore.*

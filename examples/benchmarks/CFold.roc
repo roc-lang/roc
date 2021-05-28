@@ -82,9 +82,9 @@ constFolding = \e ->
 
             when Pair x1 x2 is
                 Pair (Val a) (Val b) -> Val (a+b)
-                # Pair (Val a) (Add (Val b) x) -> Add (Val (a+b)) x
+                Pair (Val a) (Add (Val b) x) -> Add (Val (a+b)) x
                 Pair (Val a) (Add x (Val b)) -> Add (Val (a+b)) x
-                Pair _ _                     -> Add x1 x2
+                Pair y1 y2                   -> Add y1 y2
 
         Mul e1 e2 ->
             x1 = constFolding e1
@@ -94,7 +94,7 @@ constFolding = \e ->
                 Pair (Val a) (Val b) -> Val (a*b)
                 Pair (Val a) (Mul (Val b) x) -> Mul (Val (a*b)) x
                 Pair (Val a) (Mul x (Val b)) -> Mul (Val (a*b)) x
-                Pair _ _                     -> Mul x1 x2
+                Pair y1 y2                   -> Add y1 y2
 
         _ -> e
 

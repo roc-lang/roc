@@ -32,7 +32,7 @@ fn main() {
 
     run_command(&bitcode_path, "zig", &["build", "ir", "-Drelease=true"]);
 
-    let dest_bc_path = Path::new(&out_dir).join("builtins.bc");
+    let dest_bc_path = bitcode_path.join("builtins.bc");
     let dest_bc = dest_bc_path.to_str().expect("Invalid dest bc path");
     println!("Compiling bitcode to: {}", dest_bc);
 
@@ -43,7 +43,6 @@ fn main() {
     );
 
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rustc-env=BUILTINS_BC={}", dest_bc);
     println!("cargo:rustc-env=BUILTINS_O={}", dest_obj);
     get_zig_files(bitcode_path.as_path(), &|path| {
         let path: &Path = path;

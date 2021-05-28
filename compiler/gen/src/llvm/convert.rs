@@ -108,21 +108,10 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
         FunctionPointer(args, ret_layout) => {
             basic_type_from_function_layout(env, args, None, ret_layout)
         }
-        Closure(args, closure_layout, ret_layout) => {
-            let closure_data_layout = closure_layout.as_block_of_memory_layout();
-            let closure_data = basic_type_from_layout(env, &closure_data_layout);
-
-            let function_pointer =
-                basic_type_from_function_layout(env, args, Some(closure_data), ret_layout);
-
-            env.context
-                .struct_type(&[function_pointer, closure_data], false)
-                .as_basic_type_enum()
+        Closure(_args, closure_layout, _ret_layout) => {
+            let closure_data_layout = closure_layout.runtime_representation();
+            basic_type_from_layout(env, &closure_data_layout)
         }
-        Pointer(layout) => basic_type_from_layout(env, &layout)
-            .ptr_type(AddressSpace::Generic)
-            .into(),
-        PhantomEmptyStruct => env.context.struct_type(&[], false).into(),
         Struct(sorted_fields) => basic_type_from_record(env, sorted_fields),
         Union(variant) => {
             use UnionLayout::*;
@@ -181,7 +170,7 @@ pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
         Float16 => context.f16_type().as_basic_type_enum(),
         Dict(_, _) | EmptyDict => zig_dict_type(env).into(),
         Set(_) | EmptySet => zig_dict_type(env).into(),
-        List(_, _) | EmptyList => zig_list_type(env).into(),
+        List(_) | EmptyList => zig_list_type(env).into(),
         Str | EmptyStr => zig_str_type(env).into(),
     }
 }

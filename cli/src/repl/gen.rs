@@ -1,6 +1,7 @@
 use crate::repl::eval;
 use bumpalo::Bump;
 use inkwell::context::Context;
+use inkwell::module::Linkage;
 use roc_build::link::module_to_dylib;
 use roc_build::program::FunctionIterator;
 use roc_can::builtins::builtin_defs_map;
@@ -8,6 +9,7 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_fmt::annotation::Formattable;
 use roc_fmt::annotation::{Newlines, Parens};
 use roc_gen::llvm::build::{build_proc, build_proc_header, OptLevel};
+use roc_gen::llvm::externs::add_default_roc_externs;
 use roc_load::file::LoadingProblem;
 use roc_parse::parser::SyntaxError;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
@@ -126,14 +128,15 @@ pub fn gen_and_eval<'a>(
         Ok(ReplOutput::Problems(lines))
     } else {
         let context = Context::create();
-
-        let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
-
-        let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(&context, ""));
         let builder = context.create_builder();
+        let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
+        let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(&context, ""));
+
+        // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
+        // platform to provide them.
+        add_default_roc_externs(&context, module, &builder, ptr_bytes);
 
         // mark our zig-defined builtins as internal
-        use inkwell::module::Linkage;
         for function in FunctionIterator::from_module(module) {
             let name = function.get_name().to_str().unwrap();
             if name.starts_with("roc_builtins") {
@@ -190,12 +193,12 @@ pub fn gen_and_eval<'a>(
         // because their bodies may reference each other.
         let mut scope = roc_gen::llvm::build::Scope::default();
         for ((symbol, layout), proc) in procedures.drain() {
-            let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+            let fn_val = build_proc_header(&env, &mut layout_ids, symbol, layout, &proc);
 
             if proc.args.is_empty() {
                 // this is a 0-argument thunk, i.e. a top-level constant definition
                 // it must be in-scope everywhere in the module!
-                scope.insert_top_level_thunk(symbol, layout, fn_val);
+                scope.insert_top_level_thunk(symbol, arena.alloc(layout), fn_val);
             }
 
             headers.push((proc, fn_val));
@@ -240,7 +243,7 @@ pub fn gen_and_eval<'a>(
             &env,
             &mut layout_ids,
             main_fn_symbol,
-            &main_fn_layout,
+            main_fn_layout,
         );
 
         env.dibuilder.finalize();
@@ -256,13 +259,16 @@ pub fn gen_and_eval<'a>(
 
         module_pass.run_on(env.module);
 
-        // Verify the module
-        if let Err(errors) = env.module.verify() {
-            panic!("Errors defining module: {:?}", errors);
-        }
-
         // Uncomment this to see the module's optimized LLVM instruction output:
         // env.module.print_to_stderr();
+
+        // Verify the module
+        if let Err(errors) = env.module.verify() {
+            panic!(
+                "Errors defining module: {}\n\nUncomment things nearby to see more details.",
+                errors
+            );
+        }
 
         let lib = module_to_dylib(&env.module, &target, opt_level)
             .expect("Error loading compiled dylib for test");
@@ -271,7 +277,7 @@ pub fn gen_and_eval<'a>(
                 &arena,
                 lib,
                 main_fn_name,
-                &main_fn_layout,
+                &arena.alloc(main_fn_layout).full(),
                 &content,
                 &env.interns,
                 home,

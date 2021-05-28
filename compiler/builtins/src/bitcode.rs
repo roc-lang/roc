@@ -1,26 +1,12 @@
-use std::fs::File;
-use std::io::prelude::Read;
-use std::vec::Vec;
-
-const BC_PATH: &str = env!(
-    "BUILTINS_BC",
-    "Env var BUILTINS_BC not found. Is there a problem with the build script?"
-);
-
 pub const OBJ_PATH: &str = env!(
     "BUILTINS_O",
     "Env var BUILTINS_O not found. Is there a problem with the build script?"
 );
 
-pub fn get_bytes() -> Vec<u8> {
-    // In the build script for the builtins module, we compile the builtins bitcode and set
-    // BUILTINS_BC to the path to the compiled output.
-    let mut builtins_bitcode = File::open(BC_PATH).expect("Unable to find builtins bitcode source");
-    let mut buffer = Vec::new();
-    builtins_bitcode
-        .read_to_end(&mut buffer)
-        .expect("Unable to read builtins bitcode");
-    buffer
+pub fn as_bytes() -> &'static [u8] {
+    // In the build script for the builtins module,
+    // we compile the builtins into LLVM bitcode
+    include_bytes!("../bitcode/builtins.bc")
 }
 
 pub const NUM_ASIN: &str = "roc_builtins.num.asin";
@@ -76,9 +62,11 @@ pub const LIST_WALK_BACKWARDS: &str = "roc_builtins.list.walk_backwards";
 pub const LIST_CONTAINS: &str = "roc_builtins.list.contains";
 pub const LIST_REPEAT: &str = "roc_builtins.list.repeat";
 pub const LIST_APPEND: &str = "roc_builtins.list.append";
+pub const LIST_DROP: &str = "roc_builtins.list.drop";
 pub const LIST_SINGLE: &str = "roc_builtins.list.single";
 pub const LIST_JOIN: &str = "roc_builtins.list.join";
 pub const LIST_RANGE: &str = "roc_builtins.list.range";
 pub const LIST_REVERSE: &str = "roc_builtins.list.reverse";
 pub const LIST_SORT_WITH: &str = "roc_builtins.list.sort_with";
 pub const LIST_CONCAT: &str = "roc_builtins.list.concat";
+pub const LIST_SET: &str = "roc_builtins.list.set";

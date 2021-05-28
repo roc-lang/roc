@@ -1,19 +1,18 @@
 app "custom-malloc-example"
     packages { base: "platform" }
-    imports [ base.Task.{ Task }, base.File, base.Path ]
+    imports [ base.Task.{ Task } ]
     provides [ main ] to base
 
 main : Task.Task {} []
 main =
-    when Path.fromStr "thing.txt" is
-        Ok path ->
-            {} <- Task.await (Task.putLine "Writing to file")
+    _ <- Task.await (Task.putLine "About to allocate a list!")
 
-            result <- Task.attempt (File.writeUtf8 path "zig is awesome")
+    # This is the only allocation in this Roc code!
+    # (The strings all get stored in the application
+    # binary, and are never allocated on the heap.)
+    list = [ 1, 2, 3, 4 ]
 
-            when result is
-                Ok _ -> Task.putLine "successfully wrote to file"
-                Err BadThing -> Task.putLine "error writing to file"
-                Err _ -> Task.putLine "something worse"
-
-        _ -> Task.putLine "invalid path"
+    if List.len list > 100 then
+        Task.putLine "The list was big!"
+    else
+        Task.putLine "The list was small!"

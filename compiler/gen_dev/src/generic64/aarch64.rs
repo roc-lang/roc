@@ -315,6 +315,13 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     fn jmp_imm32(_buf: &mut Vec<'_, u8>, _offset: i32) -> usize {
         unimplemented!("jump instructions not yet implemented for AArch64");
     }
+
+    #[inline(always)]
+    fn tail_call(buf: &mut Vec<'_, u8>) -> u64 {
+        Self::jmp_imm32(buf, 0);
+        buf.len() as u64 - 4 // TODO is 4 the correct offset in ARM?
+    }
+
     #[inline(always)]
     fn jne_reg64_imm64_imm32(
         _buf: &mut Vec<'_, u8>,
