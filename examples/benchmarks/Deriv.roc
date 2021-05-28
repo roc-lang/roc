@@ -9,14 +9,15 @@ IO a : Task.Task a []
 
 main : IO {}
 main =
-    x : Expr
-    x = Var "x"
+    Task.after Task.getInt \n ->
+        x : Expr
+        x = Var "x"
 
-    f : Expr
-    f = pow x x
+        f : Expr
+        f = pow x x
 
-    nest deriv 7 f
-        |> Task.map (\_ -> {})
+        nest deriv n f # original koka n = 10
+            |> Task.map (\_ -> {})
 
 Expr : [ Val I64, Var Str, Add Expr Expr, Mul Expr Expr, Pow Expr Expr, Ln Expr ]
 

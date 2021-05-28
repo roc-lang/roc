@@ -116,5 +116,5 @@ bench-roc:
     ENV RUST_BACKTRACE=full
     RUN cargo criterion -V
     RUN --privileged --mount=type=cache,target=$SCCACHE_DIR \
-        cd cli && cargo bench instructions_bench && cargo criterion --bench time_bench && sccache --show-stats
+        cd cli && cargo criterion && sccache --show-stats
     

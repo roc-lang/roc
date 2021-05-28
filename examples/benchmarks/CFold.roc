@@ -7,15 +7,16 @@ app "cfold"
 
 main : Task.Task {} []
 main =
-    e = mkExpr 12 1
-    unoptimized = eval e
-    optimized = eval (constFolding (reassoc e))
+    Task.after Task.getInt \n ->
+        e = mkExpr n 1 # original koka n = 20 (set `ulimit -s unlimited` to avoid stack overflow for n = 20)
+        unoptimized = eval e
+        optimized = eval (constFolding (reassoc e))
 
-    unoptimized
-        |> Str.fromInt
-        |> Str.concat " & "
-        |> Str.concat (Str.fromInt optimized)
-        |> Task.putLine
+        unoptimized
+            |> Str.fromInt
+            |> Str.concat " & "
+            |> Str.concat (Str.fromInt optimized)
+            |> Task.putLine
 
 Expr : [
     Add Expr Expr,

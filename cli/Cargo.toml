@@ -96,14 +96,15 @@ serial_test = "0.5"
 tempfile = "3.1.0"
 criterion = "0.3.4"
 cli_utils = { path = "cli_utils" }
-iai = "0.1"
-criterion-perf-events = "0.1.3"
-perfcnt = "0.7.1"
+# Keep the commented deps, they are commented because they require nightly rust
+# criterion-perf-events = "0.1.3"
+# perfcnt = "0.7.1"
 
 [[bench]]
 name = "time_bench"
 harness = false
 
-[[bench]]
-name = "events_bench"
-harness = false
+# Keep this benchmark, it's commented because it requires nightly
+# [[bench]]
+# name = "events_bench"
+# harness = false

@@ -190,8 +190,9 @@ mod cli_run {
     #[test]
     #[serial(cfold)]
     fn run_cfold_not_optimized() {
-        check_output(
+        check_output_with_stdin(
             &example_file("benchmarks", "CFold.roc"),
+            "3",
             "cfold",
             &[],
             "11 & 11\n",
@@ -202,8 +203,9 @@ mod cli_run {
     #[test]
     #[serial(deriv)]
     fn run_deriv_not_optimized() {
-        check_output(
+        check_output_with_stdin(
             &example_file("benchmarks", "Deriv.roc"),
+            "2",
             "deriv",
             &[],
             "1 count: 6\n2 count: 22\n",
@@ -226,8 +228,9 @@ mod cli_run {
     #[test]
     #[serial(deriv)]
     fn run_rbtree_delete_not_optimized() {
-        check_output(
+        check_output_with_stdin(
             &example_file("benchmarks", "RBTreeDel.roc"),
+            "420",
             "rbtree-del",
             &[],
             "30\n",

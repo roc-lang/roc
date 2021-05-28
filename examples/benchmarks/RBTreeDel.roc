@@ -14,14 +14,14 @@ ConsList a : [ Nil, Cons a (ConsList a) ]
 
 main : Task.Task {} []
 main =
-    # benchmarks use 4_200_000
-    m = makeMap 6000
+    Task.after Task.getInt \n ->
+        m = makeMap n # koka original n = 4_200_000
 
-    val = fold (\_, v, r -> if v then r + 1 else r) m 0
+        val = fold (\_, v, r -> if v then r + 1 else r) m 0
 
-    val
-        |> Str.fromInt
-        |> Task.putLine
+        val
+            |> Str.fromInt
+            |> Task.putLine
 
 boom : Str -> a
 boom = \_ -> boom ""
