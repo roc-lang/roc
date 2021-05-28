@@ -21,7 +21,6 @@ roc_mono = { path = "../mono" }
 roc_load = { path = "../load" }
 roc_gen = { path = "../gen" }
 roc_reporting = { path = "../reporting" }
-morphic_lib = { path = "../../vendor/morphic_lib" }
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.6.1", features = ["collections"] }

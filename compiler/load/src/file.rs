@@ -2085,7 +2085,7 @@ fn update<'a>(
                     &mut state.procedures,
                 );
 
-                if true {
+                if false {
                     let it = state.procedures.iter().map(|x| x.1);
 
                     match roc_mono::alias_analysis::spec_program(it) {

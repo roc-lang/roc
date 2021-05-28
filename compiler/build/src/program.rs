@@ -157,27 +157,8 @@ pub fn gen_from_mono_module(
         headers.push((proc, fn_val));
     }
 
-    use roc_load::file::AliasAnalysisSolutions::*;
-    let solutions = match loaded.alias_analysis_solutions {
-        NotAvailable => panic!(),
-        Available(solutions) => solutions,
-    };
-
-    let module_solutions = solutions
-        .mod_solutions(roc_mono::alias_analysis::MOD_APP)
-        .unwrap();
-
     // Build each proc using its header info.
     for (proc, fn_val) in headers {
-        let bytes = proc.name.to_ne_bytes();
-        let func_name = morphic_lib::FuncName(&bytes);
-        let func_specs = module_solutions.func_solutions(func_name).unwrap();
-
-        for spec_name in func_specs.specs() {
-            let morphic_lib::FuncSpec(bytes) = spec_name;
-            dbg!(proc.name, unsafe { std::str::from_utf8_unchecked(bytes) },);
-            let spec = func_specs.spec(spec_name).unwrap();
-        }
         // NOTE: This is here to be uncommented in case verification fails.
         // (This approach means we don't have to defensively clone name here.)
         //
