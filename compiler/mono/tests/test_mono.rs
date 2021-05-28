@@ -270,11 +270,12 @@ mod test_mono {
             indoc!(
                 r#"
                 procedure Test.0 ():
-                    let Test.11 = 1i64;
-                    let Test.9 = 1i64;
-                    let Test.10 = 2i64;
-                    let Test.5 = These Test.11 Test.9 Test.10;
-                    switch Test.5:
+                    let Test.12 = 1i64;
+                    let Test.10 = 1i64;
+                    let Test.11 = 2i64;
+                    let Test.5 = These Test.12 Test.10 Test.11;
+                    let Test.9 = Index 0 Test.5;
+                    switch Test.9:
                         case 2:
                             let Test.2 = Index 1 Test.5;
                             ret Test.2;
