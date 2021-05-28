@@ -1,10 +1,10 @@
 use morphic_lib::TypeContext;
 use morphic_lib::{
-    BlockExpr, BlockId, CalleeSpecVar, ConstDef, ConstDefBuilder, ConstName, EntryPointName,
-    ExprContext, FuncDef, FuncDefBuilder, FuncName, ModDefBuilder, ModName, ProgramBuilder, Result,
-    TypeId, UpdateModeVar, ValueId,
+    BlockExpr, BlockId, CalleeSpecVar, ConstDefBuilder, ConstName, EntryPointName, ExprContext,
+    FuncDef, FuncDefBuilder, FuncName, ModDefBuilder, ModName, ProgramBuilder, Result, TypeId,
+    UpdateModeVar, ValueId,
 };
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use std::convert::TryFrom;
@@ -12,30 +12,35 @@ use std::convert::TryFrom;
 use crate::ir::{Call, CallType, Expr, Literal, ModifyRc, Proc, Stmt};
 use crate::layout::{Builtin, Layout, ListLayout, UnionLayout};
 
-use bumpalo::Bump;
-
 // just using one module for now
 pub const MOD_APP: ModName = ModName(b"UserApp");
+
+pub const STATIC_STR_NAME: ConstName = ConstName(&Symbol::STR_ALIAS_ANALYSIS_STATIC.to_ne_bytes());
 
 pub fn spec_program<'a, I>(procs: I) -> Result<morphic_lib::Solutions>
 where
     I: Iterator<Item = &'a Proc<'a>>,
 {
-    let arena = Bump::new();
-
     let mut main_function = None;
     let main_module = {
         let mut m = ModDefBuilder::new();
 
+        let static_str_def = {
+            let mut cbuilder = ConstDefBuilder::new();
+            let block = cbuilder.add_block();
+            let cell = cbuilder.add_new_heap_cell(block)?;
+            let value_id = cbuilder.add_make_tuple(block, &[cell])?;
+            let root = BlockExpr(block, value_id);
+            let str_type_id = str_type(&mut cbuilder)?;
+
+            cbuilder.build(str_type_id, root)?
+        };
+        m.add_const(STATIC_STR_NAME, static_str_def)?;
+
         for proc in procs {
-            let (spec, consts) = proc_spec(&arena, proc)?;
+            let spec = proc_spec(proc)?;
 
             m.add_func(FuncName(&proc.name.to_ne_bytes()), spec)?;
-
-            for (symbol, def) in consts {
-                let const_name = ConstName(arena.alloc(symbol.to_ne_bytes()));
-                m.add_const(const_name, def)?;
-            }
 
             if format!("{:?}", proc.name).contains("mainForHost") {
                 main_function = Some(proc.name);
@@ -60,9 +65,9 @@ where
     morphic_lib::solve(program)
 }
 
-fn proc_spec(arena: &Bump, proc: &Proc) -> Result<(FuncDef, MutMap<Symbol, ConstDef>)> {
+fn proc_spec(proc: &Proc) -> Result<FuncDef> {
     let mut builder = FuncDefBuilder::new();
-    let mut env = Env::new(arena);
+    let mut env = Env::default();
 
     let block = builder.add_block();
 
@@ -81,39 +86,15 @@ fn proc_spec(arena: &Bump, proc: &Proc) -> Result<(FuncDef, MutMap<Symbol, Const
     let arg_type_id = layout_spec(&mut builder, &Layout::Struct(&argument_layouts))?;
     let ret_type_id = layout_spec(&mut builder, &proc.ret_layout)?;
 
-    let mut statics: MutMap<Symbol, ConstDef> = MutMap::default();
-
-    for symbol in env.statics {
-        let mut cbuilder = ConstDefBuilder::new();
-        let str_type_id = str_type(&mut cbuilder)?;
-        let def = cbuilder.build(str_type_id, root)?;
-
-        statics.insert(symbol, def);
-    }
-
     let spec = builder.build(arg_type_id, ret_type_id, root)?;
 
-    Ok((spec, statics))
+    Ok(spec)
 }
 
-type Statics = MutSet<Symbol>;
-
-struct Env<'a> {
-    arena: &'a Bump,
+#[derive(Default)]
+struct Env {
     symbols: MutMap<Symbol, ValueId>,
     join_points: MutMap<crate::ir::JoinPointId, morphic_lib::JoinPointId>,
-    statics: Statics,
-}
-
-impl<'a> Env<'a> {
-    fn new(arena: &'a Bump) -> Self {
-        Env {
-            arena,
-            symbols: Default::default(),
-            join_points: Default::default(),
-            statics: Default::default(),
-        }
-    }
 }
 
 fn stmt_spec(
@@ -127,7 +108,7 @@ fn stmt_spec(
 
     match stmt {
         Let(symbol, expr, layout, continuation) => {
-            let value_id = expr_spec(builder, env, block, symbol, layout, expr)?;
+            let value_id = expr_spec(builder, env, block, layout, expr)?;
             env.symbols.insert(*symbol, value_id);
             let result = stmt_spec(builder, env, block, layout, continuation)?;
             env.symbols.remove(symbol);
@@ -465,16 +446,13 @@ fn expr_spec(
     builder: &mut FuncDefBuilder,
     env: &mut Env,
     block: BlockId,
-    lhs: &Symbol,
     layout: &Layout,
     expr: &Expr,
 ) -> Result<ValueId> {
     use Expr::*;
 
     match expr {
-        Literal(literal) => {
-            literal_spec(env.arena, builder, &mut env.statics, block, *lhs, literal)
-        }
+        Literal(literal) => literal_spec(builder, block, literal),
         Call(call) => call_spec(builder, env, block, layout, call),
         Tag {
             tag_layout,
@@ -557,17 +535,14 @@ fn expr_spec(
 }
 
 fn literal_spec(
-    arena: &Bump,
     builder: &mut FuncDefBuilder,
-    statics: &mut Statics,
     block: BlockId,
-    lhs: Symbol,
     literal: &Literal,
 ) -> Result<ValueId> {
     use Literal::*;
 
     match literal {
-        Str(_) => new_static_string(arena, builder, statics, block, lhs),
+        Str(_) => new_static_string(builder, block),
         Int(_) | Float(_) | Bool(_) | Byte(_) => builder.add_make_tuple(block, &[]),
     }
 }
@@ -645,19 +620,10 @@ fn new_list(builder: &mut FuncDefBuilder, block: BlockId, element_type: TypeId) 
     builder.add_make_tuple(block, &[cell, bag])
 }
 
-fn new_static_string(
-    arena: &Bump,
-    builder: &mut FuncDefBuilder,
-    statics: &mut Statics,
-    block: BlockId,
-    lhs: Symbol,
-) -> Result<ValueId> {
+fn new_static_string(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
     let module = MOD_APP;
-    let const_name = ConstName(arena.alloc(lhs.to_ne_bytes()));
 
-    statics.insert(lhs);
-
-    builder.add_const_ref(block, module, const_name)
+    builder.add_const_ref(block, module, STATIC_STR_NAME)
 }
 
 fn new_order(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
