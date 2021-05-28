@@ -5791,7 +5791,7 @@ fn get_gxx_personality_v0<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> Function
         None => {
             let personality_func = add_func(
                 module,
-                "__gxx_personality_v0",
+                name,
                 context.i64_type().fn_type(&[], false),
                 Linkage::External,
                 C_CALL_CONV,
@@ -5843,7 +5843,7 @@ fn cxa_begin_catch<'a, 'ctx, 'env>(
 
             let cxa_begin_catch = add_func(
                 module,
-                "__cxa_begin_catch",
+                name,
                 u8_ptr.fn_type(&[u8_ptr.into()], false),
                 Linkage::External,
                 C_CALL_CONV,

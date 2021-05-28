@@ -100,20 +100,22 @@ pub fn gen_from_mono_module(
 
     let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
     debug_assert!(kind_id > 0);
-    let attr = context.create_enum_attribute(kind_id, 1);
+    let enum_attr = context.create_enum_attribute(kind_id, 1);
 
     for function in FunctionIterator::from_module(module) {
         let name = function.get_name().to_str().unwrap();
+
+        // mark our zig-defined builtins as internal
         if name.starts_with("roc_builtins") {
             function.set_linkage(Linkage::Internal);
         }
 
-        if name.starts_with("roc_builtins.dict") || name.starts_with("dict.RocDict") {
-            function.add_attribute(AttributeLoc::Function, attr);
-        }
-
-        if name.starts_with("roc_builtins.list") || name.starts_with("list.RocList") {
-            function.add_attribute(AttributeLoc::Function, attr);
+        if name.starts_with("roc_builtins.dict")
+            || name.starts_with("dict.RocDict")
+            || name.starts_with("roc_builtins.list")
+            || name.starts_with("list.RocList")
+        {
+            function.add_attribute(AttributeLoc::Function, enum_attr);
         }
     }
 
