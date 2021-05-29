@@ -81,6 +81,13 @@ fn jit_to_ast_help<'a>(
         Layout::Builtin(Builtin::Usize) => Ok(run_jit_function!(lib, main_fn_name, usize, |num| {
             num_to_ast(env, nat_to_ast(env.arena, num), content)
         })),
+        Layout::Builtin(Builtin::Int32) => {
+            Ok(run_jit_function!(lib, main_fn_name, i32, |num| num_to_ast(
+                env,
+                i32_to_ast(env.arena, num),
+                content
+            )))
+        }
         Layout::Builtin(Builtin::Int64) => {
             Ok(run_jit_function!(lib, main_fn_name, i64, |num| num_to_ast(
                 env,
