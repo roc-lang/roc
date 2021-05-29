@@ -274,3 +274,15 @@ fn constrain_access() {
         "Str",
     )
 }
+
+#[test]
+fn constrain_if() {
+    infer_eq(
+        indoc!(
+            r#"
+            if True then Green else Red
+            "#
+        ),
+        "[ Green, Red ]*",
+    )
+}

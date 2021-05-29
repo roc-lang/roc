@@ -516,7 +516,7 @@ pub fn to_expr2<'a>(
                 output.references.union_mut(cond_output.references);
                 output.references.union_mut(then_output.references);
 
-                new_branches.push((cond, then_expr));
+                new_branches.push((env.pool.add(cond), env.pool.add(then_expr)));
             }
 
             let (else_expr, else_output) =
