@@ -105,6 +105,7 @@ fn stmt_spec(
             layout: call_layout,
             pass,
             fail,
+            exception_id: _,
         } => {
             // a call that might throw an exception
 
@@ -208,7 +209,7 @@ fn stmt_spec(
             let jpid = env.join_points[id];
             builder.add_jump(block, jpid, argument, ret_type_id)
         }
-        Rethrow | RuntimeError(_) => {
+        Rethrow(_) | RuntimeError(_) => {
             let type_id = layout_spec(builder, layout)?;
 
             builder.add_terminate(block, type_id)

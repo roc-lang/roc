@@ -48,7 +48,9 @@ use roc_collections::all::{ImMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::ir::{BranchInfo, CallType, JoinPointId, ModifyRc, TopLevelFunctionLayout, Wrapped};
+use roc_mono::ir::{
+    BranchInfo, CallType, ExceptionId, JoinPointId, ModifyRc, TopLevelFunctionLayout, Wrapped,
+};
 use roc_mono::layout::{Builtin, InPlace, LambdaSet, Layout, LayoutIds, UnionLayout};
 use target_lexicon::CallingConvention;
 
@@ -1821,6 +1823,7 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
     closure_argument: Option<BasicValueEnum<'ctx>>,
     pass: &'a roc_mono::ir::Stmt<'a>,
     fail: &'a roc_mono::ir::Stmt<'a>,
+    exception_id: ExceptionId,
 ) -> BasicValueEnum<'ctx> {
     let context = env.context;
 
@@ -1877,14 +1880,17 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
             context.struct_type(&[exception_ptr, selector_value], false)
         };
 
-        env.builder
-            .build_catch_all_landing_pad(
-                &landing_pad_type,
-                &BasicValueEnum::IntValue(context.i8_type().const_zero()),
-                context.i8_type().ptr_type(AddressSpace::Generic),
-                "invoke_landing_pad",
-            )
-            .into_struct_value();
+        let exception_object = env.builder.build_cleanup_landing_pad(
+            &landing_pad_type,
+            &BasicValueEnum::IntValue(context.i8_type().const_zero()),
+            context.i8_type().ptr_type(AddressSpace::Generic),
+            "invoke_landing_pad",
+        );
+
+        scope.insert(
+            exception_id.into_inner(),
+            (Layout::Struct(&[]), exception_object),
+        );
 
         build_exp_stmt(env, layout_ids, scope, parent, fail);
     }
@@ -1983,7 +1989,8 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             call,
             layout,
             pass,
-            fail: roc_mono::ir::Stmt::Rethrow,
+            fail: roc_mono::ir::Stmt::Rethrow(_),
+            exception_id: _,
         } => {
             // when the fail case is just Rethrow, there is no cleanup work to do
             // so we can just treat this invoke as a normal call
@@ -1997,6 +2004,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             layout,
             pass,
             fail,
+            exception_id,
         } => match call.call_type {
             CallType::ByName {
                 name,
@@ -2017,6 +2025,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     None,
                     pass,
                     fail,
+                    *exception_id,
                 )
             }
 
@@ -2047,11 +2056,9 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             }
         },
 
-        Rethrow => {
-            cxa_rethrow_exception(env);
-
-            // used in exception handling
-            env.builder.build_unreachable();
+        Rethrow(exception_id) => {
+            let exception_object = scope.get(&exception_id.into_inner()).unwrap().1;
+            env.builder.build_resume(&exception_object);
 
             env.context.i64_type().const_zero().into()
         }

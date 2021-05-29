@@ -855,6 +855,7 @@ pub enum Stmt<'a> {
         layout: Layout<'a>,
         pass: &'a Stmt<'a>,
         fail: &'a Stmt<'a>,
+        exception_id: ExceptionId,
     },
     Switch {
         /// This *must* stand for an integer, because Switch potentially compiles to a jump table.
@@ -869,7 +870,7 @@ pub enum Stmt<'a> {
         ret_layout: Layout<'a>,
     },
     Ret(Symbol),
-    Rethrow,
+    Rethrow(ExceptionId),
     Refcounting(ModifyRc, &'a Stmt<'a>),
     /// a join point `join f <params> = <continuation> in remainder`
     Join {
@@ -1361,7 +1362,7 @@ impl<'a> Stmt<'a> {
                 symbol,
                 call,
                 pass,
-                fail: Stmt::Rethrow,
+                fail: Stmt::Rethrow(_),
                 ..
             } => alloc
                 .text("let ")
@@ -1394,7 +1395,7 @@ impl<'a> Stmt<'a> {
                 .append(symbol_to_doc(alloc, *symbol))
                 .append(";"),
 
-            Rethrow => alloc.text("unreachable;"),
+            Rethrow(_) => alloc.text("unreachable;"),
 
             Switch {
                 cond_symbol,
@@ -4684,12 +4685,14 @@ pub fn from_can<'a>(
                 arguments,
             };
 
+            let exception_id = ExceptionId(env.unique_symbol());
             let rest = Stmt::Invoke {
                 symbol: env.unique_symbol(),
                 call,
                 layout: bool_layout,
                 pass: env.arena.alloc(rest),
-                fail: env.arena.alloc(Stmt::Rethrow),
+                fail: env.arena.alloc(Stmt::Rethrow(exception_id)),
+                exception_id,
             };
 
             with_hole(
@@ -5271,6 +5274,7 @@ fn substitute_in_stmt_help<'a>(
             layout,
             pass,
             fail,
+            exception_id,
         } => {
             let opt_call = substitute_in_call(arena, call, subs);
             let opt_pass = substitute_in_stmt_help(arena, pass, subs);
@@ -5287,6 +5291,7 @@ fn substitute_in_stmt_help<'a>(
                     layout: *layout,
                     pass,
                     fail,
+                    exception_id: *exception_id,
                 }))
             } else {
                 None
@@ -5406,7 +5411,7 @@ fn substitute_in_stmt_help<'a>(
             }
         }
 
-        Rethrow => None,
+        Rethrow(_) => None,
 
         RuntimeError(_) => None,
     }
@@ -5909,7 +5914,7 @@ fn force_thunk<'a>(
         arguments: &[],
     };
 
-    Stmt::Let(assigned, Expr::Call(call), layout, env.arena.alloc(hole))
+    build_call(env, call, assigned, layout, env.arena.alloc(hole))
 }
 
 fn let_empty_struct<'a>(assigned: Symbol, hole: &'a Stmt<'a>) -> Stmt<'a> {
@@ -6160,6 +6165,18 @@ fn can_throw_exception(call: &Call) -> bool {
     }
 }
 
+/// Symbol that links an Invoke with a Rethrow
+/// we'll assign the exception object to this symbol
+/// so we can later rethrow the exception
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub struct ExceptionId(Symbol);
+
+impl ExceptionId {
+    pub fn into_inner(self) -> Symbol {
+        self.0
+    }
+}
+
 fn build_call<'a>(
     env: &mut Env<'a, '_>,
     call: Call<'a>,
@@ -6168,13 +6185,15 @@ fn build_call<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     if can_throw_exception(&call) {
-        let fail = env.arena.alloc(Stmt::Rethrow);
+        let id = ExceptionId(env.unique_symbol());
+        let fail = env.arena.alloc(Stmt::Rethrow(id));
         Stmt::Invoke {
             symbol: assigned,
             call,
             layout,
             fail,
             pass: hole,
+            exception_id: id,
         }
     } else {
         Stmt::Let(assigned, Expr::Call(call), layout, hole)
@@ -7693,17 +7712,9 @@ where
         Layout::Struct(_) => {
             let function_symbol = lambda_set.set[0].0;
 
-            // build the call
-            Stmt::Let(
-                assigned,
-                Expr::Call(to_lowlevel_call(
-                    function_symbol,
-                    closure_data_symbol,
-                    function_layout,
-                )),
-                return_layout,
-                env.arena.alloc(hole),
-            )
+            let call = to_lowlevel_call(function_symbol, closure_data_symbol, function_layout);
+
+            build_call(env, call, assigned, return_layout, env.arena.alloc(hole))
         }
         Layout::Builtin(Builtin::Int1) => {
             let closure_tag_id_symbol = closure_data_symbol;
@@ -7768,17 +7779,8 @@ where
 
         let hole = Stmt::Jump(join_point_id, env.arena.alloc([assigned]));
 
-        // build the call
-        let stmt = Stmt::Let(
-            assigned,
-            Expr::Call(to_lowlevel_call(
-                *function_symbol,
-                closure_data_symbol,
-                function_layout,
-            )),
-            return_layout,
-            env.arena.alloc(hole),
-        );
+        let call = to_lowlevel_call(*function_symbol, closure_data_symbol, function_layout);
+        let stmt = build_call(env, call, assigned, return_layout, env.arena.alloc(hole));
 
         branches.push((i as u64, BranchInfo::None, stmt));
     }
@@ -8036,21 +8038,18 @@ fn union_lambda_set_branch_help<'a>(
     let full_layout = Layout::FunctionPointer(argument_layouts, env.arena.alloc(return_layout));
 
     // build the call
-    Stmt::Let(
-        assigned,
-        Expr::Call(self::Call {
-            call_type: CallType::ByName {
-                name: function_symbol,
-                full_layout,
-                ret_layout: return_layout,
-                arg_layouts: argument_layouts,
-                specialization_id: env.next_call_specialization_id(),
-            },
-            arguments: argument_symbols,
-        }),
-        return_layout,
-        hole,
-    )
+    let call = self::Call {
+        call_type: CallType::ByName {
+            name: function_symbol,
+            full_layout,
+            ret_layout: return_layout,
+            arg_layouts: argument_layouts,
+            specialization_id: env.next_call_specialization_id(),
+        },
+        arguments: argument_symbols,
+    };
+
+    build_call(env, call, assigned, return_layout, hole)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8159,22 +8158,17 @@ fn enum_lambda_set_branch<'a>(
 
     let full_layout = Layout::FunctionPointer(argument_layouts, env.arena.alloc(return_layout));
 
-    // build the call
-    Stmt::Let(
-        assigned,
-        Expr::Call(self::Call {
-            call_type: CallType::ByName {
-                name: function_symbol,
-                full_layout,
-                ret_layout: return_layout,
-                arg_layouts: argument_layouts,
-                specialization_id: env.next_call_specialization_id(),
-            },
-            arguments: argument_symbols,
-        }),
-        return_layout,
-        env.arena.alloc(hole),
-    )
+    let call = self::Call {
+        call_type: CallType::ByName {
+            name: function_symbol,
+            full_layout,
+            ret_layout: return_layout,
+            arg_layouts: argument_layouts,
+            specialization_id: env.next_call_specialization_id(),
+        },
+        arguments: argument_symbols,
+    };
+    build_call(env, call, assigned, return_layout, env.arena.alloc(hole))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8204,14 +8198,11 @@ where
 
         let hole = Stmt::Jump(join_point_id, env.arena.alloc([result_symbol]));
 
-        // build the call
-        let stmt = Stmt::Let(
+        let call = to_lowlevel_call(*function_symbol, closure_data_symbol, function_layout);
+        let stmt = build_call(
+            env,
+            call,
             result_symbol,
-            Expr::Call(to_lowlevel_call(
-                *function_symbol,
-                closure_data_symbol,
-                function_layout,
-            )),
             return_layout,
             env.arena.alloc(hole),
         );
