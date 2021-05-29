@@ -858,6 +858,10 @@ fn i64_to_ast(arena: &Bump, num: i64) -> Expr<'_> {
     Expr::Num(arena.alloc(format!("{}", num)))
 }
 
+fn i32_to_ast(arena: &Bump, num: i32) -> Expr<'_> {
+    Expr::Num(arena.alloc(format!("{}", num)))
+}
+
 /// This is centralized in case we want to format it differently later,
 /// e.g. adding underscores for large numbers
 fn i128_to_ast(arena: &Bump, num: i128) -> Expr<'_> {
