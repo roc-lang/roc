@@ -939,6 +939,7 @@ define_builtins! {
         30 LIST_RANGE: "range"
         31 LIST_SORT_WITH: "sortWith"
         32 LIST_DROP: "drop"
+        33 LIST_SWAP: "swap"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

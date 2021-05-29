@@ -135,6 +135,7 @@ impl LowLevel {
             | ListPrepend
             | ListJoin
             | ListRange
+            | ListSwap
             | DictSize
             | DictEmpty
             | DictInsert
