@@ -722,6 +722,16 @@ pub fn listAppend(list: RocList, alignment: u32, element: Opaque, element_width:
     return output;
 }
 
+pub fn listSwap(
+    list: RocList,
+    alignment: u32,
+    element_width: usize,
+    index_1: usize,
+    index_2: usize,
+) callconv(.C) RocList {
+    return RocList.empty();
+}
+
 pub fn listDrop(
     list: RocList,
     alignment: u32,

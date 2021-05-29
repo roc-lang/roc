@@ -181,11 +181,7 @@ fn list_drop() {
 
 #[test]
 fn list_swap() {
-    assert_evals_to!(
-        "List.swap [] 0 1",
-        RocList::from_slice(&[]),
-        RocList<i64>
-    );
+    assert_evals_to!("List.swap [] 0 1", RocList::from_slice(&[]), RocList<i64>);
     assert_evals_to!(
         "List.swap [ 0 ] 1 2",
         RocList::from_slice(&[0]),

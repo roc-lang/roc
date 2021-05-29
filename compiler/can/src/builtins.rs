@@ -1885,13 +1885,13 @@ fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
 }
 
 /// List.swap : List elem, Nat, Nat -> List elem
-fn list_drop(symbol: Symbol, var_store: &mut VarStore) -> Def {
+fn list_swap(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let index1_var = var_store.fresh();
     let index2_var = var_store.fresh();
 
     let body = RunLowLevel {
-        op: LowLevel::ListDrop,
+        op: LowLevel::ListSwap,
         args: vec![
             (list_var, Var(Symbol::ARG_1)),
             (index1_var, Var(Symbol::ARG_2)),

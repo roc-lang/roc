@@ -307,19 +307,19 @@ pub fn list_append<'a, 'ctx, 'env>(
 /// List.swap : List elem, Nat, Nat -> List elem
 pub fn list_swap<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
     original_wrapper: StructValue<'ctx>,
-    count: IntValue<'ctx>,
+    index_1: IntValue<'ctx>,
+    index_2: IntValue<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let dec_element_fn = build_dec_wrapper(env, layout_ids, &element_layout);
     call_bitcode_fn_returns_list(
         env,
         &[
             pass_list_as_i128(env, original_wrapper.into()),
             env.alignment_intvalue(&element_layout),
             layout_width(env, &element_layout),
-            count.into(),
+            index_1.into(),
+            index_2.into(),
         ],
         &bitcode::LIST_SWAP,
     )

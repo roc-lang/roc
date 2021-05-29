@@ -4171,15 +4171,16 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
             let original_wrapper = list.into_struct_value();
 
-            let count = load_symbol(scope, &args[1]);
+            let index_1 = load_symbol(scope, &args[1]);
+            let index_2 = load_symbol(scope, &args[2]);
 
             match list_layout {
                 Layout::Builtin(Builtin::EmptyList) => empty_list(env),
                 Layout::Builtin(Builtin::List(element_layout)) => list_swap(
                     env,
-                    layout_ids,
                     original_wrapper,
-                    count.into_int_value(),
+                    index_1.into_int_value(),
+                    index_2.into_int_value(),
                     element_layout,
                 ),
                 _ => unreachable!("Invalid layout {:?} in List.swap", list_layout),
