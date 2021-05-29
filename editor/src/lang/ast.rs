@@ -119,10 +119,10 @@ pub enum Expr2 {
         elems: PoolVec<Expr2>, // 8B
     },
     If {
-        cond_var: Variable,                // 4B
-        expr_var: Variable,                // 4B
-        branches: PoolVec<(Expr2, Expr2)>, // 8B
-        final_else: NodeId<Expr2>,         // 4B
+        cond_var: Variable,                                // 4B
+        expr_var: Variable,                                // 4B
+        branches: PoolVec<(NodeId<Expr2>, NodeId<Expr2>)>, // 8B
+        final_else: NodeId<Expr2>,                         // 4B
     },
     When {
         cond_var: Variable,            // 4B
