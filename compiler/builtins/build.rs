@@ -24,14 +24,14 @@ fn main() {
     let dest_ir = dest_ir_path.to_str().expect("Invalid dest ir path");
 
     if use_build_script {
-      println!("Compiling zig object & ir to: {} and {}", src_obj, dest_ir);
-      run_command_with_no_args(&bitcode_path, "./build.sh");
+        println!("Compiling zig object & ir to: {} and {}", src_obj, dest_ir);
+        run_command_with_no_args(&bitcode_path, "./build.sh");
     } else {
-      println!("Compiling zig object to: {}", src_obj);
-      run_command(&bitcode_path, "zig", &["build", "object", "-Drelease=true"]);
+        println!("Compiling zig object to: {}", src_obj);
+        run_command(&bitcode_path, "zig", &["build", "object", "-Drelease=true"]);
 
-      println!("Compiling ir to: {}", dest_ir);
-      run_command(&bitcode_path, "zig", &["build", "ir", "-Drelease=true"]);
+        println!("Compiling ir to: {}", dest_ir);
+        run_command(&bitcode_path, "zig", &["build", "ir", "-Drelease=true"]);
     }
 
     let dest_obj_path = Path::new(&out_dir).join("builtins.o");
@@ -86,8 +86,7 @@ where
     }
 }
 
-fn run_command_with_no_args<P: AsRef<Path>>(path: P, command_str: &str)
-{
+fn run_command_with_no_args<P: AsRef<Path>>(path: P, command_str: &str) {
     let output_result = Command::new(OsStr::new(&command_str))
         .current_dir(path)
         .output();
