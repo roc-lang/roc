@@ -9,28 +9,7 @@ edition = "2018"
 proc-macro = true
 
 [dependencies]
-roc_collections = { path = "../collections" }
-roc_region = { path = "../region" }
-roc_module = { path = "../module" }
-roc_types = { path = "../types" }
-roc_can = { path = "../can" }
-roc_unify = { path = "../unify" }
-roc_solve = { path = "../solve" }
-roc_problem = { path = "../problem" }
-roc_mono = { path = "../mono" }
-
 syn = { version = "1.0.39", features = ["full", "extra-traits"] }
 quote = "1.0.7"
 darling = "0.10.2"
 proc-macro2 = "1.0.24"
-
-[dev-dependencies]
-roc_load= { path = "../load" }
-roc_builtins = { path = "../builtins" }
-roc_parse = { path = "../parse" }
-roc_solve = { path = "../solve" }
-pretty_assertions = "0.5.1"
-maplit = "1.0.1"
-indoc = "0.3.3"
-quickcheck = "0.8"
-quickcheck_macros = "0.8"

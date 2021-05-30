@@ -15,6 +15,7 @@ members = [
     "compiler/fmt",
     "compiler/mono",
     "compiler/test_mono_macros",
+    "compiler/test_mono",
     "compiler/load",
     "compiler/gen",
     "compiler/gen_dev",
