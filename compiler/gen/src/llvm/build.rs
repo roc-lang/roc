@@ -5738,32 +5738,6 @@ fn cxa_throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, info: BasicVal
     call.set_call_convention(C_CALL_CONV);
 }
 
-fn cxa_rethrow_exception(env: &Env<'_, '_, '_>) {
-    let name = "__cxa_rethrow";
-
-    let module = env.module;
-    let context = env.context;
-
-    let function = match module.get_function(&name) {
-        Some(gvalue) => gvalue,
-        None => {
-            let cxa_rethrow = add_func(
-                module,
-                name,
-                context.void_type().fn_type(&[], false),
-                Linkage::External,
-                C_CALL_CONV,
-            );
-
-            cxa_rethrow
-        }
-    };
-    let call = env.builder.build_call(function, &[], "rethrow");
-
-    call.set_call_convention(C_CALL_CONV);
-    // call.try_as_basic_value().left().unwrap()
-}
-
 fn get_foreign_symbol<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     foreign_symbol: roc_module::ident::ForeignSymbol,
