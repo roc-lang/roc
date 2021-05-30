@@ -5928,35 +5928,48 @@ fn reuse_function_symbol<'a>(
 ) -> Stmt<'a> {
     match procs.partial_procs.get(&original) {
         None => {
-            let is_imported = env.is_imported_symbol(original);
-
             match arg_var {
-                Some(arg_var) if is_imported => {
+                Some(arg_var) if env.is_imported_symbol(original) => {
                     let layout = layout_cache
                         .from_var(env.arena, arg_var, env.subs)
                         .expect("creating layout does not fail");
 
-                    let top_level = TopLevelFunctionLayout::from_layout(env.arena, layout);
+                    if procs.imported_module_thunks.contains(&original) {
+                        let top_level = TopLevelFunctionLayout::new(env.arena, &[], layout);
+                        procs.insert_passed_by_name(
+                            env,
+                            arg_var,
+                            original,
+                            top_level,
+                            layout_cache,
+                        );
 
-                    procs.insert_passed_by_name(env, arg_var, original, top_level, layout_cache);
+                        force_thunk(env, original, layout, symbol, env.arena.alloc(result))
+                    } else {
+                        let top_level = TopLevelFunctionLayout::from_layout(env.arena, layout);
+                        procs.insert_passed_by_name(
+                            env,
+                            arg_var,
+                            original,
+                            top_level,
+                            layout_cache,
+                        );
 
-                    // an imported symbol is either a function, or a top-level 0-argument thunk
-                    // it never has closure data, so we use the empty struct
-                    return let_empty_struct(symbol, env.arena.alloc(result));
+                        let_empty_struct(symbol, env.arena.alloc(result))
+                    }
                 }
 
                 _ => {
                     // danger: a foreign symbol may not be specialized!
                     debug_assert!(
-                        !is_imported,
+                        !env.is_imported_symbol(original),
                         "symbol {:?} while processing module {:?}",
                         original,
                         (env.home, &arg_var),
                     );
+                    result
                 }
             }
-
-            result
         }
 
         Some(partial_proc) => {
