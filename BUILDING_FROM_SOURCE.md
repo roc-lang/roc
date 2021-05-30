@@ -20,7 +20,7 @@ For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir).
 
 ### libunwind & libc++-dev
 
-MacOS systems should already have `libunwind`, but other systems will need to install it (On Ubuntu, this can be donw with `sudo apt-get install libunwind-dev`).
+MacOS systems should already have `libunwind`, but other systems will need to install it (On Ubuntu, this can be done with `sudo apt-get install libunwind-dev`).
 Some systems may already have `libc++-dev` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `sudo apt-get install libc++-dev`.)
 
 ### libcxb libraries

@@ -276,7 +276,8 @@ impl<'a> LambdaSet<'a> {
 
         use UnionVariant::*;
         match variant {
-            Never | Unit | UnitWithArguments => Layout::Struct(&[]),
+            Never => Layout::Union(UnionLayout::NonRecursive(&[])),
+            Unit | UnitWithArguments => Layout::Struct(&[]),
             BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
             ByteUnion(_) => Layout::Builtin(Builtin::Int8),
             Unwrapped(_tag_name, layouts) => Layout::Struct(layouts.into_bump_slice()),
