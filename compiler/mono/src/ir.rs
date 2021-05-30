@@ -857,6 +857,9 @@ pub enum Stmt<'a> {
         fail: &'a Stmt<'a>,
         exception_id: ExceptionId,
     },
+    /// after cleanup, rethrow the exception object (stored in the exception id)
+    /// so it bubbles up
+    Resume(ExceptionId),
     Switch {
         /// This *must* stand for an integer, because Switch potentially compiles to a jump table.
         cond_symbol: Symbol,
@@ -870,7 +873,6 @@ pub enum Stmt<'a> {
         ret_layout: Layout<'a>,
     },
     Ret(Symbol),
-    Rethrow(ExceptionId),
     Refcounting(ModifyRc, &'a Stmt<'a>),
     /// a join point `join f <params> = <continuation> in remainder`
     Join {
@@ -1362,7 +1364,7 @@ impl<'a> Stmt<'a> {
                 symbol,
                 call,
                 pass,
-                fail: Stmt::Rethrow(_),
+                fail: Stmt::Resume(_),
                 ..
             } => alloc
                 .text("let ")
@@ -1395,7 +1397,7 @@ impl<'a> Stmt<'a> {
                 .append(symbol_to_doc(alloc, *symbol))
                 .append(";"),
 
-            Rethrow(_) => alloc.text("unreachable;"),
+            Resume(_) => alloc.text("unreachable;"),
 
             Switch {
                 cond_symbol,
@@ -4691,7 +4693,7 @@ pub fn from_can<'a>(
                 call,
                 layout: bool_layout,
                 pass: env.arena.alloc(rest),
-                fail: env.arena.alloc(Stmt::Rethrow(exception_id)),
+                fail: env.arena.alloc(Stmt::Resume(exception_id)),
                 exception_id,
             };
 
@@ -5411,7 +5413,7 @@ fn substitute_in_stmt_help<'a>(
             }
         }
 
-        Rethrow(_) => None,
+        Resume(_) => None,
 
         RuntimeError(_) => None,
     }
@@ -6186,7 +6188,7 @@ fn build_call<'a>(
 ) -> Stmt<'a> {
     if can_throw_exception(&call) {
         let id = ExceptionId(env.unique_symbol());
-        let fail = env.arena.alloc(Stmt::Rethrow(id));
+        let fail = env.arena.alloc(Stmt::Resume(id));
         Stmt::Invoke {
             symbol: assigned,
             call,

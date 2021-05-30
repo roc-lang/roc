@@ -50,7 +50,7 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
                 result.insert(*symbol);
             }
 
-            Rethrow(_) => {}
+            Resume(_) => {}
 
             Refcounting(modify, cont) => {
                 let symbol = modify.get_symbol();
@@ -1011,7 +1011,7 @@ impl<'a> Context<'a> {
                 }
             }
 
-            Rethrow(_) => (stmt, MutSet::default()),
+            Resume(_) => (stmt, MutSet::default()),
 
             Jump(j, xs) => {
                 let empty = MutSet::default();
@@ -1177,7 +1177,7 @@ pub fn collect_stmt(
             vars
         }
 
-        Rethrow(_) => vars,
+        Resume(_) => vars,
 
         RuntimeError(_) => vars,
     }

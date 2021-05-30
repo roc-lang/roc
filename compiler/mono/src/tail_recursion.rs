@@ -105,7 +105,7 @@ fn insert_jumps<'a>(
             exception_id,
             ..
         } if needle == *fsym && symbol == rsym => {
-            debug_assert_eq!(fail, &&Stmt::Rethrow(*exception_id));
+            debug_assert_eq!(fail, &&Stmt::Resume(*exception_id));
 
             // replace the call and return with a jump
 
@@ -241,7 +241,7 @@ fn insert_jumps<'a>(
             None => None,
         },
 
-        Rethrow(_) => None,
+        Resume(_) => None,
         Ret(_) => None,
         Jump(_, _) => None,
         RuntimeError(_) => None,

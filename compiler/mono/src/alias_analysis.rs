@@ -209,7 +209,7 @@ fn stmt_spec(
             let jpid = env.join_points[id];
             builder.add_jump(block, jpid, argument, ret_type_id)
         }
-        Rethrow(_) | RuntimeError(_) => {
+        Resume(_) | RuntimeError(_) => {
             let type_id = layout_spec(builder, layout)?;
 
             builder.add_terminate(block, type_id)

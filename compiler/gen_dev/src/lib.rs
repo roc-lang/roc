@@ -510,7 +510,7 @@ where
             Stmt::Ret(sym) => {
                 self.set_last_seen(*sym, stmt);
             }
-            Stmt::Rethrow(_exception_id) => {}
+            Stmt::Resume(_exception_id) => {}
             Stmt::Refcounting(modify, following) => {
                 let sym = modify.get_symbol();
 

@@ -638,7 +638,7 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                 env.arena.alloc(stmt)
             }
 
-            Rethrow(_) | Ret(_) | Jump(_, _) | RuntimeError(_) => stmt,
+            Resume(_) | Ret(_) | Jump(_, _) | RuntimeError(_) => stmt,
         }
     };
 

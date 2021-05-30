@@ -1989,7 +1989,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             call,
             layout,
             pass,
-            fail: roc_mono::ir::Stmt::Rethrow(_),
+            fail: roc_mono::ir::Stmt::Resume(_),
             exception_id: _,
         } => {
             // when the fail case is just Rethrow, there is no cleanup work to do
@@ -2056,7 +2056,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             }
         },
 
-        Rethrow(exception_id) => {
+        Resume(exception_id) => {
             let exception_object = scope.get(&exception_id.into_inner()).unwrap().1;
             env.builder.build_resume(&exception_object);
 
