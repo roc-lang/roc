@@ -21,6 +21,7 @@ members = [
     "compiler/arena_pool",
     "compiler/test_gen",
     "vendor/ena",
+    "vendor/inkwell",
     "vendor/pathfinding",
     "vendor/pretty",
     "editor",
