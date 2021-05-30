@@ -3911,6 +3911,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_mono_macros"
+version = "0.1.0"
+dependencies = [
+ "darling",
+ "indoc 0.3.6",
+ "maplit",
+ "pretty_assertions 0.5.1",
+ "proc-macro2 1.0.27",
+ "quickcheck 0.8.5",
+ "quickcheck_macros 0.8.0",
+ "quote 1.0.9",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_load",
+ "roc_module",
+ "roc_mono",
+ "roc_parse",
+ "roc_problem",
+ "roc_region",
+ "roc_solve",
+ "roc_types",
+ "roc_unify",
+ "syn 1.0.72",
+]
+
+[[package]]
 name = "textwrap"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
