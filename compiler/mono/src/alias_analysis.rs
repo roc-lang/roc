@@ -579,9 +579,9 @@ fn builtin_spec(builder: &mut FuncDefBuilder, builtin: &Builtin) -> Result<TypeI
             let bag = builder.add_bag_type(element_type)?;
             builder.add_tuple_type(&[cell, bag])
         }
-        Set(value_layout) => {
-            let value_type = layout_spec(builder, value_layout)?;
-            let key_type = builder.add_tuple_type(&[])?;
+        Set(key_layout) => {
+            let value_type = builder.add_tuple_type(&[])?;
+            let key_type = layout_spec(builder, key_layout)?;
             let element_type = builder.add_tuple_type(&[key_type, value_type])?;
 
             let cell = builder.add_heap_cell_type();
