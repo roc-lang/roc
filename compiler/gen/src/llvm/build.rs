@@ -2044,6 +2044,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     symbol: *symbol,
                     pass,
                     fail,
+                    exception_id: *exception_id,
                 },
             ),
 
@@ -4694,6 +4695,7 @@ enum ForeignCallOrInvoke<'a> {
     Call,
     Invoke {
         symbol: Symbol,
+        exception_id: ExceptionId,
         pass: &'a roc_mono::ir::Stmt<'a>,
         fail: &'a roc_mono::ir::Stmt<'a>,
     },
@@ -4788,7 +4790,12 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                 call.try_as_basic_value().left().unwrap()
             }
         }
-        ForeignCallOrInvoke::Invoke { symbol, pass, fail } => {
+        ForeignCallOrInvoke::Invoke {
+            symbol,
+            pass,
+            fail,
+            exception_id,
+        } => {
             let pass_block = env.context.append_basic_block(parent, "invoke_pass");
             let fail_block = env.context.append_basic_block(parent, "invoke_fail");
 
@@ -4829,14 +4836,17 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                         .struct_type(&[exception_ptr, selector_value], false)
                 };
 
-                env.builder
-                    .build_catch_all_landing_pad(
-                        &landing_pad_type,
-                        &BasicValueEnum::IntValue(env.context.i8_type().const_zero()),
-                        env.context.i8_type().ptr_type(AddressSpace::Generic),
-                        "invoke_landing_pad",
-                    )
-                    .into_struct_value();
+                let exception_object = env.builder.build_cleanup_landing_pad(
+                    &landing_pad_type,
+                    &BasicValueEnum::IntValue(env.context.i8_type().const_zero()),
+                    env.context.i8_type().ptr_type(AddressSpace::Generic),
+                    "invoke_landing_pad",
+                );
+
+                scope.insert(
+                    exception_id.into_inner(),
+                    (Layout::Struct(&[]), exception_object),
+                );
 
                 build_exp_stmt(env, layout_ids, scope, parent, fail);
             }
