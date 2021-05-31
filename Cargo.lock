@@ -3225,6 +3225,7 @@ dependencies = [
  "indoc 0.3.6",
  "inlinable_string",
  "maplit",
+ "morphic_lib",
  "num_cpus",
  "parking_lot",
  "pretty_assertions 0.5.1",
