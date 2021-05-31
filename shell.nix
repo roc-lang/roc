@@ -13,9 +13,6 @@ let
     }
   ) {};
 
-  currentArch = builtins.elemAt (builtins.split "-" builtins.currentSystem) 0;
-  isAarch64 = currentArch == "aarch64";
-
   darwinInputs =
     with pkgs;
     lib.optionals stdenv.isDarwin (
@@ -50,7 +47,6 @@ let
   zig = import ./nix/zig.nix {
     pkgs = pkgs;
     isDarwin = pkgs.stdenv.isDarwin;
-    isAarch64 = isAarch64;
   };
 
   inputs = with pkgs;[
