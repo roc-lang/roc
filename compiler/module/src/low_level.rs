@@ -40,6 +40,7 @@ pub enum LowLevel {
     ListKeepErrs,
     ListSortWith,
     ListDrop,
+    ListSwap,
     DictSize,
     DictEmpty,
     DictInsert,
@@ -135,6 +136,7 @@ impl LowLevel {
             | ListPrepend
             | ListJoin
             | ListRange
+            | ListSwap
             | DictSize
             | DictEmpty
             | DictInsert
