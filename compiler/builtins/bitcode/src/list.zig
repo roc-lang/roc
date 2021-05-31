@@ -729,7 +729,19 @@ pub fn listSwap(
     index_1: usize,
     index_2: usize,
 ) callconv(.C) RocList {
-    return RocList.empty();
+    const size = list.len();
+    if (index_1 >= size or index_2 >= size) {
+        // Either index out of bounds so we just return
+        return list;
+    }
+
+    const newList = list.makeUnique(alignment, element_width);
+
+    if (newList.bytes) |source_ptr| {
+        swapElements(source_ptr, element_width, index_1, index_2);
+    }
+
+    return newList;
 }
 
 pub fn listDrop(
