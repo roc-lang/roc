@@ -180,6 +180,41 @@ fn list_drop() {
 }
 
 #[test]
+fn list_swap() {
+    assert_evals_to!("List.swap [] 0 1", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!(
+        "List.swap [ 0 ] 1 2",
+        RocList::from_slice(&[0]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.swap [ 1, 2 ] 0 1",
+        RocList::from_slice(&[2, 1]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.swap [ 1, 2 ] 1 0",
+        RocList::from_slice(&[2, 1]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.swap [ 0, 1, 2, 3, 4, 5 ] 2 4",
+        RocList::from_slice(&[0, 1, 4, 3, 2, 5]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.swap [ 0, 1, 2 ] 1 3",
+        RocList::from_slice(&[0, 1, 2]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.swap [ 1, 2, 3 ] 1 1",
+        RocList::from_slice(&[1, 2, 3]),
+        RocList<i64>
+    );
+}
+
+#[test]
 fn list_append_to_empty_list() {
     assert_evals_to!("List.append [] 3", RocList::from_slice(&[3]), RocList<i64>);
 }
