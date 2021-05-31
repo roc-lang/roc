@@ -94,6 +94,10 @@ You should be in a shell with everything needed to build already installed. Next
 
 You should be in a repl now. Have fun!
 
+### Extra tips
+
+If you plan on using `nix-shell` regularly, check out [direnv](https://direnv.net/) and [lorri](https://github.com/target/lorri). Whenever you `cd` into `roc/`, they will automatically load the Nix dependecies into your current shell, so you never have to run nix-shell directly!
+
 ### Editor
 
 When you want to run the editor from Ubuntu inside nix you need to install [nixGL](https://github.com/guibou/nixGL) as well:
