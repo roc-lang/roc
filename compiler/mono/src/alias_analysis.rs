@@ -1,8 +1,8 @@
 use morphic_lib::TypeContext;
 use morphic_lib::{
-    BlockExpr, BlockId, CalleeSpecVar, EntryPointName, ExprContext, FuncDef, FuncDefBuilder,
-    FuncName, ModDefBuilder, ModName, ProgramBuilder, Result, TypeId, TypeName, UpdateModeVar,
-    ValueId,
+    BlockExpr, BlockId, CalleeSpecVar, ConstDefBuilder, ConstName, EntryPointName, ExprContext,
+    FuncDef, FuncDefBuilder, FuncName, ModDefBuilder, ModName, ProgramBuilder, Result, TypeId,
+    UpdateModeVar, ValueId,
 };
 use roc_collections::all::MutMap;
 use roc_module::low_level::LowLevel;
@@ -13,8 +13,9 @@ use crate::ir::{Call, CallType, Expr, Literal, ModifyRc, Proc, Stmt};
 use crate::layout::{Builtin, Layout, ListLayout, UnionLayout};
 
 // just using one module for now
-const MOD_LIST: ModName = ModName(b"UserApp");
-const MOD_APP: ModName = ModName(b"UserApp");
+pub const MOD_APP: ModName = ModName(b"UserApp");
+
+pub const STATIC_STR_NAME: ConstName = ConstName(&Symbol::STR_ALIAS_ANALYSIS_STATIC.to_ne_bytes());
 
 pub fn spec_program<'a, I>(procs: I) -> Result<morphic_lib::Solutions>
 where
@@ -23,6 +24,18 @@ where
     let mut main_function = None;
     let main_module = {
         let mut m = ModDefBuilder::new();
+
+        let static_str_def = {
+            let mut cbuilder = ConstDefBuilder::new();
+            let block = cbuilder.add_block();
+            let cell = cbuilder.add_new_heap_cell(block)?;
+            let value_id = cbuilder.add_make_tuple(block, &[cell])?;
+            let root = BlockExpr(block, value_id);
+            let str_type_id = str_type(&mut cbuilder)?;
+
+            cbuilder.build(str_type_id, root)?
+        };
+        m.add_const(STATIC_STR_NAME, static_str_def)?;
 
         for proc in procs {
             let spec = proc_spec(proc)?;
@@ -72,7 +85,10 @@ fn proc_spec(proc: &Proc) -> Result<FuncDef> {
     let root = BlockExpr(block, value_id);
     let arg_type_id = layout_spec(&mut builder, &Layout::Struct(&argument_layouts))?;
     let ret_type_id = layout_spec(&mut builder, &proc.ret_layout)?;
-    builder.build(arg_type_id, ret_type_id, root)
+
+    let spec = builder.build(arg_type_id, ret_type_id, root)?;
+
+    Ok(spec)
 }
 
 #[derive(Default)]
@@ -146,13 +162,17 @@ fn stmt_spec(
         }
         Ret(symbol) => Ok(env.symbols[symbol]),
         Refcounting(modify_rc, continuation) => match modify_rc {
-            ModifyRc::Inc(symbol, _) | ModifyRc::Dec(symbol) | ModifyRc::DecRef(symbol) => {
+            ModifyRc::Inc(symbol, _) | ModifyRc::Dec(symbol) => {
                 let result_type = builder.add_tuple_type(&[])?;
                 let argument = env.symbols[symbol];
 
                 // this is how RC is modelled; it recursively touches all heap cells
                 builder.add_unknown_with(block, &[argument], result_type)?;
 
+                stmt_spec(builder, env, block, layout, continuation)
+            }
+            ModifyRc::DecRef(_symbol) => {
+                // TODO a decref is a non-recursive decrement of a structure
                 stmt_spec(builder, env, block, layout, continuation)
             }
         },
@@ -297,7 +317,18 @@ fn call_spec(
             *update_mode,
             call.arguments,
         ),
-        HigherOrderLowLevel { .. } => todo!(),
+        HigherOrderLowLevel { .. } => {
+            // TODO overly pessimstic
+            let arguments: Vec<_> = call
+                .arguments
+                .iter()
+                .map(|symbol| env.symbols[symbol])
+                .collect();
+
+            let result_type = layout_spec(builder, layout)?;
+
+            builder.add_unknown_with(block, &arguments, result_type)
+        }
     }
 }
 
@@ -344,9 +375,8 @@ fn lowlevel_spec(
         Eq | NotEq => new_bool(builder, block),
         NumLte | NumLt | NumGt | NumGte => new_order(builder, block),
         ListLen => {
-            let list = env.symbols[&arguments[0]];
-
-            builder.add_get_tuple_field(block, list, LIST_LEN_INDEX)
+            // just dream up a unit value
+            builder.add_make_tuple(block, &[])
         }
         ListGetUnsafe => {
             // NOTE the ListGet lowlevel op is only evaluated if the index is in-bounds
@@ -372,7 +402,14 @@ fn lowlevel_spec(
 
             Ok(list)
         }
-        other => todo!("lowlevel op not implemented: {:?}", other),
+        _other => {
+            // TODO overly pessimstic
+            let arguments: Vec<_> = arguments.iter().map(|symbol| env.symbols[symbol]).collect();
+
+            let result_type = layout_spec(builder, layout)?;
+
+            builder.add_unknown_with(block, &arguments, result_type)
+        }
     }
 }
 
@@ -407,7 +444,7 @@ fn build_variant_types(
 
 fn expr_spec(
     builder: &mut FuncDefBuilder,
-    env: &Env,
+    env: &mut Env,
     block: BlockId,
     layout: &Layout,
     expr: &Expr,
@@ -531,22 +568,44 @@ fn builtin_spec(builder: &mut FuncDefBuilder, builtin: &Builtin) -> Result<TypeI
 
     match builtin {
         Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize => builder.add_tuple_type(&[]),
-        Float128 => todo!(),
-        Float64 => todo!(),
-        Float32 => todo!(),
-        Float16 => todo!(),
-        Str => todo!(),
-        Dict(_, _) => todo!(),
-        Set(_) => todo!(),
-        List(_) => {
-            // TODO should incorporate the element type into the name
-            Ok(builder.add_named_type(MOD_LIST, TypeName(b"List")))
+        Float128 | Float64 | Float32 | Float16 => builder.add_tuple_type(&[]),
+        Str | EmptyStr => str_type(builder),
+        Dict(key_layout, value_layout) => {
+            let value_type = layout_spec(builder, value_layout)?;
+            let key_type = layout_spec(builder, key_layout)?;
+            let element_type = builder.add_tuple_type(&[key_type, value_type])?;
+
+            let cell = builder.add_heap_cell_type();
+            let bag = builder.add_bag_type(element_type)?;
+            builder.add_tuple_type(&[cell, bag])
         }
-        EmptyStr => todo!(),
+        Set(key_layout) => {
+            let value_type = builder.add_tuple_type(&[])?;
+            let key_type = layout_spec(builder, key_layout)?;
+            let element_type = builder.add_tuple_type(&[key_type, value_type])?;
+
+            let cell = builder.add_heap_cell_type();
+            let bag = builder.add_bag_type(element_type)?;
+            builder.add_tuple_type(&[cell, bag])
+        }
+        List(element_layout) => {
+            let element_type = layout_spec(builder, element_layout)?;
+
+            let cell = builder.add_heap_cell_type();
+            let bag = builder.add_bag_type(element_type)?;
+
+            builder.add_tuple_type(&[cell, bag])
+        }
         EmptyList => todo!(),
         EmptyDict => todo!(),
         EmptySet => todo!(),
     }
+}
+
+fn str_type<TC: TypeContext>(builder: &mut TC) -> Result<TypeId> {
+    let cell_id = builder.add_heap_cell_type();
+    let len_id = builder.add_tuple_type(&[])?;
+    builder.add_tuple_type(&[cell_id, len_id])
 }
 
 // const OK_TAG_ID: u8 = 1u8;
@@ -554,28 +613,17 @@ fn builtin_spec(builder: &mut FuncDefBuilder, builtin: &Builtin) -> Result<TypeI
 
 const LIST_CELL_INDEX: u32 = 0;
 const LIST_BAG_INDEX: u32 = 1;
-const LIST_LEN_INDEX: u32 = 2;
 
 fn new_list(builder: &mut FuncDefBuilder, block: BlockId, element_type: TypeId) -> Result<ValueId> {
     let cell = builder.add_new_heap_cell(block)?;
     let bag = builder.add_empty_bag(block, element_type)?;
-    let length = new_usize(builder, block)?;
-    builder.add_make_tuple(block, &[cell, bag, length])
-}
-
-fn new_usize(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
-    new_num(builder, block)
+    builder.add_make_tuple(block, &[cell, bag])
 }
 
 fn new_static_string(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
-    let cell = builder.add_new_heap_cell(block)?;
+    let module = MOD_APP;
 
-    // immediately mutate the cell, so any future updates on this value are invalid
-    // updating a static string would cause a crash at runtime
-    let _ = builder.add_update(block, UpdateModeVar(&[]), cell)?;
-
-    let length = new_usize(builder, block)?;
-    builder.add_make_tuple(block, &[cell, length])
+    builder.add_const_ref(block, module, STATIC_STR_NAME)
 }
 
 fn new_order(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {

@@ -1,5 +1,5 @@
 [package]
-name = "roc_gen"
+name = "test_mono"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
@@ -12,29 +12,29 @@ roc_module = { path = "../module" }
 roc_problem = { path = "../problem" }
 roc_types = { path = "../types" }
 roc_builtins = { path = "../builtins" }
+roc_constrain = { path = "../constrain" }
 roc_unify = { path = "../unify" }
 roc_solve = { path = "../solve" }
+roc_reporting = { path = "../reporting" }
+roc_load = { path = "../load" }
+roc_can = { path = "../can" }
+roc_parse = { path = "../parse" }
+roc_build = { path = "../build" }
 roc_mono = { path = "../mono" }
+test_mono_macros = { path = "../test_mono_macros" }
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.6.1", features = ["collections"] }
 inlinable_string = "0.1"
 either = "1.6.1"
-inkwell = { path = "../../vendor/inkwell" }
+indoc = "0.3.3"
+libc = "0.2"
 target-lexicon = "0.10"
+libloading = "0.6"
 
 [dev-dependencies]
-roc_can = { path = "../can" }
-roc_parse = { path = "../parse" }
-roc_load = { path = "../load" }
-roc_reporting = { path = "../reporting" }
-roc_build = { path = "../build" }
-roc_std = { path = "../../roc_std" }
 pretty_assertions = "0.5.1"
-maplit = "1.0.1"
 indoc = "0.3.3"
 quickcheck = "0.8"
 quickcheck_macros = "0.8"
-tokio = { version = "0.2", features = ["blocking", "fs", "sync", "rt-threaded"] }
 bumpalo = { version = "3.6.1", features = ["collections"] }
-libc = "0.2"
