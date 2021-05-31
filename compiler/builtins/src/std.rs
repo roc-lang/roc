@@ -856,6 +856,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(list_type(flex(TVAR1))),
     );
 
+    // swap : List elem, Nat, Nat -> List elem
+    add_top_level_function_type!(
+        Symbol::LIST_SWAP,
+        vec![list_type(flex(TVAR1)), nat_type(), nat_type()],
+        Box::new(list_type(flex(TVAR1))),
+    );
+
     // prepend : List elem, elem -> List elem
     add_top_level_function_type!(
         Symbol::LIST_PREPEND,

@@ -8,7 +8,7 @@ use crate::llvm::build_list::{
     allocate_list, empty_list, empty_polymorphic_list, list_append, list_concat, list_contains,
     list_drop, list_get_unsafe, list_join, list_keep_errs, list_keep_if, list_keep_oks, list_len,
     list_map, list_map2, list_map3, list_map_with_index, list_prepend, list_range, list_repeat,
-    list_reverse, list_set, list_single, list_sort_with,
+    list_reverse, list_set, list_single, list_sort_with, list_swap,
 };
 use crate::llvm::build_str::{
     empty_str, str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int,
@@ -4163,6 +4163,28 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
             list_append(env, layout.in_place(), original_wrapper, elem, elem_layout)
+        }
+        ListSwap => {
+            // List.swap : List elem, Nat, Nat -> List elem
+            debug_assert_eq!(args.len(), 3);
+
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let original_wrapper = list.into_struct_value();
+
+            let index_1 = load_symbol(scope, &args[1]);
+            let index_2 = load_symbol(scope, &args[2]);
+
+            match list_layout {
+                Layout::Builtin(Builtin::EmptyList) => empty_list(env),
+                Layout::Builtin(Builtin::List(element_layout)) => list_swap(
+                    env,
+                    original_wrapper,
+                    index_1.into_int_value(),
+                    index_2.into_int_value(),
+                    element_layout,
+                ),
+                _ => unreachable!("Invalid layout {:?} in List.swap", list_layout),
+            }
         }
         ListDrop => {
             // List.drop : List elem, Nat -> List elem
