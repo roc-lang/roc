@@ -79,19 +79,26 @@ fn jit_to_ast_help<'a>(
             )
         }
         Layout::Builtin(Builtin::Usize) => Ok(run_jit_function!(lib, main_fn_name, usize, |num| {
-            num_to_ast(env, nat_to_ast(env.arena, num), content)
+            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
         })),
+        Layout::Builtin(Builtin::Int16) => {
+            Ok(run_jit_function!(lib, main_fn_name, i16, |num| num_to_ast(
+                env,
+                number_literal_to_ast(env.arena, num),
+                content
+            )))
+        }
         Layout::Builtin(Builtin::Int32) => {
             Ok(run_jit_function!(lib, main_fn_name, i32, |num| num_to_ast(
                 env,
-                i32_to_ast(env.arena, num),
+                number_literal_to_ast(env.arena, num),
                 content
             )))
         }
         Layout::Builtin(Builtin::Int64) => {
             Ok(run_jit_function!(lib, main_fn_name, i64, |num| num_to_ast(
                 env,
-                i64_to_ast(env.arena, num),
+                number_literal_to_ast(env.arena, num),
                 content
             )))
         }
@@ -100,13 +107,20 @@ fn jit_to_ast_help<'a>(
                 lib,
                 main_fn_name,
                 i128,
-                |num| num_to_ast(env, i128_to_ast(env.arena, num), content)
+                |num| num_to_ast(env, number_literal_to_ast(env.arena, num), content)
             ))
+        }
+        Layout::Builtin(Builtin::Float32) => {
+            Ok(run_jit_function!(lib, main_fn_name, f32, |num| num_to_ast(
+                env,
+                number_literal_to_ast(env.arena, num),
+                content
+            )))
         }
         Layout::Builtin(Builtin::Float64) => {
             Ok(run_jit_function!(lib, main_fn_name, f64, |num| num_to_ast(
                 env,
-                f64_to_ast(env.arena, num),
+                number_literal_to_ast(env.arena, num),
                 content
             )))
         }
@@ -272,15 +286,30 @@ fn ptr_to_ast<'a>(
     content: &Content,
 ) -> Expr<'a> {
     match layout {
+        Layout::Builtin(Builtin::Int128) => {
+            let num = unsafe { *(ptr as *const i128) };
+
+            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+        }
         Layout::Builtin(Builtin::Int64) => {
             let num = unsafe { *(ptr as *const i64) };
 
-            num_to_ast(env, i64_to_ast(env.arena, num), content)
+            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+        }
+        Layout::Builtin(Builtin::Int32) => {
+            let num = unsafe { *(ptr as *const i32) };
+
+            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+        }
+        Layout::Builtin(Builtin::Int16) => {
+            let num = unsafe { *(ptr as *const i16) };
+
+            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
         }
         Layout::Builtin(Builtin::Usize) => {
             let num = unsafe { *(ptr as *const usize) };
 
-            num_to_ast(env, nat_to_ast(env.arena, num), content)
+            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
         }
         Layout::Builtin(Builtin::Int1) => {
             // TODO: bits are not as expected here.
@@ -292,7 +321,12 @@ fn ptr_to_ast<'a>(
         Layout::Builtin(Builtin::Float64) => {
             let num = unsafe { *(ptr as *const f64) };
 
-            num_to_ast(env, f64_to_ast(env.arena, num), content)
+            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+        }
+        Layout::Builtin(Builtin::Float32) => {
+            let num = unsafe { *(ptr as *const f32) };
+
+            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
         }
         Layout::Builtin(Builtin::EmptyList) => Expr::List {
             items: &[],
@@ -855,29 +889,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
 
 /// This is centralized in case we want to format it differently later,
 /// e.g. adding underscores for large numbers
-fn nat_to_ast(arena: &Bump, num: usize) -> Expr<'_> {
-    Expr::Num(arena.alloc(format!("{}", num)))
-}
-
-/// This is centralized in case we want to format it differently later,
-/// e.g. adding underscores for large numbers
-fn i64_to_ast(arena: &Bump, num: i64) -> Expr<'_> {
-    Expr::Num(arena.alloc(format!("{}", num)))
-}
-
-fn i32_to_ast(arena: &Bump, num: i32) -> Expr<'_> {
-    Expr::Num(arena.alloc(format!("{}", num)))
-}
-
-/// This is centralized in case we want to format it differently later,
-/// e.g. adding underscores for large numbers
-fn i128_to_ast(arena: &Bump, num: i128) -> Expr<'_> {
-    Expr::Num(arena.alloc(format!("{}", num)))
-}
-
-/// This is centralized in case we want to format it differently later,
-/// e.g. adding underscores for large numbers
-fn f64_to_ast(arena: &Bump, num: f64) -> Expr<'_> {
+fn number_literal_to_ast<T: std::fmt::Display>(arena: &Bump, num: T) -> Expr<'_> {
     Expr::Num(arena.alloc(format!("{}", num)))
 }
 
