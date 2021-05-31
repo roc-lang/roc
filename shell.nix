@@ -44,10 +44,7 @@ let
 
   llvmPkgs = pkgs.llvmPackages_10;
 
-  zig = import ./nix/zig.nix {
-    pkgs = pkgs;
-    isDarwin = pkgs.stdenv.isDarwin;
-  };
+  zig = import ./nix/zig.nix { inherit pkgs; };
 
   inputs = with pkgs;[
     # build libraries

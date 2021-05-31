@@ -1,6 +1,6 @@
-{ pkgs, isDarwin }:
+{ pkgs }:
 
-if isDarwin then
+if pkgs.stdenv.isDarwin then
   let
     version = "0.7.1";
     archiveName = "zig-macos-x86_64-${version}";
