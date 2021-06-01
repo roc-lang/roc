@@ -116,10 +116,16 @@ fn render_main_content(interns: &Interns, module: &mut ModuleDocumentation) -> S
                     content.push_str(type_var.as_str());
                 }
 
-                if let Some(type_ann) = &doc_def.type_annotation {
-                    content.push_str(" : ");
-                    type_annotation_to_html(0, &mut content, &type_ann);
+                let type_ann = &doc_def.type_annotation;
+
+                match type_ann {
+                    TypeAnnotation::NoTypeAnn => {}
+                    _ => {
+                        content.push_str(" : ");
+                    }
                 }
+
+                type_annotation_to_html(0, &mut content, &type_ann);
 
                 buf.push_str(
                     html_node(
@@ -329,17 +335,33 @@ fn new_line(buf: &mut String) {
 fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &TypeAnnotation) {
     match type_ann {
         TypeAnnotation::TagUnion { tags, extension } => {
-            new_line(buf);
+            let tags_len = tags.len();
+
+            let more_than_one_tag = tags_len > 1;
 
             let tag_union_indent = indent_level + 1;
-            indent(buf, tag_union_indent);
+
+            if more_than_one_tag {
+                new_line(buf);
+
+                indent(buf, tag_union_indent);
+            }
+
             buf.push('[');
-            new_line(buf);
+
+            if more_than_one_tag {
+                new_line(buf);
+            }
 
             let next_indent_level = tag_union_indent + 1;
 
             for (index, tag) in tags.iter().enumerate() {
-                indent(buf, next_indent_level);
+                if more_than_one_tag {
+                    indent(buf, next_indent_level);
+                } else {
+                    buf.push(' ');
+                }
+
                 buf.push_str(tag.name.as_str());
 
                 for type_value in &tag.values {
@@ -347,19 +369,24 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                     type_annotation_to_html(next_indent_level, buf, type_value);
                 }
 
-                if index < (tags.len() - 1) {
-                    buf.push(',');
-                }
+                if more_than_one_tag {
+                    if index < (tags_len - 1) {
+                        buf.push(',');
+                    }
 
-                new_line(buf);
+                    new_line(buf);
+                }
             }
 
-            indent(buf, tag_union_indent);
+            if more_than_one_tag {
+                indent(buf, tag_union_indent);
+            } else {
+                buf.push(' ');
+            }
+
             buf.push(']');
 
-            if let Some(ext) = extension {
-                type_annotation_to_html(indent_level, buf, ext);
-            }
+            type_annotation_to_html(indent_level, buf, extension);
         }
         TypeAnnotation::BoundVariable(var_name) => {
             buf.push_str(var_name);
@@ -377,18 +404,32 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                 buf.push(')');
             }
         }
-        TypeAnnotation::Record { fields } => {
-            new_line(buf);
+        TypeAnnotation::Record { fields, extension } => {
+            let fields_len = fields.len();
+
+            let more_than_one_field = fields_len > 1;
 
             let record_indent = indent_level + 1;
-            indent(buf, record_indent);
+            if more_than_one_field {
+                new_line(buf);
+
+                indent(buf, record_indent);
+            }
+
             buf.push('{');
 
-            new_line(buf);
+            if more_than_one_field {
+                new_line(buf);
+            }
 
             let next_indent_level = record_indent + 1;
+
             for (index, field) in fields.iter().enumerate() {
-                indent(buf, next_indent_level);
+                if more_than_one_field {
+                    indent(buf, next_indent_level);
+                } else {
+                    buf.push(' ');
+                }
 
                 let fields_name = match field {
                     RecordField::RecordField { name, .. } => name,
@@ -414,16 +455,57 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                     RecordField::LabelOnly { .. } => {}
                 }
 
-                if index < (fields.len() - 1) {
-                    buf.push(',');
-                }
+                if more_than_one_field {
+                    if index < (fields_len - 1) {
+                        buf.push(',');
+                    }
 
-                new_line(buf);
+                    new_line(buf);
+                }
             }
 
-            indent(buf, record_indent);
+            if more_than_one_field {
+                indent(buf, record_indent);
+            } else {
+                buf.push(' ');
+            }
+
             buf.push('}');
+
+            type_annotation_to_html(indent_level, buf, extension);
         }
+        TypeAnnotation::Function { args, output } => {
+            let more_than_one_arg = args.len() > 1;
+            let mut peekable_args = args.iter().peekable();
+            while let Some(arg) = peekable_args.next() {
+                if more_than_one_arg {
+                    new_line(buf);
+                    indent(buf, indent_level + 1);
+                }
+
+                type_annotation_to_html(indent_level, buf, arg);
+
+                if peekable_args.peek().is_some() {
+                    buf.push_str(", ");
+                }
+            }
+
+            if more_than_one_arg {
+                new_line(buf);
+                indent(buf, indent_level + 1);
+            }
+
+            buf.push_str(" -> ");
+            type_annotation_to_html(indent_level, buf, output);
+        }
+        TypeAnnotation::ObscuredTagUnion => {
+            buf.push_str("[ @.. ]");
+        }
+        TypeAnnotation::ObscuredRecord => {
+            buf.push_str("{ @.. }");
+        }
+        TypeAnnotation::NoTypeAnn => {}
+        TypeAnnotation::Wildcard => buf.push('*'),
     }
 }
 
