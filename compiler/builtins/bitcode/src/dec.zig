@@ -26,7 +26,7 @@ pub const RocDec = struct {
         var initial_index: usize = if (is_negative) 1 else 0;
 
         var point_index: ?usize = null;
-        var index: usize = 0;
+        var index: usize = initial_index;
         while (index < length) {
             var byte: u8 = bytes_ptr[index];
             if (byte == '.' and point_index == null) {
@@ -350,10 +350,40 @@ test "fromString: .45" {
     expectEqual(RocDec{ .num = 450000000000000000 }, dec.?);
 }
 
+test "fromString: .45" {
+    var dec = RocDec.fromString("0.45", 4);
+
+    expectEqual(RocDec{ .num = 450000000000000000 }, dec.?);
+}
+
 test "fromString: 123" {
     var dec = RocDec.fromString("123", 3);
 
     expectEqual(RocDec{ .num = 123000000000000000000 }, dec.?);
+}
+
+test "fromString: -.45" {
+    var dec = RocDec.fromString("-.45", 4);
+
+    expectEqual(RocDec{ .num = -450000000000000000 }, dec.?);
+}
+
+test "fromString: -0.45" {
+    var dec = RocDec.fromString("-0.45", 5);
+
+    expectEqual(RocDec{ .num = -450000000000000000 }, dec.?);
+}
+
+test "fromString: -123" {
+    var dec = RocDec.fromString("-123", 4);
+
+    expectEqual(RocDec{ .num = -123000000000000000000 }, dec.?);
+}
+
+test "fromString: -123.45" {
+    var dec = RocDec.fromString("-123.45", 7);
+
+    expectEqual(RocDec{ .num = -123450000000000000000 }, dec.?);
 }
 
 test "fromString: abc" {
