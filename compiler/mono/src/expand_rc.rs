@@ -602,6 +602,7 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                 layout,
                 pass,
                 fail,
+                exception_id,
             } => {
                 let pass = expand_and_cancel(env, pass);
                 let fail = expand_and_cancel(env, fail);
@@ -612,6 +613,7 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                     layout: *layout,
                     pass,
                     fail,
+                    exception_id: *exception_id,
                 };
 
                 env.arena.alloc(stmt)
@@ -636,7 +638,7 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                 env.arena.alloc(stmt)
             }
 
-            Rethrow | Ret(_) | Jump(_, _) | RuntimeError(_) => stmt,
+            Resume(_) | Ret(_) | Jump(_, _) | RuntimeError(_) => stmt,
         }
     };
 

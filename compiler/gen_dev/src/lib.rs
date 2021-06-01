@@ -106,6 +106,7 @@ where
                 call,
                 pass,
                 fail: _,
+                exception_id: _,
             } => {
                 // for now, treat invoke as a normal call
                 self.build_expr(symbol, &Expr::Call(call.clone()), layout)?;
@@ -486,6 +487,7 @@ where
                 call,
                 pass,
                 fail: _,
+                exception_id: _,
             } => {
                 // for now, treat invoke as a normal call
                 self.set_last_seen(*symbol, stmt);
@@ -508,7 +510,7 @@ where
             Stmt::Ret(sym) => {
                 self.set_last_seen(*sym, stmt);
             }
-            Stmt::Rethrow => {}
+            Stmt::Resume(_exception_id) => {}
             Stmt::Refcounting(modify, following) => {
                 let sym = modify.get_symbol();
 

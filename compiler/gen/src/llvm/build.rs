@@ -48,7 +48,9 @@ use roc_collections::all::{ImMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::ir::{BranchInfo, CallType, JoinPointId, ModifyRc, TopLevelFunctionLayout, Wrapped};
+use roc_mono::ir::{
+    BranchInfo, CallType, ExceptionId, JoinPointId, ModifyRc, TopLevelFunctionLayout, Wrapped,
+};
 use roc_mono::layout::{Builtin, InPlace, LambdaSet, Layout, LayoutIds, UnionLayout};
 use target_lexicon::CallingConvention;
 
@@ -1820,6 +1822,7 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
     closure_argument: Option<BasicValueEnum<'ctx>>,
     pass: &'a roc_mono::ir::Stmt<'a>,
     fail: &'a roc_mono::ir::Stmt<'a>,
+    exception_id: ExceptionId,
 ) -> BasicValueEnum<'ctx> {
     let context = env.context;
 
@@ -1876,14 +1879,17 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
             context.struct_type(&[exception_ptr, selector_value], false)
         };
 
-        env.builder
-            .build_catch_all_landing_pad(
-                &landing_pad_type,
-                &BasicValueEnum::IntValue(context.i8_type().const_zero()),
-                context.i8_type().ptr_type(AddressSpace::Generic),
-                "invoke_landing_pad",
-            )
-            .into_struct_value();
+        let exception_object = env.builder.build_cleanup_landing_pad(
+            &landing_pad_type,
+            &BasicValueEnum::IntValue(context.i8_type().const_zero()),
+            context.i8_type().ptr_type(AddressSpace::Generic),
+            "invoke_landing_pad",
+        );
+
+        scope.insert(
+            exception_id.into_inner(),
+            (Layout::Struct(&[]), exception_object),
+        );
 
         build_exp_stmt(env, layout_ids, scope, parent, fail);
     }
@@ -1982,7 +1988,8 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             call,
             layout,
             pass,
-            fail: roc_mono::ir::Stmt::Rethrow,
+            fail: roc_mono::ir::Stmt::Resume(_),
+            exception_id: _,
         } => {
             // when the fail case is just Rethrow, there is no cleanup work to do
             // so we can just treat this invoke as a normal call
@@ -1996,6 +2003,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             layout,
             pass,
             fail,
+            exception_id,
         } => match call.call_type {
             CallType::ByName {
                 name,
@@ -2016,6 +2024,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     None,
                     pass,
                     fail,
+                    *exception_id,
                 )
             }
 
@@ -2034,6 +2043,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     symbol: *symbol,
                     pass,
                     fail,
+                    exception_id: *exception_id,
                 },
             ),
 
@@ -2046,11 +2056,9 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             }
         },
 
-        Rethrow => {
-            cxa_rethrow_exception(env);
-
-            // used in exception handling
-            env.builder.build_unreachable();
+        Resume(exception_id) => {
+            let exception_object = scope.get(&exception_id.into_inner()).unwrap().1;
+            env.builder.build_resume(&exception_object);
 
             env.context.i64_type().const_zero().into()
         }
@@ -4687,6 +4695,7 @@ enum ForeignCallOrInvoke<'a> {
     Call,
     Invoke {
         symbol: Symbol,
+        exception_id: ExceptionId,
         pass: &'a roc_mono::ir::Stmt<'a>,
         fail: &'a roc_mono::ir::Stmt<'a>,
     },
@@ -4781,7 +4790,12 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                 call.try_as_basic_value().left().unwrap()
             }
         }
-        ForeignCallOrInvoke::Invoke { symbol, pass, fail } => {
+        ForeignCallOrInvoke::Invoke {
+            symbol,
+            pass,
+            fail,
+            exception_id,
+        } => {
             let pass_block = env.context.append_basic_block(parent, "invoke_pass");
             let fail_block = env.context.append_basic_block(parent, "invoke_fail");
 
@@ -4822,14 +4836,17 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                         .struct_type(&[exception_ptr, selector_value], false)
                 };
 
-                env.builder
-                    .build_catch_all_landing_pad(
-                        &landing_pad_type,
-                        &BasicValueEnum::IntValue(env.context.i8_type().const_zero()),
-                        env.context.i8_type().ptr_type(AddressSpace::Generic),
-                        "invoke_landing_pad",
-                    )
-                    .into_struct_value();
+                let exception_object = env.builder.build_cleanup_landing_pad(
+                    &landing_pad_type,
+                    &BasicValueEnum::IntValue(env.context.i8_type().const_zero()),
+                    env.context.i8_type().ptr_type(AddressSpace::Generic),
+                    "invoke_landing_pad",
+                );
+
+                scope.insert(
+                    exception_id.into_inner(),
+                    (Layout::Struct(&[]), exception_object),
+                );
 
                 build_exp_stmt(env, layout_ids, scope, parent, fail);
             }
@@ -5729,32 +5746,6 @@ fn cxa_throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, info: BasicVal
 
     let call = builder.build_call(function, &[info, type_info, null], "throw");
     call.set_call_convention(C_CALL_CONV);
-}
-
-fn cxa_rethrow_exception(env: &Env<'_, '_, '_>) {
-    let name = "__cxa_rethrow";
-
-    let module = env.module;
-    let context = env.context;
-
-    let function = match module.get_function(&name) {
-        Some(gvalue) => gvalue,
-        None => {
-            let cxa_rethrow = add_func(
-                module,
-                name,
-                context.void_type().fn_type(&[], false),
-                Linkage::External,
-                C_CALL_CONV,
-            );
-
-            cxa_rethrow
-        }
-    };
-    let call = env.builder.build_call(function, &[], "rethrow");
-
-    call.set_call_convention(C_CALL_CONV);
-    // call.try_as_basic_value().left().unwrap()
 }
 
 fn get_foreign_symbol<'a, 'ctx, 'env>(

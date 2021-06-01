@@ -220,7 +220,7 @@ impl<'a> ParamMap<'a> {
                 }
                 Refcounting(_, _) => unreachable!("these have not been introduced yet"),
 
-                Ret(_) | Rethrow | Jump(_, _) | RuntimeError(_) => {
+                Ret(_) | Resume(_) | Jump(_, _) | RuntimeError(_) => {
                     // these are terminal, do nothing
                 }
             }
@@ -641,6 +641,7 @@ impl<'a> BorrowInfState<'a> {
                 layout: _,
                 pass,
                 fail,
+                exception_id: _,
             } => {
                 self.collect_stmt(pass);
                 self.collect_stmt(fail);
@@ -672,7 +673,7 @@ impl<'a> BorrowInfState<'a> {
             }
             Refcounting(_, _) => unreachable!("these have not been introduced yet"),
 
-            Ret(_) | RuntimeError(_) | Rethrow => {
+            Ret(_) | RuntimeError(_) | Resume(_) => {
                 // these are terminal, do nothing
             }
         }
