@@ -1,23 +1,23 @@
 procedure Num.24 (#Attr.2, #Attr.3):
-    let Test.27 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Test.27;
+    let Test.28 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Test.28;
 
 procedure Num.26 (#Attr.2, #Attr.3):
     let Test.22 = lowlevel NumMul #Attr.2 #Attr.3;
     ret Test.22;
 
 procedure Test.1 ():
-    let Test.28 = 1i64;
-    ret Test.28;
+    let Test.30 = 1i64;
+    ret Test.30;
 
 procedure Test.2 ():
-    let Test.23 = 2i64;
-    ret Test.23;
+    let Test.24 = 2i64;
+    ret Test.24;
 
 procedure Test.3 (Test.6):
-    let Test.26 = CallByName Test.1;
-    let Test.25 = CallByName Num.24 Test.6 Test.26;
-    ret Test.25;
+    let Test.27 = CallByName Test.1;
+    let Test.26 = CallByName Num.24 Test.6 Test.27;
+    ret Test.26;
 
 procedure Test.4 (Test.7):
     let Test.21 = CallByName Test.2;
@@ -44,8 +44,8 @@ procedure Test.0 ():
         let Test.11 = CallByName Test.5 Test.12 Test.13;
         ret Test.11;
     in
-    let Test.24 = true;
-    if Test.24 then
+    let Test.25 = true;
+    if Test.25 then
         let Test.3 = Struct {};
         jump Test.19 Test.3;
     else
