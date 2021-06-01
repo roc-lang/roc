@@ -50,7 +50,7 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
                 result.insert(*symbol);
             }
 
-            Rethrow => {}
+            Resume(_) => {}
 
             Refcounting(modify, cont) => {
                 let symbol = modify.get_symbol();
@@ -892,6 +892,7 @@ impl<'a> Context<'a> {
                 pass,
                 fail,
                 layout,
+                exception_id,
             } => {
                 // live vars of the whole expression
                 let invoke_live_vars = collect_stmt(stmt, &self.jp_live_vars, MutSet::default());
@@ -926,6 +927,7 @@ impl<'a> Context<'a> {
                     pass,
                     fail,
                     layout: *layout,
+                    exception_id: *exception_id,
                 };
 
                 let cont = self.arena.alloc(invoke);
@@ -1009,7 +1011,7 @@ impl<'a> Context<'a> {
                 }
             }
 
-            Rethrow => (stmt, MutSet::default()),
+            Resume(_) => (stmt, MutSet::default()),
 
             Jump(j, xs) => {
                 let empty = MutSet::default();
@@ -1175,7 +1177,7 @@ pub fn collect_stmt(
             vars
         }
 
-        Rethrow => vars,
+        Resume(_) => vars,
 
         RuntimeError(_) => vars,
     }

@@ -880,6 +880,29 @@ fn when_peano() {
 
 #[test]
 #[should_panic(expected = "Roc failed with message: ")]
+fn overflow_frees_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            myList = [1,2,3]
+
+            # integer overflow; must use the list so it is defined before the overflow
+            # the list will then be freed in a cleanup block
+            n : I64
+            n = 9_223_372_036_854_775_807 + (Num.intCast (List.len myList))
+
+            index = Num.intCast n
+
+            List.get myList index
+                 "#
+        ),
+        3,
+        i64
+    );
+}
+
+#[test]
+#[should_panic(expected = "Roc failed with message: ")]
 fn undefined_variable() {
     assert_evals_to!(
         indoc!(
