@@ -3225,6 +3225,7 @@ dependencies = [
  "indoc 0.3.6",
  "inlinable_string",
  "maplit",
+ "morphic_lib",
  "num_cpus",
  "parking_lot",
  "pretty_assertions 0.5.1",
@@ -3908,6 +3909,50 @@ dependencies = [
  "roc_unify",
  "target-lexicon",
  "tokio",
+]
+
+[[package]]
+name = "test_mono"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "either",
+ "im 14.3.0",
+ "im-rc 14.3.0",
+ "indoc 0.3.6",
+ "inlinable_string",
+ "libc",
+ "libloading 0.6.7",
+ "pretty_assertions 0.5.1",
+ "quickcheck 0.8.5",
+ "quickcheck_macros 0.8.0",
+ "roc_build",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_constrain",
+ "roc_load",
+ "roc_module",
+ "roc_mono",
+ "roc_parse",
+ "roc_problem",
+ "roc_region",
+ "roc_reporting",
+ "roc_solve",
+ "roc_types",
+ "roc_unify",
+ "target-lexicon",
+ "test_mono_macros",
+]
+
+[[package]]
+name = "test_mono_macros"
+version = "0.1.0"
+dependencies = [
+ "darling",
+ "proc-macro2 1.0.27",
+ "quote 1.0.9",
+ "syn 1.0.72",
 ]
 
 [[package]]
