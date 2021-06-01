@@ -1,6 +1,8 @@
 const std = @import("std");
+const str = @import("str.zig");
 
 const math = std.math;
+const RocStr = str.RocStr;
 
 pub const RocDec = struct {
     num: i128,
@@ -17,18 +19,22 @@ pub const RocDec = struct {
         return .{ .num = @intCast(i128, num) * one_point_zero_i128 };
     }
 
-    pub fn fromString(bytes_ptr: [*]const u8, length: usize) ?RocDec {
-        if (length == 0) {
+    pub fn fromString(roc_str: RocStr) ?RocDec {
+        if (roc_str.isEmpty()) {
             return null;
         }
 
-        var is_negative: bool = bytes_ptr[0] == '-';
+        const length = roc_str.len();
+
+        const roc_str_slice = roc_str.asSlice();
+
+        var is_negative: bool = roc_str_slice[0] == '-';
         var initial_index: usize = if (is_negative) 1 else 0;
 
         var point_index: ?usize = null;
         var index: usize = 0;
         while (index < length) {
-            var byte: u8 = bytes_ptr[index];
+            var byte: u8 = roc_str_slice[index];
             if (byte == '.' and point_index == null) {
                 point_index = index;
                 index += 1;
@@ -52,12 +58,12 @@ pub const RocDec = struct {
             }
             var diff_decimal_places = decimal_places - after_str_len;
 
-            var after_str = bytes_ptr[pi + 1 .. length];
+            var after_str = roc_str_slice[pi + 1 .. length];
             var after_u64 = std.fmt.parseUnsigned(u64, after_str, 10) catch null;
             after_val_i128 = if (after_u64) |f| @intCast(i128, f) * math.pow(i128, 10, diff_decimal_places) else null;
         }
 
-        var before_str = bytes_ptr[initial_index..before_str_length];
+        var before_str = roc_str_slice[initial_index..before_str_length];
         var before_val_not_adjusted = std.fmt.parseUnsigned(i128, before_str, 10) catch null;
 
         var before_val_i128: ?i128 = null;
@@ -321,61 +327,71 @@ test "fromU64" {
 }
 
 test "fromString: empty" {
-    var dec = RocDec.fromString("", 0);
+    var roc_str = RocStr.init("", 0);
+    var dec = RocDec.fromString(roc_str);
 
     expectEqual(dec, null);
 }
 
 test "fromString: 0" {
-    var dec = RocDec.fromString("0", 1);
+    var roc_str = RocStr.init("0", 1);
+    var dec = RocDec.fromString(roc_str);
 
     expectEqual(RocDec{ .num = 0 }, dec.?);
 }
 
 test "fromString: 1" {
-    var dec = RocDec.fromString("1", 1);
+    var roc_str = RocStr.init("1", 1);
+    var dec = RocDec.fromString(roc_str);
 
     expectEqual(RocDec.one_point_zero, dec.?);
 }
 
 test "fromString: 123.45" {
-    var dec = RocDec.fromString("123.45", 6);
+    var roc_str = RocStr.init("123.45", 6);
+    var dec = RocDec.fromString(roc_str);
 
     expectEqual(RocDec{ .num = 123450000000000000000 }, dec.?);
 }
 
 test "fromString: .45" {
-    var dec = RocDec.fromString(".45", 3);
+    var roc_str = RocStr.init(".45", 3);
+    var dec = RocDec.fromString(roc_str);
 
     expectEqual(RocDec{ .num = 450000000000000000 }, dec.?);
 }
 
 test "fromString: 123" {
-    var dec = RocDec.fromString("123", 3);
+    var roc_str = RocStr.init("123", 3);
+    var dec = RocDec.fromString(roc_str);
 
     expectEqual(RocDec{ .num = 123000000000000000000 }, dec.?);
 }
 
 test "fromString: abc" {
-    var dec = RocDec.fromString("abc", 3);
+    var roc_str = RocStr.init("abc", 3);
+    var dec = RocDec.fromString(roc_str);
 
     expectEqual(dec, null);
 }
 
 test "fromString: 123.abc" {
-    var dec = RocDec.fromString("123.abc", 7);
+    var roc_str = RocStr.init("123.abc", 7);
+    var dec = RocDec.fromString(roc_str);
 
     expectEqual(dec, null);
 }
 
 test "fromString: abc.123" {
-    var dec = RocDec.fromString("abc.123", 7);
+    var roc_str = RocStr.init("abc.123", 7);
+    var dec = RocDec.fromString(roc_str);
 
     expectEqual(dec, null);
 }
 
 test "fromString: .123.1" {
-    var dec = RocDec.fromString(".123.1", 6);
+    var roc_str = RocStr.init(".123.1", 6);
+    var dec = RocDec.fromString(roc_str);
 
     expectEqual(dec, null);
 }
