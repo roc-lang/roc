@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const math = std.math;
 
 pub const RocDec = struct {
@@ -13,7 +14,7 @@ pub const RocDec = struct {
     pub const one_point_zero: comptime RocDec = .{ .num = one_point_zero_i128 };
 
     pub fn fromU64(num: u64) RocDec {
-        return .{ .num = num * one_point_zero_i128 };
+        return .{ .num = @intCast(i128, num) * one_point_zero_i128 };
     }
 
     pub fn fromString(bytes_ptr: [*]const u8, length: usize) ?RocDec {
@@ -310,118 +311,101 @@ fn mul_u128(a: u128, b: u128) U256 {
     return .{ .hi = hi, .lo = lo };
 }
 
-const one_e20: i256 = 100000000000000000000;
-
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
 
 test "fromU64" {
     var dec = RocDec.fromU64(25);
-    try expectEqual(RocDec{ .num = 25000000000000000000 }, dec);
+
+    expectEqual(RocDec{ .num = 25000000000000000000 }, dec);
 }
 
 test "fromString: empty" {
     var dec = RocDec.fromString("", 0);
-    if (dec) |_| {
-        unreachable;
-    }
+
+    expectEqual(dec, null);
 }
 
 test "fromString: 0" {
     var dec = RocDec.fromString("0", 1);
-    if (dec) |d| {
-        try expectEqual(RocDec{ .num = 0 }, d);
-    } else {
-        unreachable;
-    }
+
+    expectEqual(RocDec{ .num = 0 }, dec.?);
 }
 
 test "fromString: 1" {
     var dec = RocDec.fromString("1", 1);
-    if (dec) |d| {
-        try expectEqual(RocDec.one_point_zero, d);
-    } else {
-        unreachable;
-    }
+
+    expectEqual(RocDec.one_point_zero, dec.?);
 }
 
 test "fromString: 123.45" {
     var dec = RocDec.fromString("123.45", 6);
-    if (dec) |d| {
-        try expectEqual(RocDec{ .num = 123450000000000000000 }, d);
-    } else {
-        unreachable;
-    }
+
+    expectEqual(RocDec{ .num = 123450000000000000000 }, dec.?);
 }
 
 test "fromString: .45" {
     var dec = RocDec.fromString(".45", 3);
-    if (dec) |d| {
-        try expectEqual(RocDec{ .num = 450000000000000000 }, d);
-    } else {
-        unreachable;
-    }
+
+    expectEqual(RocDec{ .num = 450000000000000000 }, dec.?);
 }
 
 test "fromString: 123" {
     var dec = RocDec.fromString("123", 3);
-    if (dec) |d| {
-        try expectEqual(RocDec{ .num = 123000000000000000000 }, d);
-    } else {
-        unreachable;
-    }
+
+    expectEqual(RocDec{ .num = 123000000000000000000 }, dec.?);
 }
 
 test "fromString: abc" {
     var dec = RocDec.fromString("abc", 3);
-    if (dec) |_| {
-        unreachable;
-    }
+
+    expectEqual(dec, null);
 }
 
 test "fromString: 123.abc" {
     var dec = RocDec.fromString("123.abc", 7);
-    if (dec) |_| {
-        unreachable;
-    }
+
+    expectEqual(dec, null);
 }
 
 test "fromString: abc.123" {
     var dec = RocDec.fromString("abc.123", 7);
-    if (dec) |_| {
-        unreachable;
-    }
+
+    expectEqual(dec, null);
 }
 
 test "fromString: .123.1" {
     var dec = RocDec.fromString(".123.1", 6);
-    if (dec) |d| {
-        std.debug.print("d: {}", .{d});
-        unreachable;
-    }
+
+    expectEqual(dec, null);
 }
 
 test "add: 0" {
     var dec: RocDec = .{ .num = 0 };
-    try expectEqual(RocDec{ .num = 0 }, dec.add(.{ .num = 0 }));
+
+    expectEqual(RocDec{ .num = 0 }, dec.add(.{ .num = 0 }));
 }
 
 test "add: 1" {
     var dec: RocDec = .{ .num = 0 };
-    try expectEqual(RocDec{ .num = 1 }, dec.add(.{ .num = 1 }));
+
+    expectEqual(RocDec{ .num = 1 }, dec.add(.{ .num = 1 }));
 }
 
 test "mul: by 0" {
     var dec: RocDec = .{ .num = 0 };
-    try expectEqual(RocDec{ .num = 0 }, dec.mul(.{ .num = 0 }));
+
+    expectEqual(RocDec{ .num = 0 }, dec.mul(.{ .num = 0 }));
 }
 
 test "mul: by 1" {
     var dec: RocDec = RocDec.fromU64(15);
-    try expectEqual(RocDec.fromU64(15), dec.mul(RocDec.fromU64(1)));
+
+    expectEqual(RocDec.fromU64(15), dec.mul(RocDec.fromU64(1)));
 }
 
 test "mul: by 2" {
     var dec: RocDec = RocDec.fromU64(15);
-    try expectEqual(RocDec.fromU64(30), dec.mul(RocDec.fromU64(2)));
+
+    expectEqual(RocDec.fromU64(30), dec.mul(RocDec.fromU64(2)));
 }
