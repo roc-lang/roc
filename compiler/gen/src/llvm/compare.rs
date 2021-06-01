@@ -1,10 +1,12 @@
 use crate::llvm::build::Env;
-use crate::llvm::build::{cast_block_of_memory_to_tag, complex_bitcast, set_name, FAST_CALL_CONV};
+use crate::llvm::build::{cast_block_of_memory_to_tag, complex_bitcast, FAST_CALL_CONV};
 use crate::llvm::build_list::{list_len, load_list_ptr};
 use crate::llvm::build_str::str_equal;
 use crate::llvm::convert::{basic_type_from_layout, get_ptr_type};
 use bumpalo::collections::Vec;
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
+use inkwell::values::{
+    BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
+};
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
@@ -428,8 +430,8 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
     let list1 = it.next().unwrap().into_struct_value();
     let list2 = it.next().unwrap().into_struct_value();
 
-    set_name(list1.into(), Symbol::ARG_1.ident_string(&env.interns));
-    set_name(list2.into(), Symbol::ARG_2.ident_string(&env.interns));
+    list1.set_name(Symbol::ARG_1.ident_string(&env.interns));
+    list2.set_name(Symbol::ARG_2.ident_string(&env.interns));
 
     let entry = ctx.append_basic_block(parent, "entry");
     env.builder.position_at_end(entry);
@@ -636,8 +638,8 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
     let struct1 = it.next().unwrap().into_struct_value();
     let struct2 = it.next().unwrap().into_struct_value();
 
-    set_name(struct1.into(), Symbol::ARG_1.ident_string(&env.interns));
-    set_name(struct2.into(), Symbol::ARG_2.ident_string(&env.interns));
+    struct1.set_name(Symbol::ARG_1.ident_string(&env.interns));
+    struct2.set_name(Symbol::ARG_2.ident_string(&env.interns));
 
     let entry = ctx.append_basic_block(parent, "entry");
     let start = ctx.append_basic_block(parent, "start");
@@ -817,8 +819,8 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
     let tag1 = it.next().unwrap();
     let tag2 = it.next().unwrap();
 
-    set_name(tag1, Symbol::ARG_1.ident_string(&env.interns));
-    set_name(tag2, Symbol::ARG_2.ident_string(&env.interns));
+    tag1.set_name(Symbol::ARG_1.ident_string(&env.interns));
+    tag2.set_name(Symbol::ARG_2.ident_string(&env.interns));
 
     let entry = ctx.append_basic_block(parent, "entry");
 

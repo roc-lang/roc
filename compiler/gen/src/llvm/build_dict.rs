@@ -3,14 +3,14 @@ use crate::llvm::bitcode::{
     build_dec_wrapper, build_eq_wrapper, build_inc_wrapper, call_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
-    complex_bitcast, load_symbol, load_symbol_and_layout, set_name, Env, RocFunctionCall, Scope,
+    complex_bitcast, load_symbol, load_symbol_and_layout, Env, RocFunctionCall, Scope,
 };
 use crate::llvm::build_list::{layout_width, pass_as_opaque};
 use crate::llvm::convert::{as_const_zero, basic_type_from_layout};
 use crate::llvm::refcounting::Mode;
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::types::BasicType;
-use inkwell::values::{BasicValueEnum, FunctionValue, StructValue};
+use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, StructValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
@@ -836,8 +836,8 @@ fn build_hash_wrapper<'a, 'ctx, 'env>(
             let seed_arg = it.next().unwrap().into_int_value();
             let value_ptr = it.next().unwrap().into_pointer_value();
 
-            set_name(seed_arg.into(), Symbol::ARG_1.ident_string(&env.interns));
-            set_name(value_ptr.into(), Symbol::ARG_2.ident_string(&env.interns));
+            seed_arg.set_name(Symbol::ARG_1.ident_string(&env.interns));
+            value_ptr.set_name(Symbol::ARG_2.ident_string(&env.interns));
 
             let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 

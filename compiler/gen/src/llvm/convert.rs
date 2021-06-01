@@ -1,7 +1,7 @@
 use bumpalo::collections::Vec;
 use inkwell::context::Context;
 use inkwell::types::BasicTypeEnum::{self, *};
-use inkwell::types::{ArrayType, BasicType, FunctionType, IntType, PointerType, StructType};
+use inkwell::types::{ArrayType, BasicType, IntType, PointerType, StructType};
 use inkwell::values::BasicValueEnum;
 use inkwell::AddressSpace;
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
@@ -18,21 +18,6 @@ pub fn get_ptr_type<'ctx>(
         PointerType(typ) => typ.ptr_type(address_space),
         StructType(typ) => typ.ptr_type(address_space),
         VectorType(typ) => typ.ptr_type(address_space),
-    }
-}
-
-/// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
-pub fn get_fn_type<'ctx>(
-    bt_enum: &BasicTypeEnum<'ctx>,
-    arg_types: &[BasicTypeEnum<'ctx>],
-) -> FunctionType<'ctx> {
-    match bt_enum {
-        ArrayType(typ) => typ.fn_type(arg_types, false),
-        IntType(typ) => typ.fn_type(arg_types, false),
-        FloatType(typ) => typ.fn_type(arg_types, false),
-        PointerType(typ) => typ.fn_type(arg_types, false),
-        StructType(typ) => typ.fn_type(arg_types, false),
-        VectorType(typ) => typ.fn_type(arg_types, false),
     }
 }
 
@@ -77,7 +62,7 @@ fn basic_type_from_function_layout<'a, 'ctx, 'env>(
         arg_basic_types.push(closure);
     }
 
-    let fn_type = get_fn_type(&ret_type, arg_basic_types.into_bump_slice());
+    let fn_type = ret_type.fn_type(arg_basic_types.into_bump_slice(), false);
     let ptr_type = fn_type.ptr_type(AddressSpace::Generic);
 
     ptr_type.as_basic_type_enum()

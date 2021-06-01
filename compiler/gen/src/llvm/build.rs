@@ -18,7 +18,7 @@ use crate::llvm::build_str::{
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
     basic_type_from_builtin, basic_type_from_layout, block_of_memory, block_of_memory_slices,
-    get_fn_type, get_ptr_type, ptr_int,
+    get_ptr_type, ptr_int,
 };
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
@@ -35,7 +35,7 @@ use inkwell::debug_info::{
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
-use inkwell::types::{BasicTypeEnum, FunctionType, IntType, StructType};
+use inkwell::types::{BasicType, BasicTypeEnum, FunctionType, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
     BasicValue, CallSiteValue, FloatValue, FunctionValue, InstructionOpcode, InstructionValue,
@@ -859,7 +859,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
     expr: &roc_mono::ir::Expr<'a>,
 ) -> BasicValueEnum<'ctx> {
-    use inkwell::types::BasicType;
     use roc_mono::ir::Expr::*;
 
     match expr {
@@ -2323,8 +2322,6 @@ pub fn complex_bitcast<'ctx>(
     to_type: BasicTypeEnum<'ctx>,
     name: &str,
 ) -> BasicValueEnum<'ctx> {
-    use inkwell::types::BasicType;
-
     // builder.build_bitcast(from_value, to_type, "cast_basic_basic")
     // because this does not allow some (valid) bitcasts
 
@@ -2636,18 +2633,6 @@ fn build_switch_ir<'a, 'ctx, 'env>(
     }
 }
 
-/// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
-pub fn set_name(bv_enum: BasicValueEnum<'_>, name: &str) {
-    match bv_enum {
-        ArrayValue(val) => val.set_name(name),
-        IntValue(val) => val.set_name(name),
-        FloatValue(val) => val.set_name(name),
-        PointerValue(val) => val.set_name(name),
-        StructValue(val) => val.set_name(name),
-        VectorValue(val) => val.set_name(name),
-    }
-}
-
 /// Creates a new stack allocation instruction in the entry block of the function.
 pub fn create_entry_block_alloca<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
@@ -2681,8 +2666,6 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
     roc_function: FunctionValue<'ctx>,
     c_function_name: &str,
 ) -> FunctionValue<'ctx> {
-    use inkwell::types::BasicType;
-
     let roc_wrapper_function = make_exception_catcher(env, roc_function);
 
     let roc_function_type = roc_wrapper_function.get_type();
@@ -3019,7 +3002,7 @@ pub fn build_proc_header<'a, 'ctx, 'env>(
         arg_basic_types.push(arg_type);
     }
 
-    let fn_type = get_fn_type(&ret_type, &arg_basic_types);
+    let fn_type = ret_type.fn_type(&arg_basic_types, false);
 
     let fn_val = add_func(
         env.module,
@@ -3048,8 +3031,6 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     lambda_set: LambdaSet<'a>,
     result: &Layout<'a>,
 ) {
-    use inkwell::types::BasicType;
-
     let context = &env.context;
     let builder = env.builder;
 
@@ -3143,8 +3124,6 @@ fn build_function_caller<'a, 'ctx, 'env>(
     arguments: &[Layout<'a>],
     result: &Layout<'a>,
 ) {
-    use inkwell::types::BasicType;
-
     let context = &env.context;
     let builder = env.builder;
 
@@ -3305,7 +3284,6 @@ fn build_host_exposed_alias_size_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(entry);
 
-    use inkwell::types::BasicType;
     let size: BasicValueEnum = basic_type.size_of().unwrap().into();
     builder.build_return(Some(&size));
 }
@@ -3377,7 +3355,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
 
     // Add args to scope
     for (arg_val, (layout, arg_symbol)) in fn_val.get_param_iter().zip(args) {
-        set_name(arg_val, arg_symbol.ident_string(&env.interns));
+        arg_val.set_name(arg_symbol.ident_string(&env.interns));
         scope.insert(*arg_symbol, (*layout, arg_val));
     }
 
@@ -4732,7 +4710,7 @@ fn build_foreign_symbol_return_result<'a, 'ctx, 'env>(
         arg_types.push(arg_type);
     }
 
-    let function_type = get_fn_type(&return_type, &arg_types);
+    let function_type = return_type.fn_type(&arg_types, false);
     let function = get_foreign_symbol(env, foreign.clone(), function_type);
 
     (function, arg_vals.into_bump_slice())
