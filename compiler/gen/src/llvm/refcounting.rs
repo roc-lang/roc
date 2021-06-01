@@ -1,6 +1,6 @@
 use crate::debug_info_init;
 use crate::llvm::build::{
-    add_func, cast_basic_basic, cast_block_of_memory_to_tag, set_name, Env, FAST_CALL_CONV,
+    add_func, cast_basic_basic, cast_block_of_memory_to_tag, Env, FAST_CALL_CONV,
     LLVM_SADD_WITH_OVERFLOW_I64,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
@@ -11,7 +11,9 @@ use bumpalo::collections::Vec;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
 use inkwell::types::{AnyTypeEnum, BasicType, BasicTypeEnum};
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
+use inkwell::values::{
+    BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
+};
 use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
@@ -390,7 +392,7 @@ fn modify_refcount_struct_help<'a, 'ctx, 'env>(
     let arg_symbol = Symbol::ARG_1;
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
-    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+    arg_val.set_name(arg_symbol.ident_string(&env.interns));
 
     let parent = fn_val;
 
@@ -821,7 +823,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
     let arg_symbol = Symbol::ARG_1;
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
-    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+    arg_val.set_name(arg_symbol.ident_string(&env.interns));
 
     let parent = fn_val;
     let original_wrapper = arg_val.into_struct_value();
@@ -940,7 +942,7 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
     let arg_symbol = Symbol::ARG_1;
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
-    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+    arg_val.set_name(arg_symbol.ident_string(&env.interns));
 
     let parent = fn_val;
 
@@ -1059,7 +1061,7 @@ fn modify_refcount_dict_help<'a, 'ctx, 'env>(
     let arg_symbol = Symbol::ARG_1;
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
-    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+    arg_val.set_name(arg_symbol.ident_string(&env.interns));
 
     let parent = fn_val;
 
@@ -1270,7 +1272,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
 
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
-    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+    arg_val.set_name(arg_symbol.ident_string(&env.interns));
 
     let parent = fn_val;
 
@@ -1565,7 +1567,7 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
     let arg_symbol = Symbol::ARG_1;
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
-    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+    arg_val.set_name(arg_symbol.ident_string(&env.interns));
 
     let parent = fn_val;
 

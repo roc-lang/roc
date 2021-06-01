@@ -1,8 +1,9 @@
-use crate::llvm::build::{add_func, set_name, C_CALL_CONV};
+use crate::llvm::build::{add_func, C_CALL_CONV};
 use crate::llvm::convert::ptr_int;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
+use inkwell::values::BasicValue;
 use inkwell::AddressSpace;
 
 /// Define functions for roc_alloc, roc_realloc, and roc_dealloc
@@ -69,8 +70,8 @@ pub fn add_default_roc_externs<'ctx>(
 
             debug_assert!(params.next().is_none());
 
-            set_name(ptr_arg, "ptr");
-            set_name(size_arg, "size");
+            ptr_arg.set_name("ptr");
+            size_arg.set_name("size");
 
             if cfg!(debug_assertions) {
                 crate::llvm::build::verify_fn(fn_val);
