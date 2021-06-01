@@ -40,9 +40,42 @@ where
         for proc in procs {
             let spec = proc_spec(proc)?;
 
-            m.add_func(FuncName(&proc.name.to_ne_bytes()), spec)?;
+            let mut name_bytes = [0u8; 16];
+
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::Hash;
+            use std::hash::Hasher;
+
+            let layout_hash = {
+                let mut hasher = DefaultHasher::new();
+
+                for (layout, _) in proc.args.iter() {
+                    layout.hash(&mut hasher);
+                }
+                proc.ret_layout.hash(&mut hasher);
+
+                hasher.finish()
+            };
+
+            let sbytes = proc.name.to_ne_bytes();
+            let lbytes = layout_hash.to_ne_bytes();
+
+            let it = sbytes
+                .iter()
+                .chain(lbytes.iter())
+                .zip(name_bytes.iter_mut());
+
+            for (source, target) in it {
+                *target = *source;
+            }
+
+            m.add_func(FuncName(&name_bytes), spec)?;
 
             if format!("{:?}", proc.name).contains("mainForHost") {
+                main_function = Some(proc.name);
+            }
+
+            if format!("{:?}", proc.name).contains("replOutput") {
                 main_function = Some(proc.name);
             }
         }
@@ -50,19 +83,38 @@ where
         m.build()?
     };
 
-    let program = {
-        let mut p = ProgramBuilder::new();
-        p.add_mod(MOD_APP, main_module)?;
-        p.add_entry_point(
-            EntryPointName(b"mainForHost"),
-            MOD_APP,
-            FuncName(&main_function.unwrap().to_ne_bytes()),
-        )?;
+    match main_function {
+        None => {
+            let program = {
+                let mut p = ProgramBuilder::new();
+                p.add_mod(MOD_APP, main_module)?;
+                p.add_entry_point(
+                    EntryPointName(b"not defined! probably a function in the repl"),
+                    MOD_APP,
+                    FuncName(&[]),
+                )?;
 
-        p.build()?
-    };
+                p.build()?
+            };
 
-    morphic_lib::solve(program)
+            morphic_lib::solve(program)
+        }
+        Some(main_function) => {
+            let program = {
+                let mut p = ProgramBuilder::new();
+                p.add_mod(MOD_APP, main_module)?;
+                p.add_entry_point(
+                    EntryPointName(b"mainForHost"),
+                    MOD_APP,
+                    FuncName(&main_function.to_ne_bytes()),
+                )?;
+
+                p.build()?
+            };
+
+            morphic_lib::solve(program)
+        }
+    }
 }
 
 fn proc_spec(proc: &Proc) -> Result<FuncDef> {
@@ -319,10 +371,13 @@ fn call_spec(
         ),
         HigherOrderLowLevel { .. } => {
             // TODO overly pessimstic
+            // filter_map because one of the arguments is a function name, which
+            // is not defined in the env
             let arguments: Vec<_> = call
                 .arguments
                 .iter()
-                .map(|symbol| env.symbols[symbol])
+                .filter_map(|symbol| env.symbols.get(symbol))
+                .copied()
                 .collect();
 
             let result_type = layout_spec(builder, layout)?;
@@ -427,19 +482,24 @@ fn build_variant_types(
                 result.push(build_tuple_type(builder, tag)?);
             }
         }
-        Recursive(_) => todo!(),
-        NonNullableUnwrapped(_) => todo!(),
+        Recursive(_) => unreachable!(),
+        NonNullableUnwrapped(_) => unreachable!(),
         NullableWrapped {
             nullable_id: _,
             other_tags: _,
-        } => todo!(),
+        } => unreachable!(),
         NullableUnwrapped {
             nullable_id: _,
             other_fields: _,
-        } => todo!(),
+        } => unreachable!(),
     }
 
     Ok(result)
+}
+
+fn worst_case_type(context: &mut impl TypeContext) -> Result<TypeId> {
+    let cell = context.add_heap_cell_type();
+    context.add_bag_type(cell)
 }
 
 fn expr_spec(
@@ -460,15 +520,25 @@ fn expr_spec(
             tag_id,
             union_size: _,
             arguments,
-        } => {
-            let value_id = build_tuple_value(builder, env, block, arguments)?;
-            let variant_types = build_variant_types(builder, tag_layout)?;
-            builder.add_make_union(block, &variant_types, *tag_id as u32, value_id)
-        }
+        } => match tag_layout {
+            UnionLayout::NonRecursive(_) => {
+                let value_id = build_tuple_value(builder, env, block, arguments)?;
+                let variant_types = build_variant_types(builder, tag_layout)?;
+                builder.add_make_union(block, &variant_types, *tag_id as u32, value_id)
+            }
+            UnionLayout::Recursive(_)
+            | UnionLayout::NonNullableUnwrapped(_)
+            | UnionLayout::NullableWrapped { .. }
+            | UnionLayout::NullableUnwrapped { .. } => {
+                let result_type = worst_case_type(builder)?;
+                let value_id = build_tuple_value(builder, env, block, arguments)?;
+                builder.add_unknown_with(block, &[value_id], result_type)
+            }
+        },
         Struct(fields) => build_tuple_value(builder, env, block, fields),
         AccessAtIndex {
             index,
-            field_layouts: _,
+            field_layouts,
             structure,
             wrapped,
         } => {
@@ -482,13 +552,23 @@ fn expr_spec(
                     builder.add_make_tuple(block, &[])
                 }
                 Wrapped::SingleElementRecord => {
-                    todo!("do we unwrap single-element records still?")
+                    // builder.add_get_tuple_field(block, value_id, *index as u32)
+                    Ok(env.symbols[structure])
                 }
                 Wrapped::RecordOrSingleTagUnion => {
                     builder.add_get_tuple_field(block, value_id, *index as u32)
                 }
                 Wrapped::MultiTagUnion => {
-                    builder.add_get_tuple_field(block, value_id, *index as u32)
+                    // Clearly this is not generally correct, but it should be for our examples
+                    let hacky_is_recursive =
+                        field_layouts.iter().any(|l| l == &Layout::RecursivePointer);
+
+                    if hacky_is_recursive {
+                        let result_type = layout_spec(builder, layout)?;
+                        builder.add_unknown_with(block, &[value_id], result_type)
+                    } else {
+                        builder.add_get_tuple_field(block, value_id, *index as u32)
+                    }
                 }
             }
         }
@@ -553,13 +633,25 @@ fn layout_spec(builder: &mut FuncDefBuilder, layout: &Layout) -> Result<TypeId> 
     match layout {
         Builtin(builtin) => builtin_spec(builder, builtin),
         Struct(fields) => build_tuple_type(builder, fields),
-        Union(union_layout) => {
-            let variant_types = build_variant_types(builder, union_layout)?;
-            builder.add_union_type(&variant_types)
-        }
-        RecursivePointer => todo!(),
+        Union(union_layout) => match union_layout {
+            UnionLayout::NonRecursive(_) => {
+                let variant_types = build_variant_types(builder, union_layout)?;
+                builder.add_union_type(&variant_types)
+            }
+            UnionLayout::Recursive(_) => worst_case_type(builder),
+            UnionLayout::NonNullableUnwrapped(_) => worst_case_type(builder),
+            UnionLayout::NullableWrapped {
+                nullable_id: _,
+                other_tags: _,
+            } => worst_case_type(builder),
+            UnionLayout::NullableUnwrapped {
+                nullable_id: _,
+                other_fields: _,
+            } => worst_case_type(builder),
+        },
+        RecursivePointer => worst_case_type(builder),
         FunctionPointer(_, _) => todo!(),
-        Closure(_, _, _) => todo!(),
+        Closure(_, lambda_set, _) => layout_spec(builder, &lambda_set.runtime_representation()),
     }
 }
 
@@ -596,9 +688,25 @@ fn builtin_spec(builder: &mut FuncDefBuilder, builtin: &Builtin) -> Result<TypeI
 
             builder.add_tuple_type(&[cell, bag])
         }
-        EmptyList => todo!(),
-        EmptyDict => todo!(),
-        EmptySet => todo!(),
+        EmptyList => {
+            // TODO make sure that we consistently treat the EmptyList as a list of unit values
+            let element_type = builder.add_tuple_type(&[])?;
+
+            let cell = builder.add_heap_cell_type();
+            let bag = builder.add_bag_type(element_type)?;
+
+            builder.add_tuple_type(&[cell, bag])
+        }
+        EmptyDict | EmptySet => {
+            // TODO make sure that we consistently treat the these as a dict of unit values
+            let unit = builder.add_tuple_type(&[])?;
+            let element_type = builder.add_tuple_type(&[unit, unit])?;
+
+            let cell = builder.add_heap_cell_type();
+            let bag = builder.add_bag_type(element_type)?;
+
+            builder.add_tuple_type(&[cell, bag])
+        }
     }
 }
 
