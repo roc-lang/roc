@@ -320,9 +320,27 @@ test "fromU64" {
     try expectEqual(RocDec{ .num = 25000000000000000000 }, dec);
 }
 
-test "fromString: 0" {
+test "fromString: empty" {
     var dec = RocDec.fromString("", 0);
     if (dec) |_| {
+        unreachable;
+    }
+}
+
+test "fromString: 0" {
+    var dec = RocDec.fromString("0", 1);
+    if (dec) |d| {
+        try expectEqual(RocDec{ .num = 0 }, d);
+    } else {
+        unreachable;
+    }
+}
+
+test "fromString: 1" {
+    var dec = RocDec.fromString("1", 1);
+    if (dec) |d| {
+        try expectEqual(RocDec.one_point_zero, d);
+    } else {
         unreachable;
     }
 }
