@@ -6,11 +6,11 @@ use crate::llvm::bitcode::{
 use crate::llvm::build::{
     allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, RocFunctionCall,
 };
-use crate::llvm::convert::{basic_type_from_layout, get_ptr_type};
+use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::increment_refcount_layout;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use inkwell::types::{BasicTypeEnum, PointerType};
+use inkwell::types::{BasicType, BasicTypeEnum, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
 use roc_builtins::bitcode;
@@ -135,7 +135,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
     // Load the usize length from the wrapper.
     let len = list_len(builder, original_wrapper);
     let elem_type = basic_type_from_layout(env, elem_layout);
-    let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+    let ptr_type = elem_type.ptr_type(AddressSpace::Generic);
     let list_ptr = load_list_ptr(builder, original_wrapper, ptr_type);
 
     // The output list length, which is the old list length + 1
@@ -260,7 +260,7 @@ pub fn list_get_unsafe<'a, 'ctx, 'env>(
     match list_layout {
         Layout::Builtin(Builtin::List(elem_layout)) => {
             let elem_type = basic_type_from_layout(env, elem_layout);
-            let ptr_type = get_ptr_type(&elem_type, AddressSpace::Generic);
+            let ptr_type = elem_type.ptr_type(AddressSpace::Generic);
             // Load the pointer to the array data
             let array_data_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
 
