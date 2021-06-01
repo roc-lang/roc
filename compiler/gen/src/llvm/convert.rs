@@ -1,22 +1,8 @@
 use bumpalo::collections::Vec;
 use inkwell::context::Context;
-use inkwell::types::BasicTypeEnum::{self, *};
-use inkwell::types::{BasicType, IntType, StructType};
-use inkwell::values::BasicValueEnum;
+use inkwell::types::{BasicType, BasicTypeEnum, IntType, StructType};
 use inkwell::AddressSpace;
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
-
-/// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
-pub fn as_const_zero<'ctx>(bt_enum: &BasicTypeEnum<'ctx>) -> BasicValueEnum<'ctx> {
-    match bt_enum {
-        ArrayType(typ) => typ.const_zero().into(),
-        IntType(typ) => typ.const_zero().into(),
-        FloatType(typ) => typ.const_zero().into(),
-        PointerType(typ) => typ.const_zero().into(),
-        StructType(typ) => typ.const_zero().into(),
-        VectorType(typ) => typ.const_zero().into(),
-    }
-}
 
 fn basic_type_from_function_layout<'a, 'ctx, 'env>(
     env: &crate::llvm::build::Env<'a, 'ctx, 'env>,

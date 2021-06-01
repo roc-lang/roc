@@ -6,7 +6,7 @@ use crate::llvm::build::{
     complex_bitcast, load_symbol, load_symbol_and_layout, Env, RocFunctionCall, Scope,
 };
 use crate::llvm::build_list::{layout_width, pass_as_opaque};
-use crate::llvm::convert::{as_const_zero, basic_type_from_layout};
+use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::Mode;
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::types::BasicType;
@@ -326,7 +326,7 @@ pub fn dict_get<'a, 'ctx, 'env>(
     let done_block = env.context.append_basic_block(parent, "done");
 
     let value_bt = basic_type_from_layout(env, value_layout);
-    let default = as_const_zero(&value_bt);
+    let default = value_bt.const_zero();
 
     env.builder
         .build_conditional_branch(flag, if_not_null, done_block);
