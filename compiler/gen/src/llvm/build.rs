@@ -18,7 +18,7 @@ use crate::llvm::build_str::{
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
     basic_type_from_builtin, basic_type_from_layout, block_of_memory, block_of_memory_slices,
-    get_ptr_type, ptr_int,
+    ptr_int,
 };
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
@@ -1713,7 +1713,7 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
 
         let index_intvalue = int_type.const_int(index, false);
 
-        let ptr_type = get_ptr_type(&value_type, AddressSpace::Generic);
+        let ptr_type = value_type.ptr_type(AddressSpace::Generic);
 
         unsafe {
             builder

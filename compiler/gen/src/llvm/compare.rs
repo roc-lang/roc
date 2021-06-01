@@ -2,8 +2,9 @@ use crate::llvm::build::Env;
 use crate::llvm::build::{cast_block_of_memory_to_tag, complex_bitcast, FAST_CALL_CONV};
 use crate::llvm::build_list::{list_len, load_list_ptr};
 use crate::llvm::build_str::str_equal;
-use crate::llvm::convert::{basic_type_from_layout, get_ptr_type};
+use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
+use inkwell::types::BasicType;
 use inkwell::values::{
     BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
 };
@@ -459,7 +460,7 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
 
         let builder = env.builder;
         let element_type = basic_type_from_layout(env, element_layout);
-        let ptr_type = get_ptr_type(&element_type, AddressSpace::Generic);
+        let ptr_type = element_type.ptr_type(AddressSpace::Generic);
         let ptr1 = load_list_ptr(env.builder, list1, ptr_type);
         let ptr2 = load_list_ptr(env.builder, list2, ptr_type);
 
@@ -1166,8 +1167,6 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
     tag1: PointerValue<'ctx>,
     tag2: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
-    use inkwell::types::BasicType;
-
     let struct_layout = Layout::Struct(field_layouts);
 
     let wrapper_type = basic_type_from_layout(env, &struct_layout);

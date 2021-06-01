@@ -1,37 +1,10 @@
 use bumpalo::collections::Vec;
 use inkwell::context::Context;
 use inkwell::types::BasicTypeEnum::{self, *};
-use inkwell::types::{ArrayType, BasicType, IntType, PointerType, StructType};
+use inkwell::types::{BasicType, IntType, StructType};
 use inkwell::values::BasicValueEnum;
 use inkwell::AddressSpace;
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
-
-/// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
-pub fn get_ptr_type<'ctx>(
-    bt_enum: &BasicTypeEnum<'ctx>,
-    address_space: AddressSpace,
-) -> PointerType<'ctx> {
-    match bt_enum {
-        ArrayType(typ) => typ.ptr_type(address_space),
-        IntType(typ) => typ.ptr_type(address_space),
-        FloatType(typ) => typ.ptr_type(address_space),
-        PointerType(typ) => typ.ptr_type(address_space),
-        StructType(typ) => typ.ptr_type(address_space),
-        VectorType(typ) => typ.ptr_type(address_space),
-    }
-}
-
-/// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
-pub fn get_array_type<'ctx>(bt_enum: &BasicTypeEnum<'ctx>, size: u32) -> ArrayType<'ctx> {
-    match bt_enum {
-        ArrayType(typ) => typ.array_type(size),
-        IntType(typ) => typ.array_type(size),
-        FloatType(typ) => typ.array_type(size),
-        PointerType(typ) => typ.array_type(size),
-        StructType(typ) => typ.array_type(size),
-        VectorType(typ) => typ.array_type(size),
-    }
-}
 
 /// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
 pub fn as_const_zero<'ctx>(bt_enum: &BasicTypeEnum<'ctx>) -> BasicValueEnum<'ctx> {
