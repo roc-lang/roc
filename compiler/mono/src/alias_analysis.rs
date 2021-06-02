@@ -218,8 +218,9 @@ fn stmt_spec(
             ModifyRc::Inc(symbol, _) => {
                 let argument = env.symbols[symbol];
 
-                // inc is non-recursive
-                builder.add_touch(block, argument)?;
+                // a recursive touch is never worse for optimizations than a normal touch
+                // and a bit more permissive in its type
+                builder.add_recursive_touch(block, argument)?;
 
                 stmt_spec(builder, env, block, layout, continuation)
             }
@@ -227,7 +228,6 @@ fn stmt_spec(
             ModifyRc::Dec(symbol) => {
                 let argument = env.symbols[symbol];
 
-                // dec may be recursive
                 builder.add_recursive_touch(block, argument)?;
 
                 stmt_spec(builder, env, block, layout, continuation)
@@ -235,8 +235,7 @@ fn stmt_spec(
             ModifyRc::DecRef(symbol) => {
                 let argument = env.symbols[symbol];
 
-                // decref is non-recursive
-                builder.add_touch(block, argument)?;
+                builder.add_recursive_touch(block, argument)?;
 
                 stmt_spec(builder, env, block, layout, continuation)
             }
