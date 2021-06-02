@@ -36,7 +36,6 @@ pub fn helper<'a>(
     ignore_problems: bool,
     context: &'a inkwell::context::Context,
 ) -> (&'static str, String, Library) {
-    use roc_gen::llvm::build::{build_proc, build_proc_header, Scope};
     use std::path::{Path, PathBuf};
 
     let filename = PathBuf::from("Test.roc");
@@ -79,7 +78,7 @@ pub fn helper<'a>(
 
     use roc_load::file::MonomorphizedModule;
     let MonomorphizedModule {
-        mut procedures,
+        procedures,
         interns,
         exposed_to_host,
         ..
@@ -236,63 +235,10 @@ pub fn helper<'a>(
         exposed_to_host: MutSet::default(),
     };
 
-    let mut layout_ids = roc_mono::layout::LayoutIds::default();
-    let mut headers = Vec::with_capacity(procedures.len());
-
-    // Add all the Proc headers to the module.
-    // We have to do this in a separate pass first,
-    // because their bodies may reference each other.
-    let mut scope = Scope::default();
-    for ((symbol, layout), proc) in procedures.drain() {
-        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, layout, &proc);
-
-        if proc.args.is_empty() {
-            // this is a 0-argument thunk, i.e. a top-level constant definition
-            // it must be in-scope everywhere in the module!
-            scope.insert_top_level_thunk(symbol, arena.alloc(layout), fn_val);
-        }
-
-        headers.push((proc, fn_val));
-    }
-
-    // Build each proc using its header info.
-    for (proc, fn_val) in headers {
-        let mut current_scope = scope.clone();
-
-        // only have top-level thunks for this proc's module in scope
-        // this retain is not needed for correctness, but will cause less confusion when debugging
-        let home = proc.name.module_id();
-        current_scope.retain_top_level_thunks_for_module(home);
-
-        build_proc(&env, &mut layout_ids, scope.clone(), proc, fn_val);
-
-        // call finalize() before any code generation/verification
-        env.dibuilder.finalize();
-
-        if fn_val.verify(true) {
-            function_pass.run_on(&fn_val);
-        } else {
-            let mode = "NON-OPTIMIZED";
-
-            eprintln!(
-                "\n\nFunction {:?} failed LLVM verification in {} build. Its content was:\n",
-                fn_val.get_name().to_str().unwrap(),
-                mode,
-            );
-
-            fn_val.print_to_stderr();
-            // module.print_to_stderr();
-
-            panic!(
-                "The preceding code was from {:?}, which failed LLVM verification in {} build.",
-                fn_val.get_name().to_str().unwrap(),
-                mode,
-            );
-        }
-    }
-    let (main_fn_name, main_fn) = roc_gen::llvm::build::promote_to_main_function(
+    let (main_fn_name, main_fn) = roc_gen::llvm::build::build_procedures_return_main(
         &env,
-        &mut layout_ids,
+        opt_level,
+        procedures,
         main_fn_symbol,
         main_fn_layout,
     );

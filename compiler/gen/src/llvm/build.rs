@@ -44,7 +44,7 @@ use inkwell::values::{
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
 use roc_builtins::bitcode;
-use roc_collections::all::{ImMap, MutSet};
+use roc_collections::all::{ImMap, MutMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -2985,7 +2985,113 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
     wrapper_function
 }
 
-pub fn build_proc_header<'a, 'ctx, 'env>(
+pub fn build_proc_headers<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
+    scope: &mut Scope<'a, 'ctx>,
+    // alias_analysis_solutions: AliasAnalysisSolutions,
+) -> std::vec::Vec<(roc_mono::ir::Proc<'a>, FunctionValue<'ctx>)> {
+    // Populate Procs further and get the low-level Expr from the canonical Expr
+    let mut headers = std::vec::Vec::with_capacity(procedures.len());
+    for ((symbol, layout), proc) in procedures {
+        let fn_val = build_proc_header(env, layout_ids, symbol, layout, &proc);
+
+        if proc.args.is_empty() {
+            // this is a 0-argument thunk, i.e. a top-level constant definition
+            // it must be in-scope everywhere in the module!
+            scope.insert_top_level_thunk(symbol, env.arena.alloc(layout), fn_val);
+        }
+
+        headers.push((proc, fn_val));
+    }
+
+    headers
+}
+
+pub fn build_procedures<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    opt_level: OptLevel,
+    procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
+    // alias_analysis_solutions: AliasAnalysisSolutions,
+) {
+    build_procedures_help(env, opt_level, procedures, None);
+}
+
+pub fn build_procedures_return_main<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    opt_level: OptLevel,
+    procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
+    // alias_analysis_solutions: AliasAnalysisSolutions,
+    main_fn_symbol: Symbol,
+    main_fn_layout: TopLevelFunctionLayout<'a>,
+) -> (&'static str, FunctionValue<'ctx>) {
+    build_procedures_help(
+        env,
+        opt_level,
+        procedures,
+        Some((main_fn_symbol, main_fn_layout)),
+    )
+    .unwrap()
+}
+
+fn build_procedures_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    opt_level: OptLevel,
+    procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
+    main_data: Option<(Symbol, TopLevelFunctionLayout<'a>)>,
+) -> Option<(&'static str, FunctionValue<'ctx>)> {
+    let mut layout_ids = roc_mono::layout::LayoutIds::default();
+    let mut scope = Scope::default();
+
+    // Add all the Proc headers to the module.
+    // We have to do this in a separate pass first,
+    // because their bodies may reference each other.
+    let headers = build_proc_headers(env, &mut layout_ids, procedures, &mut scope);
+
+    let (_, function_pass) = construct_optimization_passes(env.module, opt_level);
+
+    for (proc, fn_val) in headers {
+        let mut current_scope = scope.clone();
+
+        // only have top-level thunks for this proc's module in scope
+        // this retain is not needed for correctness, but will cause less confusion when debugging
+        let home = proc.name.module_id();
+        current_scope.retain_top_level_thunks_for_module(home);
+
+        build_proc(&env, &mut layout_ids, scope.clone(), proc, fn_val);
+
+        // call finalize() before any code generation/verification
+        env.dibuilder.finalize();
+
+        if fn_val.verify(true) {
+            function_pass.run_on(&fn_val);
+        } else {
+            let mode = "NON-OPTIMIZED";
+
+            eprintln!(
+                "\n\nFunction {:?} failed LLVM verification in {} build. Its content was:\n",
+                fn_val.get_name().to_str().unwrap(),
+                mode,
+            );
+
+            fn_val.print_to_stderr();
+            // module.print_to_stderr();
+
+            panic!(
+                "The preceding code was from {:?}, which failed LLVM verification in {} build.",
+                fn_val.get_name().to_str().unwrap(),
+                mode,
+            );
+        }
+    }
+
+    main_data.map(|(main_fn_symbol, main_fn_layout)| {
+        promote_to_main_function(env, &mut layout_ids, main_fn_symbol, main_fn_layout)
+    })
+}
+
+fn build_proc_header<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     symbol: Symbol,
