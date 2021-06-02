@@ -3037,7 +3037,6 @@ dependencies = [
  "roc_unify",
  "rustyline",
  "rustyline-derive",
- "serde",
  "serial_test",
  "target-lexicon",
  "tempfile",

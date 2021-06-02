@@ -65,7 +65,6 @@ libloading = "0.6"
 inkwell = { path = "../vendor/inkwell" }
 target-lexicon = "0.10"
 tempfile = "3.1.0"
-serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"
