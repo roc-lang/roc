@@ -146,7 +146,7 @@ fn proc_spec(proc: &Proc) -> Result<FuncDef> {
 #[derive(Default)]
 struct Env {
     symbols: MutMap<Symbol, ValueId>,
-    join_points: MutMap<crate::ir::JoinPointId, morphic_lib::JoinPointId>,
+    join_points: MutMap<crate::ir::JoinPointId, morphic_lib::ContinuationId>,
 }
 
 fn stmt_spec(
@@ -246,7 +246,7 @@ fn stmt_spec(
             let jp_arg_type_id = builder.add_tuple_type(&type_ids)?;
 
             let (jpid, jp_argument) =
-                builder.declare_join_point(block, jp_arg_type_id, ret_type_id)?;
+                builder.declare_continuation(block, jp_arg_type_id, ret_type_id)?;
 
             let join_body_sub_block = {
                 env.join_points.insert(*id, jpid);
@@ -270,7 +270,7 @@ fn stmt_spec(
             let cont_value_id = stmt_spec(builder, env, cont_block, layout, continuation)?;
 
             env.join_points.remove(id);
-            builder.define_join_point(jpid, join_body_sub_block)?;
+            builder.define_continuation(jpid, join_body_sub_block)?;
 
             builder.add_sub_block(block, BlockExpr(cont_block, cont_value_id))
         }

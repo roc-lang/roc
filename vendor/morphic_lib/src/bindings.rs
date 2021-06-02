@@ -218,27 +218,28 @@ pub unsafe extern "C" fn Morphic_FuncDefBuilder_Build(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn Morphic_FuncDefBuilder_DeclareJoinPoint(
+pub unsafe extern "C" fn Morphic_FuncDefBuilder_DeclareContinuation(
     self_: *mut FuncDefBuilder,
     block: BlockId,
     arg_type: TypeId,
     ret_type: TypeId,
-    out0: *mut JoinPointId,
+    out0: *mut ContinuationId,
     out1: *mut ValueId,
 ) -> *mut Error {
-    let (join_point, value) = check_err!((*self_).declare_join_point(block, arg_type, ret_type));
-    *out0 = join_point;
+    let (continuation, value) =
+        check_err!((*self_).declare_continuation(block, arg_type, ret_type));
+    *out0 = continuation;
     *out1 = value;
     ptr::null_mut()
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn Morphic_FuncDefBuilder_DefineJoinPoint(
+pub unsafe extern "C" fn Morphic_FuncDefBuilder_DefineContinuation(
     self_: *mut FuncDefBuilder,
-    join_point: JoinPointId,
+    continuation: ContinuationId,
     body: BlockExpr,
 ) -> *mut Error {
-    check_err!((*self_).define_join_point(join_point, body));
+    check_err!((*self_).define_continuation(continuation, body));
     ptr::null_mut()
 }
 
@@ -246,12 +247,12 @@ pub unsafe extern "C" fn Morphic_FuncDefBuilder_DefineJoinPoint(
 pub unsafe extern "C" fn Morphic_FuncDefBuilder_AddJump(
     self_: *mut FuncDefBuilder,
     block: BlockId,
-    join_point: JoinPointId,
+    continuation: ContinuationId,
     arg: ValueId,
     unreachable_result_type: TypeId,
     out: *mut ValueId,
 ) -> *mut Error {
-    *out = check_err!((*self_).add_jump(block, join_point, arg, unreachable_result_type));
+    *out = check_err!((*self_).add_jump(block, continuation, arg, unreachable_result_type));
     ptr::null_mut()
 }
 
