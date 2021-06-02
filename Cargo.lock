@@ -3038,9 +3038,7 @@ dependencies = [
  "rustyline",
  "rustyline-derive",
  "serde",
- "serde-xml-rs",
  "serial_test",
- "strip-ansi-escapes",
  "target-lexicon",
  "tempfile",
 ]

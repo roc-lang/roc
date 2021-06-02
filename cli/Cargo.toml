@@ -66,8 +66,6 @@ inkwell = { path = "../vendor/inkwell" }
 target-lexicon = "0.10"
 tempfile = "3.1.0"
 serde = { version = "1.0", features = ["derive"] }
-strip-ansi-escapes = "0.1"
-serde-xml-rs = "0.4"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"
