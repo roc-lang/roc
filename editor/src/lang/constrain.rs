@@ -13,7 +13,7 @@ use roc_module::{ident::TagName, symbol::Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::{
     subs::Variable,
-    types,
+    types::{self, AnnotationSource},
     types::{Category, Reason},
 };
 
@@ -286,9 +286,9 @@ pub fn constrain_expr<'a>(
         } => {
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
-            let expr = env.pool.get(*expr_node_id);
+            let call_expr = env.pool.get(*expr_node_id);
 
-            let opt_symbol = if let Expr2::Var(symbol) = expr {
+            let opt_symbol = if let Expr2::Var(symbol) = call_expr {
                 Some(*symbol)
             } else {
                 None
@@ -303,7 +303,7 @@ pub fn constrain_expr<'a>(
                 arity: args.len() as u8,
             };
 
-            let fn_con = constrain_expr(arena, env, expr, fn_expected, region);
+            let fn_con = constrain_expr(arena, env, call_expr, fn_expected, region);
 
             // The function's return type
             // TODO: don't use expr_var?
@@ -430,6 +430,205 @@ pub fn constrain_expr<'a>(
             and_constraints.push(record_con);
 
             exists(arena, flex_vars, And(and_constraints))
+        }
+        Expr2::Access {
+            expr: expr_id,
+            field,
+            field_var,
+            record_var,
+            ext_var,
+        } => {
+            let ext_type = Type2::Variable(*ext_var);
+
+            let field_type = Type2::Variable(*field_var);
+
+            let record_field =
+                types::RecordField::Demanded(env.pool.add(field_type.shallow_clone()));
+
+            let record_type = Type2::Record(
+                PoolVec::new(vec![(*field, record_field)].into_iter(), env.pool),
+                env.pool.add(ext_type),
+            );
+
+            let record_expected = Expected::NoExpectation(record_type);
+
+            let category = Category::Access(field.as_str(env.pool).into());
+
+            let record_con = Eq(
+                Type2::Variable(*record_var),
+                record_expected.shallow_clone(),
+                category.clone(),
+                region,
+            );
+
+            let access_expr = env.pool.get(*expr_id);
+
+            let constraint = constrain_expr(arena, env, access_expr, record_expected, region);
+
+            let mut flex_vars = BumpVec::with_capacity_in(3, arena);
+
+            flex_vars.push(*record_var);
+            flex_vars.push(*field_var);
+            flex_vars.push(*ext_var);
+
+            let mut and_constraints = BumpVec::with_capacity_in(3, arena);
+
+            and_constraints.push(constraint);
+            and_constraints.push(Eq(field_type, expected, category, region));
+            and_constraints.push(record_con);
+
+            exists(arena, flex_vars, And(and_constraints))
+        }
+        Expr2::If {
+            cond_var,
+            expr_var,
+            branches,
+            final_else,
+        } => {
+            let expect_bool = |region| {
+                let bool_type = Type2::Variable(Variable::BOOL);
+                Expected::ForReason(Reason::IfCondition, bool_type, region)
+            };
+
+            let mut branch_cons = BumpVec::with_capacity_in(2 * branches.len() + 3, arena);
+
+            // TODO why does this cond var exist? is it for error messages?
+            // let first_cond_region = branches[0].0.region;
+            let cond_var_is_bool_con = Eq(
+                Type2::Variable(*cond_var),
+                expect_bool(region),
+                Category::If,
+                region,
+            );
+
+            branch_cons.push(cond_var_is_bool_con);
+
+            let final_else_expr = env.pool.get(*final_else);
+
+            let mut flex_vars = BumpVec::with_capacity_in(2, arena);
+
+            flex_vars.push(*cond_var);
+            flex_vars.push(*expr_var);
+
+            match expected {
+                Expected::FromAnnotation(name, arity, _, tipe) => {
+                    let num_branches = branches.len() + 1;
+
+                    for (index, branch_id) in branches.iter_node_ids().enumerate() {
+                        let (cond_id, body_id) = env.pool.get(branch_id);
+
+                        let cond = env.pool.get(*cond_id);
+                        let body = env.pool.get(*body_id);
+
+                        let cond_con =
+                            constrain_expr(arena, env, cond, expect_bool(region), region);
+
+                        let then_con = constrain_expr(
+                            arena,
+                            env,
+                            body,
+                            Expected::FromAnnotation(
+                                name.clone(),
+                                arity,
+                                AnnotationSource::TypedIfBranch {
+                                    index: Index::zero_based(index),
+                                    num_branches,
+                                },
+                                tipe.shallow_clone(),
+                            ),
+                            region,
+                        );
+
+                        branch_cons.push(cond_con);
+                        branch_cons.push(then_con);
+                    }
+
+                    let else_con = constrain_expr(
+                        arena,
+                        env,
+                        final_else_expr,
+                        Expected::FromAnnotation(
+                            name,
+                            arity,
+                            AnnotationSource::TypedIfBranch {
+                                index: Index::zero_based(branches.len()),
+                                num_branches,
+                            },
+                            tipe.shallow_clone(),
+                        ),
+                        region,
+                    );
+
+                    let ast_con = Eq(
+                        Type2::Variable(*expr_var),
+                        Expected::NoExpectation(tipe),
+                        Category::Storage(std::file!(), std::line!()),
+                        region,
+                    );
+
+                    branch_cons.push(ast_con);
+                    branch_cons.push(else_con);
+
+                    exists(arena, flex_vars, And(branch_cons))
+                }
+                _ => {
+                    for (index, branch_id) in branches.iter_node_ids().enumerate() {
+                        let (cond_id, body_id) = env.pool.get(branch_id);
+
+                        let cond = env.pool.get(*cond_id);
+                        let body = env.pool.get(*body_id);
+
+                        let cond_con =
+                            constrain_expr(arena, env, cond, expect_bool(region), region);
+
+                        let then_con = constrain_expr(
+                            arena,
+                            env,
+                            body,
+                            Expected::ForReason(
+                                Reason::IfBranch {
+                                    index: Index::zero_based(index),
+                                    total_branches: branches.len(),
+                                },
+                                Type2::Variable(*expr_var),
+                                // should be from body
+                                region,
+                            ),
+                            region,
+                        );
+
+                        branch_cons.push(cond_con);
+                        branch_cons.push(then_con);
+                    }
+
+                    let else_con = constrain_expr(
+                        arena,
+                        env,
+                        final_else_expr,
+                        Expected::ForReason(
+                            Reason::IfBranch {
+                                index: Index::zero_based(branches.len()),
+                                total_branches: branches.len() + 1,
+                            },
+                            Type2::Variable(*expr_var),
+                            // should come from final_else
+                            region,
+                        ),
+                        region,
+                    );
+
+                    branch_cons.push(Eq(
+                        Type2::Variable(*expr_var),
+                        expected,
+                        Category::Storage(std::file!(), std::line!()),
+                        region,
+                    ));
+
+                    branch_cons.push(else_con);
+
+                    exists(arena, flex_vars, And(branch_cons))
+                }
+            }
         }
         _ => todo!("implement constaints for {:?}", expr),
     }

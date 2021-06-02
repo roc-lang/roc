@@ -3,8 +3,29 @@
 use crate::assert_evals_to;
 use crate::assert_llvm_evals_to;
 use crate::helpers::with_larger_debug_stack;
+use core::ffi::c_void;
 use indoc::indoc;
 use roc_std::{RocList, RocStr};
+
+#[no_mangle]
+pub unsafe fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
+    libc::malloc(size)
+}
+
+#[no_mangle]
+pub unsafe fn roc_realloc(
+    c_ptr: *mut c_void,
+    new_size: usize,
+    _old_size: usize,
+    _alignment: u32,
+) -> *mut c_void {
+    libc::realloc(c_ptr, new_size)
+}
+
+#[no_mangle]
+pub unsafe fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
+    libc::free(c_ptr)
+}
 
 #[test]
 fn roc_list_construction() {
@@ -143,6 +164,52 @@ fn list_append() {
     assert_evals_to!(
         "List.append [1, 1] 2",
         RocList::from_slice(&[1, 1, 2]),
+        RocList<i64>
+    );
+}
+
+#[test]
+fn list_drop() {
+    assert_evals_to!(
+        "List.drop [1,2,3] 2",
+        RocList::from_slice(&[3]),
+        RocList<i64>
+    );
+    assert_evals_to!("List.drop [] 1", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!("List.drop [1,2] 5", RocList::from_slice(&[]), RocList<i64>);
+}
+
+#[test]
+fn list_swap() {
+    assert_evals_to!("List.swap [] 0 1", RocList::from_slice(&[]), RocList<i64>);
+    assert_evals_to!(
+        "List.swap [ 0 ] 1 2",
+        RocList::from_slice(&[0]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.swap [ 1, 2 ] 0 1",
+        RocList::from_slice(&[2, 1]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.swap [ 1, 2 ] 1 0",
+        RocList::from_slice(&[2, 1]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.swap [ 0, 1, 2, 3, 4, 5 ] 2 4",
+        RocList::from_slice(&[0, 1, 4, 3, 2, 5]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.swap [ 0, 1, 2 ] 1 3",
+        RocList::from_slice(&[0, 1, 2]),
+        RocList<i64>
+    );
+    assert_evals_to!(
+        "List.swap [ 1, 2, 3 ] 1 1",
+        RocList::from_slice(&[1, 2, 3]),
         RocList<i64>
     );
 }
@@ -629,7 +696,8 @@ fn list_map2_pair() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.map2 [1,2,3] [3,2,1] (\a,b -> Pair a b)
+            f = (\a,b -> Pair a b)
+            List.map2 [1,2,3] [3,2,1] f
             "#
         ),
         RocList::from_slice(&[(1, 3), (2, 2), (3, 1)]),
@@ -645,7 +713,7 @@ fn list_map2_different_lengths() {
             List.map2
                 ["a", "b", "lllllllllllllongnggg" ]
                 ["b"]
-                Str.concat
+                (\a, b -> Str.concat a b)
             "#
         ),
         RocList::from_slice(&[RocStr::from_slice("ab".as_bytes()),]),
@@ -1806,10 +1874,15 @@ fn list_keep_errs() {
     assert_evals_to!("List.keepErrs [] (\\x -> x)", 0, i64);
     assert_evals_to!("List.keepErrs [1,2] (\\x -> Err x)", &[1, 2], &[i64]);
     assert_evals_to!(
-        "List.keepErrs [0,1,2] (\\x -> x % 0 |> Result.mapErr (\\_ -> 32))",
+        indoc!(
+            r#"
+            List.keepErrs [0,1,2] (\x -> x % 0 |> Result.mapErr (\_ -> 32))
+            "#
+        ),
         &[32, 32, 32],
         &[i64]
     );
+
     assert_evals_to!("List.keepErrs [Ok 1, Err 2] (\\x -> x)", &[2], &[i64]);
 }
 

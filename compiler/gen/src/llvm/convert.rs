@@ -1,64 +1,8 @@
 use bumpalo::collections::Vec;
 use inkwell::context::Context;
-use inkwell::types::BasicTypeEnum::{self, *};
-use inkwell::types::{ArrayType, BasicType, FunctionType, IntType, PointerType, StructType};
-use inkwell::values::BasicValueEnum;
+use inkwell::types::{BasicType, BasicTypeEnum, IntType, StructType};
 use inkwell::AddressSpace;
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
-
-/// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
-pub fn get_ptr_type<'ctx>(
-    bt_enum: &BasicTypeEnum<'ctx>,
-    address_space: AddressSpace,
-) -> PointerType<'ctx> {
-    match bt_enum {
-        ArrayType(typ) => typ.ptr_type(address_space),
-        IntType(typ) => typ.ptr_type(address_space),
-        FloatType(typ) => typ.ptr_type(address_space),
-        PointerType(typ) => typ.ptr_type(address_space),
-        StructType(typ) => typ.ptr_type(address_space),
-        VectorType(typ) => typ.ptr_type(address_space),
-    }
-}
-
-/// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
-pub fn get_fn_type<'ctx>(
-    bt_enum: &BasicTypeEnum<'ctx>,
-    arg_types: &[BasicTypeEnum<'ctx>],
-) -> FunctionType<'ctx> {
-    match bt_enum {
-        ArrayType(typ) => typ.fn_type(arg_types, false),
-        IntType(typ) => typ.fn_type(arg_types, false),
-        FloatType(typ) => typ.fn_type(arg_types, false),
-        PointerType(typ) => typ.fn_type(arg_types, false),
-        StructType(typ) => typ.fn_type(arg_types, false),
-        VectorType(typ) => typ.fn_type(arg_types, false),
-    }
-}
-
-/// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
-pub fn get_array_type<'ctx>(bt_enum: &BasicTypeEnum<'ctx>, size: u32) -> ArrayType<'ctx> {
-    match bt_enum {
-        ArrayType(typ) => typ.array_type(size),
-        IntType(typ) => typ.array_type(size),
-        FloatType(typ) => typ.array_type(size),
-        PointerType(typ) => typ.array_type(size),
-        StructType(typ) => typ.array_type(size),
-        VectorType(typ) => typ.array_type(size),
-    }
-}
-
-/// TODO could this be added to Inkwell itself as a method on BasicValueEnum?
-pub fn as_const_zero<'ctx>(bt_enum: &BasicTypeEnum<'ctx>) -> BasicValueEnum<'ctx> {
-    match bt_enum {
-        ArrayType(typ) => typ.const_zero().into(),
-        IntType(typ) => typ.const_zero().into(),
-        FloatType(typ) => typ.const_zero().into(),
-        PointerType(typ) => typ.const_zero().into(),
-        StructType(typ) => typ.const_zero().into(),
-        VectorType(typ) => typ.const_zero().into(),
-    }
-}
 
 fn basic_type_from_function_layout<'a, 'ctx, 'env>(
     env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
@@ -77,7 +21,7 @@ fn basic_type_from_function_layout<'a, 'ctx, 'env>(
         arg_basic_types.push(closure);
     }
 
-    let fn_type = get_fn_type(&ret_type, arg_basic_types.into_bump_slice());
+    let fn_type = ret_type.fn_type(arg_basic_types.into_bump_slice(), false);
     let ptr_type = fn_type.ptr_type(AddressSpace::Generic);
 
     ptr_type.as_basic_type_enum()
@@ -108,21 +52,10 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
         FunctionPointer(args, ret_layout) => {
             basic_type_from_function_layout(env, args, None, ret_layout)
         }
-        Closure(args, closure_layout, ret_layout) => {
-            let closure_data_layout = closure_layout.as_block_of_memory_layout();
-            let closure_data = basic_type_from_layout(env, &closure_data_layout);
-
-            let function_pointer =
-                basic_type_from_function_layout(env, args, Some(closure_data), ret_layout);
-
-            env.context
-                .struct_type(&[function_pointer, closure_data], false)
-                .as_basic_type_enum()
+        Closure(_args, closure_layout, _ret_layout) => {
+            let closure_data_layout = closure_layout.runtime_representation();
+            basic_type_from_layout(env, &closure_data_layout)
         }
-        Pointer(layout) => basic_type_from_layout(env, &layout)
-            .ptr_type(AddressSpace::Generic)
-            .into(),
-        PhantomEmptyStruct => env.context.struct_type(&[], false).into(),
         Struct(sorted_fields) => basic_type_from_record(env, sorted_fields),
         Union(variant) => {
             use UnionLayout::*;
@@ -181,7 +114,7 @@ pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
         Float16 => context.f16_type().as_basic_type_enum(),
         Dict(_, _) | EmptyDict => zig_dict_type(env).into(),
         Set(_) | EmptySet => zig_dict_type(env).into(),
-        List(_, _) | EmptyList => zig_list_type(env).into(),
+        List(_) | EmptyList => zig_list_type(env).into(),
         Str | EmptyStr => zig_str_type(env).into(),
     }
 }

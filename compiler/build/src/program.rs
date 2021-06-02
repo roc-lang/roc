@@ -2,7 +2,7 @@ use crate::target;
 use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::targets::{CodeModel, FileType, RelocMode};
-use inkwell::values::FunctionValue;
+pub use roc_gen::llvm::build::FunctionIterator;
 use roc_gen::llvm::build::{build_proc, build_proc_header, module_from_builtins, OptLevel, Scope};
 use roc_load::file::MonomorphizedModule;
 use roc_mono::layout::LayoutIds;
@@ -100,20 +100,22 @@ pub fn gen_from_mono_module(
 
     let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
     debug_assert!(kind_id > 0);
-    let attr = context.create_enum_attribute(kind_id, 1);
+    let enum_attr = context.create_enum_attribute(kind_id, 1);
 
     for function in FunctionIterator::from_module(module) {
         let name = function.get_name().to_str().unwrap();
+
+        // mark our zig-defined builtins as internal
         if name.starts_with("roc_builtins") {
             function.set_linkage(Linkage::Internal);
         }
 
-        if name.starts_with("roc_builtins.dict") || name.starts_with("dict.RocDict") {
-            function.add_attribute(AttributeLoc::Function, attr);
-        }
-
-        if name.starts_with("roc_builtins.list") || name.starts_with("list.RocList") {
-            function.add_attribute(AttributeLoc::Function, attr);
+        if name.starts_with("roc_builtins.dict")
+            || name.starts_with("dict.RocDict")
+            || name.starts_with("roc_builtins.list")
+            || name.starts_with("list.RocList")
+        {
+            function.add_attribute(AttributeLoc::Function, enum_attr);
         }
     }
 
@@ -146,12 +148,12 @@ pub fn gen_from_mono_module(
 
     let mut scope = Scope::default();
     for ((symbol, layout), proc) in loaded.procedures {
-        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, layout, &proc);
 
         if proc.args.is_empty() {
             // this is a 0-argument thunk, i.e. a top-level constant definition
             // it must be in-scope everywhere in the module!
-            scope.insert_top_level_thunk(symbol, layout, fn_val);
+            scope.insert_top_level_thunk(symbol, arena.alloc(layout), fn_val);
         }
 
         headers.push((proc, fn_val));
@@ -285,32 +287,5 @@ pub fn gen_from_mono_module(
     CodeGenTiming {
         code_gen,
         emit_o_file,
-    }
-}
-
-pub struct FunctionIterator<'ctx> {
-    next: Option<FunctionValue<'ctx>>,
-}
-
-impl<'ctx> FunctionIterator<'ctx> {
-    pub fn from_module(module: &inkwell::module::Module<'ctx>) -> Self {
-        Self {
-            next: module.get_first_function(),
-        }
-    }
-}
-
-impl<'ctx> Iterator for FunctionIterator<'ctx> {
-    type Item = FunctionValue<'ctx>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.next {
-            Some(function) => {
-                self.next = function.get_next_function();
-
-                Some(function)
-            }
-            None => None,
-        }
     }
 }

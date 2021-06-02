@@ -1,4 +1,4 @@
-#![warn(clippy::all, clippy::dbg_macro)]
+#![warn(clippy::dbg_macro)]
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant, clippy::upper_case_acronyms)]
 
@@ -22,6 +22,7 @@ pub struct Env<'a> {
     pub interns: Interns,
     pub exposed_to_host: MutSet<Symbol>,
     pub lazy_literals: bool,
+    pub generate_allocators: bool,
 }
 
 // These relocations likely will need a length.
@@ -67,6 +68,9 @@ where
     // The backend should track these args so it can use them as needed.
     fn load_args(&mut self, args: &'a [(Layout<'a>, Symbol)]) -> Result<(), String>;
 
+    /// Used for generating wrappers for malloc/realloc/free
+    fn build_wrapped_jmp(&mut self) -> Result<(&'a [u8], u64), String>;
+
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
     fn build_proc(&mut self, proc: Proc<'a>) -> Result<(&'a [u8], &[Relocation]), String> {
         self.reset();
@@ -102,11 +106,12 @@ where
                 call,
                 pass,
                 fail: _,
+                exception_id: _,
             } => {
                 // for now, treat invoke as a normal call
-
-                let stmt = Stmt::Let(*symbol, Expr::Call(call.clone()), *layout, pass);
-                self.build_stmt(&stmt)
+                self.build_expr(symbol, &Expr::Call(call.clone()), layout)?;
+                self.free_symbols(stmt);
+                self.build_stmt(pass)
             }
             Stmt::Switch {
                 cond_symbol,
@@ -214,7 +219,7 @@ where
                         }
                     }
 
-                    CallType::LowLevel { op: lowlevel } => {
+                    CallType::LowLevel { op: lowlevel, .. } => {
                         self.build_run_low_level(sym, lowlevel, arguments, layout)
                     }
                     x => Err(format!("the call type, {:?}, is not yet implemented", x)),
@@ -426,7 +431,6 @@ where
                 self.set_last_seen(*sym, stmt);
                 match expr {
                     Expr::Literal(_) => {}
-                    Expr::FunctionPointer(sym, _) => self.set_last_seen(*sym, stmt),
 
                     Expr::Call(call) => self.scan_ast_call(call, stmt),
 
@@ -479,15 +483,16 @@ where
 
             Stmt::Invoke {
                 symbol,
-                layout,
+                layout: _,
                 call,
                 pass,
                 fail: _,
+                exception_id: _,
             } => {
                 // for now, treat invoke as a normal call
-
-                let stmt = Stmt::Let(*symbol, Expr::Call(call.clone()), *layout, pass);
-                self.scan_ast(&stmt);
+                self.set_last_seen(*symbol, stmt);
+                self.scan_ast_call(call, stmt);
+                self.scan_ast(pass);
             }
 
             Stmt::Switch {
@@ -505,7 +510,7 @@ where
             Stmt::Ret(sym) => {
                 self.set_last_seen(*sym, stmt);
             }
-            Stmt::Rethrow => {}
+            Stmt::Resume(_exception_id) => {}
             Stmt::Refcounting(modify, following) => {
                 let sym = modify.get_symbol();
 
@@ -546,10 +551,8 @@ where
 
         match call_type {
             CallType::ByName { .. } => {}
-            CallType::ByPointer { name: sym, .. } => {
-                self.set_last_seen(*sym, stmt);
-            }
             CallType::LowLevel { .. } => {}
+            CallType::HigherOrderLowLevel { .. } => {}
             CallType::Foreign { .. } => {}
         }
     }

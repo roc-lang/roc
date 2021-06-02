@@ -1,10 +1,13 @@
-use crate::ir::{Expr, JoinPointId, Param, Proc, Stmt};
+use crate::ir::{Expr, JoinPointId, Param, Proc, Stmt, TopLevelFunctionLayout};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
+
+pub const OWNED: bool = false;
+pub const BORROWED: bool = true;
 
 fn should_borrow_layout(layout: &Layout) -> bool {
     match layout {
@@ -15,14 +18,15 @@ fn should_borrow_layout(layout: &Layout) -> bool {
 
 pub fn infer_borrow<'a>(
     arena: &'a Bump,
-    procs: &MutMap<(Symbol, Layout<'a>), Proc<'a>>,
+    procs: &MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
 ) -> ParamMap<'a> {
     let mut param_map = ParamMap {
         items: MutMap::default(),
     };
 
-    for (key, proc) in procs {
-        param_map.visit_proc(arena, proc, *key);
+    for ((s, top_level), proc) in procs {
+        let key = (*s, arena.alloc(*top_level).full());
+        param_map.visit_proc(arena, proc, key);
     }
 
     let mut env = BorrowInfState {
@@ -47,7 +51,8 @@ pub fn infer_borrow<'a>(
         // mutually recursive functions (or just make all their arguments owned)
 
         for (key, proc) in procs {
-            env.collect_proc(proc, key.1);
+            let layout = arena.alloc(key.1).full();
+            env.collect_proc(proc, layout);
         }
 
         if !env.modified {
@@ -215,7 +220,7 @@ impl<'a> ParamMap<'a> {
                 }
                 Refcounting(_, _) => unreachable!("these have not been introduced yet"),
 
-                Ret(_) | Rethrow | Jump(_, _) | RuntimeError(_) => {
+                Ret(_) | Resume(_) | Jump(_, _) | RuntimeError(_) => {
                     // these are terminal, do nothing
                 }
             }
@@ -306,16 +311,6 @@ impl<'a> BorrowInfState<'a> {
         }
     }
 
-    fn own_arg(&mut self, x: Symbol) {
-        self.own_var(x);
-    }
-
-    fn own_args(&mut self, xs: &[Symbol]) {
-        for x in xs.iter() {
-            self.own_arg(*x);
-        }
-    }
-
     /// For each xs[i], if xs[i] is owned, then mark ps[i] as owned.
     /// We use this action to preserve tail calls. That is, if we have
     /// a tail call `f xs`, if the i-th parameter is borrowed, but `xs[i]` is owned
@@ -367,48 +362,158 @@ impl<'a> BorrowInfState<'a> {
                 name, full_layout, ..
             } => {
                 // get the borrow signature of the applied function
-                match self.param_map.get_symbol(*name, *full_layout) {
-                    Some(ps) => {
-                        // the return value will be owned
-                        self.own_var(z);
+                let ps = self
+                    .param_map
+                    .get_symbol(*name, *full_layout)
+                    .expect("function is defined");
 
-                        // if the function exects an owned argument (ps), the argument must be owned (args)
-                        debug_assert_eq!(
-                            arguments.len(),
-                            ps.len(),
-                            "{:?} has {} parameters, but was applied to {} arguments",
-                            name,
-                            ps.len(),
-                            arguments.len()
-                        );
-                        self.own_args_using_params(arguments, ps);
-                    }
-                    None => {
-                        // this is really an indirect call, but the function was bound to a symbol
-                        // the return value will be owned
-                        self.own_var(z);
-
-                        // if the function exects an owned argument (ps), the argument must be owned (args)
-                        self.own_args(arguments);
-                    }
-                }
-            }
-
-            ByPointer { .. } => {
                 // the return value will be owned
                 self.own_var(z);
 
                 // if the function exects an owned argument (ps), the argument must be owned (args)
-                self.own_args(arguments);
+                debug_assert_eq!(
+                    arguments.len(),
+                    ps.len(),
+                    "{:?} has {} parameters, but was applied to {} arguments",
+                    name,
+                    ps.len(),
+                    arguments.len()
+                );
+                self.own_args_using_params(arguments, ps);
             }
 
-            LowLevel { op } => {
-                // very unsure what demand RunLowLevel should place upon its arguments
+            LowLevel { op, .. } => {
+                debug_assert!(!op.is_higher_order());
+
                 self.own_var(z);
 
                 let ps = lowlevel_borrow_signature(self.arena, *op);
 
                 self.own_args_using_bools(arguments, ps);
+            }
+
+            HigherOrderLowLevel {
+                op, closure_layout, ..
+            } => {
+                use roc_module::low_level::LowLevel::*;
+
+                debug_assert!(op.is_higher_order());
+
+                match op {
+                    ListMap | ListKeepIf | ListKeepOks | ListKeepErrs => {
+                        match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                            Some(function_ps) => {
+                                // own the list if the function wants to own the element
+                                if !function_ps[0].borrow {
+                                    self.own_var(arguments[0]);
+                                }
+
+                                // own the closure environment if the function needs to own it
+                                if let Some(false) = function_ps.get(1).map(|p| p.borrow) {
+                                    self.own_var(arguments[2]);
+                                }
+                            }
+                            None => unreachable!(),
+                        }
+                    }
+                    ListMapWithIndex => {
+                        match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                            Some(function_ps) => {
+                                // own the list if the function wants to own the element
+                                if !function_ps[1].borrow {
+                                    self.own_var(arguments[0]);
+                                }
+
+                                // own the closure environment if the function needs to own it
+                                if let Some(false) = function_ps.get(2).map(|p| p.borrow) {
+                                    self.own_var(arguments[2]);
+                                }
+                            }
+                            None => unreachable!(),
+                        }
+                    }
+                    ListMap2 => match self.param_map.get_symbol(arguments[2], *closure_layout) {
+                        Some(function_ps) => {
+                            // own the lists if the function wants to own the element
+                            if !function_ps[0].borrow {
+                                self.own_var(arguments[0]);
+                            }
+
+                            if !function_ps[1].borrow {
+                                self.own_var(arguments[1]);
+                            }
+
+                            // own the closure environment if the function needs to own it
+                            if let Some(false) = function_ps.get(2).map(|p| p.borrow) {
+                                self.own_var(arguments[3]);
+                            }
+                        }
+                        None => unreachable!(),
+                    },
+                    ListMap3 => match self.param_map.get_symbol(arguments[3], *closure_layout) {
+                        Some(function_ps) => {
+                            // own the lists if the function wants to own the element
+                            if !function_ps[0].borrow {
+                                self.own_var(arguments[0]);
+                            }
+                            if !function_ps[1].borrow {
+                                self.own_var(arguments[1]);
+                            }
+                            if !function_ps[2].borrow {
+                                self.own_var(arguments[2]);
+                            }
+
+                            // own the closure environment if the function needs to own it
+                            if let Some(false) = function_ps.get(3).map(|p| p.borrow) {
+                                self.own_var(arguments[4]);
+                            }
+                        }
+                        None => unreachable!(),
+                    },
+                    ListSortWith => {
+                        match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                            Some(function_ps) => {
+                                // always own the input list
+                                self.own_var(arguments[0]);
+
+                                // own the closure environment if the function needs to own it
+                                if let Some(false) = function_ps.get(2).map(|p| p.borrow) {
+                                    self.own_var(arguments[2]);
+                                }
+                            }
+                            None => unreachable!(),
+                        }
+                    }
+                    ListWalk | ListWalkUntil | ListWalkBackwards | DictWalk => {
+                        match self.param_map.get_symbol(arguments[2], *closure_layout) {
+                            Some(function_ps) => {
+                                // own the data structure if the function wants to own the element
+                                if !function_ps[0].borrow {
+                                    self.own_var(arguments[0]);
+                                }
+
+                                // own the default value if the function wants to own it
+                                if !function_ps[1].borrow {
+                                    self.own_var(arguments[1]);
+                                }
+
+                                // own the closure environment if the function needs to own it
+                                if let Some(false) = function_ps.get(2).map(|p| p.borrow) {
+                                    self.own_var(arguments[3]);
+                                }
+                            }
+                            None => unreachable!(),
+                        }
+                    }
+                    _ => {
+                        // very unsure what demand RunLowLevel should place upon its arguments
+                        self.own_var(z);
+
+                        let ps = lowlevel_borrow_signature(self.arena, *op);
+
+                        self.own_args_using_bools(arguments, ps);
+                    }
+                }
             }
 
             Foreign { .. } => {
@@ -463,48 +568,33 @@ impl<'a> BorrowInfState<'a> {
 
             Call(call) => self.collect_call(z, call),
 
-            Literal(_) | FunctionPointer(_, _) | RuntimeErrorFunction(_) => {}
+            Literal(_) | RuntimeErrorFunction(_) => {}
         }
     }
 
     #[allow(clippy::many_single_char_names)]
     fn preserve_tail_call(&mut self, x: Symbol, v: &Expr<'a>, b: &Stmt<'a>) {
-        match (v, b) {
-            (
-                Expr::Call(crate::ir::Call {
-                    call_type:
-                        crate::ir::CallType::ByName {
-                            name: g,
-                            full_layout,
-                            ..
-                        },
-                    arguments: ys,
-                    ..
-                }),
-                Stmt::Ret(z),
-            )
-            | (
-                Expr::Call(crate::ir::Call {
-                    call_type:
-                        crate::ir::CallType::ByPointer {
-                            name: g,
-                            full_layout,
-                            ..
-                        },
-                    arguments: ys,
-                    ..
-                }),
-                Stmt::Ret(z),
-            ) => {
-                if self.current_proc == *g && x == *z {
-                    // anonymous functions (for which the ps may not be known)
-                    // can never be tail-recursive, so this is fine
-                    if let Some(ps) = self.param_map.get_symbol(*g, *full_layout) {
-                        self.own_params_using_args(ys, ps)
-                    }
+        if let (
+            Expr::Call(crate::ir::Call {
+                call_type:
+                    crate::ir::CallType::ByName {
+                        name: g,
+                        full_layout,
+                        ..
+                    },
+                arguments: ys,
+                ..
+            }),
+            Stmt::Ret(z),
+        ) = (v, b)
+        {
+            if self.current_proc == *g && x == *z {
+                // anonymous functions (for which the ps may not be known)
+                // can never be tail-recursive, so this is fine
+                if let Some(ps) = self.param_map.get_symbol(*g, *full_layout) {
+                    self.own_params_using_args(ys, ps)
                 }
             }
-            _ => {}
         }
     }
 
@@ -539,18 +629,6 @@ impl<'a> BorrowInfState<'a> {
                 self.collect_stmt(b);
             }
 
-            Let(x, Expr::FunctionPointer(fsymbol, layout), _, b) => {
-                // ensure that the function pointed to is in the param map
-                if let Some(params) = self.param_map.get_symbol(*fsymbol, *layout) {
-                    self.param_map
-                        .items
-                        .insert(Key::Declaration(*x, *layout), params);
-                }
-
-                self.collect_stmt(b);
-                self.preserve_tail_call(*x, &Expr::FunctionPointer(*fsymbol, *layout), b);
-            }
-
             Let(x, v, _, b) => {
                 self.collect_stmt(b);
                 self.collect_expr(*x, v);
@@ -563,6 +641,7 @@ impl<'a> BorrowInfState<'a> {
                 layout: _,
                 pass,
                 fail,
+                exception_id: _,
             } => {
                 self.collect_stmt(pass);
                 self.collect_stmt(fail);
@@ -594,7 +673,7 @@ impl<'a> BorrowInfState<'a> {
             }
             Refcounting(_, _) => unreachable!("these have not been introduced yet"),
 
-            Ret(_) | RuntimeError(_) | Rethrow => {
+            Ret(_) | RuntimeError(_) | Resume(_) => {
                 // these are terminal, do nothing
             }
         }
@@ -620,7 +699,7 @@ impl<'a> BorrowInfState<'a> {
 pub fn foreign_borrow_signature(arena: &Bump, arity: usize) -> &[bool] {
     // NOTE this means that Roc is responsible for cleaning up resources;
     // the host cannot (currently) take ownership
-    let all = bumpalo::vec![in arena; true; arity];
+    let all = bumpalo::vec![in arena; BORROWED; arity];
     all.into_bump_slice()
 }
 
@@ -628,9 +707,11 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
     use LowLevel::*;
 
     // TODO is true or false more efficient for non-refcounted layouts?
-    let irrelevant = false;
-    let owned = false;
-    let borrowed = true;
+    let irrelevant = OWNED;
+    let function = irrelevant;
+    let closure_data = irrelevant;
+    let owned = OWNED;
+    let borrowed = BORROWED;
 
     // Here we define the borrow signature of low-level operations
     //
@@ -651,20 +732,24 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListPrepend => arena.alloc_slice_copy(&[owned, owned]),
         StrJoinWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
         ListJoin => arena.alloc_slice_copy(&[irrelevant]),
-        ListMap | ListMapWithIndex => arena.alloc_slice_copy(&[owned, irrelevant]),
-        ListMap2 => arena.alloc_slice_copy(&[owned, owned, irrelevant]),
-        ListMap3 => arena.alloc_slice_copy(&[owned, owned, owned, irrelevant]),
-        ListKeepIf | ListKeepOks | ListKeepErrs => arena.alloc_slice_copy(&[owned, borrowed]),
+        ListMap | ListMapWithIndex => arena.alloc_slice_copy(&[owned, function, closure_data]),
+        ListMap2 => arena.alloc_slice_copy(&[owned, owned, function, closure_data]),
+        ListMap3 => arena.alloc_slice_copy(&[owned, owned, owned, function, closure_data]),
+        ListKeepIf | ListKeepOks | ListKeepErrs => {
+            arena.alloc_slice_copy(&[owned, function, closure_data])
+        }
         ListContains => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         ListRange => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
         ListWalk | ListWalkUntil | ListWalkBackwards => {
-            arena.alloc_slice_copy(&[owned, irrelevant, owned])
+            arena.alloc_slice_copy(&[owned, owned, function, closure_data])
         }
-        ListSortWith => arena.alloc_slice_copy(&[owned, irrelevant]),
+        ListSortWith => arena.alloc_slice_copy(&[owned, function, closure_data]),
 
         // TODO when we have lists with capacity (if ever)
         // List.append should own its first argument
         ListAppend => arena.alloc_slice_copy(&[owned, owned]),
+        ListDrop => arena.alloc_slice_copy(&[owned, irrelevant]),
+        ListSwap => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
 
         Eq | NotEq => arena.alloc_slice_copy(&[borrowed, borrowed]),
 
@@ -693,7 +778,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         DictUnion | DictDifference | DictIntersection => arena.alloc_slice_copy(&[owned, borrowed]),
 
         // borrow function argument so we don't have to worry about RC of the closure
-        DictWalk => arena.alloc_slice_copy(&[owned, borrowed, owned]),
+        DictWalk => arena.alloc_slice_copy(&[owned, owned, function, closure_data]),
 
         SetFromList => arena.alloc_slice_copy(&[owned]),
 

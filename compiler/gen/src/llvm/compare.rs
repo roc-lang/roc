@@ -1,10 +1,13 @@
 use crate::llvm::build::Env;
-use crate::llvm::build::{cast_block_of_memory_to_tag, complex_bitcast, set_name, FAST_CALL_CONV};
+use crate::llvm::build::{cast_block_of_memory_to_tag, complex_bitcast, FAST_CALL_CONV};
 use crate::llvm::build_list::{list_len, load_list_ptr};
 use crate::llvm::build_str::str_equal;
-use crate::llvm::convert::{basic_type_from_layout, get_ptr_type};
+use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
+use inkwell::types::BasicType;
+use inkwell::values::{
+    BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
+};
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
@@ -99,7 +102,7 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
         Builtin::Float16 => float_cmp(FloatPredicate::OEQ, "eq_f16"),
 
         Builtin::Str => str_equal(env, lhs_val, rhs_val),
-        Builtin::List(_, elem) => build_list_eq(
+        Builtin::List(elem) => build_list_eq(
             env,
             layout_ids,
             &Layout::Builtin(*builtin),
@@ -159,11 +162,6 @@ fn build_eq<'a, 'ctx, 'env>(
             rhs_val,
         ),
 
-        Layout::PhantomEmptyStruct => {
-            // always equal to itself
-            env.context.bool_type().const_int(1, false).into()
-        }
-
         Layout::RecursivePointer => match when_recursive {
             WhenRecursive::Unreachable => {
                 unreachable!("recursion pointers should never be compared directly")
@@ -196,10 +194,6 @@ fn build_eq<'a, 'ctx, 'env>(
                 )
             }
         },
-
-        Layout::Pointer(_) => {
-            unreachable!("unused")
-        }
 
         Layout::FunctionPointer(_, _) | Layout::Closure(_, _, _) => {
             unreachable!("the type system will guarantee these are never compared")
@@ -258,7 +252,7 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
 
             result.into()
         }
-        Builtin::List(_, elem) => {
+        Builtin::List(elem) => {
             let is_equal = build_list_eq(
                 env,
                 layout_ids,
@@ -338,17 +332,8 @@ fn build_neq<'a, 'ctx, 'env>(
             result.into()
         }
 
-        Layout::PhantomEmptyStruct => {
-            // always equal to itself
-            env.context.bool_type().const_int(1, false).into()
-        }
-
         Layout::RecursivePointer => {
             unreachable!("recursion pointers should never be compared directly")
-        }
-
-        Layout::Pointer(_) => {
-            unreachable!("unused")
         }
 
         Layout::FunctionPointer(_, _) | Layout::Closure(_, _, _) => {
@@ -446,8 +431,8 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
     let list1 = it.next().unwrap().into_struct_value();
     let list2 = it.next().unwrap().into_struct_value();
 
-    set_name(list1.into(), Symbol::ARG_1.ident_string(&env.interns));
-    set_name(list2.into(), Symbol::ARG_2.ident_string(&env.interns));
+    list1.set_name(Symbol::ARG_1.ident_string(&env.interns));
+    list2.set_name(Symbol::ARG_2.ident_string(&env.interns));
 
     let entry = ctx.append_basic_block(parent, "entry");
     env.builder.position_at_end(entry);
@@ -475,7 +460,7 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
 
         let builder = env.builder;
         let element_type = basic_type_from_layout(env, element_layout);
-        let ptr_type = get_ptr_type(&element_type, AddressSpace::Generic);
+        let ptr_type = element_type.ptr_type(AddressSpace::Generic);
         let ptr1 = load_list_ptr(env.builder, list1, ptr_type);
         let ptr2 = load_list_ptr(env.builder, list2, ptr_type);
 
@@ -654,8 +639,8 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
     let struct1 = it.next().unwrap().into_struct_value();
     let struct2 = it.next().unwrap().into_struct_value();
 
-    set_name(struct1.into(), Symbol::ARG_1.ident_string(&env.interns));
-    set_name(struct2.into(), Symbol::ARG_2.ident_string(&env.interns));
+    struct1.set_name(Symbol::ARG_1.ident_string(&env.interns));
+    struct2.set_name(Symbol::ARG_2.ident_string(&env.interns));
 
     let entry = ctx.append_basic_block(parent, "entry");
     let start = ctx.append_basic_block(parent, "start");
@@ -835,8 +820,8 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
     let tag1 = it.next().unwrap();
     let tag2 = it.next().unwrap();
 
-    set_name(tag1, Symbol::ARG_1.ident_string(&env.interns));
-    set_name(tag2, Symbol::ARG_2.ident_string(&env.interns));
+    tag1.set_name(Symbol::ARG_1.ident_string(&env.interns));
+    tag2.set_name(Symbol::ARG_2.ident_string(&env.interns));
 
     let entry = ctx.append_basic_block(parent, "entry");
 
@@ -1182,8 +1167,6 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
     tag1: PointerValue<'ctx>,
     tag2: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
-    use inkwell::types::BasicType;
-
     let struct_layout = Layout::Struct(field_layouts);
 
     let wrapper_type = basic_type_from_layout(env, &struct_layout);

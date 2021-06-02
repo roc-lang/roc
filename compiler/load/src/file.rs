@@ -20,6 +20,7 @@ use roc_module::symbol::{
 };
 use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
+    TopLevelFunctionLayout,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, StrLiteral, TypeAnnotation};
@@ -51,7 +52,7 @@ const DEFAULT_APP_OUTPUT_PATH: &str = "app";
 const ROC_FILE_EXTENSION: &str = "roc";
 
 /// Roc-Config file name
-const PKG_CONFIG_FILE_NAME: &str = "Pkg-Config";
+const PKG_CONFIG_FILE_NAME: &str = "Package-Config";
 
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
@@ -704,7 +705,8 @@ pub struct MonomorphizedModule<'a> {
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
-    pub procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
+    pub procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
+    pub alias_analysis_solutions: AliasAnalysisSolutions,
     pub exposed_to_host: MutMap<Symbol, Variable>,
     pub header_sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
@@ -775,7 +777,7 @@ enum Msg<'a> {
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
         external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations<'a>>,
-        procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
+        procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         module_timing: ModuleTiming,
         subs: Subs,
@@ -817,7 +819,7 @@ struct State<'a> {
 
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
-    pub procedures: MutMap<(Symbol, Layout<'a>), Proc<'a>>,
+    pub procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
@@ -847,7 +849,8 @@ struct State<'a> {
     /// pending specializations in the same thread.
     pub needs_specialization: MutSet<ModuleId>,
 
-    pub all_pending_specializations: MutMap<Symbol, MutMap<Layout<'a>, PendingSpecialization<'a>>>,
+    pub all_pending_specializations:
+        MutMap<Symbol, MutMap<TopLevelFunctionLayout<'a>, PendingSpecialization<'a>>>,
 
     pub specializations_in_flight: u32,
 
@@ -861,6 +864,19 @@ struct State<'a> {
     pub layout_caches: std::vec::Vec<LayoutCache<'a>>,
 
     pub procs: Procs<'a>,
+
+    pub alias_analysis_solutions: AliasAnalysisSolutions,
+}
+
+pub enum AliasAnalysisSolutions {
+    NotAvailable,
+    Available(morphic_lib::Solutions),
+}
+
+impl std::fmt::Debug for AliasAnalysisSolutions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "AliasAnalysisSolutions {{}}")
+    }
 }
 
 #[derive(Debug)]
@@ -1470,6 +1486,7 @@ where
                 specializations_in_flight: 0,
                 layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
                 procs: Procs::new_in(arena),
+                alias_analysis_solutions: AliasAnalysisSolutions::NotAvailable,
             };
 
             // We've now distributed one worker queue to each thread.
@@ -1892,7 +1909,7 @@ fn update<'a>(
 
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
 
-            // if there is a platform, the Pkg-Config module provides host-exposed,
+            // if there is a platform, the Package-Config module provides host-exposed,
             // otherwise the App module exposes host-exposed
             let is_host_exposed = match state.platform_id {
                 None => module_id == state.root_id,
@@ -2046,6 +2063,19 @@ fn update<'a>(
                 && state.dependencies.solved_all()
                 && state.goal_phase == Phase::MakeSpecializations
             {
+                // display the mono IR of the module, for debug purposes
+                if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
+                    let procs_string = state
+                        .procedures
+                        .values()
+                        .map(|proc| proc.to_pretty(200))
+                        .collect::<Vec<_>>();
+
+                    let result = procs_string.join("\n");
+
+                    println!("{}", result);
+                }
+
                 Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 Proc::optimize_refcount_operations(
@@ -2054,6 +2084,18 @@ fn update<'a>(
                     &mut ident_ids,
                     &mut state.procedures,
                 );
+
+                if false {
+                    let it = state.procedures.iter().map(|x| x.1);
+
+                    match roc_mono::alias_analysis::spec_program(it) {
+                        Err(e) => panic!("Error in alias analysis: {:?}", e),
+                        Ok(solutions) => {
+                            state.alias_analysis_solutions =
+                                AliasAnalysisSolutions::Available(solutions)
+                        }
+                    }
+                }
 
                 state.constrained_ident_ids.insert(module_id, ident_ids);
 
@@ -2068,19 +2110,6 @@ fn update<'a>(
                     };
 
                     existing.extend(requested);
-                }
-
-                // display the mono IR of the module, for debug purposes
-                if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
-                    let procs_string = state
-                        .procedures
-                        .values()
-                        .map(|proc| proc.to_pretty(200))
-                        .collect::<Vec<_>>();
-
-                    let result = procs_string.join("\n");
-
-                    println!("{}", result);
                 }
 
                 msg_tx
@@ -2147,6 +2176,7 @@ fn finish_specialization(
 
     let State {
         procedures,
+        alias_analysis_solutions,
         module_cache,
         output_path,
         platform_path,
@@ -2208,6 +2238,7 @@ fn finish_specialization(
         subs,
         interns,
         procedures,
+        alias_analysis_solutions,
         sources,
         header_sources,
         timings: state.timings,
@@ -2312,7 +2343,7 @@ fn load_pkg_config<'a>(
                     let chomped = &bytes[..delta];
                     let header_src = unsafe { std::str::from_utf8_unchecked(chomped) };
 
-                    // make a Pkg-Config module that ultimately exposes `main` to the host
+                    // make a Package-Config module that ultimately exposes `main` to the host
                     let pkg_config_module_msg = fabricate_pkg_config_module(
                         arena,
                         shorthand,
@@ -2551,7 +2582,7 @@ fn parse_header<'a>(
                         }) => {
                             match package_or_path {
                                 PackageOrPath::Path(StrLiteral::PlainLine(package)) => {
-                                    // check whether we can find a Pkg-Config.roc file
+                                    // check whether we can find a Package-Config.roc file
                                     let mut pkg_config_roc = pkg_config_dir;
                                     pkg_config_roc.push(package);
                                     pkg_config_roc.push(PKG_CONFIG_FILE_NAME);
@@ -3502,9 +3533,14 @@ fn fabricate_effects_module<'a>(
         problems: can_env.problems,
         ident_ids: can_env.ident_ids,
         references: MutSet::default(),
+        scope,
     };
 
-    let constraint = constrain_module(&module_output, module_id);
+    let constraint = constrain_module(
+        &module_output.aliases,
+        &module_output.declarations,
+        module_id,
+    );
 
     let module = Module {
         module_id,
@@ -3521,6 +3557,7 @@ fn fabricate_effects_module<'a>(
     let module_docs = ModuleDocumentation {
         name: String::from(name),
         entries: Vec::new(),
+        scope: module_output.scope,
     };
 
     let constrained_module = ConstrainedModule {
@@ -3602,18 +3639,6 @@ where
         ..
     } = parsed;
 
-    // Generate documentation information
-    // TODO: store timing information?
-    let module_docs = match module_name {
-        ModuleNameEnum::PkgConfig => None,
-        ModuleNameEnum::App(_) => None,
-        ModuleNameEnum::Interface(name) => Some(crate::docs::generate_module_docs(
-            name.as_str().into(),
-            &exposed_ident_ids,
-            &parsed_defs,
-        )),
-    };
-
     let mut var_store = VarStore::default();
     let canonicalized = canonicalize_module_defs(
         &arena,
@@ -3634,7 +3659,24 @@ where
 
     match canonicalized {
         Ok(module_output) => {
-            let constraint = constrain_module(&module_output, module_id);
+            // Generate documentation information
+            // TODO: store timing information?
+            let module_docs = match module_name {
+                ModuleNameEnum::PkgConfig => None,
+                ModuleNameEnum::App(_) => None,
+                ModuleNameEnum::Interface(name) => Some(crate::docs::generate_module_docs(
+                    module_output.scope,
+                    name.as_str().into(),
+                    &module_output.ident_ids,
+                    &parsed_defs,
+                )),
+            };
+
+            let constraint = constrain_module(
+                &module_output.aliases,
+                &module_output.declarations,
+                module_id,
+            );
 
             let module = Module {
                 module_id,
@@ -3799,6 +3841,8 @@ fn make_specializations<'a>(
         home,
         ident_ids: &mut ident_ids,
         ptr_bytes,
+        update_mode_counter: 0,
+        call_specialization_counter: 0,
     };
 
     // TODO: for now this final specialization pass is sequential,
@@ -3860,6 +3904,8 @@ fn build_pending_specializations<'a>(
         home,
         ident_ids: &mut ident_ids,
         ptr_bytes,
+        update_mode_counter: 0,
+        call_specialization_counter: 0,
     };
 
     // Add modules' decls to Procs
@@ -3978,7 +4024,7 @@ fn add_def_to_module<'a>(
 
                         procs.insert_exposed(
                             symbol,
-                            layout,
+                            TopLevelFunctionLayout::from_layout(mono_env.arena, layout),
                             mono_env.arena,
                             mono_env.subs,
                             def.annotation,
@@ -3999,6 +4045,9 @@ fn add_def_to_module<'a>(
                     );
                 }
                 body => {
+                    // mark this symbols as a top-level thunk before any other work on the procs
+                    procs.module_thunks.insert(symbol);
+
                     // If this is an exposed symbol, we need to
                     // register it as such. Otherwise, since it
                     // never gets called by Roc code, it will never
@@ -4011,7 +4060,10 @@ fn add_def_to_module<'a>(
                             annotation,
                             mono_env.subs,
                         ) {
-                            Ok(l) => l,
+                            Ok(l) => {
+                                // remember, this is a 0-argument thunk
+                                Layout::FunctionPointer(&[], mono_env.arena.alloc(l))
+                            }
                             Err(LayoutProblem::Erroneous) => {
                                 let message = "top level function has erroneous type";
                                 procs.runtime_errors.insert(symbol, message);
@@ -4031,7 +4083,7 @@ fn add_def_to_module<'a>(
 
                         procs.insert_exposed(
                             symbol,
-                            layout,
+                            TopLevelFunctionLayout::from_layout(mono_env.arena, layout),
                             mono_env.arena,
                             mono_env.subs,
                             def.annotation,
@@ -4051,7 +4103,6 @@ fn add_def_to_module<'a>(
                     };
 
                     procs.partial_procs.insert(symbol, proc);
-                    procs.module_thunks.insert(symbol);
                 }
             };
         }

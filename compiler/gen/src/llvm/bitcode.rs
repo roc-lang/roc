@@ -1,13 +1,13 @@
 /// Helpers for interacting with the zig that generates bitcode
 use crate::debug_info_init;
-use crate::llvm::build::{set_name, Env, C_CALL_CONV, FAST_CALL_CONV};
+use crate::llvm::build::{Env, C_CALL_CONV, FAST_CALL_CONV};
 use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_n_refcount_layout, increment_refcount_layout,
 };
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::types::{BasicType, BasicTypeEnum};
-use inkwell::values::{BasicValueEnum, CallSiteValue, FunctionValue, InstructionValue};
+use inkwell::values::{BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, InstructionValue};
 use inkwell::AddressSpace;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Layout, LayoutIds};
@@ -68,24 +68,31 @@ const ARGUMENT_SYMBOLS: [Symbol; 8] = [
 
 pub fn build_transform_caller<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    function_layout: &Layout<'a>,
+    function: FunctionValue<'ctx>,
+    closure_data_layout: Layout<'a>,
     argument_layouts: &[Layout<'a>],
 ) -> FunctionValue<'ctx> {
-    let symbol = Symbol::ZIG_FUNCTION_CALLER;
-    let fn_name = layout_ids
-        .get(symbol, &function_layout)
-        .to_symbol_string(symbol, &env.interns);
+    let fn_name: &str = &format!(
+        "{}_zig_function_caller",
+        function.get_name().to_string_lossy()
+    );
 
-    match env.module.get_function(fn_name.as_str()) {
+    match env.module.get_function(fn_name) {
         Some(function_value) => function_value,
-        None => build_transform_caller_help(env, function_layout, argument_layouts, &fn_name),
+        None => build_transform_caller_help(
+            env,
+            function,
+            closure_data_layout,
+            argument_layouts,
+            &fn_name,
+        ),
     }
 }
 
 fn build_transform_caller_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    function_layout: &Layout<'a>,
+    roc_function: FunctionValue<'ctx>,
+    closure_data_layout: Layout<'a>,
     argument_layouts: &[Layout<'a>],
     fn_name: &str,
 ) -> FunctionValue<'ctx> {
@@ -115,16 +122,14 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
 
     let mut it = function_value.get_param_iter();
     let closure_ptr = it.next().unwrap().into_pointer_value();
-    set_name(closure_ptr.into(), Symbol::ARG_1.ident_string(&env.interns));
+    closure_ptr.set_name(Symbol::ARG_1.ident_string(&env.interns));
 
     let arguments =
         bumpalo::collections::Vec::from_iter_in(it.take(argument_layouts.len()), env.arena);
 
     for (argument, name) in arguments.iter().zip(ARGUMENT_SYMBOLS[1..].iter()) {
-        set_name(*argument, name.ident_string(&env.interns));
+        argument.set_name(name.ident_string(&env.interns));
     }
-
-    let closure_type = basic_type_from_layout(env, function_layout).ptr_type(AddressSpace::Generic);
 
     let mut arguments_cast =
         bumpalo::collections::Vec::with_capacity_in(arguments.len(), env.arena);
@@ -142,41 +147,61 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
         arguments_cast.push(argument);
     }
 
-    let closure_cast = env
-        .builder
-        .build_bitcast(closure_ptr, closure_type, "load_opaque")
-        .into_pointer_value();
+    match closure_data_layout {
+        Layout::FunctionPointer(_, _) => {
+            // do nothing
+        }
+        Layout::Closure(_, lambda_set, _) => {
+            if let Layout::Struct(&[]) = lambda_set.runtime_representation() {
+                // do nothing
+            } else {
+                let closure_type =
+                    basic_type_from_layout(env, &lambda_set.runtime_representation())
+                        .ptr_type(AddressSpace::Generic);
 
-    let fpointer = env.builder.build_load(closure_cast, "load_opaque");
+                let closure_cast = env
+                    .builder
+                    .build_bitcast(closure_ptr, closure_type, "load_opaque")
+                    .into_pointer_value();
 
-    let call = match function_layout {
-        Layout::FunctionPointer(_, _) => env.builder.build_call(
-            fpointer.into_pointer_value(),
-            arguments_cast.as_slice(),
-            "tmp",
-        ),
-        Layout::Closure(_, _, _) | Layout::Struct(_) => {
-            let pair = fpointer.into_struct_value();
+                let closure_data = env.builder.build_load(closure_cast, "load_opaque");
 
-            let fpointer = env
+                arguments_cast.push(closure_data);
+            }
+        }
+        Layout::Struct([Layout::Closure(_, lambda_set, _)]) => {
+            // a case required for Set.walk; may be able to remove when we can define builtins in
+            // terms of other builtins in the right way (using their function symbols instead of
+            // hacking with lowlevel ops).
+            let closure_type = basic_type_from_layout(
+                env,
+                &Layout::Struct(&[lambda_set.runtime_representation()]),
+            )
+            .ptr_type(AddressSpace::Generic);
+
+            let closure_cast = env
                 .builder
-                .build_extract_value(pair, 0, "get_fpointer")
-                .unwrap();
+                .build_bitcast(closure_ptr, closure_type, "load_opaque")
+                .into_pointer_value();
 
-            let closure_data = env
-                .builder
-                .build_extract_value(pair, 1, "get_closure_data")
-                .unwrap();
+            let closure_data = env.builder.build_load(closure_cast, "load_opaque");
 
             arguments_cast.push(closure_data);
-            env.builder.build_call(
-                fpointer.into_pointer_value(),
-                arguments_cast.as_slice(),
-                "tmp",
-            )
         }
-        _ => unreachable!("layout is not callable {:?}", function_layout),
+        Layout::Struct([]) => {
+            // do nothing, should try to remove this case later
+        }
+        Layout::Struct(_) => {
+            // do nothing, should try to remove this case later
+        }
+        other => unreachable!("layout is not valid for a closure: {:?}", other),
+    }
+
+    let call = {
+        env.builder
+            .build_call(roc_function, arguments_cast.as_slice(), "tmp")
     };
+
     call.set_call_convention(FAST_CALL_CONV);
 
     let result = call
@@ -291,7 +316,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
             let mut it = function_value.get_param_iter();
             let value_ptr = it.next().unwrap().into_pointer_value();
 
-            set_name(value_ptr.into(), Symbol::ARG_1.ident_string(&env.interns));
+            value_ptr.set_name(Symbol::ARG_1.ident_string(&env.interns));
 
             let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 
@@ -309,7 +334,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
                 }
                 Mode::IncN => {
                     let n = it.next().unwrap().into_int_value();
-                    set_name(n.into(), Symbol::ARG_2.ident_string(&env.interns));
+                    n.set_name(Symbol::ARG_2.ident_string(&env.interns));
 
                     increment_n_refcount_layout(env, function_value, layout_ids, n, value, layout);
                 }
@@ -370,8 +395,8 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
             let value_ptr1 = it.next().unwrap().into_pointer_value();
             let value_ptr2 = it.next().unwrap().into_pointer_value();
 
-            set_name(value_ptr1.into(), Symbol::ARG_1.ident_string(&env.interns));
-            set_name(value_ptr2.into(), Symbol::ARG_2.ident_string(&env.interns));
+            value_ptr1.set_name(Symbol::ARG_1.ident_string(&env.interns));
+            value_ptr2.set_name(Symbol::ARG_2.ident_string(&env.interns));
 
             let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 
@@ -406,18 +431,19 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
 
 pub fn build_compare_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
+    roc_function: FunctionValue<'ctx>,
+    closure_data_layout: Layout<'a>,
     layout: &Layout<'a>,
 ) -> FunctionValue<'ctx> {
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let symbol = Symbol::GENERIC_COMPARE_REF;
-    let fn_name = layout_ids
-        .get(symbol, &layout)
-        .to_symbol_string(symbol, &env.interns);
+    let fn_name: &str = &format!(
+        "{}_compare_wrapper",
+        roc_function.get_name().to_string_lossy()
+    );
 
-    let function_value = match env.module.get_function(fn_name.as_str()) {
+    let function_value = match env.module.get_function(fn_name) {
         Some(function_value) => function_value,
         None => {
             let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
@@ -443,28 +469,17 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
             debug_info_init!(env, function_value);
 
             let mut it = function_value.get_param_iter();
-            let function_ptr = it.next().unwrap().into_pointer_value();
+            let closure_ptr = it.next().unwrap().into_pointer_value();
             let value_ptr1 = it.next().unwrap().into_pointer_value();
             let value_ptr2 = it.next().unwrap().into_pointer_value();
 
-            set_name(
-                function_ptr.into(),
-                Symbol::ARG_1.ident_string(&env.interns),
-            );
-            set_name(value_ptr1.into(), Symbol::ARG_2.ident_string(&env.interns));
-            set_name(value_ptr2.into(), Symbol::ARG_3.ident_string(&env.interns));
+            closure_ptr.set_name(Symbol::ARG_1.ident_string(&env.interns));
+            value_ptr1.set_name(Symbol::ARG_2.ident_string(&env.interns));
+            value_ptr2.set_name(Symbol::ARG_3.ident_string(&env.interns));
 
             let value_type = basic_type_from_layout(env, layout);
-            let function_type = env
-                .context
-                .i8_type()
-                .fn_type(&[value_type, value_type], false)
-                .ptr_type(AddressSpace::Generic);
             let value_ptr_type = value_type.ptr_type(AddressSpace::Generic);
 
-            let function_cast =
-                env.builder
-                    .build_bitcast(function_ptr, function_type, "load_opaque");
             let value_cast1 = env
                 .builder
                 .build_bitcast(value_ptr1, value_ptr_type, "load_opaque")
@@ -478,10 +493,36 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
             let value1 = env.builder.build_load(value_cast1, "load_opaque");
             let value2 = env.builder.build_load(value_cast2, "load_opaque");
 
+            let default = [value1, value2];
+
+            let arguments_cast = match closure_data_layout {
+                Layout::FunctionPointer(_, _) => &default,
+                Layout::Closure(_, lambda_set, _) => {
+                    if let Layout::Struct(&[]) = lambda_set.runtime_representation() {
+                        &default
+                    } else {
+                        let closure_type =
+                            basic_type_from_layout(env, &lambda_set.runtime_representation())
+                                .ptr_type(AddressSpace::Generic);
+
+                        let closure_cast = env
+                            .builder
+                            .build_bitcast(closure_ptr, closure_type, "load_opaque")
+                            .into_pointer_value();
+
+                        let closure_data = env.builder.build_load(closure_cast, "load_opaque");
+
+                        env.arena.alloc([value1, value2, closure_data]) as &[_]
+                    }
+                }
+                Layout::Struct([]) => &default,
+                other => unreachable!("layout is not valid for a closure: {:?}", other),
+            };
+
             let call = env.builder.build_call(
-                function_cast.into_pointer_value(),
-                &[value1, value2],
-                "call_user_defined_function",
+                roc_function,
+                arguments_cast,
+                "call_user_defined_compare_function",
             );
 
             let result = call.try_as_basic_value().left().unwrap();

@@ -4,6 +4,7 @@ use roc_build::program::FunctionIterator;
 use roc_can::builtins::builtin_defs_map;
 use roc_can::def::Def;
 use roc_collections::all::{MutMap, MutSet};
+use roc_gen::llvm::externs::add_default_roc_externs;
 use roc_module::symbol::Symbol;
 use roc_types::subs::VarStore;
 
@@ -179,12 +180,16 @@ pub fn helper<'a>(
         ),
     };
 
+    let builder = context.create_builder();
     let module = roc_gen::llvm::build::module_from_builtins(context, "app");
+
+    // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
+    // platform to provide them.
+    add_default_roc_externs(context, &module, &builder, ptr_bytes);
 
     // strip Zig debug stuff
     module.strip_debug_info();
 
-    let builder = context.create_builder();
     let opt_level = if cfg!(debug_assertions) {
         roc_gen::llvm::build::OptLevel::Normal
     } else {
@@ -239,12 +244,12 @@ pub fn helper<'a>(
     // because their bodies may reference each other.
     let mut scope = Scope::default();
     for ((symbol, layout), proc) in procedures.drain() {
-        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
+        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, layout, &proc);
 
         if proc.args.is_empty() {
             // this is a 0-argument thunk, i.e. a top-level constant definition
             // it must be in-scope everywhere in the module!
-            scope.insert_top_level_thunk(symbol, layout, fn_val);
+            scope.insert_top_level_thunk(symbol, arena.alloc(layout), fn_val);
         }
 
         headers.push((proc, fn_val));
@@ -275,7 +280,7 @@ pub fn helper<'a>(
                 mode,
             );
 
-            // fn_val.print_to_stderr();
+            fn_val.print_to_stderr();
             // module.print_to_stderr();
 
             panic!(
@@ -289,7 +294,7 @@ pub fn helper<'a>(
         &env,
         &mut layout_ids,
         main_fn_symbol,
-        &main_fn_layout,
+        main_fn_layout,
     );
 
     env.dibuilder.finalize();

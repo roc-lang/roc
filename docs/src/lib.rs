@@ -4,18 +4,22 @@ use roc_can::builtins::builtin_defs_map;
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::file::LoadingProblem;
+use roc_module::symbol::{Interns, ModuleId};
 
 use std::fs;
 extern crate roc_load;
 use bumpalo::Bump;
+use roc_can::scope::Scope;
 use roc_collections::all::MutMap;
+use roc_region::all::Region;
 use std::path::{Path, PathBuf};
 
 pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
     let files_docs = files_to_documentations(filenames, std_lib);
+
     //
     // TODO: get info from a file like "elm.json"
-    let package = roc_load::docs::Documentation {
+    let mut package = roc_load::docs::Documentation {
         name: "roc/builtins".to_string(),
         version: "1.0.0".to_string(),
         docs: "Package introduction or README.".to_string(),
@@ -45,36 +49,44 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
     )
     .expect("TODO gracefully handle failing to make the favicon");
 
-    let template_html = include_str!("./static/index.html");
+    let template_html = include_str!("./static/index.html").replace(
+        "<!-- Module links -->",
+        render_sidebar(
+            package
+                .modules
+                .iter()
+                .flat_map(|(docs_by_id, _)| docs_by_id.values()),
+        )
+        .as_str(),
+    );
 
     // Write each package's module docs html file
-    for module in &package.modules {
-        let mut filename = String::new();
-        filename.push_str(module.name.as_str());
-        filename.push_str(".html");
+    for (docs_by_id, interns) in package.modules.iter_mut() {
+        for module in docs_by_id.values_mut() {
+            let mut filename = String::new();
+            filename.push_str(module.name.as_str());
+            filename.push_str(".html");
 
-        let rendered_module = template_html
-            .replace(
-                "<!-- Module links -->",
-                render_module_links(&package.modules).as_str(),
-            )
-            .replace(
-                "<!-- Package Name and Version -->",
-                render_name_and_version(package.name.as_str(), package.version.as_str()).as_str(),
-            )
-            .replace(
-                "<!-- Module Docs -->",
-                render_main_content(&module).as_str(),
-            );
+            let rendered_module = template_html
+                .replace(
+                    "<!-- Package Name and Version -->",
+                    render_name_and_version(package.name.as_str(), package.version.as_str())
+                        .as_str(),
+                )
+                .replace(
+                    "<!-- Module Docs -->",
+                    render_main_content(interns, module).as_str(),
+                );
 
-        fs::write(build_dir.join(filename), rendered_module)
-            .expect("TODO gracefully handle failing to write html");
+            fs::write(build_dir.join(filename), rendered_module)
+                .expect("TODO gracefully handle failing to write html");
+        }
     }
 
     println!("🎉 Docs generated in {}", build_dir.display());
 }
 
-fn render_main_content(module: &ModuleDocumentation) -> String {
+fn render_main_content(interns: &Interns, module: &mut ModuleDocumentation) -> String {
     let mut buf = String::new();
 
     buf.push_str(
@@ -85,8 +97,6 @@ fn render_main_content(module: &ModuleDocumentation) -> String {
         )
         .as_str(),
     );
-
-    // buf.push_str(markdown_to_html(module.docs.clone()).as_str());
 
     for entry in &module.entries {
         match entry {
@@ -106,10 +116,16 @@ fn render_main_content(module: &ModuleDocumentation) -> String {
                     content.push_str(type_var.as_str());
                 }
 
-                if let Some(type_ann) = &doc_def.type_annotation {
-                    content.push_str(" : ");
-                    type_annotation_to_html(0, &mut content, &type_ann);
+                let type_ann = &doc_def.type_annotation;
+
+                match type_ann {
+                    TypeAnnotation::NoTypeAnn => {}
+                    _ => {
+                        content.push_str(" : ");
+                    }
                 }
+
+                type_annotation_to_html(0, &mut content, &type_ann);
 
                 buf.push_str(
                     html_node(
@@ -121,11 +137,15 @@ fn render_main_content(module: &ModuleDocumentation) -> String {
                 );
 
                 if let Some(docs) = &doc_def.docs {
-                    buf.push_str(markdown_to_html(docs.to_string()).as_str());
+                    buf.push_str(
+                        markdown_to_html(&mut module.scope, interns, docs.to_string()).as_str(),
+                    );
                 }
             }
             DocEntry::DetatchedDoc(docs) => {
-                buf.push_str(markdown_to_html(docs.to_string()).as_str());
+                buf.push_str(
+                    markdown_to_html(&mut module.scope, interns, docs.to_string()).as_str(),
+                );
             }
         };
     }
@@ -197,7 +217,7 @@ fn render_name_and_version(name: &str, version: &str) -> String {
     buf
 }
 
-fn render_module_links(modules: &[ModuleDocumentation]) -> String {
+fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -> String {
     let mut buf = String::new();
 
     for module in modules {
@@ -271,7 +291,7 @@ fn render_module_links(modules: &[ModuleDocumentation]) -> String {
 pub fn files_to_documentations(
     filenames: Vec<PathBuf>,
     std_lib: StdLib,
-) -> Vec<ModuleDocumentation> {
+) -> Vec<(MutMap<ModuleId, ModuleDocumentation>, Interns)> {
     let arena = Bump::new();
     let mut files_docs = vec![];
 
@@ -288,7 +308,7 @@ pub fn files_to_documentations(
             8, // TODO: Is it okay to hardcode ptr_bytes here? I think it should be fine since we'er only type checking (also, 8 => 32bit system)
             builtin_defs_map,
         ) {
-            Ok(mut loaded) => files_docs.extend(loaded.documentation.drain().map(|x| x.1)),
+            Ok(loaded) => files_docs.push((loaded.documentation, loaded.interns)),
             Err(LoadingProblem::FormattedReport(report)) => {
                 println!("{}", report);
                 panic!();
@@ -296,6 +316,7 @@ pub fn files_to_documentations(
             Err(e) => panic!("{:?}", e),
         }
     }
+
     files_docs
 }
 
@@ -314,17 +335,33 @@ fn new_line(buf: &mut String) {
 fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &TypeAnnotation) {
     match type_ann {
         TypeAnnotation::TagUnion { tags, extension } => {
-            new_line(buf);
+            let tags_len = tags.len();
+
+            let more_than_one_tag = tags_len > 1;
 
             let tag_union_indent = indent_level + 1;
-            indent(buf, tag_union_indent);
+
+            if more_than_one_tag {
+                new_line(buf);
+
+                indent(buf, tag_union_indent);
+            }
+
             buf.push('[');
-            new_line(buf);
+
+            if more_than_one_tag {
+                new_line(buf);
+            }
 
             let next_indent_level = tag_union_indent + 1;
 
             for (index, tag) in tags.iter().enumerate() {
-                indent(buf, next_indent_level);
+                if more_than_one_tag {
+                    indent(buf, next_indent_level);
+                } else {
+                    buf.push(' ');
+                }
+
                 buf.push_str(tag.name.as_str());
 
                 for type_value in &tag.values {
@@ -332,19 +369,24 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                     type_annotation_to_html(next_indent_level, buf, type_value);
                 }
 
-                if index < (tags.len() - 1) {
-                    buf.push(',');
-                }
+                if more_than_one_tag {
+                    if index < (tags_len - 1) {
+                        buf.push(',');
+                    }
 
-                new_line(buf);
+                    new_line(buf);
+                }
             }
 
-            indent(buf, tag_union_indent);
+            if more_than_one_tag {
+                indent(buf, tag_union_indent);
+            } else {
+                buf.push(' ');
+            }
+
             buf.push(']');
 
-            if let Some(ext) = extension {
-                type_annotation_to_html(indent_level, buf, ext);
-            }
+            type_annotation_to_html(indent_level, buf, extension);
         }
         TypeAnnotation::BoundVariable(var_name) => {
             buf.push_str(var_name);
@@ -362,18 +404,32 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                 buf.push(')');
             }
         }
-        TypeAnnotation::Record { fields } => {
-            new_line(buf);
+        TypeAnnotation::Record { fields, extension } => {
+            let fields_len = fields.len();
+
+            let more_than_one_field = fields_len > 1;
 
             let record_indent = indent_level + 1;
-            indent(buf, record_indent);
+            if more_than_one_field {
+                new_line(buf);
+
+                indent(buf, record_indent);
+            }
+
             buf.push('{');
 
-            new_line(buf);
+            if more_than_one_field {
+                new_line(buf);
+            }
 
             let next_indent_level = record_indent + 1;
+
             for (index, field) in fields.iter().enumerate() {
-                indent(buf, next_indent_level);
+                if more_than_one_field {
+                    indent(buf, next_indent_level);
+                } else {
+                    buf.push(' ');
+                }
 
                 let fields_name = match field {
                     RecordField::RecordField { name, .. } => name,
@@ -399,28 +455,152 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                     RecordField::LabelOnly { .. } => {}
                 }
 
-                if index < (fields.len() - 1) {
-                    buf.push(',');
-                }
+                if more_than_one_field {
+                    if index < (fields_len - 1) {
+                        buf.push(',');
+                    }
 
-                new_line(buf);
+                    new_line(buf);
+                }
             }
 
-            indent(buf, record_indent);
+            if more_than_one_field {
+                indent(buf, record_indent);
+            } else {
+                buf.push(' ');
+            }
+
             buf.push('}');
+
+            type_annotation_to_html(indent_level, buf, extension);
+        }
+        TypeAnnotation::Function { args, output } => {
+            let more_than_one_arg = args.len() > 1;
+            let mut peekable_args = args.iter().peekable();
+            while let Some(arg) = peekable_args.next() {
+                if more_than_one_arg {
+                    new_line(buf);
+                    indent(buf, indent_level + 1);
+                }
+
+                type_annotation_to_html(indent_level, buf, arg);
+
+                if peekable_args.peek().is_some() {
+                    buf.push_str(", ");
+                }
+            }
+
+            if more_than_one_arg {
+                new_line(buf);
+                indent(buf, indent_level + 1);
+            }
+
+            buf.push_str(" -> ");
+            type_annotation_to_html(indent_level, buf, output);
+        }
+        TypeAnnotation::ObscuredTagUnion => {
+            buf.push_str("[ @.. ]");
+        }
+        TypeAnnotation::ObscuredRecord => {
+            buf.push_str("{ @.. }");
+        }
+        TypeAnnotation::NoTypeAnn => {}
+        TypeAnnotation::Wildcard => buf.push('*'),
+    }
+}
+
+fn insert_doc_links(scope: &mut Scope, interns: &Interns, markdown: String) -> String {
+    let buf = &markdown;
+    let mut result = String::new();
+
+    let mut chomping_from: Option<usize> = None;
+
+    let mut chars = buf.chars().enumerate().peekable();
+
+    while let Some((index, char)) = chars.next() {
+        match chomping_from {
+            None => {
+                let next_is_alphabetic = match chars.peek() {
+                    None => false,
+                    Some((_, next_char)) => next_char.is_alphabetic(),
+                };
+
+                if char == '#' && next_is_alphabetic {
+                    chomping_from = Some(index);
+                }
+            }
+            Some(from) => {
+                if !(char.is_alphabetic() || char == '.') {
+                    let after_link = buf.chars().skip(from + buf.len());
+
+                    result = buf.chars().take(from).collect();
+
+                    let doc_link = make_doc_link(
+                        scope,
+                        interns,
+                        &buf.chars()
+                            .skip(from + 1)
+                            .take(index - from)
+                            .collect::<String>(),
+                    );
+
+                    result.insert_str(from, doc_link.as_str());
+
+                    let remainder = insert_doc_links(scope, interns, after_link.collect());
+
+                    result.push_str(remainder.as_str());
+                    break;
+                }
+            }
+        }
+    }
+
+    result
+}
+
+fn make_doc_link(scope: &mut Scope, interns: &Interns, doc_item: &str) -> String {
+    match scope.lookup(&doc_item.into(), Region::zero()) {
+        Ok(symbol) => {
+            let module_str = symbol.module_string(interns);
+            let ident_str = symbol.ident_string(interns);
+
+            let mut link = String::new();
+
+            link.push_str(module_str);
+            link.push_str(".html#");
+            link.push_str(ident_str);
+
+            let mut buf = String::new();
+
+            buf.push('[');
+            buf.push_str(doc_item);
+            buf.push_str("](");
+
+            buf.push_str(link.as_str());
+            buf.push(')');
+
+            buf
+        }
+        Err(_) => {
+            panic!(
+                "Could not find symbol in scope for module link : {}",
+                doc_item
+            )
         }
     }
 }
 
-fn markdown_to_html(markdown: String) -> String {
+fn markdown_to_html(scope: &mut Scope, interns: &Interns, markdown: String) -> String {
     use pulldown_cmark::CodeBlockKind;
     use pulldown_cmark::CowStr;
     use pulldown_cmark::Event;
     use pulldown_cmark::Tag::*;
 
+    let markdown_with_links = insert_doc_links(scope, interns, markdown);
+
     let markdown_options = pulldown_cmark::Options::empty();
     let mut docs_parser = vec![];
-    let (_, _) = pulldown_cmark::Parser::new_ext(&markdown, markdown_options).fold(
+    let (_, _) = pulldown_cmark::Parser::new_ext(&markdown_with_links, markdown_options).fold(
         (0, 0),
         |(start_quote_count, end_quote_count), event| match event {
             // Replace this sequence (`>>>` syntax):

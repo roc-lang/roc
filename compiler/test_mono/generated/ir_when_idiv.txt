@@ -1,0 +1,27 @@
+procedure Num.42 (#Attr.2, #Attr.3):
+    let Test.17 = 0i64;
+    let Test.13 = lowlevel NotEq #Attr.3 Test.17;
+    if Test.13 then
+        let Test.16 = 1i64;
+        let Test.15 = lowlevel NumDivUnchecked #Attr.2 #Attr.3;
+        let Test.14 = Ok Test.16 Test.15;
+        ret Test.14;
+    else
+        let Test.12 = 0i64;
+        let Test.11 = Struct {};
+        let Test.10 = Err Test.12 Test.11;
+        ret Test.10;
+
+procedure Test.0 ():
+    let Test.8 = 1000i64;
+    let Test.9 = 10i64;
+    let Test.2 = CallByName Num.42 Test.8 Test.9;
+    let Test.5 = 1i64;
+    let Test.6 = Index 0 Test.2;
+    let Test.7 = lowlevel Eq Test.5 Test.6;
+    if Test.7 then
+        let Test.1 = Index 1 Test.2;
+        ret Test.1;
+    else
+        let Test.4 = -1i64;
+        ret Test.4;

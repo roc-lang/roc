@@ -427,18 +427,52 @@ chomp : Str, Str -> Result Str [ Expected [ ExactStr Str ]* Str ]*
 ## equal to the given [U32], return whatever comes after that code point.
 chompCodePoint : Str, U32 -> Result Str [ Expected [ ExactCodePoint U32 ]* Str ]*
 
-## If the string begins with digits which can represent a valid #U8, return
-## that number along with the rest of the string after the digits.
-parseU8 : Str -> Result { val : U8, rest : Str } [ Expected [ NumU8 ]* Str ]*
-parseI8 : Str -> Result { val : I8, rest : Str } [ Expected [ NumI8 ]* Str ]*
-parseU16 : Str -> Result { val : U16, rest : Str } [ Expected [ NumU16 ]* Str ]*
-parseI16 : Str -> Result { val : I16, rest : Str } [ Expected [ NumI16 ]* Str ]*
-parseU32 : Str -> Result { val : U32, rest : Str } [ Expected [ NumU32 ]* Str ]*
-parseI32 : Str -> Result { val : I32, rest : Str } [ Expected [ NumI32 ]* Str ]*
-parseU64 : Str -> Result { val : U64, rest : Str } [ Expected [ NumU64 ]* Str ]*
-parseI64 : Str -> Result { val : I64, rest : Str } [ Expected [ NumI64 ]* Str ]*
-parseU128 : Str -> Result { val : U128, rest : Str } [ Expected [ NumU128 ]* Str ]*
-parseI128 : Str -> Result { val : I128, rest : Str } [ Expected [ NumI128 ]* Str ]*
+## If the string represents a valid #U8 number, return that number.
+##
+## For more advanced options, see [parseU8].
+toU8 : Str -> Result U8 [ InvalidU8 ]*
+toI8 : Str -> Result I8 [ InvalidI8 ]*
+toU16 : Str -> Result U16 [ InvalidU16 ]*
+toI16 : Str -> Result I16 [ InvalidI16 ]*
+toU32 : Str -> Result U32 [ InvalidU32 ]*
+toI32 : Str -> Result I32 [ InvalidI32 ]*
+toU64 : Str -> Result U64 [ InvalidU64 ]*
+toI64 : Str -> Result I64 [ InvalidI64 ]*
+toU128 : Str -> Result U128 [ InvalidU128 ]*
+toI128 : Str -> Result I128 [ InvalidI128 ]*
+toF64 : Str -> Result U128 [ InvalidF64 ]*
+toF32 : Str -> Result I128 [ InvalidF32 ]*
+toDec : Str -> Result Dec [ InvalidDec ]*
 
-parseF64 : Str -> Result { val : U128, rest : Str } [ Expected [ NumF64 ]* Str ]*
-parseF32 : Str -> Result { val : I128, rest : Str } [ Expected [ NumF32 ]* Str ]*
+## If the string begins with a valid #U8 number, return
+## that number along with the rest of the string after it.
+parseU8 : Str, NumParseConfig -> Result { val : U8, rest : Str } [ Expected [ NumU8 ]* Str ]*
+parseI8 : Str, NumParseConfig -> Result { val : I8, rest : Str } [ Expected [ NumI8 ]* Str ]*
+parseU16 : Str, NumParseConfig -> Result { val : U16, rest : Str } [ Expected [ NumU16 ]* Str ]*
+parseI16 : Str, NumParseConfig -> Result { val : I16, rest : Str } [ Expected [ NumI16 ]* Str ]*
+parseU32 : Str, NumParseConfig -> Result { val : U32, rest : Str } [ Expected [ NumU32 ]* Str ]*
+parseI32 : Str, NumParseConfig -> Result { val : I32, rest : Str } [ Expected [ NumI32 ]* Str ]*
+parseU64 : Str, NumParseConfig -> Result { val : U64, rest : Str } [ Expected [ NumU64 ]* Str ]*
+parseI64 : Str, NumParseConfig -> Result { val : I64, rest : Str } [ Expected [ NumI64 ]* Str ]*
+parseU128 : Str, NumParseConfig -> Result { val : U128, rest : Str } [ Expected [ NumU128 ]* Str ]*
+parseI128 : Str, NumParseConfig -> Result { val : I128, rest : Str } [ Expected [ NumI128 ]* Str ]*
+parseF64 : Str, NumParseConfig -> Result { val : U128, rest : Str } [ Expected [ NumF64 ]* Str ]*
+parseF32 : Str, NumParseConfig -> Result { val : I128, rest : Str } [ Expected [ NumF32 ]* Str ]*
+parseDec : Str, NumParseConfig -> Result { val : Dec, rest : Str } [ Expected [ NumDec ]* Str ]*
+
+## Notes:
+## * You can allow a decimal mark for integers; they'll only parse if the numbers after it are all 0.
+## * For `wholeSep`, `Required` has a payload for how many digits (e.g. "required every 3 digits")
+## * For `wholeSep`, `Allowed` allows the separator to appear anywhere.
+NumParseConfig :
+    {
+        base ? [ Decimal, Hexadecimal, Octal, Binary ],
+        notation ? [ Standard, Scientific, Any ],
+        decimalMark ? [ Allowed Str, Required Str, Disallowed ],
+        decimalDigits ? [ Any, AtLeast U16, Exactly U16 ],
+        wholeDigits ? [ Any, AtLeast U16, Exactly U16 ],
+        leadingZeroes ? [ Allowed, Disallowed ],
+        trailingZeroes ? [ Allowed, Disallowed ],
+        wholeSep ? { mark : Str, policy : [ Allowed, Required U64 ] }
+    }
+    -> Str

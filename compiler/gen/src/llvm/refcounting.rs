@@ -1,6 +1,6 @@
 use crate::debug_info_init;
 use crate::llvm::build::{
-    cast_basic_basic, cast_block_of_memory_to_tag, set_name, Env, FAST_CALL_CONV,
+    add_func, cast_basic_basic, cast_block_of_memory_to_tag, Env, FAST_CALL_CONV,
     LLVM_SADD_WITH_OVERFLOW_I64,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
@@ -11,11 +11,13 @@ use bumpalo::collections::Vec;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
 use inkwell::types::{AnyTypeEnum, BasicType, BasicTypeEnum};
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
+use inkwell::values::{
+    BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
+};
 use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, Layout, LayoutIds, MemoryMode, UnionLayout};
+use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
 pub const REFCOUNT_MAX: usize = 0_usize;
 
@@ -40,8 +42,8 @@ impl<'ctx> PointerToRefcount<'ctx> {
     /// # Safety
     ///
     /// the invariant is that the given pointer really points to the refcount,
-    /// not the data, and only is the start of the malloced buffer if the alignment
-    /// works out that way.
+    /// not the data, and only is the start of the allocated buffer if the
+    /// alignment works out that way.
     pub unsafe fn from_ptr<'a, 'env>(env: &Env<'a, 'ctx, 'env>, ptr: PointerValue<'ctx>) -> Self {
         // must make sure it's a pointer to usize
         let refcount_type = ptr_int(env.context, env.ptr_bytes);
@@ -165,17 +167,18 @@ impl<'ctx> PointerToRefcount<'ctx> {
                     false,
                 );
 
-                let function_value =
-                    env.module
-                        .add_function(fn_name, fn_type, Some(Linkage::Private));
-
-                // Because it's an internal-only function, it should use the fast calling convention.
-                function_value.set_call_conventions(FAST_CALL_CONV);
+                let function_value = add_func(
+                    env.module,
+                    fn_name,
+                    fn_type,
+                    Linkage::Private,
+                    FAST_CALL_CONV, // Because it's an internal-only function, it should use the fast calling convention.
+                );
 
                 let subprogram = env.new_subprogram(fn_name);
                 function_value.set_subprogram(subprogram);
 
-                Self::_build_decrement_function_body(env, function_value, alignment);
+                Self::build_decrement_function_body(env, function_value, alignment);
 
                 function_value
             }
@@ -194,10 +197,10 @@ impl<'ctx> PointerToRefcount<'ctx> {
         call.set_call_convention(FAST_CALL_CONV);
     }
 
-    fn _build_decrement_function_body<'a, 'env>(
+    fn build_decrement_function_body<'a, 'env>(
         env: &Env<'a, 'ctx, 'env>,
         parent: FunctionValue<'ctx>,
-        extra_bytes: u32,
+        alignment: u32,
     ) {
         let builder = env.builder;
         let ctx = env.context;
@@ -269,15 +272,21 @@ impl<'ctx> PointerToRefcount<'ctx> {
         {
             builder.position_at_end(then_block);
             if !env.leak {
-                match extra_bytes {
+                let ptr = builder.build_pointer_cast(
+                    refcount_ptr.value,
+                    ctx.i8_type().ptr_type(AddressSpace::Generic),
+                    "cast_to_i8_ptr",
+                );
+
+                match alignment {
                     n if env.ptr_bytes == n => {
-                        // the refcount ptr is also the ptr to the malloced region
-                        builder.build_free(refcount_ptr.value);
+                        // the refcount ptr is also the ptr to the allocated region
+                        env.call_dealloc(ptr, alignment);
                     }
                     n if 2 * env.ptr_bytes == n => {
-                        // we need to step back another ptr_bytes to get the malloced ptr
-                        let malloced = Self::from_ptr_to_data(env, refcount_ptr.value);
-                        builder.build_free(malloced.value);
+                        // we need to step back another ptr_bytes to get the allocated ptr
+                        let allocated = Self::from_ptr_to_data(env, ptr);
+                        env.call_dealloc(allocated.value, alignment);
                     }
                     n => unreachable!("invalid extra_bytes {:?}", n),
                 }
@@ -369,12 +378,6 @@ fn modify_refcount_struct_help<'a, 'ctx, 'env>(
     layouts: &[Layout<'a>],
     fn_val: FunctionValue<'ctx>,
 ) {
-    debug_assert_eq!(
-        when_recursive,
-        &WhenRecursive::Unreachable,
-        "TODO pipe when_recursive through the dict key/value inc/dec"
-    );
-
     let builder = env.builder;
     let ctx = env.context;
 
@@ -389,7 +392,7 @@ fn modify_refcount_struct_help<'a, 'ctx, 'env>(
     let arg_symbol = Symbol::ARG_1;
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
-    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+    arg_val.set_name(arg_symbol.ident_string(&env.interns));
 
     let parent = fn_val;
 
@@ -468,21 +471,17 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
     use Builtin::*;
 
     match builtin {
-        List(memory_mode, element_layout) => {
-            if let MemoryMode::Refcounted = memory_mode {
-                let function = modify_refcount_list(
-                    env,
-                    layout_ids,
-                    mode,
-                    when_recursive,
-                    layout,
-                    element_layout,
-                );
+        List(element_layout) => {
+            let function = modify_refcount_list(
+                env,
+                layout_ids,
+                mode,
+                when_recursive,
+                layout,
+                element_layout,
+            );
 
-                Some(function)
-            } else {
-                None
-            }
+            Some(function)
         }
         Set(element_layout) => {
             let key_layout = &Layout::Struct(&[]);
@@ -699,26 +698,16 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
                 }
             }
         }
-        Closure(argument_layouts, closure_layout, return_layout) => {
-            if closure_layout.contains_refcounted() {
-                // Temporary hack to make this work for now. With defunctionalization, none of this
-                // will matter
-                let p2 = closure_layout.as_block_of_memory_layout();
-                let mut argument_layouts =
-                    Vec::from_iter_in(argument_layouts.iter().copied(), env.arena);
-                argument_layouts.push(p2);
-                let argument_layouts = argument_layouts.into_bump_slice();
 
-                let p1 = Layout::FunctionPointer(argument_layouts, return_layout);
-                let actual_layout = Layout::Struct(env.arena.alloc([p1, p2]));
-
+        Closure(_, lambda_set, _) => {
+            if lambda_set.contains_refcounted() {
                 let function = modify_refcount_layout_build_function(
                     env,
                     parent,
                     layout_ids,
                     mode,
                     when_recursive,
-                    &actual_layout,
+                    &lambda_set.runtime_representation(),
                 )?;
 
                 Some(function)
@@ -732,8 +721,6 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
 
             Some(function)
         }
-
-        PhantomEmptyStruct => None,
 
         Layout::RecursivePointer => match when_recursive {
             WhenRecursive::Unreachable => {
@@ -755,7 +742,7 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
             }
         },
 
-        FunctionPointer(_, _) | Pointer(_) => None,
+        FunctionPointer(_, _) => None,
     }
 }
 
@@ -836,7 +823,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
     let arg_symbol = Symbol::ARG_1;
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
-    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+    arg_val.set_name(arg_symbol.ident_string(&env.interns));
 
     let parent = fn_val;
     let original_wrapper = arg_val.into_struct_value();
@@ -955,7 +942,7 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
     let arg_symbol = Symbol::ARG_1;
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
-    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+    arg_val.set_name(arg_symbol.ident_string(&env.interns));
 
     let parent = fn_val;
 
@@ -1074,7 +1061,7 @@ fn modify_refcount_dict_help<'a, 'ctx, 'env>(
     let arg_symbol = Symbol::ARG_1;
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
-    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+    arg_val.set_name(arg_symbol.ident_string(&env.interns));
 
     let parent = fn_val;
 
@@ -1165,12 +1152,13 @@ pub fn build_header_help<'a, 'ctx, 'env>(
         VoidType(t) => t.fn_type(arguments, false),
     };
 
-    let fn_val = env
-        .module
-        .add_function(fn_name, fn_type, Some(Linkage::Private));
-
-    // Because it's an internal-only function, it should use the fast calling convention.
-    fn_val.set_call_conventions(FAST_CALL_CONV);
+    let fn_val = add_func(
+        env.module,
+        fn_name,
+        fn_type,
+        Linkage::Private,
+        FAST_CALL_CONV, // Because it's an internal-only function, it should use the fast calling convention.
+    );
 
     let subprogram = env.new_subprogram(&fn_name);
     fn_val.set_subprogram(subprogram);
@@ -1284,7 +1272,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
 
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
-    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+    arg_val.set_name(arg_symbol.ident_string(&env.interns));
 
     let parent = fn_val;
 
@@ -1579,7 +1567,7 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
     let arg_symbol = Symbol::ARG_1;
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
-    set_name(arg_val, arg_symbol.ident_string(&env.interns));
+    arg_val.set_name(arg_symbol.ident_string(&env.interns));
 
     let parent = fn_val;
 
@@ -1697,7 +1685,7 @@ pub fn refcount_offset<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layou
     let value_bytes = layout.stack_size(env.ptr_bytes) as u64;
 
     match layout {
-        Layout::Builtin(Builtin::List(_, _)) => env.ptr_bytes as u64,
+        Layout::Builtin(Builtin::List(_)) => env.ptr_bytes as u64,
         Layout::Builtin(Builtin::Str) => env.ptr_bytes as u64,
         Layout::RecursivePointer | Layout::Union(_) => env.ptr_bytes as u64,
         _ => (env.ptr_bytes as u64).max(value_bytes),

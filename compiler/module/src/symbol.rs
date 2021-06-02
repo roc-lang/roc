@@ -1,6 +1,6 @@
 use crate::ident::Ident;
 use inlinable_string::InlinableString;
-use roc_collections::all::{default_hasher, ImMap, MutMap};
+use roc_collections::all::{default_hasher, MutMap, SendMap};
 use roc_region::all::Region;
 use std::collections::HashMap;
 use std::{fmt, u32};
@@ -86,6 +86,10 @@ impl Symbol {
         })
     }
 
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
+
     pub fn fully_qualified(self, interns: &Interns, home: ModuleId) -> InlinableString {
         let module_id = self.module_id();
 
@@ -100,6 +104,10 @@ impl Symbol {
             )
             .into()
         }
+    }
+
+    pub const fn to_ne_bytes(self) -> [u8; 8] {
+        self.0.to_ne_bytes()
     }
 }
 
@@ -154,6 +162,12 @@ impl fmt::Display for Symbol {
         match ident_id {
             IdentId(value) => write!(f, "{:?}.{:?}", module_id, value),
         }
+    }
+}
+
+impl From<Symbol> for u64 {
+    fn from(symbol: Symbol) -> Self {
+        symbol.0
     }
 }
 
@@ -697,8 +711,8 @@ macro_rules! define_builtins {
             /// and what symbols they should resolve to.
             ///
             /// This is for type aliases like `Int` and `Str` and such.
-            pub fn default_in_scope() -> ImMap<Ident, (Symbol, Region)> {
-                let mut scope = ImMap::default();
+            pub fn default_in_scope() -> SendMap<Ident, (Symbol, Region)> {
+                let mut scope = SendMap::default();
 
                 $(
                     $(
@@ -890,6 +904,7 @@ define_builtins! {
         14 STR_UT8_BYTE_PROBLEM: "Utf8ByteProblem" // the Utf8ByteProblem type alias
         15 STR_TO_BYTES: "toBytes"
         16 STR_STARTS_WITH_CODE_POINT: "startsWithCodePoint"
+        17 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -924,6 +939,8 @@ define_builtins! {
         29 LIST_WALK_UNTIL: "walkUntil"
         30 LIST_RANGE: "range"
         31 LIST_SORT_WITH: "sortWith"
+        32 LIST_DROP: "drop"
+        33 LIST_SWAP: "swap"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

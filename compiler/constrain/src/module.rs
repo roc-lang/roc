@@ -1,7 +1,7 @@
 use crate::expr::constrain_decls;
 use roc_builtins::std::StdLib;
 use roc_can::constraint::{Constraint, LetConstraint};
-use roc_can::module::ModuleOutput;
+use roc_can::def::Declaration;
 use roc_collections::all::{MutMap, MutSet, SendMap};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
@@ -22,16 +22,18 @@ pub struct ConstrainedModule {
     pub constraint: Constraint,
 }
 
-pub fn constrain_module(module: &ModuleOutput, home: ModuleId) -> Constraint {
+pub fn constrain_module(
+    aliases: &MutMap<Symbol, Alias>,
+    declarations: &[Declaration],
+    home: ModuleId,
+) -> Constraint {
     let mut send_aliases = SendMap::default();
 
-    for (symbol, alias) in module.aliases.iter() {
+    for (symbol, alias) in aliases.iter() {
         send_aliases.insert(*symbol, alias.clone());
     }
 
-    let decls = &module.declarations;
-
-    constrain_decls(home, decls)
+    constrain_decls(home, declarations)
 }
 
 #[derive(Debug, Clone)]

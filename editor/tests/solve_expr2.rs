@@ -262,3 +262,27 @@ fn constrain_call_and_accessor() {
         "Str",
     )
 }
+
+#[test]
+fn constrain_access() {
+    infer_eq(
+        indoc!(
+            r#"
+            { foo: "bar" }.foo
+            "#
+        ),
+        "Str",
+    )
+}
+
+#[test]
+fn constrain_if() {
+    infer_eq(
+        indoc!(
+            r#"
+            if True then Green else Red
+            "#
+        ),
+        "[ Green, Red ]*",
+    )
+}

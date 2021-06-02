@@ -52,7 +52,13 @@ pub unsafe fn jit_to_ast<'a>(
         home,
     };
 
-    jit_to_ast_help(&env, lib, main_fn_name, layout, content)
+    match layout {
+        Layout::FunctionPointer(&[], result) => {
+            // this is a thunk
+            jit_to_ast_help(&env, lib, main_fn_name, result, content)
+        }
+        _ => jit_to_ast_help(&env, lib, main_fn_name, layout, content),
+    }
 }
 
 fn jit_to_ast_help<'a>(
@@ -73,12 +79,26 @@ fn jit_to_ast_help<'a>(
             )
         }
         Layout::Builtin(Builtin::Usize) => Ok(run_jit_function!(lib, main_fn_name, usize, |num| {
-            num_to_ast(env, nat_to_ast(env.arena, num), content)
+            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
         })),
+        Layout::Builtin(Builtin::Int16) => {
+            Ok(run_jit_function!(lib, main_fn_name, i16, |num| num_to_ast(
+                env,
+                number_literal_to_ast(env.arena, num),
+                content
+            )))
+        }
+        Layout::Builtin(Builtin::Int32) => {
+            Ok(run_jit_function!(lib, main_fn_name, i32, |num| num_to_ast(
+                env,
+                number_literal_to_ast(env.arena, num),
+                content
+            )))
+        }
         Layout::Builtin(Builtin::Int64) => {
             Ok(run_jit_function!(lib, main_fn_name, i64, |num| num_to_ast(
                 env,
-                i64_to_ast(env.arena, num),
+                number_literal_to_ast(env.arena, num),
                 content
             )))
         }
@@ -87,13 +107,20 @@ fn jit_to_ast_help<'a>(
                 lib,
                 main_fn_name,
                 i128,
-                |num| num_to_ast(env, i128_to_ast(env.arena, num), content)
+                |num| num_to_ast(env, number_literal_to_ast(env.arena, num), content)
             ))
+        }
+        Layout::Builtin(Builtin::Float32) => {
+            Ok(run_jit_function!(lib, main_fn_name, f32, |num| num_to_ast(
+                env,
+                number_literal_to_ast(env.arena, num),
+                content
+            )))
         }
         Layout::Builtin(Builtin::Float64) => {
             Ok(run_jit_function!(lib, main_fn_name, f64, |num| num_to_ast(
                 env,
-                f64_to_ast(env.arena, num),
+                number_literal_to_ast(env.arena, num),
                 content
             )))
         }
@@ -110,7 +137,7 @@ fn jit_to_ast_help<'a>(
                 }
             }))
         }
-        Layout::Builtin(Builtin::List(_, elem_layout)) => Ok(run_jit_function!(
+        Layout::Builtin(Builtin::List(elem_layout)) => Ok(run_jit_function!(
             lib,
             main_fn_name,
             (*const u8, usize),
@@ -119,12 +146,6 @@ fn jit_to_ast_help<'a>(
         Layout::Builtin(other) => {
             todo!("add support for rendering builtin {:?} to the REPL", other)
         }
-        Layout::PhantomEmptyStruct => Ok(run_jit_function!(lib, main_fn_name, &u8, |_| {
-            Expr::Record {
-                fields: &[],
-                final_comments: env.arena.alloc([]),
-            }
-        })),
         Layout::Struct(field_layouts) => {
             let ptr_to_ast = |ptr: *const u8| match content {
                 Content::Structure(FlatType::Record(fields, _)) => {
@@ -139,6 +160,9 @@ fn jit_to_ast_help<'a>(
                     let (tag_name, payload_vars) = tags.iter().next().unwrap();
 
                     single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), payload_vars)
+                }
+                Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
+                    single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), &[])
                 }
                 other => {
                     unreachable!(
@@ -236,10 +260,8 @@ fn jit_to_ast_help<'a>(
             todo!("add support for rendering recursive tag unions in the REPL")
         }
 
-        Layout::FunctionPointer(_, _) | Layout::Closure(_, _, _) => {
-            Err(ToAstProblem::FunctionLayout)
-        }
-        Layout::Pointer(_) => todo!("add support for rendering pointers in the REPL"),
+        Layout::Closure(_, _, _) => Err(ToAstProblem::FunctionLayout),
+        Layout::FunctionPointer(_, _) => Err(ToAstProblem::FunctionLayout),
     }
 }
 
@@ -264,15 +286,30 @@ fn ptr_to_ast<'a>(
     content: &Content,
 ) -> Expr<'a> {
     match layout {
+        Layout::Builtin(Builtin::Int128) => {
+            let num = unsafe { *(ptr as *const i128) };
+
+            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+        }
         Layout::Builtin(Builtin::Int64) => {
             let num = unsafe { *(ptr as *const i64) };
 
-            num_to_ast(env, i64_to_ast(env.arena, num), content)
+            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+        }
+        Layout::Builtin(Builtin::Int32) => {
+            let num = unsafe { *(ptr as *const i32) };
+
+            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+        }
+        Layout::Builtin(Builtin::Int16) => {
+            let num = unsafe { *(ptr as *const i16) };
+
+            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
         }
         Layout::Builtin(Builtin::Usize) => {
             let num = unsafe { *(ptr as *const usize) };
 
-            num_to_ast(env, nat_to_ast(env.arena, num), content)
+            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
         }
         Layout::Builtin(Builtin::Int1) => {
             // TODO: bits are not as expected here.
@@ -284,13 +321,18 @@ fn ptr_to_ast<'a>(
         Layout::Builtin(Builtin::Float64) => {
             let num = unsafe { *(ptr as *const f64) };
 
-            num_to_ast(env, f64_to_ast(env.arena, num), content)
+            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
+        }
+        Layout::Builtin(Builtin::Float32) => {
+            let num = unsafe { *(ptr as *const f32) };
+
+            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
         }
         Layout::Builtin(Builtin::EmptyList) => Expr::List {
             items: &[],
             final_comments: &[],
         },
-        Layout::Builtin(Builtin::List(_, elem_layout)) => {
+        Layout::Builtin(Builtin::List(elem_layout)) => {
             // Turn the (ptr, len) wrapper struct into actual ptr and len values.
             let len = unsafe { *(ptr.offset(env.ptr_bytes as isize) as *const usize) };
             let ptr = unsafe { *(ptr as *const *const u8) };
@@ -312,6 +354,9 @@ fn ptr_to_ast<'a>(
 
                 let (tag_name, payload_vars) = tags.iter().next().unwrap();
                 single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), payload_vars)
+            }
+            Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
+                single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), &[])
             }
             Content::Structure(FlatType::EmptyRecord) => {
                 struct_to_ast(env, ptr, &[], &MutMap::default())
@@ -844,25 +889,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
 
 /// This is centralized in case we want to format it differently later,
 /// e.g. adding underscores for large numbers
-fn nat_to_ast(arena: &Bump, num: usize) -> Expr<'_> {
-    Expr::Num(arena.alloc(format!("{}", num)))
-}
-
-/// This is centralized in case we want to format it differently later,
-/// e.g. adding underscores for large numbers
-fn i64_to_ast(arena: &Bump, num: i64) -> Expr<'_> {
-    Expr::Num(arena.alloc(format!("{}", num)))
-}
-
-/// This is centralized in case we want to format it differently later,
-/// e.g. adding underscores for large numbers
-fn i128_to_ast(arena: &Bump, num: i128) -> Expr<'_> {
-    Expr::Num(arena.alloc(format!("{}", num)))
-}
-
-/// This is centralized in case we want to format it differently later,
-/// e.g. adding underscores for large numbers
-fn f64_to_ast(arena: &Bump, num: f64) -> Expr<'_> {
+fn number_literal_to_ast<T: std::fmt::Display>(arena: &Bump, num: T) -> Expr<'_> {
     Expr::Num(arena.alloc(format!("{}", num)))
 }
 

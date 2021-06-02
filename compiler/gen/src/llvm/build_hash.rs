@@ -1,11 +1,13 @@
 use crate::debug_info_init;
 use crate::llvm::bitcode::call_bitcode_fn;
 use crate::llvm::build::Env;
-use crate::llvm::build::{cast_block_of_memory_to_tag, complex_bitcast, set_name, FAST_CALL_CONV};
+use crate::llvm::build::{cast_block_of_memory_to_tag, complex_bitcast, FAST_CALL_CONV};
 use crate::llvm::build_str;
 use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
+use inkwell::values::{
+    BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
+};
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
@@ -56,11 +58,6 @@ fn build_hash_layout<'a, 'ctx, 'env>(
             val.into_struct_value(),
         ),
 
-        Layout::PhantomEmptyStruct => {
-            // just does nothing and returns the seed
-            seed
-        }
-
         Layout::Union(union_layout) => {
             build_hash_tag(env, layout_ids, layout, union_layout, seed, val)
         }
@@ -90,10 +87,6 @@ fn build_hash_layout<'a, 'ctx, 'env>(
                 )
             }
         },
-
-        Layout::Pointer(_) => {
-            unreachable!("unused")
-        }
 
         Layout::FunctionPointer(_, _) | Layout::Closure(_, _, _) => {
             unreachable!("the type system will guarantee these are never hashed")
@@ -157,7 +150,7 @@ fn hash_builtin<'a, 'ctx, 'env>(
         Builtin::Set(_) => {
             todo!("Implement Hash for Set")
         }
-        Builtin::List(_, element_layout) => build_hash_list(
+        Builtin::List(element_layout) => build_hash_list(
             env,
             layout_ids,
             layout,
@@ -241,8 +234,8 @@ fn build_hash_struct_help<'a, 'ctx, 'env>(
     let seed = it.next().unwrap().into_int_value();
     let value = it.next().unwrap().into_struct_value();
 
-    set_name(seed.into(), Symbol::ARG_1.ident_string(&env.interns));
-    set_name(value.into(), Symbol::ARG_2.ident_string(&env.interns));
+    seed.set_name(Symbol::ARG_1.ident_string(&env.interns));
+    value.set_name(Symbol::ARG_2.ident_string(&env.interns));
 
     let entry = ctx.append_basic_block(parent, "entry");
     env.builder.position_at_end(entry);
@@ -382,8 +375,8 @@ fn build_hash_tag_help<'a, 'ctx, 'env>(
     let seed = it.next().unwrap().into_int_value();
     let value = it.next().unwrap();
 
-    set_name(seed.into(), Symbol::ARG_1.ident_string(&env.interns));
-    set_name(value, Symbol::ARG_2.ident_string(&env.interns));
+    seed.set_name(Symbol::ARG_1.ident_string(&env.interns));
+    value.set_name(Symbol::ARG_2.ident_string(&env.interns));
 
     let entry = ctx.append_basic_block(parent, "entry");
     env.builder.position_at_end(entry);
@@ -662,8 +655,8 @@ fn build_hash_list_help<'a, 'ctx, 'env>(
     let seed = it.next().unwrap().into_int_value();
     let value = it.next().unwrap().into_struct_value();
 
-    set_name(seed.into(), Symbol::ARG_1.ident_string(&env.interns));
-    set_name(value.into(), Symbol::ARG_2.ident_string(&env.interns));
+    seed.set_name(Symbol::ARG_1.ident_string(&env.interns));
+    value.set_name(Symbol::ARG_2.ident_string(&env.interns));
 
     let entry = ctx.append_basic_block(parent, "entry");
     env.builder.position_at_end(entry);
