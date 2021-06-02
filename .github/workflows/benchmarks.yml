@@ -20,5 +20,5 @@ jobs:
       - name: Earthly version
         run: earthly --version
 
-      - name: install dependencies, build, cd cli, benchmark with iai and criterion
-        run: earthly --allow-privileged +bench-roc
+      - name: install dependencies, build, cd cli, benchmark with criterion
+        run: ./ci/safe-earthly.sh +bench-roc

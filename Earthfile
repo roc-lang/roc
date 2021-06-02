@@ -39,7 +39,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     # rustfmt
     RUN rustup component add rustfmt
     # criterion
-    RUN cargo install --git https://github.com/Anton-4/cargo-criterion
+    RUN cargo install --git https://github.com/Anton-4/cargo-criterion --branch main
     # sccache
     RUN apt -y install libssl-dev
     RUN cargo install sccache
