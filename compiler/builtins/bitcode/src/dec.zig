@@ -361,8 +361,9 @@ test "fromString: .45" {
     expectEqual(RocDec{ .num = 450000000000000000 }, dec.?);
 }
 
-test "fromString: .45" {
-    var dec = RocDec.fromString("0.45", 4);
+test "fromString: 0.45" {
+    var roc_str = RocStr.init("0.45", 4);
+    var dec = RocDec.fromString(roc_str);
 
     expectEqual(RocDec{ .num = 450000000000000000 }, dec.?);
 }
@@ -375,25 +376,29 @@ test "fromString: 123" {
 }
 
 test "fromString: -.45" {
-    var dec = RocDec.fromString("-.45", 4);
+    var roc_str = RocStr.init("-.45", 4);
+    var dec = RocDec.fromString(roc_str);
 
     expectEqual(RocDec{ .num = -450000000000000000 }, dec.?);
 }
 
 test "fromString: -0.45" {
-    var dec = RocDec.fromString("-0.45", 5);
+    var roc_str = RocStr.init("-0.45", 4);
+    var dec = RocDec.fromString(roc_str);
 
     expectEqual(RocDec{ .num = -450000000000000000 }, dec.?);
 }
 
 test "fromString: -123" {
-    var dec = RocDec.fromString("-123", 4);
+    var roc_str = RocStr.init("-123", 4);
+    var dec = RocDec.fromString(roc_str);
 
     expectEqual(RocDec{ .num = -123000000000000000000 }, dec.?);
 }
 
 test "fromString: -123.45" {
-    var dec = RocDec.fromString("-123.45", 7);
+    var roc_str = RocStr.init("-123.45", 7);
+    var dec = RocDec.fromString(roc_str);
 
     expectEqual(RocDec{ .num = -123450000000000000000 }, dec.?);
 }
