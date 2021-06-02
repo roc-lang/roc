@@ -3035,6 +3035,18 @@ pub fn build_procedures_return_main<'a, 'ctx, 'env>(
     .unwrap()
 }
 
+// Coming soon
+// pub enum AliasAnalysisSolutions {
+//     NotAvailable,
+//     Available(morphic_lib::Solutions),
+// }
+// 
+// impl std::fmt::Debug for AliasAnalysisSolutions {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         write!(f, "AliasAnalysisSolutions {{}}")
+//     }
+// }
+
 fn build_procedures_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
@@ -3043,6 +3055,20 @@ fn build_procedures_help<'a, 'ctx, 'env>(
 ) -> Option<(&'static str, FunctionValue<'ctx>)> {
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
     let mut scope = Scope::default();
+
+    // Coming Soon
+    //
+    //                if false {
+    //                    let it = state.procedures.iter().map(|x| x.1);
+    //
+    //                    match roc_mono::alias_analysis::spec_program(it) {
+    //                        Err(e) => panic!("Error in alias analysis: {:?}", e),
+    //                        Ok(solutions) => {
+    //                            state.alias_analysis_solutions =
+    //                                AliasAnalysisSolutions::Available(solutions)
+    //                        }
+    //                    }
+    //                }
 
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
