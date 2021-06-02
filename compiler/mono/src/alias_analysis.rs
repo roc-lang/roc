@@ -215,17 +215,29 @@ fn stmt_spec(
         }
         Ret(symbol) => Ok(env.symbols[symbol]),
         Refcounting(modify_rc, continuation) => match modify_rc {
-            ModifyRc::Inc(symbol, _) | ModifyRc::Dec(symbol) => {
-                let result_type = builder.add_tuple_type(&[])?;
+            ModifyRc::Inc(symbol, _) => {
                 let argument = env.symbols[symbol];
 
-                // this is how RC is modelled; it recursively touches all heap cells
-                builder.add_unknown_with(block, &[argument], result_type)?;
+                // inc is non-recursive
+                builder.add_touch(block, argument)?;
 
                 stmt_spec(builder, env, block, layout, continuation)
             }
-            ModifyRc::DecRef(_symbol) => {
-                // TODO a decref is a non-recursive decrement of a structure
+
+            ModifyRc::Dec(symbol) => {
+                let argument = env.symbols[symbol];
+
+                // dec may be recursive
+                builder.add_recursive_touch(block, argument)?;
+
+                stmt_spec(builder, env, block, layout, continuation)
+            }
+            ModifyRc::DecRef(symbol) => {
+                let argument = env.symbols[symbol];
+
+                // decref is non-recursive
+                builder.add_touch(block, argument)?;
+
                 stmt_spec(builder, env, block, layout, continuation)
             }
         },
