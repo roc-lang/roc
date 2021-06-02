@@ -77,7 +77,7 @@ quickcheck = "0.8"
 quickcheck_macros = "0.8"
 serial_test = "0.5"
 tempfile = "3.1.0"
-criterion = "0.3.4"
+criterion = { git = "https://github.com/Anton-4/criterion.rs"} 
 cli_utils = { path = "cli_utils" }
 # Keep the commented deps, they are commented because they require nightly rust
 # criterion-perf-events = "0.1.3"
