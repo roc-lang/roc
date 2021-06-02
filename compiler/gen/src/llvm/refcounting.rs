@@ -724,7 +724,7 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
 
         Layout::RecursivePointer => match when_recursive {
             WhenRecursive::Unreachable => {
-                unreachable!("recursion pointers should never be hashed directly")
+                unreachable!("recursion pointers cannot be in/decremented directly")
             }
             WhenRecursive::Loop(union_layout) => {
                 let layout = Layout::Union(*union_layout);
