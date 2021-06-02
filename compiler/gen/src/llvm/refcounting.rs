@@ -8,6 +8,7 @@ use crate::llvm::convert::{
     basic_type_from_layout, block_of_memory, block_of_memory_slices, ptr_int,
 };
 use bumpalo::collections::Vec;
+use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
 use inkwell::types::{AnyTypeEnum, BasicType, BasicTypeEnum};
@@ -92,6 +93,14 @@ impl<'ctx> PointerToRefcount<'ctx> {
             .into_pointer_value();
 
         Self::from_ptr_to_data(env, data_ptr)
+    }
+
+    pub fn is_1<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
+        let current = self.get_refcount(env);
+        let one = refcount_1(env.context, env.ptr_bytes);
+
+        env.builder
+            .build_int_compare(IntPredicate::EQ, current, one, "is_one")
     }
 
     pub fn get_refcount<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
@@ -1249,7 +1258,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
     when_recursive: &WhenRecursive<'a>,
-    tags: &[&[Layout<'a>]],
+    tags: &'a [&'a [roc_mono::layout::Layout<'a>]],
     fn_val: FunctionValue<'ctx>,
     is_nullable: bool,
 ) {
@@ -1257,8 +1266,6 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
 
     let context = &env.context;
     let builder = env.builder;
-
-    let pick = |a, b| if let Mode::Inc = mode { a } else { b };
 
     // Add a basic block for the entry point
     let entry = context.append_basic_block(fn_val, "entry");
@@ -1281,6 +1288,92 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
     debug_assert!(arg_val.is_pointer_value());
     let value_ptr = arg_val.into_pointer_value();
 
+    // to increment/decrement the cons-cell itself
+    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
+    let call_mode = mode_to_call_mode(fn_val, mode);
+
+    let should_recurse_block = env.context.append_basic_block(parent, "should_recurse");
+
+    let ctx = env.context;
+    if is_nullable {
+        let is_null = env.builder.build_is_null(value_ptr, "is_null");
+
+        let then_block = ctx.append_basic_block(parent, "then");
+
+        env.builder
+            .build_conditional_branch(is_null, then_block, should_recurse_block);
+
+        {
+            env.builder.position_at_end(then_block);
+            env.builder.build_return(None);
+        }
+    } else {
+        env.builder.build_unconditional_branch(should_recurse_block);
+    }
+
+    env.builder.position_at_end(should_recurse_block);
+
+    match mode {
+        Mode::Inc => {
+            // inc is cheap; we never recurse
+            refcount_ptr.modify(call_mode, &layout, env);
+            env.builder.build_return(None);
+        }
+
+        Mode::Dec => {
+            let do_recurse_block = env.context.append_basic_block(parent, "do_recurse");
+            let no_recurse_block = env.context.append_basic_block(parent, "no_recurse");
+
+            builder.build_conditional_branch(
+                refcount_ptr.is_1(env),
+                do_recurse_block,
+                no_recurse_block,
+            );
+
+            {
+                env.builder.position_at_end(no_recurse_block);
+
+                refcount_ptr.modify(call_mode, &layout, env);
+                env.builder.build_return(None);
+            }
+
+            {
+                env.builder.position_at_end(do_recurse_block);
+
+                build_rec_union_recursive_decrement(
+                    env,
+                    layout_ids,
+                    when_recursive,
+                    parent,
+                    fn_val,
+                    layout,
+                    tags,
+                    value_ptr,
+                    refcount_ptr,
+                    do_recurse_block,
+                )
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    when_recursive: &WhenRecursive<'a>,
+    parent: FunctionValue<'ctx>,
+    decrement_fn: FunctionValue<'ctx>,
+    layout: Layout<'a>,
+    tags: &[&[Layout<'a>]],
+    value_ptr: PointerValue<'ctx>,
+    refcount_ptr: PointerToRefcount<'ctx>,
+    match_block: BasicBlock<'ctx>,
+) {
+    let mode = Mode::Dec;
+    let call_mode = mode_to_call_mode(decrement_fn, mode);
+    let builder = env.builder;
+
     // branches that are not/don't contain anything refcounted
     // if there is only one branch, we don't need to switch
     let switch_needed: bool = (|| {
@@ -1296,28 +1389,6 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
         false
     })();
 
-    // to increment/decrement the cons-cell itself
-    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
-    let call_mode = mode_to_call_mode(fn_val, mode);
-
-    let ctx = env.context;
-    let cont_block = ctx.append_basic_block(parent, "cont");
-    if is_nullable {
-        let is_null = env.builder.build_is_null(value_ptr, "is_null");
-
-        let then_block = ctx.append_basic_block(parent, "then");
-
-        env.builder
-            .build_conditional_branch(is_null, then_block, cont_block);
-
-        {
-            env.builder.position_at_end(then_block);
-            env.builder.build_return(None);
-        }
-    } else {
-        env.builder.build_unconditional_branch(cont_block);
-    }
-
     // next, make a jump table for all possible values of the tag_id
     let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
@@ -1330,9 +1401,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
             continue;
         }
 
-        let block = env
-            .context
-            .append_basic_block(parent, pick("tag_id_increment", "tag_id_decrement"));
+        let block = env.context.append_basic_block(parent, "tag_id_decrement");
 
         env.builder.position_at_end(block);
 
@@ -1382,10 +1451,9 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
                     .build_struct_gep(struct_ptr, i as u32, "gep_recursive_pointer")
                     .unwrap();
 
-                let field = env.builder.build_load(
-                    elem_pointer,
-                    pick("increment_struct_field", "decrement_struct_field"),
-                );
+                let field = env
+                    .builder
+                    .build_load(elem_pointer, "decrement_struct_field");
 
                 deferred_nonrec.push((field, field_layout));
             }
@@ -1404,7 +1472,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
                 env,
                 parent,
                 layout_ids,
-                mode.to_call_mode(fn_val),
+                mode.to_call_mode(decrement_fn),
                 when_recursive,
                 field,
                 field_layout,
@@ -1413,7 +1481,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
 
         for ptr in deferred_rec {
             // recursively decrement the field
-            let call = call_help(env, fn_val, mode.to_call_mode(fn_val), ptr);
+            let call = call_help(env, decrement_fn, mode.to_call_mode(decrement_fn), ptr);
             call.set_tail_call(true);
         }
 
@@ -1426,9 +1494,9 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
         ));
     }
 
-    cases.reverse();
+    env.builder.position_at_end(match_block);
 
-    env.builder.position_at_end(cont_block);
+    cases.reverse();
 
     if cases.len() == 1 && !switch_needed {
         // there is only one tag in total; we don't need a switch
@@ -1441,9 +1509,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
         // read the tag_id
         let current_tag_id = rec_union_read_tag(env, value_ptr);
 
-        let merge_block = env
-            .context
-            .append_basic_block(parent, pick("increment_merge", "decrement_merge"));
+        let merge_block = env.context.append_basic_block(parent, "decrement_merge");
 
         // switch on it
         env.builder
