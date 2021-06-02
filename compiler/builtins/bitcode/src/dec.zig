@@ -383,7 +383,7 @@ test "fromString: -.45" {
 }
 
 test "fromString: -0.45" {
-    var roc_str = RocStr.init("-0.45", 4);
+    var roc_str = RocStr.init("-0.45", 5);
     var dec = RocDec.fromString(roc_str);
 
     expectEqual(RocDec{ .num = -450000000000000000 }, dec.?);
