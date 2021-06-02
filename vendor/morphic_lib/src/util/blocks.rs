@@ -93,7 +93,7 @@ impl<BlockId: Id, ValId: Id, BlockInfo> Blocks<BlockId, ValId, BlockInfo> {
         &mut self.blocks[block_id].info
     }
 
-    pub fn block_values<'a>(&'a self, block_id: BlockId) -> impl Iterator<Item = ValId> + 'a {
+    pub fn block_values(&self, block_id: BlockId) -> impl Iterator<Item = ValId> + '_ {
         let mut frag = &self.frags[self.blocks[block_id].head];
         let mut val = frag.min_val.clone();
         std::iter::from_fn(move || {

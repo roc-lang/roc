@@ -6,7 +6,7 @@ use crate::util::blocks::Blocks;
 use crate::util::id_bi_map::IdBiMap;
 use crate::util::id_type::Count;
 use crate::util::id_vec::IdVec;
-use crate::util::op_graph::{Node, OpGraph};
+use crate::util::op_graph::OpGraph;
 use crate::util::replace_none::replace_none;
 
 #[derive(Clone, thiserror::Error, Debug)]
@@ -1518,24 +1518,17 @@ fn populate_specs(
 ) -> IdVec<CalleeSpecVarId, FuncSpec> {
     let mut results = IdVec::filled_with(callee_spec_var_ids, || None);
     for val_id in vals.count().iter() {
-        match vals.node(val_id) {
-            Node {
-                op:
-                    Op::Call {
-                        callee_spec_var,
-                        callee_mod,
-                        callee,
-                    },
-                inputs: _,
-            } => {
-                replace_none(
-                    &mut results[callee_spec_var],
-                    hash_func_name(callee_mod.borrowed(), callee.borrowed()),
-                )
-                .unwrap();
-            }
-
-            _ => {}
+        if let Op::Call {
+            callee_spec_var,
+            callee_mod,
+            callee,
+        } = vals.node(val_id).op
+        {
+            replace_none(
+                &mut results[callee_spec_var],
+                hash_func_name(callee_mod.borrowed(), callee.borrowed()),
+            )
+            .unwrap();
         }
     }
     results.into_mapped(|_, spec| spec.unwrap())
