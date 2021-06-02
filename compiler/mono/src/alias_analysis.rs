@@ -440,8 +440,14 @@ fn lowlevel_spec(
 
             builder.add_sub_block(block, sub_block)
         }
-        Eq | NotEq => new_bool(builder, block),
-        NumLte | NumLt | NumGt | NumGte => new_order(builder, block),
+        Eq | NotEq => {
+            // just dream up a unit value
+            builder.add_make_tuple(block, &[])
+        }
+        NumLte | NumLt | NumGt | NumGte => {
+            // just dream up a unit value
+            builder.add_make_tuple(block, &[])
+        }
         ListLen => {
             // just dream up a unit value
             builder.add_make_tuple(block, &[])
@@ -745,24 +751,6 @@ fn new_static_string(builder: &mut FuncDefBuilder, block: BlockId) -> Result<Val
     let module = MOD_APP;
 
     builder.add_const_ref(block, module, STATIC_STR_NAME)
-}
-
-fn new_order(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
-    // always generats EQ
-    let tag_id = 0;
-
-    let unit = builder.add_tuple_type(&[])?;
-    let unit_value = builder.add_make_tuple(block, &[])?;
-    builder.add_make_union(block, &[unit, unit, unit], tag_id, unit_value)
-}
-
-fn new_bool(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
-    // always generats False
-    let tag_id = 0;
-
-    let unit = builder.add_tuple_type(&[])?;
-    let unit_value = builder.add_make_tuple(block, &[])?;
-    builder.add_make_union(block, &[unit, unit], tag_id, unit_value)
 }
 
 fn new_num(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
