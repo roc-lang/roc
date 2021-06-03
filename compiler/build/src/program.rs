@@ -3,9 +3,8 @@ use bumpalo::Bump;
 use inkwell::context::Context;
 use inkwell::targets::{CodeModel, FileType, RelocMode};
 pub use roc_gen::llvm::build::FunctionIterator;
-use roc_gen::llvm::build::{build_proc, build_proc_header, module_from_builtins, OptLevel, Scope};
+use roc_gen::llvm::build::{module_from_builtins, OptLevel};
 use roc_load::file::MonomorphizedModule;
-use roc_mono::layout::LayoutIds;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
@@ -121,7 +120,7 @@ pub fn gen_from_mono_module(
 
     let builder = context.create_builder();
     let (dibuilder, compile_unit) = roc_gen::llvm::build::Env::new_debug_info(module);
-    let (mpm, fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
+    let (mpm, _fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
 
     // Compile and add all the Procs before adding main
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
@@ -138,55 +137,7 @@ pub fn gen_from_mono_module(
         exposed_to_host: loaded.exposed_to_host.keys().copied().collect(),
     };
 
-    // Populate Procs further and get the low-level Expr from the canonical Expr
-    let mut headers = Vec::with_capacity(loaded.procedures.len());
-
-    // Add all the Proc headers to the module.
-    // We have to do this in a separate pass first,
-    // because their bodies may reference each other.
-    let mut layout_ids = LayoutIds::default();
-
-    let mut scope = Scope::default();
-    for ((symbol, layout), proc) in loaded.procedures {
-        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, layout, &proc);
-
-        if proc.args.is_empty() {
-            // this is a 0-argument thunk, i.e. a top-level constant definition
-            // it must be in-scope everywhere in the module!
-            scope.insert_top_level_thunk(symbol, arena.alloc(layout), fn_val);
-        }
-
-        headers.push((proc, fn_val));
-    }
-
-    // Build each proc using its header info.
-    for (proc, fn_val) in headers {
-        // NOTE: This is here to be uncommented in case verification fails.
-        // (This approach means we don't have to defensively clone name here.)
-        //
-        // println!("\n\nBuilding and then verifying function {:?}\n\n", proc);
-        build_proc(&env, &mut layout_ids, scope.clone(), proc, fn_val);
-
-        // call finalize() before any code generation/verification
-        env.dibuilder.finalize();
-
-        if fn_val.verify(true) {
-            fpm.run_on(&fn_val);
-        } else {
-            fn_val.print_to_stderr();
-
-            // write the ll code to a file, so we can modify it
-            env.module.print_to_file(&app_ll_file).unwrap();
-
-            // env.module.print_to_stderr();
-            // NOTE: If this fails, uncomment the above println to debug.
-            panic!(
-                r"Non-main function {:?} failed LLVM verification. I wrote the full LLVM IR to {:?}",
-                fn_val.get_name(),
-                app_ll_file,
-            );
-        }
-    }
+    roc_gen::llvm::build::build_procedures(&env, opt_level, loaded.procedures);
 
     env.dibuilder.finalize();
 

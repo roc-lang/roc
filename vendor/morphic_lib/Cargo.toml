@@ -7,3 +7,4 @@ edition = "2018"
 [dependencies]
 thiserror = "1.0.24"
 sha2 = "0.9.4"
+smallvec = "1.6.1"
