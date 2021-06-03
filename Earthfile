@@ -38,6 +38,8 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN rustup component add clippy
     # rustfmt
     RUN rustup component add rustfmt
+    # criterion
+    RUN cargo install --git https://github.com/Anton-4/cargo-criterion --branch main
     # sccache
     RUN apt -y install libssl-dev
     RUN cargo install sccache
@@ -108,4 +110,11 @@ test-all:
     BUILD +check-rustfmt
     BUILD +check-clippy
     BUILD +test-rust
+
+bench-roc:
+    FROM +copy-dirs-and-cache
+    ENV RUST_BACKTRACE=full
+    RUN cargo criterion -V
+    RUN --privileged --mount=type=cache,target=$SCCACHE_DIR \
+        cd cli && cargo criterion && sccache --show-stats
     

@@ -7,11 +7,9 @@ extern crate roc_collections;
 extern crate roc_load;
 extern crate roc_module;
 
-mod helpers;
-
 #[cfg(test)]
 mod cli_run {
-    use crate::helpers::{
+    use cli_utils::helpers::{
         example_file, extract_valgrind_errors, fixture_file, run_cmd, run_roc, run_with_valgrind,
         ValgrindError, ValgrindErrorXWhat,
     };
@@ -181,7 +179,7 @@ mod cli_run {
     fn run_nqueens_not_optimized() {
         check_output_with_stdin(
             &example_file("benchmarks", "NQueens.roc"),
-            "",
+            "6",
             "nqueens",
             &[],
             "4\n",
@@ -192,8 +190,9 @@ mod cli_run {
     #[test]
     #[serial(cfold)]
     fn run_cfold_not_optimized() {
-        check_output(
+        check_output_with_stdin(
             &example_file("benchmarks", "CFold.roc"),
+            "3",
             "cfold",
             &[],
             "11 & 11\n",
@@ -204,8 +203,9 @@ mod cli_run {
     #[test]
     #[serial(deriv)]
     fn run_deriv_not_optimized() {
-        check_output(
+        check_output_with_stdin(
             &example_file("benchmarks", "Deriv.roc"),
+            "2",
             "deriv",
             &[],
             "1 count: 6\n2 count: 22\n",
@@ -228,8 +228,9 @@ mod cli_run {
     #[test]
     #[serial(deriv)]
     fn run_rbtree_delete_not_optimized() {
-        check_output(
+        check_output_with_stdin(
             &example_file("benchmarks", "RBTreeDel.roc"),
+            "420",
             "rbtree-del",
             &[],
             "30\n",
