@@ -2040,7 +2040,7 @@ fn update<'a>(
         }
         MadeSpecializations {
             module_id,
-            mut ident_ids,
+            ident_ids,
             subs,
             procedures,
             external_specializations_requested,
@@ -2063,6 +2063,8 @@ fn update<'a>(
                 && state.dependencies.solved_all()
                 && state.goal_phase == Phase::MakeSpecializations
             {
+                Proc::insert_refcount_operations(arena, &mut state.procedures);
+
                 // display the mono IR of the module, for debug purposes
                 if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
                     let procs_string = state
@@ -2076,14 +2078,14 @@ fn update<'a>(
                     println!("{}", result);
                 }
 
-                Proc::insert_refcount_operations(arena, &mut state.procedures);
-
-                Proc::optimize_refcount_operations(
-                    arena,
-                    module_id,
-                    &mut ident_ids,
-                    &mut state.procedures,
-                );
+                // This is not safe with the new non-recursive RC updates that we do for tag unions
+                //
+                //                Proc::optimize_refcount_operations(
+                //                    arena,
+                //                    module_id,
+                //                    &mut ident_ids,
+                //                    &mut state.procedures,
+                //                );
 
                 if false {
                     let it = state.procedures.iter().map(|x| x.1);

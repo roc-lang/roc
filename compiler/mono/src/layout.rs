@@ -1113,7 +1113,6 @@ fn layout_from_flat_type<'a>(
             // That means none of the optimizations for enums or single tag tag unions apply
 
             let rec_var = subs.get_root_key_without_compacting(rec_var);
-            env.insert_seen(rec_var);
             let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
 
             // VERY IMPORTANT: sort the tags
@@ -1131,6 +1130,7 @@ fn layout_from_flat_type<'a>(
                 }
             }
 
+            env.insert_seen(rec_var);
             for (index, (_name, variables)) in tags_vec.into_iter().enumerate() {
                 if matches!(nullable, Some(i) if i == index as i64) {
                     // don't add the
@@ -1163,6 +1163,7 @@ fn layout_from_flat_type<'a>(
 
                 tag_layouts.push(tag_layout.into_bump_slice());
             }
+            env.remove_seen(rec_var);
 
             let union_layout = if let Some(tag_id) = nullable {
                 match tag_layouts.into_bump_slice() {
@@ -1185,8 +1186,6 @@ fn layout_from_flat_type<'a>(
             } else {
                 UnionLayout::Recursive(tag_layouts.into_bump_slice())
             };
-
-            env.remove_seen(rec_var);
 
             Ok(Layout::Union(union_layout))
         }
@@ -1421,10 +1420,6 @@ pub fn union_sorted_tags_help<'a>(
         subs,
         seen: MutSet::default(),
     };
-
-    if let Some(rec_var) = opt_rec_var {
-        env.insert_seen(rec_var);
-    }
 
     match tags_vec.len() {
         0 => {
