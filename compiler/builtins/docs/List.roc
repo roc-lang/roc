@@ -62,7 +62,7 @@ interface List2
 ## the same type. If you want to put a mix of #Int and #Str values into a list, try this:
 ##
 ## ```
-## mixedList : List [ IntElem Int, StrElem Str ]*
+## mixedList : List [ IntElem I64, StrElem Str ]*
 ## mixedList = [ IntElem 1, IntElem 2, StrElem "a", StrElem "b" ]
 ## ```
 ##
@@ -248,7 +248,7 @@ map : List before, (before -> after) -> List after
 
 ## This works like #List.map, except it also passes the index
 ## of the element to the conversion function.
-mapWithIndex : List before, (before, Int -> after) -> List after
+mapWithIndex : List before, (before, Nat -> after) -> List after
 
 ## This works like #List.map, except at any time you can return `Err` to
 ## cancel the entire operation immediately, and return that #Err.

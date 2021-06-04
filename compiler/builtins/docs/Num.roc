@@ -689,7 +689,7 @@ toD64 : Num * -> D64
 ## >>> Num.divRound 8 -3
 ##
 ## This is the same as the #// operator.
-divRound : Int, Int -> Int
+divRound : Int a, Int a -> Int a
 
 ## Perform flooring modulo on two integers.
 ##
@@ -711,16 +711,16 @@ divRound : Int, Int -> Int
 ## >>> -8 %% -3
 ##
 ## >>> Int.modFloor -8 -3
-#modFloor : Int, Int -> Result DivByZero Int
+#modFloor : Int a, Int a -> Result (Int a) [ DivByZero ]*
 
 
 ## Bitwise
 
-xor : Int, Int -> Int
+xor : Int a, Int a -> Int a
 
-and : Int, Int -> Int
+and : Int a, Int a -> Int a
 
-not : Int -> Int
+not : Int a -> Int a
 
 ## Sort ascending - that is, with the lowest first, and the highest last.
 ##
