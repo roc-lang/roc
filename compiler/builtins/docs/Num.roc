@@ -520,7 +520,20 @@ isOdd : Num * -> Bool
 ##
 ## >>> Frac.pi
 ## >>>     |> Num.add 1.0
+##
+## If the answer to this operation can't fit in the return value (e.g. an
+## [I8] answer that's higher than 127 or lower than -128), the result is an
+## *overflow*. For [F64] and [F32], overflow results in an answer of either
+## [*Infinity*](#isPositiveInfinity) or [*-Infinity*](#isNegativeInfinity). For
+## all other number types, overflow results in a panic.
 add : Num a, Num a -> Num a
+
+## Add two numbers and check for overflow.
+##
+## This is the same as [Num.add] except if the operation overflows, instead of
+## panicking or returning [*Infinity*](#isPositiveInfinity) or [*-Infinity*](#isNegativeInfinity),
+## it will return `Err Overflow`.
+addCheckOverflow : Num a, Num a -> Result (Num a) [ Overflow ]*
 
 ## Subtract two numbers of the same type.
 ##
@@ -536,7 +549,20 @@ add : Num a, Num a -> Num a
 ##
 ## >>> Frac.pi
 ## >>>     |> Num.sub 2.0
+##
+## If the answer to this operation can't fit in the return value (e.g. an
+## [I8] answer that's higher than 127 or lower than -128), the result is an
+## *overflow*. For [F64] and [F32], overflow results in an answer of either
+## [*Infinity*](#isPositiveInfinity) or [*-Infinity*](#isNegativeInfinity). For
+## all other number types, overflow results in a panic.
 sub : Num a, Num a -> Num a
+
+## Subtract two numbers and check for overflow.
+##
+## This is the same as [Num.sub] except if the operation overflows, instead of
+## panicking or returning [*Infinity*](#isPositiveInfinity) or [*-Infinity*](#isNegativeInfinity),
+## it will return `Err Overflow`.
+subCheckOverflow : Num a, Num a -> Result (Num a) [ Overflow ]*
 
 ## Multiply two numbers of the same type.
 ##
@@ -552,7 +578,20 @@ sub : Num a, Num a -> Num a
 ##
 ## >>> Frac.pi
 ## >>>     |> Num.mul 2.0
+##
+## If the answer to this operation can't fit in the return value (e.g. an
+## [I8] answer that's higher than 127 or lower than -128), the result is an
+## *overflow*. For [F64] and [F32], overflow results in an answer of either
+## [*Infinity*](#isPositiveInfinity) or [*-Infinity*](#isNegativeInfinity). For
+## all other number types, overflow results in a panic.
 mul : Num a, Num a -> Num a
+
+## Multiply two numbers and check for overflow.
+##
+## This is the same as [Num.mul] except if the operation overflows, instead of
+## panicking or returning [*Infinity*](#isPositiveInfinity) or [*-Infinity*](#isNegativeInfinity),
+## it will return `Err Overflow`.
+mulCheckOverflow : Num a, Num a -> Result (Num a) [ Overflow ]*
 
 ## Convert
 
