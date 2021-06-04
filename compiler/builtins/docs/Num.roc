@@ -12,10 +12,10 @@ interface Num2
 ## add : Num range, Num range -> Num range
 ## ```
 ##
-## The number 1.5 technically has the type `Num FloatingPoint`, so when you pass two of them to `Num.add`, the answer you get is `3.0 : Num FloatingPoint`.
+## The number 1.5 technically has the type `Num Fraction`, so when you pass two of them to `Num.add`, the answer you get is `3.0 : Num Fraction`.
 ##
-## The type #Float is defined to be an alias for `Num FloatingPoint`, so `3.0 : Num FloatingPoint` is the same answer as `3.0 : Float`.  # # Similarly, the number 1 technically has the type `Num Integer`, so when you pass two of them to `Num.add`, the answer you get is `2 : Num Integer`.  # # The type #Int is defined to be an alias for `Num Integer`, so `2 : Num Integer` is the same answer as `2 : Int`.  #
-## In this way, the `Num` type makes it possible to have `1 + 1` return `2 : Int` and `1.5 + 1.5` return `3.0 : Float`.
+## The type #Frac is defined to be an alias for `Num Fraction`, so `3.0 : Num Fraction` is the same answer as `3.0 : Frac`.  # # Similarly, the number 1 technically has the type `Num Integer`, so when you pass two of them to `Num.add`, the answer you get is `2 : Num Integer`.  # # The type #Int is defined to be an alias for `Num Integer`, so `2 : Num Integer` is the same answer as `2 : Int`.  #
+## In this way, the `Num` type makes it possible to have `1 + 1` return `2 : Int` and `1.5 + 1.5` return `3.0 : Frac`.
 ##
 ## ## Number Literals
 ##
@@ -272,7 +272,7 @@ Nat : Int [ @Natural ]
 ## If you need to do math outside these bounds, consider using a larger numeric size.
 Int size : Num [ @Int size ]
 
-## A 64-bit floating-point number. All number literals with decimal points are #Float values.
+## A 64-bit floating-point number. All number literals with decimal points are #Frac values.
 ##
 ## >>> 0.1
 ##
@@ -280,7 +280,7 @@ Int size : Num [ @Int size ]
 ##
 ## >>> 0.0
 ##
-## If you like, you can put underscores in your #Float literals.
+## If you like, you can put underscores in your #Frac literals.
 ## They have no effect on the number's value, but can make things easier to read.
 ##
 ## >>> 1_000_000.000_000_001
@@ -309,7 +309,7 @@ Int size : Num [ @Int size ]
 ## If decimal precision is important - for example, when representing money -
 ## decimal floats tend to be worth the performance cost.
 ##
-## Usually, Roc's compiler can infer a more specific type than #Float for
+## Usually, Roc's compiler can infer a more specific type than #Frac for
 ## a particular float value, based on how it is used with other numbers. For example:
 ##
 ## >>> coordinates : { x : F32, y : F32 }
@@ -330,7 +330,7 @@ Int size : Num [ @Int size ]
 ## If you want something else, you can write (for example) `0.1f32 + 0.2 == 0.3`
 ## to compare them as #F32 values instead.
 ##
-## Both decimal and binary #Float values conform to the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754#Interchange_formats)
+## Both decimal and binary #Frac values conform to the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754#Interchange_formats)
 ## specification for floating point numbers. Conforming to this specification
 ## means Roc's binary floats have nearly universal hardware support, and its
 ## decimal floats have [some hardware support](http://speleotrove.com/decimal/)
@@ -343,7 +343,7 @@ Int size : Num [ @Int size ]
 ## - #D32 (32-bit decimal float)
 ## - #D64 (64-bit decimal float) # TODO show a table like we do with ints, with the min/max ranges
 ##
-## Like #Int, it's possible for #Float operations to overflow. Like with ints,
+## Like #Int, it's possible for #Frac operations to overflow. Like with ints,
 ## you'll typically get a crash when this happens.
 ##
 ## * In a development build, you'll get an assertion failure.
@@ -352,7 +352,7 @@ Int size : Num [ @Int size ]
 ## Although some languages treat have first-class representations for
 ## `-Infinity`, `Infinity`, and the special `NaN` ("not a number")
 ## floating-point values described in the IEEE-754, Roc does not.
-## Instead, Roc treats all of these as errors. If any Float operation
+## Instead, Roc treats all of these as errors. If any Frac operation
 ## in a development build encounters one of these values, it will
 ## result in an assertion failure.
 ##
@@ -378,13 +378,13 @@ Int size : Num [ @Int size ]
 ## Whenever any arithmetic operation is performed on an invalid float,
 ## the result is also invalid. This is called *error propagation*, and
 ## it is notoriously error-prone. In Roc, using equality operations like
-## `==` and `!=` on an invalid float causes a crash. (See #Float.verify
+## `==` and `!=` on an invalid float causes a crash. (See #Frac.verify
 ## to check the validity of your float.)
 ##
 ## Beause invalid floats are so error-prone, Roc discourages using them.
 ## Instead, by default it treats them the same way as overflow: by
-## crashing whenever any #Float function would otherwise return one.
-## You can also use functions like #Float.tryAdd to get an `Ok` or an error
+## crashing whenever any #Frac function would otherwise return one.
+## You can also use functions like #Frac.tryAdd to get an `Ok` or an error
 ## back so you can gracefully recover from invalid values.
 ##
 ## Quiet errors can be useful sometimes. For example, you might want to
@@ -426,7 +426,7 @@ Int size : Num [ @Int size ]
 ##
 ## >>> Num.neg 0.0
 ##
-## This is safe to use with any #Float, but it can cause overflow when used with certain #Int values.
+## This is safe to use with any #Frac, but it can cause overflow when used with certain #Int values.
 ##
 ## For example, calling #Num.neg on the lowest value of a signed integer (such as #Int.lowestI64 or #Int.lowestI32) will cause overflow.
 ## This is because, for any given size of signed integer (32-bit, 64-bit, etc.) its negated lowest value turns out to be 1 higher than
@@ -434,7 +434,7 @@ Int size : Num [ @Int size ]
 ##
 ## Additionally, calling #Num.neg on any unsigned integer (such as any #U64 or #U32 value) other than 0 will cause overflow.
 ##
-## (It will never crash when given a #Float, however, because of how floating point numbers represent positive and negative numbers.)
+## (It will never crash when given a #Frac, however, because of how floating point numbers represent positive and negative numbers.)
 neg : Num range -> Num range
 
 ## Return the absolute value of the number.
@@ -451,7 +451,7 @@ neg : Num range -> Num range
 ##
 ## >>> Num.abs 0.0
 ##
-## This is safe to use with any #Float, but it can cause overflow when used with certain #Int values.
+## This is safe to use with any #Frac, but it can cause overflow when used with certain #Int values.
 ##
 ## For example, calling #Num.abs on the lowest value of a signed integer (such as #Int.lowestI64 or #Int.lowestI32) will cause overflow.
 ## This is because, for any given size of signed integer (32-bit, 64-bit, etc.) its negated lowest value turns out to be 1 higher than
@@ -485,7 +485,7 @@ isOdd : Num * -> Bool
 
 ## Add two numbers of the same type.
 ##
-## (To add an #Int and a #Float, first convert one so that they both have the same type. There are functions in the [`Float`](/Float) module that can convert both #Int to #Float and the other way around.)
+## (To add an #Int and a #Frac, first convert one so that they both have the same type. There are functions in the [`Frac`](/Frac) module that can convert both #Int to #Frac and the other way around.)
 ##
 ## `a + b` is shorthand for `Num.add a b`.
 ##
@@ -495,13 +495,13 @@ isOdd : Num * -> Bool
 ##
 ## `Num.add` can be convenient in pipelines.
 ##
-## >>> Float.pi
+## >>> Frac.pi
 ## >>>     |> Num.add 1.0
 add : Num range, Num range -> Num range
 
 ## Subtract two numbers of the same type.
 ##
-## (To subtract an #Int and a #Float, first convert one so that they both have the same type. There are functions in the [`Float`](/Float) module that can convert both #Int to #Float and the other way around.)
+## (To subtract an #Int and a #Frac, first convert one so that they both have the same type. There are functions in the [`Frac`](/Frac) module that can convert both #Int to #Frac and the other way around.)
 ##
 ## `a - b` is shorthand for `Num.sub a b`.
 ##
@@ -511,13 +511,13 @@ add : Num range, Num range -> Num range
 ##
 ## `Num.sub` can be convenient in pipelines.
 ##
-## >>> Float.pi
+## >>> Frac.pi
 ## >>>     |> Num.sub 2.0
 sub : Num range, Num range -> Num range
 
 ## Multiply two numbers of the same type.
 ##
-## (To multiply an #Int and a #Float, first convert one so that they both have the same type. There are functions in the [`Float`](/Float) module that can convert both #Int to #Float and the other way around.)
+## (To multiply an #Int and a #Frac, first convert one so that they both have the same type. There are functions in the [`Frac`](/Frac) module that can convert both #Int to #Frac and the other way around.)
 ##
 ## `a * b` is shorthand for `Num.mul a b`.
 ##
@@ -527,7 +527,7 @@ sub : Num range, Num range -> Num range
 ##
 ## `Num.mul` can be convenient in pipelines.
 ##
-## >>> Float.pi
+## >>> Frac.pi
 ## >>>     |> Num.mul 2.0
 mul : Num range, Num range -> Num range
 
@@ -540,7 +540,7 @@ mul : Num range, Num range -> Num range
 ##
 ## >>> Num.toStr 42
 ##
-## Only #Float values will include a decimal point, and they will always include one.
+## Only #Frac values will include a decimal point, and they will always include one.
 ##
 ## >>> Num.toStr 4.2
 ##
@@ -612,10 +612,10 @@ format :
     -> Str
 
 ## Round off the given float to the nearest integer.
-round : Float * -> Int *
-ceil : Float * -> Int *
-floor : Float * -> Int *
-trunc : Float * -> Int *
+round : Frac * -> Int *
+ceil : Frac * -> Int *
+floor : Frac * -> Int *
+trunc : Frac * -> Int *
 
 ## Convert an #Int to a #Nat. If the given number doesn't fit in #Nat, it will be truncated.
 ## Since #Nat has a different maximum number depending on the system you're building
@@ -630,13 +630,13 @@ trunc : Float * -> Int *
 ## the #Nat value of 9_000_000_000. This is because on a 64-bit system, #Nat can
 ## hold up to #Num.maxU64, and 9_000_000_000 is lower than #Num.maxU64.
 ##
-## To convert a #Float to a #Nat, first call either #Num.round, #Num.ceil, or #Num.floor
+## To convert a #Frac to a #Nat, first call either #Num.round, #Num.ceil, or #Num.floor
 ## on it, then call this on the resulting #Int.
 toNat : Int * -> Nat
 
 ## Convert an #Int to an #I8. If the given number doesn't fit in #I8, it will be truncated.
 ##
-## To convert a #Float to an #I8, first call either #Num.round, #Num.ceil, or #Num.floor
+## To convert a #Frac to an #I8, first call either #Num.round, #Num.ceil, or #Num.floor
 ## on it, then call this on the resulting #Int.
 toI8 : Int * -> I8
 toI16 : Int * -> I16
@@ -660,13 +660,9 @@ toF32 : Num * -> F32
 ## there will be a loss of precision.
 toF64 : Num * -> F64
 
-## Convert a #Num to a #D32. If the given number can't be precisely represented in a #D32,
+## Convert a #Num to a #Dec. If the given number can't be precisely represented in a #Dec,
 ## there will be a loss of precision.
-toD32 : Num * -> D32
-
-## Convert a #Num to a #D64. If the given number can't be precisely represented in a #D64,
-## there will be a loss of precision.
-toD64 : Num * -> D64
+toDec : Num * -> Dec
 
 ## Divide two integers and #Num.round  the resulut.
 ##
@@ -696,9 +692,9 @@ divRound : Int a, Int a -> Int a
 ## Modulo is the same as remainder when working with positive numbers,
 ## but if either number is negative, then modulo works differently.
 ##
-## Additionally, flooring modulo uses #Float.floor on the result.
+## Additionally, flooring modulo uses #Frac.floor on the result.
 ##
-## (Use #Float.mod for non-flooring modulo.)
+## (Use #Frac.mod for non-flooring modulo.)
 ##
 ## Return `Err DivByZero` if the second integer is zero, because division by zero is undefined in mathematics.
 ##
@@ -739,7 +735,7 @@ desc : Num a, Num a -> [ Eq, Lt, Gt ]
 ## This function can crash under these circumstances:
 ##
 ## * It receives a function, or any type that contains a function (for example a record, tag, or #List containing a function)
-## * It receives an erroneous #Float (`NaN`, `Infinity`, or `-Infinity` - these values can only originate from hosts)
+## * It receives an erroneous #Frac (`NaN`, `Infinity`, or `-Infinity` - these values can only originate from hosts)
 ##
 ## CAUTION: This function may give different answers in future releases of Roc,
 ## so be aware that if you rely on the exact answer this gives today, your
@@ -803,88 +799,96 @@ maxU32 : U32
 ## and zero is the lowest unsigned number. Unsigned numbers cannot be negative.
 minU32 : U32
 
-## The highest supported #Float value you can have, which is approximately 1.8 × 10^308.
+## The highest supported #Frac value you can have, which is approximately 1.8 × 10^308.
 ##
 ## If you go higher than this, your running Roc code will crash - so be careful not to!
-maxF64 : Float *
+maxF64 : Frac *
 
-## The lowest supported #Float value you can have, which is approximately -1.8 × 10^308.
+## The lowest supported #Frac value you can have, which is approximately -1.8 × 10^308.
 ##
 ## If you go lower than this, your running Roc code will crash - so be careful not to!
-minF64 : Float *
+minF64 : Frac *
 
-## The highest integer that can be represented as a #Float without # losing precision.
+## The highest integer that can be represented as a #Frac without # losing precision.
 ## It is equal to 2^53, which is approximately 9 × 10^15.
 ##
 ## Some integers higher than this can be represented, but they may lose precision. For example:
 ##
-## >>> Float.highestInt
+## >>> Frac.highestInt
 ##
-## >>> Float.highestInt + 100 # Increasing may lose precision
+## >>> Frac.highestInt + 100 # Increasing may lose precision
 ##
-## >>> Float.highestInt - 100 # Decreasing is fine - but watch out for lowestLosslessInt!
-maxPreciseInt : Float *
+## >>> Frac.highestInt - 100 # Decreasing is fine - but watch out for lowestLosslessInt!
+maxPreciseInt : Frac *
 
-## The lowest integer that can be represented as a #Float without losing precision.
+## The lowest integer that can be represented as a #Frac without losing precision.
 ## It is equal to -2^53, which is approximately -9 × 10^15.
 ##
 ## Some integers lower than this can be represented, but they may lose precision. For example:
 ##
-## >>> Float.lowestIntVal
+## >>> Frac.lowestIntVal
 ##
-## >>> Float.lowestIntVal - 100 # Decreasing may lose precision
+## >>> Frac.lowestIntVal - 100 # Decreasing may lose precision
 ##
-## >>> Float.lowestIntVal + 100 # Increasing is fine - but watch out for highestInt!
-maxPreciseInt : Float *
+## >>> Frac.lowestIntVal + 100 # Increasing is fine - but watch out for highestInt!
+maxPreciseInt : Frac *
 
 ## Constants
 
 ## An approximation of e, specifically 2.718281828459045.
-e : Float *
+e : Frac *
 
 ## An approximation of pi, specifically 3.141592653589793.
-pi : Float *
+pi : Frac *
 ## Constants
 
 ## An approximation of e, specifically 2.718281828459045.
-e : Float *
+e : Frac *
 
 ## An approximation of pi, specifically 3.141592653589793.
-pi : Float *
+pi : Frac *
 
-#ceiling : Float -> Int
+#ceiling : Frac -> Int
 
-#floor : Float -> Int
+#floor : Frac -> Int
 
 ## Trigonometry
 
-#cos : Float -> Float
+#cos : Frac -> Frac
 
-#acos : Float -> Float
+#acos : Frac -> Frac
 
-#sin : Float -> Float
+#sin : Frac -> Frac
 
-#asin : Float -> Float
+#asin : Frac -> Frac
 
-#tan : Float -> Float
+#tan : Frac -> Frac
 
-#atan : Float -> Float
+#atan : Frac -> Frac
 
 ## Other Calculations (arithmetic?)
 
-## Divide two #Float numbers.
+## Divide one [Frac] by another.
 ##
 ## `a / b` is shorthand for `Num.div a b`.
 ##
-## Division by zero is undefined in mathematics. As such, you should make
-## sure never to pass zero as the denomaintor to this function!
+## [Division by zero is undefined in mathematics](https://en.wikipedia.org/wiki/Division_by_zero).
+## As such, you should make sure never to pass zero as the denomaintor to this function!
+## Calling [div] on a [Dec] denominator of 0 will cause a runtime error.
 ##
-## If zero does get passed as the denominator...
+## Calling [div] on [F32] and [F64] values follows these rules:
+## * Dividing a positive [F32] or [F64] by zero returns [Infinity](#isPositiveInfinity).
+## * Dividing a negative [F32] or [F64] by zero returns [-Infinity](#isNegativeInfinity).
+## * Dividing a zero [F32] or [F64] by zero returns [NaN](#isNaN).
 ##
-## * In a development build, you'll get an assertion failure.
-## * In a release build, the function will return `Infinity`, `-Infinity`, or `NaN` depending on the arguments.
+## > These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
+## > floating point standard. Since almost all modern processors are built to
+## > this standard, deviating from these rules has a significant performance
+## > cost. Since the most common reason to choose [F32] or [F64] over [Dec] is
+## > access to hardware-accelerated performance, Roc follows these rules exactly.
 ##
-## To divide an #Int and a #Float, first convert the #Int to a #Float using one of the functions in this module.
+## To divide an [Int] and a [Frac], first convert the [Int] to a [Frac] using
+## one of the functions in this module like [toDec].
 ##
 ## >>> 5.0 / 7.0
 ##
@@ -892,45 +896,47 @@ pi : Float *
 ##
 ## `Num.div` can be convenient in pipelines.
 ##
-## >>> Float.pi
+## >>> Num.pi
 ## >>>     |> Num.div 2.0
-#div : Float, Float -> Result Float DivByZero
-div = \numerator, denominator ->
-    when numerator is
-        0.0 -> 0.0 # TODO return Result!
-        _ -> denominator
+div : Frac a, Frac a -> Frac a
 
-## Perform modulo on two #Float numbers.
+## Perform modulo on two [Frac]s.
 ##
 ## Modulo is the same as remainder when working with positive numbers,
 ## but if either number is negative, then modulo works differently.
 ##
-## Return `Err DivByZero` if the second number is zero, because division by zero is undefined in mathematics.
+## `a % b` is shorthand for `Num.mod a b`.
 ##
-## `a % b` is shorthand for `Float.mod a b`.
+## [Division by zero is undefined in mathematics](https://en.wikipedia.org/wiki/Division_by_zero),
+## and as such, so is modulo by zero. Because of this, you should make sure never
+## to pass zero for the second argument to this function!
+##
+## Passing [mod] a [Dec] value of 0 for its second argument will cause a runtime error.
+## Passing [mod] a [F32] and [F64] value for its second argument will cause it
+## to return [NaN](#isNaN).
 ##
 ## >>> 5.0 % 7.0
 ##
-## >>> Float.mod 5 7
+## >>> Num.mod 5 7
 ##
-## `Float.mod` can be convenient in pipelines.
+## `Num.mod` can be convenient in pipelines.
 ##
-## >>> Float.pi
-## >>>     |> Float.mod 2.0
-mod : Float a, Float a -> Result (Float a) [ DivByZero ]*
+## >>> Num.pi
+## >>>     |> Num.mod 2.0
+mod : Frac a, Frac a -> Frac a
 
-## Raises a #Float to the power of another #Float.
+## Raises a #Frac to the power of another #Frac.
 ##
 ## `
 ## For an #Int alternative to this function, see #Num.raise.
-pow : Float a, Float a -> Float a
+pow : Frac a, Frac a -> Frac a
 
 ## Raises an integer to the power of another, by multiplying the integer by
 ## itself the given number of times.
 ##
 ## This process is known as [exponentiation by squaring](https://en.wikipedia.org/wiki/Exponentiation_by_squaring).
 ##
-## For a #Float alternative to this function, which supports negative exponents,
+## For a #Frac alternative to this function, which supports negative exponents,
 ## see #Num.exp.
 ##
 ## >>> Num.exp 5 0
@@ -947,30 +953,48 @@ pow : Float a, Float a -> Float a
 ## overflow
 expBySquaring : Int a, U8 -> Int a
 
-## Return the reciprocal of a #Float - that is, divides `1.0` by the given number.
+## Returns an approximation of the absolute value of the square root of the [Frac].
 ##
-## Crashes if given `0.0`, because division by zero is undefined in mathematics.
+## The square root of a negative number is an irrational number, and [Frac] only
+## supports rational numbers. As such, you should make sure never to pass this
+## function a negative number! Calling [sqrt] on a negative [Dec] will cause a runtime error.
 ##
-## For a version that does not crash, use #tryRecip
-recip : Float a -> Result (Float a) [ DivByZero ]*
+## Calling [sqrt] on [F32] and [F64] values follows these rules:
+## * Passing a negative [F32] or [F64] returns [NaN](#isNaN).
+## * Passing [NaN](#isNaN) or [-Infinity](isNegativeInfinity) also returns [NaN](#isNaN).
+## * Passing [Infinity](isPositiveInfinity) returns [Infinity].
+##
+## > These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
+## > floating point standard. Since almost all modern processors are built to
+## > this standard, deviating from these rules has a significant performance
+## > cost. Since the most common reason to choose [F32] or [F64] over [Dec] is
+## > access to hardware-accelerated performance, Roc follows these rules exactly.
+##
+## >>> Frac.sqrt 4.0
+##
+## >>> Frac.sqrt 1.5
+##
+## >>> Frac.sqrt 0.0
+##
+## >>> Frac.sqrt -4.0f64
+##
+## >>> Frac.sqrt -4.0dec
+sqrt : Frac a -> Frac a
 
-## NOTE: Need to come up a suffix alternative to the "try" prefix.
-## This should be like (for example) recipTry so that it's more discoverable
-## in documentation and editor autocomplete when you type "recip"
-tryRecip : Float a -> Result (Float a) [ DivByZero ]*
-
-## Return an approximation of the absolute value of the square root of the #Float.
+## Return an approximation of the absolute value of the square root of the #Frac,
+## or a poison number if given a negative or poison number.
 ##
-## Return #InvalidSqrt if given a negative number or an invalid #Float. The square root of a negative number is an irrational number, and #Float only supports rational numbers.
+## (The square root of a negative number is an irrational number, and [Frac]
+## only supports rational numbers.)
 ##
-## >>> Float.sqrt 4.0
+## >>> Frac.sqrt 4.0
 ##
-## >>> Float.sqrt 1.5
+## >>> Frac.sqrt 1.5
 ##
-## >>> Float.sqrt 0.0
+## >>> Frac.sqrt 0.0
 ##
-## >>> Float.sqrt -4.0
-sqrt : Float a -> [Ok (Float a), InvalidSqrt]*
+## >>> Frac.sqrt -4.0
+sqrtOrPoison : Frac a -> [Ok (Frac a), InvalidSqrt]*
 
 
 ## [Endianness](https://en.wikipedia.org/wiki/Endianness)
