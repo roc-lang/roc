@@ -981,22 +981,6 @@ expBySquaring : Int a, U8 -> Int a
 ## >>> Frac.sqrt -4.0dec
 sqrt : Frac a -> Frac a
 
-## Return an approximation of the absolute value of the square root of the #Frac,
-## or a poison number if given a negative or poison number.
-##
-## (The square root of a negative number is an irrational number, and [Frac]
-## only supports rational numbers.)
-##
-## >>> Frac.sqrt 4.0
-##
-## >>> Frac.sqrt 1.5
-##
-## >>> Frac.sqrt 0.0
-##
-## >>> Frac.sqrt -4.0
-sqrtOrPoison : Frac a -> [Ok (Frac a), InvalidSqrt]*
-
-
 ## [Endianness](https://en.wikipedia.org/wiki/Endianness)
 Endi : [ Big, Little ]
 
@@ -1011,7 +995,7 @@ toBytes : Num *, Endi -> List U8
 ##
 ## >>> Num.isNaN (Num.sqrtOrNaN -2)
 ##
-## See also [isPoison] and [isFinite].
+## See also [isFinite].
 isNaN : Frac * -> Bool
 
 ## When given a [F64] or [F32] value, returns `False` if that value is
@@ -1019,18 +1003,8 @@ isNaN : Frac * -> Bool
 ##
 ## Always returns `True` when given a [Dec].
 ##
-## [isPoison] returns the opposite of this.
-##
 ## See also [isInfinite].
 isFinite : Frac * -> Bool
-
-## When given a [F64] or [F32] value, returns `True` if that value is
-## [*NaN*](https://en.wikipedia.org/wiki/NaN), *Infinity*, or *-Infinity*.
-##
-## Always returns `False` when given a [Dec].
-##
-## [isFinite] returns the opposite of this.
-isPoison : Frac * -> Bool
 
 ## When given a [F64] or [F32] value, returns `True` if that value is either
 ## *Infinity* or *-Infinity*. (Returns `False` if that value is [*NaN*](https://en.wikipedia.org/wiki/NaN).)
