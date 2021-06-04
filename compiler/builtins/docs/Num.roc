@@ -455,7 +455,7 @@ Int size : Num [ @Int size ]
 ## This is because, for any given size of signed integer (32-bit, 64-bit, etc.) its negated lowest value turns out to be 1 higher than
 ## the highest value it can represent. (For this reason, calling #Num.abs on the lowest signed value will also cause overflow.)
 ##
-## Additionally, calling #Num.neg on any unsigned integer (such as any #U64 or #U32 value) other than 0 will cause overflow.
+## Additionally, calling #Num.neg on any unsigned integer (such as any #U64 or #U32 value) other than zero will cause overflow.
 ##
 ## (It will never crash when given a #Frac, however, because of how floating point numbers represent positive and negative numbers.)
 neg : Num a -> Num a
@@ -913,7 +913,7 @@ atan : Frac a -> Frac a
 ##
 ## [Division by zero is undefined in mathematics](https://en.wikipedia.org/wiki/Division_by_zero).
 ## As such, you should make sure never to pass zero as the denomaintor to this function!
-## Calling [div] on a [Dec] denominator of 0 will cause a panic.
+## Calling [div] on a [Dec] denominator of zero will cause a panic.
 ##
 ## Calling [div] on [F32] and [F64] values follows these rules:
 ## * Dividing a positive [F32] or [F64] by zero returns [Infinity](#isPositiveInfinity).
@@ -950,7 +950,7 @@ div : Frac a, Frac a -> Frac a
 ## and as such, so is modulo by zero. Because of this, you should make sure never
 ## to pass zero for the second argument to this function!
 ##
-## Passing [mod] a [Dec] value of 0 for its second argument will cause a panic.
+## Passing [mod] a [Dec] value of zero for its second argument will cause a panic.
 ## Passing [mod] a [F32] and [F64] value for its second argument will cause it
 ## to return [NaN](#isNaN).
 ##
