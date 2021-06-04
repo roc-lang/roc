@@ -583,8 +583,8 @@ fn make_doc_link(scope: &mut Scope, interns: &Interns, doc_item: &str) -> String
         }
         Err(_) => {
             panic!(
-                "Could not find symbol in scope for module link : {}",
-                doc_item
+                "Tried to generate an automatic link in docs for symbol `{}`, but that symbol was not in scope in this module. Scope was: {:?}",
+                doc_item, scope
             )
         }
     }
