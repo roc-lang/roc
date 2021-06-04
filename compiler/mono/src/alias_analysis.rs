@@ -17,6 +17,50 @@ pub const MOD_APP: ModName = ModName(b"UserApp");
 
 pub const STATIC_STR_NAME: ConstName = ConstName(&Symbol::STR_ALIAS_ANALYSIS_STATIC.to_ne_bytes());
 
+pub fn func_name_bytes(proc: &Proc) -> [u8; 16] {
+    func_name_bytes_help(proc.name, proc.args.iter().map(|x| x.0), proc.ret_layout)
+}
+
+pub fn func_name_bytes_help<'a, I>(
+    symbol: Symbol,
+    argument_layouts: I,
+    return_layout: Layout<'a>,
+) -> [u8; 16]
+where
+    I: Iterator<Item = Layout<'a>>,
+{
+    let mut name_bytes = [0u8; 16];
+
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::Hash;
+    use std::hash::Hasher;
+
+    let layout_hash = {
+        let mut hasher = DefaultHasher::new();
+
+        for layout in argument_layouts {
+            layout.hash(&mut hasher);
+        }
+        return_layout.hash(&mut hasher);
+
+        hasher.finish()
+    };
+
+    let sbytes = symbol.to_ne_bytes();
+    let lbytes = layout_hash.to_ne_bytes();
+
+    let it = sbytes
+        .iter()
+        .chain(lbytes.iter())
+        .zip(name_bytes.iter_mut());
+
+    for (source, target) in it {
+        *target = *source;
+    }
+
+    return name_bytes;
+}
+
 pub fn spec_program<'a, I>(procs: I) -> Result<morphic_lib::Solutions>
 where
     I: Iterator<Item = &'a Proc<'a>>,
@@ -40,36 +84,7 @@ where
         for proc in procs {
             let spec = proc_spec(proc)?;
 
-            let mut name_bytes = [0u8; 16];
-
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::Hash;
-            use std::hash::Hasher;
-
-            let layout_hash = {
-                let mut hasher = DefaultHasher::new();
-
-                for (layout, _) in proc.args.iter() {
-                    layout.hash(&mut hasher);
-                }
-                proc.ret_layout.hash(&mut hasher);
-
-                hasher.finish()
-            };
-
-            let sbytes = proc.name.to_ne_bytes();
-            let lbytes = layout_hash.to_ne_bytes();
-
-            let it = sbytes
-                .iter()
-                .chain(lbytes.iter())
-                .zip(name_bytes.iter_mut());
-
-            for (source, target) in it {
-                *target = *source;
-            }
-
-            m.add_func(FuncName(&name_bytes), spec)?;
+            m.add_func(FuncName(&func_name_bytes(proc)), spec)?;
 
             if format!("{:?}", proc.name).contains("mainForHost") {
                 main_function = Some(proc.name);
@@ -345,16 +360,17 @@ fn call_spec(
         ByName {
             name: symbol,
             full_layout: _,
-            ret_layout: _,
-            arg_layouts: _,
+            ret_layout,
+            arg_layouts,
             specialization_id,
         } => {
             let array = specialization_id.to_bytes();
             let spec_var = CalleeSpecVar(&array);
 
             let arg_value_id = build_tuple_value(builder, env, block, call.arguments)?;
-            let slice = &symbol.to_ne_bytes();
-            let name = FuncName(slice);
+            let it = arg_layouts.iter().copied();
+            let bytes = func_name_bytes_help(*symbol, it, *ret_layout);
+            let name = FuncName(&bytes);
             let module = MOD_APP;
             builder.add_call(block, spec_var, module, name, arg_value_id)
         }

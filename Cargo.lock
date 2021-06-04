@@ -3171,6 +3171,7 @@ dependencies = [
  "inlinable_string",
  "libc",
  "maplit",
+ "morphic_lib",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",

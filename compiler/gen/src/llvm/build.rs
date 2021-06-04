@@ -43,6 +43,7 @@ use inkwell::values::{
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
+use morphic_lib::FuncName;
 use roc_builtins::bitcode;
 use roc_collections::all::{ImMap, MutMap, MutSet};
 use roc_module::ident::TagName;
@@ -795,21 +796,32 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
 
     match call_type {
         CallType::ByName {
-            name, full_layout, ..
+            name,
+            full_layout,
+            arg_layouts,
+            ret_layout,
+            ..
         } => {
             let mut arg_tuples: Vec<BasicValueEnum> =
                 Vec::with_capacity_in(arguments.len(), env.arena);
+
+            let name_bytes = roc_mono::alias_analysis::func_name_bytes_help(
+                *name,
+                arg_layouts.iter().copied(),
+                *ret_layout,
+            );
+            let func_name = FuncName(&name_bytes);
 
             for symbol in arguments.iter() {
                 arg_tuples.push(load_symbol(scope, symbol));
             }
 
-            call_with_args(
+            roc_call_with_args(
                 env,
                 layout_ids,
                 &full_layout,
                 *name,
-                parent,
+                func_name,
                 arg_tuples.into_bump_slice(),
             )
         }
@@ -3035,18 +3047,6 @@ pub fn build_procedures_return_main<'a, 'ctx, 'env>(
     .unwrap()
 }
 
-// Coming soon
-// pub enum AliasAnalysisSolutions {
-//     NotAvailable,
-//     Available(morphic_lib::Solutions),
-// }
-//
-// impl std::fmt::Debug for AliasAnalysisSolutions {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "AliasAnalysisSolutions {{}}")
-//     }
-// }
-
 fn build_procedures_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
@@ -3056,19 +3056,16 @@ fn build_procedures_help<'a, 'ctx, 'env>(
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
     let mut scope = Scope::default();
 
-    // Coming Soon
-    //
-    //                if false {
-    //                    let it = state.procedures.iter().map(|x| x.1);
-    //
-    //                    match roc_mono::alias_analysis::spec_program(it) {
-    //                        Err(e) => panic!("Error in alias analysis: {:?}", e),
-    //                        Ok(solutions) => {
-    //                            state.alias_analysis_solutions =
-    //                                AliasAnalysisSolutions::Available(solutions)
-    //                        }
-    //                    }
-    //                }
+    let it = procedures.iter().map(|x| x.1);
+
+    let solutions = match roc_mono::alias_analysis::spec_program(it) {
+        Err(e) => panic!("Error in alias analysis: {:?}", e),
+        Ok(solutions) => solutions,
+    };
+
+    let mod_solutions = solutions
+        .mod_solutions(roc_mono::alias_analysis::MOD_APP)
+        .unwrap();
 
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
@@ -3079,6 +3076,9 @@ fn build_procedures_help<'a, 'ctx, 'env>(
 
     for (proc, fn_val) in headers {
         let mut current_scope = scope.clone();
+
+        let name_bytes = roc_mono::alias_analysis::func_name_bytes(&proc);
+        let func_name = FuncName(&name_bytes);
 
         // only have top-level thunks for this proc's module in scope
         // this retain is not needed for correctness, but will cause less confusion when debugging
@@ -3569,12 +3569,12 @@ fn function_value_by_name_help<'a, 'ctx, 'env>(
 
 // #[allow(clippy::cognitive_complexity)]
 #[inline(always)]
-fn call_with_args<'a, 'ctx, 'env>(
+fn roc_call_with_args<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     layout: &Layout<'a>,
     symbol: Symbol,
-    _parent: FunctionValue<'ctx>,
+    _func_name: FuncName<'_>,
     args: &[BasicValueEnum<'ctx>],
 ) -> BasicValueEnum<'ctx> {
     let fn_val = function_value_by_name(env, layout_ids, *layout, symbol);
