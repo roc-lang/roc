@@ -18,6 +18,7 @@ len : Set * -> Nat
 
 # TODO: removed `'` from signature because parser does not support it yet
 # Original signature: `add : Set 'elem, 'elem -> Set 'elem`
+## Since NaN is defined to be unequal to NaN, panics if given NaN.
 add : Set elem, elem -> Set elem
 
 ## Drops the given element from the set.
