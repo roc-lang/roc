@@ -475,4 +475,3 @@ NumParseConfig :
         trailingZeroes ? [ Allowed, Disallowed ],
         wholeSep ? { mark : Str, policy : [ Allowed, Required U64 ] }
     }
-    -> Str
