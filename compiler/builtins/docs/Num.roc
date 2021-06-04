@@ -840,31 +840,20 @@ e : Frac *
 
 ## An approximation of pi, specifically 3.141592653589793.
 pi : Frac *
-## Constants
-
-## An approximation of e, specifically 2.718281828459045.
-e : Frac *
-
-## An approximation of pi, specifically 3.141592653589793.
-pi : Frac *
-
-#ceiling : Frac -> Int
-
-#floor : Frac -> Int
 
 ## Trigonometry
 
-#cos : Frac -> Frac
+cos : Frac a -> Frac a
 
-#acos : Frac -> Frac
+acos : Frac a -> Frac a
 
-#sin : Frac -> Frac
+sin : Frac a -> Frac a
 
-#asin : Frac -> Frac
+asin : Frac a -> Frac a
 
-#tan : Frac -> Frac
+tan : Frac a -> Frac a
 
-#atan : Frac -> Frac
+atan : Frac a -> Frac a
 
 ## Other Calculations (arithmetic?)
 
