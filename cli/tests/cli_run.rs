@@ -141,11 +141,12 @@ mod cli_run {
     #[test]
     #[serial(quicksort)]
     fn run_quicksort_not_optimized() {
-        check_output(
-            &example_file("quicksort", "Quicksort.roc"),
-            "quicksort",
+        check_output_with_stdin(
+            &example_file("benchmarks", "QuicksortApp.roc"),
+            "0",
+            "quicksortapp",
             &[],
-            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
+            "[ 0, 1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 5, 6, 6, 8, 9 ]\n",
             true,
         );
     }
@@ -153,11 +154,12 @@ mod cli_run {
     #[test]
     #[serial(quicksort)]
     fn run_quicksort_optimized() {
-        check_output(
-            &example_file("quicksort", "Quicksort.roc"),
-            "quicksort",
+        check_output_with_stdin(
+            &example_file("benchmarks", "QuicksortApp.roc"),
+            "0",
+            "quicksortapp",
             &["--optimize"],
-            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
+            "[ 0, 1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 5, 6, 6, 8, 9 ]\n",
             true,
         );
     }
@@ -165,11 +167,12 @@ mod cli_run {
     #[test]
     #[serial(quicksort)]
     fn run_quicksort_optimized_valgrind() {
-        check_output(
-            &example_file("quicksort", "Quicksort.roc"),
-            "quicksort",
+        check_output_with_stdin(
+            &example_file("benchmarks", "QuicksortApp.roc"),
+            "0",
+            "quicksortapp",
             &["--optimize"],
-            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
+            "[ 0, 1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 5, 6, 6, 8, 9 ]\n",
             true,
         );
     }
