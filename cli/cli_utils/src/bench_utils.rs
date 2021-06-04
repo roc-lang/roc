@@ -87,9 +87,9 @@ pub fn bench_nqueens<T: Measurement>(bench_group_opt: Option<&mut BenchmarkGroup
 pub fn bench_cfold<T: Measurement>(bench_group_opt: Option<&mut BenchmarkGroup<T>>) {
     exec_bench_w_input(
         &example_file("benchmarks", "CFold.roc"),
-        "12",
+        "17",
         "cfold",
-        "10426 & 10426\n",
+        "396354 & 396354\n",
         bench_group_opt,
     );
 }
@@ -97,9 +97,9 @@ pub fn bench_cfold<T: Measurement>(bench_group_opt: Option<&mut BenchmarkGroup<T
 pub fn bench_deriv<T: Measurement>(bench_group_opt: Option<&mut BenchmarkGroup<T>>) {
     exec_bench_w_input(
         &example_file("benchmarks", "Deriv.roc"),
-        "7",
+        "8",
         "deriv",
-        "1 count: 6\n2 count: 22\n3 count: 90\n4 count: 420\n5 count: 2202\n6 count: 12886\n7 count: 83648\n",
+        "1 count: 6\n2 count: 22\n3 count: 90\n4 count: 420\n5 count: 2202\n6 count: 12886\n7 count: 83648\n8 count: 598592\n",
         bench_group_opt,
     );
 }
@@ -107,9 +107,9 @@ pub fn bench_deriv<T: Measurement>(bench_group_opt: Option<&mut BenchmarkGroup<T
 pub fn bench_rbtree_ck<T: Measurement>(bench_group_opt: Option<&mut BenchmarkGroup<T>>) {
     exec_bench_w_input(
         &example_file("benchmarks", "RBTreeCk.roc"),
-        "5600",
+        "80000",
         "rbtree-ck",
-        "560\n",
+        "8000\n",
         bench_group_opt,
     );
 }
@@ -117,9 +117,9 @@ pub fn bench_rbtree_ck<T: Measurement>(bench_group_opt: Option<&mut BenchmarkGro
 pub fn bench_rbtree_delete<T: Measurement>(bench_group_opt: Option<&mut BenchmarkGroup<T>>) {
     exec_bench_w_input(
         &example_file("benchmarks", "RBTreeDel.roc"),
-        "6000",
+        "100000",
         "rbtree-del",
-        "420\n",
+        "7000\n",
         bench_group_opt,
     );
 }
