@@ -305,7 +305,7 @@ pub fn files_to_documentations(
             &std_lib,
             src_dir.as_path(),
             MutMap::default(),
-            8, // TODO: Is it okay to hardcode ptr_bytes here? I think it should be fine since we'er only type checking (also, 8 => 32bit system)
+            std::mem::size_of::<usize>(), // This is just type-checking for docs, so "target" doesn't matter
             builtin_defs_map,
         ) {
             Ok(loaded) => files_docs.push((loaded.documentation, loaded.interns)),
