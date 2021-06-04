@@ -742,18 +742,6 @@ asc : Num a, Num a -> [ Eq, Lt, Gt ]
 ##
 desc : Num a, Num a -> [ Eq, Lt, Gt ]
 
-## TODO should we offer hash32 etc even if someday it has to do a hash64 and truncate?
-##
-## This function can crash under these circumstances:
-##
-## * It receives a function, or any type that contains a function (for example a record, tag, or #List containing a function)
-## * It receives an erroneous #Frac (`NaN`, `Infinity`, or `-Infinity` - these values can only originate from hosts)
-##
-## CAUTION: This function may give different answers in future releases of Roc,
-## so be aware that if you rely on the exact answer this gives today, your
-## code may break in a future Roc release.
-hash64 : a -> U64
-
 ## Limits
 
 ## The highest number that can be stored in a #Nat without overflowing its
