@@ -977,3 +977,57 @@ sqrt : Float a -> [Ok (Float a), InvalidSqrt]*
 Endi : [ Big, Little ]
 
 toBytes : Num *, Endi -> List U8
+
+## When given a [F64] or [F32] value, returns `False` if that value is
+## [*NaN*](https://en.wikipedia.org/wiki/NaN). (Returns `False` if that value is *Infinity* or *-Infinity*.)
+##
+## Always returns `False` when given a [Dec].
+##
+## >>> Num.isNaN 12.3
+##
+## >>> Num.isNaN (Num.sqrtOrNaN -2)
+##
+## See also [isPoison] and [isFinite].
+isNaN : Frac * -> Bool
+
+## When given a [F64] or [F32] value, returns `False` if that value is
+## [*NaN*](https://en.wikipedia.org/wiki/NaN), *Infinity*, or *-Infinity*.
+##
+## Always returns `True` when given a [Dec].
+##
+## [isPoison] returns the opposite of this.
+##
+## See also [isInfinite].
+isFinite : Frac * -> Bool
+
+## When given a [F64] or [F32] value, returns `True` if that value is
+## [*NaN*](https://en.wikipedia.org/wiki/NaN), *Infinity*, or *-Infinity*.
+##
+## Always returns `False` when given a [Dec].
+##
+## [isFinite] returns the opposite of this.
+isPoison : Frac * -> Bool
+
+## When given a [F64] or [F32] value, returns `True` if that value is either
+## *Infinity* or *-Infinity*. (Returns `False` if that value is [*NaN*](https://en.wikipedia.org/wiki/NaN).)
+##
+## Always returns `False` when given a [Dec].
+##
+## See also [isFinite], [isPositiveInfinity], and [isNegativeInfinity].
+isInfinite : Frac * -> Bool
+
+## When given a [F64] or [F32] value, returns `True` if that value is
+## *Infinity*. (Returns `False` if that value is *-Infinity* or [*NaN*](https://en.wikipedia.org/wiki/NaN).)
+##
+## Always returns `False` when given a [Dec].
+##
+## See also [isNegativeInfinity], [isInfinite], and [isFinite].
+isPositiveInfinity : Frac * -> Bool
+
+## When given a [F64] or [F32] value, returns `True` if that value is
+## *Infinity*. (Returns `False` if that value is *-Infinity* or [*NaN*](https://en.wikipedia.org/wiki/NaN).)
+##
+## Always returns `False` when given a [Dec].
+##
+## See also [isPositiveInfinity], [isInfinite], and [isFinite].
+isNegativeInfinity : Frac * -> Bool
