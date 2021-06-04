@@ -206,6 +206,17 @@ I64 : Int [ @Signed64 ]
 U64 : Int [ @Unsigned64 ]
 I128 : Int [ @Signed128 ]
 U128 : Int [ @Unsigned128 ]
+
+## A [natural number](https://en.wikipedia.org/wiki/Natural_number) represented
+## as a 64-bit unsigned integer on 64-bit systems, a 32-bit unsigned integer
+## on 32-bit systems, and so on.
+##
+## This system-specific size makes it useful for certain data structure
+## functions like [List.len], because the number of elements many data strucures
+## can hold is also system-specific. For example, the maximum number of elements
+## a [List] can hold on a 64-bit system fits in a 64-bit unsigned integer, and
+## on a 32-bit system it fits in 32-bit unsigned integer. This makes [Nat] a
+## good fit for [List.len] regardless of system.
 Nat : Int [ @Natural ]
 
 ## A 64-bit signed integer. All number literals without decimal points are compatible with #Int values.
