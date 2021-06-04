@@ -9,13 +9,24 @@ interface Num2
 ## This is useful for functions that can work on either, for example #Num.add, whose type is:
 ##
 ## ```
-## add : Num range, Num range -> Num range
+## add : Num a, Num a -> Num a
 ## ```
 ##
-## The number 1.5 technically has the type `Num Fraction`, so when you pass two of them to `Num.add`, the answer you get is `3.0 : Num Fraction`.
+## The number 1.5 technically has the type `Num (Fraction *)`, so when you pass
+## two of them to [Num.add], the answer you get is `3.0 : Num (Fraction *)`.
+#
+## Similarly, the number 0x1 (that is, the integer 1 in hexadecimal notation)
+## technically has the type `Num (Integer *)`, so when you pass two of them to
+## [Num.add], the answer you get is `2 : Num (Integer *)`.
 ##
-## The type #Frac is defined to be an alias for `Num Fraction`, so `3.0 : Num Fraction` is the same answer as `3.0 : Frac`.  # # Similarly, the number 1 technically has the type `Num Integer`, so when you pass two of them to `Num.add`, the answer you get is `2 : Num Integer`.  # # The type #Int is defined to be an alias for `Num Integer`, so `2 : Num Integer` is the same answer as `2 : Int`.  #
-## In this way, the `Num` type makes it possible to have `1 + 1` return `2 : Int` and `1.5 + 1.5` return `3.0 : Frac`.
+## The type [`Frac a`](#Frac) is defined to be an alias for `Num (Fraction a)`,
+## so `3.0 : Num (Fraction *)` is the same value as `3.0 : Frac *`.
+## Similarly, the type [`Int a`](#Int) is defined to be an alias for
+## `Num (Integer a)`, so `2 : Num (Integer *)` is the same value as
+## `2 : Int *`.
+##
+## In this way, the [Num] type makes it possible to have `1 + 0x1` return
+## `2 : Int *` and `1.5 + 1.5` return `3.0 : Frac`.
 ##
 ## ## Number Literals
 ##
@@ -29,29 +40,30 @@ interface Num2
 ## ends up having the type `Nat`.
 ##
 ## Sometimes number literals don't become more specific. For example,
-## the #Num.toStr function has the type `Num * -> Str`. This means that
+## the [Num.toStr] function has the type `Num * -> Str`. This means that
 ## when calling `Num.toStr (5 + 6)`, the expression `(5 + 6)`
 ## still has the type `Num *`. When this happens, `Num *` defaults to
-## being an #I32 - so this addition expression would overflow
+## being an [I64] - so this addition expression would overflow
 ## if either 5 or 6 were replaced with a number big enough to cause
-## addition overflow on an #I32.
+## addition overflow on an [I64] value.
 ##
-## If this default of #I32 is not big enough for your purposes,
-## you can add an `i64` to the end of the number literal, like so:
+## If this default of [I64] is not big enough for your purposes,
+## you can add an `i128` to the end of the number literal, like so:
 ##
-## >>> Num.toStr 5_000_000_000i64
+## >>> Num.toStr 5_000_000_000i128
 ##
-## This `i64` suffix specifies that you want this number literal to be
-## an #I64 instead of a `Num *`. All the other numeric types have
-## suffixes just like `i64`; here are some other examples:
+## This `i128` suffix specifies that you want this number literal to be
+## an [I128] instead of a `Num *`. All the other numeric types have
+## suffixes just like `i128`; here are some other examples:
 ##
-## * `215u8` is a `215` value of type #U8
-## * `76.4f32` is a `76.4` value of type #F32
-## * `12345ulen` is a `12345` value of type #Nat
+## * `215u8` is a `215` value of type [U8]
+## * `76.4f32` is a `76.4` value of type [F32]
+## * `123.45dec` is a `123.45` value of type [Dec]
+## * `12345nat` is a `12345` value of type [Nat]
 ##
 ## In practice, these are rarely needed. It's most common to write
 ## number literals without any suffix.
-Num range : [ @Num range ]
+Num a : [ @Num a ]
 
 ## A decimal number.
 ##
@@ -435,7 +447,7 @@ Int size : Num [ @Int size ]
 ## Additionally, calling #Num.neg on any unsigned integer (such as any #U64 or #U32 value) other than 0 will cause overflow.
 ##
 ## (It will never crash when given a #Frac, however, because of how floating point numbers represent positive and negative numbers.)
-neg : Num range -> Num range
+neg : Num a -> Num a
 
 ## Return the absolute value of the number.
 ##
@@ -458,7 +470,7 @@ neg : Num range -> Num range
 ## the highest value it can represent. (For this reason, calling #Num.neg on the lowest signed value will also cause overflow.)
 ##
 ## Calling this on an unsigned integer (like #U32 or #U64) never does anything.
-abs : Num range -> Num range
+abs : Num a -> Num a
 
 ## Check
 
@@ -497,7 +509,7 @@ isOdd : Num * -> Bool
 ##
 ## >>> Frac.pi
 ## >>>     |> Num.add 1.0
-add : Num range, Num range -> Num range
+add : Num a, Num a -> Num a
 
 ## Subtract two numbers of the same type.
 ##
@@ -513,7 +525,7 @@ add : Num range, Num range -> Num range
 ##
 ## >>> Frac.pi
 ## >>>     |> Num.sub 2.0
-sub : Num range, Num range -> Num range
+sub : Num a, Num a -> Num a
 
 ## Multiply two numbers of the same type.
 ##
@@ -529,7 +541,7 @@ sub : Num range, Num range -> Num range
 ##
 ## >>> Frac.pi
 ## >>>     |> Num.mul 2.0
-mul : Num range, Num range -> Num range
+mul : Num a, Num a -> Num a
 
 ## Convert
 
@@ -953,7 +965,7 @@ pow : Frac a, Frac a -> Frac a
 ## overflow
 expBySquaring : Int a, U8 -> Int a
 
-## Returns an approximation of the absolute value of the square root of the [Frac].
+## Returns an approximation of the absolute value of a [Frac]'s square root.
 ##
 ## The square root of a negative number is an irrational number, and [Frac] only
 ## supports rational numbers. As such, you should make sure never to pass this
