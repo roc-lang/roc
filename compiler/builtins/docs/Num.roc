@@ -874,7 +874,7 @@ atan : Frac a -> Frac a
 ##
 ## [Division by zero is undefined in mathematics](https://en.wikipedia.org/wiki/Division_by_zero).
 ## As such, you should make sure never to pass zero as the denomaintor to this function!
-## Calling [div] on a [Dec] denominator of 0 will cause a runtime error.
+## Calling [div] on a [Dec] denominator of 0 will cause a panic.
 ##
 ## Calling [div] on [F32] and [F64] values follows these rules:
 ## * Dividing a positive [F32] or [F64] by zero returns [Infinity](#isPositiveInfinity).
@@ -911,7 +911,7 @@ div : Frac a, Frac a -> Frac a
 ## and as such, so is modulo by zero. Because of this, you should make sure never
 ## to pass zero for the second argument to this function!
 ##
-## Passing [mod] a [Dec] value of 0 for its second argument will cause a runtime error.
+## Passing [mod] a [Dec] value of 0 for its second argument will cause a panic.
 ## Passing [mod] a [F32] and [F64] value for its second argument will cause it
 ## to return [NaN](#isNaN).
 ##
@@ -957,7 +957,7 @@ expBySquaring : Int a, U8 -> Int a
 ##
 ## The square root of a negative number is an irrational number, and [Frac] only
 ## supports rational numbers. As such, you should make sure never to pass this
-## function a negative number! Calling [sqrt] on a negative [Dec] will cause a runtime error.
+## function a negative number! Calling [sqrt] on a negative [Dec] will cause a panic.
 ##
 ## Calling [sqrt] on [F32] and [F64] values follows these rules:
 ## * Passing a negative [F32] or [F64] returns [NaN](#isNaN).
