@@ -42,6 +42,23 @@ pub const NODE_BYTES: usize = 32;
 //   usize pointers, which would be too big for us to have 16B nodes.
 //   On the plus side, we could be okay with higher memory usage early on,
 //   and then later use the Mesh strategy to reduce long-running memory usage.
+//
+// With this system, we can allocate up to 4B nodes. If we wanted to keep
+// a generational index in there, like https://crates.io/crates/sharded-slab
+// does, we could use some of the 32 bits for that. For example, if we wanted
+// to have a 5-bit generational index (supporting up to 32 generations), then
+// we would have 27 bits remaining, meaning we could only support at most
+// 134M nodes. Since the editor has a separate Pool for each module, is that
+// enough for any single module we'll encounter in practice? Probably, and
+// especially if we allocate super large collection literals on the heap instead
+// of in the pool.
+//
+// Another possible design is to try to catch reuse bugs using an "ASan" like
+// approach: in development builds, whenever we "free" a particular slot, we
+// can add it to a dev-build-only "freed nodes" list and don't hand it back
+// out (so, we leak the memory.) Then we can (again, in development builds only)
+// check to see if we're about to store something in zeroed-out memory; if so, check
+// to see if it was
 
 #[derive(Debug, Eq)]
 pub struct NodeId<T> {

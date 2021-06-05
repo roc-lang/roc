@@ -4558,7 +4558,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             BasicValueEnum::IntValue(bool_val)
         }
         ListGetUnsafe => {
-            // List.get : List elem, Int -> [ Ok elem, OutOfBounds ]*
+            // List.get : List elem, Nat -> [ Ok elem, OutOfBounds ]*
             debug_assert_eq!(args.len(), 2);
 
             let (wrapper_struct, list_layout) = load_symbol_and_layout(scope, &args[0]);

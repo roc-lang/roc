@@ -305,7 +305,7 @@ pub fn files_to_documentations(
             &std_lib,
             src_dir.as_path(),
             MutMap::default(),
-            8, // TODO: Is it okay to hardcode ptr_bytes here? I think it should be fine since we'er only type checking (also, 8 => 32bit system)
+            std::mem::size_of::<usize>() as u32, // This is just type-checking for docs, so "target" doesn't matter
             builtin_defs_map,
         ) {
             Ok(loaded) => files_docs.push((loaded.documentation, loaded.interns)),
@@ -583,8 +583,8 @@ fn make_doc_link(scope: &mut Scope, interns: &Interns, doc_item: &str) -> String
         }
         Err(_) => {
             panic!(
-                "Could not find symbol in scope for module link : {}",
-                doc_item
+                "Tried to generate an automatic link in docs for symbol `{}`, but that symbol was not in scope in this module. Scope was: {:?}",
+                doc_item, scope
             )
         }
     }
