@@ -43,7 +43,7 @@ use inkwell::values::{
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
-use morphic_lib::FuncName;
+use morphic_lib::{CalleeSpecVar, FuncName, FuncSpec, FuncSpecSolutions, ModSolutions};
 use roc_builtins::bitcode;
 use roc_collections::all::{ImMap, MutMap, MutSet};
 use roc_module::ident::TagName;
@@ -784,6 +784,7 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
 pub fn build_exp_call<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
+    func_spec_solutions: &FuncSpecSolutions,
     scope: &mut Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     layout: &Layout<'a>,
@@ -798,30 +799,27 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
         CallType::ByName {
             name,
             full_layout,
-            arg_layouts,
-            ret_layout,
+            specialization_id,
             ..
         } => {
             let mut arg_tuples: Vec<BasicValueEnum> =
                 Vec::with_capacity_in(arguments.len(), env.arena);
 
-            let name_bytes = roc_mono::alias_analysis::func_name_bytes_help(
-                *name,
-                arg_layouts.iter().copied(),
-                *ret_layout,
-            );
-            let func_name = FuncName(&name_bytes);
-
             for symbol in arguments.iter() {
                 arg_tuples.push(load_symbol(scope, symbol));
             }
 
+            let bytes = specialization_id.to_bytes();
+            let callee_var = CalleeSpecVar(&bytes);
+            let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
+
+            dbg!(name, &func_spec);
+
             roc_call_with_args(
                 env,
-                layout_ids,
                 &full_layout,
                 *name,
-                func_name,
+                func_spec,
                 arg_tuples.into_bump_slice(),
             )
         }
@@ -854,6 +852,7 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
             build_foreign_symbol(
                 env,
                 layout_ids,
+                func_spec_solutions,
                 scope,
                 parent,
                 foreign_symbol,
@@ -868,6 +867,7 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
 pub fn build_exp_expr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
+    func_spec_solutions: &FuncSpecSolutions,
     scope: &mut Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     layout: &Layout<'a>,
@@ -878,7 +878,15 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
     match expr {
         Literal(literal) => build_exp_literal(env, layout, literal),
 
-        Call(call) => build_exp_call(env, layout_ids, scope, parent, layout, call),
+        Call(call) => build_exp_call(
+            env,
+            layout_ids,
+            func_spec_solutions,
+            scope,
+            parent,
+            layout,
+            call,
+        ),
 
         Struct(sorted_fields) => {
             let ctx = env.context;
@@ -1825,6 +1833,7 @@ fn list_literal<'a, 'ctx, 'env>(
 fn invoke_roc_function<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
+    func_spec_solutions: &FuncSpecSolutions,
     scope: &mut Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     symbol: Symbol,
@@ -1876,7 +1885,7 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
 
         scope.insert(symbol, (layout, call_result));
 
-        build_exp_stmt(env, layout_ids, scope, parent, pass);
+        build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, pass);
 
         scope.remove(&symbol);
     }
@@ -1903,7 +1912,7 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
             (Layout::Struct(&[]), exception_object),
         );
 
-        build_exp_stmt(env, layout_ids, scope, parent, fail);
+        build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, fail);
     }
 
     call_result
@@ -1938,6 +1947,7 @@ fn decrement_with_size_check<'a, 'ctx, 'env>(
 pub fn build_exp_stmt<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
+    func_spec_solutions: &FuncSpecSolutions,
     scope: &mut Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     stmt: &roc_mono::ir::Stmt<'a>,
@@ -1962,7 +1972,15 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             for (symbol, expr, layout) in queue {
                 debug_assert!(layout != &Layout::RecursivePointer);
 
-                let val = build_exp_expr(env, layout_ids, scope, parent, layout, &expr);
+                let val = build_exp_expr(
+                    env,
+                    layout_ids,
+                    func_spec_solutions,
+                    scope,
+                    parent,
+                    layout,
+                    &expr,
+                );
 
                 // Make a new scope which includes the binding we just encountered.
                 // This should be done *after* compiling the bound expr, since any
@@ -1975,7 +1993,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 stack.push(*symbol);
             }
 
-            let result = build_exp_stmt(env, layout_ids, scope, parent, cont);
+            let result = build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont);
 
             for symbol in stack {
                 scope.remove(&symbol);
@@ -2006,7 +2024,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             // when the fail case is just Rethrow, there is no cleanup work to do
             // so we can just treat this invoke as a normal call
             let stmt = roc_mono::ir::Stmt::Let(*symbol, Expr::Call(call.clone()), *layout, pass);
-            build_exp_stmt(env, layout_ids, scope, parent, &stmt)
+            build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, &stmt)
         }
 
         Invoke {
@@ -2020,13 +2038,20 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             CallType::ByName {
                 name,
                 ref full_layout,
+                specialization_id,
                 ..
             } => {
-                let function_value = function_value_by_name(env, layout_ids, *full_layout, name);
+                let bytes = specialization_id.to_bytes();
+                let callee_var = CalleeSpecVar(&bytes);
+                let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
+
+                let function_value =
+                    function_value_by_func_spec(env, func_spec, name, *full_layout);
 
                 invoke_roc_function(
                     env,
                     layout_ids,
+                    func_spec_solutions,
                     scope,
                     parent,
                     *symbol,
@@ -2046,6 +2071,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             } => build_foreign_symbol(
                 env,
                 layout_ids,
+                func_spec_solutions,
                 scope,
                 parent,
                 foreign_symbol,
@@ -2092,7 +2118,14 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 ret_type,
             };
 
-            build_switch_ir(env, layout_ids, scope, parent, switch_args)
+            build_switch_ir(
+                env,
+                layout_ids,
+                func_spec_solutions,
+                scope,
+                parent,
+                switch_args,
+            )
         }
         Join {
             id,
@@ -2123,7 +2156,14 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             scope.join_points.insert(*id, (cont_block, joinpoint_args));
 
             // construct the blocks that may jump to this join point
-            build_exp_stmt(env, layout_ids, scope, parent, remainder);
+            build_exp_stmt(
+                env,
+                layout_ids,
+                func_spec_solutions,
+                scope,
+                parent,
+                remainder,
+            );
 
             let phi_block = builder.get_insert_block().unwrap();
 
@@ -2136,7 +2176,14 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             }
 
             // put the continuation in
-            let result = build_exp_stmt(env, layout_ids, scope, parent, continuation);
+            let result = build_exp_stmt(
+                env,
+                layout_ids,
+                func_spec_solutions,
+                scope,
+                parent,
+                continuation,
+            );
 
             // remove this join point again
             scope.join_points.remove(&id);
@@ -2180,7 +2227,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         );
                     }
 
-                    build_exp_stmt(env, layout_ids, scope, parent, cont)
+                    build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont)
                 }
                 Dec(symbol) => {
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
@@ -2189,7 +2236,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         decrement_refcount_layout(env, parent, layout_ids, value, layout);
                     }
 
-                    build_exp_stmt(env, layout_ids, scope, parent, cont)
+                    build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont)
                 }
                 DecRef(symbol) => {
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
@@ -2241,7 +2288,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         }
                     }
 
-                    build_exp_stmt(env, layout_ids, scope, parent, cont)
+                    build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont)
                 }
             }
         }
@@ -2431,6 +2478,7 @@ fn const_i128<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, value: i128) -> IntValu
 fn build_switch_ir<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
+    func_spec_solutions: &FuncSpecSolutions,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     switch_args: SwitchArgsIr<'a, 'ctx>,
@@ -2553,7 +2601,14 @@ fn build_switch_ir<'a, 'ctx, 'env>(
                 {
                     builder.position_at_end(then_block);
 
-                    let branch_val = build_exp_stmt(env, layout_ids, scope, parent, true_branch);
+                    let branch_val = build_exp_stmt(
+                        env,
+                        layout_ids,
+                        func_spec_solutions,
+                        scope,
+                        parent,
+                        true_branch,
+                    );
 
                     if then_block.get_terminator().is_none() {
                         builder.build_unconditional_branch(cont_block);
@@ -2564,7 +2619,14 @@ fn build_switch_ir<'a, 'ctx, 'env>(
                 {
                     builder.position_at_end(else_block);
 
-                    let branch_val = build_exp_stmt(env, layout_ids, scope, parent, false_branch);
+                    let branch_val = build_exp_stmt(
+                        env,
+                        layout_ids,
+                        func_spec_solutions,
+                        scope,
+                        parent,
+                        false_branch,
+                    );
 
                     if else_block.get_terminator().is_none() {
                         builder.build_unconditional_branch(cont_block);
@@ -2614,7 +2676,14 @@ fn build_switch_ir<'a, 'ctx, 'env>(
         for ((_, _, branch_expr), (_, block)) in branches.iter().zip(cases) {
             builder.position_at_end(block);
 
-            let branch_val = build_exp_stmt(env, layout_ids, scope, parent, branch_expr);
+            let branch_val = build_exp_stmt(
+                env,
+                layout_ids,
+                func_spec_solutions,
+                scope,
+                parent,
+                branch_expr,
+            );
 
             if block.get_terminator().is_none() {
                 builder.build_unconditional_branch(cont_block);
@@ -2625,7 +2694,14 @@ fn build_switch_ir<'a, 'ctx, 'env>(
         // The block for the conditional's default branch.
         builder.position_at_end(default_block);
 
-        let default_val = build_exp_stmt(env, layout_ids, scope, parent, default_branch);
+        let default_val = build_exp_stmt(
+            env,
+            layout_ids,
+            func_spec_solutions,
+            scope,
+            parent,
+            default_branch,
+        );
 
         if default_block.get_terminator().is_none() {
             builder.build_unconditional_branch(cont_block);
@@ -2673,10 +2749,12 @@ pub fn create_entry_block_alloca<'a, 'ctx>(
 
 fn expose_function_to_host<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    symbol: Symbol,
     roc_function: FunctionValue<'ctx>,
 ) {
-    let c_function_name: String =
-        format!("roc_{}_exposed", roc_function.get_name().to_str().unwrap());
+    // Assumption: there is only one specialization of a host-exposed function
+    let ident_string = symbol.ident_string(&env.interns);
+    let c_function_name: String = format!("roc__{}_1_exposed", ident_string);
 
     expose_function_to_host_help(env, roc_function, &c_function_name);
 }
@@ -2999,23 +3077,42 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
 
 pub fn build_proc_headers<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
+    _layout_ids: &mut LayoutIds<'a>,
+    mod_solutions: &'a ModSolutions,
     procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
     scope: &mut Scope<'a, 'ctx>,
     // alias_analysis_solutions: AliasAnalysisSolutions,
-) -> std::vec::Vec<(roc_mono::ir::Proc<'a>, FunctionValue<'ctx>)> {
+) -> Vec<
+    'a,
+    (
+        roc_mono::ir::Proc<'a>,
+        &'a [(&'a FuncSpecSolutions, FunctionValue<'ctx>)],
+    ),
+> {
     // Populate Procs further and get the low-level Expr from the canonical Expr
-    let mut headers = std::vec::Vec::with_capacity(procedures.len());
+    let mut headers = Vec::with_capacity_in(procedures.len(), env.arena);
     for ((symbol, layout), proc) in procedures {
-        let fn_val = build_proc_header(env, layout_ids, symbol, layout, &proc);
+        let name_bytes = roc_mono::alias_analysis::func_name_bytes(&proc);
+        let func_name = FuncName(&name_bytes);
 
-        if proc.args.is_empty() {
-            // this is a 0-argument thunk, i.e. a top-level constant definition
-            // it must be in-scope everywhere in the module!
-            scope.insert_top_level_thunk(symbol, env.arena.alloc(layout), fn_val);
+        let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
+
+        let it = func_solutions.specs();
+        let mut function_values = Vec::with_capacity_in(it.size_hint().0, env.arena);
+        for specialization in it {
+            let fn_val = build_proc_header(env, *specialization, symbol, &proc);
+
+            if proc.args.is_empty() {
+                // this is a 0-argument thunk, i.e. a top-level constant definition
+                // it must be in-scope everywhere in the module!
+                scope.insert_top_level_thunk(symbol, env.arena.alloc(layout), fn_val);
+            }
+
+            let func_spec_solutions = func_solutions.spec(specialization).unwrap();
+
+            function_values.push((func_spec_solutions, fn_val));
         }
-
-        headers.push((proc, fn_val));
+        headers.push((proc, function_values.into_bump_slice()));
     }
 
     headers
@@ -3063,6 +3160,8 @@ fn build_procedures_help<'a, 'ctx, 'env>(
         Ok(solutions) => solutions,
     };
 
+    let solutions = env.arena.alloc(solutions);
+
     let mod_solutions = solutions
         .mod_solutions(roc_mono::alias_analysis::MOD_APP)
         .unwrap();
@@ -3070,45 +3169,51 @@ fn build_procedures_help<'a, 'ctx, 'env>(
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
-    let headers = build_proc_headers(env, &mut layout_ids, procedures, &mut scope);
+    let headers = build_proc_headers(env, &mut layout_ids, &mod_solutions, procedures, &mut scope);
 
     let (_, function_pass) = construct_optimization_passes(env.module, opt_level);
 
-    for (proc, fn_val) in headers {
-        let mut current_scope = scope.clone();
+    for (proc, fn_vals) in headers {
+        for (func_spec_solutions, fn_val) in fn_vals {
+            let mut current_scope = scope.clone();
 
-        let name_bytes = roc_mono::alias_analysis::func_name_bytes(&proc);
-        let func_name = FuncName(&name_bytes);
+            // only have top-level thunks for this proc's module in scope
+            // this retain is not needed for correctness, but will cause less confusion when debugging
+            let home = proc.name.module_id();
+            current_scope.retain_top_level_thunks_for_module(home);
 
-        // only have top-level thunks for this proc's module in scope
-        // this retain is not needed for correctness, but will cause less confusion when debugging
-        let home = proc.name.module_id();
-        current_scope.retain_top_level_thunks_for_module(home);
-
-        build_proc(&env, &mut layout_ids, scope.clone(), proc, fn_val);
-
-        // call finalize() before any code generation/verification
-        env.dibuilder.finalize();
-
-        if fn_val.verify(true) {
-            function_pass.run_on(&fn_val);
-        } else {
-            let mode = "NON-OPTIMIZED";
-
-            eprintln!(
-                "\n\nFunction {:?} failed LLVM verification in {} build. Its content was:\n",
-                fn_val.get_name().to_str().unwrap(),
-                mode,
+            build_proc(
+                &env,
+                &mut layout_ids,
+                func_spec_solutions,
+                scope.clone(),
+                &proc,
+                *fn_val,
             );
 
-            fn_val.print_to_stderr();
-            // module.print_to_stderr();
+            // call finalize() before any code generation/verification
+            env.dibuilder.finalize();
 
-            panic!(
-                "The preceding code was from {:?}, which failed LLVM verification in {} build.",
-                fn_val.get_name().to_str().unwrap(),
-                mode,
-            );
+            if fn_val.verify(true) {
+                function_pass.run_on(&fn_val);
+            } else {
+                let mode = "NON-OPTIMIZED";
+
+                eprintln!(
+                    "\n\nFunction {:?} failed LLVM verification in {} build. Its content was:\n",
+                    fn_val.get_name().to_str().unwrap(),
+                    mode,
+                );
+
+                fn_val.print_to_stderr();
+                // module.print_to_stderr();
+
+                panic!(
+                    "The preceding code was from {:?}, which failed LLVM verification in {} build.",
+                    fn_val.get_name().to_str().unwrap(),
+                    mode,
+                );
+            }
         }
     }
 
@@ -3117,21 +3222,39 @@ fn build_procedures_help<'a, 'ctx, 'env>(
     })
 }
 
+fn func_spec_name<'a>(
+    arena: &'a Bump,
+    interns: &Interns,
+    symbol: Symbol,
+    func_spec: FuncSpec,
+) -> bumpalo::collections::String<'a> {
+    use std::fmt::Write;
+
+    let mut buf = bumpalo::collections::String::with_capacity_in(1, arena);
+
+    let ident_string = symbol.ident_string(interns);
+    let module_string = interns.module_ids.get_name(symbol.module_id()).unwrap();
+    write!(buf, "{}_{}_", module_string, ident_string).unwrap();
+
+    for byte in func_spec.0.iter() {
+        write!(buf, "{:x?}", byte).unwrap();
+    }
+
+    buf
+}
+
 fn build_proc_header<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
+    func_spec: FuncSpec,
     symbol: Symbol,
-    top_level: TopLevelFunctionLayout<'a>,
     proc: &roc_mono::ir::Proc<'a>,
 ) -> FunctionValue<'ctx> {
-    let layout = env.arena.alloc(top_level).full();
-
     let args = proc.args;
     let arena = env.arena;
 
-    let fn_name = layout_ids
-        .get(symbol, &layout)
-        .to_symbol_string(symbol, &env.interns);
+    dbg!(&symbol, &func_spec);
+
+    let fn_name = func_spec_name(env.arena, &env.interns, symbol, func_spec);
 
     let ret_type = basic_type_from_layout(env, &proc.ret_layout);
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
@@ -3156,7 +3279,7 @@ fn build_proc_header<'a, 'ctx, 'env>(
     fn_val.set_subprogram(subprogram);
 
     if env.exposed_to_host.contains(&symbol) {
-        expose_function_to_host(env, fn_val);
+        expose_function_to_host(env, symbol, fn_val);
     }
 
     fn_val
@@ -3431,8 +3554,9 @@ fn build_host_exposed_alias_size_help<'a, 'ctx, 'env>(
 pub fn build_proc<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
+    func_spec_solutions: &FuncSpecSolutions,
     mut scope: Scope<'a, 'ctx>,
-    proc: roc_mono::ir::Proc<'a>,
+    proc: &roc_mono::ir::Proc<'a>,
     fn_val: FunctionValue<'ctx>,
 ) {
     use roc_mono::ir::HostExposedLayouts;
@@ -3499,7 +3623,14 @@ pub fn build_proc<'a, 'ctx, 'env>(
         scope.insert(*arg_symbol, (*layout, arg_val));
     }
 
-    let body = build_exp_stmt(env, layout_ids, &mut scope, fn_val, &proc.body);
+    let body = build_exp_stmt(
+        env,
+        layout_ids,
+        func_spec_solutions,
+        &mut scope,
+        fn_val,
+        &proc.body,
+    );
 
     // only add a return if codegen did not already add one
     if let Some(block) = builder.get_insert_block() {
@@ -3519,15 +3650,13 @@ pub fn verify_fn(fn_val: FunctionValue<'_>) {
     }
 }
 
-fn function_value_by_name<'a, 'ctx, 'env>(
+fn function_value_by_func_spec<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    layout: Layout<'a>,
+    func_spec: FuncSpec,
     symbol: Symbol,
+    layout: Layout<'a>,
 ) -> FunctionValue<'ctx> {
-    let fn_name = layout_ids
-        .get(symbol, &layout)
-        .to_symbol_string(symbol, &env.interns);
+    let fn_name = func_spec_name(env.arena, &env.interns, symbol, func_spec);
     let fn_name = fn_name.as_str();
 
     function_value_by_name_help(env, layout, symbol, fn_name)
@@ -3571,13 +3700,12 @@ fn function_value_by_name_help<'a, 'ctx, 'env>(
 #[inline(always)]
 fn roc_call_with_args<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
     layout: &Layout<'a>,
     symbol: Symbol,
-    _func_name: FuncName<'_>,
+    func_spec: FuncSpec,
     args: &[BasicValueEnum<'ctx>],
 ) -> BasicValueEnum<'ctx> {
-    let fn_val = function_value_by_name(env, layout_ids, *layout, symbol);
+    let fn_val = function_value_by_func_spec(env, func_spec, symbol, *layout);
 
     let call = env.builder.build_call(fn_val, args, "call");
 
@@ -4888,6 +5016,7 @@ fn build_foreign_symbol_write_result_into_ptr<'a, 'ctx, 'env>(
 fn build_foreign_symbol<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
+    func_spec_solutions: &FuncSpecSolutions,
     scope: &mut Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     foreign: &roc_module::ident::ForeignSymbol,
@@ -4951,7 +5080,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
 
                 scope.insert(symbol, (*ret_layout, call_result));
 
-                build_exp_stmt(env, layout_ids, scope, parent, pass);
+                build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, pass);
 
                 scope.remove(&symbol);
             }
@@ -4980,7 +5109,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                     (Layout::Struct(&[]), exception_object),
                 );
 
-                build_exp_stmt(env, layout_ids, scope, parent, fail);
+                build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, fail);
             }
 
             call_result
