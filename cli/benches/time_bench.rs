@@ -17,7 +17,7 @@ fn bench_group_wall_time(c: &mut Criterion) {
         bench_deriv,         // nest deriv 8 f
         bench_rbtree_ck,     // ms = makeMap 5 80000
         bench_rbtree_delete, // m = makeMap 100000
-        bench_quicksort,     // list size 2000
+        bench_quicksort,     // list size 10000
     ];
 
     for bench_func in bench_funcs.iter() {
