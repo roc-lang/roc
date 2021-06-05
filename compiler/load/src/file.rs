@@ -706,7 +706,6 @@ pub struct MonomorphizedModule<'a> {
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
     pub procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
-    pub alias_analysis_solutions: AliasAnalysisSolutions,
     pub exposed_to_host: MutMap<Symbol, Variable>,
     pub header_sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
@@ -864,19 +863,6 @@ struct State<'a> {
     pub layout_caches: std::vec::Vec<LayoutCache<'a>>,
 
     pub procs: Procs<'a>,
-
-    pub alias_analysis_solutions: AliasAnalysisSolutions,
-}
-
-pub enum AliasAnalysisSolutions {
-    NotAvailable,
-    Available(morphic_lib::Solutions),
-}
-
-impl std::fmt::Debug for AliasAnalysisSolutions {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "AliasAnalysisSolutions {{}}")
-    }
 }
 
 #[derive(Debug)]
@@ -1486,7 +1472,6 @@ where
                 specializations_in_flight: 0,
                 layout_caches: std::vec::Vec::with_capacity(num_cpus::get()),
                 procs: Procs::new_in(arena),
-                alias_analysis_solutions: AliasAnalysisSolutions::NotAvailable,
             };
 
             // We've now distributed one worker queue to each thread.
@@ -2040,7 +2025,7 @@ fn update<'a>(
         }
         MadeSpecializations {
             module_id,
-            mut ident_ids,
+            ident_ids,
             subs,
             procedures,
             external_specializations_requested,
@@ -2063,6 +2048,8 @@ fn update<'a>(
                 && state.dependencies.solved_all()
                 && state.goal_phase == Phase::MakeSpecializations
             {
+                Proc::insert_refcount_operations(arena, &mut state.procedures);
+
                 // display the mono IR of the module, for debug purposes
                 if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
                     let procs_string = state
@@ -2076,26 +2063,14 @@ fn update<'a>(
                     println!("{}", result);
                 }
 
-                Proc::insert_refcount_operations(arena, &mut state.procedures);
-
-                Proc::optimize_refcount_operations(
-                    arena,
-                    module_id,
-                    &mut ident_ids,
-                    &mut state.procedures,
-                );
-
-                if false {
-                    let it = state.procedures.iter().map(|x| x.1);
-
-                    match roc_mono::alias_analysis::spec_program(it) {
-                        Err(e) => panic!("Error in alias analysis: {:?}", e),
-                        Ok(solutions) => {
-                            state.alias_analysis_solutions =
-                                AliasAnalysisSolutions::Available(solutions)
-                        }
-                    }
-                }
+                // This is not safe with the new non-recursive RC updates that we do for tag unions
+                //
+                //                Proc::optimize_refcount_operations(
+                //                    arena,
+                //                    module_id,
+                //                    &mut ident_ids,
+                //                    &mut state.procedures,
+                //                );
 
                 state.constrained_ident_ids.insert(module_id, ident_ids);
 
@@ -2176,7 +2151,6 @@ fn finish_specialization(
 
     let State {
         procedures,
-        alias_analysis_solutions,
         module_cache,
         output_path,
         platform_path,
@@ -2238,7 +2212,6 @@ fn finish_specialization(
         subs,
         interns,
         procedures,
-        alias_analysis_solutions,
         sources,
         header_sources,
         timings: state.timings,

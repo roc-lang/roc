@@ -146,7 +146,7 @@ fn proc_spec(proc: &Proc) -> Result<FuncDef> {
 #[derive(Default)]
 struct Env {
     symbols: MutMap<Symbol, ValueId>,
-    join_points: MutMap<crate::ir::JoinPointId, morphic_lib::JoinPointId>,
+    join_points: MutMap<crate::ir::JoinPointId, morphic_lib::ContinuationId>,
 }
 
 fn stmt_spec(
@@ -215,17 +215,28 @@ fn stmt_spec(
         }
         Ret(symbol) => Ok(env.symbols[symbol]),
         Refcounting(modify_rc, continuation) => match modify_rc {
-            ModifyRc::Inc(symbol, _) | ModifyRc::Dec(symbol) => {
-                let result_type = builder.add_tuple_type(&[])?;
+            ModifyRc::Inc(symbol, _) => {
                 let argument = env.symbols[symbol];
 
-                // this is how RC is modelled; it recursively touches all heap cells
-                builder.add_unknown_with(block, &[argument], result_type)?;
+                // a recursive touch is never worse for optimizations than a normal touch
+                // and a bit more permissive in its type
+                builder.add_recursive_touch(block, argument)?;
 
                 stmt_spec(builder, env, block, layout, continuation)
             }
-            ModifyRc::DecRef(_symbol) => {
-                // TODO a decref is a non-recursive decrement of a structure
+
+            ModifyRc::Dec(symbol) => {
+                let argument = env.symbols[symbol];
+
+                builder.add_recursive_touch(block, argument)?;
+
+                stmt_spec(builder, env, block, layout, continuation)
+            }
+            ModifyRc::DecRef(symbol) => {
+                let argument = env.symbols[symbol];
+
+                builder.add_recursive_touch(block, argument)?;
+
                 stmt_spec(builder, env, block, layout, continuation)
             }
         },
@@ -246,7 +257,7 @@ fn stmt_spec(
             let jp_arg_type_id = builder.add_tuple_type(&type_ids)?;
 
             let (jpid, jp_argument) =
-                builder.declare_join_point(block, jp_arg_type_id, ret_type_id)?;
+                builder.declare_continuation(block, jp_arg_type_id, ret_type_id)?;
 
             let join_body_sub_block = {
                 env.join_points.insert(*id, jpid);
@@ -270,7 +281,7 @@ fn stmt_spec(
             let cont_value_id = stmt_spec(builder, env, cont_block, layout, continuation)?;
 
             env.join_points.remove(id);
-            builder.define_join_point(jpid, join_body_sub_block)?;
+            builder.define_continuation(jpid, join_body_sub_block)?;
 
             builder.add_sub_block(block, BlockExpr(cont_block, cont_value_id))
         }
@@ -428,8 +439,14 @@ fn lowlevel_spec(
 
             builder.add_sub_block(block, sub_block)
         }
-        Eq | NotEq => new_bool(builder, block),
-        NumLte | NumLt | NumGt | NumGte => new_order(builder, block),
+        Eq | NotEq => {
+            // just dream up a unit value
+            builder.add_make_tuple(block, &[])
+        }
+        NumLte | NumLt | NumGt | NumGte => {
+            // just dream up a unit value
+            builder.add_make_tuple(block, &[])
+        }
         ListLen => {
             // just dream up a unit value
             builder.add_make_tuple(block, &[])
@@ -733,24 +750,6 @@ fn new_static_string(builder: &mut FuncDefBuilder, block: BlockId) -> Result<Val
     let module = MOD_APP;
 
     builder.add_const_ref(block, module, STATIC_STR_NAME)
-}
-
-fn new_order(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
-    // always generats EQ
-    let tag_id = 0;
-
-    let unit = builder.add_tuple_type(&[])?;
-    let unit_value = builder.add_make_tuple(block, &[])?;
-    builder.add_make_union(block, &[unit, unit, unit], tag_id, unit_value)
-}
-
-fn new_bool(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {
-    // always generats False
-    let tag_id = 0;
-
-    let unit = builder.add_tuple_type(&[])?;
-    let unit_value = builder.add_make_tuple(block, &[])?;
-    builder.add_make_union(block, &[unit, unit], tag_id, unit_value)
 }
 
 fn new_num(builder: &mut FuncDefBuilder, block: BlockId) -> Result<ValueId> {

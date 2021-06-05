@@ -47,18 +47,19 @@ resultWithDefault = \res, default ->
 
 main : Task.Task {} []
 main =
-    ms : ConsList Map
-    ms = makeMap 5 5 # 42_000_00
+    Task.after Task.getInt \n ->
+        ms : ConsList Map
+        ms = makeMap 5 n # original koka n = 4_200_000
 
-    when ms is
-        Cons head _ ->
-            val = fold (\_, v, r -> if v then r + 1 else r) head 0
-            val
-                |> Str.fromInt
-                |> Task.putLine
+        when ms is
+            Cons head _ ->
+                val = fold (\_, v, r -> if v then r + 1 else r) head 0
+                val
+                    |> Str.fromInt
+                    |> Task.putLine
 
-        Nil ->
-            Task.putLine "fail"
+            Nil ->
+                Task.putLine "fail"
 
 insert : Tree (Num k) v, (Num k), v -> Tree (Num k) v
 insert = \t, k, v -> if isRed t then setBlack (ins t k v) else ins t k v
