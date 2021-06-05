@@ -27,5 +27,7 @@ map :
 
 # TODO: removed `'` from signature because parser does not support it yet
 # Original signature: insert : Dict 'key val, 'key, val -> Dict 'key val
-## Since NaN is defined to be unequal to NaN, panics if given NaN for a key.
+## Make sure never to insert a key of *NaN* into a [Dict]! Becuase *NaN* is
+## defined to be unequal to *NaN*, inserting a *NaN* key results in an entry
+## that can never be retrieved or removed from the [Dict].
 insert : Dict key val, key, val -> Dict key val

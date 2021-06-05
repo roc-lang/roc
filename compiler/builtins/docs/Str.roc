@@ -456,9 +456,16 @@ parseU64 : Str, NumParseConfig -> Result { val : U64, rest : Str } [ Expected [ 
 parseI64 : Str, NumParseConfig -> Result { val : I64, rest : Str } [ Expected [ NumI64 ]* Str ]*
 parseU128 : Str, NumParseConfig -> Result { val : U128, rest : Str } [ Expected [ NumU128 ]* Str ]*
 parseI128 : Str, NumParseConfig -> Result { val : I128, rest : Str } [ Expected [ NumI128 ]* Str ]*
-parseF64 : Str, NumParseConfig -> Result { val : U128, rest : Str } [ Expected [ NumF64 ]* Str ]*
-parseF32 : Str, NumParseConfig -> Result { val : I128, rest : Str } [ Expected [ NumF32 ]* Str ]*
 parseDec : Str, NumParseConfig -> Result { val : Dec, rest : Str } [ Expected [ NumDec ]* Str ]*
+
+## If the string begins with a [finite](Num.isFinite) [F64] number, return
+## that number along with the rest of the string after it.
+##
+## If the string begins with `"NaN"`, `"∞"`, and `"-∞"` (which do not represent
+## [finite](Num.isFinite) numbers), they will be similarly accepted and
+## translated into their respective [F64] values.
+parseF64 : Str, NumParseConfig -> Result { val : F64, rest : Str } [ Expected [ NumF64 ]* Str ]*
+parseF32 : Str, NumParseConfig -> Result { val : F32, rest : Str } [ Expected [ NumF32 ]* Str ]*
 
 ## Notes:
 ## * You can allow a decimal mark for integers; they'll only parse if the numbers after it are all 0.

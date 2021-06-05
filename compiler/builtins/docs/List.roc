@@ -232,8 +232,27 @@ reverse : List elem -> List elem
 
 ## Sorts a list using a function which specifies how two elements are ordered.
 ##
-##
+## When sorting by numeric values, it's more efficient to use [sortAsc] or
+## [sortDesc] instead.
 sort : List elem, (elem, elem -> [ Lt, Eq, Gt ]) -> List elem
+
+## Sorts a list in ascending order (lowest to highest), using a function which
+## specifies a way to represent each element as a number.
+##
+## This is more efficient than [sort] because it skips
+## calculating the `[ Lt, Eq, Gt ]` value and uses the number directly instead.
+##
+## To sort in descending order (highest to lowest), use [List.sortDesc] instead.
+sortAsc : List elem, (elem -> Num *) -> List elem
+
+## Sorts a list in descending order (highest to lowest), using a function which
+## specifies a way to represent each element as a number.
+##
+## This is more efficient than [sort] because it skips
+## calculating the `[ Lt, Eq, Gt ]` value and uses the number directly instead.
+##
+## To sort in ascending order (lowest to highest), use [List.sortAsc] instead.
+sortDesc : List elem, (elem -> Num *) -> List elem
 
 ## Convert each element in the list to something new, by calling a conversion
 ## function on each of them. Then return a new list of the converted values.
