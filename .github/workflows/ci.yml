@@ -22,3 +22,4 @@ jobs:
 
       - name: install dependencies, build, run zig tests, rustfmt, clippy, cargo test --release
         run: ./ci/safe-earthly.sh +test-all
+
