@@ -20,8 +20,5 @@ jobs:
       - name: Earthly version
         run: earthly --version
 
-      - name: prune cache
-        run: earthly prune --reset
-
       - name: install dependencies, build, cd cli, benchmark with criterion
         run: ./ci/safe-earthly.sh +bench-roc
