@@ -8,6 +8,7 @@ pub const RocDec = struct {
     num: i128,
 
     pub const decimal_places: comptime u32 = 18;
+    const max_digits: comptime u32 = 39;
 
     pub const min: comptime RocDec = .{ .num = math.minInt(i128) };
     pub const max: comptime RocDec = .{ .num = math.maxInt(i128) };
@@ -106,6 +107,60 @@ pub const RocDec = struct {
             '0'...'9' => true,
             else => false,
         };
+    }
+
+    pub fn toString(self: RocDec) ?RocStr {
+        var num_bytes: [max_digits]u8 = undefined;
+        var num_digits = std.fmt.formatIntBuf(num_bytes[0..], self.num, 10, false, .{});
+
+        var before_num_digits = num_digits - decimal_places;
+
+        var index = decimal_places - 1;
+        var trim_index: ?usize = null;
+        var is_consecutive_zero = true;
+        while (index != 0) {
+            var digit = num_bytes[before_num_digits + index];
+            if (digit == '0' and is_consecutive_zero) {
+                trim_index = index;
+            } else {
+                is_consecutive_zero = false;
+            }
+            index -= 1;
+        }
+        var after_num_digits = if (trim_index) |i| i else decimal_places;
+
+        const should_add_prefix_zero = before_num_digits == 0 or (before_num_digits == 1 and num_bytes[0] == '-');
+        const prefix_zero_len: usize = if (should_add_prefix_zero) 1 else 0;
+        const dot_len: usize = 1;
+        var str_len = prefix_zero_len + before_num_digits + dot_len + after_num_digits;
+
+        // [max_digits + 2] here to account for '.' and '-'
+        var str_bytes: [max_digits + 2]u8 = undefined;
+
+        var str_bytes_index: usize = 0;
+        var bytes_index: usize = 0;
+        if (should_add_prefix_zero) {
+            if (num_bytes[bytes_index] == '-') {
+                str_bytes[str_bytes_index] = '-';
+                str_bytes_index += 1;
+                bytes_index += 1;
+            }
+            str_bytes[str_bytes_index] = '0';
+            str_bytes_index += 1;
+        }
+
+        while (bytes_index < str_len) {
+            if (bytes_index == before_num_digits) {
+                str_bytes[str_bytes_index] = '.';
+                str_bytes_index += 1;
+            }
+
+            str_bytes[str_bytes_index] = num_bytes[bytes_index];
+            str_bytes_index += 1;
+            bytes_index += 1;
+        }
+
+        return RocStr.init(&str_bytes, str_len);
     }
 
     pub fn negate(self: RocDec) ?RocDec {
@@ -319,6 +374,7 @@ fn mul_u128(a: u128, b: u128) U256 {
 
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
+const expect = testing.expect;
 
 test "fromU64" {
     var dec = RocDec.fromU64(25);
@@ -429,6 +485,76 @@ test "fromString: .123.1" {
     var dec = RocDec.fromString(roc_str);
 
     expectEqual(dec, null);
+}
+
+test "toString: 123.45" {
+    var roc_str = RocStr.init("123.45", 6);
+    var dec = RocDec.fromString(roc_str);
+    var res_roc_str = dec.?.toString();
+
+    expect(RocStr.eq(roc_str, res_roc_str.?));
+}
+
+test "toString: -123.45" {
+    var roc_str = RocStr.init("-123.45", 7);
+    var dec = RocDec.fromString(roc_str);
+    var res_roc_str = dec.?.toString();
+
+    expect(RocStr.eq(roc_str, res_roc_str.?));
+}
+
+test "toString: 123.0" {
+    var roc_str = RocStr.init("123.0", 5);
+    var dec = RocDec.fromString(roc_str);
+    var res_roc_str = dec.?.toString();
+
+    expect(RocStr.eq(roc_str, res_roc_str.?));
+}
+
+test "toString: -123.0" {
+    var roc_str = RocStr.init("-123.0", 6);
+    var dec = RocDec.fromString(roc_str);
+    var res_roc_str = dec.?.toString();
+
+    expect(RocStr.eq(roc_str, res_roc_str.?));
+}
+
+test "toString: 0.45" {
+    var roc_str = RocStr.init("0.45", 4);
+    var dec = RocDec.fromString(roc_str);
+    var res_roc_str = dec.?.toString();
+
+    expect(RocStr.eq(roc_str, res_roc_str.?));
+}
+
+test "toString: -0.45" {
+    var roc_str = RocStr.init("-0.45", 5);
+    var dec = RocDec.fromString(roc_str);
+    var res_roc_str = dec.?.toString();
+
+    expect(RocStr.eq(roc_str, res_roc_str.?));
+}
+
+test "toString: -111.123456789" {
+    var roc_str = RocStr.init("-111.123456789", 14);
+    var dec = RocDec.fromString(roc_str);
+    var res_roc_str = dec.?.toString();
+
+    expect(RocStr.eq(roc_str, res_roc_str.?));
+}
+
+test "toString: 111.1234567891" {
+    var roc_str = RocStr.init("111.1234567891", 14);
+    var dec = RocDec.fromString(roc_str);
+    var res_roc_str = dec.?.toString();
+    expect(RocStr.eq(roc_str, res_roc_str.?));
+}
+
+test "toString: 123.111111111111 (big str)" {
+    var roc_str = RocStr.init("123.111111111111", 16);
+    var dec = RocDec.fromString(roc_str);
+    var res_roc_str = dec.?.toString();
+    expect(RocStr.eq(roc_str, res_roc_str.?));
 }
 
 test "add: 0" {
