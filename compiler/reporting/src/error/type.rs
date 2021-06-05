@@ -1046,7 +1046,7 @@ fn to_pattern_report<'b>(
             let doc = alloc.stack(vec![
                 alloc.text("This pattern is being used in an unexpected way:"),
                 alloc.region(expr_region),
-                pattern_type_comparision(
+                pattern_type_comparison(
                     alloc,
                     found,
                     expected_type,
@@ -1078,7 +1078,7 @@ fn to_pattern_report<'b>(
                         .append(name.clone())
                         .append(alloc.text(" is weird:")),
                     alloc.region(region),
-                    pattern_type_comparision(
+                    pattern_type_comparison(
                         alloc,
                         found,
                         expected_type,
@@ -1112,7 +1112,7 @@ fn to_pattern_report<'b>(
                             .append(alloc.keyword("when"))
                             .append(alloc.text(" is causing a mismatch:")),
                         alloc.region(region),
-                        pattern_type_comparision(
+                        pattern_type_comparison(
                             alloc,
                             found,
                             expected_type,
@@ -1144,7 +1144,7 @@ fn to_pattern_report<'b>(
                             .append(alloc.keyword("when"))
                             .append(alloc.text(" does not match the previous ones:")),
                         alloc.region(region),
-                        pattern_type_comparision(
+                        pattern_type_comparison(
                             alloc,
                             found,
                             expected_type,
@@ -1175,7 +1175,7 @@ fn to_pattern_report<'b>(
     }
 }
 
-fn pattern_type_comparision<'b>(
+fn pattern_type_comparison<'b>(
     alloc: &'b RocDocAllocator<'b>,
     actual: ErrorType,
     expected: ErrorType,

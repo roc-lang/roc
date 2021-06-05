@@ -81,7 +81,7 @@ pub fn set_clipboard_txt(clipboard_opt: &mut Option<Clipboard>, txt: &str) -> Ed
         clipboard.set_content(txt.to_owned())?;
     } else {
         return Err(ClipboardWriteFailed {
-            err_msg: "Clipboard was never initialized succesfully.".to_owned(),
+            err_msg: "Clipboard was never initialized successfully.".to_owned(),
         });
     }
 
@@ -93,7 +93,7 @@ pub fn get_clipboard_txt(clipboard_opt: &mut Option<Clipboard>) -> EdResult<Stri
         clipboard.get_content()
     } else {
         Err(ClipboardReadFailed {
-            err_msg: "Clipboard was never initialized succesfully.".to_owned(),
+            err_msg: "Clipboard was never initialized successfully.".to_owned(),
         })
     }
 }

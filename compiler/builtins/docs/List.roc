@@ -180,7 +180,7 @@ interface List2
 ## we can free it immediately because there are no other refcounts. However,
 ## in the case of `lists`, we have to iterate through the list and decrement
 ## the refcounts of each of its contained lists - because they, too, have
-## refcounts! Importantly, beacuse the first element had its refcount incremented
+## refcounts! Importantly, because the first element had its refcount incremented
 ## because the function returned `first`, that element will actually end up
 ## *not* getting freed at the end - but all the others will be.
 ##

@@ -5,7 +5,7 @@ It goes from Roc's [mono ir](https://github.com/rtfeldman/roc/blob/trunk/compile
 
 ## General Process
 
-The backend is essentially defined as two recursive match statment over the mono ir.
+The backend is essentially defined as two recursive match statement over the mono ir.
 The first pass is used to do simple linear scan lifetime analysis.
 In the future it may be expanded to add a few other quick optimizations.
 The second pass is the actual meat of the backend that generates the byte buffer of output binary.
@@ -62,7 +62,7 @@ Here are example implementations for [arm](https://github.com/rtfeldman/roc/blob
 Adding a new builtin to the dev backend can be pretty simple.
 Here is [an example](https://github.com/rtfeldman/roc/pull/893/files) of adding `Num.Sub`.
 
-This is the general procede I follow with some helpful links:
+This is the general procedure I follow with some helpful links:
 
 1. Find a feature that is just n+1.
    For example, since we already have integers, adding a builtin that functions on them should be n+1.

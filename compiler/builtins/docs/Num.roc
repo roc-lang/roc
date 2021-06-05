@@ -318,7 +318,7 @@ Int size : Num [ @Int size ]
 ## >>> coordinates.x + 1
 ##
 ## On the last line, the compiler infers that the `1` in `+ 1` is an #F32
-## beacuse it's being added to `coordinates.x`, which was defined to be an #F32
+## because it's being added to `coordinates.x`, which was defined to be an #F32
 ## on the first line.
 ##
 ## Sometimes the compiler has no information about which specific type to pick.
@@ -621,7 +621,7 @@ trunc : Float * -> Int *
 ## Since #Nat has a different maximum number depending on the system you're building
 ## for, this may give a different answer on different systems.
 ##
-## For example, on a 32-bit sytem, #Num.maxNat will return the same answer as
+## For example, on a 32-bit system, #Num.maxNat will return the same answer as
 ## #Num.maxU32. This means that calling `Num.toNat 9_000_000_000` on a 32-bit
 ## system will return #Num.maxU32 instead of 9 billion, because 9 billion is
 ## higher than #Num.maxU32 and will not fit in a #Nat on a 32-bit system.

@@ -42,7 +42,7 @@ fn list_repeat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 ```
-In these builtin definitions you will need to allocate for and list the arguments. For `List.repeat`, the arguments are the `elem_var` and the `len_var`. So in both the `body` and `defn` we list these arguments in a vector, with the `Symobl::ARG_1` adn` Symvol::ARG_2` designating which argument is which.
+In these builtin definitions you will need to allocate for and list the arguments. For `List.repeat`, the arguments are the `elem_var` and the `len_var`. So in both the `body` and `defn` we list these arguments in a vector, with the `Symobl::ARG_1` and` Symvol::ARG_2` designating which argument is which.
 
 Since `List.repeat` is implemented entirely as low level functions, its `body` is a `RunLowLevel`, and the `op` is `LowLevel::ListRepeat`. Lets talk about `LowLevel` in the next section.
 
@@ -60,7 +60,7 @@ Its one thing to actually write these functions, its _another_ thing to let the 
 
 ## Specifying how we pass args to the function
 ### builtins/mono/src/borrow.rs
-After we have all of this, we need to specify if the arguements we're passing are owned, borrowed or irrelvant. Towards the bottom of this file, add a new case for you builtin and specify each arg. Be sure to read the comment, as it explains this in more detail.
+After we have all of this, we need to specify if the arguments we're passing are owned, borrowed or irrelvant. Towards the bottom of this file, add a new case for you builtin and specify each arg. Be sure to read the comment, as it explains this in more detail.
 
 ## Specifying the uniqueness of a function
 ### builtins/src/unique.rs

@@ -102,7 +102,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * When refactoring; 
     - Cutting and pasting code to a new file should automatically add imports to the new file and delete them from the old file.
     - Ability to link e.g. variable name in comments to actual variable name. Comment is automatically updated when variable name is changed.
-    - When updating dependencies with breaking changes; show similar diffs from github projects that have succesfully updated that dependency.
+    - When updating dependencies with breaking changes; show similar diffs from github projects that have successfully updated that dependency.
     - AST backed renaming, changing variable/function/type name should change it all over the codebase.  
 * Automatically create all "arms" when pattern matching after entering `when var is` based on the type.
     - All `when ... is` should be updated if the type is changed, e.g. adding Indigo to the Color type should add an arm everywhere where `when color is` is used. 
@@ -133,7 +133,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - Webcam based eye tracking for quick selection.
 - Machine Learning:
    * GPT-3 can generate correct python functions based on a comment describing the functionality, video [here](https://www.youtube.com/watch?v=utuz7wBGjKM). It's possible that training a model using ast's may lead to better results than text based models.
-- Current autocomplete lacks flow, moving through suggestions with arrows is slow. Being able to code by weaving together autocomplete suggestions layed out in rows using eye tracking, that could flow.
+- Current autocomplete lacks flow, moving through suggestions with arrows is slow. Being able to code by weaving together autocomplete suggestions laid out in rows using eye tracking, that could flow.
 
 #### Productivity Inspiration
 
@@ -205,9 +205,9 @@ Thoughts and ideas possibly taken from above inspirations or separate.
       Or Total blindness where we need to trough sound to communicate to the user
       Screen readers read trees of labeled elements. Each platform has different apis, but I think they are horrible. Just close your eyes and imagine listening to screen reader all day while you are using this majectic machines called computers.
       But blind people walk with a tool and they can react much better to sound/space relations than full on visal majority does. They are acute to sound as a spatial hint. And a hand for most of them is a very sensitive tool that can make sounds in space.
-      Imagine if everytime for the user doesnt want to rely on shining rendered pixels on the screen for a feedback from machine, we make a accoustic room simulation, where with moving the "stick", either with mouse or with key arrows, we bump into one of the objects and that produces certain contextually appropriate sound (clean)*ding*
+      Imagine if everytime for the user doesnt want to rely on shining rendered pixels on the screen for a feedback from machine, we make a acoustic room simulation, where with moving the "stick", either with mouse or with key arrows, we bump into one of the objects and that produces certain contextually appropriate sound (clean)*ding*
       
-      On the each level of abstraction they can make sounds more deeper, so then when you type letters you feel like you are playing with the sand (soft)*shh*. We would need help from some sound engeneer about it, but imagine moving down, which can be voice trigered command for motion impaired, you hear (soft)*pup* and the name of the module, and then you have options and commands appropriate for the module, they could map to those  basic 4 buttons that we trained user on, and he would shortcut all the soft talk with click of a button. Think of the satisfaction when you can skip the dialog of the game and get straight into action. (X) Open functions! each function would make a sound and say its name, unless you press search and start searching for a specific function inside module, if you want one you select or move to next.
+      On the each level of abstraction they can make sounds more deeper, so then when you type letters you feel like you are playing with the sand (soft)*shh*. We would need help from some sound engineer about it, but imagine moving down, which can be voice trigered command for motion impaired, you hear (soft)*pup* and the name of the module, and then you have options and commands appropriate for the module, they could map to those  basic 4 buttons that we trained user on, and he would shortcut all the soft talk with click of a button. Think of the satisfaction when you can skip the dialog of the game and get straight into action. (X) Open functions! each function would make a sound and say its name, unless you press search and start searching for a specific function inside module, if you want one you select or move to next.
       
    * Motor impariments
       [rant]BACKS OF CODERS ARE NOT HEALTHY! We need to change that![/neverstop]

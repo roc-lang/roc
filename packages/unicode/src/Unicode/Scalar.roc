@@ -26,7 +26,7 @@ toStr = \@Scalar u32
         Ok str -> str
         Err _ ->
             # This will quickly crash if it ever runs, but we're confident
-            # this Err branch will never run. That's becasue it only runs
+            # this Err branch will never run. That's because it only runs
             # if Str.fromScalar receives an invalid scalar value, and we've
             # already validated this!
             toStr (@Scalar (scalar * 256))
