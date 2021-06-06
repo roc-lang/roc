@@ -229,7 +229,6 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
         let href = {
             let mut href_buf = String::new();
             href_buf.push_str(name);
-            href_buf.push_str(".html");
             href_buf
         };
 
@@ -568,7 +567,7 @@ fn make_doc_link(scope: &mut Scope, interns: &Interns, doc_item: &str) -> String
             let mut link = String::new();
 
             link.push_str(module_str);
-            link.push_str(".html#");
+            link.push_str("#");
             link.push_str(ident_str);
 
             let mut buf = String::new();
