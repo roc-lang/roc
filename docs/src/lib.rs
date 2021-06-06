@@ -30,7 +30,6 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
         fs::create_dir_all(build_dir).expect("TODO gracefully handle unable to create build dir");
     }
 
-    // Copy over the assets
     let template_html = include_str!("./static/index.html").replace(
         "<!-- Module links -->",
         render_sidebar(
