@@ -1,13 +1,14 @@
-use crate::target;
-use bumpalo::Bump;
-use inkwell::context::Context;
-use inkwell::targets::{CodeModel, FileType, RelocMode};
+#[cfg(feature = "llvm")]
+use roc_gen::llvm::build::module_from_builtins;
+#[cfg(feature = "llvm")]
 pub use roc_gen::llvm::build::FunctionIterator;
-use roc_gen::llvm::build::{module_from_builtins, OptLevel};
+#[cfg(feature = "llvm")]
 use roc_load::file::MonomorphizedModule;
+#[cfg(feature = "llvm")]
+use roc_mono::ir::OptLevel;
+#[cfg(feature = "llvm")]
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
-use target_lexicon::Triple;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CodeGenTiming {
@@ -18,16 +19,24 @@ pub struct CodeGenTiming {
 // TODO how should imported modules factor into this? What if those use builtins too?
 // TODO this should probably use more helper functions
 // TODO make this polymorphic in the llvm functions so it can be reused for another backend.
+#[cfg(feature = "llvm")]
 #[allow(clippy::cognitive_complexity)]
 pub fn gen_from_mono_module(
-    arena: &Bump,
+    arena: &bumpalo::Bump,
     mut loaded: MonomorphizedModule,
     roc_file_path: &Path,
-    target: Triple,
+    target: target_lexicon::Triple,
     app_o_file: &Path,
     opt_level: OptLevel,
     emit_debug_info: bool,
 ) -> CodeGenTiming {
+    use crate::target::{self, convert_opt_level};
+    use inkwell::attributes::{Attribute, AttributeLoc};
+    use inkwell::context::Context;
+    use inkwell::module::Linkage;
+    use inkwell::targets::{CodeModel, FileType, RelocMode};
+    use std::time::SystemTime;
+
     use roc_reporting::report::{
         can_problem, mono_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE,
     };
@@ -87,9 +96,6 @@ pub fn gen_from_mono_module(
     // module.strip_debug_info();
 
     // mark our zig-defined builtins as internal
-    use inkwell::attributes::{Attribute, AttributeLoc};
-    use inkwell::module::Linkage;
-
     let app_ll_file = {
         let mut temp = PathBuf::from(roc_file_path);
         temp.set_extension("ll");
@@ -226,7 +232,7 @@ pub fn gen_from_mono_module(
         let reloc = RelocMode::Default;
         let model = CodeModel::Default;
         let target_machine =
-            target::target_machine(&target, opt_level.into(), reloc, model).unwrap();
+            target::target_machine(&target, convert_opt_level(opt_level), reloc, model).unwrap();
 
         target_machine
             .write_to_file(&env.module, FileType::Object, &app_o_file)

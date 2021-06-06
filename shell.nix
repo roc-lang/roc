@@ -44,7 +44,6 @@ let
 
   llvmPkgs = pkgs.llvmPackages_10;
 
-  # zig = import ./nix/zig-unstable.nix { inherit pkgs; };
   zig = import ./nix/zig.nix { inherit pkgs; };
 
   inputs = with pkgs;[
