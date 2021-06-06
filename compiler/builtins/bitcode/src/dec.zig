@@ -323,140 +323,140 @@ const expectEqual = testing.expectEqual;
 test "fromU64" {
     var dec = RocDec.fromU64(25);
 
-    expectEqual(RocDec{ .num = 25000000000000000000 }, dec);
+    try expectEqual(RocDec{ .num = 25000000000000000000 }, dec);
 }
 
 test "fromString: empty" {
     var roc_str = RocStr.init("", 0);
     var dec = RocDec.fromString(roc_str);
 
-    expectEqual(dec, null);
+    try expectEqual(dec, null);
 }
 
 test "fromString: 0" {
     var roc_str = RocStr.init("0", 1);
     var dec = RocDec.fromString(roc_str);
 
-    expectEqual(RocDec{ .num = 0 }, dec.?);
+    try expectEqual(RocDec{ .num = 0 }, dec.?);
 }
 
 test "fromString: 1" {
     var roc_str = RocStr.init("1", 1);
     var dec = RocDec.fromString(roc_str);
 
-    expectEqual(RocDec.one_point_zero, dec.?);
+    try expectEqual(RocDec.one_point_zero, dec.?);
 }
 
 test "fromString: 123.45" {
     var roc_str = RocStr.init("123.45", 6);
     var dec = RocDec.fromString(roc_str);
 
-    expectEqual(RocDec{ .num = 123450000000000000000 }, dec.?);
+    try expectEqual(RocDec{ .num = 123450000000000000000 }, dec.?);
 }
 
 test "fromString: .45" {
     var roc_str = RocStr.init(".45", 3);
     var dec = RocDec.fromString(roc_str);
 
-    expectEqual(RocDec{ .num = 450000000000000000 }, dec.?);
+    try expectEqual(RocDec{ .num = 450000000000000000 }, dec.?);
 }
 
 test "fromString: 0.45" {
     var roc_str = RocStr.init("0.45", 4);
     var dec = RocDec.fromString(roc_str);
 
-    expectEqual(RocDec{ .num = 450000000000000000 }, dec.?);
+    try expectEqual(RocDec{ .num = 450000000000000000 }, dec.?);
 }
 
 test "fromString: 123" {
     var roc_str = RocStr.init("123", 3);
     var dec = RocDec.fromString(roc_str);
 
-    expectEqual(RocDec{ .num = 123000000000000000000 }, dec.?);
+    try expectEqual(RocDec{ .num = 123000000000000000000 }, dec.?);
 }
 
 test "fromString: -.45" {
     var roc_str = RocStr.init("-.45", 4);
     var dec = RocDec.fromString(roc_str);
 
-    expectEqual(RocDec{ .num = -450000000000000000 }, dec.?);
+    try expectEqual(RocDec{ .num = -450000000000000000 }, dec.?);
 }
 
 test "fromString: -0.45" {
     var roc_str = RocStr.init("-0.45", 5);
     var dec = RocDec.fromString(roc_str);
 
-    expectEqual(RocDec{ .num = -450000000000000000 }, dec.?);
+    try expectEqual(RocDec{ .num = -450000000000000000 }, dec.?);
 }
 
 test "fromString: -123" {
     var roc_str = RocStr.init("-123", 4);
     var dec = RocDec.fromString(roc_str);
 
-    expectEqual(RocDec{ .num = -123000000000000000000 }, dec.?);
+    try expectEqual(RocDec{ .num = -123000000000000000000 }, dec.?);
 }
 
 test "fromString: -123.45" {
     var roc_str = RocStr.init("-123.45", 7);
     var dec = RocDec.fromString(roc_str);
 
-    expectEqual(RocDec{ .num = -123450000000000000000 }, dec.?);
+    try expectEqual(RocDec{ .num = -123450000000000000000 }, dec.?);
 }
 
 test "fromString: abc" {
     var roc_str = RocStr.init("abc", 3);
     var dec = RocDec.fromString(roc_str);
 
-    expectEqual(dec, null);
+    try expectEqual(dec, null);
 }
 
 test "fromString: 123.abc" {
     var roc_str = RocStr.init("123.abc", 7);
     var dec = RocDec.fromString(roc_str);
 
-    expectEqual(dec, null);
+    try expectEqual(dec, null);
 }
 
 test "fromString: abc.123" {
     var roc_str = RocStr.init("abc.123", 7);
     var dec = RocDec.fromString(roc_str);
 
-    expectEqual(dec, null);
+    try expectEqual(dec, null);
 }
 
 test "fromString: .123.1" {
     var roc_str = RocStr.init(".123.1", 6);
     var dec = RocDec.fromString(roc_str);
 
-    expectEqual(dec, null);
+    try expectEqual(dec, null);
 }
 
 test "add: 0" {
     var dec: RocDec = .{ .num = 0 };
 
-    expectEqual(RocDec{ .num = 0 }, dec.add(.{ .num = 0 }));
+    try expectEqual(RocDec{ .num = 0 }, dec.add(.{ .num = 0 }));
 }
 
 test "add: 1" {
     var dec: RocDec = .{ .num = 0 };
 
-    expectEqual(RocDec{ .num = 1 }, dec.add(.{ .num = 1 }));
+    try expectEqual(RocDec{ .num = 1 }, dec.add(.{ .num = 1 }));
 }
 
 test "mul: by 0" {
     var dec: RocDec = .{ .num = 0 };
 
-    expectEqual(RocDec{ .num = 0 }, dec.mul(.{ .num = 0 }));
+    try expectEqual(RocDec{ .num = 0 }, dec.mul(.{ .num = 0 }));
 }
 
 test "mul: by 1" {
     var dec: RocDec = RocDec.fromU64(15);
 
-    expectEqual(RocDec.fromU64(15), dec.mul(RocDec.fromU64(1)));
+    try expectEqual(RocDec.fromU64(15), dec.mul(RocDec.fromU64(1)));
 }
 
 test "mul: by 2" {
     var dec: RocDec = RocDec.fromU64(15);
 
-    expectEqual(RocDec.fromU64(30), dec.mul(RocDec.fromU64(2)));
+    try expectEqual(RocDec.fromU64(30), dec.mul(RocDec.fromU64(2)));
 }
