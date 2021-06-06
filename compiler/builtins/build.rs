@@ -8,6 +8,13 @@ use std::process::Command;
 use std::str;
 
 fn main() {
+    // When we build on Netlify, zig is not installed (but also not used,
+    // since all we're doing is generating docs), so we can skip the steps
+    // that require having zig installed.
+    if env::var_os("NO_ZIG_INSTALLED").is_some() {
+        return;
+    }
+
     let out_dir = env::var_os("OUT_DIR").unwrap();
 
     let big_sur_path = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib";
