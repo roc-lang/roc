@@ -63,9 +63,10 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
     // Write each package's module docs html file
     for (docs_by_id, interns) in package.modules.iter_mut() {
         for module in docs_by_id.values_mut() {
-            let mut filename = String::new();
-            filename.push_str(module.name.as_str());
-            filename.push_str(".html");
+            let module_dir = build_dir.join(module.name.as_str());
+
+            fs::create_dir(&module_dir)
+                .expect("TODO gracefully handle not being able to create the module dir");
 
             let rendered_module = template_html
                 .replace(
@@ -78,7 +79,7 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
                     render_main_content(interns, module).as_str(),
                 );
 
-            fs::write(build_dir.join(filename), rendered_module)
+            fs::write(module_dir.join("index.html"), rendered_module)
                 .expect("TODO gracefully handle failing to write html");
         }
     }

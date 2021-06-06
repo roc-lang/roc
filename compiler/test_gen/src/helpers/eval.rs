@@ -6,6 +6,7 @@ use roc_can::def::Def;
 use roc_collections::all::{MutMap, MutSet};
 use roc_gen::llvm::externs::add_default_roc_externs;
 use roc_module::symbol::Symbol;
+use roc_mono::ir::OptLevel;
 use roc_types::subs::VarStore;
 
 fn promote_expr_to_module(src: &str) -> String {
@@ -190,9 +191,9 @@ pub fn helper<'a>(
     module.strip_debug_info();
 
     let opt_level = if cfg!(debug_assertions) {
-        roc_gen::llvm::build::OptLevel::Normal
+        OptLevel::Normal
     } else {
-        roc_gen::llvm::build::OptLevel::Optimize
+        OptLevel::Optimize
     };
 
     let module = arena.alloc(module);

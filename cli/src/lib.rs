@@ -1,12 +1,12 @@
 #[macro_use]
 extern crate clap;
 
-use build::{build_file, BuildOutcome, BuiltFile};
+use build::{BuildOutcome, BuiltFile};
 use bumpalo::Bump;
 use clap::{App, AppSettings, Arg, ArgMatches};
 use roc_build::link::LinkType;
-use roc_gen::llvm::build::OptLevel;
 use roc_load::file::LoadingProblem;
+use roc_mono::ir::OptLevel;
 use std::env;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -116,7 +116,9 @@ pub enum BuildConfig {
     BuildAndRun { roc_file_arg_index: usize },
 }
 
+#[cfg(feature = "llvm")]
 pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
+    use build::build_file;
     use BuildConfig::*;
 
     let arena = Bump::new();
