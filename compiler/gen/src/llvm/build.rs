@@ -49,7 +49,8 @@ use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
-    BranchInfo, CallType, ExceptionId, JoinPointId, ModifyRc, TopLevelFunctionLayout, Wrapped,
+    BranchInfo, CallType, ExceptionId, JoinPointId, ModifyRc, OptLevel, TopLevelFunctionLayout,
+    Wrapped,
 };
 use roc_mono::layout::{Builtin, InPlace, LambdaSet, Layout, LayoutIds, UnionLayout};
 use target_lexicon::CallingConvention;
@@ -84,21 +85,6 @@ macro_rules! debug_info_init {
         );
         $env.builder.set_current_debug_location(&$env.context, loc);
     }};
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum OptLevel {
-    Normal,
-    Optimize,
-}
-
-impl From<OptLevel> for OptimizationLevel {
-    fn from(level: OptLevel) -> Self {
-        match level {
-            OptLevel::Normal => OptimizationLevel::None,
-            OptLevel::Optimize => OptimizationLevel::Aggressive,
-        }
-    }
 }
 
 /// Iterate over all functions in an llvm module

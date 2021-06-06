@@ -1,10 +1,18 @@
 use roc_cli::{
-    build, build_app, docs, repl, BuildConfig, CMD_BUILD, CMD_DOCS, CMD_EDIT, CMD_REPL, CMD_RUN,
+    build_app, docs, repl, BuildConfig, CMD_BUILD, CMD_DOCS, CMD_EDIT, CMD_REPL, CMD_RUN,
     DIRECTORY_OR_FILES, ROC_FILE,
 };
 use std::io;
 use std::path::{Path, PathBuf};
 use target_lexicon::Triple;
+
+#[cfg(feature = "llvm")]
+use roc_cli::build;
+
+#[cfg(not(feature = "llvm"))]
+fn build(_target: &Triple, _matches: &clap::ArgMatches, _config: BuildConfig) -> io::Result<i32> {
+    panic!("Building without LLVM is not currently supported.");
+}
 
 fn main() -> io::Result<()> {
     let matches = build_app().get_matches();
