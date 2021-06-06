@@ -1,5 +1,6 @@
 [package]
 name = "roc_gen_llvm"
+description = "The LLVM backend for the Roc compiler"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
