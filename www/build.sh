@@ -16,17 +16,5 @@ echo 'Generating docs...'
 # We run the CLI with --no-default-features because that way we don't have a LLVM
 # dependency. (Netlify's build servers have Rust installed, but not LLVM.)
 cargo run -p roc_cli --no-default-features docs compiler/builtins/docs/Bool.roc
-
 mv generated-docs/ www/build/builtins
-
-pushd www/build/builtins
-
-for f in ./*.html; do
-    DIRNAME=$(echo "$f" | sed s/.html//)
-    mkdir "$DIRNAME"
-    mv "$f" "$DIRNAME"/index.html
-done
-
-popd
-
 popd
