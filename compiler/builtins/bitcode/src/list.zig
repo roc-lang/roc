@@ -781,43 +781,19 @@ pub fn listDrop(
 }
 
 pub fn listRange(width: utils.IntWidth, low: Opaque, high: Opaque) callconv(.C) RocList {
-    const IntWidth = utils.IntWidth;
-
-    switch (width) {
-        IntWidth.U8 => {
-            return helper1(u8, low, high);
-        },
-        IntWidth.U16 => {
-            return helper1(u16, low, high);
-        },
-        IntWidth.U32 => {
-            return helper1(u32, low, high);
-        },
-        IntWidth.U64 => {
-            return helper1(u64, low, high);
-        },
-        IntWidth.U128 => {
-            return helper1(u128, low, high);
-        },
-        IntWidth.I8 => {
-            return helper1(i8, low, high);
-        },
-        IntWidth.I16 => {
-            return helper1(i16, low, high);
-        },
-        IntWidth.I32 => {
-            return helper1(i32, low, high);
-        },
-        IntWidth.I64 => {
-            return helper1(i64, low, high);
-        },
-        IntWidth.I128 => {
-            return helper1(i128, low, high);
-        },
-        IntWidth.Usize => {
-            return helper1(usize, low, high);
-        },
-    }
+    return switch (width) {
+        .U8 => helper1(u8, low, high),
+        .U16 => helper1(u16, low, high),
+        .U32 => helper1(u32, low, high),
+        .U64 => helper1(u64, low, high),
+        .U128 => helper1(u128, low, high),
+        .I8 => helper1(i8, low, high),
+        .I16 => helper1(i16, low, high),
+        .I32 => helper1(i32, low, high),
+        .I64 => helper1(i64, low, high),
+        .I128 => helper1(i128, low, high),
+        .Usize => helper1(usize, low, high),
+    };
 }
 
 fn helper1(comptime T: type, low: Opaque, high: Opaque) RocList {
