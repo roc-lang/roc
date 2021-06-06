@@ -1,5 +1,5 @@
 [package]
-name = "roc_gen"
+name = "roc_gen_llvm"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
