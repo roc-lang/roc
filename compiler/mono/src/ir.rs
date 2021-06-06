@@ -43,6 +43,12 @@ macro_rules! return_on_layout_error {
     };
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum OptLevel {
+    Normal,
+    Optimize,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum MonoProblem {
     PatternProblem(crate::exhaustive::Error),
