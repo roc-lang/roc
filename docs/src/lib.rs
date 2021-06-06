@@ -567,7 +567,7 @@ fn make_doc_link(scope: &mut Scope, interns: &Interns, doc_item: &str) -> String
             let mut link = String::new();
 
             link.push_str(module_str);
-            link.push_str("#");
+            link.push('#');
             link.push_str(ident_str);
 
             let mut buf = String::new();
