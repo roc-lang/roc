@@ -341,7 +341,9 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
 }
 
 pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Module<'ctx> {
-    let bitcode_bytes = bitcode::as_bytes();
+    // In the build script for the builtins module,
+    // we compile the builtins into LLVM bitcode
+    let bitcode_bytes: &[u8] = include_bytes!("../../../builtins/bitcode/builtins.bc");
 
     let memory_buffer = MemoryBuffer::create_from_memory_range(&bitcode_bytes, module_name);
 
