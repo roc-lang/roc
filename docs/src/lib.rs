@@ -31,24 +31,6 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
     }
 
     // Copy over the assets
-    fs::write(
-        build_dir.join("search.js"),
-        include_str!("./static/search.js"),
-    )
-    .expect("TODO gracefully handle failing to make the search javascript");
-
-    fs::write(
-        build_dir.join("styles.css"),
-        include_str!("./static/styles.css"),
-    )
-    .expect("TODO gracefully handle failing to make the stylesheet");
-
-    fs::write(
-        build_dir.join("favicon.svg"),
-        include_str!("./static/favicon.svg"),
-    )
-    .expect("TODO gracefully handle failing to make the favicon");
-
     let template_html = include_str!("./static/index.html").replace(
         "<!-- Module links -->",
         render_sidebar(
@@ -69,6 +51,9 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
                 .expect("TODO gracefully handle not being able to create the module dir");
 
             let rendered_module = template_html
+                .replace("<!-- Styles -->", include_str!("./static/styles.css"))
+                .replace("<!-- JavaScript -->", include_str!("./static/search.js"))
+                .replace("/* Icon Svg */", include_str!("./static/favicon.svg"))
                 .replace(
                     "<!-- Package Name and Version -->",
                     render_name_and_version(package.name.as_str(), package.version.as_str())
