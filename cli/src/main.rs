@@ -2,6 +2,7 @@ use roc_cli::{
     build_app, docs, repl, BuildConfig, CMD_BUILD, CMD_DOCS, CMD_EDIT, CMD_REPL, CMD_RUN,
     DIRECTORY_OR_FILES, ROC_FILE,
 };
+use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
 use target_lexicon::Triple;
@@ -73,11 +74,16 @@ fn main() -> io::Result<()> {
                 .values_of_os(DIRECTORY_OR_FILES)
                 .unwrap();
 
-            let paths = values
-                .map(|os_str| Path::new(os_str).to_path_buf())
-                .collect::<Vec<PathBuf>>();
+            let mut roc_files = Vec::new();
 
-            docs(paths);
+            // Populate roc_files
+            for os_str in values {
+                let metadata = fs::metadata(os_str)?;
+
+                roc_files_recursive(os_str, metadata.file_type(), &mut roc_files)?;
+            }
+
+            docs(roc_files);
 
             Ok(0)
         }
@@ -85,6 +91,24 @@ fn main() -> io::Result<()> {
     }?;
 
     std::process::exit(exit_code);
+}
+
+fn roc_files_recursive<P: AsRef<Path>>(
+    path: P,
+    file_type: FileType,
+    roc_files: &mut Vec<PathBuf>,
+) -> io::Result<()> {
+    if file_type.is_dir() {
+        for entry_res in fs::read_dir(path)? {
+            let entry = entry_res?;
+
+            roc_files_recursive(entry.path(), entry.file_type()?, roc_files)?;
+        }
+    } else {
+        roc_files.push(path.as_ref().to_path_buf());
+    }
+
+    Ok(())
 }
 
 #[cfg(feature = "editor")]
