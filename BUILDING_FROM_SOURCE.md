@@ -40,11 +40,16 @@ sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
 
 ### Zig
-**version: 0.7.x**
+**version: 0.8.0**
 
-If you're on MacOS, you can install with `brew install zig`
-If you're on Ubuntu and use Snap, you can install with `snap install zig --classic --beta`
-For any other OS, checkout the [Zig installation page](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
+For any OS, you can use [`zigup`](https://github.com/marler8997/zigup) to manage zig installations.
+
+If you prefer a package manager, you can try the following:
+- For MacOS, you can install with `brew install zig`
+- For, Ubuntu, you can use Snap, you can install with `snap install zig --classic --beta`
+- For other systems, checkout this [page](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
+
+If you want to install it manually, you can also download Zig directly [here](https://ziglang.org/download/). Just make sure you download the right version, the bleeding edge master build is the first download link on this page.
 
 ### LLVM
 **version: 10.0.x**
