@@ -20,7 +20,7 @@ pub const RocDec = struct {
         return .{ .num = num * one_point_zero_i128 };
     }
 
-    pub fn fromString(roc_str: RocStr) ?RocDec {
+    pub fn fromStr(roc_str: RocStr) ?RocDec {
         if (roc_str.isEmpty()) {
             return null;
         }
@@ -109,7 +109,7 @@ pub const RocDec = struct {
         };
     }
 
-    pub fn toString(self: RocDec) ?RocStr {
+    pub fn toStr(self: RocDec) ?RocStr {
         var num_bytes: [max_digits]u8 = undefined;
         var num_digits = std.fmt.formatIntBuf(num_bytes[0..], self.num, 10, false, .{});
 
@@ -383,178 +383,178 @@ test "fromU64" {
     try expectEqual(RocDec{ .num = 25000000000000000000 }, dec);
 }
 
-test "fromString: empty" {
+test "fromStr: empty" {
     var roc_str = RocStr.init("", 0);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
     try expectEqual(dec, null);
 }
 
-test "fromString: 0" {
+test "fromStr: 0" {
     var roc_str = RocStr.init("0", 1);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
     try expectEqual(RocDec{ .num = 0 }, dec.?);
 }
 
-test "fromString: 1" {
+test "fromStr: 1" {
     var roc_str = RocStr.init("1", 1);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
     try expectEqual(RocDec.one_point_zero, dec.?);
 }
 
-test "fromString: 123.45" {
+test "fromStr: 123.45" {
     var roc_str = RocStr.init("123.45", 6);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
     try expectEqual(RocDec{ .num = 123450000000000000000 }, dec.?);
 }
 
-test "fromString: .45" {
+test "fromStr: .45" {
     var roc_str = RocStr.init(".45", 3);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
     try expectEqual(RocDec{ .num = 450000000000000000 }, dec.?);
 }
 
-test "fromString: 0.45" {
+test "fromStr: 0.45" {
     var roc_str = RocStr.init("0.45", 4);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
     try expectEqual(RocDec{ .num = 450000000000000000 }, dec.?);
 }
 
-test "fromString: 123" {
+test "fromStr: 123" {
     var roc_str = RocStr.init("123", 3);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
     try expectEqual(RocDec{ .num = 123000000000000000000 }, dec.?);
 }
 
-test "fromString: -.45" {
+test "fromStr: -.45" {
     var roc_str = RocStr.init("-.45", 4);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
     try expectEqual(RocDec{ .num = -450000000000000000 }, dec.?);
 }
 
-test "fromString: -0.45" {
+test "fromStr: -0.45" {
     var roc_str = RocStr.init("-0.45", 5);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
     try expectEqual(RocDec{ .num = -450000000000000000 }, dec.?);
 }
 
-test "fromString: -123" {
+test "fromStr: -123" {
     var roc_str = RocStr.init("-123", 4);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
     try expectEqual(RocDec{ .num = -123000000000000000000 }, dec.?);
 }
 
-test "fromString: -123.45" {
+test "fromStr: -123.45" {
     var roc_str = RocStr.init("-123.45", 7);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
     try expectEqual(RocDec{ .num = -123450000000000000000 }, dec.?);
 }
 
-test "fromString: abc" {
+test "fromStr: abc" {
     var roc_str = RocStr.init("abc", 3);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
     try expectEqual(dec, null);
 }
 
-test "fromString: 123.abc" {
+test "fromStr: 123.abc" {
     var roc_str = RocStr.init("123.abc", 7);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
     try expectEqual(dec, null);
 }
 
-test "fromString: abc.123" {
+test "fromStr: abc.123" {
     var roc_str = RocStr.init("abc.123", 7);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
     try expectEqual(dec, null);
 }
 
-test "fromString: .123.1" {
+test "fromStr: .123.1" {
     var roc_str = RocStr.init(".123.1", 6);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
     try expectEqual(dec, null);
 }
 
-test "toString: 123.45" {
+test "toStr: 123.45" {
     var dec: RocDec = .{ .num = 123450000000000000000 };
-    var res_roc_str = dec.toString();
+    var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "123.45"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
-test "toString: -123.45" {
+test "toStr: -123.45" {
     var dec: RocDec = .{ .num = -123450000000000000000 };
-    var res_roc_str = dec.toString();
+    var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "-123.45"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
-test "toString: 123.0" {
+test "toStr: 123.0" {
     var dec: RocDec = .{ .num = 123000000000000000000 };
-    var res_roc_str = dec.toString();
+    var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "123.0"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
-test "toString: -123.0" {
+test "toStr: -123.0" {
     var dec: RocDec = .{ .num = -123000000000000000000 };
-    var res_roc_str = dec.toString();
+    var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "-123.0"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
-test "toString: 0.45" {
+test "toStr: 0.45" {
     var dec: RocDec = .{ .num = 450000000000000000 };
-    var res_roc_str = dec.toString();
+    var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "0.45"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
-test "toString: -0.45" {
+test "toStr: -0.45" {
     var dec: RocDec = .{ .num = -450000000000000000 };
-    var res_roc_str = dec.toString();
+    var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "-0.45"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
-test "toString: -111.123456789" {
+test "toStr: -111.123456789" {
     var dec: RocDec = .{ .num = -111123456789000000000 };
-    var res_roc_str = dec.toString();
+    var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "-111.123456789"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
-test "toString: 123.1111111" {
+test "toStr: 123.1111111" {
     var dec: RocDec = .{ .num = 123111111100000000000 };
-    var res_roc_str = dec.toString();
+    var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "123.1111111"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
-test "toString: 123.111111111111 (big str)" {
+test "toStr: 123.111111111111 (big str)" {
     var dec: RocDec = .{ .num = 123111111111110000000 };
-    var res_roc_str = dec.toString();
+    var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "123.11111111111"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
