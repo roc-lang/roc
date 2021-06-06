@@ -8,14 +8,21 @@ use std::process::Command;
 use std::str;
 
 fn main() {
+    let out_dir = env::var_os("OUT_DIR").unwrap();
+    let dest_obj_path = Path::new(&out_dir).join("builtins.o");
+    let dest_obj = dest_obj_path.to_str().expect("Invalid dest object path");
+
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rustc-env=BUILTINS_O={}", dest_obj);
+
     // When we build on Netlify, zig is not installed (but also not used,
     // since all we're doing is generating docs), so we can skip the steps
     // that require having zig installed.
     if env::var_os("NO_ZIG_INSTALLED").is_some() {
+        // We still need to do the other things before this point, because
+        // setting the env vars is needed for other parts of the build.
         return;
     }
-
-    let out_dir = env::var_os("OUT_DIR").unwrap();
 
     let big_sur_path = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib";
     let use_build_script = Path::new(big_sur_path).exists();
@@ -41,8 +48,6 @@ fn main() {
         run_command(&bitcode_path, "zig", &["build", "ir", "-Drelease=true"]);
     }
 
-    let dest_obj_path = Path::new(&out_dir).join("builtins.o");
-    let dest_obj = dest_obj_path.to_str().expect("Invalid dest object path");
     println!("Moving zig object to: {}", dest_obj);
 
     run_command(&bitcode_path, "mv", &[src_obj, dest_obj]);
@@ -57,8 +62,6 @@ fn main() {
         &[dest_ir, "-o", dest_bc],
     );
 
-    println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rustc-env=BUILTINS_O={}", dest_obj);
     get_zig_files(bitcode_path.as_path(), &|path| {
         let path: &Path = path;
         println!(
