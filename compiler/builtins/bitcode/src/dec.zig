@@ -374,6 +374,7 @@ fn mul_u128(a: u128, b: u128) U256 {
 
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
+const expectEqualSlices = testing.expectEqualSlices;
 const expect = testing.expect;
 
 test "fromU64" {
@@ -488,73 +489,75 @@ test "fromString: .123.1" {
 }
 
 test "toString: 123.45" {
-    var roc_str = RocStr.init("123.45", 6);
-    var dec = RocDec.fromString(roc_str);
-    var res_roc_str = dec.?.toString();
+    var dec: RocDec = .{ .num = 123450000000000000000 };
+    var res_roc_str = dec.toString();
 
-    expect(RocStr.eq(roc_str, res_roc_str.?));
+    const res_slice: []const u8 = "123.45"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
 test "toString: -123.45" {
-    var roc_str = RocStr.init("-123.45", 7);
-    var dec = RocDec.fromString(roc_str);
-    var res_roc_str = dec.?.toString();
+    var dec: RocDec = .{ .num = -123450000000000000000 };
+    var res_roc_str = dec.toString();
 
-    expect(RocStr.eq(roc_str, res_roc_str.?));
+    const res_slice: []const u8 = "-123.45"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
 test "toString: 123.0" {
-    var roc_str = RocStr.init("123.0", 5);
-    var dec = RocDec.fromString(roc_str);
-    var res_roc_str = dec.?.toString();
+    var dec: RocDec = .{ .num = 123000000000000000000 };
+    var res_roc_str = dec.toString();
 
-    expect(RocStr.eq(roc_str, res_roc_str.?));
+    const res_slice: []const u8 = "123.0"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
 test "toString: -123.0" {
-    var roc_str = RocStr.init("-123.0", 6);
-    var dec = RocDec.fromString(roc_str);
-    var res_roc_str = dec.?.toString();
+    var dec: RocDec = .{ .num = -123000000000000000000 };
+    var res_roc_str = dec.toString();
 
-    expect(RocStr.eq(roc_str, res_roc_str.?));
+    const res_slice: []const u8 = "-123.0"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
 test "toString: 0.45" {
-    var roc_str = RocStr.init("0.45", 4);
-    var dec = RocDec.fromString(roc_str);
-    var res_roc_str = dec.?.toString();
+    var dec: RocDec = .{ .num = 450000000000000000 };
+    var res_roc_str = dec.toString();
 
-    expect(RocStr.eq(roc_str, res_roc_str.?));
+    const res_slice: []const u8 = "0.45"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
 test "toString: -0.45" {
-    var roc_str = RocStr.init("-0.45", 5);
-    var dec = RocDec.fromString(roc_str);
-    var res_roc_str = dec.?.toString();
+    var dec: RocDec = .{ .num = -450000000000000000 };
+    var res_roc_str = dec.toString();
 
-    expect(RocStr.eq(roc_str, res_roc_str.?));
+    const res_slice: []const u8 = "-0.45"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
 test "toString: -111.123456789" {
-    var roc_str = RocStr.init("-111.123456789", 14);
-    var dec = RocDec.fromString(roc_str);
-    var res_roc_str = dec.?.toString();
+    var dec: RocDec = .{ .num = -111123456789000000000 };
+    var res_roc_str = dec.toString();
 
-    expect(RocStr.eq(roc_str, res_roc_str.?));
+    const res_slice: []const u8 = "-111.123456789"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
-test "toString: 111.1234567891" {
-    var roc_str = RocStr.init("111.1234567891", 14);
-    var dec = RocDec.fromString(roc_str);
-    var res_roc_str = dec.?.toString();
-    expect(RocStr.eq(roc_str, res_roc_str.?));
+test "toString: 123.1111111" {
+    var dec: RocDec = .{ .num = 123111111100000000000 };
+    var res_roc_str = dec.toString();
+
+    const res_slice: []const u8 = "123.1111111"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
 test "toString: 123.111111111111 (big str)" {
-    var roc_str = RocStr.init("123.111111111111", 16);
-    var dec = RocDec.fromString(roc_str);
-    var res_roc_str = dec.?.toString();
-    expect(RocStr.eq(roc_str, res_roc_str.?));
+    var dec: RocDec = .{ .num = 123111111111110000000 };
+    var res_roc_str = dec.toString();
+
+    const res_slice: []const u8 = "123.11111111111"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
 test "add: 0" {
