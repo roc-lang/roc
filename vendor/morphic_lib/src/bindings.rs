@@ -1,6 +1,8 @@
 // TODO: These bindings are incomplete
 // TODO: Add test for compatibility with `include/morphic.h`
 
+#![allow(clippy::boxed_local)]
+
 use crate::api::*;
 use std::{ffi::CString, os::raw::c_char, ptr, slice};
 
