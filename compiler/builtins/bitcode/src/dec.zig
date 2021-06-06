@@ -16,7 +16,7 @@ pub const RocDec = struct {
     pub const one_point_zero: comptime RocDec = .{ .num = one_point_zero_i128 };
 
     pub fn fromU64(num: u64) RocDec {
-        return .{ .num = @intCast(i128, num) * one_point_zero_i128 };
+        return .{ .num = num * one_point_zero_i128 };
     }
 
     pub fn fromString(roc_str: RocStr) ?RocDec {
