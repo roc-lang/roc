@@ -102,6 +102,7 @@ pub const RocDec = struct {
         return dec;
     }
 
+    // TODO: Replace this with https://github.com/rtfeldman/roc/pull/1365/files#r643580738
     fn isDigit(c: u8) bool {
         return switch (c) {
             '0'...'9' => true,
@@ -110,16 +111,33 @@ pub const RocDec = struct {
     }
 
     pub fn toStr(self: RocDec) ?RocStr {
-        var num_bytes: [max_digits]u8 = undefined;
-        var num_digits = std.fmt.formatIntBuf(num_bytes[0..], self.num, 10, false, .{});
+        var digit_bytes: [max_digits]u8 = undefined;
+        var num_digits_formatted = std.fmt.formatIntBuf(digit_bytes[0..], self.num, 10, false, .{});
 
-        var before_num_digits = num_digits - decimal_places;
+        var before_digits_num_raw: usize = undefined;
+        var before_digits_num: usize = undefined;
+        var before_digits_slice: []const u8 = undefined;
+        if (num_digits_formatted > decimal_places) {
+            before_digits_num_raw = num_digits_formatted - decimal_places;
+
+            if (before_digits_num_raw == 1 and digit_bytes[0] == '-') {
+                before_digits_num = 2;
+                before_digits_slice = "-0"[0..];
+            } else {
+                before_digits_num = before_digits_num_raw;
+                before_digits_slice = digit_bytes[0..before_digits_num_raw];
+            }
+        } else {
+            before_digits_num_raw = 0;
+            before_digits_num = 1;
+            before_digits_slice = "0"[0..];
+        }
 
         var index = decimal_places - 1;
         var trim_index: ?usize = null;
         var is_consecutive_zero = true;
         while (index != 0) {
-            var digit = num_bytes[before_num_digits + index];
+            var digit = digit_bytes[before_digits_num_raw + index];
             if (digit == '0' and is_consecutive_zero) {
                 trim_index = index;
             } else {
@@ -127,38 +145,19 @@ pub const RocDec = struct {
             }
             index -= 1;
         }
-        var after_num_digits = if (trim_index) |i| i else decimal_places;
 
-        const should_add_prefix_zero = before_num_digits == 0 or (before_num_digits == 1 and num_bytes[0] == '-');
-        const prefix_zero_len: usize = if (should_add_prefix_zero) 1 else 0;
-        const dot_len: usize = 1;
-        var str_len = prefix_zero_len + before_num_digits + dot_len + after_num_digits;
+        var after_digits_num = if (trim_index) |i| i else decimal_places;
+        var after_digits_slice: []const u8 = undefined;
+        after_digits_slice = digit_bytes[before_digits_num_raw..(before_digits_num_raw + after_digits_num)];
 
-        // [max_digits + 2] here to account for '.' and '-'
+        // `+ 1` in here to account for the '.'
+        // `before_digits_num` already includes the '-'
+        var str_len: usize = before_digits_num + 1 + after_digits_num;
+
+        // TODO: Ideally we'd use [str_len]u8 here, but Zig gives an error if we do that.
+        // [max_digits + 2]u8 here to account for '.' and '-', aka the max possible length of the string
         var str_bytes: [max_digits + 2]u8 = undefined;
-
-        var str_bytes_index: usize = 0;
-        var bytes_index: usize = 0;
-        if (should_add_prefix_zero) {
-            if (num_bytes[bytes_index] == '-') {
-                str_bytes[str_bytes_index] = '-';
-                str_bytes_index += 1;
-                bytes_index += 1;
-            }
-            str_bytes[str_bytes_index] = '0';
-            str_bytes_index += 1;
-        }
-
-        while (bytes_index < str_len) {
-            if (bytes_index == before_num_digits) {
-                str_bytes[str_bytes_index] = '.';
-                str_bytes_index += 1;
-            }
-
-            str_bytes[str_bytes_index] = num_bytes[bytes_index];
-            str_bytes_index += 1;
-            bytes_index += 1;
-        }
+        _ = std.fmt.bufPrint(str_bytes[0 .. str_len + 1], "{s}.{s}", .{ before_digits_slice, after_digits_slice }) catch unreachable;
 
         return RocStr.init(&str_bytes, str_len);
     }
@@ -535,6 +534,14 @@ test "toStr: -0.45" {
     const res_slice: []const u8 = "-0.45"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
+
+// test "toStr: 0.00045" {
+//     var dec: RocDec = .{ .num = 000450000000000000 };
+//     var res_roc_str = dec.toStr();
+
+//     const res_slice: []const u8 = "0.00045"[0..];
+//     try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+// }
 
 test "toStr: -111.123456789" {
     var dec: RocDec = .{ .num = -111123456789000000000 };
