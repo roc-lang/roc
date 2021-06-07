@@ -84,6 +84,12 @@ where
         for proc in procs {
             let spec = proc_spec(proc)?;
 
+            dbg!(proc.name);
+            for b in &func_name_bytes(proc) {
+                eprint!("{:x}", b);
+            }
+            eprintln!("");
+
             m.add_func(FuncName(&func_name_bytes(proc)), spec)?;
 
             if format!("{:?}", proc.name).contains("mainForHost") {
@@ -126,6 +132,8 @@ where
 
                 p.build()?
             };
+
+            eprintln!("{}", program.to_source_string());
 
             morphic_lib::solve(program)
         }

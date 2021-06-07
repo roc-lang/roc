@@ -813,8 +813,6 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
             let callee_var = CalleeSpecVar(&bytes);
             let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
 
-            dbg!(name, &func_spec);
-
             roc_call_with_args(
                 env,
                 &full_layout,
@@ -2901,7 +2899,7 @@ where
         let info = builder
             .build_catch_all_landing_pad(
                 &landing_pad_type,
-                &BasicValueEnum::IntValue(context.i8_type().const_zero()),
+                BasicValueEnum::IntValue(context.i8_type().const_zero()),
                 context.i8_type().ptr_type(AddressSpace::Generic),
                 "main_landing_pad",
             )
@@ -3252,9 +3250,9 @@ fn build_proc_header<'a, 'ctx, 'env>(
     let args = proc.args;
     let arena = env.arena;
 
-    dbg!(&symbol, &func_spec);
-
     let fn_name = func_spec_name(env.arena, &env.interns, symbol, func_spec);
+
+    dbg!(&fn_name);
 
     let ret_type = basic_type_from_layout(env, &proc.ret_layout);
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
@@ -3572,6 +3570,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
                         //
                         // * roc__mainForHost_1_Update_size() -> i64
                         // * roc__mainForHost_1_Update_result_size() -> i64
+                        continue;
 
                         let evaluator_layout = env.arena.alloc(top_level).full();
                         let evaluator_name = layout_ids
