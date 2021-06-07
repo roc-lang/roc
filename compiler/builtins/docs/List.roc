@@ -298,7 +298,7 @@ update : List elem, Nat, (elem -> elem) -> List elem
 
 ## A more flexible version of #List.update, which returns an "updater" function
 ## that lets you delay performing the update until later.
-updater : List elem, Nat -> { elem, new : elem -> List elem }
+updater : List elem, Nat -> { elem, new : (elem -> List elem) }
 
 ## If all the elements in the list are #Ok, return a new list containing the
 ## contents of those #Ok tags. If any elements are #Err, return #Err.
@@ -648,7 +648,7 @@ walk : List elem, { start : state, step : (state, elem -> state) } -> state
 
 ## Note that in other languages, `walkBackwards` is sometimes called `reduceRight`,
 ## `fold`, `foldRight`, or `foldr`.
-walkBackwards : List elem, { start : state, step : (state, elem -> state ]) } -> state
+walkBackwards : List elem, { start : state, step : (state, elem -> state) } -> state
 
 ## Same as #List.walk, except you can stop walking early.
 ##

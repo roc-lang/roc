@@ -6,7 +6,7 @@ license = "UPL-1.0"
 edition = "2018"
 
 [dependencies]
-roc_gen = { path = "../gen" }
+roc_gen_llvm = { path = "../gen_llvm" }
 roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
