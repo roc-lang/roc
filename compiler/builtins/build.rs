@@ -58,7 +58,7 @@ fn main() {
 
     run_command(
         build_script_dir_path,
-        "llvm-as-10",
+        "llvm-as-12",
         &[dest_ir, "-o", dest_bc],
     );
 
