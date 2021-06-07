@@ -8,7 +8,8 @@ pub const RocDec = struct {
     num: i128,
 
     pub const decimal_places: comptime u32 = 18;
-    const max_digits: comptime u32 = 39;
+    pub const whole_number_places: comptime u32 = 21;
+    const max_digits: comptime u32 = decimal_places + whole_number_places;
 
     pub const min: comptime RocDec = .{ .num = math.minInt(i128) };
     pub const max: comptime RocDec = .{ .num = math.maxInt(i128) };
@@ -601,18 +602,43 @@ test "toStr: 123.1111111" {
     try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
-// TODO: This test passes, leaks memory
 test "toStr: 123.1111111111111 (big str)" {
     var dec: RocDec = .{ .num = 123111111111111000000 };
     var res_roc_str = dec.toStr();
+    errdefer res_roc_str.?.deinit();
+    defer res_roc_str.?.deinit();
 
     const res_slice: []const u8 = "123.111111111111"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
-// TODO: Add toStr tests for edge cases:
-// 1. Max number of decimal places
-// 2. Max number of digits
+test "toStr: 123.111111111111444444 (max number of decimal places)" {
+    var dec: RocDec = .{ .num = 123111111111111444444 };
+    var res_roc_str = dec.toStr();
+    errdefer res_roc_str.?.deinit();
+    defer res_roc_str.?.deinit();
+
+    const res_slice: []const u8 = "123.111111111111444444"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+}
+
+test "toStr: 12345678912345678912.111111111111111111 (max number of digits)" {
+    var dec: RocDec = .{ .num = 12345678912345678912111111111111111111 };
+    var res_roc_str = dec.toStr();
+    errdefer res_roc_str.?.deinit();
+    defer res_roc_str.?.deinit();
+
+    const res_slice: []const u8 = "12345678912345678912.111111111111111111"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+}
+
+test "toStr: 0" {
+    var dec: RocDec = .{ .num = 0 };
+    var res_roc_str = dec.toStr();
+
+    const res_slice: []const u8 = "0.0"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+}
 
 test "add: 0" {
     var dec: RocDec = .{ .num = 0 };
