@@ -128,6 +128,7 @@ bench-roc:
     FROM +copy-dirs-and-cache
     ENV RUST_BACKTRACE=full
     RUN cargo criterion -V
+    # ulimit -s unlimited to prevent stack overflow errors for CFold
     RUN --privileged --mount=type=cache,target=$SCCACHE_DIR \
-        cd cli && cargo criterion && sccache --show-stats
+        ulimit -s unlimited && cd cli && cargo criterion && sccache --show-stats
     

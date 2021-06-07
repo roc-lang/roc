@@ -38,7 +38,7 @@ macro_rules! run_jit_function {
 
     ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr) => {{
         use inkwell::context::Context;
-        use roc_gen::run_roc::RocCallResult;
+        use roc_gen_llvm::run_roc::RocCallResult;
         use std::mem::MaybeUninit;
 
         unsafe {
@@ -77,7 +77,7 @@ macro_rules! run_jit_function_dynamic_type {
 
     ($lib: expr, $main_fn_name: expr, $bytes:expr, $transform:expr, $errors:expr) => {{
         use inkwell::context::Context;
-        use roc_gen::run_roc::RocCallResult;
+        use roc_gen_llvm::run_roc::RocCallResult;
 
         unsafe {
             let main: libloading::Symbol<unsafe extern "C" fn(*const u8)> = $lib
@@ -86,7 +86,7 @@ macro_rules! run_jit_function_dynamic_type {
                 .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
                 .expect("errored");
 
-            let size = roc_gen::run_roc::ROC_CALL_RESULT_DISCRIMINANT_SIZE + $bytes;
+            let size = roc_gen_llvm::run_roc::ROC_CALL_RESULT_DISCRIMINANT_SIZE + $bytes;
             let layout = std::alloc::Layout::array::<u8>(size).unwrap();
             let result = std::alloc::alloc(layout);
             main(result);

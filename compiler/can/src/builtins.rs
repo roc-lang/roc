@@ -30,7 +30,7 @@ macro_rules! macro_magic {
 /// Some builtins cannot be constructed in code gen alone, and need to be defined
 /// as separate Roc defs. For example, List.get has this type:
 ///
-/// List.get : List elem, Int -> Result elem [ OutOfBounds ]*
+/// List.get : List elem, Nat -> Result elem [ OutOfBounds ]*
 ///
 /// Because this returns an open tag union for its Err type, it's not possible
 /// for code gen to return a hardcoded value for OutOfBounds. For example,
@@ -450,7 +450,7 @@ fn num_add(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumAdd)
 }
 
-/// Num.addWrap : Int, Int -> Int
+/// Num.addWrap : Int a, Int a -> Int a
 fn num_add_wrap(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumAddWrap)
 }
@@ -549,7 +549,7 @@ fn num_sub(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumSub)
 }
 
-/// Num.subWrap : Int, Int -> Int
+/// Num.subWrap : Int a, Int a -> Int a
 fn num_sub_wrap(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumSubWrap)
 }
@@ -648,7 +648,7 @@ fn num_mul(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumMul)
 }
 
-/// Num.mulWrap : Int, Int -> Int
+/// Num.mulWrap : Int a, Int a -> Int a
 fn num_mul_wrap(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumMulWrap)
 }
@@ -1152,7 +1152,7 @@ fn num_ceiling(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.powInt : Int, Int -> Int
+/// Num.powInt : Int a, Int a -> Int a
 fn num_pow_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
 
@@ -1251,17 +1251,17 @@ fn num_asin(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.bitwiseAnd : Int, Int -> Int
+/// Num.bitwiseAnd : Int a, Int a -> Int a
 fn num_bitwise_and(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumBitwiseAnd)
 }
 
-/// Num.bitwiseXor : Int, Int -> Int
+/// Num.bitwiseXor : Int a, Int a -> Int a
 fn num_bitwise_xor(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumBitwiseXor)
 }
 
-/// Num.bitwiseOr: Int, Int -> Int
+/// Num.bitwiseOr: Int a, Int a -> Int a
 fn num_bitwise_or(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumBitwiseOr)
 }
@@ -1667,7 +1667,7 @@ fn list_concat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.repeat : elem, Int -> List elem
+/// List.repeat : elem, Nat -> List elem
 fn list_repeat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let elem_var = var_store.fresh();
     let len_var = var_store.fresh();
@@ -1809,7 +1809,7 @@ fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.set : List elem, Int, elem -> List elem
+/// List.set : List elem, Nat, elem -> List elem
 ///
 /// List.set :
 ///     Attr (w | u | v) (List (Attr u a)),
@@ -2531,7 +2531,7 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.rem : Int, Int -> Result Int [ DivByZero ]*
+/// Num.rem : Int a, Int a -> Result (Int a) [ DivByZero ]*
 fn num_rem(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let num_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
@@ -2590,7 +2590,7 @@ fn num_rem(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.isMultipleOf : Int, Int -> Bool
+/// Num.isMultipleOf : Int a, Int a -> Bool
 fn num_is_multiple_of(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::NumIsMultipleOf, var_store)
 }
@@ -2696,7 +2696,7 @@ fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.div : Int, Int -> Result Int [ DivByZero ]*
+/// Num.div : Int a , Int a -> Result (Int a) [ DivByZero ]*
 fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let num_var = var_store.fresh();

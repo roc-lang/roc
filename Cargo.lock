@@ -2943,7 +2943,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
- "roc_gen",
+ "roc_gen_llvm",
  "roc_load",
  "roc_module",
  "roc_mono",
@@ -3025,7 +3025,7 @@ dependencies = [
  "roc_docs",
  "roc_editor",
  "roc_fmt",
- "roc_gen",
+ "roc_gen_llvm",
  "roc_load",
  "roc_module",
  "roc_mono",
@@ -3159,41 +3159,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "roc_gen"
-version = "0.1.0"
-dependencies = [
- "bumpalo",
- "either",
- "im 14.3.0",
- "im-rc 14.3.0",
- "indoc 0.3.6",
- "inkwell 0.1.0",
- "inlinable_string",
- "libc",
- "maplit",
- "pretty_assertions 0.5.1",
- "quickcheck 0.8.5",
- "quickcheck_macros 0.8.0",
- "roc_build",
- "roc_builtins",
- "roc_can",
- "roc_collections",
- "roc_load",
- "roc_module",
- "roc_mono",
- "roc_parse",
- "roc_problem",
- "roc_region",
- "roc_reporting",
- "roc_solve",
- "roc_std",
- "roc_types",
- "roc_unify",
- "target-lexicon",
- "tokio",
-]
-
-[[package]]
 name = "roc_gen_dev"
 version = "0.1.0"
 dependencies = [
@@ -3228,6 +3193,41 @@ dependencies = [
  "roc_unify",
  "target-lexicon",
  "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "roc_gen_llvm"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "either",
+ "im 14.3.0",
+ "im-rc 14.3.0",
+ "indoc 0.3.6",
+ "inkwell 0.1.0",
+ "inlinable_string",
+ "libc",
+ "maplit",
+ "pretty_assertions 0.5.1",
+ "quickcheck 0.8.5",
+ "quickcheck_macros 0.8.0",
+ "roc_build",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_load",
+ "roc_module",
+ "roc_mono",
+ "roc_parse",
+ "roc_problem",
+ "roc_region",
+ "roc_reporting",
+ "roc_solve",
+ "roc_std",
+ "roc_types",
+ "roc_unify",
+ "target-lexicon",
  "tokio",
 ]
 
@@ -3910,7 +3910,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
- "roc_gen",
+ "roc_gen_llvm",
  "roc_load",
  "roc_module",
  "roc_mono",

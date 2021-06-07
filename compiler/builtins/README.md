@@ -9,15 +9,15 @@ Towards the bottom of `symbol.rs` there is a `define_builtins!` macro being used
 Some of these have `#` inside their name (`first#list`, `#lt` ..). This is a trick we are doing to hide implementation details from Roc programmers. To a Roc programmer, a name with `#` in it is invalid, because `#` means everything after it is parsed to a comment. We are constructing these functions manually, so we are circumventing the parsing step and dont have such restrictions. We get to make functions and values with `#` which as a consequence are not accessible to Roc programmers. Roc programmers simply cannot reference them.
 
 But we can use these values and some of these are necessary for implementing builtins. For example, `List.get` returns tags, and it is not easy for us to create tags when composing LLVM. What is easier however, is:
-- ..writing `List.#getUnsafe` that has the dangerous signature of `List elem, Int -> elem` in LLVM
-- ..writing `List elem, Int -> Result elem [ OutOfBounds ]*` in a type safe way that uses `getUnsafe` internally, only after it checks if the `elem` at `Int` index exists.
+- ..writing `List.#getUnsafe` that has the dangerous signature of `List elem, Nat -> elem` in LLVM
+- ..writing `List elem, Nat -> Result elem [ OutOfBounds ]*` in a type safe way that uses `getUnsafe` internally, only after it checks if the `elem` at `Nat` index exists.
 
 
 ### can/src/builtins.rs
 
 Right at the top of this module is a function called `builtin_defs`. All this is doing is mapping the `Symbol` defined in `module/src/symbol.rs` to its implementation. Some of the builtins are quite complex, such as `list_get`. What makes `list_get` is that it returns tags, and in order to return tags it first has to  defer to lower-level functions via an if statement.
 
-Lets look at `List.repeat : elem, Int -> List elem`, which is more straight-forward, and points directly to its lower level implementation:
+Lets look at `List.repeat : elem, Nat -> List elem`, which is more straight-forward, and points directly to its lower level implementation:
 ```
 fn list_repeat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let elem_var = var_store.fresh();

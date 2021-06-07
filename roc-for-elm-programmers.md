@@ -1427,6 +1427,8 @@ Here are various Roc expressions involving operators, and what they desugar to.
 | `a ^ b`           | `Num.pow a b`      |
 | `a % b`           | `Num.rem a b`    |
 | `a %% b`          | `Num.mod a b`    |
+| `a >> b`          | `Num.shr a b`    |
+| `a << b`          | `Num.shl a b`    |
 | `-a`              | `Num.neg a`        |
 | `-f x y`          | `Num.neg (f x y)`  |
 | `a == b`          | `Bool.isEq a b`    |

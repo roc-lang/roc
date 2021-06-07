@@ -3,12 +3,6 @@ pub const OBJ_PATH: &str = env!(
     "Env var BUILTINS_O not found. Is there a problem with the build script?"
 );
 
-pub fn as_bytes() -> &'static [u8] {
-    // In the build script for the builtins module,
-    // we compile the builtins into LLVM bitcode
-    include_bytes!("../bitcode/builtins.bc")
-}
-
 pub const NUM_ASIN: &str = "roc_builtins.num.asin";
 pub const NUM_ACOS: &str = "roc_builtins.num.acos";
 pub const NUM_ATAN: &str = "roc_builtins.num.atan";

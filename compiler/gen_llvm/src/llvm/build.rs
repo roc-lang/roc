@@ -49,7 +49,8 @@ use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
-    BranchInfo, CallType, ExceptionId, JoinPointId, ModifyRc, TopLevelFunctionLayout, Wrapped,
+    BranchInfo, CallType, ExceptionId, JoinPointId, ModifyRc, OptLevel, TopLevelFunctionLayout,
+    Wrapped,
 };
 use roc_mono::layout::{Builtin, InPlace, LambdaSet, Layout, LayoutIds, UnionLayout};
 use target_lexicon::CallingConvention;
@@ -84,21 +85,6 @@ macro_rules! debug_info_init {
         );
         $env.builder.set_current_debug_location(&$env.context, loc);
     }};
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum OptLevel {
-    Normal,
-    Optimize,
-}
-
-impl From<OptLevel> for OptimizationLevel {
-    fn from(level: OptLevel) -> Self {
-        match level {
-            OptLevel::Normal => OptimizationLevel::None,
-            OptLevel::Optimize => OptimizationLevel::Aggressive,
-        }
-    }
 }
 
 /// Iterate over all functions in an llvm module
@@ -355,7 +341,9 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
 }
 
 pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Module<'ctx> {
-    let bitcode_bytes = bitcode::as_bytes();
+    // In the build script for the builtins module,
+    // we compile the builtins into LLVM bitcode
+    let bitcode_bytes: &[u8] = include_bytes!("../../../builtins/bitcode/builtins.bc");
 
     let memory_buffer = MemoryBuffer::create_from_memory_range(&bitcode_bytes, module_name);
 
@@ -4558,7 +4546,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             BasicValueEnum::IntValue(bool_val)
         }
         ListGetUnsafe => {
-            // List.get : List elem, Int -> [ Ok elem, OutOfBounds ]*
+            // List.get : List elem, Nat -> [ Ok elem, OutOfBounds ]*
             debug_assert_eq!(args.len(), 2);
 
             let (wrapper_struct, list_layout) = load_symbol_and_layout(scope, &args[0]);
