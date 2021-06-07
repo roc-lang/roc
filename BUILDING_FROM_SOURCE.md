@@ -52,7 +52,7 @@ If you prefer a package manager, you can try the following:
 If you want to install it manually, you can also download Zig directly [here](https://ziglang.org/download/). Just make sure you download the right version, the bleeding edge master build is the first download link on this page.
 
 ### LLVM
-**version: 10.0.x**
+**version: 12.0.x**
 
 For Ubuntu and Debian, you can use the `Automatic installation script` at [apt.llvm.org](https://apt.llvm.org):
 ```
