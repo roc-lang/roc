@@ -27,3 +27,6 @@ editor/benches/resources/500_lines.roc
 # rust cache (sccache folder)
 sccache_dir
 
+# criterion for benchmark results
+criterion
+

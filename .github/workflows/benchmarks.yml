@@ -15,10 +15,18 @@ jobs:
     steps:
       - uses: actions/checkout@v2
         with:
-          clean: "true"
+          ref: "trunk" # benchmarking on trunk first in order to compare results
+          clean: "false" # we want to keep the benchmark folder
 
       - name: Earthly version
         run: earthly --version
 
-      - name: install dependencies, build, cd cli, benchmark with criterion
+      - name: on trunk; install dependencies, build, cd cli, benchmark with criterion
+        run: ./ci/safe-earthly.sh +bench-roc
+
+      - uses: actions/checkout@v2
+        with:
+          clean: "true"
+
+      - name: on current branch; install dependencies, build, cd cli, benchmark with criterion
         run: ./ci/safe-earthly.sh +bench-roc
