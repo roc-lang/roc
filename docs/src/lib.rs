@@ -63,9 +63,9 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
     // Write each package's module docs html file
     for (docs_by_id, interns) in package.modules.iter_mut() {
         for module in docs_by_id.values_mut() {
-            let module_dir = build_dir.join(module.name.as_str());
+            let module_dir = build_dir.join(module.name.replace(".", "/").as_str());
 
-            fs::create_dir(&module_dir)
+            fs::create_dir_all(&module_dir)
                 .expect("TODO gracefully handle not being able to create the module dir");
 
             let rendered_module = template_html
