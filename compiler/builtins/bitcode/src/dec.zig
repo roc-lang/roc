@@ -601,22 +601,18 @@ test "toStr: 123.1111111" {
     try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
-test "toStr: 123.111111111111 (big str)" {
-    var dec: RocDec = .{ .num = 123111111111110000000 };
-    var res_roc_str = dec.toStr();
-
-    const res_slice: []const u8 = "123.11111111111"[0..];
-    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
-}
-
 // TODO: This test passes, leaks memory
-test "toStr: 123.111111111111111111 (max number of decimals)" {
-    var dec: RocDec = .{ .num = 123111111111111111111 };
+test "toStr: 123.1111111111111 (big str)" {
+    var dec: RocDec = .{ .num = 123111111111111000000 };
     var res_roc_str = dec.toStr();
 
-    const res_slice: []const u8 = "123.111111111111111111"[0..];
+    const res_slice: []const u8 = "123.111111111111"[0..];
     try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
+
+// TODO: Add toStr tests for edge cases:
+// 1. Max number of decimal places
+// 2. Max number of digits
 
 test "add: 0" {
     var dec: RocDec = .{ .num = 0 };
