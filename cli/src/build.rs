@@ -5,8 +5,8 @@ use roc_build::{
 };
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
-use roc_gen::llvm::build::OptLevel;
 use roc_load::file::LoadingProblem;
+use roc_mono::ir::OptLevel;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
@@ -32,6 +32,7 @@ pub struct BuiltFile {
     pub total_time: Duration,
 }
 
+#[cfg(feature = "llvm")]
 pub fn build_file<'a>(
     arena: &'a Bump,
     target: &Triple,

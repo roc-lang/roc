@@ -63,9 +63,10 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
     // Write each package's module docs html file
     for (docs_by_id, interns) in package.modules.iter_mut() {
         for module in docs_by_id.values_mut() {
-            let mut filename = String::new();
-            filename.push_str(module.name.as_str());
-            filename.push_str(".html");
+            let module_dir = build_dir.join(module.name.replace(".", "/").as_str());
+
+            fs::create_dir_all(&module_dir)
+                .expect("TODO gracefully handle not being able to create the module dir");
 
             let rendered_module = template_html
                 .replace(
@@ -78,7 +79,7 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
                     render_main_content(interns, module).as_str(),
                 );
 
-            fs::write(build_dir.join(filename), rendered_module)
+            fs::write(module_dir.join("index.html"), rendered_module)
                 .expect("TODO gracefully handle failing to write html");
         }
     }
@@ -228,7 +229,6 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
         let href = {
             let mut href_buf = String::new();
             href_buf.push_str(name);
-            href_buf.push_str(".html");
             href_buf
         };
 
@@ -305,7 +305,7 @@ pub fn files_to_documentations(
             &std_lib,
             src_dir.as_path(),
             MutMap::default(),
-            8, // TODO: Is it okay to hardcode ptr_bytes here? I think it should be fine since we'er only type checking (also, 8 => 32bit system)
+            std::mem::size_of::<usize>() as u32, // This is just type-checking for docs, so "target" doesn't matter
             builtin_defs_map,
         ) {
             Ok(loaded) => files_docs.push((loaded.documentation, loaded.interns)),
@@ -567,7 +567,7 @@ fn make_doc_link(scope: &mut Scope, interns: &Interns, doc_item: &str) -> String
             let mut link = String::new();
 
             link.push_str(module_str);
-            link.push_str(".html#");
+            link.push('#');
             link.push_str(ident_str);
 
             let mut buf = String::new();
@@ -583,8 +583,8 @@ fn make_doc_link(scope: &mut Scope, interns: &Interns, doc_item: &str) -> String
         }
         Err(_) => {
             panic!(
-                "Could not find symbol in scope for module link : {}",
-                doc_item
+                "Tried to generate an automatic link in docs for symbol `{}`, but that symbol was not in scope in this module. Scope was: {:?}",
+                doc_item, scope
             )
         }
     }

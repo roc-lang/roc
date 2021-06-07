@@ -62,7 +62,7 @@ interface List2
 ## the same type. If you want to put a mix of #Int and #Str values into a list, try this:
 ##
 ## ```
-## mixedList : List [ IntElem Int, StrElem Str ]*
+## mixedList : List [ IntElem I64, StrElem Str ]*
 ## mixedList = [ IntElem 1, IntElem 2, StrElem "a", StrElem "b" ]
 ## ```
 ##
@@ -232,8 +232,27 @@ reverse : List elem -> List elem
 
 ## Sorts a list using a function which specifies how two elements are ordered.
 ##
-##
+## When sorting by numeric values, it's more efficient to use [sortAsc] or
+## [sortDesc] instead.
 sort : List elem, (elem, elem -> [ Lt, Eq, Gt ]) -> List elem
+
+## Sorts a list in ascending order (lowest to highest), using a function which
+## specifies a way to represent each element as a number.
+##
+## This is more efficient than [sort] because it skips
+## calculating the `[ Lt, Eq, Gt ]` value and uses the number directly instead.
+##
+## To sort in descending order (highest to lowest), use [List.sortDesc] instead.
+sortAsc : List elem, (elem -> Num *) -> List elem
+
+## Sorts a list in descending order (highest to lowest), using a function which
+## specifies a way to represent each element as a number.
+##
+## This is more efficient than [sort] because it skips
+## calculating the `[ Lt, Eq, Gt ]` value and uses the number directly instead.
+##
+## To sort in ascending order (lowest to highest), use [List.sortAsc] instead.
+sortDesc : List elem, (elem -> Num *) -> List elem
 
 ## Convert each element in the list to something new, by calling a conversion
 ## function on each of them. Then return a new list of the converted values.
@@ -248,7 +267,7 @@ map : List before, (before -> after) -> List after
 
 ## This works like #List.map, except it also passes the index
 ## of the element to the conversion function.
-mapWithIndex : List before, (before, Int -> after) -> List after
+mapWithIndex : List before, (before, Nat -> after) -> List after
 
 ## This works like #List.map, except at any time you can return `Err` to
 ## cancel the entire operation immediately, and return that #Err.
@@ -279,7 +298,7 @@ update : List elem, Nat, (elem -> elem) -> List elem
 
 ## A more flexible version of #List.update, which returns an "updater" function
 ## that lets you delay performing the update until later.
-updater : List elem, Nat -> { elem, new : elem -> List elem }
+updater : List elem, Nat -> { elem, new : (elem -> List elem) }
 
 ## If all the elements in the list are #Ok, return a new list containing the
 ## contents of those #Ok tags. If any elements are #Err, return #Err.
@@ -629,7 +648,7 @@ walk : List elem, { start : state, step : (state, elem -> state) } -> state
 
 ## Note that in other languages, `walkBackwards` is sometimes called `reduceRight`,
 ## `fold`, `foldRight`, or `foldr`.
-walkBackwards : List elem, { start : state, step : (state, elem -> state ]) } -> state
+walkBackwards : List elem, { start : state, step : (state, elem -> state) } -> state
 
 ## Same as #List.walk, except you can stop walking early.
 ##
