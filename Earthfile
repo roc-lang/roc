@@ -1,8 +1,6 @@
 FROM rust:1.52-slim-buster
 WORKDIR /earthbuild
 
-ARG TO_COPY_DIRS=cli compiler docs editor roc_std vendor examples Cargo.toml Cargo.lock
-
 prep-debian:
     RUN apt -y update
 
@@ -40,8 +38,6 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     RUN rustup component add clippy
     # rustfmt
     RUN rustup component add rustfmt
-    # typo checker
-    RUN cargo install typos-cli
     # criterion
     RUN cargo install --git https://github.com/Anton-4/cargo-criterion --branch main
     # sccache
@@ -61,8 +57,7 @@ deps-image:
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
     # If you edit this, make sure to update copy-dirs-and-cache below.
-    RUN baksldbjk
-    COPY --dir $TO_COPY_DIRS ./
+    COPY --dir cli compiler docs editor roc_std vendor examples Cargo.toml Cargo.lock ./
 
 copy-dirs-and-cache:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
@@ -71,7 +66,7 @@ copy-dirs-and-cache:
     # This needs to be kept in sync with copy-dirs above.
     # The reason this is at the end is to maximize caching.
     # Lines above this should be cached even if the code changes.
-    COPY --dir $TO_COPY_DIRS ./
+    COPY --dir cli compiler docs editor roc_std vendor examples Cargo.toml Cargo.lock ./
 
 prepare-cache:
     FROM +copy-dirs
@@ -105,10 +100,8 @@ check-rustfmt:
     RUN cargo fmt --all -- --check
 
 check-typos:
-    FROM +copy-dirs
-    RUN echo "DIRS_TO_KEEP=" > temp42.txt
-    RUN echo $TO_COPY_DIRS | sed "s/ /\"|\"/g" >> temp42.txt
-    RUN source temp42.txt && rm -v !("$DIRS_TO_KEEP")
+    RUN cargo install typos-cli --version 1.0.4 # use latest version on resolution of issue crate-ci/typos#277
+    COPY --dir .github ci cli compiler docs editor examples packages roc_std www *.md LEGAL_DETAILS shell.nix ./
     RUN typos
 
 test-rust:
