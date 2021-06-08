@@ -205,7 +205,7 @@ pub struct Backend64Bit<
     float_used_callee_saved_regs: MutSet<FloatReg>,
 
     stack_size: u32,
-    // The ammount of stack space needed to pass args for function calling.
+    // The amount of stack space needed to pass args for function calling.
     fn_call_stack_size: u32,
 }
 
@@ -409,7 +409,7 @@ impl<
                 Ok(())
             }
             x => Err(format!(
-                "recieving return type, {:?}, is not yet implemented",
+                "receiving return type, {:?}, is not yet implemented",
                 x
             )),
         }

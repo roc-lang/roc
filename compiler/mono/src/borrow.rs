@@ -40,7 +40,7 @@ pub fn infer_borrow<'a>(
 
     // This is a fixed-point analysis
     //
-    // all functions initiall own all their paramters
+    // all functions initiall own all their parameters
     // through a series of checks and heuristics, some arguments are set to borrowed
     // when that doesn't lead to conflicts the change is kept, otherwise it may be reverted
     //
@@ -348,7 +348,7 @@ impl<'a> BorrowInfState<'a> {
     /// let z = e in ...
     ///
     /// and determines whether z and which of the symbols used in e
-    /// must be taken as owned paramters
+    /// must be taken as owned parameters
     fn collect_call(&mut self, z: Symbol, e: &crate::ir::Call<'a>) {
         use crate::ir::CallType::*;
 

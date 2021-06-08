@@ -99,17 +99,35 @@ check-rustfmt:
     RUN cargo fmt --version
     RUN cargo fmt --all -- --check
 
+check-typos:
+    RUN cargo install typos-cli --version 1.0.4 # use latest version on resolution of issue crate-ci/typos#277
+    COPY --dir .github ci cli compiler docs editor examples packages roc_std www *.md LEGAL_DETAILS shell.nix ./
+    RUN typos
+
 test-rust:
     FROM +copy-dirs-and-cache
     ENV RUST_BACKTRACE=1
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo test --release && sccache --show-stats
 
+verify-no-git-changes:
+    FROM +test-rust
+    # If running tests caused anything to be changed or added (without being
+    # included in a .gitignore somewhere), fail the build!
+    #
+    # How it works: the `git ls-files` command lists all the modified or
+    # uncommitted files in the working tree, the `| grep -E .` command returns a
+    # zero exit code if it listed any files and nonzero otherwise (which is the
+    # opposite of what we want), and the `!` at the start inverts the exit code.
+    RUN ! git ls-files --deleted --modified --others --exclude-standard | grep -E .
+
 test-all:
     BUILD +test-zig
     BUILD +check-rustfmt
     BUILD +check-clippy
+    BUILD +check-typos
     BUILD +test-rust
+    BUILD +verify-no-git-changes
 
 bench-roc:
     FROM +copy-dirs-and-cache
@@ -117,8 +135,9 @@ bench-roc:
     RUN cargo criterion -V
     # get benchmark results from trunk if they exist
     COPY --dir --if-exists criterion ./target
+    RUN ls ./target/criterion
     # ulimit -s unlimited to prevent stack overflow errors for CFold
-    RUN --privileged --mount=type=cache,target=$SCCACHE_DIR \
+    RUN --no-cache --privileged --mount=type=cache,target=$SCCACHE_DIR \
         ulimit -s unlimited && cd cli && cargo criterion && sccache --show-stats
     SAVE ARTIFACT target/criterion AS LOCAL criterion
     
