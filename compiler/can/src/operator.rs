@@ -345,7 +345,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             )
         }
         If(if_thens, final_else_branch) => {
-            // If does not get desugared into `when` so we can give more targetted error messages during type checking.
+            // If does not get desugared into `when` so we can give more targeted error messages during type checking.
             let desugared_final_else = &*arena.alloc(desugar_expr(arena, &final_else_branch));
 
             let mut desugared_if_thens = Vec::with_capacity_in(if_thens.len(), arena);

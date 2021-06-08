@@ -3385,7 +3385,7 @@ mod test_parse {
         // Reproducing this bug requires a bizarre set of things to all be true:
         //
         // * Must be parsing a *module* def (nested expr defs don't repro this)
-        // * That top-level module def conatins a def inside it
+        // * That top-level module def contains a def inside it
         // * That inner def is defining a function
         // * The name of the inner def begins with a keyword (`if`, `then`, `else`, `when`, `is`)
         //

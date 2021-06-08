@@ -143,7 +143,7 @@ fn render_main_content(interns: &Interns, module: &mut ModuleDocumentation) -> S
                     );
                 }
             }
-            DocEntry::DetatchedDoc(docs) => {
+            DocEntry::DetachedDoc(docs) => {
                 buf.push_str(
                     markdown_to_html(&mut module.scope, interns, docs.to_string()).as_str(),
                 );

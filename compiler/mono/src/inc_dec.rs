@@ -7,16 +7,16 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::Symbol;
 
 pub fn free_variables(stmt: &Stmt<'_>) -> MutSet<Symbol> {
-    let (mut occuring, bound) = occuring_variables(stmt);
+    let (mut occurring, bound) = occurring_variables(stmt);
 
     for ref s in bound {
-        occuring.remove(s);
+        occurring.remove(s);
     }
 
-    occuring
+    occurring
 }
 
-pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
+pub fn occurring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
     let mut stack = std::vec![stmt];
     let mut result = MutSet::default();
     let mut bound_variables = MutSet::default();
@@ -26,7 +26,7 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
 
         match stmt {
             Let(symbol, expr, _, cont) => {
-                occuring_variables_expr(expr, &mut result);
+                occurring_variables_expr(expr, &mut result);
                 result.insert(*symbol);
                 bound_variables.insert(*symbol);
                 stack.push(cont);
@@ -39,7 +39,7 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
                 fail,
                 ..
             } => {
-                occuring_variables_call(call, &mut result);
+                occurring_variables_call(call, &mut result);
                 result.insert(*symbol);
                 bound_variables.insert(*symbol);
                 stack.push(pass);
@@ -93,13 +93,13 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
     (result, bound_variables)
 }
 
-fn occuring_variables_call(call: &crate::ir::Call<'_>, result: &mut MutSet<Symbol>) {
+fn occurring_variables_call(call: &crate::ir::Call<'_>, result: &mut MutSet<Symbol>) {
     // NOTE though the function name does occur, it is a static constant in the program
     // for liveness, it should not be included here.
     result.extend(call.arguments.iter().copied());
 }
 
-pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
+pub fn occurring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
     use Expr::*;
 
     match expr {
@@ -109,7 +109,7 @@ pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
             result.insert(*symbol);
         }
 
-        Call(call) => occuring_variables_call(call, result),
+        Call(call) => occurring_variables_call(call, result),
 
         Tag { arguments, .. }
         | Struct(arguments)
@@ -160,13 +160,13 @@ struct Context<'a> {
 fn update_live_vars<'a>(expr: &Expr<'a>, v: &LiveVarSet) -> LiveVarSet {
     let mut v = v.clone();
 
-    occuring_variables_expr(expr, &mut v);
+    occurring_variables_expr(expr, &mut v);
 
     v
 }
 
 /// `isFirstOcc xs x i = true` if `xs[i]` is the first occurrence of `xs[i]` in `xs`
-fn is_first_occurence(xs: &[Symbol], i: usize) -> bool {
+fn is_first_occurrence(xs: &[Symbol], i: usize) -> bool {
     match xs.get(i) {
         None => unreachable!(),
         Some(s) => i == xs.iter().position(|v| s == v).unwrap(),
@@ -319,7 +319,7 @@ impl<'a> Context<'a> {
     {
         for (i, x) in xs.iter().enumerate() {
             let info = self.get_var_info(*x);
-            if !info.reference || !is_first_occurence(xs, i) {
+            if !info.reference || !is_first_occurrence(xs, i) {
                 // do nothing
             } else {
                 let num_consumptions = get_num_consumptions(*x, xs, consume_param_pred.clone()); // number of times the argument is used
@@ -393,7 +393,7 @@ impl<'a> Context<'a> {
             // Remark: `x` may occur multiple times in the application (e.g., `f x y x`).
             // This is why we check whether it is the first occurrence.
             if self.must_consume(*x)
-                && is_first_occurence(xs, i)
+                && is_first_occurrence(xs, i)
                 && is_borrow_param(*x, xs, ps)
                 && !b_live_vars.contains(x)
             {
@@ -418,7 +418,7 @@ impl<'a> Context<'a> {
             This is why we check whether it is the first occurrence. */
 
             if self.must_consume(*x)
-                && is_first_occurence(xs, i)
+                && is_first_occurrence(xs, i)
                 && *is_borrow
                 && !b_live_vars.contains(x)
             {
@@ -1096,7 +1096,7 @@ pub fn collect_stmt(
             vars = collect_stmt(cont, jp_live_vars, vars);
             vars.remove(symbol);
             let mut result = MutSet::default();
-            occuring_variables_expr(expr, &mut result);
+            occurring_variables_expr(expr, &mut result);
             vars.extend(result);
 
             vars
@@ -1114,7 +1114,7 @@ pub fn collect_stmt(
             vars.remove(symbol);
 
             let mut result = MutSet::default();
-            occuring_variables_call(call, &mut result);
+            occurring_variables_call(call, &mut result);
 
             vars.extend(result);
 

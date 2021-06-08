@@ -236,7 +236,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
             Layout::Builtin(Builtin::Float64) => {}
             x => {
                 return Err(format!(
-                    "recieving return type, {:?}, is not yet implemented",
+                    "receiving return type, {:?}, is not yet implemented",
                     x
                 ));
             }
@@ -530,7 +530,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
             Layout::Builtin(Builtin::Float64) => {}
             x => {
                 return Err(format!(
-                    "recieving return type, {:?}, is not yet implemented",
+                    "receiving return type, {:?}, is not yet implemented",
                     x
                 ));
             }
