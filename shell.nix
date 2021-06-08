@@ -42,7 +42,7 @@ let
       xorg.libxcb
     ];
 
-  llvmPkgs = pkgs.llvmPackages_10;
+  llvmPkgs = pkgs.llvmPackages_12;
 
   zig = import ./nix/zig.nix { inherit pkgs; };
 
@@ -79,7 +79,7 @@ pkgs.mkShell
     buildInputs = inputs ++ darwinInputs ++ linuxInputs;
 
     # Additional Env vars
-    LLVM_SYS_100_PREFIX = "${llvmPkgs.llvm}";
+    LLVM_SYS_120_PREFIX = "${llvmPkgs.llvm}";
     LD_LIBRARY_PATH =
       with pkgs;
       lib.makeLibraryPath
