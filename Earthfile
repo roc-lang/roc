@@ -136,7 +136,7 @@ bench-roc:
     # get benchmark results from trunk if they exist
     COPY --dir --if-exists criterion ./target
     # ulimit -s unlimited to prevent stack overflow errors for CFold
-    RUN --privileged --mount=type=cache,target=$SCCACHE_DIR \
+    RUN --no-cache --privileged --mount=type=cache,target=$SCCACHE_DIR \
         ulimit -s unlimited && cd cli && cargo criterion && sccache --show-stats
     SAVE ARTIFACT target/criterion AS LOCAL criterion
     
