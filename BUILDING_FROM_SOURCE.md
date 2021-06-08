@@ -63,7 +63,18 @@ For Ubuntu and Debian, you can use the `Automatic installation script` at [apt.l
 sudo bash -c "$(wget -O - https://apt.llvm.org/llvm.sh)"
 ```
 
-There are also plenty of alternative options at http://releases.llvm.org/download.html
+If you use this script, you'll need to add `clang` and `llvm-as` to your `PATH`.
+By default, the script installs them as `llvm-as-12` and `clang-12`,
+respectively. You can address this with symlinks like so:
+
+```
+sudo ln -s /usr/bin/clang-12 /usr/bin/clang
+```
+```
+sudo ln -s /usr/bin/llvm-as-12 /usr/bin/llvm-as
+````
+
+There are also alternative installation options at http://releases.llvm.org/download.html
 
 ## Using Nix
 
