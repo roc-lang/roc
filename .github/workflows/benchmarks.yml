@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
         with:
-          ref: "trunk" # benchmarking on trunk first in order to compare results
+          ref: "ff7755c94cd40c0feaba7878789d152d03dec1df" # benchmarking on trunk first in order to compare results
           clean: "true" 
 
       - name: Earthly version

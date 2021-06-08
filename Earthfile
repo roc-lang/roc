@@ -135,6 +135,7 @@ bench-roc:
     RUN cargo criterion -V
     # get benchmark results from trunk if they exist
     COPY --dir --if-exists criterion ./target
+    RUN ls ./target/criterion
     # ulimit -s unlimited to prevent stack overflow errors for CFold
     RUN --no-cache --privileged --mount=type=cache,target=$SCCACHE_DIR \
         ulimit -s unlimited && cd cli && cargo criterion && sccache --show-stats
