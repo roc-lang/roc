@@ -32,7 +32,7 @@ pub fn index_of<T: ::std::fmt::Debug + std::cmp::Eq>(elt: T, slice: &[T]) -> EdR
     Ok(index)
 }
 
-// returns the index of the first occurence of element and index of the last occurence
+// returns the index of the first occurrence of element and index of the last occurrence
 pub fn first_last_index_of<T: ::std::fmt::Debug + std::cmp::Eq>(
     elt: T,
     slice: &[T],

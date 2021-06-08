@@ -630,7 +630,7 @@ pub fn constrain_expr<'a>(
                 }
             }
         }
-        _ => todo!("implement constaints for {:?}", expr),
+        _ => todo!("implement constraints for {:?}", expr),
     }
 }
 

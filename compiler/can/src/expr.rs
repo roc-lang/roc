@@ -603,7 +603,7 @@ pub fn canonicalize_expr<'a>(
 
             // A "when" with no branches is a runtime error, but it will mess things up
             // if code gen mistakenly thinks this is a tail call just because its condition
-            // happend to be one. (The condition gave us our initial output value.)
+            // happened to be one. (The condition gave us our initial output value.)
             if branches.is_empty() {
                 output.tail_call = None;
             }

@@ -13,7 +13,7 @@ use roc_types::types::Type::{self, *};
 #[inline(always)]
 pub fn int_literal(
     num_var: Variable,
-    percision_var: Variable,
+    precision_var: Variable,
     expected: Expected<Type>,
     region: Region,
 ) -> Constraint {
@@ -25,7 +25,7 @@ pub fn int_literal(
         And(vec![
             Eq(
                 num_type.clone(),
-                ForReason(reason, num_int(Type::Variable(percision_var)), region),
+                ForReason(reason, num_int(Type::Variable(precision_var)), region),
                 Category::Int,
                 region,
             ),
