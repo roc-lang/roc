@@ -96,11 +96,4 @@ pkgs.mkShell
           ]
           ++ linuxInputs
         );
-
-    # Non Nix llvm installs names the bin llvm-as-${version}, so we
-    # alias `llvm` to `llvm-as-${version}` here.
-    # This the name of the file in nix/bin will need to be updated whenever llvm is updated
-    shellHook = ''
-      export PATH="$PATH:$PWD/nix/bin"
-    '';
   }

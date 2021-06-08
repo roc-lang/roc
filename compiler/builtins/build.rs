@@ -56,11 +56,7 @@ fn main() {
     let dest_bc = dest_bc_path.to_str().expect("Invalid dest bc path");
     println!("Compiling bitcode to: {}", dest_bc);
 
-    run_command(
-        build_script_dir_path,
-        "llvm-as-12",
-        &[dest_ir, "-o", dest_bc],
-    );
+    run_command(build_script_dir_path, "llvm-as", &[dest_ir, "-o", dest_bc]);
 
     get_zig_files(bitcode_path.as_path(), &|path| {
         let path: &Path = path;

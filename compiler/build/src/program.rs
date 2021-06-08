@@ -204,7 +204,7 @@ pub fn gen_from_mono_module(
         }
 
         // assemble the .ll into a .bc
-        let _ = Command::new("llvm-as-12")
+        let _ = Command::new("llvm-as")
             .env_clear()
             .args(&[
                 app_ll_dbg_file.to_str().unwrap(),
