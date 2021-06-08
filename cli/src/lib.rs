@@ -30,7 +30,7 @@ pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
 pub fn build_app<'a>() -> App<'a> {
-    App::new("roc")
+    let app = App::new("roc")
         .version(crate_version!())
         .subcommand(App::new(CMD_BUILD)
             .about("Build a program")
@@ -81,15 +81,6 @@ pub fn build_app<'a>() -> App<'a> {
         .subcommand(App::new(CMD_REPL)
             .about("Launch the interactive Read Eval Print Loop (REPL)")
         )
-        .subcommand(App::new(CMD_EDIT)
-            .about("Launch the Roc editor")
-            .arg(Arg::with_name(DIRECTORY_OR_FILES)
-                .index(1)
-                .multiple(true)
-                .required(false)
-                .help("(optional) The directory or files to open on launch.")
-            )
-        )
         .subcommand(
             App::new(CMD_DOCS)
                 .about("Generate documentation for Roc modules")
@@ -100,7 +91,21 @@ pub fn build_app<'a>() -> App<'a> {
                     .help("The directory or files to build documentation for")
 
                 )
+        );
+
+    if cfg!(feature = "edit") {
+        app.subcommand(
+            App::new(CMD_EDIT).about("Launch the Roc editor").arg(
+                Arg::with_name(DIRECTORY_OR_FILES)
+                    .index(1)
+                    .multiple(true)
+                    .required(false)
+                    .help("(optional) The directory or files to open on launch."),
+            ),
         )
+    } else {
+        app
+    }
 }
 
 pub fn docs(files: Vec<PathBuf>) {
