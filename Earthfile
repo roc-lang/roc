@@ -110,12 +110,24 @@ test-rust:
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo test --release && sccache --show-stats
 
+verify-no-git-changes:
+    FROM +test-rust
+    # If running tests caused anything to be changed or added (without being
+    # included in a .gitignore somewhere), fail the build!
+    #
+    # How it works: the `git ls-files` command lists all the modified or
+    # uncommitted files in the working tree, the `| grep -E .` command returns a
+    # zero exit code if it listed any files and nonzero otherwise (which is the
+    # opposite of what we want), and the `!` at the start inverts the exit code.
+    RUN ! git ls-files --deleted --modified --others --exclude-standard | grep -E .
+
 test-all:
     BUILD +test-zig
     BUILD +check-rustfmt
     BUILD +check-clippy
     BUILD +check-typos
     BUILD +test-rust
+    BUILD +verify-no-git-changes
 
 bench-roc:
     FROM +copy-dirs-and-cache
