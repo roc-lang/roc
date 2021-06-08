@@ -913,8 +913,35 @@ shrWrap : Int a, Int a -> Int a
 ## [Endianness](https://en.wikipedia.org/wiki/Endianness)
 Endi : [ Big, Little ]
 
+## The [Endi] argument does not matter for [U8] and [I8], since they have
+## only one byte.
 toBytes : Num *, Endi -> List U8
 
+## If the bytes begin with a valid #U8 number, return
+## that number along with the rest of the bytes after it.
+parseU8 : List U8 -> Result { val : U8, rest : List U8 } [ Expected [ NumU8 ]* List U8 ]*
+parseI8 : List U8 -> Result { val : I8, rest : List U8 } [ Expected [ NumI8 ]* List U8 ]*
+parseU16 : List U8, Endi -> Result { val : U16, rest : List U8 } [ Expected [ NumU16 Endi ]* (List U8) ]*
+parseI16 : List U8, Endi -> Result { val : I16, rest : List U8 } [ Expected [ NumI16 Endi ]* (List U8) ]*
+parseU32 : List U8, Endi -> Result { val : U32, rest : List U8 } [ Expected [ NumU32 Endi ]* (List U8) ]*
+parseI32 : List U8, Endi -> Result { val : I32, rest : List U8 } [ Expected [ NumI32 Endi ]* (List U8) ]*
+parseU64 : List U8, Endi -> Result { val : U64, rest : List U8 } [ Expected [ NumU64 Endi ]* (List U8) ]*
+parseI64 : List U8, Endi -> Result { val : I64, rest : List U8 } [ Expected [ NumI64 Endi ]* (List U8) ]*
+parseU128 : List U8, Endi -> Result { val : U128, rest : List U8 } [ Expected [ NumU128 Endi ]* (List U8) ]*
+parseI128 : List U8, Endi -> Result { val : I128, rest : List U8 } [ Expected [ NumI128 Endi ]* (List U8) ]*
+parseF64 : List U8, Endi -> Result { val : F64, rest : List U8 } [ Expected [ NumF64 Endi ]* (List U8) ]*
+parseF32 : List U8, Endi -> Result { val : F32, rest : List U8 } [ Expected [ NumF32 Endi ]* (List U8) ]*
+parseDec : List U8, Endi -> Result { val : Dec, rest : List U8 } [ Expected [ NumDec Endi ]* (List U8) ]*
+
+## when Num.parseBytes bytes Big is
+##     Ok { val: f64, rest } -> ...
+##     Err (ExpectedNum (Float Binary64)) -> ...
+parseBytes : List U8, Endi -> Result { val : Num a, rest : List U8 } [ ExpectedNum a ]*
+
+## when Num.fromBytes bytes Big is
+##     Ok f64 -> ...
+##     Err (ExpectedNum (Float Binary64)) -> ...
+fromBytes : List U8, Endi -> Result (Num a) [ ExpectedNum a ]*
 
 ## Comparison
 

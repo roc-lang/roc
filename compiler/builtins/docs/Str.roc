@@ -444,6 +444,23 @@ toF64 : Str -> Result U128 [ InvalidF64 ]*
 toF32 : Str -> Result I128 [ InvalidF32 ]*
 toDec : Str -> Result Dec [ InvalidDec ]*
 
+## If the string represents a valid number, return that number.
+##
+## The exact number type to look for will be inferred from usage. Here's an
+## example where the `Err` branch matches `Integer Signed64`, which causes this to
+## parse an [I64] because [I64] is defined as `I64 : Num [ Integer [ Signed64 ] ]`.
+##
+## >>> when Str.toNum "12345" is
+## >>>     Ok i64 -> "The I64 was: \(i64)"
+## >>>     Err (ExpectedNum (Integer Signed64)) -> "Not a valid I64!"
+##
+## If the string is exactly `"NaN"`, `"∞"`, or `"-∞"`, they will be accepted
+## only when converting to [F64] or [F32] numbers, and will be translated accordingly.
+##
+## This never accepts numbers with underscores or commas in them. For more
+## advanced options, see [parseNum].
+toNum : Str -> Result (Num a) [ ExpectedNum a ]*
+
 ## If the string begins with a valid #U8 number, return
 ## that number along with the rest of the string after it.
 parseU8 : Str, NumParseConfig -> Result { val : U8, rest : Str } [ Expected [ NumU8 ]* Str ]*
@@ -466,6 +483,22 @@ parseDec : Str, NumParseConfig -> Result { val : Dec, rest : Str } [ Expected [ 
 ## translated into their respective [F64] values.
 parseF64 : Str, NumParseConfig -> Result { val : F64, rest : Str } [ Expected [ NumF64 ]* Str ]*
 parseF32 : Str, NumParseConfig -> Result { val : F32, rest : Str } [ Expected [ NumF32 ]* Str ]*
+
+## If the string begins with an [Int] or a [finite](Num.isFinite) [Frac], return
+## that number along with the rest of the string after it.
+##
+## The exact number type to look for will be inferred from usage. Here's an
+## example where the `Err` branch matches `Float Binary64`, which causes this to
+## parse an [F64] because [F64] is defined as `F64 : Num [ Fraction [ Float64 ] ]`.
+##
+## >>> when Str.parseNum input {} is
+## >>>     Ok { val: f64, rest } -> "The F64 was: \(f64)"
+## >>>     Err (ExpectedNum (Fraction Float64)) -> "Not a valid F64!"
+##
+## If the string begins with `"NaN"`, `"∞"`, and `"-∞"` (which do not represent
+## [finite](Num.isFinite) numbers), they will be accepted only when parsing
+## [F64] or [F32] numbers, and translated accordingly.
+parseNum : Str, NumParseConfig -> Result { val : Num a, rest : Str } [ ExpectedNum a ]*
 
 ## Notes:
 ## * You can allow a decimal mark for integers; they'll only parse if the numbers after it are all 0.

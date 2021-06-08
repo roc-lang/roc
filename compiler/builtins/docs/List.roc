@@ -263,6 +263,34 @@ sortDesc : List elem, (elem -> Num *) -> List elem
 ##
 ## `map` functions like this are common in Roc, and they all work similarly.
 ## See for example #Result.map, #Set.map, and #Map.map.
+##
+## ## Perfomrance
+##
+## `map` may run either sequentially or in parallel, depending on its workload.
+##
+## For example, when running `map` on a very small list, with a very quick
+## transformation function, running it in parallel might actually slow it down
+## because the coordination overhead would exceed the savings from parallelizing
+## the work. On the other hand, a very long list might benefit massively from
+## parallelization, as might a medium-sized list with a transformation funtion
+## that takes a long time to run.
+##
+## As with all behind-the-scenes optimizations, Roc's compiler uses heuristics
+## to decides whether a given `map` invocation should be parallelized. If it
+## decides to parallelize it, the platform is responsible for deciding how
+## many threads to devote to a particular `map` call. (The `map` call will
+## always return the same answer regardless of any of this.)
+##
+## Assigning threads is up to the platform because the platform has full
+## information about the availability of system resources, including information
+## that may not be available to application code (and especially to package code
+## that isn't coupled to any particular platform).
+##
+## For example, if the platform knows that 5 out of 8 threads are currently
+## busy doing other work, then it may choose to split the `map` workload across
+## the 3 remaining threads. The next time you call `map`, the platform may know
+## that only 2 out of 8 threads are currently busy, so it may allocate 6 threads
+## to it instead.
 map : List before, (before -> after) -> List after
 
 ## This works like #List.map, except it also passes the index
