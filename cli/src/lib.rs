@@ -25,6 +25,7 @@ pub const CMD_DOCS: &str = "docs";
 
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_OPTIMIZE: &str = "optimize";
+pub const FLAG_LIB: &str = "lib";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
@@ -43,6 +44,12 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::with_name(FLAG_OPTIMIZE)
                     .long(FLAG_OPTIMIZE)
                     .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(FLAG_LIB)
+                    .long(FLAG_LIB)
+                    .help("Build a C library instead of an executable.")
                     .required(false),
             )
             .arg(
