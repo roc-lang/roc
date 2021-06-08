@@ -99,6 +99,11 @@ check-rustfmt:
     RUN cargo fmt --version
     RUN cargo fmt --all -- --check
 
+check-typos:
+    RUN cargo install typos-cli --version 1.0.4 # use latest version on resolution of issue crate-ci/typos#277
+    COPY --dir .github ci cli compiler docs editor examples packages roc_std www *.md LEGAL_DETAILS shell.nix ./
+    RUN typos
+
 test-rust:
     FROM +copy-dirs-and-cache
     ENV RUST_BACKTRACE=1
@@ -109,6 +114,7 @@ test-all:
     BUILD +test-zig
     BUILD +check-rustfmt
     BUILD +check-clippy
+    BUILD +check-typos
     BUILD +test-rust
 
 bench-roc:

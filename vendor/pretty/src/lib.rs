@@ -185,9 +185,9 @@ macro_rules! impl_doc {
 
             /// Mark this document as a group.
             ///
-            /// Groups are layed out on a single line if possible.  Within a group, all basic documents with
-            /// several possible layouts are assigned the same layout, that is, they are all layed out
-            /// horizontally and combined into a one single line, or they are each layed out on their own
+            /// Groups are laid out on a single line if possible.  Within a group, all basic documents with
+            /// several possible layouts are assigned the same layout, that is, they are all laid out
+            /// horizontally and combined into a one single line, or they are each laid out on their own
             /// line.
             #[inline]
             pub fn group(self) -> Self {
@@ -714,9 +714,9 @@ where
 
     /// Mark this document as a group.
     ///
-    /// Groups are layed out on a single line if possible.  Within a group, all basic documents with
-    /// several possible layouts are assigned the same layout, that is, they are all layed out
-    /// horizontally and combined into a one single line, or they are each layed out on their own
+    /// Groups are laid out on a single line if possible.  Within a group, all basic documents with
+    /// several possible layouts are assigned the same layout, that is, they are all laid out
+    /// horizontally and combined into a one single line, or they are each laid out on their own
     /// line.
     #[inline]
     pub fn group(self) -> DocBuilder<'a, D, A> {
