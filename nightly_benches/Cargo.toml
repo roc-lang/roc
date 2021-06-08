@@ -1,0 +1,16 @@
+[package]
+name = "nightly_benches"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+
+[dev-dependencies]
+criterion = { git = "https://github.com/Anton-4/criterion.rs"}
+cli_utils = { path = "../cli/cli_utils" }
+criterion-perf-events ={ git = "https://github.com/Anton-4/criterion-perf-events" }
+perfcnt = "0.7.1"
+
+[[bench]]
+name = "events_bench"
+harness = false
