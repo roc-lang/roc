@@ -145,6 +145,12 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
     };
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
 
+    let link_type = if matches.is_present(FLAG_LIB) {
+        LinkType::Dylib
+    } else {
+        LinkType::Executable
+    };
+
     let path = Path::new(filename).canonicalize().unwrap();
     let src_dir = path.parent().unwrap().canonicalize().unwrap();
 
@@ -174,7 +180,7 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
         path,
         opt_level,
         emit_debug_info,
-        LinkType::Executable,
+        link_type,
     );
 
     match res_binary_path {
