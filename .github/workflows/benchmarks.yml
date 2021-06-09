@@ -21,12 +21,21 @@ jobs:
       - name: Earthly version
         run: earthly --version
 
-      - name: on trunk; install dependencies, build, cd cli, benchmark with criterion
-        run: ./ci/safe-earthly.sh +bench-roc
+      - name: on trunk; prepare a self contained benchmark folder
+        run: ./ci/safe-earthly.sh +prep-bench-folder --build-arg BENCH_SUFFIX=trunk
 
       - uses: actions/checkout@v2
         with:
-          clean: "false" # we want to keep the benchmark(criterion) folder
+          clean: "false" # we want to keep the benchmark folder
 
-      - name: on current branch; install dependencies, build, cd cli, benchmark with criterion
-        run: ./ci/safe-earthly.sh +bench-roc
+      - name: on current branch; prepare a self contained benchmark folder
+        run: ./ci/safe-earthly.sh +prep-bench-folder
+
+      - name: benchmark trunk
+        run: cd bench-folder-trunk && ./target/release/deps/time_bench --bench
+
+      - name: move benchmark results so they can be compared later
+        run: cd .. && cp bench-folder-trunk/target/criterion bench-folder-branch/target/
+
+      - name: benchmark current branch
+        run: cd bench-folder-branch && ./target/release/deps/time_bench --bench

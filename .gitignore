@@ -27,3 +27,5 @@ editor/benches/resources/500_lines.roc
 # rust cache (sccache folder)
 sccache_dir
 
+# self-contained benchmark folder
+bench-folder*

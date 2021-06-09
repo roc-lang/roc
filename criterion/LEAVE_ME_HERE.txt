@@ -1,1 +1,0 @@
-The criterion dir needs to be non-empty until this [earthly issue](https://github.com/earthly/earthly/issues/588) is resolved.

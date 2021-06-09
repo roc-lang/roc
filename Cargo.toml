@@ -31,7 +31,6 @@ members = [
     "cli/cli_utils",
     "roc_std",
     "docs",
-    "nightly_benches",
 ]
 # Needed to be able to run `cargo run -p roc_cli --no-default-features` -
 # see www/build.sh for more.
