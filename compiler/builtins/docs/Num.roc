@@ -562,7 +562,7 @@ trunc : Frac * -> Int *
 ## Since #Nat has a different maximum number depending on the system you're building
 ## for, this may give a different answer on different systems.
 ##
-## For example, on a 32-bit sytem, #Num.maxNat will return the same answer as
+## For example, on a 32-bit system, #Num.maxNat will return the same answer as
 ## #Num.maxU32. This means that calling `Num.toNat 9_000_000_000` on a 32-bit
 ## system will return #Num.maxU32 instead of 9 billion, because 9 billion is
 ## higher than #Num.maxU32 and will not fit in a #Nat on a 32-bit system.
@@ -913,8 +913,19 @@ shrWrap : Int a, Int a -> Int a
 ## [Endianness](https://en.wikipedia.org/wiki/Endianness)
 Endi : [ Big, Little ]
 
+## The [Endi] argument does not matter for [U8] and [I8], since they have
+## only one byte.
 toBytes : Num *, Endi -> List U8
 
+## when Num.parseBytes bytes Big is
+##     Ok { val: f64, rest } -> ...
+##     Err (ExpectedNum (Float Binary64)) -> ...
+parseBytes : List U8, Endi -> Result { val : Num a, rest : List U8 } [ ExpectedNum a ]*
+
+## when Num.fromBytes bytes Big is
+##     Ok f64 -> ...
+##     Err (ExpectedNum (Float Binary64)) -> ...
+fromBytes : List U8, Endi -> Result (Num a) [ ExpectedNum a ]*
 
 ## Comparison
 

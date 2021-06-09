@@ -265,7 +265,7 @@ fn mul_and_decimalize(a: u128, b: u128) i128 {
     // floor(2^315/10^18) is 66749594872528440074844428317798503581334516323645399060845050244444366430645
 
     // Add 1.
-    // This can't overflow because the intial numbers are only 127bit due to removing the sign bit.
+    // This can't overflow because the initial numbers are only 127bit due to removing the sign bit.
     var overflowed = @addWithOverflow(u128, lhs_lo, 1, &lhs_lo);
     lhs_hi = blk: {
         if (overflowed) {

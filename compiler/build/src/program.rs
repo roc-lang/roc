@@ -1,7 +1,7 @@
 #[cfg(feature = "llvm")]
-use roc_gen::llvm::build::module_from_builtins;
+use roc_gen_llvm::llvm::build::module_from_builtins;
 #[cfg(feature = "llvm")]
-pub use roc_gen::llvm::build::FunctionIterator;
+pub use roc_gen_llvm::llvm::build::FunctionIterator;
 #[cfg(feature = "llvm")]
 use roc_load::file::MonomorphizedModule;
 #[cfg(feature = "llvm")]
@@ -125,12 +125,12 @@ pub fn gen_from_mono_module(
     }
 
     let builder = context.create_builder();
-    let (dibuilder, compile_unit) = roc_gen::llvm::build::Env::new_debug_info(module);
-    let (mpm, _fpm) = roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
+    let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
+    let (mpm, _fpm) = roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
 
     // Compile and add all the Procs before adding main
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
-    let env = roc_gen::llvm::build::Env {
+    let env = roc_gen_llvm::llvm::build::Env {
         arena: &arena,
         builder: &builder,
         dibuilder: &dibuilder,
@@ -143,7 +143,7 @@ pub fn gen_from_mono_module(
         exposed_to_host: loaded.exposed_to_host.keys().copied().collect(),
     };
 
-    roc_gen::llvm::build::build_procedures(&env, opt_level, loaded.procedures);
+    roc_gen_llvm::llvm::build::build_procedures(&env, opt_level, loaded.procedures);
 
     env.dibuilder.finalize();
 
@@ -204,7 +204,7 @@ pub fn gen_from_mono_module(
         }
 
         // assemble the .ll into a .bc
-        let _ = Command::new("llvm-as-10")
+        let _ = Command::new("llvm-as")
             .env_clear()
             .args(&[
                 app_ll_dbg_file.to_str().unwrap(),
@@ -216,7 +216,7 @@ pub fn gen_from_mono_module(
 
         // write the .o file. Note that this builds the .o for the local machine,
         // and ignores the `target_machine` entirely.
-        let _ = Command::new("llc-10")
+        let _ = Command::new("llc-12")
             .env_clear()
             .args(&[
                 "-filetype=obj",

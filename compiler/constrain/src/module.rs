@@ -146,7 +146,7 @@ pub fn pre_constrain_imports(
     // Translate referenced symbols into constraints. We do this on the main
     // thread because we need exclusive access to the exposed_types map, in order
     // to get the necessary constraint info for any aliases we imported. We also
-    // resolve builtin types now, so we can use a refernce to stdlib instead of
+    // resolve builtin types now, so we can use a reference to stdlib instead of
     // having to either clone it or recreate it from scratch on the other thread.
     for &symbol in references.iter() {
         let module_id = symbol.module_id();

@@ -25,12 +25,13 @@ pub const CMD_DOCS: &str = "docs";
 
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_OPTIMIZE: &str = "optimize";
+pub const FLAG_LIB: &str = "lib";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
 pub fn build_app<'a>() -> App<'a> {
-    App::new("roc")
+    let app = App::new("roc")
         .version(crate_version!())
         .subcommand(App::new(CMD_BUILD)
             .about("Build a program")
@@ -43,6 +44,12 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::with_name(FLAG_OPTIMIZE)
                     .long(FLAG_OPTIMIZE)
                     .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(FLAG_LIB)
+                    .long(FLAG_LIB)
+                    .help("Build a C library instead of an executable.")
                     .required(false),
             )
             .arg(
@@ -81,15 +88,6 @@ pub fn build_app<'a>() -> App<'a> {
         .subcommand(App::new(CMD_REPL)
             .about("Launch the interactive Read Eval Print Loop (REPL)")
         )
-        .subcommand(App::new(CMD_EDIT)
-            .about("Launch the Roc editor")
-            .arg(Arg::with_name(DIRECTORY_OR_FILES)
-                .index(1)
-                .multiple(true)
-                .required(false)
-                .help("(optional) The directory or files to open on launch.")
-            )
-        )
         .subcommand(
             App::new(CMD_DOCS)
                 .about("Generate documentation for Roc modules")
@@ -100,7 +98,21 @@ pub fn build_app<'a>() -> App<'a> {
                     .help("The directory or files to build documentation for")
 
                 )
+        );
+
+    if cfg!(feature = "edit") {
+        app.subcommand(
+            App::new(CMD_EDIT).about("Launch the Roc editor").arg(
+                Arg::with_name(DIRECTORY_OR_FILES)
+                    .index(1)
+                    .multiple(true)
+                    .required(false)
+                    .help("(optional) The directory or files to open on launch."),
+            ),
         )
+    } else {
+        app
+    }
 }
 
 pub fn docs(files: Vec<PathBuf>) {
@@ -111,6 +123,7 @@ pub fn docs(files: Vec<PathBuf>) {
     )
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum BuildConfig {
     BuildOnly,
     BuildAndRun { roc_file_arg_index: usize },
@@ -131,6 +144,12 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
         OptLevel::Normal
     };
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
+
+    let link_type = if matches.is_present(FLAG_LIB) {
+        LinkType::Dylib
+    } else {
+        LinkType::Executable
+    };
 
     let path = Path::new(filename).canonicalize().unwrap();
     let src_dir = path.parent().unwrap().canonicalize().unwrap();
@@ -161,7 +180,7 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
         path,
         opt_level,
         emit_debug_info,
-        LinkType::Executable,
+        link_type,
     );
 
     match res_binary_path {

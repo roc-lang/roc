@@ -776,7 +776,7 @@ fn type_to_variable<'a>(
         Alias(symbol, args, alias_type_id) => {
             // TODO cache in uniqueness inference gives problems! all Int's get the same uniqueness var!
             // Cache aliases without type arguments. Commonly used aliases like `Int` would otherwise get O(n)
-            // different variables (once for each occurence). The recursion restriction is required
+            // different variables (once for each occurrence). The recursion restriction is required
             // for uniqueness types only: recursive aliases "introduce" an unbound uniqueness
             // attribute in the body, when
             //

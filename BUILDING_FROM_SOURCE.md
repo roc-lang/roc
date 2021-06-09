@@ -52,16 +52,29 @@ If you prefer a package manager, you can try the following:
 If you want to install it manually, you can also download Zig directly [here](https://ziglang.org/download/). Just make sure you download the right version, the bleeding edge master build is the first download link on this page.
 
 ### LLVM
-**version: 10.0.x**
+**version: 12.0.x**
+
+For macOS, you can install LLVM 12 using `brew install llvm@12` and then adding
+`/usr/local/opt/llvm/bin` to your `PATH`. You can confirm this worked by
+running `llc --version` - it should mention "LLVM version 12.0.0" at the top.
 
 For Ubuntu and Debian, you can use the `Automatic installation script` at [apt.llvm.org](https://apt.llvm.org):
 ```
 sudo bash -c "$(wget -O - https://apt.llvm.org/llvm.sh)"
 ```
 
-For macOS, check the troubleshooting section below.
+If you use this script, you'll need to add `clang` and `llvm-as` to your `PATH`.
+By default, the script installs them as `llvm-as-12` and `clang-12`,
+respectively. You can address this with symlinks like so:
 
-There are also plenty of alternative options at http://releases.llvm.org/download.html
+```
+sudo ln -s /usr/bin/clang-12 /usr/bin/clang
+```
+```
+sudo ln -s /usr/bin/llvm-as-12 /usr/bin/llvm-as
+````
+
+There are also alternative installation options at http://releases.llvm.org/download.html
 
 ## Using Nix
 
@@ -143,30 +156,14 @@ If you encounter `cannot find -lz` run `sudo apt install zlib1g-dev`.
 
 ### LLVM installation on macOS
 
-By default homebrew will try to install llvm 11, which is currently
-unsupported. You need to install an older version (10.0.0_3) by doing:
-
-```
-$ brew edit llvm
-
-# Replace the contents of the file with https://raw.githubusercontent.com/Homebrew/homebrew-core/6616d50fb0b24dbe30f5e975210bdad63257f517/Formula/llvm.rb
-
-# we expect llvm-as-10 to be present
-$ ln -s /usr/local/opt/llvm/bin/{llvm-as,llvm-as-10}
-
-# "pinning" ensures that homebrew doesn't update it automatically
-$ brew pin llvm
-```
+If installing LLVM fails, it might help to run `sudo xcode-select -r` before installing again.
 
 It might also be useful to add these exports to your shell:
 
 ```
-export PATH="/usr/local/opt/llvm/bin:$PATH"
 export LDFLAGS="-L/usr/local/opt/llvm/lib -Wl,-rpath,/usr/local/opt/llvm/lib"
 export CPPFLAGS="-I/usr/local/opt/llvm/include"
 ```
-
-If installing LLVM still fails, it might help to run `sudo xcode-select -r` before installing again.
 
 ### LLVM installation on Windows
 

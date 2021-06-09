@@ -12,8 +12,10 @@ use target_lexicon::{Architecture, OperatingSystem, Triple};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum LinkType {
-    Executable,
-    Dylib,
+    // These numbers correspond to the --lib flag; if it's present
+    // (e.g. is_present returns `1 as bool`), this will be 1 as well.
+    Executable = 0,
+    Dylib = 1,
 }
 
 /// input_paths can include the host as well as the app. e.g. &["host.o", "roc_app.o"]

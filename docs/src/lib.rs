@@ -63,9 +63,9 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
     // Write each package's module docs html file
     for (docs_by_id, interns) in package.modules.iter_mut() {
         for module in docs_by_id.values_mut() {
-            let module_dir = build_dir.join(module.name.as_str());
+            let module_dir = build_dir.join(module.name.replace(".", "/").as_str());
 
-            fs::create_dir(&module_dir)
+            fs::create_dir_all(&module_dir)
                 .expect("TODO gracefully handle not being able to create the module dir");
 
             let rendered_module = template_html
@@ -143,7 +143,7 @@ fn render_main_content(interns: &Interns, module: &mut ModuleDocumentation) -> S
                     );
                 }
             }
-            DocEntry::DetatchedDoc(docs) => {
+            DocEntry::DetachedDoc(docs) => {
                 buf.push_str(
                     markdown_to_html(&mut module.scope, interns, docs.to_string()).as_str(),
                 );
@@ -229,7 +229,6 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
         let href = {
             let mut href_buf = String::new();
             href_buf.push_str(name);
-            href_buf.push_str(".html");
             href_buf
         };
 
@@ -568,7 +567,7 @@ fn make_doc_link(scope: &mut Scope, interns: &Interns, doc_item: &str) -> String
             let mut link = String::new();
 
             link.push_str(module_str);
-            link.push_str(".html#");
+            link.push('#');
             link.push_str(ident_str);
 
             let mut buf = String::new();

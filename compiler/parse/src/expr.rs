@@ -418,7 +418,7 @@ impl<'a> ExprState<'a> {
         F: Fn(Region, Row, Col) -> EExpr<'a>,
     {
         if !self.operators.is_empty() {
-            // this `=` or `<-` likely occured inline; treat it as an invalid operator
+            // this `=` or `<-` likely occurred inline; treat it as an invalid operator
             let opchar = match loc_op.value {
                 BinOp::Assignment => arena.alloc([b'=']) as &[_],
                 BinOp::Backpassing => arena.alloc([b'<', b'-']) as &[_],
@@ -451,7 +451,7 @@ impl<'a> ExprState<'a> {
         debug_assert_eq!(loc_op.value, BinOp::HasType);
 
         if !self.operators.is_empty() {
-            // this `:` likely occured inline; treat it as an invalid operator
+            // this `:` likely occurred inline; treat it as an invalid operator
             let opchar = arena.alloc([b':']) as &[_];
 
             let fail =
@@ -1000,7 +1000,7 @@ fn parse_expr_operator<'a>(
                         (&*arena.alloc(Located::at(alias_region, alias)), state)
                     }
                     Err(_) => {
-                        // this `=` likely occured inline; treat it as an invalid operator
+                        // this `=` likely occurred inline; treat it as an invalid operator
                         let fail = EExpr::BadOperator(
                             arena.alloc([b'=']),
                             loc_op.region.start_line,
@@ -1044,7 +1044,7 @@ fn parse_expr_operator<'a>(
                         (Located::at(expr_region, good), ann_type, state)
                     }
                     Err(_) => {
-                        // this `=` likely occured inline; treat it as an invalid operator
+                        // this `=` likely occurred inline; treat it as an invalid operator
                         let fail = EExpr::BadOperator(
                             arena.alloc([b'=']),
                             loc_op.region.start_line,
@@ -1153,7 +1153,7 @@ fn parse_expr_operator<'a>(
                             }
                         }
                         Err(_) => {
-                            // this `:` likely occured inline; treat it as an invalid operator
+                            // this `:` likely occurred inline; treat it as an invalid operator
                             let fail = EExpr::BadOperator(
                                 arena.alloc([b':']),
                                 loc_op.region.start_line,

@@ -301,6 +301,8 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
             /* dwo_id */ 0,
             /* split_debug_inling */ false,
             /* debug_info_for_profiling */ false,
+            "",
+            "",
         )
     }
 
@@ -1460,7 +1462,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             let builder = env.builder;
 
-            // Determine types, assumes the descriminant is in the field layouts
+            // Determine types, assumes the discriminant is in the field layouts
             let num_fields = field_layouts.len();
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
 
@@ -5135,7 +5137,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
             //        rem == 0
             //    }
             //
-            // NOTE we'd like the branches to be swapped for better branch prediciton,
+            // NOTE we'd like the branches to be swapped for better branch prediction,
             // but llvm normalizes to the above ordering in -O3
             let zero = rhs.get_type().const_zero();
             let neg_1 = rhs.get_type().const_int(-1i64 as u64, false);
@@ -5482,7 +5484,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
             int_abs_raise_on_overflow(env, arg, arg_layout)
         }
         NumToFloat => {
-            // TODO: Handle differnt sized numbers
+            // TODO: Handle different sized numbers
             // This is an Int, so we need to convert it.
             bd.build_cast(
                 InstructionOpcode::SIToFP,
@@ -5606,7 +5608,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
 
     let bd = env.builder;
 
-    // TODO: Handle differnt sized floats
+    // TODO: Handle different sized floats
     match op {
         NumNeg => bd.build_float_neg(arg, "negate_float").into(),
         NumAbs => env.call_intrinsic(LLVM_FABS_F64, &[arg.into()]),
@@ -5747,7 +5749,7 @@ fn throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, message: &str) {
     let builder = env.builder;
 
     let info = {
-        // we represend both void and char pointers with `u8*`
+        // we represented both void and char pointers with `u8*`
         let u8_ptr = context.i8_type().ptr_type(AddressSpace::Generic);
 
         // allocate an exception (that can hold a pointer to a string)
