@@ -163,7 +163,7 @@ pub export fn roc_fx_getInt() GetInt {
 }
 
 fn roc_fx_getInt_help() !i64 {
-    const stdin = std.io.getStdIn().inStream();
+    const stdin = std.io.getStdIn().reader();
     var buf: [40]u8 = undefined;
 
     const line: []u8 = (try stdin.readUntilDelimiterOrEof(&buf, '\n')) orelse "";

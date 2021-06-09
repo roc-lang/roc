@@ -59,7 +59,7 @@ pub export fn main() i32 {
     roc__mainForHost_1_exposed(&callresult);
 
     // stdout the result
-    stdout.print("{}\n", .{callresult.content.asSlice()}) catch unreachable;
+    stdout.print("{s}\n", .{callresult.content.asSlice()}) catch unreachable;
 
     callresult.content.deinit();
 

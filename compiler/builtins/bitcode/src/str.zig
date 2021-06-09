@@ -273,7 +273,7 @@ pub const RocStr = extern struct {
         const str2_ptr: [*]u8 = &str2;
         var roc_str2 = RocStr.init(str2_ptr, str2_len);
 
-        expect(roc_str1.eq(roc_str2));
+        try expect(roc_str1.eq(roc_str2));
 
         roc_str1.deinit();
         roc_str2.deinit();
@@ -295,7 +295,7 @@ pub const RocStr = extern struct {
             roc_str2.deinit();
         }
 
-        expect(!roc_str1.eq(roc_str2));
+        try expect(!roc_str1.eq(roc_str2));
     }
 
     test "RocStr.eq: not equal same length" {
@@ -314,7 +314,7 @@ pub const RocStr = extern struct {
             roc_str2.deinit();
         }
 
-        expect(!roc_str1.eq(roc_str2));
+        try expect(!roc_str1.eq(roc_str2));
     }
 };
 
@@ -449,8 +449,8 @@ test "strSplitInPlace: no delimiter" {
         delimiter.deinit();
     }
 
-    expectEqual(array.len, expected.len);
-    expect(array[0].eq(expected[0]));
+    try expectEqual(array.len, expected.len);
+    try expect(array[0].eq(expected[0]));
 }
 
 test "strSplitInPlace: empty end" {
@@ -490,10 +490,10 @@ test "strSplitInPlace: empty end" {
         delimiter.deinit();
     }
 
-    expectEqual(array.len, expected.len);
-    expect(array[0].eq(expected[0]));
-    expect(array[1].eq(expected[1]));
-    expect(array[2].eq(expected[2]));
+    try expectEqual(array.len, expected.len);
+    try expect(array[0].eq(expected[0]));
+    try expect(array[1].eq(expected[1]));
+    try expect(array[2].eq(expected[2]));
 }
 
 test "strSplitInPlace: delimiter on sides" {
@@ -532,10 +532,10 @@ test "strSplitInPlace: delimiter on sides" {
         delimiter.deinit();
     }
 
-    expectEqual(array.len, expected.len);
-    expect(array[0].eq(expected[0]));
-    expect(array[1].eq(expected[1]));
-    expect(array[2].eq(expected[2]));
+    try expectEqual(array.len, expected.len);
+    try expect(array[0].eq(expected[0]));
+    try expect(array[1].eq(expected[1]));
+    try expect(array[2].eq(expected[2]));
 }
 
 test "strSplitInPlace: three pieces" {
@@ -573,10 +573,10 @@ test "strSplitInPlace: three pieces" {
         delimiter.deinit();
     }
 
-    expectEqual(expected_array.len, array.len);
-    expect(array[0].eq(expected_array[0]));
-    expect(array[1].eq(expected_array[1]));
-    expect(array[2].eq(expected_array[2]));
+    try expectEqual(expected_array.len, array.len);
+    try expect(array[0].eq(expected_array[0]));
+    try expect(array[1].eq(expected_array[1]));
+    try expect(array[2].eq(expected_array[2]));
 }
 
 // This is used for `Str.split : Str, Str -> Array Str
@@ -639,7 +639,7 @@ test "countSegments: long delimiter" {
     }
 
     const segments_count = countSegments(str, delimiter);
-    expectEqual(segments_count, 1);
+    try expectEqual(segments_count, 1);
 }
 
 test "countSegments: delimiter at start" {
@@ -658,7 +658,7 @@ test "countSegments: delimiter at start" {
 
     const segments_count = countSegments(str, delimiter);
 
-    expectEqual(segments_count, 2);
+    try expectEqual(segments_count, 2);
 }
 
 test "countSegments: delimiter interspered" {
@@ -677,7 +677,7 @@ test "countSegments: delimiter interspered" {
 
     const segments_count = countSegments(str, delimiter);
 
-    expectEqual(segments_count, 3);
+    try expectEqual(segments_count, 3);
 }
 
 // Str.countGraphemeClusters
@@ -721,7 +721,7 @@ fn rocStrFromLiteral(bytes_arr: *const []u8) RocStr {}
 
 test "countGraphemeClusters: empty string" {
     const count = countGraphemeClusters(RocStr.empty());
-    expectEqual(count, 0);
+    try expectEqual(count, 0);
 }
 
 test "countGraphemeClusters: ascii characters" {
@@ -731,7 +731,7 @@ test "countGraphemeClusters: ascii characters" {
     defer str.deinit();
 
     const count = countGraphemeClusters(str);
-    expectEqual(count, 4);
+    try expectEqual(count, 4);
 }
 
 test "countGraphemeClusters: utf8 characters" {
@@ -741,7 +741,7 @@ test "countGraphemeClusters: utf8 characters" {
     defer str.deinit();
 
     const count = countGraphemeClusters(str);
-    expectEqual(count, 3);
+    try expectEqual(count, 3);
 }
 
 test "countGraphemeClusters: emojis" {
@@ -751,7 +751,7 @@ test "countGraphemeClusters: emojis" {
     defer str.deinit();
 
     const count = countGraphemeClusters(str);
-    expectEqual(count, 3);
+    try expectEqual(count, 3);
 }
 
 test "countGraphemeClusters: emojis and ut8 characters" {
@@ -761,7 +761,7 @@ test "countGraphemeClusters: emojis and ut8 characters" {
     defer str.deinit();
 
     const count = countGraphemeClusters(str);
-    expectEqual(count, 6);
+    try expectEqual(count, 6);
 }
 
 test "countGraphemeClusters: emojis, ut8, and ascii characters" {
@@ -771,7 +771,7 @@ test "countGraphemeClusters: emojis, ut8, and ascii characters" {
     defer str.deinit();
 
     const count = countGraphemeClusters(str);
-    expectEqual(count, 10);
+    try expectEqual(count, 10);
 }
 
 // Str.startsWith
@@ -821,27 +821,27 @@ pub fn startsWithCodePoint(string: RocStr, prefix: u32) callconv(.C) bool {
 test "startsWithCodePoint: ascii char" {
     const whole = RocStr.init("foobar", 6);
     const prefix = 'f';
-    expect(startsWithCodePoint(whole, prefix));
+    try expect(startsWithCodePoint(whole, prefix));
 }
 
 test "startsWithCodePoint: emoji" {
     const yes = RocStr.init("💖foobar", 10);
     const no = RocStr.init("foobar", 6);
     const prefix = '💖';
-    expect(startsWithCodePoint(yes, prefix));
-    expect(!startsWithCodePoint(no, prefix));
+    try expect(startsWithCodePoint(yes, prefix));
+    try expect(!startsWithCodePoint(no, prefix));
 }
 
 test "startsWith: foo starts with fo" {
     const foo = RocStr.init("foo", 3);
     const fo = RocStr.init("fo", 2);
-    expect(startsWith(foo, fo));
+    try expect(startsWith(foo, fo));
 }
 
 test "startsWith: 123456789123456789 starts with 123456789123456789" {
     const str = RocStr.init("123456789123456789", 18);
     defer str.deinit();
-    expect(startsWith(str, str));
+    try expect(startsWith(str, str));
 }
 
 test "startsWith: 12345678912345678910 starts with 123456789123456789" {
@@ -850,7 +850,7 @@ test "startsWith: 12345678912345678910 starts with 123456789123456789" {
     const prefix = RocStr.init("123456789123456789", 18);
     defer prefix.deinit();
 
-    expect(startsWith(str, prefix));
+    try expect(startsWith(str, prefix));
 }
 
 // Str.endsWith
@@ -882,13 +882,13 @@ test "endsWith: foo ends with oo" {
     defer foo.deinit();
     defer oo.deinit();
 
-    expect(endsWith(foo, oo));
+    try expect(endsWith(foo, oo));
 }
 
 test "endsWith: 123456789123456789 ends with 123456789123456789" {
     const str = RocStr.init("123456789123456789", 18);
     defer str.deinit();
-    expect(endsWith(str, str));
+    try expect(endsWith(str, str));
 }
 
 test "endsWith: 12345678912345678910 ends with 345678912345678910" {
@@ -897,7 +897,7 @@ test "endsWith: 12345678912345678910 ends with 345678912345678910" {
     defer str.deinit();
     defer suffix.deinit();
 
-    expect(endsWith(str, suffix));
+    try expect(endsWith(str, suffix));
 }
 
 test "endsWith: hello world ends with world" {
@@ -906,7 +906,7 @@ test "endsWith: hello world ends with world" {
     defer str.deinit();
     defer suffix.deinit();
 
-    expect(endsWith(str, suffix));
+    try expect(endsWith(str, suffix));
 }
 
 // Str.concat
@@ -978,7 +978,7 @@ test "RocStr.concat: small concat small" {
 
     defer result.deinit();
 
-    expect(roc_str3.eq(result));
+    try expect(roc_str3.eq(result));
 }
 
 pub const RocListStr = extern struct {
@@ -1057,7 +1057,7 @@ test "RocStr.joinWith: result is big" {
 
     defer result.deinit();
 
-    expect(roc_result.eq(result));
+    try expect(roc_result.eq(result));
 }
 
 // Str.toBytes
@@ -1191,8 +1191,8 @@ fn validateUtf8BytesX(str: RocList) FromUtf8Result {
     return fromUtf8(str);
 }
 
-fn expectOk(result: FromUtf8Result) void {
-    expectEqual(result.is_ok, true);
+fn expectOk(result: FromUtf8Result) !void {
+    try expectEqual(result.is_ok, true);
 }
 
 fn sliceHelp(bytes: [*]const u8, length: usize) RocList {
@@ -1217,7 +1217,7 @@ test "validateUtf8Bytes: ascii" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectOk(validateUtf8BytesX(list));
+    try expectOk(validateUtf8BytesX(list));
 }
 
 test "validateUtf8Bytes: unicode œ" {
@@ -1225,7 +1225,7 @@ test "validateUtf8Bytes: unicode œ" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectOk(validateUtf8BytesX(list));
+    try expectOk(validateUtf8BytesX(list));
 }
 
 test "validateUtf8Bytes: unicode ∆" {
@@ -1233,7 +1233,7 @@ test "validateUtf8Bytes: unicode ∆" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectOk(validateUtf8BytesX(list));
+    try expectOk(validateUtf8BytesX(list));
 }
 
 test "validateUtf8Bytes: emoji" {
@@ -1241,7 +1241,7 @@ test "validateUtf8Bytes: emoji" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectOk(validateUtf8BytesX(list));
+    try expectOk(validateUtf8BytesX(list));
 }
 
 test "validateUtf8Bytes: unicode ∆ in middle of array" {
@@ -1249,15 +1249,15 @@ test "validateUtf8Bytes: unicode ∆ in middle of array" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectOk(validateUtf8BytesX(list));
+    try expectOk(validateUtf8BytesX(list));
 }
 
-fn expectErr(list: RocList, index: usize, err: Utf8DecodeError, problem: Utf8ByteProblem) void {
+fn expectErr(list: RocList, index: usize, err: Utf8DecodeError, problem: Utf8ByteProblem) !void {
     const str_ptr = @ptrCast([*]u8, list.bytes);
     const str_len = list.length;
 
-    expectError(err, numberOfNextCodepointBytes(str_ptr, str_len, index));
-    expectEqual(toErrUtf8ByteResponse(index, problem), validateUtf8Bytes(str_ptr, str_len));
+    try expectError(err, numberOfNextCodepointBytes(str_ptr, str_len, index));
+    try expectEqual(toErrUtf8ByteResponse(index, problem), validateUtf8Bytes(str_ptr, str_len));
 }
 
 test "validateUtf8Bytes: invalid start byte" {
@@ -1266,7 +1266,7 @@ test "validateUtf8Bytes: invalid start byte" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectErr(list, 2, error.Utf8InvalidStartByte, Utf8ByteProblem.InvalidStartByte);
+    try expectErr(list, 2, error.Utf8InvalidStartByte, Utf8ByteProblem.InvalidStartByte);
 }
 
 test "validateUtf8Bytes: unexpected eof for 2 byte sequence" {
@@ -1275,7 +1275,7 @@ test "validateUtf8Bytes: unexpected eof for 2 byte sequence" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
+    try expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
 }
 
 test "validateUtf8Bytes: expected continuation for 2 byte sequence" {
@@ -1284,7 +1284,7 @@ test "validateUtf8Bytes: expected continuation for 2 byte sequence" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
+    try expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
 }
 
 test "validateUtf8Bytes: unexpected eof for 3 byte sequence" {
@@ -1293,7 +1293,7 @@ test "validateUtf8Bytes: unexpected eof for 3 byte sequence" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
+    try expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
 }
 
 test "validateUtf8Bytes: expected continuation for 3 byte sequence" {
@@ -1302,7 +1302,7 @@ test "validateUtf8Bytes: expected continuation for 3 byte sequence" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
+    try expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
 }
 
 test "validateUtf8Bytes: unexpected eof for 4 byte sequence" {
@@ -1311,7 +1311,7 @@ test "validateUtf8Bytes: unexpected eof for 4 byte sequence" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
+    try expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
 }
 
 test "validateUtf8Bytes: expected continuation for 4 byte sequence" {
@@ -1320,7 +1320,7 @@ test "validateUtf8Bytes: expected continuation for 4 byte sequence" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
+    try expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
 }
 
 test "validateUtf8Bytes: overlong" {
@@ -1329,7 +1329,7 @@ test "validateUtf8Bytes: overlong" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectErr(list, 3, error.Utf8OverlongEncoding, Utf8ByteProblem.OverlongEncoding);
+    try expectErr(list, 3, error.Utf8OverlongEncoding, Utf8ByteProblem.OverlongEncoding);
 }
 
 test "validateUtf8Bytes: codepoint out too large" {
@@ -1338,7 +1338,7 @@ test "validateUtf8Bytes: codepoint out too large" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectErr(list, 3, error.Utf8CodepointTooLarge, Utf8ByteProblem.CodepointTooLarge);
+    try expectErr(list, 3, error.Utf8CodepointTooLarge, Utf8ByteProblem.CodepointTooLarge);
 }
 
 test "validateUtf8Bytes: surrogate halves" {
@@ -1347,5 +1347,5 @@ test "validateUtf8Bytes: surrogate halves" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectErr(list, 3, error.Utf8EncodesSurrogateHalf, Utf8ByteProblem.EncodesSurrogateHalf);
+    try expectErr(list, 3, error.Utf8EncodesSurrogateHalf, Utf8ByteProblem.EncodesSurrogateHalf);
 }
