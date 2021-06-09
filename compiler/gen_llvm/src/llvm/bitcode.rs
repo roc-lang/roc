@@ -110,6 +110,9 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
         &(bumpalo::vec![ in env.arena; BasicTypeEnum::PointerType(arg_type); argument_layouts.len() + 2 ]),
     );
 
+    // called from zig, must use C calling convention
+    function_value.set_call_conventions(C_CALL_CONV);
+
     let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
     debug_assert!(kind_id > 0);
     let attr = env.context.create_enum_attribute(kind_id, 1);
@@ -303,6 +306,9 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
                 ),
             };
 
+            // called from zig, must use C calling convention
+            function_value.set_call_conventions(C_CALL_CONV);
+
             let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
             debug_assert!(kind_id > 0);
             let attr = env.context.create_enum_attribute(kind_id, 1);
@@ -381,6 +387,9 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
                 &[arg_type.into(), arg_type.into()],
             );
 
+            // called from zig, must use C calling convention
+            function_value.set_call_conventions(C_CALL_CONV);
+
             let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
             debug_assert!(kind_id > 0);
             let attr = env.context.create_enum_attribute(kind_id, 1);
@@ -454,6 +463,9 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
                 env.context.i8_type().into(),
                 &[arg_type.into(), arg_type.into(), arg_type.into()],
             );
+
+            // called from zig, must use C calling convention
+            function_value.set_call_conventions(C_CALL_CONV);
 
             // we expose this function to zig; must use c calling convention
             function_value.set_call_conventions(C_CALL_CONV);
