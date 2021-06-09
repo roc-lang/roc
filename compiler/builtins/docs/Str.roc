@@ -461,29 +461,6 @@ toDec : Str -> Result Dec [ InvalidDec ]*
 ## advanced options, see [parseNum].
 toNum : Str -> Result (Num a) [ ExpectedNum a ]*
 
-## If the string begins with a valid #U8 number, return
-## that number along with the rest of the string after it.
-parseU8 : Str, NumParseConfig -> Result { val : U8, rest : Str } [ Expected [ NumU8 ]* Str ]*
-parseI8 : Str, NumParseConfig -> Result { val : I8, rest : Str } [ Expected [ NumI8 ]* Str ]*
-parseU16 : Str, NumParseConfig -> Result { val : U16, rest : Str } [ Expected [ NumU16 ]* Str ]*
-parseI16 : Str, NumParseConfig -> Result { val : I16, rest : Str } [ Expected [ NumI16 ]* Str ]*
-parseU32 : Str, NumParseConfig -> Result { val : U32, rest : Str } [ Expected [ NumU32 ]* Str ]*
-parseI32 : Str, NumParseConfig -> Result { val : I32, rest : Str } [ Expected [ NumI32 ]* Str ]*
-parseU64 : Str, NumParseConfig -> Result { val : U64, rest : Str } [ Expected [ NumU64 ]* Str ]*
-parseI64 : Str, NumParseConfig -> Result { val : I64, rest : Str } [ Expected [ NumI64 ]* Str ]*
-parseU128 : Str, NumParseConfig -> Result { val : U128, rest : Str } [ Expected [ NumU128 ]* Str ]*
-parseI128 : Str, NumParseConfig -> Result { val : I128, rest : Str } [ Expected [ NumI128 ]* Str ]*
-parseDec : Str, NumParseConfig -> Result { val : Dec, rest : Str } [ Expected [ NumDec ]* Str ]*
-
-## If the string begins with a [finite](Num.isFinite) [F64] number, return
-## that number along with the rest of the string after it.
-##
-## If the string begins with `"NaN"`, `"∞"`, and `"-∞"` (which do not represent
-## [finite](Num.isFinite) numbers), they will be similarly accepted and
-## translated into their respective [F64] values.
-parseF64 : Str, NumParseConfig -> Result { val : F64, rest : Str } [ Expected [ NumF64 ]* Str ]*
-parseF32 : Str, NumParseConfig -> Result { val : F32, rest : Str } [ Expected [ NumF32 ]* Str ]*
-
 ## If the string begins with an [Int] or a [finite](Num.isFinite) [Frac], return
 ## that number along with the rest of the string after it.
 ##
