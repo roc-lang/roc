@@ -3,11 +3,8 @@
 LOG_FILE="earthly_log.txt"
 touch $LOG_FILE
 
-ARGS=$1
-
-if [[ $ARGS == *"bench"* ]]; then
-  ARGS="--allow-privileged $ARGS"
-fi
+# first arg + everything after
+ARGS=${@:1}
 
 script -efq $LOG_FILE -c "earthly --config ci/earthly-conf.yml $ARGS"
 EXIT_CODE=$?
