@@ -43,6 +43,12 @@ macro_rules! return_on_layout_error {
     };
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum OptLevel {
+    Normal,
+    Optimize,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum MonoProblem {
     PatternProblem(crate::exhaustive::Error),
@@ -7663,7 +7669,7 @@ pub fn num_argument_to_int_or_float(
                 4 => IntOrFloat::UnsignedIntType(IntPrecision::I32),
                 8 => IntOrFloat::UnsignedIntType(IntPrecision::I64),
                 _ => panic!(
-                    "Invalid target for Num type arguement: Roc does't support compiling to {}-bit systems.",
+                    "Invalid target for Num type argument: Roc does't support compiling to {}-bit systems.",
                     ptr_bytes * 8
                 ),
             }

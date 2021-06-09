@@ -50,7 +50,8 @@ use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
-    BranchInfo, CallType, ExceptionId, JoinPointId, ModifyRc, TopLevelFunctionLayout, Wrapped,
+    BranchInfo, CallType, ExceptionId, JoinPointId, ModifyRc, OptLevel, TopLevelFunctionLayout,
+    Wrapped,
 };
 use roc_mono::layout::{Builtin, InPlace, LambdaSet, Layout, LayoutIds, UnionLayout};
 use target_lexicon::CallingConvention;
@@ -85,21 +86,6 @@ macro_rules! debug_info_init {
         );
         $env.builder.set_current_debug_location(&$env.context, loc);
     }};
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum OptLevel {
-    Normal,
-    Optimize,
-}
-
-impl From<OptLevel> for OptimizationLevel {
-    fn from(level: OptLevel) -> Self {
-        match level {
-            OptLevel::Normal => OptimizationLevel::None,
-            OptLevel::Optimize => OptimizationLevel::Aggressive,
-        }
-    }
 }
 
 /// Iterate over all functions in an llvm module
@@ -356,7 +342,9 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
 }
 
 pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Module<'ctx> {
-    let bitcode_bytes = bitcode::as_bytes();
+    // In the build script for the builtins module,
+    // we compile the builtins into LLVM bitcode
+    let bitcode_bytes: &[u8] = include_bytes!("../../../builtins/bitcode/builtins.bc");
 
     let memory_buffer = MemoryBuffer::create_from_memory_range(&bitcode_bytes, module_name);
 
@@ -1490,7 +1478,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             let builder = env.builder;
 
-            // Determine types, assumes the descriminant is in the field layouts
+            // Determine types, assumes the discriminant is in the field layouts
             let num_fields = field_layouts.len();
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
 
@@ -4685,7 +4673,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             BasicValueEnum::IntValue(bool_val)
         }
         ListGetUnsafe => {
-            // List.get : List elem, Int -> [ Ok elem, OutOfBounds ]*
+            // List.get : List elem, Nat -> [ Ok elem, OutOfBounds ]*
             debug_assert_eq!(args.len(), 2);
 
             let (wrapper_struct, list_layout) = load_symbol_and_layout(scope, &args[0]);
@@ -5275,7 +5263,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
             //        rem == 0
             //    }
             //
-            // NOTE we'd like the branches to be swapped for better branch prediciton,
+            // NOTE we'd like the branches to be swapped for better branch prediction,
             // but llvm normalizes to the above ordering in -O3
             let zero = rhs.get_type().const_zero();
             let neg_1 = rhs.get_type().const_int(-1i64 as u64, false);
@@ -5622,7 +5610,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
             int_abs_raise_on_overflow(env, arg, arg_layout)
         }
         NumToFloat => {
-            // TODO: Handle differnt sized numbers
+            // TODO: Handle different sized numbers
             // This is an Int, so we need to convert it.
             bd.build_cast(
                 InstructionOpcode::SIToFP,
@@ -5746,7 +5734,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
 
     let bd = env.builder;
 
-    // TODO: Handle differnt sized floats
+    // TODO: Handle different sized floats
     match op {
         NumNeg => bd.build_float_neg(arg, "negate_float").into(),
         NumAbs => env.call_intrinsic(LLVM_FABS_F64, &[arg.into()]),
@@ -5887,7 +5875,7 @@ fn throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, message: &str) {
     let builder = env.builder;
 
     let info = {
-        // we represend both void and char pointers with `u8*`
+        // we represented both void and char pointers with `u8*`
         let u8_ptr = context.i8_type().ptr_type(AddressSpace::Generic);
 
         // allocate an exception (that can hold a pointer to a string)

@@ -4,8 +4,9 @@ use roc_build::program::FunctionIterator;
 use roc_can::builtins::builtin_defs_map;
 use roc_can::def::Def;
 use roc_collections::all::{MutMap, MutSet};
-use roc_gen::llvm::externs::add_default_roc_externs;
+use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_module::symbol::Symbol;
+use roc_mono::ir::OptLevel;
 use roc_types::subs::VarStore;
 
 fn promote_expr_to_module(src: &str) -> String {
@@ -180,7 +181,7 @@ pub fn helper<'a>(
     };
 
     let builder = context.create_builder();
-    let module = roc_gen::llvm::build::module_from_builtins(context, "app");
+    let module = roc_gen_llvm::llvm::build::module_from_builtins(context, "app");
 
     // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
     // platform to provide them.
@@ -190,16 +191,16 @@ pub fn helper<'a>(
     module.strip_debug_info();
 
     let opt_level = if cfg!(debug_assertions) {
-        roc_gen::llvm::build::OptLevel::Normal
+        OptLevel::Normal
     } else {
-        roc_gen::llvm::build::OptLevel::Optimize
+        OptLevel::Optimize
     };
 
     let module = arena.alloc(module);
     let (module_pass, function_pass) =
-        roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
+        roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
 
-    let (dibuilder, compile_unit) = roc_gen::llvm::build::Env::new_debug_info(module);
+    let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
 
     // mark our zig-defined builtins as internal
     use inkwell::attributes::{Attribute, AttributeLoc};
@@ -221,7 +222,7 @@ pub fn helper<'a>(
     }
 
     // Compile and add all the Procs before adding main
-    let env = roc_gen::llvm::build::Env {
+    let env = roc_gen_llvm::llvm::build::Env {
         arena: &arena,
         builder: &builder,
         dibuilder: &dibuilder,
@@ -235,7 +236,7 @@ pub fn helper<'a>(
         exposed_to_host: MutSet::default(),
     };
 
-    let (main_fn_name, main_fn) = roc_gen::llvm::build::build_procedures_return_main(
+    let (main_fn_name, main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
         &env,
         opt_level,
         procedures,
@@ -275,7 +276,7 @@ macro_rules! assert_llvm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr, $ignore_problems:expr) => {
         use bumpalo::Bump;
         use inkwell::context::Context;
-        use roc_gen::run_jit_function;
+        use roc_gen_llvm::run_jit_function;
 
         let arena = Bump::new();
         let context = Context::create();

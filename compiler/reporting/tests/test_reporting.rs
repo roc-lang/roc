@@ -4774,7 +4774,7 @@ mod test_reporting {
                 r#"
                 ── DOUBLE COMMA ────────────────────────────────────────────────────────────────
 
-                I just started parsing a function argument type, but I encounterd two
+                I just started parsing a function argument type, but I encountered two
                 commas in a row:
 
                 1│  f : I64,,I64 -> I64

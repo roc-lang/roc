@@ -1,21 +1,21 @@
-use crate::target;
 use crate::target::arch_str;
-use inkwell::module::Module;
-use inkwell::targets::{CodeModel, FileType, RelocMode};
+#[cfg(feature = "llvm")]
 use libloading::{Error, Library};
-use roc_gen::llvm::build::OptLevel;
+#[cfg(feature = "llvm")]
+use roc_mono::ir::OptLevel;
 use std::collections::HashMap;
 use std::env;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
-use tempfile::tempdir;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum LinkType {
-    Executable,
-    Dylib,
+    // These numbers correspond to the --lib flag; if it's present
+    // (e.g. is_present returns `1 as bool`), this will be 1 as well.
+    Executable = 0,
+    Dylib = 1,
 }
 
 /// input_paths can include the host as well as the app. e.g. &["host.o", "roc_app.o"]
@@ -360,6 +360,9 @@ fn link_linux(
     };
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
+
+    init_arch(target);
+
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
     Ok((
@@ -477,12 +480,16 @@ fn link_macos(
     ))
 }
 
+#[cfg(feature = "llvm")]
 pub fn module_to_dylib(
-    module: &Module,
+    module: &inkwell::module::Module,
     target: &Triple,
     opt_level: OptLevel,
 ) -> Result<Library, Error> {
-    let dir = tempdir().unwrap();
+    use crate::target::{self, convert_opt_level};
+    use inkwell::targets::{CodeModel, FileType, RelocMode};
+
+    let dir = tempfile::tempdir().unwrap();
     let filename = PathBuf::from("Test.roc");
     let file_path = dir.path().join(filename);
     let mut app_o_file = file_path;
@@ -492,7 +499,8 @@ pub fn module_to_dylib(
     // Emit the .o file using position-indepedent code (PIC) - needed for dylibs
     let reloc = RelocMode::PIC;
     let model = CodeModel::Default;
-    let target_machine = target::target_machine(target, opt_level.into(), reloc, model).unwrap();
+    let target_machine =
+        target::target_machine(target, convert_opt_level(opt_level), reloc, model).unwrap();
 
     target_machine
         .write_to_file(module, FileType::Object, &app_o_file)
@@ -528,4 +536,14 @@ fn validate_output(file_name: &str, cmd_name: &str, output: Output) {
             ),
         }
     }
+}
+
+#[cfg(feature = "llvm")]
+fn init_arch(target: &Triple) {
+    crate::target::init_arch(target);
+}
+
+#[cfg(not(feature = "llvm"))]
+fn init_arch(_target: &Triple) {
+    panic!("Tried to initialize LLVM when crate was not built with `feature = \"llvm\"` enabled");
 }

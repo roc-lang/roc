@@ -383,7 +383,7 @@ fn list_walk_with_str() {
 }
 
 #[test]
-fn list_walk_substraction() {
+fn list_walk_subtraction() {
     assert_evals_to!(r#"List.walk [ 1, 2 ] Num.sub 1"#, 2, i64);
 }
 

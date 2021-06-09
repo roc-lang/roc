@@ -145,7 +145,7 @@ where
     ) -> Result<(), String>;
 
     /// build_expr builds the expressions for the specified symbol.
-    /// The builder must keep track of the symbol because it may be refered to later.
+    /// The builder must keep track of the symbol because it may be referred to later.
     fn build_expr(
         &mut self,
         sym: &Symbol,
@@ -230,7 +230,7 @@ where
     }
 
     /// build_run_low_level builds the low level opertation and outputs to the specified symbol.
-    /// The builder must keep track of the symbol because it may be refered to later.
+    /// The builder must keep track of the symbol because it may be referred to later.
     fn build_run_low_level(
         &mut self,
         sym: &Symbol,

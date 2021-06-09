@@ -2,7 +2,7 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use libloading::Library;
 use roc_collections::all::MutMap;
-use roc_gen::{run_jit_function, run_jit_function_dynamic_type};
+use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::operator::CalledVia;
 use roc_module::symbol::{Interns, ModuleId, Symbol};

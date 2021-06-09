@@ -8,9 +8,9 @@ use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::{MutMap, MutSet};
 use roc_fmt::annotation::Formattable;
 use roc_fmt::annotation::{Newlines, Parens};
-use roc_gen::llvm::build::OptLevel;
-use roc_gen::llvm::externs::add_default_roc_externs;
+use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_load::file::LoadingProblem;
+use roc_mono::ir::OptLevel;
 use roc_parse::parser::SyntaxError;
 use roc_types::pretty_print::{content_to_string, name_all_type_vars};
 use std::path::{Path, PathBuf};
@@ -130,7 +130,9 @@ pub fn gen_and_eval<'a>(
         let context = Context::create();
         let builder = context.create_builder();
         let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
-        let module = arena.alloc(roc_gen::llvm::build::module_from_builtins(&context, ""));
+        let module = arena.alloc(roc_gen_llvm::llvm::build::module_from_builtins(
+            &context, "",
+        ));
 
         // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
         // platform to provide them.
@@ -166,12 +168,12 @@ pub fn gen_and_eval<'a>(
 
         let module = arena.alloc(module);
         let (module_pass, function_pass) =
-            roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
+            roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
 
-        let (dibuilder, compile_unit) = roc_gen::llvm::build::Env::new_debug_info(module);
+        let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
 
         // Compile and add all the Procs before adding main
-        let env = roc_gen::llvm::build::Env {
+        let env = roc_gen_llvm::llvm::build::Env {
             arena: &arena,
             builder: &builder,
             dibuilder: &dibuilder,
@@ -185,7 +187,7 @@ pub fn gen_and_eval<'a>(
             exposed_to_host: MutSet::default(),
         };
 
-        let (main_fn_name, main_fn) = roc_gen::llvm::build::build_procedures_return_main(
+        let (main_fn_name, main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
             &env,
             opt_level,
             procedures,
