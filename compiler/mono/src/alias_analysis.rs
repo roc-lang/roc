@@ -39,9 +39,24 @@ where
         let mut hasher = DefaultHasher::new();
 
         for layout in argument_layouts {
-            layout.hash(&mut hasher);
+            match layout {
+                Layout::Closure(_, lambda_set, _) => {
+                    lambda_set.runtime_representation().hash(&mut hasher);
+                }
+                _ => {
+                    layout.hash(&mut hasher);
+                }
+            }
         }
-        return_layout.hash(&mut hasher);
+
+        match return_layout {
+            Layout::Closure(_, lambda_set, _) => {
+                lambda_set.runtime_representation().hash(&mut hasher);
+            }
+            _ => {
+                return_layout.hash(&mut hasher);
+            }
+        }
 
         hasher.finish()
     };
@@ -83,12 +98,6 @@ where
 
         for proc in procs {
             let spec = proc_spec(proc)?;
-
-            dbg!(proc.name);
-            for b in &func_name_bytes(proc) {
-                eprint!("{:x}", b);
-            }
-            eprintln!("");
 
             m.add_func(FuncName(&func_name_bytes(proc)), spec)?;
 
@@ -133,7 +142,7 @@ where
                 p.build()?
             };
 
-            eprintln!("{}", program.to_source_string());
+            // eprintln!("{}", program.to_source_string());
 
             morphic_lib::solve(program)
         }

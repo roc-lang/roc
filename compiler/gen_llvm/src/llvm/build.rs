@@ -600,7 +600,12 @@ pub fn promote_to_main_function<'a, 'ctx, 'env>(
     let main_fn_name = "$Test.main";
 
     // Add main to the module.
-    let main_fn = expose_function_to_host_help(env, roc_main_fn, main_fn_name);
+    let main_fn = expose_function_to_host_help(
+        env,
+        &inlinable_string::InlinableString::from(main_fn_name),
+        roc_main_fn,
+        main_fn_name,
+    );
 
     (main_fn_name, main_fn)
 }
@@ -2744,11 +2749,12 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
     let ident_string = symbol.ident_string(&env.interns);
     let c_function_name: String = format!("roc__{}_1_exposed", ident_string);
 
-    expose_function_to_host_help(env, roc_function, &c_function_name);
+    expose_function_to_host_help(env, ident_string, roc_function, &c_function_name);
 }
 
 fn expose_function_to_host_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    ident_string: &inlinable_string::InlinableString,
     roc_function: FunctionValue<'ctx>,
     c_function_name: &str,
 ) -> FunctionValue<'ctx> {
@@ -2809,8 +2815,7 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
 
     // STEP 3: build a {} -> u64 function that gives the size of the return type
     let size_function_type = env.context.i64_type().fn_type(&[], false);
-    let size_function_name: String =
-        format!("roc_{}_size", roc_function.get_name().to_str().unwrap());
+    let size_function_name: String = format!("roc__{}_size", ident_string);
 
     let size_function = add_func(
         env.module,
@@ -2889,7 +2894,7 @@ where
         let info = builder
             .build_catch_all_landing_pad(
                 &landing_pad_type,
-                BasicValueEnum::IntValue(context.i8_type().const_zero()),
+                &BasicValueEnum::IntValue(context.i8_type().const_zero()),
                 context.i8_type().ptr_type(AddressSpace::Generic),
                 "main_landing_pad",
             )
@@ -3172,6 +3177,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
 
             build_proc(
                 &env,
+                mod_solutions,
                 &mut layout_ids,
                 func_spec_solutions,
                 scope.clone(),
@@ -3242,8 +3248,6 @@ fn build_proc_header<'a, 'ctx, 'env>(
 
     let fn_name = func_spec_name(env.arena, &env.interns, symbol, func_spec);
 
-    dbg!(&fn_name);
-
     let ret_type = basic_type_from_layout(env, &proc.ret_layout);
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
 
@@ -3289,7 +3293,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
     // e.g. `roc__main_1_Fx_caller`
     let function_name = format!(
-        "roc_{}_{}_caller",
+        "roc__{}_{}_caller",
         def_name,
         alias_symbol.ident_string(&env.interns)
     );
@@ -3510,14 +3514,14 @@ fn build_host_exposed_alias_size_help<'a, 'ctx, 'env>(
     let size_function_type = env.context.i64_type().fn_type(&[], false);
     let size_function_name: String = if let Some(label) = opt_label {
         format!(
-            "roc_{}_{}_{}_size",
+            "roc__{}_{}_{}_size",
             def_name,
             alias_symbol.ident_string(&env.interns),
             label
         )
     } else {
         format!(
-            "roc_{}_{}_size",
+            "roc__{}_{}_size",
             def_name,
             alias_symbol.ident_string(&env.interns)
         )
@@ -3541,6 +3545,7 @@ fn build_host_exposed_alias_size_help<'a, 'ctx, 'env>(
 
 pub fn build_proc<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
+    mod_solutions: &'a ModSolutions,
     layout_ids: &mut LayoutIds<'a>,
     func_spec_solutions: &FuncSpecSolutions,
     mut scope: Scope<'a, 'ctx>,
@@ -3560,19 +3565,30 @@ pub fn build_proc<'a, 'ctx, 'env>(
                         //
                         // * roc__mainForHost_1_Update_size() -> i64
                         // * roc__mainForHost_1_Update_result_size() -> i64
-                        continue;
 
                         let evaluator_layout = env.arena.alloc(top_level).full();
-                        let evaluator_name = layout_ids
-                            .get(symbol, &evaluator_layout)
-                            .to_symbol_string(symbol, &env.interns);
 
-                        let evaluator = function_value_by_name_help(
-                            env,
-                            evaluator_layout,
+                        let it = top_level.arguments.iter().copied();
+                        let bytes = roc_mono::alias_analysis::func_name_bytes_help(
                             symbol,
-                            &evaluator_name,
+                            it,
+                            top_level.result,
                         );
+                        let func_name = FuncName(&bytes);
+                        let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
+
+                        let mut it = func_solutions.specs();
+                        let func_spec = it.next().unwrap();
+                        debug_assert!(
+                            it.next().is_none(),
+                            "we expect only one specialization of this symbol"
+                        );
+
+                        let evaluator =
+                            function_value_by_func_spec(env, *func_spec, symbol, evaluator_layout);
+
+                        let ident_string = proc.name.ident_string(&env.interns);
+                        let fn_name: String = format!("{}_1", ident_string);
 
                         build_closure_caller(
                             env, &fn_name, evaluator, name, arguments, closure, result,

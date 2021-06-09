@@ -19,7 +19,7 @@ use roc_types::subs::{Content, FlatType, Subs, Variable};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
-pub const PRETTY_PRINT_IR_SYMBOLS: bool = true;
+pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
 
 macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr) => {
@@ -2575,8 +2575,8 @@ fn cleanup_attempted_type<'a>(
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct TopLevelFunctionLayout<'a> {
-    arguments: &'a [Layout<'a>],
-    result: Layout<'a>,
+    pub arguments: &'a [Layout<'a>],
+    pub result: Layout<'a>,
 }
 
 impl<'a> TopLevelFunctionLayout<'a> {
