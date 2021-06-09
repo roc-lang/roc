@@ -5,8 +5,9 @@ touch $LOG_FILE
 
 # first arg + everything after
 ARGS=${@:1}
-
-script -efq $LOG_FILE -c "earthly --config ci/earthly-conf.yml $ARGS"
+FULL_CMD="earthly --config ci/earthly-conf.yml $ARGS"
+echo $FULL_CMD
+script -efq $LOG_FILE -c "$FULL_CMD"
 EXIT_CODE=$?
 
 if grep -q "failed to mount" "$LOG_FILE"; then
