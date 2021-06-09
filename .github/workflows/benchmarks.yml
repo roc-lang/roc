@@ -37,7 +37,7 @@ jobs:
         run: cd bench-folder-trunk && ./target/release/deps/time_bench --bench
 
       - name: move benchmark results so they can be compared later
-        run: cd .. && cp bench-folder-trunk/target/criterion bench-folder-branch/target/
+        run: cp bench-folder-trunk/target/criterion bench-folder-branch/target/
 
       - name: benchmark current branch
         run: cd bench-folder-branch && ./target/release/deps/time_bench --bench
