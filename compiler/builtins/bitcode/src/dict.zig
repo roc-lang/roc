@@ -791,9 +791,7 @@ pub fn dictWalk(
 
                 caller(data, key, value, b2, b1);
 
-                const temp = b1;
-                b2 = b1;
-                b1 = temp;
+                std.mem.swap([*]u8, &b1, &b2);
             },
             else => {},
         }

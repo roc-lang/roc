@@ -542,9 +542,7 @@ pub fn listWalk(
             const element = source_ptr + i * element_width;
             caller(data, element, b2, b1);
 
-            const temp = b1;
-            b2 = b1;
-            b1 = temp;
+            std.mem.swap([*]u8, &b1, &b2);
         }
     }
 
@@ -591,9 +589,7 @@ pub fn listWalkBackwards(
             const element = source_ptr + i * element_width;
             caller(data, element, b2, b1);
 
-            const temp = b1;
-            b2 = b1;
-            b1 = temp;
+            std.mem.swap([*]u8, &b1, &b2);
         }
     }
 
