@@ -22,14 +22,14 @@ jobs:
         run: earthly --version
 
       - name: on trunk; prepare a self-contained benchmark folder
-        run: ./ci/safe-earthly.sh --build-arg BENCH_SUFFIX=trunk +prep-bench-folder 
+        run: earthly --config ci/earthly-conf.yml --build-arg BENCH_SUFFIX=trunk +prep-bench-folder 
 
       - uses: actions/checkout@v2
         with:
           clean: "false" # we want to keep the benchmark folder
 
       - name: on current branch; prepare a self-contained benchmark folder
-        run: ./ci/safe-earthly.sh +prep-bench-folder
+        run: earthly --config ci/earthly-conf.yml +prep-bench-folder
 
       - name: benchmark trunk
         run: cd bench-folder-trunk && ./target/release/deps/time_bench --bench
