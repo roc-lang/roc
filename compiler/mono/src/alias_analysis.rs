@@ -414,7 +414,7 @@ fn call_spec(
             *update_mode,
             call.arguments,
         ),
-        HigherOrderLowLevel { .. } => {
+        HigherOrderLowLevel { op, .. } => {
             // TODO overly pessimstic
             // filter_map because one of the arguments is a function name, which
             // is not defined in the env

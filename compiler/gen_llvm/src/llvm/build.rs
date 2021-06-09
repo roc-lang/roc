@@ -825,16 +825,25 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
             op,
             closure_layout,
             function_owns_closure_data,
-        } => run_higher_order_low_level(
-            env,
-            layout_ids,
-            scope,
-            layout,
-            *op,
-            *closure_layout,
-            *function_owns_closure_data,
-            arguments,
-        ),
+            specialization_id,
+        } => {
+            let bytes = specialization_id.to_bytes();
+            let callee_var = CalleeSpecVar(&bytes);
+            let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
+            // let fn_val = function_value_by_func_spec(env, func_spec, symbol, *layout);
+
+            run_higher_order_low_level(
+                env,
+                layout_ids,
+                scope,
+                layout,
+                *op,
+                *closure_layout,
+                func_spec,
+                *function_owns_closure_data,
+                arguments,
+            )
+        }
 
         CallType::Foreign {
             foreign_symbol,
@@ -3793,6 +3802,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
     return_layout: &Layout<'a>,
     op: LowLevel,
     function_layout: Layout<'a>,
+    func_spec: FuncSpec,
     function_owns_closure_data: bool,
     args: &[Symbol],
 ) -> BasicValueEnum<'ctx> {

@@ -1146,6 +1146,8 @@ pub enum CallType<'a> {
         op: LowLevel,
         /// the layout of the closure argument, if any
         closure_layout: Layout<'a>,
+        /// specialization id of the function argument
+        specialization_id: CallSpecId,
         /// does the function need to own the closure data
         function_owns_closure_data: bool,
     },
@@ -2707,11 +2709,12 @@ macro_rules! match_on_closure_argument {
                     $env,
                     lambda_set,
                     $closure_data_symbol,
-                    |top_level_function, closure_data, function_layout| self::Call {
+                    |top_level_function, closure_data, function_layout, specialization_id| self::Call {
                         call_type: CallType::HigherOrderLowLevel {
                             op: $op,
                             closure_layout: function_layout,
-                            function_owns_closure_data: false
+                            specialization_id,
+                            function_owns_closure_data: false,
                         },
                         arguments: arena.alloc([$($x,)* top_level_function, closure_data]),
                     },
@@ -7696,7 +7699,7 @@ fn lowlevel_match_on_lambda_set<'a, ToLowLevelCall>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a>
 where
-    ToLowLevelCall: Fn(Symbol, Symbol, Layout<'a>) -> Call<'a> + Copy,
+    ToLowLevelCall: Fn(Symbol, Symbol, Layout<'a>, CallSpecId) -> Call<'a> + Copy,
 {
     match lambda_set.runtime_representation() {
         Layout::Union(_) => {
@@ -7733,7 +7736,13 @@ where
         Layout::Struct(_) => {
             let function_symbol = lambda_set.set[0].0;
 
-            let call = to_lowlevel_call(function_symbol, closure_data_symbol, function_layout);
+            let call_spec_id = env.next_call_specialization_id();
+            let call = to_lowlevel_call(
+                function_symbol,
+                closure_data_symbol,
+                function_layout,
+                call_spec_id,
+            );
 
             build_call(env, call, assigned, return_layout, env.arena.alloc(hole))
         }
@@ -7787,7 +7796,7 @@ fn lowlevel_union_lambda_set_to_switch<'a, ToLowLevelCall>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a>
 where
-    ToLowLevelCall: Fn(Symbol, Symbol, Layout<'a>) -> Call<'a> + Copy,
+    ToLowLevelCall: Fn(Symbol, Symbol, Layout<'a>, CallSpecId) -> Call<'a> + Copy,
 {
     debug_assert!(!lambda_set.is_empty());
 
@@ -7800,7 +7809,13 @@ where
 
         let hole = Stmt::Jump(join_point_id, env.arena.alloc([assigned]));
 
-        let call = to_lowlevel_call(*function_symbol, closure_data_symbol, function_layout);
+        let call_spec_id = env.next_call_specialization_id();
+        let call = to_lowlevel_call(
+            *function_symbol,
+            closure_data_symbol,
+            function_layout,
+            call_spec_id,
+        );
         let stmt = build_call(env, call, assigned, return_layout, env.arena.alloc(hole));
 
         branches.push((i as u64, BranchInfo::None, stmt));
@@ -8206,7 +8221,7 @@ fn lowlevel_enum_lambda_set_to_switch<'a, ToLowLevelCall>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a>
 where
-    ToLowLevelCall: Fn(Symbol, Symbol, Layout<'a>) -> Call<'a> + Copy,
+    ToLowLevelCall: Fn(Symbol, Symbol, Layout<'a>, CallSpecId) -> Call<'a> + Copy,
 {
     debug_assert!(!lambda_set.is_empty());
 
@@ -8219,7 +8234,13 @@ where
 
         let hole = Stmt::Jump(join_point_id, env.arena.alloc([result_symbol]));
 
-        let call = to_lowlevel_call(*function_symbol, closure_data_symbol, function_layout);
+        let call_spec_id = env.next_call_specialization_id();
+        let call = to_lowlevel_call(
+            *function_symbol,
+            closure_data_symbol,
+            function_layout,
+            call_spec_id,
+        );
         let stmt = build_call(
             env,
             call,

@@ -454,7 +454,10 @@ impl<'a> Context<'a> {
             }
 
             HigherOrderLowLevel {
-                op, closure_layout, ..
+                op,
+                closure_layout,
+                specialization_id,
+                ..
             } => {
                 macro_rules! create_call {
                     ($borrows:expr) => {
@@ -464,6 +467,7 @@ impl<'a> Context<'a> {
                                     op: *op,
                                     closure_layout: *closure_layout,
                                     function_owns_closure_data: true,
+                                    specialization_id: *specialization_id,
                                 }
                             } else {
                                 call_type
