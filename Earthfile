@@ -144,4 +144,3 @@ prep-bench-folder:
     # copy the most recent time bench to bench-folder
     RUN cp target/release/deps/`ls -t target/release/deps/ | grep time_bench | head -n 1` bench-folder/target/release/deps/time_bench
     SAVE ARTIFACT bench-folder AS LOCAL bench-folder-$BENCH_SUFFIX
-    
