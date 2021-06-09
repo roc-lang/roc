@@ -30,6 +30,9 @@ jobs:
 
       - name: on current branch; prepare a self-contained benchmark folder
         run: earthly --config ci/earthly-conf.yml +prep-bench-folder
+      
+      - name: set ulimit to prevent stack overflow error
+        run: ulimit -s unlimited
 
       - name: benchmark trunk
         run: cd bench-folder-trunk && ./target/release/deps/time_bench --bench
