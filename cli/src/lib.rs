@@ -123,6 +123,7 @@ pub fn docs(files: Vec<PathBuf>) {
     )
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum BuildConfig {
     BuildOnly,
     BuildAndRun { roc_file_arg_index: usize },
