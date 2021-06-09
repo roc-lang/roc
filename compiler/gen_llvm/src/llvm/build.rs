@@ -302,6 +302,8 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
             /* dwo_id */ 0,
             /* split_debug_inling */ false,
             /* debug_info_for_profiling */ false,
+            "",
+            "",
         )
     }
 
