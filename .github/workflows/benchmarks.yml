@@ -15,22 +15,21 @@ jobs:
     steps:
       - uses: actions/checkout@v2
         with:
-          ref: "5e4fc1dc2fed40fe9f04fbc0797da99090e8bf49" # benchmarking on trunk first in order to compare results
           clean: "true" 
 
       - name: Earthly version
         run: earthly --version
 
       - name: on trunk; prepare a self-contained benchmark folder
-        run: earthly --config ci/earthly-conf.yml --build-arg BENCH_SUFFIX=trunk +prep-bench-folder 
+        run: ./ci/safe-earthly.sh --build-arg BENCH_SUFFIX=trunk +prep-bench-folder 
 
       - uses: actions/checkout@v2
         with:
           clean: "false" # we want to keep the benchmark folder
 
       - name: on current branch; prepare a self-contained benchmark folder
-        run: earthly --config ci/earthly-conf.yml +prep-bench-folder
-      
+        run: ./ci/safe-earthly.sh +prep-bench-folder
+
       - name: set ulimit to prevent stack overflow error
         run: ulimit -s unlimited
 
