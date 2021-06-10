@@ -183,7 +183,7 @@ pub const RocDec = struct {
         var str_bytes: [max_digits + 2]u8 = undefined;
 
         // Join the whole number slice & the decimal slice together
-        // The format template arg in bufPrint is `comptime`, so we have to repeate the whole statment in each branch
+        // The format template arg in bufPrint is `comptime`, so we have to repeate the whole statement in each branch
         if (is_negative) {
             _ = std.fmt.bufPrint(str_bytes[0 .. str_len + 1], "-{s}.{s}", .{ before_digits_slice, after_digits_slice }) catch {
                 std.debug.panic("TODO runtime exception failing to print slices", .{});
