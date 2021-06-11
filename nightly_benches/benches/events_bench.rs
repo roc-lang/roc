@@ -87,8 +87,8 @@ criterion_group!(
 
 criterion_main!(
     benches_instructions,
-    /*benches_cache_refs,
+    benches_cache_refs,
     benches_cache_misses,
     benches_branch_instructions,
-    benches_branch_misses*/
+    benches_branch_misses
 );

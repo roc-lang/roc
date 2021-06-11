@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-echo "inside safe earthly"
 LOG_FILE="earthly_log.txt"
 touch $LOG_FILE
 

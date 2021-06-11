@@ -129,6 +129,7 @@ test-all:
     BUILD +test-rust
     BUILD +verify-no-git-changes
 
+# compile everything needed for benchmarks and output a self-contained folder
 prep-bench-folder:
     FROM +copy-dirs-and-cache
     ARG BENCH_SUFFIX=branch
