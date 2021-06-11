@@ -34,10 +34,10 @@ jobs:
         run: ulimit -s unlimited
 
       - name: benchmark trunk
-        run: cd bench-folder-trunk && ./target/release/deps/time_bench --bench
+        run: ulimit -s unlimited && cd bench-folder-trunk && ./target/release/deps/time_bench --bench
 
       - name: move benchmark results so they can be compared later
         run: cp -r bench-folder-trunk/target/criterion bench-folder-branch/target/
 
       - name: benchmark current branch
-        run: cd bench-folder-branch && ./target/release/deps/time_bench --bench
+        run: ulimit -s unlimited && cd bench-folder-branch && ./target/release/deps/time_bench --bench
