@@ -4,8 +4,15 @@ use cli_utils::bench_utils::{
 use criterion::{
     criterion_group, criterion_main, measurement::WallTime, BenchmarkGroup, Criterion, SamplingMode,
 };
+use systemstat::{Platform, System};
 
 fn bench_group_wall_time(c: &mut Criterion) {
+    // print CPU temp
+    match System::new().cpu_temp() {
+        Ok(cpu_temp) => println!("\nCPU temp: {}", cpu_temp),
+        Err(x) => println!("Failed to get CPU temp: {}", x),
+    }
+
     let mut group = c.benchmark_group("bench-group_wall-time");
     // calculate statistics based on a fixed(flat) 200 runs
     group.sampling_mode(SamplingMode::Flat);

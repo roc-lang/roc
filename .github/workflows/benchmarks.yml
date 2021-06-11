@@ -30,14 +30,13 @@ jobs:
       - name: on current branch; prepare a self-contained benchmark folder
         run: ./ci/safe-earthly.sh +prep-bench-folder
 
-      - name: set ulimit to prevent stack overflow error
-        run: ulimit -s unlimited
-
       - name: benchmark trunk
         run: ulimit -s unlimited && cd bench-folder-trunk && ./target/release/deps/time_bench --bench
+        # ulimit to prevent stack overflow on cfold
 
       - name: move benchmark results so they can be compared later
         run: cp -r bench-folder-trunk/target/criterion bench-folder-branch/target/
 
       - name: benchmark current branch
         run: ulimit -s unlimited && cd bench-folder-branch && ./target/release/deps/time_bench --bench
+        # ulimit to prevent stack overflow on cfold
