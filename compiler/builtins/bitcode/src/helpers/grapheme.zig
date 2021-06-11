@@ -42,7 +42,7 @@ pub const BoundClass = enum(u8) {
 };
 
 test "Bound Class" {
-    expectEqual(0, @enumToInt(BoundClass.START));
+    try expectEqual(0, @enumToInt(BoundClass.START));
 }
 
 // https://github.com/JuliaStrings/utf8proc/blob/master/utf8proc.c#L261
@@ -112,7 +112,7 @@ fn unsafeCodepointToBoundClass(codepoint: u21) *const BoundClass {
 }
 
 test "unsafeCodepointToBoundClass: valid" {
-    expectEqual(BoundClass.CONTROL, unsafeCodepointToBoundClass(8).*);
+    try expectEqual(BoundClass.CONTROL, unsafeCodepointToBoundClass(8).*);
 }
 
 // https://github.com/JuliaStrings/utf8proc/blob/master/utf8proc.c#L242
@@ -125,11 +125,11 @@ fn codepointToBoundClass(codepoint: u21) *const BoundClass {
 }
 
 test "codepointToBoundClass: valid" {
-    expectEqual(BoundClass.CONTROL, codepointToBoundClass(8).*);
+    try expectEqual(BoundClass.CONTROL, codepointToBoundClass(8).*);
 }
 
 test "codepointToBoundClass: invalid" {
-    expectEqual(BoundClass.OTHER, codepointToBoundClass(codepoint_max + 5).*);
+    try expectEqual(BoundClass.OTHER, codepointToBoundClass(codepoint_max + 5).*);
 }
 
 // https://github.com/JuliaStrings/utf8proc/blob/master/utf8proc.c#L319
