@@ -81,7 +81,6 @@ serial_test = "0.5"
 tempfile = "3.1.0"
 criterion = { git = "https://github.com/Anton-4/criterion.rs"}
 cli_utils = { path = "cli_utils" }
-systemstat = "0.1.8"
 
 [[bench]]
 name = "time_bench"
