@@ -20,13 +20,9 @@ const Slot = packed enum(u8) {
     PreviouslyFilled,
 };
 
-const MaybeIndexTag = enum {
-    index, not_found
-};
+const MaybeIndexTag = enum { index, not_found };
 
-const MaybeIndex = union(MaybeIndexTag) {
-    index: usize, not_found: void
-};
+const MaybeIndex = union(MaybeIndexTag) { index: usize, not_found: void };
 
 fn nextSeed(seed: u64) u64 {
     // TODO is this a valid way to get a new seed? are there better ways?
@@ -795,9 +791,7 @@ pub fn dictWalk(
 
                 caller(data, key, value, b2, b1);
 
-                const temp = b1;
-                b2 = b1;
-                b1 = temp;
+                std.mem.swap([*]u8, &b1, &b2);
             },
             else => {},
         }

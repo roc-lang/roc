@@ -204,7 +204,7 @@ pub fn gen_from_mono_module(
         }
 
         // assemble the .ll into a .bc
-        let _ = Command::new("llvm-as-10")
+        let _ = Command::new("llvm-as")
             .env_clear()
             .args(&[
                 app_ll_dbg_file.to_str().unwrap(),
@@ -216,7 +216,7 @@ pub fn gen_from_mono_module(
 
         // write the .o file. Note that this builds the .o for the local machine,
         // and ignores the `target_machine` entirely.
-        let _ = Command::new("llc-10")
+        let _ = Command::new("llc-12")
             .env_clear()
             .args(&[
                 "-filetype=obj",

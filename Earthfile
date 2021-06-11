@@ -13,17 +13,18 @@ install-other-libs:
 install-zig-llvm-valgrind-clippy-rustfmt:
     FROM +install-other-libs
     # zig
-    RUN wget -c https://ziglang.org/download/0.7.1/zig-linux-x86_64-0.7.1.tar.xz --no-check-certificate
-    RUN tar -xf zig-linux-x86_64-0.7.1.tar.xz
-    RUN ln -s /earthbuild/zig-linux-x86_64-0.7.1/zig /usr/bin/zig
+    RUN wget -c https://ziglang.org/download/0.8.0/zig-linux-x86_64-0.8.0.tar.xz --no-check-certificate
+    RUN tar -xf zig-linux-x86_64-0.8.0.tar.xz
+    RUN ln -s /earthbuild/zig-linux-x86_64-0.8.0/zig /usr/bin/zig
     # llvm
     RUN apt -y install lsb-release software-properties-common gnupg
     RUN wget https://apt.llvm.org/llvm.sh
     RUN chmod +x llvm.sh
-    RUN ./llvm.sh 10
-    RUN ln -s /usr/bin/clang-10 /usr/bin/clang
+    RUN ./llvm.sh 12
+    RUN ln -s /usr/bin/clang-12 /usr/bin/clang
+    RUN ln -s /usr/bin/llvm-as-12 /usr/bin/llvm-as
     # use lld as linker
-    RUN ln -s /usr/bin/lld-10 /usr/bin/ld.lld
+    RUN ln -s /usr/bin/lld-12 /usr/bin/ld.lld
     ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld -C target-cpu=native"
     # valgrind
     RUN apt -y install autotools-dev cmake automake libc6-dbg
