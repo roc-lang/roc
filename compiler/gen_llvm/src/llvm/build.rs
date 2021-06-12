@@ -25,7 +25,6 @@ use crate::llvm::refcounting::{
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use either::Either;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -38,8 +37,8 @@ use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicType, BasicTypeEnum, FunctionType, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
-    BasicValue, CallSiteValue, FloatValue, FunctionValue, InstructionOpcode, InstructionValue,
-    IntValue, PointerValue, StructValue,
+    BasicValue, CallSiteValue, CallableValue, FloatValue, FunctionValue, InstructionOpcode,
+    InstructionValue, IntValue, PointerValue, StructValue,
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
@@ -53,7 +52,7 @@ use roc_mono::ir::{
     Wrapped,
 };
 use roc_mono::layout::{Builtin, InPlace, LambdaSet, Layout, LayoutIds, UnionLayout};
-use target_lexicon::CallingConvention;
+use std::convert::TryFrom;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
 /// output in debug builds, but we don't want it to print to stdout in release builds!
@@ -1807,7 +1806,7 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     symbol: Symbol,
     layout: Layout<'a>,
-    function_value: Either<FunctionValue<'ctx>, PointerValue<'ctx>>,
+    function_value: FunctionValue<'ctx>,
     arguments: &[Symbol],
     closure_argument: Option<BasicValueEnum<'ctx>>,
     pass: &'a roc_mono::ir::Stmt<'a>,
@@ -1835,14 +1834,7 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
             "tmp",
         );
 
-        match function_value {
-            Either::Left(function) => {
-                call.set_call_convention(function.get_call_conventions());
-            }
-            Either::Right(_) => {
-                call.set_call_convention(FAST_CALL_CONV);
-            }
-        }
+        call.set_call_convention(function_value.get_call_conventions());
 
         call.try_as_basic_value()
             .left()
@@ -1869,10 +1861,13 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
             context.struct_type(&[exception_ptr, selector_value], false)
         };
 
-        let exception_object = env.builder.build_cleanup_landing_pad(
-            &landing_pad_type,
-            &BasicValueEnum::IntValue(context.i8_type().const_zero()),
-            context.i8_type().ptr_type(AddressSpace::Generic),
+        let personality_function = get_gxx_personality_v0(env);
+
+        let exception_object = env.builder.build_landing_pad(
+            landing_pad_type,
+            personality_function,
+            &[],
+            true,
             "invoke_landing_pad",
         );
 
@@ -2009,7 +2004,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     parent,
                     *symbol,
                     *layout,
-                    function_value.into(),
+                    function_value,
                     call.arguments,
                     None,
                     pass,
@@ -2048,7 +2043,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
         Resume(exception_id) => {
             let exception_object = scope.get(&exception_id.into_inner()).unwrap().1;
-            env.builder.build_resume(&exception_object);
+            env.builder.build_resume(exception_object);
 
             env.context.i64_type().const_zero().into()
         }
@@ -2751,17 +2746,16 @@ fn invoke_and_catch<'a, 'ctx, 'env, F, T>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     function: F,
+    calling_convention: u32,
     arguments: &[BasicValueEnum<'ctx>],
     return_type: T,
 ) -> BasicValueEnum<'ctx>
 where
-    F: Into<either::Either<FunctionValue<'ctx>, PointerValue<'ctx>>>,
     T: inkwell::types::BasicType<'ctx>,
+    F: Into<CallableValue<'ctx>>,
 {
     let context = env.context;
     let builder = env.builder;
-
-    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
     let call_result_type = context.struct_type(
         &[context.i64_type().into(), return_type.as_basic_type_enum()],
@@ -2783,7 +2777,7 @@ where
             catch_block,
             "call_roc_function",
         );
-        call.set_call_convention(FAST_CALL_CONV);
+        call.set_call_convention(calling_convention);
         call.try_as_basic_value().left().unwrap()
     };
 
@@ -2791,71 +2785,7 @@ where
     {
         builder.position_at_end(catch_block);
 
-        let landing_pad_type = {
-            let exception_ptr = context.i8_type().ptr_type(AddressSpace::Generic).into();
-            let selector_value = context.i32_type().into();
-
-            context.struct_type(&[exception_ptr, selector_value], false)
-        };
-
-        let info = builder
-            .build_catch_all_landing_pad(
-                &landing_pad_type,
-                &BasicValueEnum::IntValue(context.i8_type().const_zero()),
-                context.i8_type().ptr_type(AddressSpace::Generic),
-                "main_landing_pad",
-            )
-            .into_struct_value();
-
-        let exception_ptr = builder
-            .build_extract_value(info, 0, "exception_ptr")
-            .unwrap();
-
-        let thrown = cxa_begin_catch(env, exception_ptr);
-
-        let error_msg = {
-            let exception_type = u8_ptr;
-            let ptr = builder.build_bitcast(
-                thrown,
-                exception_type.ptr_type(AddressSpace::Generic),
-                "cast",
-            );
-
-            builder.build_load(ptr.into_pointer_value(), "error_msg")
-        };
-
-        let return_type = context.struct_type(&[context.i64_type().into(), u8_ptr.into()], false);
-
-        let return_value = {
-            let v1 = return_type.const_zero();
-
-            // flag is non-zero, indicating failure
-            let flag = context.i64_type().const_int(1, false);
-
-            let v2 = builder
-                .build_insert_value(v1, flag, 0, "set_error")
-                .unwrap();
-
-            let v3 = builder
-                .build_insert_value(v2, error_msg, 1, "set_exception")
-                .unwrap();
-
-            v3
-        };
-
-        // bitcast result alloca so we can store our concrete type { flag, error_msg } in there
-        let result_alloca_bitcast = builder
-            .build_bitcast(
-                result_alloca,
-                return_type.ptr_type(AddressSpace::Generic),
-                "result_alloca_bitcast",
-            )
-            .into_pointer_value();
-
-        // store our return value
-        builder.build_store(result_alloca_bitcast, return_value);
-
-        cxa_end_catch(env);
+        build_catch_all_landing_pad(env, result_alloca);
 
         builder.build_unconditional_branch(cont_block);
     }
@@ -2888,14 +2818,89 @@ where
 
     builder.position_at_end(cont_block);
 
-    let result = builder.build_load(result_alloca, "result");
+    builder.build_load(result_alloca, "result")
+}
 
-    // MUST set the personality at the very end;
-    // doing it earlier can cause the personality to be ignored
-    let personality_func = get_gxx_personality_v0(env);
-    parent.set_personality_function(personality_func);
+fn build_catch_all_landing_pad<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    result_alloca: PointerValue<'ctx>,
+) {
+    let context = env.context;
+    let builder = env.builder;
 
-    result
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let landing_pad_type = {
+        let exception_ptr = context.i8_type().ptr_type(AddressSpace::Generic).into();
+        let selector_value = context.i32_type().into();
+
+        context.struct_type(&[exception_ptr, selector_value], false)
+    };
+
+    // null pointer functions as a catch-all catch clause
+    let null = u8_ptr.const_zero();
+
+    let personality_function = get_gxx_personality_v0(env);
+
+    let info = builder
+        .build_landing_pad(
+            landing_pad_type,
+            personality_function,
+            &[null.into()],
+            false,
+            "main_landing_pad",
+        )
+        .into_struct_value();
+
+    let exception_ptr = builder
+        .build_extract_value(info, 0, "exception_ptr")
+        .unwrap();
+
+    let thrown = cxa_begin_catch(env, exception_ptr);
+
+    let error_msg = {
+        let exception_type = u8_ptr;
+        let ptr = builder.build_bitcast(
+            thrown,
+            exception_type.ptr_type(AddressSpace::Generic),
+            "cast",
+        );
+
+        builder.build_load(ptr.into_pointer_value(), "error_msg")
+    };
+
+    let return_type = context.struct_type(&[context.i64_type().into(), u8_ptr.into()], false);
+
+    let return_value = {
+        let v1 = return_type.const_zero();
+
+        // flag is non-zero, indicating failure
+        let flag = context.i64_type().const_int(1, false);
+
+        let v2 = builder
+            .build_insert_value(v1, flag, 0, "set_error")
+            .unwrap();
+
+        let v3 = builder
+            .build_insert_value(v2, error_msg, 1, "set_exception")
+            .unwrap();
+
+        v3
+    };
+
+    // bitcast result alloca so we can store our concrete type { flag, error_msg } in there
+    let result_alloca_bitcast = builder
+        .build_bitcast(
+            result_alloca,
+            return_type.ptr_type(AddressSpace::Generic),
+            "result_alloca_bitcast",
+        )
+        .into_pointer_value();
+
+    // store our return value
+    builder.build_store(result_alloca_bitcast, return_value);
+
+    cxa_end_catch(env);
 }
 
 fn make_exception_catcher<'a, 'ctx, 'env>(
@@ -2961,16 +2966,12 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
         env,
         wrapper_function,
         roc_function,
+        roc_function.get_call_conventions(),
         &arguments,
         roc_function_type.get_return_type().unwrap(),
     );
 
     builder.build_return(Some(&result));
-
-    // MUST set the personality at the very end;
-    // doing it earlier can cause the personality to be ignored
-    let personality_func = get_gxx_personality_v0(env);
-    wrapper_function.set_personality_function(personality_func);
 
     wrapper_function
 }
@@ -3226,8 +3227,14 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
         *param = builder.build_load(param.into_pointer_value(), "load_param");
     }
 
-    let call_result =
-        invoke_and_catch(env, function_value, evaluator, &[closure_data], result_type);
+    let call_result = invoke_and_catch(
+        env,
+        function_value,
+        evaluator,
+        evaluator.get_call_conventions(),
+        &[closure_data],
+        result_type,
+    );
 
     builder.build_store(output, call_result);
 
@@ -3341,7 +3348,14 @@ fn build_function_caller<'a, 'ctx, 'env>(
         *param = builder.build_load(param.into_pointer_value(), "load_param");
     }
 
-    let call_result = invoke_and_catch(env, function_value, function_ptr, &parameters, result_type);
+    let call_result = invoke_and_catch(
+        env,
+        function_value,
+        CallableValue::try_from(function_ptr).unwrap(),
+        C_CALL_CONV,
+        &parameters,
+        result_type,
+    );
 
     builder.build_store(output, call_result);
 
@@ -3580,8 +3594,8 @@ fn call_with_args<'a, 'ctx, 'env>(
 
 /// Translates a target_lexicon::Triple to a LLVM calling convention u32
 /// as described in https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html
-pub fn get_call_conventions(cc: CallingConvention) -> u32 {
-    use CallingConvention::*;
+pub fn get_call_conventions(cc: target_lexicon::CallingConvention) -> u32 {
+    use target_lexicon::CallingConvention::*;
 
     // For now, we're returning 0 for the C calling convention on all of these.
     // Not sure if we should be picking something more specific!
@@ -3593,9 +3607,9 @@ pub fn get_call_conventions(cc: CallingConvention) -> u32 {
 }
 
 /// Source: https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html
-pub static C_CALL_CONV: u32 = 0;
-pub static FAST_CALL_CONV: u32 = 8;
-pub static COLD_CALL_CONV: u32 = 9;
+pub const C_CALL_CONV: u32 = 0;
+pub const FAST_CALL_CONV: u32 = 8;
+pub const COLD_CALL_CONV: u32 = 9;
 
 pub struct RocFunctionCall<'ctx> {
     pub caller: PointerValue<'ctx>,
@@ -4958,10 +4972,13 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                         .struct_type(&[exception_ptr, selector_value], false)
                 };
 
-                let exception_object = env.builder.build_cleanup_landing_pad(
-                    &landing_pad_type,
-                    &BasicValueEnum::IntValue(env.context.i8_type().const_zero()),
-                    env.context.i8_type().ptr_type(AddressSpace::Generic),
+                let personality_function = get_gxx_personality_v0(env);
+
+                let exception_object = env.builder.build_landing_pad(
+                    landing_pad_type,
+                    personality_function,
+                    &[],
+                    true,
                     "invoke_landing_pad",
                 );
 
