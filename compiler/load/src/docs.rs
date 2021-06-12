@@ -2,11 +2,11 @@ use crate::docs::DocEntry::DetachedDoc;
 use crate::docs::TypeAnnotation::{
     Apply, BoundVariable, Function, NoTypeAnn, ObscuredRecord, ObscuredTagUnion, Record, TagUnion,
 };
+use crate::file::LoadedModule;
 use inlinable_string::InlinableString;
 use roc_can::scope::Scope;
-use roc_collections::all::MutMap;
 use roc_module::ident::ModuleName;
-use roc_module::symbol::{IdentIds, Interns, ModuleId};
+use roc_module::symbol::IdentIds;
 use roc_parse::ast;
 use roc_parse::ast::CommentOrNewline;
 use roc_parse::ast::{AssignedField, Def};
@@ -19,7 +19,7 @@ pub struct Documentation {
     pub name: String,
     pub version: String,
     pub docs: String,
-    pub modules: Vec<(MutMap<ModuleId, ModuleDocumentation>, Interns)>,
+    pub modules: Vec<LoadedModule>,
 }
 
 #[derive(Debug)]
