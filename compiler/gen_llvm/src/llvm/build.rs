@@ -826,6 +826,7 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
             closure_layout,
             function_owns_closure_data,
             specialization_id,
+            ..
         } => {
             let bytes = specialization_id.to_bytes();
             let callee_var = CalleeSpecVar(&bytes);
@@ -3815,18 +3816,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
         ($index:expr) => {{
             let function_symbol = args[$index];
 
-            let fn_name = layout_ids
-                .get(function_symbol, &function_layout)
-                .to_symbol_string(function_symbol, &env.interns);
-
-            env.module
-                .get_function(fn_name.as_str())
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Could not get pointer to unknown function {:?} {:?}",
-                        fn_name, function_layout
-                    )
-                })
+            function_value_by_func_spec(env, func_spec, function_symbol, function_layout)
         }};
     }
 

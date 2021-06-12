@@ -457,6 +457,8 @@ impl<'a> Context<'a> {
                 op,
                 closure_layout,
                 specialization_id,
+                arg_layouts,
+                ret_layout,
                 ..
             } => {
                 macro_rules! create_call {
@@ -468,6 +470,8 @@ impl<'a> Context<'a> {
                                     closure_layout: *closure_layout,
                                     function_owns_closure_data: true,
                                     specialization_id: *specialization_id,
+                                    arg_layouts,
+                                    ret_layout: *ret_layout,
                                 }
                             } else {
                                 call_type

@@ -1150,6 +1150,9 @@ pub enum CallType<'a> {
         specialization_id: CallSpecId,
         /// does the function need to own the closure data
         function_owns_closure_data: bool,
+        /// function layout
+        arg_layouts: &'a [Layout<'a>],
+        ret_layout: Layout<'a>,
     },
 }
 
@@ -2703,6 +2706,11 @@ macro_rules! match_on_closure_argument {
 
         let arena = $env.arena;
 
+        let function_layout = arena.alloc(top_level).full();
+
+        let arg_layouts = top_level.arguments;
+        let ret_layout = top_level.result;
+
         match closure_data_layout {
             Layout::Closure(_, lambda_set, _) => {
                 lowlevel_match_on_lambda_set(
@@ -2715,10 +2723,12 @@ macro_rules! match_on_closure_argument {
                             closure_layout: function_layout,
                             specialization_id,
                             function_owns_closure_data: false,
+                            arg_layouts,
+                            ret_layout,
                         },
                         arguments: arena.alloc([$($x,)* top_level_function, closure_data]),
                     },
-                    arena.alloc(top_level).full(),
+                    function_layout,
                     $layout,
                     $assigned,
                     $hole,

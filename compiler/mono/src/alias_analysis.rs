@@ -414,7 +414,64 @@ fn call_spec(
             *update_mode,
             call.arguments,
         ),
-        HigherOrderLowLevel { op, .. } => {
+        HigherOrderLowLevel {
+            specialization_id,
+            closure_layout: _,
+            op,
+            arg_layouts,
+            ret_layout,
+            ..
+        } => {
+            let array = specialization_id.to_bytes();
+            let spec_var = CalleeSpecVar(&array);
+
+            let symbol = {
+                use roc_module::low_level::LowLevel::*;
+
+                match op {
+                    ListMap | ListMapWithIndex => call.arguments[1],
+                    ListMap2 => call.arguments[2],
+                    ListMap3 => call.arguments[3],
+                    ListWalk | ListWalkUntil | ListWalkBackwards | DictWalk => call.arguments[2],
+                    ListKeepIf | ListKeepOks | ListKeepErrs => call.arguments[1],
+                    ListSortWith => call.arguments[1],
+                    _ => unreachable!(),
+                }
+            };
+
+            let it = arg_layouts.iter().copied();
+            let bytes = func_name_bytes_help(symbol, it, *ret_layout);
+            let name = FuncName(&bytes);
+            let module = MOD_APP;
+
+            {
+                use roc_module::low_level::LowLevel::*;
+
+                match op {
+                    DictWalk => {
+                        let dict = env.symbols[&call.arguments[0]];
+                        let default = env.symbols[&call.arguments[1]];
+
+                        let bag = builder.add_get_tuple_field(block, dict, DICT_BAG_INDEX)?;
+                        let _cell = builder.add_get_tuple_field(block, dict, DICT_CELL_INDEX)?;
+
+                        let first = builder.add_bag_get(block, bag)?;
+
+                        let argument = builder.add_make_tuple(block, &[first, default])?;
+                        builder.add_call(block, spec_var, module, name, argument)?;
+                    }
+                    _ => {
+                        // fake a call to the function argument
+                        // to make sure the function is specialized
+
+                        // very invalid
+                        let arg_value_id = build_tuple_value(builder, env, block, &[])?;
+
+                        builder.add_call(block, spec_var, module, name, arg_value_id)?;
+                    }
+                }
+            }
+
             // TODO overly pessimstic
             // filter_map because one of the arguments is a function name, which
             // is not defined in the env
@@ -772,6 +829,9 @@ fn str_type<TC: TypeContext>(builder: &mut TC) -> Result<TypeId> {
 
 const LIST_CELL_INDEX: u32 = 0;
 const LIST_BAG_INDEX: u32 = 1;
+
+const DICT_CELL_INDEX: u32 = LIST_CELL_INDEX;
+const DICT_BAG_INDEX: u32 = LIST_BAG_INDEX;
 
 fn new_list(builder: &mut FuncDefBuilder, block: BlockId, element_type: TypeId) -> Result<ValueId> {
     let cell = builder.add_new_heap_cell(block)?;
