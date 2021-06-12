@@ -96,7 +96,7 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
 
 fn render_main_content(
     interns: &Interns,
-    exposed_values: &Vec<String>,
+    exposed_values: &[String],
     module: &mut ModuleDocumentation,
 ) -> String {
     let mut buf = String::new();
