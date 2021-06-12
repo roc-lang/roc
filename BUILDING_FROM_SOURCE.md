@@ -76,6 +76,8 @@ sudo ln -s /usr/bin/llvm-as-12 /usr/bin/llvm-as
 
 There are also alternative installation options at http://releases.llvm.org/download.html
 
+[Troubleshooting](#troubleshooting)
+
 ## Using Nix
 
 ### Install
@@ -153,6 +155,13 @@ On some Linux systems we've seen the error "failed to run custom build command f
 On Ubuntu, running `sudo apt install pkg-config cmake libx11-dev` fixed this.
 
 If you encounter `cannot find -lz` run `sudo apt install zlib1g-dev`.
+
+If you encounter:
+```
+error: No suitable version of LLVM was found system-wide or pointed
+       to by LLVM_SYS_120_PREFIX.
+```
+Add `export LLVM_SYS_120_PREFIX=/usr/lib/llvm-12` to your `~/.bashrc` or equivalent file for your shell.
 
 ### LLVM installation on macOS
 
