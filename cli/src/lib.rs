@@ -100,7 +100,7 @@ pub fn build_app<'a>() -> App<'a> {
                 )
         );
 
-    if cfg!(feature = "edit") {
+    if cfg!(feature = "editor") {
         app.subcommand(
             App::new(CMD_EDIT).about("Launch the Roc editor").arg(
                 Arg::with_name(DIRECTORY_OR_FILES)
