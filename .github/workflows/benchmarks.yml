@@ -15,10 +15,29 @@ jobs:
     steps:
       - uses: actions/checkout@v2
         with:
-          clean: "true"
+          ref: "trunk"
+          clean: "true" 
 
       - name: Earthly version
         run: earthly --version
 
-      - name: install dependencies, build, cd cli, benchmark with criterion
-        run: ./ci/safe-earthly.sh +bench-roc
+      - name: on trunk; prepare a self-contained benchmark folder
+        run: ./ci/safe-earthly.sh --build-arg BENCH_SUFFIX=trunk +prep-bench-folder 
+
+      - uses: actions/checkout@v2
+        with:
+          clean: "false" # we want to keep the benchmark folder
+
+      - name: on current branch; prepare a self-contained benchmark folder
+        run: ./ci/safe-earthly.sh +prep-bench-folder
+
+      - name: benchmark trunk
+        run: ulimit -s unlimited && cd bench-folder-trunk && ./target/release/deps/time_bench --bench
+        # ulimit to prevent stack overflow on cfold
+
+      - name: move benchmark results so they can be compared later
+        run: cp -r bench-folder-trunk/target/criterion bench-folder-branch/target/
+
+      - name: benchmark current branch
+        run: ulimit -s unlimited && cd bench-folder-branch && ./target/release/deps/time_bench --bench
+        # ulimit to prevent stack overflow on cfold

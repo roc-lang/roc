@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
-
 LOG_FILE="earthly_log.txt"
 touch $LOG_FILE
 
-ARGS=$1
-
-if [[ $ARGS == *"bench"* ]]; then
-  ARGS="--allow-privileged $ARGS"
-fi
-
-script -efq $LOG_FILE -c "earthly --config ci/earthly-conf.yml $ARGS"
+# first arg + everything after
+ARGS=${@:1}
+FULL_CMD="earthly --config ci/earthly-conf.yml $ARGS"
+echo $FULL_CMD
+script -efq $LOG_FILE -c "$FULL_CMD"
 EXIT_CODE=$?
 
 if grep -q "failed to mount" "$LOG_FILE"; then
