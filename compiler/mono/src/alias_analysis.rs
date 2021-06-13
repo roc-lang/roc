@@ -73,7 +73,7 @@ where
         *target = *source;
     }
 
-    return name_bytes;
+    name_bytes
 }
 
 pub fn spec_program<'a, I>(procs: I) -> Result<morphic_lib::Solutions>

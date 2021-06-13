@@ -584,17 +584,25 @@ pub fn construct_optimization_passes<'a>(
     (mpm, fpm)
 }
 
-pub fn promote_to_main_function<'a, 'ctx, 'env>(
+fn promote_to_main_function<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
+    mod_solutions: &'a ModSolutions,
     symbol: Symbol,
-    layout: TopLevelFunctionLayout<'a>,
+    top_level: TopLevelFunctionLayout<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
-    let fn_name = layout_ids
-        .get(symbol, &(env.arena.alloc(layout).full()))
-        .to_symbol_string(symbol, &env.interns);
+    let it = top_level.arguments.iter().copied();
+    let bytes = roc_mono::alias_analysis::func_name_bytes_help(symbol, it, top_level.result);
+    let func_name = FuncName(&bytes);
+    let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
-    let roc_main_fn = env.module.get_function(&fn_name).unwrap();
+    let mut it = func_solutions.specs();
+    let func_spec = it.next().unwrap();
+    debug_assert!(
+        it.next().is_none(),
+        "we expect only one specialization of this symbol"
+    );
+
+    let roc_main_fn = function_value_by_func_spec(env, *func_spec, symbol, Layout::Struct(&[]));
 
     let main_fn_name = "$Test.main";
 
@@ -3081,7 +3089,6 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
 
 pub fn build_proc_headers<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    _layout_ids: &mut LayoutIds<'a>,
     mod_solutions: &'a ModSolutions,
     procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
     scope: &mut Scope<'a, 'ctx>,
@@ -3173,7 +3180,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
-    let headers = build_proc_headers(env, &mut layout_ids, &mod_solutions, procedures, &mut scope);
+    let headers = build_proc_headers(env, &mod_solutions, procedures, &mut scope);
 
     let (_, function_pass) = construct_optimization_passes(env.module, opt_level);
 
@@ -3223,7 +3230,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
     }
 
     main_data.map(|(main_fn_symbol, main_fn_layout)| {
-        promote_to_main_function(env, &mut layout_ids, main_fn_symbol, main_fn_layout)
+        promote_to_main_function(env, mod_solutions, main_fn_symbol, main_fn_layout)
     })
 }
 
