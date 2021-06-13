@@ -2298,7 +2298,7 @@ fn dict_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     let make_err = tag(
         "Err",
-        vec![tag("OutOfBounds", Vec::new(), var_store)],
+        vec![tag("KeyNotFound", Vec::new(), var_store)],
         var_store,
     );
 
