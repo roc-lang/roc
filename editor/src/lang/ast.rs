@@ -114,7 +114,6 @@ pub enum Expr2 {
     InvalidLookup(PoolStr), // 8B
 
     List {
-        list_var: Variable,    // 4B - required for uniqueness of the list
         elem_var: Variable,    // 4B
         elems: PoolVec<Expr2>, // 8B
     },
