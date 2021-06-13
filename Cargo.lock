@@ -1618,13 +1618,13 @@ dependencies = [
 name = "inkwell"
 version = "0.1.0"
 dependencies = [
- "inkwell 0.1.0 (git+https://github.com/rtfeldman/inkwell?tag=llvm12-0.release4)",
+ "inkwell 0.1.0 (git+https://github.com/rtfeldman/inkwell?tag=llvm12-0.release5)",
 ]
 
 [[package]]
 name = "inkwell"
 version = "0.1.0"
-source = "git+https://github.com/rtfeldman/inkwell?tag=llvm12-0.release4#8d7174fc8da4d2e6f2555f9ec2b3f7464ec5026b"
+source = "git+https://github.com/rtfeldman/inkwell?tag=llvm12-0.release5#b5aa51313d4cfa4e1b52ad630cb786140671478b"
 dependencies = [
  "either",
  "inkwell_internals",
@@ -1638,7 +1638,7 @@ dependencies = [
 [[package]]
 name = "inkwell_internals"
 version = "0.3.0"
-source = "git+https://github.com/rtfeldman/inkwell?tag=llvm12-0.release4#8d7174fc8da4d2e6f2555f9ec2b3f7464ec5026b"
+source = "git+https://github.com/rtfeldman/inkwell?tag=llvm12-0.release5#b5aa51313d4cfa4e1b52ad630cb786140671478b"
 dependencies = [
  "proc-macro2 1.0.27",
  "quote 1.0.9",
@@ -3212,7 +3212,6 @@ name = "roc_gen_llvm"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "either",
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",

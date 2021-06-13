@@ -102,7 +102,7 @@ check-rustfmt:
 
 check-typos:
     RUN cargo install typos-cli --version 1.0.4 # use latest version on resolution of issue crate-ci/typos#277
-    COPY --dir .github ci cli compiler docs editor examples packages roc_std www *.md LEGAL_DETAILS shell.nix ./
+    COPY --dir .github ci cli compiler docs editor examples nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix ./
     RUN typos
 
 test-rust:
@@ -130,11 +130,19 @@ test-all:
     BUILD +test-rust
     BUILD +verify-no-git-changes
 
-bench-roc:
+# compile everything needed for benchmarks and output a self-contained folder
+prep-bench-folder:
     FROM +copy-dirs-and-cache
-    ENV RUST_BACKTRACE=full
+    ARG BENCH_SUFFIX=branch
     RUN cargo criterion -V
-    # ulimit -s unlimited to prevent stack overflow errors for CFold
-    RUN --privileged --mount=type=cache,target=$SCCACHE_DIR \
-        ulimit -s unlimited && cd cli && cargo criterion && sccache --show-stats
-    
+    RUN --mount=type=cache,target=$SCCACHE_DIR cd cli && cargo criterion --no-run
+    RUN mkdir -p bench-folder/compiler/builtins/bitcode/src
+    RUN mkdir -p bench-folder/target/release/deps
+    RUN mkdir -p bench-folder/examples/benchmarks
+    RUN cp examples/benchmarks/*.roc bench-folder/examples/benchmarks/
+    RUN cp -r examples/benchmarks/platform bench-folder/examples/benchmarks/
+    RUN cp compiler/builtins/bitcode/src/str.zig bench-folder/compiler/builtins/bitcode/src
+    RUN cp target/release/roc bench-folder/target/release
+    # copy the most recent time bench to bench-folder
+    RUN cp target/release/deps/`ls -t target/release/deps/ | grep time_bench | head -n 1` bench-folder/target/release/deps/time_bench
+    SAVE ARTIFACT bench-folder AS LOCAL bench-folder-$BENCH_SUFFIX

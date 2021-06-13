@@ -30,7 +30,7 @@ members = [
     "cli",
     "cli/cli_utils",
     "roc_std",
-    "docs"
+    "docs",
 ]
 # Needed to be able to run `cargo run -p roc_cli --no-default-features` -
 # see www/build.sh for more.
