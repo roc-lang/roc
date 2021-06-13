@@ -2228,7 +2228,17 @@ fn finish_specialization(
                 layout: *layout,
                 symbol,
             },
-            None => unreachable!("entry point was not specialized"),
+            None => {
+                // the entry point is not specialized. This can happen if the repl output
+                // is a function value
+                EntryPoint {
+                    layout: roc_mono::ir::TopLevelFunctionLayout {
+                        arguments: &[],
+                        result: Layout::Struct(&[]),
+                    },
+                    symbol,
+                }
+            }
         }
     };
 
@@ -3147,8 +3157,6 @@ fn send_header_two<'a>(
         Symbol::new(home, ident_id)
     };
 
-    dbg!(main_for_host);
-
     let extra = HeaderFor::PkgConfig {
         config_shorthand: shorthand,
         platform_main_type: requires[0].value.clone(),
@@ -3857,7 +3865,8 @@ fn make_specializations<'a>(
         ident_ids: &mut ident_ids,
         ptr_bytes,
         update_mode_counter: 0,
-        call_specialization_counter: 0,
+        // call_specialization_counter=0 is reserved
+        call_specialization_counter: 1,
     };
 
     // TODO: for now this final specialization pass is sequential,
@@ -3920,7 +3929,8 @@ fn build_pending_specializations<'a>(
         ident_ids: &mut ident_ids,
         ptr_bytes,
         update_mode_counter: 0,
-        call_specialization_counter: 0,
+        // call_specialization_counter=0 is reserved
+        call_specialization_counter: 1,
     };
 
     // Add modules' decls to Procs
