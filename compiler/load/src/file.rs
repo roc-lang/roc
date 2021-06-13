@@ -660,6 +660,8 @@ enum HeaderFor<'a> {
         config_shorthand: &'a str,
         /// the type scheme of the main function (required by the platform)
         platform_main_type: TypedIdent<'a>,
+        /// provided symbol to host (commonly `mainForHost`)
+        main_for_host: Symbol,
     },
     Interface,
 }
@@ -693,6 +695,12 @@ pub struct FoundSpecializationsModule<'a> {
     pub procs: Procs<'a>,
     pub subs: Subs,
     pub module_timing: ModuleTiming,
+}
+
+#[derive(Debug)]
+pub struct EntryPoint<'a> {
+    symbol: Symbol,
+    layout: TopLevelFunctionLayout<'a>,
 }
 
 #[derive(Debug)]
@@ -805,9 +813,15 @@ enum PlatformPath<'a> {
 }
 
 #[derive(Debug)]
+struct PlatformData {
+    module_id: ModuleId,
+    provides: Symbol,
+}
+
+#[derive(Debug)]
 struct State<'a> {
     pub root_id: ModuleId,
-    pub platform_id: Option<ModuleId>,
+    pub platform_id: Option<PlatformData>,
     pub goal_phase: Phase,
     pub stdlib: &'a StdLib,
     pub exposed_types: SubsByModule,
@@ -1674,10 +1688,13 @@ fn update<'a>(
                     debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                     state.platform_path = PlatformPath::Valid(to_platform.clone());
                 }
-                PkgConfig { .. } => {
-                    debug_assert_eq!(state.platform_id, None);
+                PkgConfig { main_for_host, .. } => {
+                    debug_assert!(matches!(state.platform_id, None));
 
-                    state.platform_id = Some(header.module_id);
+                    state.platform_id = Some(PlatformData {
+                        module_id: header.module_id,
+                        provides: main_for_host,
+                    });
 
                     if header.is_root_module {
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
@@ -1898,7 +1915,7 @@ fn update<'a>(
             // otherwise the App module exposes host-exposed
             let is_host_exposed = match state.platform_id {
                 None => module_id == state.root_id,
-                Some(platform_id) => module_id == platform_id,
+                Some(ref platform_data) => module_id == platform_data.module_id,
             };
 
             if is_host_exposed {
@@ -2985,7 +3002,7 @@ fn send_header_two<'a>(
         HashMap::with_capacity_and_hasher(scope_size, default_hasher());
     let home: ModuleId;
 
-    let ident_ids = {
+    let mut ident_ids = {
         // Lock just long enough to perform the minimal operations necessary.
         let mut module_ids = (*module_ids).lock();
         let mut ident_ids_by_module = (*ident_ids_by_module).lock();
@@ -3108,9 +3125,19 @@ fn send_header_two<'a>(
     // to decrement its "pending" count.
     let module_name = ModuleNameEnum::PkgConfig;
 
+    let main_for_host = {
+        let ident_str: InlinableString = provides[0].value.as_str().into();
+        let ident_id = ident_ids.get_or_insert(&ident_str);
+
+        Symbol::new(home, ident_id)
+    };
+
+    dbg!(main_for_host);
+
     let extra = HeaderFor::PkgConfig {
         config_shorthand: shorthand,
         platform_main_type: requires[0].value.clone(),
+        main_for_host,
     };
 
     let mut package_qualified_imported_modules = MutSet::default();
