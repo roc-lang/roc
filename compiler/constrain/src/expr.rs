@@ -220,7 +220,6 @@ pub fn constrain_expr(
         List {
             elem_var,
             loc_elems,
-            list_var: _unused,
         } => {
             if loc_elems.is_empty() {
                 exists(

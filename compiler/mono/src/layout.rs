@@ -43,6 +43,7 @@ pub enum Layout<'a> {
     Struct(&'a [Layout<'a>]),
     Union(UnionLayout<'a>),
     RecursivePointer,
+
     /// A function. The types of its arguments, then the type of its return value.
     FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
     Closure(&'a [Layout<'a>], LambdaSet<'a>, &'a Layout<'a>),

@@ -346,7 +346,6 @@ pub fn to_expr2<'a>(
             }
 
             let expr = Expr2::List {
-                list_var: env.var_store.fresh(),
                 elem_var: env.var_store.fresh(),
                 elems,
             };
