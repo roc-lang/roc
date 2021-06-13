@@ -19,8 +19,8 @@ use roc_module::symbol::{
     Symbol,
 };
 use roc_mono::ir::{
-    CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
-    TopLevelFunctionLayout,
+    CapturedSymbols, EntryPoint, ExternalSpecializations, PartialProc, PendingSpecialization, Proc,
+    Procs, TopLevelFunctionLayout,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, StrLiteral, TypeAnnotation};
@@ -698,12 +698,6 @@ pub struct FoundSpecializationsModule<'a> {
 }
 
 #[derive(Debug)]
-pub struct EntryPoint<'a> {
-    symbol: Symbol,
-    layout: TopLevelFunctionLayout<'a>,
-}
-
-#[derive(Debug)]
 pub struct MonomorphizedModule<'a> {
     pub module_id: ModuleId,
     pub interns: Interns,
@@ -714,6 +708,7 @@ pub struct MonomorphizedModule<'a> {
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
     pub procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
+    pub entry_point: EntryPoint<'a>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
     pub header_sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
@@ -821,7 +816,7 @@ struct PlatformData {
 #[derive(Debug)]
 struct State<'a> {
     pub root_id: ModuleId,
-    pub platform_id: Option<PlatformData>,
+    pub platform_data: Option<PlatformData>,
     pub goal_phase: Phase,
     pub stdlib: &'a StdLib,
     pub exposed_types: SubsByModule,
@@ -1461,7 +1456,7 @@ where
 
             let mut state = State {
                 root_id,
-                platform_id: None,
+                platform_data: None,
                 goal_phase,
                 stdlib,
                 output_path: None,
@@ -1689,9 +1684,9 @@ fn update<'a>(
                     state.platform_path = PlatformPath::Valid(to_platform.clone());
                 }
                 PkgConfig { main_for_host, .. } => {
-                    debug_assert!(matches!(state.platform_id, None));
+                    debug_assert!(matches!(state.platform_data, None));
 
-                    state.platform_id = Some(PlatformData {
+                    state.platform_data = Some(PlatformData {
                         module_id: header.module_id,
                         provides: main_for_host,
                     });
@@ -1913,7 +1908,7 @@ fn update<'a>(
 
             // if there is a platform, the Package-Config module provides host-exposed,
             // otherwise the App module exposes host-exposed
-            let is_host_exposed = match state.platform_id {
+            let is_host_exposed = match state.platform_data {
                 None => module_id == state.root_id,
                 Some(ref platform_data) => module_id == platform_data.module_id,
             };
@@ -2171,6 +2166,7 @@ fn finish_specialization(
         module_cache,
         output_path,
         platform_path,
+        platform_data,
         ..
     } = state;
 
@@ -2218,6 +2214,24 @@ fn finish_specialization(
 
     let platform_path = path_to_platform.into();
 
+    let entry_point = {
+        let symbol = match platform_data {
+            None => {
+                debug_assert_eq!(exposed_to_host.len(), 1);
+                *exposed_to_host.iter().next().unwrap().0
+            }
+            Some(PlatformData { provides, .. }) => provides,
+        };
+
+        match procedures.keys().find(|(s, _)| *s == symbol) {
+            Some((_, layout)) => EntryPoint {
+                layout: *layout,
+                symbol,
+            },
+            None => unreachable!("entry point was not specialized"),
+        }
+    };
+
     Ok(MonomorphizedModule {
         can_problems,
         mono_problems,
@@ -2229,6 +2243,7 @@ fn finish_specialization(
         subs,
         interns,
         procedures,
+        entry_point,
         sources,
         header_sources,
         timings: state.timings,

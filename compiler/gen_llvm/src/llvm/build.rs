@@ -49,8 +49,8 @@ use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
-    BranchInfo, CallType, ExceptionId, JoinPointId, ModifyRc, OptLevel, TopLevelFunctionLayout,
-    Wrapped,
+    BranchInfo, CallType, EntryPoint, ExceptionId, JoinPointId, ModifyRc, OptLevel,
+    TopLevelFunctionLayout, Wrapped,
 };
 use roc_mono::layout::{Builtin, InPlace, LambdaSet, Layout, LayoutIds, UnionLayout};
 use std::convert::TryFrom;
@@ -3133,40 +3133,34 @@ pub fn build_procedures<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
-    // alias_analysis_solutions: AliasAnalysisSolutions,
+    entry_point: EntryPoint<'a>,
 ) {
-    build_procedures_help(env, opt_level, procedures, None);
+    build_procedures_help(env, opt_level, procedures, entry_point);
 }
 
 pub fn build_procedures_return_main<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
-    // alias_analysis_solutions: AliasAnalysisSolutions,
-    main_fn_symbol: Symbol,
-    main_fn_layout: TopLevelFunctionLayout<'a>,
+    entry_point: EntryPoint<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
-    build_procedures_help(
-        env,
-        opt_level,
-        procedures,
-        Some((main_fn_symbol, main_fn_layout)),
-    )
-    .unwrap()
+    let mod_solutions = build_procedures_help(env, opt_level, procedures, entry_point);
+
+    promote_to_main_function(env, mod_solutions, entry_point.symbol, entry_point.layout)
 }
 
 fn build_procedures_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
-    main_data: Option<(Symbol, TopLevelFunctionLayout<'a>)>,
-) -> Option<(&'static str, FunctionValue<'ctx>)> {
+    entry_point: EntryPoint<'a>,
+) -> &'a ModSolutions {
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
     let mut scope = Scope::default();
 
     let it = procedures.iter().map(|x| x.1);
 
-    let solutions = match roc_mono::alias_analysis::spec_program(it) {
+    let solutions = match roc_mono::alias_analysis::spec_program(entry_point, it) {
         Err(e) => panic!("Error in alias analysis: {:?}", e),
         Ok(solutions) => solutions,
     };
@@ -3229,9 +3223,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
         }
     }
 
-    main_data.map(|(main_fn_symbol, main_fn_layout)| {
-        promote_to_main_function(env, mod_solutions, main_fn_symbol, main_fn_layout)
-    })
+    mod_solutions
 }
 
 fn func_spec_name<'a>(

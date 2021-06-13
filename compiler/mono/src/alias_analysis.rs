@@ -76,11 +76,13 @@ where
     name_bytes
 }
 
-pub fn spec_program<'a, I>(procs: I) -> Result<morphic_lib::Solutions>
+pub fn spec_program<'a, I>(
+    entry_point: crate::ir::EntryPoint<'a>,
+    procs: I,
+) -> Result<morphic_lib::Solutions>
 where
     I: Iterator<Item = &'a Proc<'a>>,
 {
-    let mut main_function = None;
     let main_module = {
         let mut m = ModDefBuilder::new();
 
@@ -100,53 +102,26 @@ where
             let spec = proc_spec(proc)?;
 
             m.add_func(FuncName(&func_name_bytes(proc)), spec)?;
-
-            if format!("{:?}", proc.name).contains("mainForHost") {
-                main_function = Some(proc.name);
-            }
-
-            if format!("{:?}", proc.name).contains("replOutput") {
-                main_function = Some(proc.name);
-            }
         }
 
         m.build()?
     };
 
-    match main_function {
-        None => {
-            let program = {
-                let mut p = ProgramBuilder::new();
-                p.add_mod(MOD_APP, main_module)?;
-                p.add_entry_point(
-                    EntryPointName(b"not defined! probably a function in the repl"),
-                    MOD_APP,
-                    FuncName(&[]),
-                )?;
+    let program = {
+        let mut p = ProgramBuilder::new();
+        p.add_mod(MOD_APP, main_module)?;
+        p.add_entry_point(
+            EntryPointName(b"mainForHost"),
+            MOD_APP,
+            FuncName(&entry_point.symbol.to_ne_bytes()),
+        )?;
 
-                p.build()?
-            };
+        p.build()?
+    };
 
-            morphic_lib::solve(program)
-        }
-        Some(main_function) => {
-            let program = {
-                let mut p = ProgramBuilder::new();
-                p.add_mod(MOD_APP, main_module)?;
-                p.add_entry_point(
-                    EntryPointName(b"mainForHost"),
-                    MOD_APP,
-                    FuncName(&main_function.to_ne_bytes()),
-                )?;
+    // eprintln!("{}", program.to_source_string());
 
-                p.build()?
-            };
-
-            // eprintln!("{}", program.to_source_string());
-
-            morphic_lib::solve(program)
-        }
-    }
+    morphic_lib::solve(program)
 }
 
 fn proc_spec(proc: &Proc) -> Result<FuncDef> {
