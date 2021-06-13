@@ -1,7 +1,8 @@
 use sha2::{digest::Digest, Sha256};
 use smallvec::SmallVec;
-use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
+use std::collections::{btree_map::Entry, BTreeMap};
 
+use crate::render_api_ir;
 use crate::util::blocks::Blocks;
 use crate::util::id_bi_map::IdBiMap;
 use crate::util::id_type::Count;
@@ -554,11 +555,14 @@ pub(crate) enum TypeOp {
 }
 
 /// A `TypeDef` defines the content type of a named type.
-pub struct TypeDef;
+pub struct TypeDef {
+    pub(crate) builder: TypeBuilder,
+    pub(crate) root: TypeId,
+}
 
 #[derive(Clone, Debug)]
-struct TypeBuilder {
-    types: OpGraph<TypeId, TypeOp>,
+pub(crate) struct TypeBuilder {
+    pub(crate) types: OpGraph<TypeId, TypeOp>,
 }
 
 impl Default for TypeBuilder {
@@ -637,7 +641,10 @@ impl TypeDefBuilder {
     /// Create a `TypeDef` using the given type node as the root.
     pub fn build(self, root: TypeId) -> Result<TypeDef> {
         self.inner.check(root)?;
-        Ok(TypeDef)
+        Ok(TypeDef {
+            builder: self.inner,
+            root,
+        })
     }
 }
 
@@ -743,27 +750,27 @@ pub(crate) enum Op {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ContinuationInfo {
-    arg_type: TypeId,
-    ret_type: TypeId,
-    arg: ValueId,
-    body: Option<BlockExpr>,
+pub(crate) struct ContinuationInfo {
+    pub(crate) arg_type: TypeId,
+    pub(crate) ret_type: TypeId,
+    pub(crate) arg: ValueId,
+    pub(crate) body: Option<BlockExpr>,
 }
 
 #[derive(Clone, Copy, Debug)]
-enum BlockState {
+pub(crate) enum BlockState {
     Detached,
     Attached,
 }
 
 #[derive(Clone, Debug)]
-struct ExprBuilder {
-    type_builder: TypeBuilder,
-    blocks: Blocks<BlockId, ValueId, BlockState>,
-    vals: OpGraph<ValueId, Op>,
-    continuations: IdVec<ContinuationId, ContinuationInfo>,
-    callee_spec_vars: IdBiMap<CalleeSpecVarId, CalleeSpecBuf>,
-    update_mode_vars: IdBiMap<UpdateModeVarId, UpdateModeBuf>,
+pub(crate) struct ExprBuilder {
+    pub(crate) type_builder: TypeBuilder,
+    pub(crate) blocks: Blocks<BlockId, ValueId, BlockState>,
+    pub(crate) vals: OpGraph<ValueId, Op>,
+    pub(crate) continuations: IdVec<ContinuationId, ContinuationInfo>,
+    pub(crate) callee_spec_vars: IdBiMap<CalleeSpecVarId, CalleeSpecBuf>,
+    pub(crate) update_mode_vars: IdBiMap<UpdateModeVarId, UpdateModeBuf>,
 }
 
 impl Default for ExprBuilder {
@@ -1134,15 +1141,15 @@ impl ExprContext for ExprBuilder {
 
 /// A `FuncDef` defines the signature and body of a function.
 pub struct FuncDef {
-    builder: FuncDefBuilder,
-    arg_type: TypeId,
-    ret_type: TypeId,
-    root: BlockExpr,
+    pub(crate) builder: FuncDefBuilder,
+    pub(crate) arg_type: TypeId,
+    pub(crate) ret_type: TypeId,
+    pub(crate) root: BlockExpr,
 }
 
 pub struct FuncDefBuilder {
-    expr_builder: ExprBuilder,
-    argument: ValueId,
+    pub(crate) expr_builder: ExprBuilder,
+    pub(crate) argument: ValueId,
 }
 
 impl Default for FuncDefBuilder {
@@ -1187,13 +1194,13 @@ impl FuncDefBuilder {
 
 /// A `ConstDef` defines the type and initializer expression for a global constant.
 pub struct ConstDef {
-    builder: ConstDefBuilder,
-    type_: TypeId,
-    root: BlockExpr,
+    pub(crate) builder: ConstDefBuilder,
+    pub(crate) type_: TypeId,
+    pub(crate) root: BlockExpr,
 }
 
 pub struct ConstDefBuilder {
-    expr_builder: ExprBuilder,
+    pub(crate) expr_builder: ExprBuilder,
 }
 
 impl Default for ConstDefBuilder {
@@ -1225,12 +1232,13 @@ impl ConstDefBuilder {
 
 /// A `ModDef` defines a module, which is a collection of named types, functions, and constants.
 pub struct ModDef {
-    func_defs: BTreeMap<FuncNameBuf, FuncDef>,
-    const_defs: BTreeMap<ConstNameBuf, ConstDef>,
+    pub(crate) type_defs: BTreeMap<TypeNameBuf, TypeDef>,
+    pub(crate) func_defs: BTreeMap<FuncNameBuf, FuncDef>,
+    pub(crate) const_defs: BTreeMap<ConstNameBuf, ConstDef>,
 }
 
 pub struct ModDefBuilder {
-    type_names: BTreeSet<TypeNameBuf>,
+    type_defs: BTreeMap<TypeNameBuf, TypeDef>,
     func_defs: BTreeMap<FuncNameBuf, FuncDef>,
     const_defs: BTreeMap<ConstNameBuf, ConstDef>,
 }
@@ -1244,7 +1252,7 @@ impl Default for ModDefBuilder {
 impl ModDefBuilder {
     pub fn new() -> Self {
         Self {
-            type_names: BTreeSet::new(),
+            type_defs: BTreeMap::new(),
             func_defs: BTreeMap::new(),
             const_defs: BTreeMap::new(),
         }
@@ -1252,13 +1260,14 @@ impl ModDefBuilder {
 
     pub fn build(self) -> Result<ModDef> {
         Ok(ModDef {
+            type_defs: self.type_defs,
             func_defs: self.func_defs,
             const_defs: self.const_defs,
         })
     }
 
-    pub fn add_named_type(&mut self, name: TypeName, _type_def: TypeDef) -> Result<()> {
-        if !self.type_names.insert(name.into()) {
+    pub fn add_named_type(&mut self, name: TypeName, type_def: TypeDef) -> Result<()> {
+        if self.type_defs.insert(name.into(), type_def).is_some() {
             return Err(ErrorKind::DuplicateTypeName(name.into()).into());
         }
         Ok(())
@@ -1284,8 +1293,14 @@ impl ModDefBuilder {
 ///
 /// Each entry point has an associated main function, which must have signature `() -> ()`.
 pub struct Program {
-    mods: BTreeMap<ModNameBuf, ModDef>,
-    entry_points: BTreeMap<EntryPointNameBuf, (ModNameBuf, FuncNameBuf)>,
+    pub(crate) mods: BTreeMap<ModNameBuf, ModDef>,
+    pub(crate) entry_points: BTreeMap<EntryPointNameBuf, (ModNameBuf, FuncNameBuf)>,
+}
+
+impl Program {
+    pub fn to_source_string(&self) -> String {
+        render_api_ir::render_program_to_string(self)
+    }
 }
 
 pub struct ProgramBuilder {
