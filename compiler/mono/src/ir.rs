@@ -3406,7 +3406,6 @@ pub fn with_hole<'a>(
         }
 
         List {
-            list_var: _,
             elem_var,
             loc_elems,
         } => {
