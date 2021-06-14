@@ -75,8 +75,8 @@ impl<BlockId: Id, ValId: Id, BlockInfo> Blocks<BlockId, ValId, BlockInfo> {
             tail_frag.max_val = next_val;
         } else {
             let new_tail = BlockFrag {
-                min_val: val_id,
-                max_val: next_val,
+                min_val: val_id.clone(),
+                max_val: ValId::from_index_or_panic(val_id.to_index() + 1),
                 next: None,
             };
             let new_tail_id = self.frags.push(new_tail);
