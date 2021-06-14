@@ -3161,7 +3161,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
     let it = procedures.iter().map(|x| x.1);
 
     let solutions = match roc_mono::alias_analysis::spec_program(entry_point, it) {
-        Err(e) => panic!("Error in alias analysis: {:?}", e),
+        Err(e) => panic!("Error in alias analysis: {}", e),
         Ok(solutions) => solutions,
     };
 

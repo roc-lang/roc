@@ -78,6 +78,18 @@ where
     name_bytes
 }
 
+fn bytes_as_ascii(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+
+    let mut buf = String::new();
+
+    for byte in bytes {
+        write!(buf, "{:02X}", byte).unwrap();
+    }
+
+    buf
+}
+
 pub fn spec_program<'a, I>(
     entry_point: crate::ir::EntryPoint<'a>,
     procs: I,
@@ -110,7 +122,11 @@ where
         for proc in procs {
             let spec = proc_spec(proc)?;
 
-            m.add_func(FuncName(&func_name_bytes(proc)), spec)?;
+            let bytes = func_name_bytes(proc);
+            let func_name = FuncName(&bytes);
+            eprintln!("{:?}: {:?}", proc.name, bytes_as_ascii(&bytes));
+
+            m.add_func(func_name, spec)?;
         }
 
         m.build()?
@@ -126,7 +142,7 @@ where
         p.build()?
     };
 
-    // eprintln!("{}", program.to_source_string());
+    eprintln!("{}", program.to_source_string());
 
     morphic_lib::solve(program)
 }
@@ -198,8 +214,8 @@ fn stmt_spec(
     use Stmt::*;
 
     match stmt {
-        Let(symbol, expr, layout, continuation) => {
-            let value_id = expr_spec(builder, env, block, layout, expr)?;
+        Let(symbol, expr, expr_layout, continuation) => {
+            let value_id = expr_spec(builder, env, block, expr_layout, expr)?;
             env.symbols.insert(*symbol, value_id);
             let result = stmt_spec(builder, env, block, layout, continuation)?;
             env.symbols.remove(symbol);
