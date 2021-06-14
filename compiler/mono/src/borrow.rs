@@ -193,7 +193,7 @@ impl<'a> ParamMap<'a> {
                     id: j,
                     parameters: xs,
                     remainder: v,
-                    continuation: b,
+                    body: b,
                 } => {
                     let already_in_there = self
                         .items
@@ -618,7 +618,7 @@ impl<'a> BorrowInfState<'a> {
                 id: j,
                 parameters: ys,
                 remainder: v,
-                continuation: b,
+                body: b,
             } => {
                 let old = self.param_set.clone();
                 self.update_param_set(ys);

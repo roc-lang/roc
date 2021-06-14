@@ -890,9 +890,10 @@ pub enum Stmt<'a> {
     Join {
         id: JoinPointId,
         parameters: &'a [Param<'a>],
-        /// does not contain jumps to this id
-        continuation: &'a Stmt<'a>,
-        /// the "body" of the join point, contains the jumps to this id
+        /// body of the join point
+        /// what happens after _jumping to_ the join point
+        body: &'a Stmt<'a>,
+        /// what happens after _defining_ the join point
         remainder: &'a Stmt<'a>,
     },
     Jump(JoinPointId, &'a [Symbol]),
@@ -1476,7 +1477,7 @@ impl<'a> Stmt<'a> {
             Join {
                 id,
                 parameters,
-                continuation,
+                body: continuation,
                 remainder,
             } => {
                 let it = parameters.iter().map(|p| symbol_to_doc(alloc, p.symbol));
@@ -3328,7 +3329,7 @@ pub fn with_hole<'a>(
                     id,
                     parameters: env.arena.alloc([param]),
                     remainder: env.arena.alloc(stmt),
-                    continuation: hole,
+                    body: hole,
                 }
             }
         }
@@ -3381,7 +3382,7 @@ pub fn with_hole<'a>(
                 id,
                 parameters: env.arena.alloc([param]),
                 remainder: env.arena.alloc(stmt),
-                continuation: env.arena.alloc(hole),
+                body: env.arena.alloc(hole),
             }
         }
 
@@ -5327,7 +5328,7 @@ fn substitute_in_stmt_help<'a>(
             id,
             parameters,
             remainder,
-            continuation,
+            body: continuation,
         } => {
             let opt_remainder = substitute_in_stmt_help(arena, remainder, subs);
             let opt_continuation = substitute_in_stmt_help(arena, continuation, subs);
@@ -5340,7 +5341,7 @@ fn substitute_in_stmt_help<'a>(
                     id: *id,
                     parameters,
                     remainder,
-                    continuation,
+                    body: continuation,
                 }))
             } else {
                 None
@@ -7859,7 +7860,7 @@ where
     Stmt::Join {
         id: join_point_id,
         parameters: &*env.arena.alloc([param]),
-        continuation: hole,
+        body: hole,
         remainder: env.arena.alloc(switch),
     }
 }
@@ -8017,7 +8018,7 @@ fn union_lambda_set_to_switch<'a>(
     Stmt::Join {
         id: join_point_id,
         parameters: &*env.arena.alloc([param]),
-        continuation: hole,
+        body: hole,
         remainder: env.arena.alloc(switch),
     }
 }
@@ -8161,7 +8162,7 @@ fn enum_lambda_set_to_switch<'a>(
     Stmt::Join {
         id: join_point_id,
         parameters: &*env.arena.alloc([param]),
-        continuation: hole,
+        body: hole,
         remainder: env.arena.alloc(switch),
     }
 }
@@ -8290,7 +8291,7 @@ where
     Stmt::Join {
         id: join_point_id,
         parameters: &*env.arena.alloc([param]),
-        continuation: hole,
+        body: hole,
         remainder: env.arena.alloc(switch),
     }
 }

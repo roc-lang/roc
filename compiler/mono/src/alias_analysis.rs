@@ -298,7 +298,7 @@ fn stmt_spec(
         Join {
             id,
             parameters,
-            continuation,
+            body: continuation,
             remainder,
         } => {
             let mut type_ids = Vec::new();

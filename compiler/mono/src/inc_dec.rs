@@ -64,7 +64,7 @@ pub fn occurring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) 
 
             Join {
                 parameters,
-                continuation,
+                body: continuation,
                 remainder,
                 ..
             } => {
@@ -978,7 +978,7 @@ impl<'a> Context<'a> {
                 id: j,
                 parameters: _,
                 remainder: b,
-                continuation: v,
+                body: v,
             } => {
                 // get the parameters with borrow signature
                 let xs = self.param_map.get_join_point(*j);
@@ -1000,7 +1000,7 @@ impl<'a> Context<'a> {
                         id: *j,
                         parameters: xs,
                         remainder: b,
-                        continuation: v,
+                        body: v,
                     }),
                     b_live_vars,
                 )
@@ -1143,7 +1143,7 @@ pub fn collect_stmt(
             id: j,
             parameters,
             remainder: b,
-            continuation: v,
+            body: v,
         } => {
             let mut j_live_vars = collect_stmt(v, jp_live_vars, MutSet::default());
             for param in parameters.iter() {

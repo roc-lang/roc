@@ -2137,7 +2137,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             id,
             parameters,
             remainder,
-            continuation,
+            body: continuation,
         } => {
             let builder = env.builder;
             let context = env.context;
