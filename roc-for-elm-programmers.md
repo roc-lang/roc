@@ -1325,9 +1325,13 @@ exist in Elm but not in Roc. This is because phantom types can't be defined
 using type aliases (in fact, there is a custom error message in Elm if you
 try to do this), and Roc only has type aliases. However, in Roc, you can achieve
 the same API and runtime performance characteristics as if you had phantom types,
-by using *phantom values* instead.
+by using one of two different techniques.
 
-A phantom value is one which affects types, but which holds no information at runtime.
+### Phantom Values
+
+The first technique is a *phantom value*. A phantom value is a value which affects
+types, but which holds no information at runtime.
+
 As an example, let's say I wanted to define a [units library](https://package.elm-lang.org/packages/ianmackenzie/elm-units/latest/) -
 a classic example of phantom types. I could do that in Roc like this:
 
@@ -1361,7 +1365,95 @@ Then, becaue `Quantity Int` is an alias for `[ Quantity Int ]`, it will unbox ag
 and reduce that all the way down to to `Int`.
 
 This means that, just like phantom *types*, phantom *values* affect type checking
-only, and have no runtime overhead. Rust has a related concept called [phantom data](https://doc.rust-lang.org/nomicon/phantom-data.html).
+only, and have no runtime overhead.
+
+### Typed Zeroes
+
+Phantom values don't cover all the use cases of phantom types. For example,
+let's say I want to have a typed key into a database that stores either `I64`
+or `F64` values,
+
+```
+Key a : [ @Key Nat a ]
+
+storeI64 : Db, I64 -> [ Pair Db (Key I64) ]
+storeF64 : Db, F64 -> [ Pair Db (Key F64) ]
+
+getI64 : Db, Key I64 -> Result I64 [ NotFound ]*
+getF64 : Db, Key F64 -> Result F64 [ NotFound ]*
+```
+
+So a `Key` stores a `Nat` index into the database, which is the relevant information
+for how to look up the value later...but we also want the type parameter of `Key`
+to reflect what's stored in that particular slot. Either way, the database is
+storing 64-bit entries, but the `getI64` and `getF64` functions can use the
+`Key` type parameter to ensure that those 64-bit values are being correctly
+interpreted as either `I64` or `F64` based on how they were originally stored.
+
+We would like `Key` to be nothing more than a `Nat` at runtime. After all, the
+`Nat` is the only piece of information that will be used at runtime! The `a` it
+stores is only there for compile-time type-checking purposes, and is not
+necessary to have around at runtime.
+
+Unfortunately, we want `a` to work with types like `I64` and `F64`. This is
+different from the single-tag unions `[ Cm ]` and `[ Mm ]` we were using before,
+because types like `I64` and `F64` actually hold information at runtime. This
+means if `Key` wants to have `I64` or `F64` for its `a` type, it will waste
+memory storing an actual `I64` or `F64` value that it will never use at runtime!
+
+Fortunately, *typed zeroes* can solve this problem. A typed zero is a `Num` type
+which can only hold the value zero at runtime. Because a typed zero can only
+hold the number zero, it effectively holds no runtime information
+(it's always zero!) and gets optimized away by the compiler.
+
+How do you make a typed zero? It's easy! Other than the `Num` type aliases in
+Roc's `Num` module - like `I64`, `Nat`, or `Dec` - all other `Num` types are
+defined to be typed zeroes. For example, this means that `Num {}` is a typed
+zero, and so is `Num (List Str)`, and so is `Num [ SomethingIJustMadeUp, Foo ]`.
+
+We can use typed zeroes to cover all the remaining use cases of phantom types.
+
+For example, we could use them to make `Key` be no more than a `Nat`
+at runtime by replacing `@Key Nat a` with `@Key Nat (Num a)` like so:
+
+```
+Key a : [ @Key Nat (Num a) ]
+```
+
+The functions in this example would all remain the same. Here they are again,
+for reference:
+
+```
+storeI64 : Db, I64 -> [ Pair Db (Key I64) ]
+storeF64 : Db, F64 -> [ Pair Db (Key F64) ]
+
+getI64 : Db, Key I64 -> Result I64 [ NotFound ]*
+getF64 : Db, Key F64 -> Result F64 [ NotFound ]*
+```
+
+Now, because `Key a` is storing `(Num a)` instead of `a` as its value, we can
+implement `storeI64` and `storeF64` like so:
+
+```
+storeI64 : Db, I64 -> [ Pair Db (Key I64) ]
+storeI64 = \db, num ->
+    Pair newDb index = Db.store db num
+
+    Pair newDb (@Key index 0)
+
+storeF64 : Db, F64 -> [ Pair Db (Key F64) ]
+storeF64 = \db, num ->
+    Pair newDb index = Db.store db num
+
+    Pair newDb (@Key index 0)
+```
+
+Note that the typed zero only appears behind the scenes. Other modules can't
+see that `Key a` holds a `Num` type inside it, and in the implementation of
+these functions, the `Num` value is always set to 0. At runtime, it has no cost
+whatsoever because the compiler optimizes it away!
+
+> Rust has a similar concept to typed zeroes called [phantom data](https://doc.rust-lang.org/nomicon/phantom-data.html).
 
 ## Standard library
 
