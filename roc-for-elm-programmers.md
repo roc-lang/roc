@@ -1196,8 +1196,8 @@ Like Elm, Roc organizes numbers into integers and floating-point numbers.
 However, Roc breaks them down even further. For example, Roc has two different
 sizes of float types to choose from:
 
-* `F64` - a 64-bit [IEEE 754 binary floating point number](https://en.wikipedia.org/wiki/IEEE_754#Binary)
-* `F32` - a 32-bit [IEEE 754 binary floating point number](https://en.wikipedia.org/wiki/IEEE_754#Binary)
+* `F64` - a 64-bit [base-2 floating point number](https://en.wikipedia.org/wiki/IEEE_754#Binary)
+* `F32` - a 32-bit [base-2 floating point number](https://en.wikipedia.org/wiki/IEEE_754#Binary)
 
 Both types are desirable in different situations. For example, when doing
 simulations, the precision of the `F64` type is desirable. On the other hand,
@@ -1205,8 +1205,8 @@ GPUs tend to heavily prefer 32-bit floats because a serious bottleneck is how
 long it takes data to transfer from CPU to GPU, so having to send half as many
 bytes per render (compared to 64-bit floats) can be huge for performance.
 
-Roc also supports `D64` and `D32`, which are [IEEE 754 decimal floating point numbers](https://en.wikipedia.org/wiki/IEEE_754#Decimal). The upside of these is that they are decimal-based, so
-`0.1 + 0.2 == 0.3` (whereas in binary floats [this is not true](https://0.30000000000000004.com/)),
+Roc also supports `Dec`, which is a fixed-point decimal number. The upside of this type is that it's base-10, so
+`0.1 + 0.2 == 0.3` (whereas in base-2 floats [this is not true](https://0.30000000000000004.com/)),
 which makes them much better for calculations involving currency, among others.
 The downside of decimal floats is that they do not have hardware support
 (except on certain [highly uncommon processors](https://en.wikipedia.org/wiki/IEEE_754#See_also)),
@@ -1252,16 +1252,16 @@ Num.add : Num a, Num a -> Num a
 ```
 
 This accepts any of the numeric types discussed above, from `I128` to `F32`
-to `D64` and everything in between. This is because those are all type aliases
+to `Dec` and everything in between. This is because those are all type aliases
 for `Num` types. For example:
 
 * `I64` is a type alias for `Num (Integer Signed64)`
 * `U8` is a type alias for `Num (Integer Unsigned8)`
-* `F32` is a type alias for `Num (FloatingPoint Binary32)`
-* `D64` is a type alias for `Num (FloatingPoint Decimal64)`
+* `F32` is a type alias for `Num (Fraction Float32)`
+* `Dec` is a type alias for `Num (Fraction Decimal)`
 
-(Those types like `Integer`, `FloatingPoint`, and `Signed64` are all defined like `Never`; you can never instantiate one.
-They are used only as phantom types.)
+(Those types like `Integer`, `Fraction`, and `Signed64` are all defined like `Never`; you can never instantiate one.
+They are used essentially as phantom types.)
 
 So Roc does not use `number`, but rather uses `Num` - which works more like `List`.
 Either way, you get `+` being able to work on both integers and floats!
@@ -1276,7 +1276,7 @@ Number literals *without* a decimal point are `Num *` values. Almost always thes
 will end up becoming something more specific, but in the unlikely event
 (most often in a REPL) that you actually do end up with an operation that runs
 on either an `Int *` or a `Num *` value, it will default to being treated as
-an `I64`. Similarly, a `Float *` value will default to being treated as a `D64`,
+an `I64`. Similarly, a `Float *` value will default to being treated as a `Dec`,
 which means if someone is learning Roc as their first programming language and
 they type `0.1 + 0.2` into a REPL, they won't be confused by the answer.
 
