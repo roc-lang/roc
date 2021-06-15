@@ -1,19 +1,20 @@
 use bumpalo::{collections::Vec as BumpVec, Bump};
 
 use crate::lang::{
-    ast::{Expr2, RecordField},
+    ast::{Expr2, RecordField, WhenBranch},
     expr::Env,
+    pattern::{DestructType, Pattern2, PatternState2, RecordDestruct},
     pool::{Pool, PoolStr, PoolVec, ShallowClone},
     types::{Type2, TypeId},
 };
 
-use roc_can::expected::Expected;
+use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{BumpMap, BumpMapDefault, Index};
 use roc_module::{ident::TagName, symbol::Symbol};
-use roc_region::all::{Located, Region};
+use roc_region::all::Region;
 use roc_types::{
     subs::Variable,
-    types::{self, AnnotationSource},
+    types::{self, AnnotationSource, PReason, PatternCategory},
     types::{Category, Reason},
 };
 
