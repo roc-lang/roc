@@ -17,6 +17,8 @@ pub const MOD_APP: ModName = ModName(b"UserApp");
 
 pub const STATIC_STR_NAME: ConstName = ConstName(&Symbol::STR_ALIAS_ANALYSIS_STATIC.to_ne_bytes());
 
+const ENTRY_POINT_NAME: &[u8] = b"mainForHost";
+
 pub fn func_name_bytes(proc: &Proc) -> [u8; 16] {
     func_name_bytes_help(proc.name, proc.args.iter().map(|x| x.0), proc.ret_layout)
 }
@@ -76,14 +78,17 @@ where
     name_bytes
 }
 
-pub fn spec_program<'a, I>(procs: I) -> Result<morphic_lib::Solutions>
+pub fn spec_program<'a, I>(
+    entry_point: crate::ir::EntryPoint<'a>,
+    procs: I,
+) -> Result<morphic_lib::Solutions>
 where
     I: Iterator<Item = &'a Proc<'a>>,
 {
-    let mut main_function = None;
     let main_module = {
         let mut m = ModDefBuilder::new();
 
+        // a const that models all static strings
         let static_str_def = {
             let mut cbuilder = ConstDefBuilder::new();
             let block = cbuilder.add_block();
@@ -96,57 +101,59 @@ where
         };
         m.add_const(STATIC_STR_NAME, static_str_def)?;
 
+        // the entry point wrapper
+        let entry_point_name = FuncName(ENTRY_POINT_NAME);
+        let entry_point_function = build_entry_point(entry_point.layout, entry_point_name)?;
+        m.add_func(entry_point_name, entry_point_function)?;
+
+        // all other functions
         for proc in procs {
             let spec = proc_spec(proc)?;
 
             m.add_func(FuncName(&func_name_bytes(proc)), spec)?;
-
-            if format!("{:?}", proc.name).contains("mainForHost") {
-                main_function = Some(proc.name);
-            }
-
-            if format!("{:?}", proc.name).contains("replOutput") {
-                main_function = Some(proc.name);
-            }
         }
 
         m.build()?
     };
 
-    match main_function {
-        None => {
-            let program = {
-                let mut p = ProgramBuilder::new();
-                p.add_mod(MOD_APP, main_module)?;
-                p.add_entry_point(
-                    EntryPointName(b"not defined! probably a function in the repl"),
-                    MOD_APP,
-                    FuncName(&[]),
-                )?;
+    let program = {
+        let mut p = ProgramBuilder::new();
+        p.add_mod(MOD_APP, main_module)?;
 
-                p.build()?
-            };
+        let entry_point_name = FuncName(ENTRY_POINT_NAME);
+        p.add_entry_point(EntryPointName(ENTRY_POINT_NAME), MOD_APP, entry_point_name)?;
 
-            morphic_lib::solve(program)
-        }
-        Some(main_function) => {
-            let program = {
-                let mut p = ProgramBuilder::new();
-                p.add_mod(MOD_APP, main_module)?;
-                p.add_entry_point(
-                    EntryPointName(b"mainForHost"),
-                    MOD_APP,
-                    FuncName(&main_function.to_ne_bytes()),
-                )?;
+        p.build()?
+    };
 
-                p.build()?
-            };
+    // eprintln!("{}", program.to_source_string());
 
-            // eprintln!("{}", program.to_source_string());
+    morphic_lib::solve(program)
+}
 
-            morphic_lib::solve(program)
-        }
-    }
+fn build_entry_point(
+    layout: crate::ir::TopLevelFunctionLayout,
+    func_name: FuncName,
+) -> Result<FuncDef> {
+    let mut builder = FuncDefBuilder::new();
+    let block = builder.add_block();
+
+    // to the modelling language, the arguments appear out of thin air
+    let argument_type = build_tuple_type(&mut builder, layout.arguments)?;
+    let argument = builder.add_unknown_with(block, &[], argument_type)?;
+
+    let name_bytes = [0; 16];
+    let spec_var = CalleeSpecVar(&name_bytes);
+    let result = builder.add_call(block, spec_var, MOD_APP, func_name, argument)?;
+
+    // to the modelling language, the result disappears into the void
+    let unit_type = builder.add_tuple_type(&[])?;
+    let unit_value = builder.add_unknown_with(block, &[result], unit_type)?;
+
+    let root = BlockExpr(block, unit_value);
+    let spec = builder.build(unit_type, unit_type, root)?;
+
+    Ok(spec)
 }
 
 fn proc_spec(proc: &Proc) -> Result<FuncDef> {

@@ -143,7 +143,12 @@ pub fn gen_from_mono_module(
         exposed_to_host: loaded.exposed_to_host.keys().copied().collect(),
     };
 
-    roc_gen_llvm::llvm::build::build_procedures(&env, opt_level, loaded.procedures);
+    roc_gen_llvm::llvm::build::build_procedures(
+        &env,
+        opt_level,
+        loaded.procedures,
+        loaded.entry_point,
+    );
 
     env.dibuilder.finalize();
 

@@ -19,8 +19,8 @@ use roc_module::symbol::{
     Symbol,
 };
 use roc_mono::ir::{
-    CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
-    TopLevelFunctionLayout,
+    CapturedSymbols, EntryPoint, ExternalSpecializations, PartialProc, PendingSpecialization, Proc,
+    Procs, TopLevelFunctionLayout,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, StrLiteral, TypeAnnotation};
@@ -660,6 +660,8 @@ enum HeaderFor<'a> {
         config_shorthand: &'a str,
         /// the type scheme of the main function (required by the platform)
         platform_main_type: TypedIdent<'a>,
+        /// provided symbol to host (commonly `mainForHost`)
+        main_for_host: Symbol,
     },
     Interface,
 }
@@ -706,6 +708,7 @@ pub struct MonomorphizedModule<'a> {
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
     pub procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
+    pub entry_point: EntryPoint<'a>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
     pub header_sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
@@ -805,9 +808,15 @@ enum PlatformPath<'a> {
 }
 
 #[derive(Debug)]
+struct PlatformData {
+    module_id: ModuleId,
+    provides: Symbol,
+}
+
+#[derive(Debug)]
 struct State<'a> {
     pub root_id: ModuleId,
-    pub platform_id: Option<ModuleId>,
+    pub platform_data: Option<PlatformData>,
     pub goal_phase: Phase,
     pub stdlib: &'a StdLib,
     pub exposed_types: SubsByModule,
@@ -1447,7 +1456,7 @@ where
 
             let mut state = State {
                 root_id,
-                platform_id: None,
+                platform_data: None,
                 goal_phase,
                 stdlib,
                 output_path: None,
@@ -1674,10 +1683,13 @@ fn update<'a>(
                     debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                     state.platform_path = PlatformPath::Valid(to_platform.clone());
                 }
-                PkgConfig { .. } => {
-                    debug_assert_eq!(state.platform_id, None);
+                PkgConfig { main_for_host, .. } => {
+                    debug_assert!(matches!(state.platform_data, None));
 
-                    state.platform_id = Some(header.module_id);
+                    state.platform_data = Some(PlatformData {
+                        module_id: header.module_id,
+                        provides: main_for_host,
+                    });
 
                     if header.is_root_module {
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
@@ -1896,9 +1908,9 @@ fn update<'a>(
 
             // if there is a platform, the Package-Config module provides host-exposed,
             // otherwise the App module exposes host-exposed
-            let is_host_exposed = match state.platform_id {
+            let is_host_exposed = match state.platform_data {
                 None => module_id == state.root_id,
-                Some(platform_id) => module_id == platform_id,
+                Some(ref platform_data) => module_id == platform_data.module_id,
             };
 
             if is_host_exposed {
@@ -2154,6 +2166,7 @@ fn finish_specialization(
         module_cache,
         output_path,
         platform_path,
+        platform_data,
         ..
     } = state;
 
@@ -2201,6 +2214,34 @@ fn finish_specialization(
 
     let platform_path = path_to_platform.into();
 
+    let entry_point = {
+        let symbol = match platform_data {
+            None => {
+                debug_assert_eq!(exposed_to_host.len(), 1);
+                *exposed_to_host.iter().next().unwrap().0
+            }
+            Some(PlatformData { provides, .. }) => provides,
+        };
+
+        match procedures.keys().find(|(s, _)| *s == symbol) {
+            Some((_, layout)) => EntryPoint {
+                layout: *layout,
+                symbol,
+            },
+            None => {
+                // the entry point is not specialized. This can happen if the repl output
+                // is a function value
+                EntryPoint {
+                    layout: roc_mono::ir::TopLevelFunctionLayout {
+                        arguments: &[],
+                        result: Layout::Struct(&[]),
+                    },
+                    symbol,
+                }
+            }
+        }
+    };
+
     Ok(MonomorphizedModule {
         can_problems,
         mono_problems,
@@ -2212,6 +2253,7 @@ fn finish_specialization(
         subs,
         interns,
         procedures,
+        entry_point,
         sources,
         header_sources,
         timings: state.timings,
@@ -2985,7 +3027,7 @@ fn send_header_two<'a>(
         HashMap::with_capacity_and_hasher(scope_size, default_hasher());
     let home: ModuleId;
 
-    let ident_ids = {
+    let mut ident_ids = {
         // Lock just long enough to perform the minimal operations necessary.
         let mut module_ids = (*module_ids).lock();
         let mut ident_ids_by_module = (*ident_ids_by_module).lock();
@@ -3108,9 +3150,17 @@ fn send_header_two<'a>(
     // to decrement its "pending" count.
     let module_name = ModuleNameEnum::PkgConfig;
 
+    let main_for_host = {
+        let ident_str: InlinableString = provides[0].value.as_str().into();
+        let ident_id = ident_ids.get_or_insert(&ident_str);
+
+        Symbol::new(home, ident_id)
+    };
+
     let extra = HeaderFor::PkgConfig {
         config_shorthand: shorthand,
         platform_main_type: requires[0].value.clone(),
+        main_for_host,
     };
 
     let mut package_qualified_imported_modules = MutSet::default();
@@ -3815,7 +3865,8 @@ fn make_specializations<'a>(
         ident_ids: &mut ident_ids,
         ptr_bytes,
         update_mode_counter: 0,
-        call_specialization_counter: 0,
+        // call_specialization_counter=0 is reserved
+        call_specialization_counter: 1,
     };
 
     // TODO: for now this final specialization pass is sequential,
@@ -3878,7 +3929,8 @@ fn build_pending_specializations<'a>(
         ident_ids: &mut ident_ids,
         ptr_bytes,
         update_mode_counter: 0,
-        call_specialization_counter: 0,
+        // call_specialization_counter=0 is reserved
+        call_specialization_counter: 1,
     };
 
     // Add modules' decls to Procs

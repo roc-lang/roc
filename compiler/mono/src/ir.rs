@@ -54,6 +54,12 @@ pub enum MonoProblem {
     PatternProblem(crate::exhaustive::Error),
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct EntryPoint<'a> {
+    pub symbol: Symbol,
+    pub layout: TopLevelFunctionLayout<'a>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PartialProc<'a> {
     pub annotation: Variable,
