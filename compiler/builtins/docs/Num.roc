@@ -989,12 +989,12 @@ toBytes : Num *, Endi -> List U8
 ## when Num.parseBytes bytes Big is
 ##     Ok { val: f64, rest } -> ...
 ##     Err (ExpectedNum (Float Binary64)) -> ...
-parseBytes : List U8, Endi -> Result { val : Num a, rest : List U8 } [ ExpectedNum a ]*
+parseBytes : List U8, Endi -> Result { val : Num *, rest : List U8 } [ InvalidNum ]*
 
 ## when Num.fromBytes bytes Big is
 ##     Ok f64 -> ...
 ##     Err (ExpectedNum (Float Binary64)) -> ...
-fromBytes : List U8, Endi -> Result (Num a) [ ExpectedNum a ]*
+fromBytes : List U8, Endi -> Result (Num *) [ InvalidNum ]*
 
 ## Comparison
 
