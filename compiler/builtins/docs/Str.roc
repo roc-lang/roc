@@ -459,7 +459,7 @@ toDec : Str -> Result Dec [ InvalidDec ]*
 ##
 ## This never accepts numbers with underscores or commas in them. For more
 ## advanced options, see [parseNum].
-toNum : Str -> Result (Num a) [ ExpectedNum a ]*
+toNum : Str -> Result (Num *) [ InvalidNum ]*
 
 ## If the string begins with an [Int] or a [finite](Num.isFinite) [Frac], return
 ## that number along with the rest of the string after it.
@@ -475,7 +475,7 @@ toNum : Str -> Result (Num a) [ ExpectedNum a ]*
 ## If the string begins with `"NaN"`, `"∞"`, and `"-∞"` (which do not represent
 ## [finite](Num.isFinite) numbers), they will be accepted only when parsing
 ## [F64] or [F32] numbers, and translated accordingly.
-parseNum : Str, NumParseConfig -> Result { val : Num a, rest : Str } [ ExpectedNum a ]*
+parseNum : Str, NumParseConfig -> Result { val : Num *, rest : Str } [ InvalidNum ]*
 
 ## Notes:
 ## * You can allow a decimal mark for integers; they'll only parse if the numbers after it are all 0.
