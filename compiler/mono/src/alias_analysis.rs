@@ -799,7 +799,9 @@ fn expr_spec(
                 bag = builder.add_bag_insert(block, bag, value_id)?;
             }
 
-            Ok(bag)
+            let cell = builder.add_new_heap_cell(block)?;
+
+            builder.add_make_tuple(block, &[cell, bag])
         }
 
         EmptyArray => {
