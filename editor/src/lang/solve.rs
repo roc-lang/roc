@@ -441,22 +441,16 @@ fn solve<'a>(
                     // Add a variable for each def to new_vars_by_env.
                     let mut local_def_vars = BumpMap::new_in(arena);
 
-                    for (symbol, loc_type) in let_con.def_types.iter() {
-                        let var = type_to_var(
-                            arena,
-                            mempool,
-                            subs,
-                            rank,
-                            pools,
-                            cached_aliases,
-                            &loc_type.value,
-                        );
+                    for (symbol, typ) in let_con.def_types.iter() {
+                        let var =
+                            type_to_var(arena, mempool, subs, rank, pools, cached_aliases, typ);
 
+                        // TODO: region should come from typ
                         local_def_vars.insert(
                             *symbol,
                             Located {
                                 value: var,
-                                region: loc_type.region,
+                                region: Region::zero(),
                             },
                         );
                     }
@@ -523,9 +517,7 @@ fn solve<'a>(
                     // Add a variable for each def to local_def_vars.
                     let mut local_def_vars = BumpMap::new_in(arena);
 
-                    for (symbol, loc_type) in let_con.def_types.iter() {
-                        let def_type = &loc_type.value;
-
+                    for (symbol, typ) in let_con.def_types.iter() {
                         let var = type_to_var(
                             arena,
                             mempool,
@@ -533,14 +525,15 @@ fn solve<'a>(
                             next_rank,
                             next_pools,
                             cached_aliases,
-                            def_type,
+                            typ,
                         );
 
+                        // TODO: region should come from type
                         local_def_vars.insert(
                             *symbol,
                             Located {
                                 value: var,
-                                region: loc_type.region,
+                                region: Region::zero(),
                             },
                         );
                     }

@@ -34,7 +34,7 @@ pub enum Constraint<'a> {
 pub struct LetConstraint<'a> {
     pub rigid_vars: BumpVec<'a, Variable>,
     pub flex_vars: BumpVec<'a, Variable>,
-    pub def_types: BumpMap<Symbol, Located<Type2>>,
+    pub def_types: BumpMap<Symbol, Type2>,
     pub defs_constraint: Constraint<'a>,
     pub ret_constraint: Constraint<'a>,
 }
