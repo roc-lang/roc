@@ -5,14 +5,19 @@ use crate::lang::ast::{ExprId, FloatVal, IntVal};
 use crate::lang::expr::{to_expr_id, Env, Output};
 use crate::lang::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
 use crate::lang::scope::Scope;
+use bumpalo::collections::Vec as BumpVec;
 use roc_can::expr::unescape_char;
 use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
+use roc_collections::all::BumpMap;
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError};
 use roc_region::all::Region;
 use roc_types::subs::Variable;
+
+use super::constrain::Constraint;
+use super::types::Type2;
 
 pub type PatternId = NodeId<Pattern2>;
 
@@ -59,6 +64,13 @@ impl ShallowClone for Pattern2 {
     fn shallow_clone(&self) -> Self {
         todo!()
     }
+}
+
+#[derive(Debug)]
+pub struct PatternState2<'a> {
+    pub headers: BumpMap<Symbol, Type2>,
+    pub vars: BumpVec<'a, Variable>,
+    pub constraints: BumpVec<'a, Constraint<'a>>,
 }
 
 #[derive(Debug)]
