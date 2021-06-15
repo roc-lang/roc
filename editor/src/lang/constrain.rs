@@ -1023,7 +1023,7 @@ pub fn constrain_pattern<'a>(
                     }
                 };
 
-                field_types.push((label.clone(), field_type));
+                field_types.push((*label, field_type));
 
                 state.vars.push(*var);
             }
