@@ -19,19 +19,22 @@ pub const STATIC_STR_NAME: ConstName = ConstName(&Symbol::STR_ALIAS_ANALYSIS_STA
 
 const ENTRY_POINT_NAME: &[u8] = b"mainForHost";
 
-pub fn func_name_bytes(proc: &Proc) -> [u8; 16] {
+pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
     func_name_bytes_help(proc.name, proc.args.iter().map(|x| x.0), proc.ret_layout)
 }
+
+const DEBUG: bool = false;
+const SIZE: usize = if DEBUG { 50 } else { 16 };
 
 pub fn func_name_bytes_help<'a, I>(
     symbol: Symbol,
     argument_layouts: I,
     return_layout: Layout<'a>,
-) -> [u8; 16]
+) -> [u8; SIZE]
 where
     I: Iterator<Item = Layout<'a>>,
 {
-    let mut name_bytes = [0u8; 16];
+    let mut name_bytes = [0u8; SIZE];
 
     use std::collections::hash_map::DefaultHasher;
     use std::hash::Hash;
@@ -73,6 +76,12 @@ where
 
     for (source, target) in it {
         *target = *source;
+    }
+
+    if DEBUG {
+        for (i, c) in (format!("{:?}", symbol)).chars().take(25).enumerate() {
+            name_bytes[25 + i] = c as u8;
+        }
     }
 
     name_bytes
@@ -127,8 +136,6 @@ where
 
         // all other functions
         for proc in procs {
-            let spec = proc_spec(proc)?;
-
             let bytes = func_name_bytes(proc);
             let func_name = FuncName(&bytes);
             eprintln!(
@@ -137,6 +144,8 @@ where
                 bytes_as_ascii(&bytes),
                 proc.args.len()
             );
+
+            let spec = proc_spec(proc)?;
 
             m.add_func(func_name, spec)?;
         }
@@ -457,7 +466,7 @@ fn call_spec(
         ),
         HigherOrderLowLevel {
             specialization_id,
-            closure_layout: _,
+            closure_env_layout,
             op,
             arg_layouts,
             ret_layout,
@@ -504,6 +513,24 @@ fn call_spec(
 
                         let argument =
                             builder.add_make_tuple(block, &[key, val, default, closure_env])?;
+                        builder.add_call(block, spec_var, module, name, argument)?;
+                    }
+
+                    ListWalk | ListWalkBackwards | ListWalkUntil => {
+                        let list = env.symbols[&call.arguments[0]];
+                        let default = env.symbols[&call.arguments[1]];
+                        let closure_env = env.symbols[&call.arguments[3]];
+
+                        let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+                        let _cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+
+                        let first = builder.add_bag_get(block, bag)?;
+
+                        let argument = if closure_env_layout.is_none() {
+                            builder.add_make_tuple(block, &[first, default])?
+                        } else {
+                            builder.add_make_tuple(block, &[first, default, closure_env])?
+                        };
                         builder.add_call(block, spec_var, module, name, argument)?;
                     }
 
