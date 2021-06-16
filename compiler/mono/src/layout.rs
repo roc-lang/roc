@@ -143,6 +143,14 @@ impl<'a> LambdaSet<'a> {
         *self.representation
     }
 
+    pub fn is_represented(&self) -> Option<Layout<'a>> {
+        if let Layout::Struct(&[]) = self.representation {
+            None
+        } else {
+            Some(*self.representation)
+        }
+    }
+
     pub fn layout_for_member(&self, function_symbol: Symbol) -> ClosureRepresentation<'a> {
         debug_assert!(
             self.set.iter().any(|(s, _)| *s == function_symbol),

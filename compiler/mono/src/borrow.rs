@@ -393,15 +393,20 @@ impl<'a> BorrowInfState<'a> {
             }
 
             HigherOrderLowLevel {
-                op, closure_layout, ..
+                op,
+                arg_layouts,
+                ret_layout,
+                ..
             } => {
                 use roc_module::low_level::LowLevel::*;
 
                 debug_assert!(op.is_higher_order());
 
+                let closure_layout = Layout::FunctionPointer(arg_layouts, ret_layout);
+
                 match op {
                     ListMap | ListKeepIf | ListKeepOks | ListKeepErrs => {
-                        match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                        match self.param_map.get_symbol(arguments[1], closure_layout) {
                             Some(function_ps) => {
                                 // own the list if the function wants to own the element
                                 if !function_ps[0].borrow {
@@ -417,7 +422,7 @@ impl<'a> BorrowInfState<'a> {
                         }
                     }
                     ListMapWithIndex => {
-                        match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                        match self.param_map.get_symbol(arguments[1], closure_layout) {
                             Some(function_ps) => {
                                 // own the list if the function wants to own the element
                                 if !function_ps[1].borrow {
@@ -432,7 +437,7 @@ impl<'a> BorrowInfState<'a> {
                             None => unreachable!(),
                         }
                     }
-                    ListMap2 => match self.param_map.get_symbol(arguments[2], *closure_layout) {
+                    ListMap2 => match self.param_map.get_symbol(arguments[2], closure_layout) {
                         Some(function_ps) => {
                             // own the lists if the function wants to own the element
                             if !function_ps[0].borrow {
@@ -450,7 +455,7 @@ impl<'a> BorrowInfState<'a> {
                         }
                         None => unreachable!(),
                     },
-                    ListMap3 => match self.param_map.get_symbol(arguments[3], *closure_layout) {
+                    ListMap3 => match self.param_map.get_symbol(arguments[3], closure_layout) {
                         Some(function_ps) => {
                             // own the lists if the function wants to own the element
                             if !function_ps[0].borrow {
@@ -471,7 +476,7 @@ impl<'a> BorrowInfState<'a> {
                         None => unreachable!(),
                     },
                     ListSortWith => {
-                        match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                        match self.param_map.get_symbol(arguments[1], closure_layout) {
                             Some(function_ps) => {
                                 // always own the input list
                                 self.own_var(arguments[0]);
@@ -485,7 +490,7 @@ impl<'a> BorrowInfState<'a> {
                         }
                     }
                     ListWalk | ListWalkUntil | ListWalkBackwards | DictWalk => {
-                        match self.param_map.get_symbol(arguments[2], *closure_layout) {
+                        match self.param_map.get_symbol(arguments[2], closure_layout) {
                             Some(function_ps) => {
                                 // own the data structure if the function wants to own the element
                                 if !function_ps[0].borrow {

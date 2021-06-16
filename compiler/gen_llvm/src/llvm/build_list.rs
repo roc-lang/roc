@@ -601,18 +601,12 @@ pub fn list_keep_oks<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     roc_function_call: RocFunctionCall<'ctx>,
-    function_layout: &Layout<'a>,
+    // Layout of the `Result after *`
+    result_layout: &Layout<'a>,
     list: BasicValueEnum<'ctx>,
     before_layout: &Layout<'a>,
     after_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    // Layout of the `Result after *`
-    let result_layout = match function_layout {
-        Layout::FunctionPointer(_, ret) => ret,
-        Layout::Closure(_, _, ret) => ret,
-        _ => unreachable!("not a callable layout"),
-    };
-
     let dec_result_fn = build_dec_wrapper(env, layout_ids, result_layout);
 
     call_bitcode_fn(
@@ -638,18 +632,12 @@ pub fn list_keep_errs<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     roc_function_call: RocFunctionCall<'ctx>,
-    function_layout: &Layout<'a>,
+    // Layout of the `Result * err`
+    result_layout: &Layout<'a>,
     list: BasicValueEnum<'ctx>,
     before_layout: &Layout<'a>,
     after_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    // Layout of the `Result after *`
-    let result_layout = match function_layout {
-        Layout::FunctionPointer(_, ret) => ret,
-        Layout::Closure(_, _, ret) => ret,
-        _ => unreachable!("not a callable layout"),
-    };
-
     let dec_result_fn = build_dec_wrapper(env, layout_ids, result_layout);
 
     call_bitcode_fn(

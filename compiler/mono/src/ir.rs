@@ -1152,7 +1152,7 @@ pub enum CallType<'a> {
     HigherOrderLowLevel {
         op: LowLevel,
         /// the layout of the closure argument, if any
-        closure_layout: Layout<'a>,
+        closure_env_layout: Option<Layout<'a>>,
         /// specialization id of the function argument
         specialization_id: CallSpecId,
         /// does the function need to own the closure data
@@ -2724,10 +2724,10 @@ macro_rules! match_on_closure_argument {
                     $env,
                     lambda_set,
                     $closure_data_symbol,
-                    |top_level_function, closure_data, function_layout, specialization_id| self::Call {
+                    |top_level_function, closure_data, closure_env_layout, specialization_id| self::Call {
                         call_type: CallType::HigherOrderLowLevel {
                             op: $op,
-                            closure_layout: function_layout,
+                            closure_env_layout,
                             specialization_id,
                             function_owns_closure_data: false,
                             arg_layouts,
@@ -7715,7 +7715,7 @@ fn lowlevel_match_on_lambda_set<'a, ToLowLevelCall>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a>
 where
-    ToLowLevelCall: Fn(Symbol, Symbol, Layout<'a>, CallSpecId) -> Call<'a> + Copy,
+    ToLowLevelCall: Fn(Symbol, Symbol, Option<Layout<'a>>, CallSpecId) -> Call<'a> + Copy,
 {
     match lambda_set.runtime_representation() {
         Layout::Union(_) => {
@@ -7727,6 +7727,7 @@ where
                 closure_tag_id_symbol,
                 Layout::Builtin(crate::layout::TAG_SIZE),
                 closure_data_symbol,
+                lambda_set.is_represented(),
                 to_lowlevel_call,
                 function_layout,
                 return_layout,
@@ -7756,7 +7757,7 @@ where
             let call = to_lowlevel_call(
                 function_symbol,
                 closure_data_symbol,
-                function_layout,
+                lambda_set.is_represented(),
                 call_spec_id,
             );
 
@@ -7771,6 +7772,7 @@ where
                 closure_tag_id_symbol,
                 Layout::Builtin(Builtin::Int1),
                 closure_data_symbol,
+                lambda_set.is_represented(),
                 to_lowlevel_call,
                 function_layout,
                 return_layout,
@@ -7787,6 +7789,7 @@ where
                 closure_tag_id_symbol,
                 Layout::Builtin(Builtin::Int8),
                 closure_data_symbol,
+                lambda_set.is_represented(),
                 to_lowlevel_call,
                 function_layout,
                 return_layout,
@@ -7805,6 +7808,7 @@ fn lowlevel_union_lambda_set_to_switch<'a, ToLowLevelCall>(
     closure_tag_id_symbol: Symbol,
     closure_tag_id_layout: Layout<'a>,
     closure_data_symbol: Symbol,
+    closure_env_layout: Option<Layout<'a>>,
     to_lowlevel_call: ToLowLevelCall,
     function_layout: Layout<'a>,
     return_layout: Layout<'a>,
@@ -7812,7 +7816,7 @@ fn lowlevel_union_lambda_set_to_switch<'a, ToLowLevelCall>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a>
 where
-    ToLowLevelCall: Fn(Symbol, Symbol, Layout<'a>, CallSpecId) -> Call<'a> + Copy,
+    ToLowLevelCall: Fn(Symbol, Symbol, Option<Layout<'a>>, CallSpecId) -> Call<'a> + Copy,
 {
     debug_assert!(!lambda_set.is_empty());
 
@@ -7829,7 +7833,7 @@ where
         let call = to_lowlevel_call(
             *function_symbol,
             closure_data_symbol,
-            function_layout,
+            closure_env_layout,
             call_spec_id,
         );
         let stmt = build_call(env, call, assigned, return_layout, env.arena.alloc(hole));
@@ -8230,6 +8234,7 @@ fn lowlevel_enum_lambda_set_to_switch<'a, ToLowLevelCall>(
     closure_tag_id_symbol: Symbol,
     closure_tag_id_layout: Layout<'a>,
     closure_data_symbol: Symbol,
+    closure_env_layout: Option<Layout<'a>>,
     to_lowlevel_call: ToLowLevelCall,
     function_layout: Layout<'a>,
     return_layout: Layout<'a>,
@@ -8237,7 +8242,7 @@ fn lowlevel_enum_lambda_set_to_switch<'a, ToLowLevelCall>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a>
 where
-    ToLowLevelCall: Fn(Symbol, Symbol, Layout<'a>, CallSpecId) -> Call<'a> + Copy,
+    ToLowLevelCall: Fn(Symbol, Symbol, Option<Layout<'a>>, CallSpecId) -> Call<'a> + Copy,
 {
     debug_assert!(!lambda_set.is_empty());
 
@@ -8254,7 +8259,7 @@ where
         let call = to_lowlevel_call(
             *function_symbol,
             closure_data_symbol,
-            function_layout,
+            closure_env_layout,
             call_spec_id,
         );
         let stmt = build_call(
