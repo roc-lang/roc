@@ -283,9 +283,7 @@ impl Graph {
     ///
     /// IF an SCC 'A' can jump to an SCC 'B', then 'A' is guaranteed to appear *before* 'B' in the
     /// returned iterator.
-    pub(crate) fn iter_sccs<'a>(
-        &'a self,
-    ) -> impl Iterator<Item = Slice<'a, SccKind, BlockId>> + 'a {
+    pub(crate) fn iter_sccs(&self) -> impl Iterator<Item = Slice<'_, SccKind, BlockId>> + '_ {
         self.rev_sccs
             .count()
             .iter()

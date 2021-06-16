@@ -88,40 +88,40 @@ impl Error {
         err
     }
 
-    fn annotate_type_def<'a, E: Into<Self>>(
-        nc: &'a NameCache,
+    fn annotate_type_def<E: Into<Self>>(
+        nc: &NameCache,
         def_id: NamedTypeId,
-    ) -> impl FnOnce(E) -> Self + 'a {
+    ) -> impl FnOnce(E) -> Self + '_ {
         move |err| {
             let (mod_, name) = &nc.named_types[def_id];
             Error::annotate_mod_def(err, mod_.clone(), DefName::Type(name.clone()))
         }
     }
 
-    fn annotate_func_def<'a, E: Into<Self>>(
-        nc: &'a NameCache,
+    fn annotate_func_def<E: Into<Self>>(
+        nc: &NameCache,
         def_id: FuncId,
-    ) -> impl FnOnce(E) -> Self + 'a {
+    ) -> impl FnOnce(E) -> Self + '_ {
         move |err| {
             let (mod_, name) = &nc.funcs[def_id];
             Error::annotate_mod_def(err, mod_.clone(), DefName::Func(name.clone()))
         }
     }
 
-    fn annotate_const_def<'a, E: Into<Self>>(
-        nc: &'a NameCache,
+    fn annotate_const_def<E: Into<Self>>(
+        nc: &NameCache,
         def_id: ConstId,
-    ) -> impl FnOnce(E) -> Self + 'a {
+    ) -> impl FnOnce(E) -> Self + '_ {
         move |err| {
             let (mod_, name) = &nc.consts[def_id];
             Error::annotate_mod_def(err, mod_.clone(), DefName::Const(name.clone()))
         }
     }
 
-    fn annotate_entry_point<'a, E: Into<Self>>(
-        nc: &'a NameCache,
+    fn annotate_entry_point<E: Into<Self>>(
+        nc: &NameCache,
         def_id: EntryPointId,
-    ) -> impl FnOnce(E) -> Self + 'a {
+    ) -> impl FnOnce(E) -> Self + '_ {
         move |err| {
             let mut err = err.into();
             if err.def.is_none() {
