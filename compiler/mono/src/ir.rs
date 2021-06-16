@@ -1014,6 +1014,8 @@ pub enum Wrapped {
     EmptyRecord,
     SingleElementRecord,
     RecordOrSingleTagUnion,
+    /// Like a rose tree; recursive, but only one tag
+    LikeARoseTree,
     MultiTagUnion,
 }
 
@@ -1046,7 +1048,7 @@ impl Wrapped {
                         },
                         _ => Some(Wrapped::MultiTagUnion),
                     },
-                    NonNullableUnwrapped(_) => Some(Wrapped::RecordOrSingleTagUnion),
+                    NonNullableUnwrapped(_) => Some(Wrapped::LikeARoseTree),
 
                     NullableWrapped { .. } | NullableUnwrapped { .. } => {
                         Some(Wrapped::MultiTagUnion)

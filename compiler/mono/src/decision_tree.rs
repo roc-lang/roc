@@ -597,7 +597,7 @@ fn to_relevant_branch_help<'a>(
                                         start.extend(end);
                                     }
                                 }
-                                Wrapped::RecordOrSingleTagUnion => {
+                                Wrapped::RecordOrSingleTagUnion | Wrapped::LikeARoseTree => {
                                     let sub_positions = arguments.into_iter().enumerate().map(
                                         |(index, (pattern, _))| {
                                             let mut new_path = path.to_vec();
