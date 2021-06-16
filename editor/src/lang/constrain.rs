@@ -1059,7 +1059,8 @@ pub fn constrain_pattern<'a>(
             let mut argument_types = Vec::with_capacity(arguments.len());
 
             for (index, arg_id) in arguments.iter_node_ids().enumerate() {
-                let (pattern_var, pattern) = env.pool.get(arg_id);
+                let (pattern_var, pattern_id) = env.pool.get(arg_id);
+                let pattern = env.pool.get(*pattern_id);
 
                 state.vars.push(*pattern_var);
 
