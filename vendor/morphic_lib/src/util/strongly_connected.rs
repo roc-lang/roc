@@ -126,9 +126,10 @@ where
                         loop {
                             scc_start -= 1;
                             let scc_node = scc_stack[scc_start];
-                            debug_assert!(
-                                matches!(node_states[scc_node], NodeState::OnSccStack { .. })
-                            );
+                            debug_assert!(matches!(
+                                node_states[scc_node],
+                                NodeState::OnSccStack { .. }
+                            ));
                             node_states[scc_node] = NodeState::Complete;
                             if scc_node == node {
                                 break;
