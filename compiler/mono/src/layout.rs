@@ -1284,7 +1284,6 @@ pub enum UnionVariant<'a> {
     Unwrapped {
         tag_name: TagName,
         arguments: Vec<'a, Layout<'a>>,
-        is_recursive: bool,
     },
     Wrapped(WrappedVariant<'a>),
 }
@@ -1506,7 +1505,6 @@ pub fn union_sorted_tags_help<'a>(
                 UnionVariant::Unwrapped {
                     tag_name,
                     arguments: layouts,
-                    is_recursive: opt_rec_var.is_some(),
                 }
             }
         }
