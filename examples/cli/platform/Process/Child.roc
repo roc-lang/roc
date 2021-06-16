@@ -1,26 +1,27 @@
 interface Process.Child
-    exposes [
-        Child,
-    ]
+    exposes
+        [
+            Child,
+        ]
     imports [ fx.Effect, Pid.Internal ]
 
 Child :
     @Child
         {
-            sdtin : Stream,
-            stdout : Stream,
-            stderr : Stream,
+            sdtin : Cursor,
+            stdout : Cursor,
+            stderr : Cursor,
             pid : Pid,
         }
 
-stdin : Child -> Stream
+stdin : Child -> Cursor
 stdin = \@Child child -> child.stdin
 
-stdout : Child -> Stream
+stdout : Child -> Cursor
 stdout = \@Child child -> child.stdout
 
-stderr : Child -> Stream
+stderr : Child -> Cursor
 stderr = \@Child child -> child.stderr
 
-process : Child -> Pid
+process : Child -> Cursor
 process = \@Child child -> child.pid
