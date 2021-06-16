@@ -213,6 +213,17 @@ pub const RocDec = struct {
         }
     }
 
+    pub fn sub(self: RocDec, other: RocDec) RocDec {
+        var answer: i128 = undefined;
+        const overflowed = @subWithOverflow(i128, self.num, other.num, &answer);
+
+        if (!overflowed) {
+            return RocDec{ .num = answer };
+        } else {
+            std.debug.panic("TODO runtime exception for overflow!", .{});
+        }
+    }
+
     pub fn mul(self: RocDec, other: RocDec) RocDec {
         const self_i128 = self.num;
         const other_i128 = other.num;
@@ -650,6 +661,18 @@ test "add: 1" {
     var dec: RocDec = .{ .num = 0 };
 
     try expectEqual(RocDec{ .num = 1 }, dec.add(.{ .num = 1 }));
+}
+
+test "sub: 0" {
+    var dec: RocDec = .{ .num = 1 };
+
+    try expectEqual(RocDec{ .num = 1 }, dec.sub(.{ .num = 0 }));
+}
+
+test "sub: 1" {
+    var dec: RocDec = .{ .num = 1 };
+
+    try expectEqual(RocDec{ .num = 0 }, dec.sub(.{ .num = 1 }));
 }
 
 test "mul: by 0" {
