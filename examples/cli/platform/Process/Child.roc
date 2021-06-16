@@ -14,14 +14,14 @@ Child :
             pid : Pid,
         }
 
-stdin : Child -> Cursor { read : Yes, write : Yes }
+stdin : Child -> Cursor
 stdin = \@Child child -> child.stdin
 
-stdout : Child -> Cursor { read : Yes, write : Yes }
+stdout : Child -> Cursor
 stdout = \@Child child -> child.stdout
 
-stderr : Child -> Cursor { read : Yes, write : Yes }
+stderr : Child -> Cursor
 stderr = \@Child child -> child.stderr
 
-process : Child -> Cursor { read : Yes, write : Yes }
+process : Child -> Cursor
 process = \@Child child -> child.pid

@@ -13,10 +13,8 @@ Raw : U32
 
 Cursor : [ @Cursor Raw ]
 
-Cursor a : [ @Cursor Raw a  ]
+fromRaw : Raw -> Cursor
+fromRaw = \raw -> @Cursor raw
 
-fromRaw : Raw, a -> Cursor a
-fromRaw = \raw, a -> @Cursor raw a
-
-toRaw : Cursor * -> Raw
-toRaw = \@Cursor raw _ -> raw
+toRaw : Cursor -> Raw
+toRaw = \@Cursor raw -> raw
