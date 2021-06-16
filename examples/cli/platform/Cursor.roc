@@ -10,18 +10,37 @@ interface File.Cursor
 
 ## On UNIX systems, this is a file descriptor.
 ## On Windows, it's a file handle.
-Cursor : Cursor.Internal.Cursor
+Cursor a : Cursor.Internal.Cursor a
 
-readUtf8 : Cursor -> Task Str (FileReadErr [ BadUtf8 Str.Utf8ByteProblem Nat ]*)
+readUtf8 : Cursor { read : Yes }* -> Task Str (FileReadErr [ BadUtf8 Str.Utf8ByteProblem Nat ]*)
 readUtf8 = \cursor ->
     fd = Cursor.Internal.toRaw cursor
 
     Effect.map (Effect.readUtf8
 
-## Open a file and create a cursor that refers to the start of that file.
-open : Path, File.OpenMode -> Task Cursor Io.Err
-open = \path, mode ->
-    Effect.open path mode
+writeUtf8 : Cursor { write : Yes }* -> Task Str (FileReadErr [ BadUtf8 Str.Utf8ByteProblem Nat ]*)
+writeUtf8 = \cursor ->
+    fd = Cursor.Internal.toRaw cursor
+
+    Effect.map (Effect.readUtf8
+
+## Opens a file and creates a cursor that refers to the start of that file.
+openRead : Path -> Task (Cursor { read : Yes }) Io.Err
+openRead = \path, mode ->
+    Effect.openRead path
+        |> Effect.map \cursor -> Ok (Cursor.fromRaw cursor { read: Yes, write: Yes })
+
+## Opens a file and creates a cursor that refers to the start of that file.
+openWrite : Path -> Task (Cursor { write : Yes }) Io.Err
+openWrite = \path, mode ->
+    Effect.openWrite path
+        |> Effect.map \cursor -> Ok (Cursor.fromRaw cursor { read: Yes, write: Yes })
+
+## Opens a file and creates a cursor that refers to the start of that file.
+openReadWrite : Path -> Task (Cursor { read : Yes, write : Yes }) Io.Err
+openReadWrite = \path, mode ->
+    Effect.openReadWrite path
+        |> Effect.map \cursor -> Ok (Cursor.fromRaw cursor { read: Yes, write: Yes })
 
 ## Advance the position referred to by this cursor by the given number of bytes.
 ##
@@ -29,7 +48,7 @@ open = \path, mode ->
 ## is not necessarily a problem.
 ##
 ## This task will fail if it would result in the cursor having a negative position.
-advance : Cursor, I64 -> Task {} Io.Err
+advance : Cursor *, I64 -> Task {} Io.Err
 advance = \cursor, bytes ->
     # Note: we should use lseek64 for this - https://linux.die.net/man/3/lseek64
     # because it uses the off64_t type (which guaratnees 64-bit offsets)
