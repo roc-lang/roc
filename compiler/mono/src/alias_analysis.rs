@@ -263,7 +263,7 @@ fn stmt_spec(
             cond_layout: _,
             branches,
             default_branch,
-            ret_layout,
+            ret_layout: _lies,
         } => {
             let mut cases = Vec::with_capacity(branches.len() + 1);
 
@@ -274,7 +274,7 @@ fn stmt_spec(
 
             for branch in it {
                 let block = builder.add_block();
-                let value_id = stmt_spec(builder, env, block, ret_layout, branch)?;
+                let value_id = stmt_spec(builder, env, block, layout, branch)?;
                 cases.push(BlockExpr(block, value_id));
             }
 
