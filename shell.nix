@@ -9,7 +9,7 @@ let
       # name = "nixpkgs-2021-04-23";
       url = "https://github.com/nixos/nixpkgs/";
       ref = "refs/heads/nixpkgs-unstable";
-      rev = "8d0340aee5caac3807c58ad7fa4ebdbbdd9134d6";
+      rev = "51bb9f3e9ab6161a3bf7746e20b955712cef618b";
     }
   ) {};
 
@@ -55,7 +55,7 @@ let
     cmake
     git
     python3
-    llvmPkgs.llvm
+    llvmPkgs.llvm.dev
     llvmPkgs.clang
     pkg-config
     zig
@@ -79,7 +79,7 @@ pkgs.mkShell
     buildInputs = inputs ++ darwinInputs ++ linuxInputs;
 
     # Additional Env vars
-    LLVM_SYS_120_PREFIX = "${llvmPkgs.llvm}";
+    LLVM_SYS_120_PREFIX = "${llvmPkgs.llvm.dev}";
     LD_LIBRARY_PATH =
       with pkgs;
       lib.makeLibraryPath
