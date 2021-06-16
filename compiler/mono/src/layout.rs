@@ -289,7 +289,9 @@ impl<'a> LambdaSet<'a> {
             Unit | UnitWithArguments => Layout::Struct(&[]),
             BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
             ByteUnion(_) => Layout::Builtin(Builtin::Int8),
-            Unwrapped(_tag_name, layouts) => Layout::Struct(layouts.into_bump_slice()),
+            Unwrapped {
+                arguments: layouts, ..
+            } => Layout::Struct(layouts.into_bump_slice()),
             Wrapped(variant) => {
                 use WrappedVariant::*;
 
@@ -1274,9 +1276,16 @@ pub enum UnionVariant<'a> {
     Never,
     Unit,
     UnitWithArguments,
-    BoolUnion { ttrue: TagName, ffalse: TagName },
+    BoolUnion {
+        ttrue: TagName,
+        ffalse: TagName,
+    },
     ByteUnion(Vec<'a, TagName>),
-    Unwrapped(TagName, Vec<'a, Layout<'a>>),
+    Unwrapped {
+        tag_name: TagName,
+        arguments: Vec<'a, Layout<'a>>,
+        is_recursive: bool,
+    },
     Wrapped(WrappedVariant<'a>),
 }
 
@@ -1494,7 +1503,11 @@ pub fn union_sorted_tags_help<'a>(
                     fields: layouts.into_bump_slice(),
                 })
             } else {
-                UnionVariant::Unwrapped(tag_name, layouts)
+                UnionVariant::Unwrapped {
+                    tag_name,
+                    arguments: layouts,
+                    is_recursive: opt_rec_var.is_some(),
+                }
             }
         }
         num_tags => {
@@ -1646,7 +1659,10 @@ pub fn layout_from_tag_union<'a>(
                 Unit | UnitWithArguments => Layout::Struct(&[]),
                 BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
                 ByteUnion(_) => Layout::Builtin(Builtin::Int8),
-                Unwrapped(_, mut field_layouts) => {
+                Unwrapped {
+                    arguments: mut field_layouts,
+                    ..
+                } => {
                     if field_layouts.len() == 1 {
                         field_layouts.pop().unwrap()
                     } else {

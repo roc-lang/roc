@@ -2713,8 +2713,6 @@ macro_rules! match_on_closure_argument {
 
         let arena = $env.arena;
 
-        let function_layout = arena.alloc(top_level).full();
-
         let arg_layouts = top_level.arguments;
         let ret_layout = top_level.result;
 
@@ -2735,7 +2733,6 @@ macro_rules! match_on_closure_argument {
                         },
                         arguments: arena.alloc([$($x,)* top_level_function, closure_data]),
                     },
-                    function_layout,
                     $layout,
                     $assigned,
                     $hole,
@@ -4276,7 +4273,10 @@ fn convert_tag_union<'a>(
             )
         }
 
-        Unwrapped(_, field_layouts) => {
+        Unwrapped {
+            arguments: field_layouts,
+            ..
+        } => {
             let field_symbols_temp = sorted_field_symbols(env, procs, layout_cache, args);
 
             let mut field_symbols = Vec::with_capacity_in(field_layouts.len(), env.arena);
@@ -7014,7 +7014,10 @@ fn from_can_pattern_help<'a>(
                         union,
                     }
                 }
-                Unwrapped(_, field_layouts) => {
+                Unwrapped {
+                    arguments: field_layouts,
+                    ..
+                } => {
                     let union = crate::exhaustive::Union {
                         render_as: RenderAs::Tag,
                         alternatives: vec![Ctor {
@@ -7709,7 +7712,6 @@ fn lowlevel_match_on_lambda_set<'a, ToLowLevelCall>(
     lambda_set: LambdaSet<'a>,
     closure_data_symbol: Symbol,
     to_lowlevel_call: ToLowLevelCall,
-    function_layout: Layout<'a>,
     return_layout: Layout<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
@@ -7729,7 +7731,6 @@ where
                 closure_data_symbol,
                 lambda_set.is_represented(),
                 to_lowlevel_call,
-                function_layout,
                 return_layout,
                 assigned,
                 hole,
@@ -7774,7 +7775,6 @@ where
                 closure_data_symbol,
                 lambda_set.is_represented(),
                 to_lowlevel_call,
-                function_layout,
                 return_layout,
                 assigned,
                 hole,
@@ -7791,7 +7791,6 @@ where
                 closure_data_symbol,
                 lambda_set.is_represented(),
                 to_lowlevel_call,
-                function_layout,
                 return_layout,
                 assigned,
                 hole,
@@ -7810,7 +7809,6 @@ fn lowlevel_union_lambda_set_to_switch<'a, ToLowLevelCall>(
     closure_data_symbol: Symbol,
     closure_env_layout: Option<Layout<'a>>,
     to_lowlevel_call: ToLowLevelCall,
-    function_layout: Layout<'a>,
     return_layout: Layout<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
@@ -8236,7 +8234,6 @@ fn lowlevel_enum_lambda_set_to_switch<'a, ToLowLevelCall>(
     closure_data_symbol: Symbol,
     closure_env_layout: Option<Layout<'a>>,
     to_lowlevel_call: ToLowLevelCall,
-    function_layout: Layout<'a>,
     return_layout: Layout<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
