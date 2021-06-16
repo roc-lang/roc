@@ -860,7 +860,7 @@ fn expr_spec(
         Struct(fields) => build_tuple_value(builder, env, block, fields),
         AccessAtIndex {
             index,
-            field_layouts,
+            field_layouts: _,
             structure,
             wrapped,
         } => {
@@ -886,18 +886,14 @@ fn expr_spec(
                 }
                 Wrapped::MultiTagUnion => {
                     // Clearly this is not generally correct, but it should be for our examples
-                    let hacky_is_recursive =
-                        field_layouts.iter().any(|l| l == &Layout::RecursivePointer);
+                    // let hacky_is_recursive = field_layouts.iter().any(|l| l == &Layout::RecursivePointer);
+                    // if hacky_is_recursive {
 
-                    if hacky_is_recursive {
-                        let result_type = layout_spec(builder, layout)?;
-                        builder.add_unknown_with(block, &[value_id], result_type)
-                    } else {
-                        // what to do, what to do.
-                        let result_type = layout_spec(builder, layout)?;
-                        builder.add_unknown_with(block, &[value_id], result_type)
-                        // builder.add_get_tuple_field(block, value_id, *index as u32)
-                    }
+                    // we don't know what constructor we are at this point, so how can we get a
+                    // field from an enum value?
+
+                    let result_type = layout_spec(builder, layout)?;
+                    builder.add_unknown_with(block, &[value_id], result_type)
                 }
             }
         }
