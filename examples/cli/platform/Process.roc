@@ -13,6 +13,8 @@ interface Process
     ]
     imports [ fx.Effect ]
 
+## Process ID
+Pid : Pid.Internal.Pid
 
 ## Read the process's current environment variables into a [Dict].
 ##
@@ -99,3 +101,39 @@ exitFailure =
 exitWithStatus : I32 -> Task {} *
 exitWithStatus = \code ->
     Effect.exitWithStatus code
+
+pid : Task Pid []
+pid =
+    Effect.map Effect.getPid \raw ->
+        Ok (Internal.Pid.fromRaw raw)
+
+# Notes:
+#
+# It seems difficult (impossible?) in the general case to
+# reliably provide a "gracefully terminate process" function that
+# works on Windows. Windows seems to require knowing whether
+# a process is graphical or console.
+#
+# https://stackoverflow.com/questions/2055753/how-to-gracefully-terminate-a-process
+#
+# It seems possible to find that out on a per-thread basis,
+# but not a per-process basis:
+# https://stackoverflow.com/a/31356431
+#
+# ...so what if we don't have access to get the main
+# thread of another process that we'd otherwise be able
+# to terminate?
+#
+# Maybe this is why Rust only supports process::kill and
+# no cross-platform graceful version!
+
+## This is a [`SIGKILL`](https://en.wikipedia.org/wiki/Signal_(IPC)#SIGKILL) signal on UNIX systems and a [`TerminateProcess`](https://docs.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-terminateprocess) on Windows.
+##
+## Note that on Windows, this can cause the application to
+## stop responding if a thread was waiting on a kernel object at the tim,.
+## [The official documentation](https://docs.microsoft.com/en-us/windows/win32/procthread/terminating-a-process#how-processes-are-terminated)
+## recommends only terminating a Windows process when all of
+## its threads are in known states.
+kill : Pid -> Task {} Io.Err
+kill = \pid ->
+    Effect.map (Effect.kill (Pid.Internal.toRaw pid)) Ok
