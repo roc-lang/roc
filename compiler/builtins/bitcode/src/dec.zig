@@ -623,7 +623,7 @@ fn div_u256_by_u128(numer: U256, denom: u128) U256 {
         //
         // ((hi as i128) >> 127).as_u256()
         //
-        // ...however, I can't figure out where that funciton is defined.
+        // ...however, I can't figure out where that function is defined.
         // Maybe it's defined using a macro or something. Anyway, hopefully
         // this is what it would do in this scenario.
         var s = .{
