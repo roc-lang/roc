@@ -2,5 +2,5 @@
 
 set -euxo pipefail
 
-zig build-exe benchmark/dec.zig --main-pkg-path .
+zig build-exe benchmark/dec.zig -O ReleaseFast --main-pkg-path .
 ./dec
