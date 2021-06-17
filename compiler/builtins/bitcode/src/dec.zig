@@ -21,6 +21,7 @@ pub const RocDec = struct {
         return .{ .num = num * one_point_zero_i128 };
     }
 
+    // TODO: Refactor this to use https://ziglang.org/documentation/master/#ctz
     pub fn fromStr(roc_str: RocStr) ?RocDec {
         if (roc_str.isEmpty()) {
             return null;
@@ -259,6 +260,76 @@ pub const RocDec = struct {
             return .{ .num = unsigned_answer };
         }
     }
+
+    pub fn div(self: RocDec, other: RocDec) RocDec {
+        const numerator_i128 = self.num;
+        const denominator_i128 = other.num;
+
+        // (0 / n) is always 0
+        if (numerator_i128 == 0) {
+            return RocDec{ .num = 0 };
+        }
+
+        // (n / 0) is an error
+        if (denominator_i128 == 0) {
+            std.debug.panic("TODO runtime exception for divide by 0!", .{});
+        }
+
+        // If they're both negative, or if neither is negative, the final answer
+        // is positive or zero. If one is negative and the denominator isn't, the
+        // final answer is negative (or zero, in which case final sign won't matter).
+        //
+        // It's important that we do this in terms of negatives, because doing
+        // it in terms of positives can cause bugs when one is zero.
+        const is_answer_negative = (numerator_i128 < 0) != (denominator_i128 < 0);
+
+        // Break the two i128s into two { hi: u64, lo: u64 } tuples, discarding
+        // the sign for now.
+        //
+        // We'll multiply all 4 combinations of these (hi1 x lo1, hi2 x lo2,
+        // hi1 x lo2, hi2 x lo1) and add them as appropriate, then apply the
+        // appropriate sign at the very end.
+        //
+        // We do checked_abs because if we had -i128::MAX before, this will overflow.
+
+        const numerator_abs_i128 = math.absInt(numerator_i128) catch {
+            // Currently, if you try to do multiplication on i64::MIN, panic
+            // unless you're specifically multiplying by 0 or 1.
+            //
+            // Maybe we could support more cases in the future
+            if (denominator_i128 == one_point_zero_i128) {
+                return self;
+            } else {
+                std.debug.panic("TODO runtime exception for overflow when dividing!", .{});
+            }
+        };
+        const numerator_u128 = @intCast(u128, numerator_abs_i128);
+
+        const denominator_abs_i128 = math.absInt(denominator_i128) catch {
+            // Currently, if you try to do multiplication on i64::MIN, panic
+            // unless you're specifically multiplying by 0 or 1.
+            //
+            // Maybe we could support more cases in the future
+            if (numerator_i128 == one_point_zero_i128) {
+                return other;
+            } else {
+                std.debug.panic("TODO runtime exception for overflow when dividing!", .{});
+            }
+        };
+        const denominator_u128 = @intCast(u128, denominator_abs_i128);
+
+        const numerator_u256: U256 = mul_u128(numerator_u128, math.pow(u128, 10, decimal_places));
+        const answer = div_u256_by_u128(numerator_u256, denominator_u128);
+
+        var unsigned_answer: i128 = undefined;
+        if (answer.hi == 0 and answer.lo <= math.maxInt(i128)) {
+            unsigned_answer = @intCast(i128, answer.lo);
+        } else {
+            std.debug.panic("TODO runtime exception for overflow when dividing!", .{});
+        }
+
+        return RocDec{ .num = if (is_answer_negative) -unsigned_answer else unsigned_answer };
+    }
 };
 
 const U256 = struct {
@@ -417,8 +488,174 @@ fn mul_u128(a: u128, b: u128) U256 {
     return .{ .hi = hi, .lo = lo };
 }
 
+// Multiply two 128-bit ints and divide the result by 10^DECIMAL_PLACES
+//
+// Adapted from https://github.com/nlordell/ethnum-rs
+// Copyright (c) 2020 Nicholas Rodrigues Lordello
+// Licensed under the Apache License version 2.0
+//
+// When translating this to Zig, we often have to use math.shr/shl instead of >>/<<
+// This is because casting to the right types for Zig can be kind of tricky.
+// See https://github.com/ziglang/zig/issues/7605
+fn div_u256_by_u128(numer: U256, denom: u128) U256 {
+    const N_UDWORD_BITS: u8 = 128;
+    const N_UTWORD_BITS: u9 = 256;
+
+    var q: U256 = undefined;
+    var r: U256 = undefined;
+    var sr: u8 = undefined;
+
+    // special case
+    if (numer.hi == 0) {
+        // 0 X
+        // ---
+        // 0 X
+        return .{
+            .hi = 0,
+            .lo = numer.lo / denom,
+        };
+    }
+
+    // numer.hi != 0
+    if (denom == 0) {
+        // K X
+        // ---
+        // 0 0
+        return .{
+            .hi = 0,
+            .lo = numer.hi / denom,
+        };
+    } else {
+        // K X
+        // ---
+        // 0 K
+        // NOTE: Modified from `if (d.low() & (d.low() - 1)) == 0`.
+        if (math.isPowerOfTwo(denom)) {
+            // if d is a power of 2
+            if (denom == 1) {
+                return numer;
+            }
+
+            sr = @ctz(u128, denom);
+
+            return .{
+                .hi = math.shr(u128, numer.hi, sr),
+                .lo = math.shl(u128, numer.hi, N_UDWORD_BITS - sr) | math.shr(u128, numer.lo, sr),
+            };
+        }
+
+        // K X
+        // ---
+        // 0 K
+        var denom_leading_zeros = @clz(u128, denom);
+        var numer_hi_leading_zeros = @clz(u128, numer.hi);
+        sr = 1 + N_UDWORD_BITS + denom_leading_zeros - numer_hi_leading_zeros;
+        // 2 <= sr <= N_UTWORD_BITS - 1
+        // q.all = n.all << (N_UTWORD_BITS - sr);
+        // r.all = n.all >> sr;
+        // #[allow(clippy::comparison_chain)]
+        if (sr == N_UDWORD_BITS) {
+            q = .{
+                .hi = numer.lo,
+                .lo = 0,
+            };
+            r = .{
+                .hi = 0,
+                .lo = numer.hi,
+            };
+        } else if (sr < N_UDWORD_BITS) {
+            // 2 <= sr <= N_UDWORD_BITS - 1
+            q = .{
+                .hi = math.shl(u128, numer.lo, N_UDWORD_BITS - sr),
+                .lo = 0,
+            };
+            r = .{
+                .hi = math.shr(u128, numer.hi, sr),
+                .lo = math.shl(u128, numer.hi, N_UDWORD_BITS - sr) | math.shr(u128, numer.lo, sr),
+            };
+        } else {
+            // N_UDWORD_BITS + 1 <= sr <= N_UTWORD_BITS - 1
+            q = .{
+                .hi = math.shl(u128, numer.hi, N_UTWORD_BITS - sr) | math.shr(u128, numer.lo, sr - N_UDWORD_BITS),
+                .lo = math.shl(u128, numer.lo, N_UTWORD_BITS - sr),
+            };
+            r = .{
+                .hi = 0,
+                .lo = math.shr(u128, numer.hi, sr - N_UDWORD_BITS),
+            };
+        }
+    }
+
+    // Not a special case
+    // q and r are initialized with:
+    // q.all = n.all << (N_UTWORD_BITS - sr);
+    // r.all = n.all >> sr;
+    // 1 <= sr <= N_UTWORD_BITS - 1
+    var carry: u128 = 0;
+
+    while (sr > 0) {
+        // r:q = ((r:q)  << 1) | carry
+        r.hi = (r.hi << 1) | (r.lo >> (N_UDWORD_BITS - 1));
+        r.lo = (r.lo << 1) | (q.hi >> (N_UDWORD_BITS - 1));
+        q.hi = (q.hi << 1) | (q.lo >> (N_UDWORD_BITS - 1));
+        q.lo = (q.lo << 1) | carry;
+
+        // carry = 0;
+        // if (r.all >= d.all)
+        // {
+        //     r.all -= d.all;
+        //      carry = 1;
+        // }
+        // NOTE: Modified from `(d - r - 1) >> (N_UTWORD_BITS - 1)` to be an
+        // **arithmetic** shift.
+
+        var lo: u128 = undefined;
+        var lo_overflowed: bool = undefined;
+        var hi: u128 = undefined;
+
+        lo_overflowed = @subWithOverflow(u128, denom, r.lo, &lo);
+        hi = 0 -% @intCast(u128, @bitCast(u1, lo_overflowed)) -% r.hi;
+
+        lo_overflowed = @subWithOverflow(u128, lo, 1, &lo);
+        hi = hi -% @intCast(u128, @bitCast(u1, lo_overflowed));
+
+        // TODO this U256 was originally created by:
+        //
+        // ((hi as i128) >> 127).as_u256()
+        //
+        // ...however, I can't figure out where that function is defined.
+        // Maybe it's defined using a macro or something. Anyway, hopefully
+        // this is what it would do in this scenario.
+        var s = .{
+            .hi = 0,
+            .lo = math.shr(u128, hi, 127),
+        };
+
+        carry = s.lo & 1;
+
+        // var (lo, carry) = r.lo.overflowing_sub(denom & s.lo);
+        lo_overflowed = @subWithOverflow(u128, r.lo, (denom & s.lo), &lo);
+        hi = r.hi -% @intCast(u128, @bitCast(u1, lo_overflowed));
+
+        r = .{ .hi = hi, .lo = lo };
+
+        sr -= 1;
+    }
+
+    var hi = (q.hi << 1) | (q.lo >> (127));
+    var lo = (q.lo << 1) | carry;
+
+    return .{ .hi = hi, .lo = lo };
+}
+
+fn num_of_trailing_zeros(num: u128) u32 {
+    const trailing: u8 = @ctz(u128, num);
+    return @intCast(u32, trailing);
+}
+
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
+const expectError = testing.expectError;
 const expectEqualSlices = testing.expectEqualSlices;
 const expect = testing.expect;
 
@@ -691,4 +928,41 @@ test "mul: by 2" {
     var dec: RocDec = RocDec.fromU64(15);
 
     try expectEqual(RocDec.fromU64(30), dec.mul(RocDec.fromU64(2)));
+}
+
+test "div: 0 / 2" {
+    var dec: RocDec = RocDec.fromU64(0);
+
+    try expectEqual(RocDec.fromU64(0), dec.div(RocDec.fromU64(2)));
+}
+
+test "div: 2 / 2" {
+    var dec: RocDec = RocDec.fromU64(2);
+
+    try expectEqual(RocDec.fromU64(1), dec.div(RocDec.fromU64(2)));
+}
+
+test "div: 20 / 2" {
+    var dec: RocDec = RocDec.fromU64(20);
+
+    try expectEqual(RocDec.fromU64(10), dec.div(RocDec.fromU64(2)));
+}
+
+test "div: 8 / 5" {
+    var dec: RocDec = RocDec.fromU64(8);
+    var res: RocDec = RocDec.fromStr(RocStr.init("1.6", 3)).?;
+    try expectEqual(res, dec.div(RocDec.fromU64(5)));
+}
+
+test "div: 10 / 3" {
+    var numer: RocDec = RocDec.fromU64(10);
+    var denom: RocDec = RocDec.fromU64(3);
+
+    var roc_str = RocStr.init("3.333333333333333333", 20);
+    errdefer roc_str.deinit();
+    defer roc_str.deinit();
+
+    var res: RocDec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(res, numer.div(denom));
 }
