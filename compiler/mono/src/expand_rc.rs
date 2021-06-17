@@ -622,7 +622,7 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
             Join {
                 id,
                 parameters,
-                continuation,
+                body: continuation,
                 remainder,
             } => {
                 let continuation = expand_and_cancel(env, continuation);
@@ -631,7 +631,7 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                 let stmt = Join {
                     id: *id,
                     parameters,
-                    continuation,
+                    body: continuation,
                     remainder,
                 };
 

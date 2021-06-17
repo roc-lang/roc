@@ -64,7 +64,7 @@ pub fn occurring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) 
 
             Join {
                 parameters,
-                continuation,
+                body: continuation,
                 remainder,
                 ..
             } => {
@@ -455,7 +455,7 @@ impl<'a> Context<'a> {
 
             HigherOrderLowLevel {
                 op,
-                closure_layout,
+                closure_env_layout,
                 specialization_id,
                 arg_layouts,
                 ret_layout,
@@ -467,7 +467,7 @@ impl<'a> Context<'a> {
                             call_type: if let Some(OWNED) = $borrows.map(|p| p.borrow) {
                                 HigherOrderLowLevel {
                                     op: *op,
-                                    closure_layout: *closure_layout,
+                                    closure_env_layout: *closure_env_layout,
                                     function_owns_closure_data: true,
                                     specialization_id: *specialization_id,
                                     arg_layouts,
@@ -497,12 +497,14 @@ impl<'a> Context<'a> {
                 const FUNCTION: bool = BORROWED;
                 const CLOSURE_DATA: bool = BORROWED;
 
+                let function_layout = Layout::FunctionPointer(arg_layouts, ret_layout);
+
                 match op {
                     roc_module::low_level::LowLevel::ListMap
                     | roc_module::low_level::LowLevel::ListKeepIf
                     | roc_module::low_level::LowLevel::ListKeepOks
                     | roc_module::low_level::LowLevel::ListKeepErrs => {
-                        match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                        match self.param_map.get_symbol(arguments[1], function_layout) {
                             Some(function_ps) => {
                                 let borrows = [function_ps[0].borrow, FUNCTION, CLOSURE_DATA];
 
@@ -524,7 +526,7 @@ impl<'a> Context<'a> {
                         }
                     }
                     roc_module::low_level::LowLevel::ListMapWithIndex => {
-                        match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                        match self.param_map.get_symbol(arguments[1], function_layout) {
                             Some(function_ps) => {
                                 let borrows = [function_ps[1].borrow, FUNCTION, CLOSURE_DATA];
 
@@ -545,7 +547,7 @@ impl<'a> Context<'a> {
                         }
                     }
                     roc_module::low_level::LowLevel::ListMap2 => {
-                        match self.param_map.get_symbol(arguments[2], *closure_layout) {
+                        match self.param_map.get_symbol(arguments[2], function_layout) {
                             Some(function_ps) => {
                                 let borrows = [
                                     function_ps[0].borrow,
@@ -572,7 +574,7 @@ impl<'a> Context<'a> {
                         }
                     }
                     roc_module::low_level::LowLevel::ListMap3 => {
-                        match self.param_map.get_symbol(arguments[3], *closure_layout) {
+                        match self.param_map.get_symbol(arguments[3], function_layout) {
                             Some(function_ps) => {
                                 let borrows = [
                                     function_ps[0].borrow,
@@ -601,7 +603,7 @@ impl<'a> Context<'a> {
                         }
                     }
                     roc_module::low_level::LowLevel::ListSortWith => {
-                        match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                        match self.param_map.get_symbol(arguments[1], function_layout) {
                             Some(function_ps) => {
                                 let borrows = [OWNED, FUNCTION, CLOSURE_DATA];
 
@@ -623,7 +625,7 @@ impl<'a> Context<'a> {
                     | roc_module::low_level::LowLevel::ListWalkUntil
                     | roc_module::low_level::LowLevel::ListWalkBackwards
                     | roc_module::low_level::LowLevel::DictWalk => {
-                        match self.param_map.get_symbol(arguments[2], *closure_layout) {
+                        match self.param_map.get_symbol(arguments[2], function_layout) {
                             Some(function_ps) => {
                                 // borrow data structure based on first argument of the folded function
                                 // borrow the default based on second argument of the folded function
@@ -978,7 +980,7 @@ impl<'a> Context<'a> {
                 id: j,
                 parameters: _,
                 remainder: b,
-                continuation: v,
+                body: v,
             } => {
                 // get the parameters with borrow signature
                 let xs = self.param_map.get_join_point(*j);
@@ -1000,7 +1002,7 @@ impl<'a> Context<'a> {
                         id: *j,
                         parameters: xs,
                         remainder: b,
-                        continuation: v,
+                        body: v,
                     }),
                     b_live_vars,
                 )
@@ -1143,7 +1145,7 @@ pub fn collect_stmt(
             id: j,
             parameters,
             remainder: b,
-            continuation: v,
+            body: v,
         } => {
             let mut j_live_vars = collect_stmt(v, jp_live_vars, MutSet::default());
             for param in parameters.iter() {

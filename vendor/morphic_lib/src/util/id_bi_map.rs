@@ -52,6 +52,18 @@ impl<K: Id, V: Hash + Eq + Clone> IdBiMap<K, V> {
         }
     }
 
+    /// Insert a value into the bi-map, or get its key if it is already present.
+    pub fn get_or_insert(&mut self, val: V) -> K {
+        match self.val_to_key.entry(val) {
+            Entry::Occupied(occupied) => occupied.get().clone(),
+            Entry::Vacant(vacant) => {
+                let new_index = self.key_to_val.push(vacant.key().clone());
+                vacant.insert(new_index.clone());
+                new_index
+            }
+        }
+    }
+
     pub fn get_by_val(&self, val: &V) -> Option<K> {
         self.val_to_key.get(val).cloned()
     }
