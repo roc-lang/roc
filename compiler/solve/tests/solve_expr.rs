@@ -118,14 +118,11 @@ mod solve_expr {
             subs.get(variable).content
         };
 
-        let actual_str = content_to_string(content, &mut subs, home, &interns);
+        let actual_str = content_to_string(content, &subs, home, &interns);
 
         // Disregard UnusedDef problems, because those are unavoidable when
         // returning a function from the test expression.
-        can_problems.retain(|prob| match prob {
-            roc_problem::can::Problem::UnusedDef(_, _) => false,
-            _ => true,
-        });
+        can_problems.retain(|prob| !matches!(prob, roc_problem::can::Problem::UnusedDef(_, _)));
 
         Ok((type_problems, can_problems, actual_str))
     }

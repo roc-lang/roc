@@ -1,19 +1,20 @@
 use bumpalo::{collections::Vec as BumpVec, Bump};
 
 use crate::lang::{
-    ast::{Expr2, RecordField},
+    ast::{Expr2, RecordField, WhenBranch},
     expr::Env,
+    pattern::{DestructType, Pattern2, PatternState2, RecordDestruct},
     pool::{Pool, PoolStr, PoolVec, ShallowClone},
     types::{Type2, TypeId},
 };
 
-use roc_can::expected::Expected;
+use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{BumpMap, BumpMapDefault, Index};
 use roc_module::{ident::TagName, symbol::Symbol};
-use roc_region::all::{Located, Region};
+use roc_region::all::Region;
 use roc_types::{
     subs::Variable,
-    types::{self, AnnotationSource},
+    types::{self, AnnotationSource, PReason, PatternCategory},
     types::{Category, Reason},
 };
 
@@ -22,7 +23,7 @@ pub enum Constraint<'a> {
     Eq(Type2, Expected<Type2>, Category, Region),
     // Store(Type, Variable, &'static str, u32),
     Lookup(Symbol, Expected<Type2>, Region),
-    // Pattern(Region, PatternCategory, Type, PExpected<Type>),
+    Pattern(Region, PatternCategory, Type2, PExpected<Type2>),
     And(BumpVec<'a, Constraint<'a>>),
     Let(&'a LetConstraint<'a>),
     // SaveTheEnvironment,
@@ -33,7 +34,7 @@ pub enum Constraint<'a> {
 pub struct LetConstraint<'a> {
     pub rigid_vars: BumpVec<'a, Variable>,
     pub flex_vars: BumpVec<'a, Variable>,
-    pub def_types: BumpMap<Symbol, Located<Type2>>,
+    pub def_types: BumpMap<Symbol, Type2>,
     pub defs_constraint: Constraint<'a>,
     pub ret_constraint: Constraint<'a>,
 }
@@ -630,6 +631,129 @@ pub fn constrain_expr<'a>(
                 }
             }
         }
+        Expr2::When {
+            cond_var,
+            expr_var,
+            cond: cond_id,
+            branches,
+        } => {
+            // Infer the condition expression's type.
+            let cond_type = Type2::Variable(*cond_var);
+
+            let cond = env.pool.get(*cond_id);
+
+            let expr_con = constrain_expr(
+                arena,
+                env,
+                cond,
+                Expected::NoExpectation(cond_type.shallow_clone()),
+                region,
+            );
+
+            let mut constraints = BumpVec::with_capacity_in(branches.len() + 1, arena);
+
+            constraints.push(expr_con);
+
+            let mut flex_vars = BumpVec::with_capacity_in(2, arena);
+
+            flex_vars.push(*cond_var);
+            flex_vars.push(*expr_var);
+
+            match &expected {
+                Expected::FromAnnotation(name, arity, _, _typ) => {
+                    // NOTE deviation from elm.
+                    //
+                    // in elm, `_typ` is used, but because we have this `expr_var` too
+                    // and need to constrain it, this is what works and gives better error messages
+                    let typ = Type2::Variable(*expr_var);
+
+                    for (index, when_branch_id) in branches.iter_node_ids().enumerate() {
+                        let when_branch = env.pool.get(when_branch_id);
+
+                        let pattern_region = region;
+                        // let pattern_region = Region::across_all(
+                        //     when_branch.patterns.iter(env.pool).map(|v| &v.region),
+                        // );
+
+                        let branch_con = constrain_when_branch(
+                            arena,
+                            env,
+                            // TODO: when_branch.value.region,
+                            region,
+                            when_branch,
+                            PExpected::ForReason(
+                                PReason::WhenMatch {
+                                    index: Index::zero_based(index),
+                                },
+                                cond_type.shallow_clone(),
+                                pattern_region,
+                            ),
+                            Expected::FromAnnotation(
+                                name.clone(),
+                                *arity,
+                                AnnotationSource::TypedWhenBranch {
+                                    index: Index::zero_based(index),
+                                },
+                                typ.shallow_clone(),
+                            ),
+                        );
+
+                        constraints.push(branch_con);
+                    }
+
+                    constraints.push(Eq(typ, expected, Category::When, region));
+
+                    return exists(arena, flex_vars, And(constraints));
+                }
+
+                _ => {
+                    let branch_type = Type2::Variable(*expr_var);
+                    let mut branch_cons = BumpVec::with_capacity_in(branches.len(), arena);
+
+                    for (index, when_branch_id) in branches.iter_node_ids().enumerate() {
+                        let when_branch = env.pool.get(when_branch_id);
+
+                        let pattern_region = region;
+                        // let pattern_region =
+                        //     Region::across_all(when_branch.patterns.iter().map(|v| &v.region));
+
+                        let branch_con = constrain_when_branch(
+                            arena,
+                            env,
+                            region,
+                            when_branch,
+                            PExpected::ForReason(
+                                PReason::WhenMatch {
+                                    index: Index::zero_based(index),
+                                },
+                                cond_type.shallow_clone(),
+                                pattern_region,
+                            ),
+                            Expected::ForReason(
+                                Reason::WhenBranch {
+                                    index: Index::zero_based(index),
+                                },
+                                branch_type.shallow_clone(),
+                                // TODO: when_branch.value.region,
+                                region,
+                            ),
+                        );
+
+                        branch_cons.push(branch_con);
+                    }
+
+                    let mut and_constraints = BumpVec::with_capacity_in(2, arena);
+
+                    and_constraints.push(And(branch_cons));
+                    and_constraints.push(Eq(branch_type, expected, Category::When, region));
+
+                    constraints.push(And(and_constraints));
+                }
+            }
+
+            // exhautiveness checking happens when converting to mono::Expr
+            exists(arena, flex_vars, And(constraints))
+        }
         _ => todo!("implement constraints for {:?}", expr),
     }
 }
@@ -663,6 +787,330 @@ fn constrain_field<'a>(
 
 fn constrain_empty_record<'a>(expected: Expected<Type2>, region: Region) -> Constraint<'a> {
     Constraint::Eq(Type2::EmptyRec, expected, Category::Record, region)
+}
+
+#[inline(always)]
+fn constrain_when_branch<'a>(
+    arena: &'a Bump,
+    env: &mut Env,
+    region: Region,
+    when_branch: &WhenBranch,
+    pattern_expected: PExpected<Type2>,
+    expr_expected: Expected<Type2>,
+) -> Constraint<'a> {
+    let when_expr = env.pool.get(when_branch.body);
+
+    let ret_constraint = constrain_expr(arena, env, when_expr, expr_expected, region);
+
+    let mut state = PatternState2 {
+        headers: BumpMap::new_in(arena),
+        vars: BumpVec::with_capacity_in(1, arena),
+        constraints: BumpVec::with_capacity_in(1, arena),
+    };
+
+    // TODO investigate for error messages, is it better to unify all branches with a variable,
+    // then unify that variable with the expectation?
+    for pattern_id in when_branch.patterns.iter_node_ids() {
+        let pattern = env.pool.get(pattern_id);
+
+        constrain_pattern(
+            arena,
+            env,
+            pattern,
+            // loc_pattern.region,
+            region,
+            pattern_expected.shallow_clone(),
+            &mut state,
+        );
+    }
+
+    if let Some(guard_id) = &when_branch.guard {
+        let guard = env.pool.get(*guard_id);
+
+        let guard_constraint = constrain_expr(
+            arena,
+            env,
+            guard,
+            Expected::ForReason(
+                Reason::WhenGuard,
+                Type2::Variable(Variable::BOOL),
+                // TODO: loc_guard.region,
+                region,
+            ),
+            region,
+        );
+
+        // must introduce the headers from the pattern before constraining the guard
+        Constraint::Let(arena.alloc(LetConstraint {
+            rigid_vars: BumpVec::new_in(arena),
+            flex_vars: state.vars,
+            def_types: state.headers,
+            defs_constraint: Constraint::And(state.constraints),
+            ret_constraint: Constraint::Let(arena.alloc(LetConstraint {
+                rigid_vars: BumpVec::new_in(arena),
+                flex_vars: BumpVec::new_in(arena),
+                def_types: BumpMap::new_in(arena),
+                defs_constraint: guard_constraint,
+                ret_constraint,
+            })),
+        }))
+    } else {
+        Constraint::Let(arena.alloc(LetConstraint {
+            rigid_vars: BumpVec::new_in(arena),
+            flex_vars: state.vars,
+            def_types: state.headers,
+            defs_constraint: Constraint::And(state.constraints),
+            ret_constraint,
+        }))
+    }
+}
+
+/// This accepts PatternState (rather than returning it) so that the caller can
+/// intiialize the Vecs in PatternState using with_capacity
+/// based on its knowledge of their lengths.
+pub fn constrain_pattern<'a>(
+    arena: &'a Bump,
+    env: &mut Env,
+    pattern: &Pattern2,
+    region: Region,
+    expected: PExpected<Type2>,
+    state: &mut PatternState2<'a>,
+) {
+    use Pattern2::*;
+
+    match pattern {
+        Underscore | UnsupportedPattern(_) | MalformedPattern(_, _) | Shadowed { .. } => {
+            // Neither the _ pattern nor erroneous ones add any constraints.
+        }
+
+        Identifier(symbol) => {
+            state.headers.insert(*symbol, expected.get_type());
+        }
+
+        NumLiteral(var, _) => {
+            state.vars.push(*var);
+
+            let type_id = env.pool.add(Type2::Variable(*var));
+
+            state.constraints.push(Constraint::Pattern(
+                region,
+                PatternCategory::Num,
+                num_num(env.pool, type_id),
+                expected,
+            ));
+        }
+
+        IntLiteral(_int_val) => {
+            let precision_var = env.var_store.fresh();
+
+            let range = env.add(Type2::Variable(precision_var), region);
+
+            state.constraints.push(Constraint::Pattern(
+                region,
+                PatternCategory::Int,
+                num_int(env.pool, range),
+                expected,
+            ));
+        }
+
+        FloatLiteral(_float_val) => {
+            let precision_var = env.var_store.fresh();
+
+            let range = env.add(Type2::Variable(precision_var), region);
+
+            state.constraints.push(Constraint::Pattern(
+                region,
+                PatternCategory::Float,
+                num_float(env.pool, range),
+                expected,
+            ));
+        }
+
+        StrLiteral(_) => {
+            state.constraints.push(Constraint::Pattern(
+                region,
+                PatternCategory::Str,
+                str_type(env.pool),
+                expected,
+            ));
+        }
+
+        RecordDestructure {
+            whole_var,
+            ext_var,
+            destructs,
+        } => {
+            state.vars.push(*whole_var);
+            state.vars.push(*ext_var);
+            let ext_type = Type2::Variable(*ext_var);
+
+            let mut field_types = Vec::new();
+
+            for destruct_id in destructs.iter_node_ids() {
+                let RecordDestruct {
+                    var,
+                    label,
+                    symbol,
+                    typ,
+                } = env.pool.get(destruct_id);
+
+                let pat_type = Type2::Variable(*var);
+                let expected = PExpected::NoExpectation(pat_type.shallow_clone());
+
+                if !state.headers.contains_key(&symbol) {
+                    state.headers.insert(*symbol, pat_type.shallow_clone());
+                }
+
+                let destruct_type = env.pool.get(*typ);
+
+                let field_type = match destruct_type {
+                    DestructType::Guard(guard_var, guard_id) => {
+                        state.constraints.push(Constraint::Pattern(
+                            region,
+                            PatternCategory::PatternGuard,
+                            Type2::Variable(*guard_var),
+                            PExpected::ForReason(
+                                PReason::PatternGuard,
+                                pat_type.shallow_clone(),
+                                // TODO: region should be from guard_id
+                                region,
+                            ),
+                        ));
+
+                        state.vars.push(*guard_var);
+
+                        let guard = env.pool.get(*guard_id);
+
+                        // TODO: region should be from guard_id
+                        constrain_pattern(arena, env, guard, region, expected, state);
+
+                        types::RecordField::Demanded(env.pool.add(pat_type))
+                    }
+                    DestructType::Optional(expr_var, expr_id) => {
+                        state.constraints.push(Constraint::Pattern(
+                            region,
+                            PatternCategory::PatternDefault,
+                            Type2::Variable(*expr_var),
+                            PExpected::ForReason(
+                                PReason::OptionalField,
+                                pat_type.shallow_clone(),
+                                // TODO: region should be from expr_id
+                                region,
+                            ),
+                        ));
+
+                        state.vars.push(*expr_var);
+
+                        let expr_expected = Expected::ForReason(
+                            Reason::RecordDefaultField(label.as_str(env.pool).into()),
+                            pat_type.shallow_clone(),
+                            // TODO: region should be from expr_id
+                            region,
+                        );
+
+                        let expr = env.pool.get(*expr_id);
+
+                        // TODO: region should be from expr_id
+                        let expr_con = constrain_expr(arena, env, expr, expr_expected, region);
+
+                        state.constraints.push(expr_con);
+
+                        types::RecordField::Optional(env.pool.add(pat_type))
+                    }
+                    DestructType::Required => {
+                        // No extra constraints necessary.
+                        types::RecordField::Demanded(env.pool.add(pat_type))
+                    }
+                };
+
+                field_types.push((*label, field_type));
+
+                state.vars.push(*var);
+            }
+
+            let record_type = Type2::Record(
+                PoolVec::new(field_types.into_iter(), env.pool),
+                env.pool.add(ext_type),
+            );
+
+            let whole_con = Constraint::Eq(
+                Type2::Variable(*whole_var),
+                Expected::NoExpectation(record_type),
+                Category::Storage(std::file!(), std::line!()),
+                region,
+            );
+
+            let record_con = Constraint::Pattern(
+                region,
+                PatternCategory::Record,
+                Type2::Variable(*whole_var),
+                expected,
+            );
+
+            state.constraints.push(whole_con);
+            state.constraints.push(record_con);
+        }
+        GlobalTag {
+            whole_var,
+            ext_var,
+            tag_name,
+            arguments,
+        } => {
+            let mut argument_types = Vec::with_capacity(arguments.len());
+
+            for (index, arg_id) in arguments.iter_node_ids().enumerate() {
+                let (pattern_var, pattern_id) = env.pool.get(arg_id);
+                let pattern = env.pool.get(*pattern_id);
+
+                state.vars.push(*pattern_var);
+
+                let pattern_type = Type2::Variable(*pattern_var);
+                argument_types.push(pattern_type.shallow_clone());
+
+                let expected = PExpected::ForReason(
+                    PReason::TagArg {
+                        tag_name: TagName::Global(tag_name.as_str(env.pool).into()),
+                        index: Index::zero_based(index),
+                    },
+                    pattern_type,
+                    region,
+                );
+
+                // TODO region should come from pattern
+                constrain_pattern(arena, env, pattern, region, expected, state);
+            }
+
+            let whole_con = Constraint::Eq(
+                Type2::Variable(*whole_var),
+                Expected::NoExpectation(Type2::TagUnion(
+                    PoolVec::new(
+                        vec![(
+                            *tag_name,
+                            PoolVec::new(argument_types.into_iter(), env.pool),
+                        )]
+                        .into_iter(),
+                        env.pool,
+                    ),
+                    env.pool.add(Type2::Variable(*ext_var)),
+                )),
+                Category::Storage(std::file!(), std::line!()),
+                region,
+            );
+
+            let tag_con = Constraint::Pattern(
+                region,
+                PatternCategory::Ctor(TagName::Global(tag_name.as_str(env.pool).into())),
+                Type2::Variable(*whole_var),
+                expected,
+            );
+
+            state.vars.push(*whole_var);
+            state.vars.push(*ext_var);
+            state.constraints.push(whole_con);
+            state.constraints.push(tag_con);
+        }
+        PrivateTag { .. } => todo!(),
+    }
 }
 
 #[inline(always)]
@@ -725,7 +1173,7 @@ fn num_floatingpoint(pool: &mut Pool, range: TypeId) -> Type2 {
 }
 
 #[inline(always)]
-fn _num_int(pool: &mut Pool, range: TypeId) -> Type2 {
+fn num_int(pool: &mut Pool, range: TypeId) -> Type2 {
     let num_integer_type = _num_integer(pool, range);
     let num_integer_id = pool.add(num_integer_type);
 
