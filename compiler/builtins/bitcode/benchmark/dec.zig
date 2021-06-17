@@ -35,21 +35,21 @@ fn add7() u64 {
 
     var a = dec1.add(dec2);
     a = a.add(dec1);
+    a = a.add(dec2);
     a = a.add(dec1);
+    a = a.add(dec2);
     a = a.add(dec1);
+    a = a.add(dec2);
     a = a.add(dec1);
+    a = a.add(dec2);
     a = a.add(dec1);
+    a = a.add(dec2);
     a = a.add(dec1);
+    a = a.add(dec2);
     a = a.add(dec1);
+    a = a.add(dec2);
     a = a.add(dec1);
-    a = a.add(dec1);
-    a = a.add(dec1);
-    a = a.add(dec1);
-    a = a.add(dec1);
-    a = a.add(dec1);
-    a = a.add(dec1);
-    a = a.add(dec1);
-    a = a.add(dec1);
+    a = a.add(dec2);
 
     return timer.read();
 }
@@ -65,24 +65,25 @@ fn sub7() u64 {
 
     var a = dec1.sub(dec2);
     a = a.sub(dec1);
+    a = a.sub(dec2);
     a = a.sub(dec1);
+    a = a.sub(dec2);
     a = a.sub(dec1);
+    a = a.sub(dec2);
     a = a.sub(dec1);
+    a = a.sub(dec2);
     a = a.sub(dec1);
+    a = a.sub(dec2);
     a = a.sub(dec1);
+    a = a.sub(dec2);
     a = a.sub(dec1);
+    a = a.sub(dec2);
     a = a.sub(dec1);
-    a = a.sub(dec1);
-    a = a.sub(dec1);
-    a = a.sub(dec1);
-    a = a.sub(dec1);
-    a = a.sub(dec1);
-    a = a.sub(dec1);
-    a = a.sub(dec1);
-    a = a.sub(dec1);
+    a = a.sub(dec2);
 
     return timer.read();
 }
+
 fn mul7() u64 {
     var str1 = RocStr.init("1.2", 3);
     const dec1 = RocDec.fromStr(str1).?;
@@ -94,21 +95,21 @@ fn mul7() u64 {
 
     var a = dec1.mul(dec2);
     a = a.mul(dec1);
+    a = a.mul(dec2);
     a = a.mul(dec1);
+    a = a.mul(dec2);
     a = a.mul(dec1);
+    a = a.mul(dec2);
     a = a.mul(dec1);
+    a = a.mul(dec2);
     a = a.mul(dec1);
+    a = a.mul(dec2);
     a = a.mul(dec1);
+    a = a.mul(dec2);
     a = a.mul(dec1);
+    a = a.mul(dec2);
     a = a.mul(dec1);
-    a = a.mul(dec1);
-    a = a.mul(dec1);
-    a = a.mul(dec1);
-    a = a.mul(dec1);
-    a = a.mul(dec1);
-    a = a.mul(dec1);
-    a = a.mul(dec1);
-    a = a.mul(dec1);
+    a = a.mul(dec2);
 
     return timer.read();
 }
@@ -124,21 +125,21 @@ fn div7() u64 {
 
     var a = dec1.div(dec2);
     a = a.div(dec1);
+    a = a.div(dec2);
     a = a.div(dec1);
+    a = a.div(dec2);
     a = a.div(dec1);
+    a = a.div(dec2);
     a = a.div(dec1);
+    a = a.div(dec2);
     a = a.div(dec1);
+    a = a.div(dec2);
     a = a.div(dec1);
+    a = a.div(dec2);
     a = a.div(dec1);
+    a = a.div(dec2);
     a = a.div(dec1);
-    a = a.div(dec1);
-    a = a.div(dec1);
-    a = a.div(dec1);
-    a = a.div(dec1);
-    a = a.div(dec1);
-    a = a.div(dec1);
-    a = a.div(dec1);
-    a = a.div(dec1);
+    a = a.div(dec2);
 
     return timer.read();
 }
