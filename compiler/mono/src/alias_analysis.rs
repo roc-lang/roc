@@ -19,19 +19,22 @@ pub const STATIC_STR_NAME: ConstName = ConstName(&Symbol::STR_ALIAS_ANALYSIS_STA
 
 const ENTRY_POINT_NAME: &[u8] = b"mainForHost";
 
-pub fn func_name_bytes(proc: &Proc) -> [u8; 16] {
+pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
     func_name_bytes_help(proc.name, proc.args.iter().map(|x| x.0), proc.ret_layout)
 }
+
+const DEBUG: bool = false;
+const SIZE: usize = if DEBUG { 50 } else { 16 };
 
 pub fn func_name_bytes_help<'a, I>(
     symbol: Symbol,
     argument_layouts: I,
     return_layout: Layout<'a>,
-) -> [u8; 16]
+) -> [u8; SIZE]
 where
     I: Iterator<Item = Layout<'a>>,
 {
-    let mut name_bytes = [0u8; 16];
+    let mut name_bytes = [0u8; SIZE];
 
     use std::collections::hash_map::DefaultHasher;
     use std::hash::Hash;
@@ -75,7 +78,25 @@ where
         *target = *source;
     }
 
+    if DEBUG {
+        for (i, c) in (format!("{:?}", symbol)).chars().take(25).enumerate() {
+            name_bytes[25 + i] = c as u8;
+        }
+    }
+
     name_bytes
+}
+
+fn bytes_as_ascii(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+
+    let mut buf = String::new();
+
+    for byte in bytes {
+        write!(buf, "{:02X}", byte).unwrap();
+    }
+
+    buf
 }
 
 pub fn spec_program<'a, I>(
@@ -102,15 +123,34 @@ where
         m.add_const(STATIC_STR_NAME, static_str_def)?;
 
         // the entry point wrapper
+        let roc_main_bytes = func_name_bytes_help(
+            entry_point.symbol,
+            entry_point.layout.arguments.iter().copied(),
+            entry_point.layout.result,
+        );
+        let roc_main = FuncName(&roc_main_bytes);
+
+        let entry_point_function = build_entry_point(entry_point.layout, roc_main)?;
         let entry_point_name = FuncName(ENTRY_POINT_NAME);
-        let entry_point_function = build_entry_point(entry_point.layout, entry_point_name)?;
         m.add_func(entry_point_name, entry_point_function)?;
 
         // all other functions
         for proc in procs {
+            let bytes = func_name_bytes(proc);
+            let func_name = FuncName(&bytes);
+
+            if DEBUG {
+                eprintln!(
+                    "{:?}: {:?} with {:?} args",
+                    proc.name,
+                    bytes_as_ascii(&bytes),
+                    proc.args.len()
+                );
+            }
+
             let spec = proc_spec(proc)?;
 
-            m.add_func(FuncName(&func_name_bytes(proc)), spec)?;
+            m.add_func(func_name, spec)?;
         }
 
         m.build()?
@@ -126,7 +166,9 @@ where
         p.build()?
     };
 
-    // eprintln!("{}", program.to_source_string());
+    if DEBUG {
+        eprintln!("{}", program.to_source_string());
+    }
 
     morphic_lib::solve(program)
 }
@@ -198,11 +240,25 @@ fn stmt_spec(
     use Stmt::*;
 
     match stmt {
-        Let(symbol, expr, layout, continuation) => {
-            let value_id = expr_spec(builder, env, block, layout, expr)?;
+        Let(symbol, expr, expr_layout, mut continuation) => {
+            let value_id = expr_spec(builder, env, block, expr_layout, expr)?;
             env.symbols.insert(*symbol, value_id);
+
+            let mut queue = vec![symbol];
+
+            while let Let(symbol, expr, expr_layout, c) = continuation {
+                let value_id = expr_spec(builder, env, block, expr_layout, expr)?;
+                env.symbols.insert(*symbol, value_id);
+
+                queue.push(symbol);
+                continuation = c;
+            }
+
             let result = stmt_spec(builder, env, block, layout, continuation)?;
-            env.symbols.remove(symbol);
+
+            for symbol in queue {
+                env.symbols.remove(symbol);
+            }
 
             Ok(result)
         }
@@ -235,7 +291,7 @@ fn stmt_spec(
             cond_layout: _,
             branches,
             default_branch,
-            ret_layout,
+            ret_layout: _lies,
         } => {
             let mut cases = Vec::with_capacity(branches.len() + 1);
 
@@ -246,7 +302,7 @@ fn stmt_spec(
 
             for branch in it {
                 let block = builder.add_block();
-                let value_id = stmt_spec(builder, env, block, ret_layout, branch)?;
+                let value_id = stmt_spec(builder, env, block, layout, branch)?;
                 cases.push(BlockExpr(block, value_id));
             }
 
@@ -282,7 +338,7 @@ fn stmt_spec(
         Join {
             id,
             parameters,
-            continuation,
+            body,
             remainder,
         } => {
             let mut type_ids = Vec::new();
@@ -298,26 +354,32 @@ fn stmt_spec(
             let (jpid, jp_argument) =
                 builder.declare_continuation(block, jp_arg_type_id, ret_type_id)?;
 
+            // NOTE join point arguments can shadow variables from the outer scope
+            // the ordering of steps here is important
+
+            // add this ID so both body and remainder can reference it
+            env.join_points.insert(*id, jpid);
+
+            // first, with the current variable bindings, process the remainder
+            let cont_block = builder.add_block();
+            let cont_value_id = stmt_spec(builder, env, cont_block, layout, remainder)?;
+
+            // only then introduce variables bound by the jump point, and process its body
             let join_body_sub_block = {
-                env.join_points.insert(*id, jpid);
                 let jp_body_block = builder.add_block();
 
                 // unpack the argument
                 for (i, p) in parameters.iter().enumerate() {
                     let value_id =
                         builder.add_get_tuple_field(jp_body_block, jp_argument, i as u32)?;
+
                     env.symbols.insert(p.symbol, value_id);
                 }
 
-                let jp_body_value_id = stmt_spec(builder, env, jp_body_block, layout, remainder)?;
+                let jp_body_value_id = stmt_spec(builder, env, jp_body_block, layout, body)?;
+
                 BlockExpr(jp_body_block, jp_body_value_id)
             };
-
-            // NOTE the symbols bound by the join point can shadow the argument symbols of the
-            // surrounding function, so we don't remove them from the env here
-
-            let cont_block = builder.add_block();
-            let cont_value_id = stmt_spec(builder, env, cont_block, layout, continuation)?;
 
             env.join_points.remove(id);
             builder.define_continuation(jpid, join_body_sub_block)?;
@@ -423,7 +485,7 @@ fn call_spec(
         ),
         HigherOrderLowLevel {
             specialization_id,
-            closure_layout: _,
+            closure_env_layout,
             op,
             arg_layouts,
             ret_layout,
@@ -458,15 +520,160 @@ fn call_spec(
                     DictWalk => {
                         let dict = env.symbols[&call.arguments[0]];
                         let default = env.symbols[&call.arguments[1]];
+                        let closure_env = env.symbols[&call.arguments[3]];
 
                         let bag = builder.add_get_tuple_field(block, dict, DICT_BAG_INDEX)?;
                         let _cell = builder.add_get_tuple_field(block, dict, DICT_CELL_INDEX)?;
 
                         let first = builder.add_bag_get(block, bag)?;
 
-                        let argument = builder.add_make_tuple(block, &[first, default])?;
+                        let key = builder.add_get_tuple_field(block, first, 0)?;
+                        let val = builder.add_get_tuple_field(block, first, 1)?;
+
+                        let argument = if closure_env_layout.is_none() {
+                            builder.add_make_tuple(block, &[key, val, default])?
+                        } else {
+                            builder.add_make_tuple(block, &[key, val, default, closure_env])?
+                        };
                         builder.add_call(block, spec_var, module, name, argument)?;
                     }
+
+                    ListWalk | ListWalkBackwards | ListWalkUntil => {
+                        let list = env.symbols[&call.arguments[0]];
+                        let default = env.symbols[&call.arguments[1]];
+                        let closure_env = env.symbols[&call.arguments[3]];
+
+                        let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+                        let _cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+
+                        let first = builder.add_bag_get(block, bag)?;
+
+                        let argument = if closure_env_layout.is_none() {
+                            builder.add_make_tuple(block, &[first, default])?
+                        } else {
+                            builder.add_make_tuple(block, &[first, default, closure_env])?
+                        };
+                        builder.add_call(block, spec_var, module, name, argument)?;
+                    }
+
+                    ListMapWithIndex => {
+                        let list = env.symbols[&call.arguments[0]];
+                        let closure_env = env.symbols[&call.arguments[2]];
+
+                        let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+                        let _cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+
+                        let first = builder.add_bag_get(block, bag)?;
+                        let index = builder.add_make_tuple(block, &[])?;
+
+                        let argument = if closure_env_layout.is_none() {
+                            builder.add_make_tuple(block, &[first, index])?
+                        } else {
+                            builder.add_make_tuple(block, &[first, index, closure_env])?
+                        };
+                        builder.add_call(block, spec_var, module, name, argument)?;
+                    }
+
+                    ListMap => {
+                        let list1 = env.symbols[&call.arguments[0]];
+                        let closure_env = env.symbols[&call.arguments[2]];
+
+                        let bag1 = builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
+                        let _cell1 = builder.add_get_tuple_field(block, list1, LIST_CELL_INDEX)?;
+
+                        let elem1 = builder.add_bag_get(block, bag1)?;
+
+                        let argument = if closure_env_layout.is_none() {
+                            builder.add_make_tuple(block, &[elem1])?
+                        } else {
+                            builder.add_make_tuple(block, &[elem1, closure_env])?
+                        };
+                        builder.add_call(block, spec_var, module, name, argument)?;
+                    }
+
+                    ListSortWith => {
+                        let list1 = env.symbols[&call.arguments[0]];
+                        let closure_env = env.symbols[&call.arguments[2]];
+
+                        let bag1 = builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
+                        let _cell1 = builder.add_get_tuple_field(block, list1, LIST_CELL_INDEX)?;
+
+                        let elem1 = builder.add_bag_get(block, bag1)?;
+
+                        let argument = if closure_env_layout.is_none() {
+                            builder.add_make_tuple(block, &[elem1, elem1])?
+                        } else {
+                            builder.add_make_tuple(block, &[elem1, elem1, closure_env])?
+                        };
+                        builder.add_call(block, spec_var, module, name, argument)?;
+                    }
+
+                    ListMap2 => {
+                        let list1 = env.symbols[&call.arguments[0]];
+                        let list2 = env.symbols[&call.arguments[1]];
+                        let closure_env = env.symbols[&call.arguments[3]];
+
+                        let bag1 = builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
+                        let _cell1 = builder.add_get_tuple_field(block, list1, LIST_CELL_INDEX)?;
+                        let elem1 = builder.add_bag_get(block, bag1)?;
+
+                        let bag2 = builder.add_get_tuple_field(block, list2, LIST_BAG_INDEX)?;
+                        let _cell2 = builder.add_get_tuple_field(block, list2, LIST_CELL_INDEX)?;
+                        let elem2 = builder.add_bag_get(block, bag2)?;
+
+                        let argument = if closure_env_layout.is_none() {
+                            builder.add_make_tuple(block, &[elem1, elem2])?
+                        } else {
+                            builder.add_make_tuple(block, &[elem1, elem2, closure_env])?
+                        };
+                        builder.add_call(block, spec_var, module, name, argument)?;
+                    }
+
+                    ListMap3 => {
+                        let list1 = env.symbols[&call.arguments[0]];
+                        let list2 = env.symbols[&call.arguments[1]];
+                        let list3 = env.symbols[&call.arguments[2]];
+                        let closure_env = env.symbols[&call.arguments[4]];
+
+                        let bag1 = builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
+                        let _cell1 = builder.add_get_tuple_field(block, list1, LIST_CELL_INDEX)?;
+                        let elem1 = builder.add_bag_get(block, bag1)?;
+
+                        let bag2 = builder.add_get_tuple_field(block, list2, LIST_BAG_INDEX)?;
+                        let _cell2 = builder.add_get_tuple_field(block, list2, LIST_CELL_INDEX)?;
+                        let elem2 = builder.add_bag_get(block, bag2)?;
+
+                        let bag3 = builder.add_get_tuple_field(block, list3, LIST_BAG_INDEX)?;
+                        let _cell3 = builder.add_get_tuple_field(block, list3, LIST_CELL_INDEX)?;
+                        let elem3 = builder.add_bag_get(block, bag3)?;
+
+                        let argument = if closure_env_layout.is_none() {
+                            builder.add_make_tuple(block, &[elem1, elem2, elem3])?
+                        } else {
+                            builder.add_make_tuple(block, &[elem1, elem2, elem3, closure_env])?
+                        };
+                        builder.add_call(block, spec_var, module, name, argument)?;
+                    }
+
+                    ListKeepIf | ListKeepOks | ListKeepErrs => {
+                        let list = env.symbols[&call.arguments[0]];
+                        let closure_env = env.symbols[&call.arguments[2]];
+
+                        let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+                        // let _cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+
+                        let first = builder.add_bag_get(block, bag)?;
+
+                        let argument = if closure_env_layout.is_none() {
+                            builder.add_make_tuple(block, &[first])?
+                        } else {
+                            builder.add_make_tuple(block, &[first, closure_env])?
+                        };
+                        let result = builder.add_call(block, spec_var, module, name, argument)?;
+                        let unit = builder.add_tuple_type(&[])?;
+                        builder.add_unknown_with(block, &[result], unit)?;
+                    }
+
                     _ => {
                         // fake a call to the function argument
                         // to make sure the function is specialized
@@ -653,7 +860,7 @@ fn expr_spec(
         Struct(fields) => build_tuple_value(builder, env, block, fields),
         AccessAtIndex {
             index,
-            field_layouts,
+            field_layouts: _,
             structure,
             wrapped,
         } => {
@@ -673,17 +880,20 @@ fn expr_spec(
                 Wrapped::RecordOrSingleTagUnion => {
                     builder.add_get_tuple_field(block, value_id, *index as u32)
                 }
+                Wrapped::LikeARoseTree => {
+                    let result_type = layout_spec(builder, layout)?;
+                    builder.add_unknown_with(block, &[value_id], result_type)
+                }
                 Wrapped::MultiTagUnion => {
                     // Clearly this is not generally correct, but it should be for our examples
-                    let hacky_is_recursive =
-                        field_layouts.iter().any(|l| l == &Layout::RecursivePointer);
+                    // let hacky_is_recursive = field_layouts.iter().any(|l| l == &Layout::RecursivePointer);
+                    // if hacky_is_recursive {
 
-                    if hacky_is_recursive {
-                        let result_type = layout_spec(builder, layout)?;
-                        builder.add_unknown_with(block, &[value_id], result_type)
-                    } else {
-                        builder.add_get_tuple_field(block, value_id, *index as u32)
-                    }
+                    // we don't know what constructor we are at this point, so how can we get a
+                    // field from an enum value?
+
+                    let result_type = layout_spec(builder, layout)?;
+                    builder.add_unknown_with(block, &[value_id], result_type)
                 }
             }
         }
@@ -700,7 +910,9 @@ fn expr_spec(
                 bag = builder.add_bag_insert(block, bag, value_id)?;
             }
 
-            Ok(bag)
+            let cell = builder.add_new_heap_cell(block)?;
+
+            builder.add_make_tuple(block, &[cell, bag])
         }
 
         EmptyArray => {
@@ -827,8 +1039,7 @@ fn builtin_spec(builder: &mut FuncDefBuilder, builtin: &Builtin) -> Result<TypeI
 
 fn str_type<TC: TypeContext>(builder: &mut TC) -> Result<TypeId> {
     let cell_id = builder.add_heap_cell_type();
-    let len_id = builder.add_tuple_type(&[])?;
-    builder.add_tuple_type(&[cell_id, len_id])
+    builder.add_tuple_type(&[cell_id])
 }
 
 // const OK_TAG_ID: u8 = 1u8;

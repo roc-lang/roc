@@ -8,7 +8,9 @@ pub mod bytes_id;
 pub mod forward_trait;
 
 pub mod blocks;
+pub mod flat_slices;
 pub mod id_bi_map;
 pub mod id_vec;
 pub mod op_graph;
 pub mod replace_none;
+pub mod strongly_connected;

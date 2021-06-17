@@ -830,9 +830,10 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
 
         CallType::HigherOrderLowLevel {
             op,
-            closure_layout,
             function_owns_closure_data,
             specialization_id,
+            arg_layouts,
+            ret_layout,
             ..
         } => {
             let bytes = specialization_id.to_bytes();
@@ -846,8 +847,9 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
                 scope,
                 layout,
                 *op,
-                *closure_layout,
                 func_spec,
+                arg_layouts,
+                ret_layout,
                 *function_owns_closure_data,
                 arguments,
             )
@@ -1435,6 +1437,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             index,
             structure,
             wrapped: Wrapped::RecordOrSingleTagUnion,
+            ..
+        }
+        | AccessAtIndex {
+            index,
+            structure,
+            wrapped: Wrapped::LikeARoseTree,
             ..
         } => {
             // extract field from a record
@@ -2137,7 +2145,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             id,
             parameters,
             remainder,
-            continuation,
+            body: continuation,
         } => {
             let builder = env.builder;
             let context = env.context;
@@ -3161,7 +3169,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
     let it = procedures.iter().map(|x| x.1);
 
     let solutions = match roc_mono::alias_analysis::spec_program(entry_point, it) {
-        Err(e) => panic!("Error in alias analysis: {:?}", e),
+        Err(e) => panic!("Error in alias analysis: {}", e),
         Ok(solutions) => solutions,
     };
 
@@ -3815,8 +3823,9 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
     scope: &Scope<'a, 'ctx>,
     return_layout: &Layout<'a>,
     op: LowLevel,
-    function_layout: Layout<'a>,
     func_spec: FuncSpec,
+    argument_layouts: &[Layout<'a>],
+    result_layout: &Layout<'a>,
     function_owns_closure_data: bool,
     args: &[Symbol],
 ) -> BasicValueEnum<'ctx> {
@@ -3828,6 +3837,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
     macro_rules! passed_function_at_index {
         ($index:expr) => {{
             let function_symbol = args[$index];
+            let function_layout = Layout::FunctionPointer(argument_layouts, return_layout);
 
             function_value_by_func_spec(env, func_spec, function_symbol, function_layout)
         }};
@@ -4095,7 +4105,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         env,
                         layout_ids,
                         roc_function_call,
-                        &function_layout,
+                        result_layout,
                         list,
                         before_layout,
                         after_layout,
@@ -4139,7 +4149,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         env,
                         layout_ids,
                         roc_function_call,
-                        &function_layout,
+                        result_layout,
                         list,
                         before_layout,
                         after_layout,
