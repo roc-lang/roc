@@ -1,7 +1,7 @@
 #![crate_type = "lib"]
 #![no_std]
 use core::ffi::c_void;
-use core::{fmt, mem};
+use core::{fmt, mem, ptr};
 
 pub mod alloca;
 
@@ -434,11 +434,27 @@ impl RocStr {
             unsafe { core::slice::from_raw_parts(self.elements, self.length) }
         }
     }
+
     #[allow(clippy::missing_safety_doc)]
     pub unsafe fn as_str(&self) -> &str {
         let slice = self.as_slice();
 
         core::str::from_utf8_unchecked(slice)
+    }
+
+    /// Write a CStr (null-terminated) representation of this RocStr into
+    /// the given buffer. Assumes the given buffer has enough space!
+    pub unsafe fn write_c_str(&self, buf: *mut u8) -> *mut char {
+        if self.is_small_str() {
+            ptr::copy_nonoverlapping(self.get_small_str_ptr(), buf, self.len());
+        } else {
+            ptr::copy_nonoverlapping(self.elements, buf, self.len());
+        }
+
+        // null-terminate
+        *(buf.offset(self.len() as isize)) = 0;
+
+        buf as *mut char
     }
 }
 
