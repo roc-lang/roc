@@ -50,9 +50,15 @@ setEnv : Str, Str -> Task {} [ BadVarName Str, BadVarVal Str ]*
 setEnv = \name, val ->
     Effect.setEnvVar name val
 
+## Get the path of the currently-running executable.
+getExePath : Task Str Io.Err
+getExePath =
+    Effect.getExePath
+        |> Effect.map Ok
+
 ## Get the process's [current working directory](https://en.wikipedia.org/wiki/Working_directory)
 ## (CWD).
-getCwd : Task Str *
+getCwd : Task Str Io.Err
 getCwd = \path ->
     Effect.setCwd path
 
@@ -102,10 +108,10 @@ exitWithStatus : I32 -> Task {} *
 exitWithStatus = \code ->
     Effect.exitWithStatus code
 
-pid : Task Pid []
+pid : Task Pid *
 pid =
-    Effect.map Effect.getPid \raw ->
-        Ok (Internal.Pid.fromRaw raw)
+    Effect.getPid
+        |> Effect.map \raw -> Ok (Internal.Pid.fromRaw raw)
 
 # Notes:
 #
