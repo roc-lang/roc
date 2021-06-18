@@ -14,7 +14,7 @@ interface Stream.Internal
 Raw : { fd : Fd, offset : U64 }
 
 
-Stream : [ @Stream Raw ]
+Stream a : [ @Stream Raw ]a
 
 fromRaw : Raw -> Stream
 fromRaw = \raw -> @Stream raw
