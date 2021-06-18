@@ -522,7 +522,11 @@ impl RocStr {
     }
 
     /// Write a CStr (null-terminated) representation of this RocStr into
-    /// the given buffer. Assumes the given buffer has enough space!
+    /// the given buffer.
+    ///
+    /// # Safety
+    /// This assumes the given buffer has enough space, so make sure you only
+    /// pass in a pointer to an allocation that's at least as long as this Str!
     pub unsafe fn write_c_str(&self, buf: *mut u8) -> *mut char {
         if self.is_small_str() {
             ptr::copy_nonoverlapping(self.get_small_str_ptr(), buf, self.len());
