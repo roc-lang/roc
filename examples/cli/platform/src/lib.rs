@@ -179,7 +179,8 @@ pub unsafe fn roc_fx_open(roc_path: RocStr) -> RocResult<Fd, Errno> {
     if path_fits_in_buf {
         roc_path.write_c_str(buf.as_mut_ptr() as *mut u8);
 
-        c_path = buf.assume_init().as_mut_ptr() as *mut c_char;
+        // NOTE buf may be only partially filled, so we don't `assume_init`!
+        c_path = buf.as_mut_ptr() as *mut c_char;
     } else {
         c_path = roc_alloc(path_len, mem::align_of::<c_char>() as u32) as *mut c_char;
 
@@ -208,7 +209,7 @@ pub unsafe fn roc_fx_read(fd: Fd, bytes: usize) -> RocResult<RocList<u8>, Errno>
     // I know that since Rust 1.39 mem::uninitialized() is deprecated in favor
     // of MaybeUninit, but I couldn't get this to work with MaybeUninit.
     #[allow(deprecated)]
-    let mut buf: [u8; BUF_BYTES] = mem::uninitialized();
+    let mut buf: MaybeUninit<[u8; BUF_BYTES]> = MaybeUninit::uninit();
 
     // We'll use our own position and libc::pread rather than using libc::read
     // repeatedly and letting the fd store its own position. This way we don't
@@ -227,10 +228,12 @@ pub unsafe fn roc_fx_read(fd: Fd, bytes: usize) -> RocResult<RocList<u8>, Errno>
             position as i64,
         );
 
+        // NOTE buf may be only partially filled, so we don't `assume_init`!
+
         if bytes_read == bytes_to_read as isize {
             // The read was successful, and there may be more bytes to read.
             // Append the bytes to the list and continue looping!
-            let slice = core::slice::from_raw_parts(buf.as_ptr(), bytes_read as usize);
+            let slice = core::slice::from_raw_parts(buf.as_ptr() as *const u8, bytes_read as usize);
 
             list.append_slice(slice);
         } else if bytes_read >= 0 {
@@ -238,7 +241,7 @@ pub unsafe fn roc_fx_read(fd: Fd, bytes: usize) -> RocResult<RocList<u8>, Errno>
             // to read (because bytes_read was less than the requested
             // bytes_to_read, but it was also not negative - which would have
             // indicated an error).
-            let slice = core::slice::from_raw_parts(buf.as_ptr(), bytes_read as usize);
+            let slice = core::slice::from_raw_parts(buf.as_ptr() as *const u8, bytes_read as usize);
 
             list.append_slice(slice);
 
