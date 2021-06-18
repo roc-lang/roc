@@ -3,6 +3,7 @@
 use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem;
+use core::mem::MaybeUninit;
 use errno::{errno, Errno};
 use libc::{self, c_char, c_int};
 use roc_std::{alloca, RocCallResult, RocList, RocResult, RocStr};
@@ -167,10 +168,7 @@ pub struct Fd(c_int);
 pub unsafe fn roc_fx_open(roc_path: RocStr) -> RocResult<Fd, Errno> {
     const BUF_BYTES: usize = 256;
 
-    // I know that since Rust 1.39 mem::uninitialized() is deprecated in favor
-    // of MaybeUninit, but I couldn't get this to work with MaybeUninit.
-    #[allow(deprecated)]
-    let mut buf: [u8; BUF_BYTES] = mem::uninitialized();
+    let mut buf: MaybeUninit<[u8; BUF_BYTES]> = MaybeUninit::uninit();
 
     // If the path fits in the stack-allocated buffer, we can avoid a heap
     // allocation when translating our `RocStr` to a null-terminated `char*`.
@@ -179,9 +177,9 @@ pub unsafe fn roc_fx_open(roc_path: RocStr) -> RocResult<Fd, Errno> {
     let c_path: *mut c_char;
 
     if path_fits_in_buf {
-        roc_path.write_c_str(&mut buf as *mut u8);
+        roc_path.write_c_str(buf.as_mut_ptr() as *mut u8);
 
-        c_path = buf.as_mut_ptr() as *mut c_char;
+        c_path = buf.assume_init().as_mut_ptr() as *mut c_char;
     } else {
         c_path = roc_alloc(path_len, mem::align_of::<c_char>() as u32) as *mut c_char;
 
