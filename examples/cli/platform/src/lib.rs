@@ -165,7 +165,7 @@ pub struct Fd(c_int);
 
 #[no_mangle]
 pub unsafe fn roc_fx_open(roc_path: RocStr) -> RocResult<Fd, Errno> {
-    const BUF_BYTES: usize = 1024;
+    const BUF_BYTES: usize = 256;
 
     // I know that since Rust 1.39 mem::uninitialized() is deprecated in favor
     // of MaybeUninit, but I couldn't get this to work with MaybeUninit.
