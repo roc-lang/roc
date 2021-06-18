@@ -126,17 +126,17 @@ pub const RocDec = struct {
         var num_digits = std.fmt.formatIntBuf(digit_bytes[0..], num, 10, false, .{});
 
         // Get the slice for before the decimal point
-        var before_digits_slice_t: []const u8 = undefined;
+        var before_digits_slice: []const u8 = undefined;
         var before_digits_offset: usize = 0;
         var before_digits_adjust: u6 = 0;
         if (num_digits > decimal_places) {
             before_digits_offset = num_digits - decimal_places;
-            before_digits_slice_t = digit_bytes[0..before_digits_offset];
+            before_digits_slice = digit_bytes[0..before_digits_offset];
         } else {
             before_digits_adjust = @intCast(u6, math.absInt(@intCast(i7, num_digits) - decimal_places) catch {
                 std.debug.panic("TODO runtime exception for overflow when getting abs", .{});
             });
-            before_digits_slice_t = "0";
+            before_digits_slice = "0";
         }
 
         // Figure out how many trailing zeros there are
@@ -160,33 +160,34 @@ pub const RocDec = struct {
         }
 
         // Figure out if we need to prepend any zeros to the after decimal point
-        // For example, for the number 1.00023 we need to prepend 3 zeros after the decimal point
+        // For example, for the number 0.000123 we need to prepend 3 zeros after the decimal point
+        // This will only be needed for numbers less 0.01, otherwise after_digits_slice will handle this
         const after_zeros_num = if (num_digits < decimal_places) decimal_places - num_digits else 0;
         const after_zeros_slice: []const u8 = leading_zeros[0..after_zeros_num];
 
         // Get the slice for after the decimal point
-        var after_digits_slice_t: []const u8 = undefined;
+        var after_digits_slice: []const u8 = undefined;
         if ((num_digits - before_digits_offset) == trailing_zeros) {
-            after_digits_slice_t = "0";
+            after_digits_slice = "0";
         } else {
-            after_digits_slice_t = digit_bytes[before_digits_offset .. num_digits - trailing_zeros];
+            after_digits_slice = digit_bytes[before_digits_offset .. num_digits - trailing_zeros];
         }
 
         // Get the slice for the sign
         const sign_slice: []const u8 = if (is_negative) "-" else leading_zeros[0..0];
 
         // Hardcode adding a `1` for the '.' character
-        const str_len_t: usize = sign_slice.len + before_digits_slice_t.len + 1 + after_zeros_slice.len + after_digits_slice_t.len;
+        const str_len: usize = sign_slice.len + before_digits_slice.len + 1 + after_zeros_slice.len + after_digits_slice.len;
 
         // Join the slices together
-        // We do `max_digits + 2` here becuase we need to account for a possible sign ('-') and the dot ('.').
-        // Ideally, we'd use str_len_t here
-        var str_bytes_t: [max_digits + 2]u8 = undefined;
-        _ = std.fmt.bufPrint(str_bytes_t[0..str_len_t], "{s}{s}.{s}{s}", .{ sign_slice, before_digits_slice_t, after_zeros_slice, after_digits_slice_t }) catch {
+        // We do `max_digits + 2` here because we need to account for a possible sign ('-') and the dot ('.').
+        // Ideally, we'd use str_len here
+        var str_bytes: [max_digits + 2]u8 = undefined;
+        _ = std.fmt.bufPrint(str_bytes[0..str_len], "{s}{s}.{s}{s}", .{ sign_slice, before_digits_slice, after_zeros_slice, after_digits_slice }) catch {
             std.debug.panic("TODO runtime exception failing to print slices", .{});
         };
 
-        return RocStr.init(&str_bytes_t, str_len_t);
+        return RocStr.init(&str_bytes, str_len);
     }
 
     pub fn negate(self: RocDec) ?RocDec {
