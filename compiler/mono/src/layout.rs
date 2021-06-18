@@ -33,6 +33,18 @@ pub enum LayoutProblem {
     Erroneous,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RawFunctionLayout<'a> {
+    Function(&'a [Layout<'a>], LambdaSet<'a>, &'a Layout<'a>),
+    ZeroArgumentThunk(Layout<'a>),
+}
+
+impl RawFunctionLayout<'_> {
+    pub fn is_zero_argument_thunk(&self) -> bool {
+        matches!(self, RawFunctionLayout::ZeroArgumentThunk(_))
+    }
+}
+
 /// Types for code gen must be monomorphic. No type variables allowed!
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Layout<'a> {

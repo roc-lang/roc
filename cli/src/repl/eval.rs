@@ -168,6 +168,9 @@ fn jit_to_ast_help<'a>(
                 Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
                     single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), &[])
                 }
+                Content::Structure(FlatType::Func(_, _, _)) => {
+                    return Err(ToAstProblem::FunctionLayout)
+                }
                 other => {
                     unreachable!(
                         "Something had a Struct layout, but instead of a Record or TagUnion type, it had: {:?}",

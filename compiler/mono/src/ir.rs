@@ -3,8 +3,8 @@
 use self::InProgressProc::*;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{
-    Builtin, ClosureRepresentation, LambdaSet, Layout, LayoutCache, LayoutProblem, UnionLayout,
-    WrappedVariant, TAG_SIZE,
+    Builtin, ClosureRepresentation, LambdaSet, Layout, LayoutCache, LayoutProblem,
+    RawFunctionLayout, UnionLayout, WrappedVariant, TAG_SIZE,
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -601,7 +601,7 @@ impl<'a> Procs<'a> {
                             {
                                 Ok((proc, layout)) => {
                                     let top_level =
-                                        TopLevelFunctionLayout::from_layout(env.arena, layout);
+                                        TopLevelFunctionLayout::from_raw(env.arena, layout);
 
                                     debug_assert_eq!(outside_layout, top_level);
 
@@ -1784,10 +1784,15 @@ pub fn specialize_all<'a>(
                 ) {
                     Ok((proc, layout)) => {
                         // TODO thiscode is duplicated elsewhere
-                        let top_level = TopLevelFunctionLayout::from_layout(env.arena, layout);
+                        let top_level = TopLevelFunctionLayout::from_raw(env.arena, layout);
 
                         if procs.module_thunks.contains(&proc.name) {
-                            debug_assert!(top_level.arguments.is_empty(), "{:?}", name);
+                            debug_assert!(
+                                top_level.arguments.is_empty(),
+                                "{:?} from {:?}",
+                                name,
+                                layout
+                            );
                         }
 
                         debug_assert_eq!(outside_layout, top_level, " in {:?}", name);
@@ -1799,7 +1804,8 @@ pub fn specialize_all<'a>(
                         let proc = generate_runtime_error_function(env, name, attempted_layout);
 
                         let top_level =
-                            TopLevelFunctionLayout::from_layout(env.arena, attempted_layout);
+                            TopLevelFunctionLayout::from_raw(env.arena, attempted_layout);
+
                         procs.specialized.insert((name, top_level), Done(proc));
                     }
                 }
@@ -1859,7 +1865,7 @@ fn specialize_all_help<'a>(
             partial_proc,
         ) {
             Ok((proc, layout)) => {
-                let top_level = TopLevelFunctionLayout::from_layout(env.arena, layout);
+                let top_level = TopLevelFunctionLayout::from_raw(env.arena, layout);
 
                 if procs.module_thunks.contains(&name) {
                     debug_assert!(top_level.arguments.is_empty());
@@ -1873,7 +1879,18 @@ fn specialize_all_help<'a>(
             }) => {
                 let proc = generate_runtime_error_function(env, name, attempted_layout);
 
-                let top_level = TopLevelFunctionLayout::from_layout(env.arena, attempted_layout);
+                let top_level = {
+                    match attempted_layout {
+                        RawFunctionLayout::Function(a, b, c) => {
+                            let l = Layout::Closure(a, b, c);
+                            TopLevelFunctionLayout::from_layout(env.arena, l)
+                        }
+                        RawFunctionLayout::ZeroArgumentThunk(result) => {
+                            TopLevelFunctionLayout::new(env.arena, &[], result)
+                        }
+                    }
+                };
+
                 procs.specialized.insert((name, top_level), Done(proc));
             }
         }
@@ -1883,19 +1900,8 @@ fn specialize_all_help<'a>(
 fn generate_runtime_error_function<'a>(
     env: &mut Env<'a, '_>,
     name: Symbol,
-    layout: Layout<'a>,
+    layout: RawFunctionLayout<'a>,
 ) -> Proc<'a> {
-    let (arg_layouts, ret_layout) = match layout {
-        Layout::FunctionPointer(a, r) => (a, *r),
-        _ => (&[] as &[_], layout),
-    };
-
-    let mut args = Vec::with_capacity_in(arg_layouts.len(), env.arena);
-
-    for arg in arg_layouts {
-        args.push((*arg, env.unique_symbol()));
-    }
-
     let mut msg = bumpalo::collections::string::String::with_capacity_in(80, env.arena);
     use std::fmt::Write;
     write!(
@@ -1909,9 +1915,24 @@ fn generate_runtime_error_function<'a>(
 
     let runtime_error = Stmt::RuntimeError(msg.into_bump_str());
 
+    let (args, ret_layout) = match layout {
+        RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout) => {
+            let mut args = Vec::with_capacity_in(arg_layouts.len(), env.arena);
+
+            for arg in arg_layouts {
+                args.push((*arg, env.unique_symbol()));
+            }
+
+            args.push((lambda_set.runtime_representation(), Symbol::ARG_CLOSURE));
+
+            (args.into_bump_slice(), *ret_layout)
+        }
+        RawFunctionLayout::ZeroArgumentThunk(ret_layout) => (&[] as &[_], ret_layout),
+    };
+
     Proc {
         name,
-        args: args.into_bump_slice(),
+        args,
         body: runtime_error,
         closure_data_layout: None,
         ret_layout,
@@ -2008,10 +2029,11 @@ fn specialize_external<'a>(
                         host_exposed_layouts: HostExposedLayouts::NotHostExposed,
                     };
 
-                    let top_level = TopLevelFunctionLayout {
-                        arguments: env.arena.alloc([lambda_set.runtime_representation()]),
-                        result: *return_layout,
-                    };
+                    let top_level = TopLevelFunctionLayout::new(
+                        env.arena,
+                        env.arena.alloc([lambda_set.runtime_representation()]),
+                        *return_layout,
+                    );
 
                     procs
                         .specialized
@@ -2450,10 +2472,12 @@ fn build_specialized_proc<'a>(
 #[derive(Debug)]
 struct SpecializeFailure<'a> {
     /// The layout we attempted to create
-    attempted_layout: Layout<'a>,
+    attempted_layout: RawFunctionLayout<'a>,
     /// The problem we ran into while creating it
     problem: LayoutProblem,
 }
+
+type SpecializeSuccess<'a> = (Proc<'a>, RawFunctionLayout<'a>);
 
 fn specialize<'a>(
     env: &mut Env<'a, '_>,
@@ -2462,7 +2486,7 @@ fn specialize<'a>(
     layout_cache: &mut LayoutCache<'a>,
     pending: PendingSpecialization,
     partial_proc: PartialProc<'a>,
-) -> Result<(Proc<'a>, Layout<'a>), SpecializeFailure<'a>> {
+) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
     let PendingSpecialization {
         solved_type,
         host_exposed_aliases,
@@ -2507,7 +2531,7 @@ fn specialize_solved_type<'a>(
     solved_type: SolvedType,
     host_exposed_aliases: BumpMap<Symbol, SolvedType>,
     partial_proc: PartialProc<'a>,
-) -> Result<(Proc<'a>, Layout<'a>), SpecializeFailure<'a>> {
+) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
     // add the specializations that other modules require of us
     use roc_solve::solve::instantiate_rigids;
 
@@ -2519,6 +2543,18 @@ fn specialize_solved_type<'a>(
     let attempted_layout = layout_cache
         .from_var(&env.arena, fn_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
+
+    let raw = match attempted_layout {
+        Layout::Closure(a, lambda_set, c) => {
+            if procs.module_thunks.contains(&proc_name) {
+                RawFunctionLayout::ZeroArgumentThunk(lambda_set.runtime_representation())
+            } else {
+                RawFunctionLayout::Function(a, lambda_set, c)
+            }
+        }
+        Layout::FunctionPointer(_, _) => unreachable!(),
+        _ => RawFunctionLayout::ZeroArgumentThunk(attempted_layout),
+    };
 
     // make sure rigid variables in the annotation are converted to flex variables
     instantiate_rigids(env.subs, partial_proc.annotation);
@@ -2554,10 +2590,7 @@ fn specialize_solved_type<'a>(
             env.subs.rollback_to(snapshot);
             layout_cache.rollback_to(cache_snapshot);
 
-            Ok((
-                proc,
-                cleanup_attempted_type(env, procs, proc_name, attempted_layout),
-            ))
+            Ok((proc, raw))
         }
         Err(error) => {
             env.subs.rollback_to(snapshot);
@@ -2565,22 +2598,9 @@ fn specialize_solved_type<'a>(
 
             Err(SpecializeFailure {
                 problem: error,
-                attempted_layout: cleanup_attempted_type(env, procs, proc_name, attempted_layout),
+                attempted_layout: raw,
             })
         }
-    }
-}
-
-fn cleanup_attempted_type<'a>(
-    env: &mut Env<'a, '_>,
-    procs: &mut Procs<'a>,
-    proc_name: Symbol,
-    layout: Layout<'a>,
-) -> Layout<'a> {
-    if procs.module_thunks.contains(&proc_name) {
-        Layout::FunctionPointer(&[], env.arena.alloc(layout))
-    } else {
-        layout
     }
 }
 
@@ -2604,9 +2624,14 @@ impl<'a> TopLevelFunctionLayout<'a> {
             }
         }
 
+        let new_result = match result {
+            Layout::Closure(_, lambda_set, _) => lambda_set.runtime_representation(),
+            other => other,
+        };
+
         TopLevelFunctionLayout {
             arguments: arguments.into_bump_slice(),
-            result,
+            result: new_result,
         }
     }
     pub fn from_layout(arena: &'a Bump, layout: Layout<'a>) -> Self {
@@ -2622,6 +2647,18 @@ impl<'a> TopLevelFunctionLayout<'a> {
                 arguments: &[],
                 result: layout,
             },
+        }
+    }
+
+    fn from_raw(arena: &'a Bump, raw: RawFunctionLayout<'a>) -> Self {
+        match raw {
+            RawFunctionLayout::Function(a, b, c) => {
+                let l = Layout::Closure(a, b, c);
+                TopLevelFunctionLayout::from_layout(arena, l)
+            }
+            RawFunctionLayout::ZeroArgumentThunk(result) => {
+                TopLevelFunctionLayout::new(arena, &[], result)
+            }
         }
     }
 }
@@ -6141,7 +6178,7 @@ fn build_call<'a>(
     env: &mut Env<'a, '_>,
     call: Call<'a>,
     assigned: Symbol,
-    layout: Layout<'a>,
+    return_layout: Layout<'a>,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     if can_throw_exception(&call) {
@@ -6150,13 +6187,13 @@ fn build_call<'a>(
         Stmt::Invoke {
             symbol: assigned,
             call,
-            layout,
+            layout: return_layout,
             fail,
             pass: hole,
             exception_id: id,
         }
     } else {
-        Stmt::Let(assigned, Expr::Call(call), layout, hole)
+        Stmt::Let(assigned, Expr::Call(call), return_layout, hole)
     }
 }
 
@@ -6467,28 +6504,18 @@ fn call_by_name_help<'a>(
 
                         match specialize(env, procs, proc_name, layout_cache, pending, partial_proc)
                         {
-                            Ok((proc, layout)) => {
-                                // NOTE we cannot make the below assertion any more; figure out why
-
-                                debug_assert_eq!(
-                                    &maybe_closure_layout, &layout,
-                                    "\nProcedure {:?}\n\n{:?}\n\n{:?}",
-                                    proc_name, maybe_closure_layout, layout
-                                );
-
-                                call_specialized_proc(
-                                    env,
-                                    procs,
-                                    proc_name,
-                                    proc,
-                                    layout,
-                                    field_symbols,
-                                    loc_args,
-                                    layout_cache,
-                                    assigned,
-                                    hole,
-                                )
-                            }
+                            Ok((proc, layout)) => call_specialized_proc(
+                                env,
+                                procs,
+                                proc_name,
+                                proc,
+                                layout,
+                                field_symbols,
+                                loc_args,
+                                layout_cache,
+                                assigned,
+                                hole,
+                            ),
                             Err(SpecializeFailure {
                                 attempted_layout,
                                 problem: _,
@@ -6543,9 +6570,6 @@ fn call_by_name_module_thunk<'a>(
 
     // the layout without the `FunctionPointer(&[], ...)` wrapper
     let inner_layout = *ret_layout;
-
-    // the layout with the wrapper
-    let module_thunk_layout = Layout::FunctionPointer(&[], ret_layout);
 
     // If we've already specialized this one, no further work is needed.
     if procs
@@ -6603,8 +6627,7 @@ fn call_by_name_module_thunk<'a>(
                         match specialize(env, procs, proc_name, layout_cache, pending, partial_proc)
                         {
                             Ok((proc, layout)) => {
-                                // NOTE we cannot make the below assertion any more; figure out why
-                                debug_assert_eq!(layout, module_thunk_layout);
+                                debug_assert!(layout.is_zero_argument_thunk());
 
                                 let was_present =
                                     procs.specialized.remove(&(proc_name, top_level_layout));
@@ -6620,12 +6643,10 @@ fn call_by_name_module_thunk<'a>(
                                 attempted_layout,
                                 problem: _,
                             }) => {
-                                debug_assert_eq!(attempted_layout, module_thunk_layout);
-
                                 let proc = generate_runtime_error_function(
                                     env,
                                     proc_name,
-                                    module_thunk_layout,
+                                    attempted_layout,
                                 );
 
                                 let was_present =
@@ -6656,22 +6677,20 @@ fn call_specialized_proc<'a>(
     procs: &mut Procs<'a>,
     proc_name: Symbol,
     proc: Proc<'a>,
-    layout: Layout<'a>,
+    layout: RawFunctionLayout<'a>,
     field_symbols: &'a [Symbol],
     loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
     layout_cache: &mut LayoutCache<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    let function_layout = env
-        .arena
-        .alloc(TopLevelFunctionLayout::from_layout(env.arena, layout));
+    let function_layout = TopLevelFunctionLayout::from_raw(env.arena, layout);
 
-    procs.specialized.remove(&(proc_name, *function_layout));
+    procs.specialized.remove(&(proc_name, function_layout));
 
     procs
         .specialized
-        .insert((proc_name, *function_layout), Done(proc));
+        .insert((proc_name, function_layout), Done(proc));
 
     if field_symbols.is_empty() {
         debug_assert!(loc_args.is_empty());
@@ -6684,7 +6703,8 @@ fn call_specialized_proc<'a>(
         // there are no arguments. This confuses our IR,
         // and we have to fix it here.
         match layout {
-            Layout::Closure(_, closure_layout, _) => {
+            RawFunctionLayout::Function(_, lambda_set, _) => {
+                // when the body is a closure, the function will return the closure environment
                 let call = self::Call {
                     call_type: CallType::ByName {
                         name: proc_name,
@@ -6699,22 +6719,12 @@ fn call_specialized_proc<'a>(
                     env,
                     call,
                     assigned,
-                    closure_layout.runtime_representation(),
+                    lambda_set.runtime_representation(),
                     hole,
                 )
             }
-            _ => {
-                let call = self::Call {
-                    call_type: CallType::ByName {
-                        name: proc_name,
-                        ret_layout: function_layout.result,
-                        arg_layouts: function_layout.arguments,
-                        specialization_id: env.next_call_specialization_id(),
-                    },
-                    arguments: field_symbols,
-                };
-
-                build_call(env, call, assigned, function_layout.result, hole)
+            RawFunctionLayout::ZeroArgumentThunk(_) => {
+                unreachable!()
             }
         }
     } else {
