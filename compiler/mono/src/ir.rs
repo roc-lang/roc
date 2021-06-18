@@ -3694,7 +3694,7 @@ pub fn with_hole<'a>(
         } => {
             let loc_body = *boxed_body;
 
-            match layout_cache.from_var(env.arena, function_type, env.subs) {
+            match layout_cache.raw_from_var(env.arena, function_type, env.subs) {
                 Err(e) => panic!("invalid layout {:?}", e),
                 Ok(Layout::Closure(_argument_layouts, lambda_set, _ret_layout)) => {
                     let mut captured_symbols = Vec::from_iter_in(captured_symbols, env.arena);
@@ -3730,43 +3730,6 @@ pub fn with_hole<'a>(
                             .into_bump_slice();
 
                     construct_closure_data(env, lambda_set, name, symbols, assigned, hole)
-                }
-                Ok(Layout::FunctionPointer(_, _)) => {
-                    // CLEANUP
-                    unreachable!("closures should never have a function pointer layout");
-
-                    //                    match procs.insert_anonymous(
-                    //                        env,
-                    //                        name,
-                    //                        function_type,
-                    //                        arguments,
-                    //                        loc_body,
-                    //                        CapturedSymbols::None,
-                    //                        return_type,
-                    //                        layout_cache,
-                    //                    ) {
-                    //                        Ok(layout) => {
-                    //                            bg!(name);
-                    //                            // TODO should the let have layout Pointer?
-                    //                            // Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole)
-                    //                            if false {
-                    //                                let mut hole = hole.clone();
-                    //                                substitute_in_exprs(env.arena, &mut hole, assigned, name);
-                    //                                hole
-                    //                            } else {
-                    //                                Stmt::Let(
-                    //                                    assigned,
-                    //                                    call_by_pointer(env, procs, name, layout),
-                    //                                    layout,
-                    //                                    hole,
-                    //                                )
-                    //                            }
-                    //                        }
-                    //
-                    //                        Err(_error) => Stmt::RuntimeError(
-                    //                            "TODO convert anonymous function error to a RuntimeError string",
-                    //                        ),
-                    //                    }
                 }
                 Ok(_) => unreachable!(),
             }
@@ -3826,11 +3789,10 @@ pub fn with_hole<'a>(
 
                     let full_layout = return_on_layout_error!(
                         env,
-                        layout_cache.from_var(env.arena, fn_var, env.subs)
+                        layout_cache.raw_from_var(env.arena, fn_var, env.subs)
                     );
 
                     let arg_layouts = match full_layout {
-                        Layout::FunctionPointer(args, _) => args,
                         Layout::Closure(args, _, _) => args,
                         _ => unreachable!("function has layout that is not function pointer"),
                     };
@@ -3897,38 +3859,6 @@ pub fn with_hole<'a>(
                                         closure_data_symbol,
                                         env.arena.alloc(result),
                                     );
-                                }
-                                Layout::FunctionPointer(_, _) => {
-                                    // CLEANUP
-                                    unreachable!("should not be a function pointer");
-
-                                    //                                    let function_symbol = env.unique_symbol();
-                                    //                                    let closure_data_symbol = function_symbol;
-                                    //
-                                    //                                    // layout of the closure record
-                                    //                                    let closure_data_layout = Layout::Struct(&[]);
-                                    //
-                                    //                                    result = lambda_set_to_switch_make_branch_help(
-                                    //                                        env,
-                                    //                                        function_symbol,
-                                    //                                        closure_data_symbol,
-                                    //                                        closure_data_layout,
-                                    //                                        arg_symbols,
-                                    //                                        arg_layouts,
-                                    //                                        ret_layout,
-                                    //                                        assigned,
-                                    //                                        hole,
-                                    //                                    );
-                                    //
-                                    //                                    result = with_hole(
-                                    //                                        env,
-                                    //                                        loc_expr.value,
-                                    //                                        fn_var,
-                                    //                                        procs,
-                                    //                                        layout_cache,
-                                    //                                        closure_data_symbol,
-                                    //                                        env.arena.alloc(result),
-                                    //                                    );
                                 }
                                 _ => {
                                     todo!("{:?}", full_layout)
