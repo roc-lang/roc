@@ -208,7 +208,6 @@ pub unsafe fn roc_fx_read(fd: Fd, bytes: usize) -> RocResult<RocList<u8>, Errno>
 
     // I know that since Rust 1.39 mem::uninitialized() is deprecated in favor
     // of MaybeUninit, but I couldn't get this to work with MaybeUninit.
-    #[allow(deprecated)]
     let mut buf: MaybeUninit<[u8; BUF_BYTES]> = MaybeUninit::uninit();
 
     // We'll use our own position and libc::pread rather than using libc::read
