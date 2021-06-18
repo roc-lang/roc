@@ -1,5 +1,5 @@
 use crate::borrow::{ParamMap, BORROWED, OWNED};
-use crate::ir::{Expr, JoinPointId, ModifyRc, Param, Proc, Stmt};
+use crate::ir::{Expr, JoinPointId, ModifyRc, Param, Proc, Stmt, TopLevelFunctionLayout};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -497,7 +497,10 @@ impl<'a> Context<'a> {
                 const FUNCTION: bool = BORROWED;
                 const CLOSURE_DATA: bool = BORROWED;
 
-                let function_layout = Layout::FunctionPointer(arg_layouts, ret_layout);
+                let function_layout = TopLevelFunctionLayout {
+                    arguments: arg_layouts,
+                    result: *ret_layout,
+                };
 
                 match op {
                     roc_module::low_level::LowLevel::ListMap
@@ -679,12 +682,20 @@ impl<'a> Context<'a> {
             }
 
             ByName {
-                name, full_layout, ..
+                name,
+                ret_layout,
+                arg_layouts,
+                ..
             } => {
+                let top_level = TopLevelFunctionLayout {
+                    arguments: arg_layouts,
+                    result: *ret_layout,
+                };
+
                 // get the borrow signature
                 let ps = self
                     .param_map
-                    .get_symbol(*name, *full_layout)
+                    .get_symbol(*name, top_level)
                     .expect("function is defined");
 
                 let v = Expr::Call(crate::ir::Call {
@@ -963,12 +974,20 @@ impl<'a> Context<'a> {
                     }
 
                     CallType::ByName {
-                        name, full_layout, ..
+                        name,
+                        ret_layout,
+                        arg_layouts,
+                        ..
                     } => {
+                        let top_level = TopLevelFunctionLayout {
+                            arguments: arg_layouts,
+                            result: *ret_layout,
+                        };
+
                         // get the borrow signature
                         let ps = self
                             .param_map
-                            .get_symbol(*name, *full_layout)
+                            .get_symbol(*name, top_level)
                             .expect("function is defined");
                         self.add_dec_after_application(call.arguments, ps, cont, &invoke_live_vars)
                     }
@@ -1222,7 +1241,7 @@ pub fn visit_proc<'a>(
     arena: &'a Bump,
     param_map: &'a ParamMap<'a>,
     proc: &mut Proc<'a>,
-    layout: Layout<'a>,
+    layout: TopLevelFunctionLayout<'a>,
 ) {
     let ctx = Context::new(arena, param_map);
 

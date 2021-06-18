@@ -215,7 +215,7 @@ impl<'a> Proc<'a> {
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, procs));
 
         for (key, proc) in procs.iter_mut() {
-            crate::inc_dec::visit_proc(arena, borrow_params, proc, arena.alloc(key.1).full());
+            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1);
         }
     }
 
@@ -410,8 +410,7 @@ impl<'a> Procs<'a> {
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
 
         for (key, proc) in result.iter_mut() {
-            let layout = arena.alloc(key.1).full();
-            crate::inc_dec::visit_proc(arena, borrow_params, proc, layout);
+            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1);
         }
 
         result
@@ -454,8 +453,7 @@ impl<'a> Procs<'a> {
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
 
         for (key, proc) in result.iter_mut() {
-            let layout = arena.alloc(key.1).full();
-            crate::inc_dec::visit_proc(arena, borrow_params, proc, layout);
+            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1);
         }
 
         (result, borrow_params)
