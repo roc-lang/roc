@@ -445,7 +445,6 @@ fn call_spec(
     match &call.call_type {
         ByName {
             name: symbol,
-            full_layout: _,
             ret_layout,
             arg_layouts,
             specialization_id,

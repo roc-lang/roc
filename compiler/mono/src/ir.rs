@@ -1136,7 +1136,6 @@ impl UpdateModeId {
 pub enum CallType<'a> {
     ByName {
         name: Symbol,
-        full_layout: Layout<'a>,
         ret_layout: Layout<'a>,
         arg_layouts: &'a [Layout<'a>],
         specialization_id: CallSpecId,
@@ -5459,13 +5458,11 @@ fn substitute_in_call<'a>(
             name,
             arg_layouts,
             ret_layout,
-            full_layout,
             specialization_id,
         } => substitute(subs, *name).map(|new| CallType::ByName {
             name: new,
             arg_layouts,
             ret_layout: *ret_layout,
-            full_layout: *full_layout,
             specialization_id: *specialization_id,
         }),
         CallType::Foreign { .. } => None,
@@ -5928,13 +5925,10 @@ fn force_thunk<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    let full_layout = Layout::FunctionPointer(&[], env.arena.alloc(layout));
-
     let call = self::Call {
         call_type: CallType::ByName {
             name: thunk_name,
             ret_layout: layout,
-            full_layout,
             arg_layouts: &[],
             specialization_id: env.next_call_specialization_id(),
         },
@@ -6394,7 +6388,6 @@ fn call_by_name_help<'a>(
     // debug_assert!(!procs.module_thunks.contains(&proc_name), "{:?}", proc_name);
 
     let top_level_layout = TopLevelFunctionLayout::new(env.arena, argument_layouts, *ret_layout);
-    let function_layout = env.arena.alloc(top_level_layout).full();
 
     // the arguments given to the function, stored in symbols
     let field_symbols = Vec::from_iter_in(
@@ -6436,7 +6429,6 @@ fn call_by_name_help<'a>(
             call_type: CallType::ByName {
                 name: proc_name,
                 ret_layout: *ret_layout,
-                full_layout: function_layout,
                 arg_layouts: argument_layouts,
                 specialization_id: env.next_call_specialization_id(),
             },
@@ -6469,7 +6461,6 @@ fn call_by_name_help<'a>(
                 call_type: CallType::ByName {
                     name: proc_name,
                     ret_layout: *ret_layout,
-                    full_layout: function_layout,
                     arg_layouts: argument_layouts,
                     specialization_id: env.next_call_specialization_id(),
                 },
@@ -6522,7 +6513,6 @@ fn call_by_name_help<'a>(
                     call_type: CallType::ByName {
                         name: proc_name,
                         ret_layout: *ret_layout,
-                        full_layout: function_layout,
                         arg_layouts: argument_layouts,
                         specialization_id: env.next_call_specialization_id(),
                     },
@@ -6773,7 +6763,6 @@ fn call_specialized_proc<'a>(
                     call_type: CallType::ByName {
                         name: proc_name,
                         ret_layout: function_layout.result,
-                        full_layout: function_layout.full(),
                         arg_layouts: function_layout.arguments,
                         specialization_id: env.next_call_specialization_id(),
                     },
@@ -6793,7 +6782,6 @@ fn call_specialized_proc<'a>(
                     call_type: CallType::ByName {
                         name: proc_name,
                         ret_layout: function_layout.result,
-                        full_layout: function_layout.full(),
                         arg_layouts: function_layout.arguments,
                         specialization_id: env.next_call_specialization_id(),
                     },
@@ -6817,7 +6805,6 @@ fn call_specialized_proc<'a>(
             call_type: CallType::ByName {
                 name: proc_name,
                 ret_layout: function_layout.result,
-                full_layout: function_layout.full(),
                 arg_layouts: function_layout.arguments,
                 specialization_id: env.next_call_specialization_id(),
             },
@@ -8089,13 +8076,10 @@ fn union_lambda_set_branch_help<'a>(
         }
     };
 
-    let full_layout = Layout::FunctionPointer(argument_layouts, env.arena.alloc(return_layout));
-
     // build the call
     let call = self::Call {
         call_type: CallType::ByName {
             name: function_symbol,
-            full_layout,
             ret_layout: return_layout,
             arg_layouts: argument_layouts,
             specialization_id: env.next_call_specialization_id(),
@@ -8210,12 +8194,9 @@ fn enum_lambda_set_branch<'a>(
         }
     };
 
-    let full_layout = Layout::FunctionPointer(argument_layouts, env.arena.alloc(return_layout));
-
     let call = self::Call {
         call_type: CallType::ByName {
             name: function_symbol,
-            full_layout,
             ret_layout: return_layout,
             arg_layouts: argument_layouts,
             specialization_id: env.next_call_specialization_id(),
