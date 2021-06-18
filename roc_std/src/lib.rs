@@ -202,6 +202,84 @@ impl<T> RocList<T> {
         unsafe { core::slice::from_raw_parts(self.elements, self.length) }
     }
 
+    /// Copy the contents of the given slice into the end of this list,
+    /// reallocating and resizing as necessary.
+    pub fn append_slice(&mut self, slice: &[T]) {
+        let new_len = self.len() + slice.len();
+        let storage_ptr = self.get_storage_ptr_mut();
+
+        // First, ensure that there's enough storage space.
+        unsafe {
+            let storage_val = *storage_ptr as isize;
+
+            // Check if this is refcounted, readonly, or has a capcacity.
+            // (Capacity will be positive if it has a capacity.)
+            if storage_val > 0 {
+                let capacity = storage_val as usize;
+
+                // We don't have enough capacity, so we need to get some more.
+                if capacity < new_len {
+                    // Double our capacity using realloc
+                    let new_cap = 2 * capacity;
+                    let new_ptr = roc_realloc(
+                        storage_ptr as *mut c_void,
+                        new_cap,
+                        capacity,
+                        Self::align_of_storage_ptr(),
+                    ) as *mut isize;
+
+                    // Write the new capacity into the new memory
+                    *new_ptr = new_cap as isize;
+
+                    // Copy all the existing elements into the new allocation.
+                    ptr::copy_nonoverlapping(self.elements, new_ptr as *mut T, self.len());
+
+                    // Update our storage pointer to be the new one
+                    self.set_storage_ptr(new_ptr);
+                }
+            } else {
+                // If this was reference counted, decrement the refcount!
+                if storage_val < 0 {
+                    let refcount = storage_val;
+
+                    // Either deallocate or decrement.
+                    if refcount == REFCOUNT_1 {
+                        roc_dealloc(storage_ptr as *mut c_void, Self::align_of_storage_ptr());
+                    } else {
+                        *storage_ptr = refcount - 1;
+                    }
+                }
+
+                // This is either refcounted or readonly; either way, we need
+                // to clone the elements!
+
+                // Double the capacity we need, in case there are future additions.
+                let new_cap = new_len * 2;
+                let new_ptr = roc_alloc(new_cap, Self::align_of_storage_ptr()) as *mut isize;
+
+                // Write the new capacity into the new memory; this list is
+                // now unique, and gets its own capacity!
+                *new_ptr = new_cap as isize;
+
+                // Copy all the existing elements into the new allocation.
+                ptr::copy_nonoverlapping(self.elements, new_ptr as *mut T, self.len());
+
+                // Update our storage pointer to be the new one
+                self.set_storage_ptr(new_ptr);
+            }
+
+            // Since this is an append, we want to start writing new elements
+            // into the memory immediately after the current last element.
+            let dest = self.elements.offset(self.len() as isize);
+
+            // There's now enough storage to append the contents of the slice
+            // in-place, so do that!
+            ptr::copy_nonoverlapping(slice.as_ptr(), dest, self.len());
+        }
+
+        self.length = new_len;
+    }
+
     /// The alignment we need is either the alignment of T, or else
     /// the alignment of usize, whichever is higher. That's because we need
     /// to store both T values as well as the refcount/capacity storage slot.
