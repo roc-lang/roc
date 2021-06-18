@@ -286,3 +286,17 @@ fn constrain_if() {
         "[ Green, Red ]*",
     )
 }
+
+#[test]
+fn constrain_when() {
+    infer_eq(
+        indoc!(
+            r#"
+            when if True then Green else Red is
+                Green -> Blue
+                Red -> Purple
+            "#
+        ),
+        "[ Blue, Purple ]*",
+    )
+}

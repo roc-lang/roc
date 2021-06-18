@@ -69,6 +69,7 @@ pub fn gen_and_eval<'a>(
     use roc_load::file::MonomorphizedModule;
     let MonomorphizedModule {
         procedures,
+        entry_point,
         interns,
         exposed_to_host,
         mut subs,
@@ -191,8 +192,7 @@ pub fn gen_and_eval<'a>(
             &env,
             opt_level,
             procedures,
-            main_fn_symbol,
-            main_fn_layout,
+            entry_point,
         );
 
         env.dibuilder.finalize();

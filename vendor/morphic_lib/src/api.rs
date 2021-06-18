@@ -2,6 +2,7 @@ use sha2::{digest::Digest, Sha256};
 use smallvec::SmallVec;
 use std::collections::{btree_map::Entry, BTreeMap};
 
+use crate::preprocess;
 use crate::render_api_ir;
 use crate::util::blocks::Blocks;
 use crate::util::id_bi_map::IdBiMap;
@@ -57,6 +58,8 @@ enum ErrorKind {
     ModNotFound(ModNameBuf),
     #[error("entry point {0:?} not found in program")]
     EntryPointNotFound(EntryPointNameBuf),
+    #[error("{0}")]
+    PreprocessError(preprocess::Error),
 }
 
 #[derive(Clone, thiserror::Error, Debug)]
@@ -1550,6 +1553,8 @@ fn populate_specs(
 }
 
 pub fn solve(program: Program) -> Result<Solutions> {
+    preprocess::preprocess(&program).map_err(ErrorKind::PreprocessError)?;
+
     Ok(Solutions {
         mods: program
             .mods

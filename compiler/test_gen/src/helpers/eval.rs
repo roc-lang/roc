@@ -80,13 +80,10 @@ pub fn helper<'a>(
     use roc_load::file::MonomorphizedModule;
     let MonomorphizedModule {
         procedures,
+        entry_point,
         interns,
-        exposed_to_host,
         ..
     } = loaded;
-
-    debug_assert_eq!(exposed_to_host.len(), 1);
-    let main_fn_symbol = exposed_to_host.keys().copied().next().unwrap();
 
     let mut lines = Vec::new();
     // errors whose reporting we delay (so we can see that code gen generates runtime errors)
@@ -171,15 +168,6 @@ pub fn helper<'a>(
         }
     }
 
-    let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
-        Some(found) => *found,
-        None => panic!(
-            "The main function symbol {:?} does not have a procedure in {:?}",
-            main_fn_symbol,
-            &procedures.keys()
-        ),
-    };
-
     let builder = context.create_builder();
     let module = roc_gen_llvm::llvm::build::module_from_builtins(context, "app");
 
@@ -240,8 +228,7 @@ pub fn helper<'a>(
         &env,
         opt_level,
         procedures,
-        main_fn_symbol,
-        main_fn_layout,
+        entry_point,
     );
 
     env.dibuilder.finalize();

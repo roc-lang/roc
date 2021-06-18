@@ -60,7 +60,7 @@ pub fn make_tail_recursive<'a>(
                 id,
                 remainder: jump,
                 parameters: params,
-                continuation: new,
+                body: new,
             }
         }
     }
@@ -160,7 +160,7 @@ fn insert_jumps<'a>(
             id,
             parameters,
             remainder,
-            continuation,
+            body: continuation,
         } => {
             let opt_remainder = insert_jumps(arena, remainder, goal_id, needle);
             let opt_continuation = insert_jumps(arena, continuation, goal_id, needle);
@@ -173,7 +173,7 @@ fn insert_jumps<'a>(
                     id: *id,
                     parameters,
                     remainder,
-                    continuation,
+                    body: continuation,
                 }))
             } else {
                 None

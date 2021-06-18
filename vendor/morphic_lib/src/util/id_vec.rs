@@ -107,6 +107,13 @@ impl<K: Id, V> IdVec<K, V> {
         }
     }
 
+    pub fn with_capacity(capacity: usize) -> Self {
+        IdVec {
+            key: PhantomData,
+            items: Vec::with_capacity(capacity),
+        }
+    }
+
     pub fn from_items(items: Vec<V>) -> Self {
         K::assert_in_range(items.len());
         IdVec {

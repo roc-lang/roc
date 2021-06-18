@@ -597,7 +597,7 @@ fn to_relevant_branch_help<'a>(
                                         start.extend(end);
                                     }
                                 }
-                                Wrapped::RecordOrSingleTagUnion => {
+                                Wrapped::RecordOrSingleTagUnion | Wrapped::LikeARoseTree => {
                                     let sub_positions = arguments.into_iter().enumerate().map(
                                         |(index, (pattern, _))| {
                                             let mut new_path = path.to_vec();
@@ -956,7 +956,7 @@ pub fn optimize_when<'a>(
         stmt = Stmt::Join {
             id,
             parameters: &[],
-            continuation: env.arena.alloc(body),
+            body: env.arena.alloc(body),
             remainder: env.arena.alloc(stmt),
         };
     }
@@ -1329,7 +1329,7 @@ fn compile_guard<'a>(
         id,
         parameters: arena.alloc([param]),
         remainder: stmt,
-        continuation: arena.alloc(cond),
+        body: arena.alloc(cond),
     }
 }
 
@@ -1622,7 +1622,7 @@ fn decide_to_branching<'a>(
                 Stmt::Join {
                     id: fail_jp_id,
                     parameters: &[],
-                    continuation: fail,
+                    body: fail,
                     remainder: arena.alloc(test_stmt),
                 }
             }

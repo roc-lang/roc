@@ -98,7 +98,14 @@ impl<T: PartialOrd> PartialOrd<T> for Count<T> {
 }
 
 impl<T: Id> Count<T> {
-    pub fn iter(&self) -> impl Iterator<Item = T> {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = T> {
         (0..self.0.to_index()).map(T::from_index_unchecked)
+    }
+}
+
+pub fn decrement<T: Id>(id: T) -> Option<T> {
+    match id.to_index() {
+        0 => None,
+        index => Some(T::from_index_unchecked(index - 1)),
     }
 }

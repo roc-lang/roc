@@ -519,7 +519,7 @@ where
             }
             Stmt::Join {
                 parameters,
-                continuation,
+                body: continuation,
                 remainder,
                 ..
             } => {

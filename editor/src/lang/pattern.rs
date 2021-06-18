@@ -5,14 +5,19 @@ use crate::lang::ast::{ExprId, FloatVal, IntVal};
 use crate::lang::expr::{to_expr_id, Env, Output};
 use crate::lang::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
 use crate::lang::scope::Scope;
+use bumpalo::collections::Vec as BumpVec;
 use roc_can::expr::unescape_char;
 use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
+use roc_collections::all::BumpMap;
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError};
 use roc_region::all::Region;
 use roc_types::subs::Variable;
+
+use super::constrain::Constraint;
+use super::types::Type2;
 
 pub type PatternId = NodeId<Pattern2>;
 
@@ -25,16 +30,16 @@ pub enum Pattern2 {
     StrLiteral(PoolStr),       // 8B
     Underscore,                // 0B
     GlobalTag {
-        whole_var: Variable,                      // 4B
-        ext_var: Variable,                        // 4B
-        tag_name: PoolStr,                        // 8B
-        arguments: PoolVec<(Variable, Pattern2)>, // 8B
+        whole_var: Variable,                       // 4B
+        ext_var: Variable,                         // 4B
+        tag_name: PoolStr,                         // 8B
+        arguments: PoolVec<(Variable, PatternId)>, // 8B
     },
     PrivateTag {
-        whole_var: Variable,                      // 4B
-        ext_var: Variable,                        // 4B
-        tag_name: Symbol,                         // 8B
-        arguments: PoolVec<(Variable, Pattern2)>, // 8B
+        whole_var: Variable,                       // 4B
+        ext_var: Variable,                         // 4B
+        tag_name: Symbol,                          // 8B
+        arguments: PoolVec<(Variable, PatternId)>, // 8B
     },
     RecordDestructure {
         whole_var: Variable,                // 4B
@@ -43,10 +48,13 @@ pub enum Pattern2 {
     },
 
     // Runtime Exceptions
+    // TODO: figure out how to better handle regions
+    // to keep this member under 32. With 2 Regions
+    // it ends up at size 40
     Shadowed {
         shadowed_ident: PoolStr,
-        definition: Region,
-        shadowed_at: Region,
+        // definition: Region,
+        // shadowed_at: Region,
     },
 
     /// Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
@@ -59,6 +67,13 @@ impl ShallowClone for Pattern2 {
     fn shallow_clone(&self) -> Self {
         todo!()
     }
+}
+
+#[derive(Debug)]
+pub struct PatternState2<'a> {
+    pub headers: BumpMap<Symbol, Type2>,
+    pub vars: BumpVec<'a, Variable>,
+    pub constraints: BumpVec<'a, Constraint<'a>>,
 }
 
 #[derive(Debug)]
@@ -140,8 +155,6 @@ pub fn to_pattern2<'a>(
 
                 Pattern2::Shadowed {
                     shadowed_ident: PoolStr::new(name, env.pool),
-                    shadowed_at: region,
-                    definition: original_region,
                 }
             }
         },
@@ -238,7 +251,9 @@ pub fn to_pattern2<'a>(
 
                 output.union(new_output);
 
-                env.pool[node_id] = (env.var_store.fresh(), can_pattern);
+                let can_pattern_id = env.pool.add(can_pattern);
+
+                env.pool[node_id] = (env.var_store.fresh(), can_pattern_id);
             }
 
             match tag.value {
@@ -434,7 +449,8 @@ pub fn symbols_from_pattern(pool: &Pool, initial: &Pattern2) -> Vec<Symbol> {
             }
 
             GlobalTag { arguments, .. } | PrivateTag { arguments, .. } => {
-                for (_, pat) in arguments.iter(pool) {
+                for (_, pat_id) in arguments.iter(pool) {
+                    let pat = pool.get(*pat_id);
                     stack.push(pat);
                 }
             }
@@ -482,7 +498,8 @@ pub fn symbols_and_variables_from_pattern(
             }
 
             GlobalTag { arguments, .. } | PrivateTag { arguments, .. } => {
-                for (var, pat) in arguments.iter(pool) {
+                for (var, pat_id) in arguments.iter(pool) {
+                    let pat = pool.get(*pat_id);
                     stack.push((*var, pat));
                 }
             }
