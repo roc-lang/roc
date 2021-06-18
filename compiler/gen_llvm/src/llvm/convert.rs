@@ -44,9 +44,7 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
     use Layout::*;
 
     match layout {
-        FunctionPointer(args, ret_layout) => {
-            basic_type_from_function_layout(env, args, None, ret_layout)
-        }
+        FunctionPointer(args, ret_layout) => basic_type_from_function_layout(env, args, ret_layout),
         Closure(_args, closure_layout, _ret_layout) => {
             let closure_data_layout = closure_layout.runtime_representation();
             basic_type_from_layout(env, &closure_data_layout)
