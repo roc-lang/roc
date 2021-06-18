@@ -119,13 +119,13 @@ impl<T> RocList<T> {
 
         unsafe {
             if elem_alignment <= core::mem::align_of::<usize>() {
-                ptr.offset(1) as *const T
+                ptr.add(1) as *const T
             } else {
                 // If elements have an alignment bigger than usize (e.g. an i128),
                 // we will have necessarily allocated two usize slots worth of
                 // space for the storage value (with the first usize slot being
                 // padding for alignment's sake), and we need to skip past both.
-                ptr.offset(2) as *const T
+                ptr.add(2) as *const T
             }
         }
     }
@@ -270,7 +270,7 @@ impl<T> RocList<T> {
 
             // Since this is an append, we want to start writing new elements
             // into the memory immediately after the current last element.
-            let dest = self.elements.offset(self.len() as isize);
+            let dest = self.elements.add(self.len());
 
             // There's now enough storage to append the contents of the slice
             // in-place, so do that!
@@ -304,9 +304,9 @@ impl<T: PartialEq> PartialEq for RocList<T> {
             return false;
         }
 
-        for i in 0..(self.length as isize) {
+        for i in 0..self.length {
             unsafe {
-                if *self.elements.offset(i) != *other.elements.offset(i) {
+                if *self.elements.add(i) != *other.elements.add(i) {
                     return false;
                 }
             }
@@ -426,13 +426,13 @@ impl RocStr {
 
         unsafe {
             if elem_alignment <= core::mem::align_of::<usize>() {
-                ptr.offset(1)
+                ptr.add(1)
             } else {
                 // If elements have an alignment bigger than usize (e.g. an i128),
                 // we will have necessarily allocated two usize slots worth of
                 // space for the storage value (with the first usize slot being
                 // padding for alignment's sake), and we need to skip past both.
-                ptr.offset(2)
+                ptr.add(2)
             }
         }
     }
@@ -485,9 +485,10 @@ impl RocStr {
                     // NOTE: using a memcpy here causes weird issues
                     let target_ptr = raw_ptr as *mut u8;
                     let source_ptr = ptr as *const u8;
-                    let length = slice.len() as isize;
+                    let length = slice.len();
+
                     for index in 0..length {
-                        *target_ptr.offset(index) = *source_ptr.offset(index);
+                        *target_ptr.add(index) = *source_ptr.add(index);
                     }
                 }
 
