@@ -17,8 +17,8 @@ use crate::llvm::build_str::{
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
-    basic_type_from_builtin, basic_type_from_layout, block_of_memory, block_of_memory_slices,
-    ptr_int,
+    basic_type_from_builtin, basic_type_from_function_layout, basic_type_from_layout,
+    block_of_memory, block_of_memory_slices, ptr_int,
 };
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
@@ -839,7 +839,6 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
             let bytes = specialization_id.to_bytes();
             let callee_var = CalleeSpecVar(&bytes);
             let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
-            // let fn_val = function_value_by_func_spec(env, func_spec, symbol, *layout);
 
             run_higher_order_low_level(
                 env,
@@ -3392,8 +3391,8 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     );
 
     // STEP 4: build a {} -> u64 function that gives the size of the closure
-    let layout = Layout::Closure(arguments, lambda_set, result);
-    build_host_exposed_alias_size(env, def_name, alias_symbol, &layout);
+    let layout = lambda_set.runtime_representation();
+    build_host_exposed_alias_size(env, def_name, alias_symbol, layout);
 }
 
 fn build_function_caller<'a, 'ctx, 'env>(
@@ -3431,10 +3430,8 @@ fn build_function_caller<'a, 'ctx, 'env>(
         // pretend the closure layout is empty
         args.push(Layout::Struct(&[]));
 
-        let function_layout = Layout::FunctionPointer(&args, result);
-
         // this is already a (function) pointer type
-        basic_type_from_layout(env, &function_layout)
+        basic_type_from_function_layout(env, &args, result)
     };
     argument_types.push(function_pointer_type);
 
@@ -3474,10 +3471,7 @@ fn build_function_caller<'a, 'ctx, 'env>(
     let _closure_data_ptr = parameters.pop().unwrap().into_pointer_value();
     let function_ptr = parameters.pop().unwrap().into_pointer_value();
 
-    // let closure_data = context.struct_type(&[], false).const_zero().into();
-
-    let actual_function_type =
-        basic_type_from_layout(env, &Layout::FunctionPointer(arguments, result));
+    let actual_function_type = basic_type_from_function_layout(env, arguments, result);
 
     let function_ptr = builder
         .build_bitcast(function_ptr, actual_function_type, "cast")
@@ -3513,22 +3507,22 @@ fn build_function_caller<'a, 'ctx, 'env>(
     );
 
     // STEP 4: build a {} -> u64 function that gives the size of the function
-    let layout = Layout::FunctionPointer(arguments, result);
-    build_host_exposed_alias_size(env, def_name, alias_symbol, &layout);
+    let layout = Layout::Struct(&[]);
+    build_host_exposed_alias_size(env, def_name, alias_symbol, layout);
 }
 
 fn build_host_exposed_alias_size<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
     def_name: &str,
     alias_symbol: Symbol,
-    layout: &Layout<'a>,
+    layout: Layout<'a>,
 ) {
     build_host_exposed_alias_size_help(
         env,
         def_name,
         alias_symbol,
         None,
-        basic_type_from_layout(env, layout),
+        basic_type_from_layout(env, &layout),
     )
 }
 
