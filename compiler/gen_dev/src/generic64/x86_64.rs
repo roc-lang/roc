@@ -765,12 +765,11 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src1: X86_64GeneralReg,
         imm32: i32,
     ) {
-        if dst == src1 {
-            add_reg64_imm32(buf, dst, imm32);
-        } else {
+        if dst != src1 {
             mov_reg64_reg64(buf, dst, src1);
-            add_reg64_imm32(buf, dst, imm32);
         }
+
+        add_reg64_imm32(buf, dst, imm32);
     }
     #[inline(always)]
     fn add_reg64_reg64_reg64(
@@ -821,12 +820,11 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
-        if dst == src1 {
-            imul_reg64_reg64(buf, dst, src2);
-        } else {
+        if dst != src1 {
             mov_reg64_reg64(buf, dst, src1);
-            imul_reg64_reg64(buf, dst, src2);
         }
+
+        imul_reg64_reg64(buf, dst, src2);
     }
 
     #[inline(always)]
@@ -926,12 +924,11 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src1: X86_64GeneralReg,
         imm32: i32,
     ) {
-        if dst == src1 {
-            sub_reg64_imm32(buf, dst, imm32);
-        } else {
+        if dst != src1 {
             mov_reg64_reg64(buf, dst, src1);
-            sub_reg64_imm32(buf, dst, imm32);
         }
+
+        sub_reg64_imm32(buf, dst, imm32);
     }
     #[inline(always)]
     fn sub_reg64_reg64_reg64(
@@ -940,12 +937,11 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
-        if dst == src1 {
-            sub_reg64_reg64(buf, dst, src2);
-        } else {
+        if dst != src1 {
             mov_reg64_reg64(buf, dst, src1);
-            sub_reg64_reg64(buf, dst, src2);
         }
+
+        sub_reg64_reg64(buf, dst, src2);
     }
 
     #[inline(always)]

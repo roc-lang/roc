@@ -756,11 +756,10 @@ fn write_symbol(env: &Env, symbol: Symbol, buf: &mut String) {
 
     // Don't qualify the symbol if it's in our home module,
     // or if it's a builtin (since all their types are always in scope)
-    if module_id == env.home || module_id.is_builtin() {
-        buf.push_str(ident);
-    } else {
+    if module_id != env.home && !module_id.is_builtin() {
         buf.push_str(module_id.to_string(&interns));
         buf.push('.');
-        buf.push_str(ident);
     }
+
+    buf.push_str(ident);
 }

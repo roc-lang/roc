@@ -535,7 +535,7 @@ impl RocStr {
         }
 
         // null-terminate
-        *(buf.offset(self.len() as isize)) = 0;
+        *(buf.add(self.len())) = 0;
 
         buf as *mut char
     }
