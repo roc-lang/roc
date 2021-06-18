@@ -338,6 +338,9 @@ impl<T> Drop for RocList<T> {
                 // The only remaining option is that this is in readonly memory,
                 // in which case we shouldn't attempt to do anything to it.
             }
+
+            // The only remaining option is that this is in readonly memory,
+            // in which case we shouldn't attempt to do anything to it.
         }
     }
 }
