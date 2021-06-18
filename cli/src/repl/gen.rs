@@ -226,7 +226,7 @@ pub fn gen_and_eval<'a>(
                 &arena,
                 lib,
                 main_fn_name,
-                &arena.alloc(main_fn_layout).full(),
+                main_fn_layout,
                 &content,
                 &env.interns,
                 home,

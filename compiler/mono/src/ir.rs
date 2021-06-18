@@ -2624,10 +2624,6 @@ impl<'a> TopLevelFunctionLayout<'a> {
             },
         }
     }
-
-    pub fn full(&'a self) -> Layout<'a> {
-        Layout::FunctionPointer(self.arguments, &self.result)
-    }
 }
 
 fn specialize_naked_symbol<'a>(
@@ -6788,7 +6784,7 @@ fn call_specialized_proc<'a>(
                     arguments: field_symbols,
                 };
 
-                build_call(env, call, assigned, function_layout.full(), hole)
+                build_call(env, call, assigned, function_layout.result, hole)
             }
         }
     } else {

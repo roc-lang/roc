@@ -118,7 +118,7 @@ impl<'ctx> Iterator for FunctionIterator<'ctx> {
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Scope<'a, 'ctx> {
     symbols: ImMap<Symbol, (Layout<'a>, BasicValueEnum<'ctx>)>,
-    pub top_level_thunks: ImMap<Symbol, (Layout<'a>, FunctionValue<'ctx>)>,
+    pub top_level_thunks: ImMap<Symbol, (TopLevelFunctionLayout<'a>, FunctionValue<'ctx>)>,
     join_points: ImMap<JoinPointId, (BasicBlock<'ctx>, &'a [PointerValue<'ctx>])>,
 }
 
@@ -136,7 +136,7 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
         function_value: FunctionValue<'ctx>,
     ) {
         self.top_level_thunks
-            .insert(symbol, (layout.full(), function_value));
+            .insert(symbol, (*layout, function_value));
     }
     fn remove(&mut self, symbol: &Symbol) {
         self.symbols.remove(symbol);
