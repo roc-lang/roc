@@ -150,7 +150,7 @@ pub enum HostExposedLayouts<'a> {
     NotHostExposed,
     HostExposed {
         rigids: BumpMap<Lowercase, Layout<'a>>,
-        aliases: BumpMap<Symbol, (Symbol, ProcLayout<'a>, Layout<'a>)>,
+        aliases: BumpMap<Symbol, (Symbol, ProcLayout<'a>, RawFunctionLayout<'a>)>,
     },
 }
 
@@ -1987,13 +1987,13 @@ fn specialize_external<'a>(
 
         for (symbol, variable) in host_exposed_variables {
             let layout = layout_cache
-                .from_var(env.arena, *variable, env.subs)
+                .raw_from_var(env.arena, *variable, env.subs)
                 .unwrap();
 
             let name = env.unique_symbol();
 
             match layout {
-                Layout::Closure(argument_layouts, lambda_set, return_layout) => {
+                RawFunctionLayout::Function(argument_layouts, lambda_set, return_layout) => {
                     let assigned = env.unique_symbol();
                     let unit = env.unique_symbol();
 
@@ -2037,7 +2037,7 @@ fn specialize_external<'a>(
 
                     aliases.insert(*symbol, (name, top_level, layout));
                 }
-                _ => todo!(),
+                RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!("so far"),
             }
         }
 
@@ -5961,7 +5961,10 @@ fn reuse_function_symbol<'a>(
             // this symbol is a function, that is used by-name (e.g. as an argument to another
             // function). Register it with the current variable, then create a function pointer
             // to it in the IR.
-            let res_layout = layout_cache.from_var(env.arena, arg_var, env.subs);
+            let res_layout = return_on_layout_error!(
+                env,
+                layout_cache.raw_from_var(env.arena, arg_var, env.subs)
+            );
 
             // we have three kinds of functions really. Plain functions, closures by capture,
             // and closures by unification. Here we record whether this function captures
@@ -5970,10 +5973,9 @@ fn reuse_function_symbol<'a>(
             let captured = partial_proc.captured_symbols.clone();
 
             match res_layout {
-                Ok(Layout::Closure(argument_layouts, lambda_set, ret_layout)) => {
+                RawFunctionLayout::Function(argument_layouts, lambda_set, ret_layout) => {
                     // define the function pointer
-                    let function_ptr_layout =
-                        ProcLayout::from_layout(env.arena, res_layout.unwrap());
+                    let function_ptr_layout = ProcLayout::from_raw(env.arena, res_layout);
 
                     if captures {
                         // this is a closure by capture, meaning it itself captures local variables.
@@ -6030,23 +6032,12 @@ fn reuse_function_symbol<'a>(
                         return let_empty_struct(symbol, env.arena.alloc(result));
                     }
                 }
-                Ok(layout) => {
+                RawFunctionLayout::ZeroArgumentThunk(ret_layout) => {
                     // this is a 0-argument thunk
-                    let top_level = ProcLayout::new(env.arena, &[], layout);
+                    let top_level = ProcLayout::new(env.arena, &[], ret_layout);
                     procs.insert_passed_by_name(env, arg_var, original, top_level, layout_cache);
 
-                    force_thunk(env, original, layout, symbol, env.arena.alloc(result))
-                }
-                Err(LayoutProblem::Erroneous) => {
-                    let message = format!("The {:?} symbol has an erroneous type", symbol);
-                    Stmt::RuntimeError(env.arena.alloc(message))
-                }
-                Err(LayoutProblem::UnresolvedTypeVar(v)) => {
-                    let message = format!(
-                        "The {:?} symbol contains a unresolved type var {:?}",
-                        symbol, v
-                    );
-                    Stmt::RuntimeError(env.arena.alloc(message))
+                    force_thunk(env, original, ret_layout, symbol, env.arena.alloc(result))
                 }
             }
         }

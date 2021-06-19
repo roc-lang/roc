@@ -3466,13 +3466,14 @@ pub fn build_proc<'a, 'ctx, 'env>(
     fn_val: FunctionValue<'ctx>,
 ) {
     use roc_mono::ir::HostExposedLayouts;
+    use roc_mono::layout::RawFunctionLayout;
     let copy = proc.host_exposed_layouts.clone();
     match copy {
         HostExposedLayouts::NotHostExposed => {}
         HostExposedLayouts::HostExposed { rigids: _, aliases } => {
             for (name, (symbol, top_level, layout)) in aliases {
                 match layout {
-                    Layout::Closure(arguments, closure, result) => {
+                    RawFunctionLayout::Function(arguments, closure, result) => {
                         // define closure size and return value size, e.g.
                         //
                         // * roc__mainForHost_1_Update_size() -> i64
@@ -3510,10 +3511,9 @@ pub fn build_proc<'a, 'ctx, 'env>(
                         )
                     }
 
-                    Layout::Builtin(_) => {}
-                    Layout::Struct(_) => {}
-                    Layout::Union(_) => {}
-                    Layout::RecursivePointer => {}
+                    RawFunctionLayout::ZeroArgumentThunk(_) => {
+                        // do nothing
+                    }
                 }
             }
         }
