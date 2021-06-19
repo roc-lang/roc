@@ -975,7 +975,7 @@ test "RocStr.concat: small concat small" {
         roc_str3.deinit();
     }
 
-    const result = strConcat(InPlace.Clone, roc_str1, roc_str2);
+    const result = strConcat(roc_str1, roc_str2);
 
     defer result.deinit();
 
