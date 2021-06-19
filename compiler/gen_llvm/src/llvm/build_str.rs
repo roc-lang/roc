@@ -6,7 +6,7 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, Str
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, InPlace, Layout};
+use roc_mono::layout::{Builtin, Layout};
 
 use super::build::load_symbol;
 
@@ -16,7 +16,6 @@ pub static CHAR_LAYOUT: Layout = Layout::Builtin(Builtin::Int8);
 pub fn str_split<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
-    inplace: InPlace,
     str_symbol: Symbol,
     delimiter_symbol: Symbol,
 ) -> BasicValueEnum<'ctx> {
@@ -33,7 +32,7 @@ pub fn str_split<'a, 'ctx, 'env>(
     .into_int_value();
 
     // a pointer to the elements
-    let ret_list_ptr = allocate_list(env, inplace, &Layout::Builtin(Builtin::Str), segment_count);
+    let ret_list_ptr = allocate_list(env, &Layout::Builtin(Builtin::Str), segment_count);
 
     // get the RocStr type defined by zig
     let roc_str_type = env.module.get_struct_type("str.RocStr").unwrap();
@@ -109,7 +108,6 @@ pub fn destructure<'ctx>(
 /// Str.concat : Str, Str -> Str
 pub fn str_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    inplace: InPlace,
     scope: &Scope<'a, 'ctx>,
     str1_symbol: Symbol,
     str2_symbol: Symbol,
@@ -120,14 +118,7 @@ pub fn str_concat<'a, 'ctx, 'env>(
 
     call_bitcode_fn(
         env,
-        &[
-            env.context
-                .i8_type()
-                .const_int(inplace as u64, false)
-                .into(),
-            str1_i128.into(),
-            str2_i128.into(),
-        ],
+        &[str1_i128.into(), str2_i128.into()],
         &bitcode::STR_CONCAT,
     )
 }
@@ -135,7 +126,6 @@ pub fn str_concat<'a, 'ctx, 'env>(
 /// Str.join : List Str, Str -> Str
 pub fn str_join_with<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    _inplace: InPlace,
     scope: &Scope<'a, 'ctx>,
     list_symbol: Symbol,
     str_symbol: Symbol,

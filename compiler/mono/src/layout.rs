@@ -20,13 +20,6 @@ impl Layout<'_> {
     pub const TAG_SIZE: Layout<'static> = Layout::Builtin(Builtin::Int64);
 }
 
-#[derive(Copy, Clone)]
-#[repr(u8)]
-pub enum InPlace {
-    InPlace,
-    Clone,
-}
-
 #[derive(Debug, Clone)]
 pub enum LayoutProblem {
     UnresolvedTypeVar(Variable),
@@ -58,19 +51,6 @@ pub enum Layout<'a> {
 
     /// A function. The types of its arguments, then the type of its return value.
     Closure(&'a [Layout<'a>], LambdaSet<'a>, &'a Layout<'a>),
-}
-
-impl<'a> Layout<'a> {
-    pub fn in_place(&self) -> InPlace {
-        match self {
-            Layout::Builtin(Builtin::EmptyList) => InPlace::InPlace,
-            Layout::Builtin(Builtin::List(_)) => InPlace::Clone,
-            Layout::Builtin(Builtin::EmptyStr) => InPlace::InPlace,
-            Layout::Builtin(Builtin::Str) => InPlace::Clone,
-            Layout::Builtin(Builtin::Int1) => InPlace::Clone,
-            _ => unreachable!("Layout {:?} does not have an inplace", self),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -719,8 +699,6 @@ impl<'a> CachedVariable<'a> {
         CachedVariable(var, std::marker::PhantomData)
     }
 }
-
-// use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 
 impl<'a> ven_ena::unify::UnifyKey for CachedVariable<'a> {
     type Value = CachedLayout<'a>;

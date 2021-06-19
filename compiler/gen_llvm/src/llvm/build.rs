@@ -52,7 +52,7 @@ use roc_mono::ir::{
     BranchInfo, CallType, EntryPoint, ExceptionId, JoinPointId, ModifyRc, OptLevel, ProcLayout,
     Wrapped,
 };
-use roc_mono::layout::{Builtin, InPlace, LambdaSet, Layout, LayoutIds, UnionLayout};
+use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, UnionLayout};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
 /// output in debug builds, but we don't want it to print to stdout in release builds!
@@ -1637,9 +1637,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             }
         }
         EmptyArray => empty_polymorphic_list(env),
-        Array { elem_layout, elems } => {
-            list_literal(env, layout.in_place(), scope, elem_layout, elems)
-        }
+        Array { elem_layout, elems } => list_literal(env, scope, elem_layout, elems),
         RuntimeErrorFunction(_) => todo!(),
     }
 }
@@ -1793,7 +1791,6 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
 
 fn list_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    inplace: InPlace,
     scope: &Scope<'a, 'ctx>,
     elem_layout: &Layout<'a>,
     elems: &&[Symbol],
@@ -1807,7 +1804,7 @@ fn list_literal<'a, 'ctx, 'env>(
         let len_type = env.ptr_int();
         let len = len_type.const_int(len_u64, false);
 
-        allocate_list(env, inplace, elem_layout, len)
+        allocate_list(env, elem_layout, len)
     };
 
     // Copy the elements from the list literal into the array
@@ -4164,13 +4161,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.concat : Str, Str -> Str
             debug_assert_eq!(args.len(), 2);
 
-            str_concat(env, layout.in_place(), scope, args[0], args[1])
+            str_concat(env, scope, args[0], args[1])
         }
         StrJoinWith => {
             // Str.joinWith : List Str, Str -> Str
             debug_assert_eq!(args.len(), 2);
 
-            str_join_with(env, layout.in_place(), scope, args[0], args[1])
+            str_join_with(env, scope, args[0], args[1])
         }
         StrStartsWith => {
             // Str.startsWith : Str, Str -> Bool
@@ -4224,7 +4221,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.split : Str, Str -> List Str
             debug_assert_eq!(args.len(), 2);
 
-            str_split(env, scope, layout.in_place(), args[0], args[1])
+            str_split(env, scope, args[0], args[1])
         }
         StrIsEmpty => {
             // Str.isEmpty : Str -> Str
@@ -4259,7 +4256,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (arg, arg_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            list_single(env, layout.in_place(), arg, arg_layout)
+            list_single(env, arg, arg_layout)
         }
         ListRepeat => {
             // List.repeat : Int, elem -> List elem
@@ -4276,7 +4273,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            list_reverse(env, layout.in_place(), list, list_layout)
+            list_reverse(env, list, list_layout)
         }
         ListConcat => {
             debug_assert_eq!(args.len(), 2);
@@ -4285,14 +4282,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let second_list = load_symbol(scope, &args[1]);
 
-            list_concat(
-                env,
-                layout.in_place(),
-                parent,
-                first_list,
-                second_list,
-                list_layout,
-            )
+            list_concat(env, parent, first_list, second_list, list_layout)
         }
         ListContains => {
             // List.contains : List elem, elem -> Bool
@@ -4325,7 +4315,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            list_append(env, layout.in_place(), original_wrapper, elem, elem_layout)
+            list_append(env, original_wrapper, elem, elem_layout)
         }
         ListSwap => {
             // List.swap : List elem, Nat, Nat -> List elem
@@ -4377,7 +4367,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            list_prepend(env, layout.in_place(), original_wrapper, elem, elem_layout)
+            list_prepend(env, original_wrapper, elem, elem_layout)
         }
         ListJoin => {
             // List.join : List (List elem) -> List elem
@@ -4385,7 +4375,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, outer_list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            list_join(env, layout.in_place(), parent, list, outer_list_layout)
+            list_join(env, parent, list, outer_list_layout)
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumLogUnchecked | NumSin | NumCos
         | NumCeiling | NumFloor | NumToFloat | NumIsFinite | NumAtan | NumAcos | NumAsin => {
