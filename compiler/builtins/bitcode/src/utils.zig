@@ -92,7 +92,7 @@ pub fn decref(
             if (refcount == REFCOUNT_ONE_ISIZE) {
                 dealloc(bytes - 16, alignment);
             } else if (refcount_isize < 0) {
-                (isizes - 1)[0] = refcount + 1;
+                (isizes - 1)[0] = refcount - 1;
             }
         },
         else => {
@@ -100,7 +100,7 @@ pub fn decref(
             if (refcount == REFCOUNT_ONE_ISIZE) {
                 dealloc(bytes - 8, alignment);
             } else if (refcount_isize < 0) {
-                (isizes - 1)[0] = refcount + 1;
+                (isizes - 1)[0] = refcount - 1;
             }
         },
     }
