@@ -2296,10 +2296,6 @@ fn finish(
         .map(|(id, (path, src))| (id, (path, src.into())))
         .collect();
 
-    dbg!(&exposed_vars_by_symbol);
-    let exposed_aliases = exposed_aliases_by_symbol;
-    // todo!("Get exposed aliases");
-
     LoadedModule {
         module_id: state.root_id,
         interns,
@@ -2308,7 +2304,7 @@ fn finish(
         type_problems: state.module_cache.type_problems,
         declarations_by_id: state.declarations_by_id,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
-        exposed_aliases,
+        exposed_aliases: exposed_aliases_by_symbol,
         header_sources,
         sources,
         timings: state.timings,
