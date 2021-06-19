@@ -396,17 +396,15 @@ impl<'a> PackageModuleIds<'a> {
     fn insert_debug_name(module_id: ModuleId, module_name: &PQModuleName) {
         let mut names = DEBUG_MODULE_ID_NAMES.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
-        if !names.contains_key(&module_id.0) {
-            match module_name {
-                PQModuleName::Unqualified(module) => {
-                    names.insert(module_id.0, module.to_string().into());
-                }
+        names
+            .entry(module_id.0)
+            .or_insert_with(|| match module_name {
+                PQModuleName::Unqualified(module) => module.to_string().into(),
                 PQModuleName::Qualified(package, module) => {
                     let name = format!("{}.{}", package, module).into();
-                    names.insert(module_id.0, name);
+                    name
                 }
-            }
-        }
+            });
     }
 
     #[cfg(not(debug_assertions))]
@@ -464,9 +462,9 @@ impl ModuleIds {
         let mut names = DEBUG_MODULE_ID_NAMES.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
         // TODO make sure modules are never added more than once!
-        if !names.contains_key(&module_id.0) {
-            names.insert(module_id.0, module_name.to_string().into());
-        }
+        names
+            .entry(module_id.0)
+            .or_insert_with(|| module_name.to_string().into());
     }
 
     #[cfg(not(debug_assertions))]

@@ -176,7 +176,7 @@ fn jit_to_ast_help<'a>(
                 ),
                 Content::Structure(FlatType::Func(_, _, _)) => {
                     // a function with a struct as the closure environment
-                    return Err(ToAstProblem::FunctionLayout);
+                    Err(ToAstProblem::FunctionLayout)
                 }
                 other => {
                     unreachable!(
