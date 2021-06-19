@@ -808,7 +808,7 @@ impl<'a> LayoutCache<'a> {
         arena: &'a Bump,
         var: Variable,
         subs: &Subs,
-    ) -> Result<Layout<'a>, LayoutProblem> {
+    ) -> Result<RawFunctionLayout<'a>, LayoutProblem> {
         // Store things according to the root Variable, to avoid duplicate work.
         let var = subs.get_root_key_without_compacting(var);
 
@@ -818,31 +818,18 @@ impl<'a> LayoutCache<'a> {
 
         use CachedLayout::*;
         match self.layouts.probe_value(cached_var) {
-            Cached(result) => Ok(result),
             Problem(problem) => Err(problem),
-            NotCached => {
+            Cached(_) | NotCached => {
                 let mut env = Env {
                     arena,
                     subs,
                     seen: MutSet::default(),
                 };
 
-                let result = Layout::from_var(&mut env, var);
-
-                // Don't actually cache. The layout cache is very hard to get right in the presence
-                // of specialization, it's turned of for now so an invalid cache is never the cause
-                // of a problem
-                if false {
-                    let cached_layout = match &result {
-                        Ok(layout) => Cached(*layout),
-                        Err(problem) => Problem(problem.clone()),
-                    };
-
-                    self.layouts
-                        .update_value(cached_var, |existing| existing.value = cached_layout);
-                }
-
-                result
+                Layout::from_var(&mut env, var).map(|l| match l {
+                    Layout::Closure(a, b, c) => RawFunctionLayout::Function(a, b, c),
+                    other => RawFunctionLayout::ZeroArgumentThunk(other),
+                })
             }
         }
     }

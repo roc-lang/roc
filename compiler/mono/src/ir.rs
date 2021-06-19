@@ -25,14 +25,22 @@ macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr) => {
         match $layout_result {
             Ok(cached) => cached,
-            Err(LayoutProblem::UnresolvedTypeVar(_)) => {
+            Err(error) => return_on_layout_error_help!($env, error),
+        }
+    };
+}
+
+macro_rules! return_on_layout_error_help {
+    ($env:expr, $error:expr) => {
+        match $error {
+            LayoutProblem::UnresolvedTypeVar(_) => {
                 return Stmt::RuntimeError($env.arena.alloc(format!(
                     "UnresolvedTypeVar {} line {}",
                     file!(),
                     line!()
                 )));
             }
-            Err(LayoutProblem::Erroneous) => {
+            LayoutProblem::Erroneous => {
                 return Stmt::RuntimeError($env.arena.alloc(format!(
                     "Erroneous {} line {}",
                     file!(),
@@ -3731,9 +3739,13 @@ pub fn with_hole<'a>(
         } => {
             let loc_body = *boxed_body;
 
-            match layout_cache.raw_from_var(env.arena, function_type, env.subs) {
-                Err(e) => panic!("invalid layout {:?}", e),
-                Ok(Layout::Closure(_argument_layouts, lambda_set, _ret_layout)) => {
+            let raw = layout_cache.raw_from_var(env.arena, function_type, env.subs);
+
+            match return_on_layout_error!(env, raw) {
+                RawFunctionLayout::ZeroArgumentThunk(_) => {
+                    unreachable!("a closure syntactically always must have at least one argument")
+                }
+                RawFunctionLayout::Function(_argument_layouts, lambda_set, _ret_layout) => {
                     let mut captured_symbols = Vec::from_iter_in(captured_symbols, env.arena);
                     captured_symbols.sort();
                     let captured_symbols = captured_symbols.into_bump_slice();
@@ -3768,7 +3780,6 @@ pub fn with_hole<'a>(
 
                     construct_closure_data(env, lambda_set, name, symbols, assigned, hole)
                 }
-                Ok(_) => unreachable!(),
             }
         }
 
@@ -3829,16 +3840,6 @@ pub fn with_hole<'a>(
                         layout_cache.raw_from_var(env.arena, fn_var, env.subs)
                     );
 
-                    let arg_layouts = match full_layout {
-                        Layout::Closure(args, _, _) => args,
-                        _ => unreachable!("function has layout that is not function pointer"),
-                    };
-
-                    let ret_layout = return_on_layout_error!(
-                        env,
-                        layout_cache.from_var(env.arena, ret_var, env.subs)
-                    );
-
                     // if the function expression (loc_expr) is already a symbol,
                     // re-use that symbol, and don't define its value again
                     let mut result;
@@ -3850,8 +3851,8 @@ pub fn with_hole<'a>(
                         Imported(_) => {
                             unreachable!("an imported value is never an anonymous function")
                         }
-                        Value(function_symbol) => {
-                            if let Layout::Closure(_, lambda_set, _) = full_layout {
+                        Value(function_symbol) => match full_layout {
+                            RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout) => {
                                 let closure_data_symbol = function_symbol;
 
                                 result = match_on_lambda_set(
@@ -3860,20 +3861,25 @@ pub fn with_hole<'a>(
                                     closure_data_symbol,
                                     arg_symbols,
                                     arg_layouts,
-                                    ret_layout,
+                                    *ret_layout,
                                     assigned,
                                     hole,
                                 );
-                            } else {
+                            }
+                            RawFunctionLayout::ZeroArgumentThunk(_) => {
                                 unreachable!("calling a non-closure layout")
                             }
-                        }
+                        },
                         NotASymbol => {
                             // the expression is not a symbol. That means it's an expression
                             // evaluating to a function value.
 
                             match full_layout {
-                                Layout::Closure(_, lambda_set, _) => {
+                                RawFunctionLayout::Function(
+                                    arg_layouts,
+                                    lambda_set,
+                                    ret_layout,
+                                ) => {
                                     let closure_data_symbol = env.unique_symbol();
 
                                     result = match_on_lambda_set(
@@ -3882,7 +3888,7 @@ pub fn with_hole<'a>(
                                         closure_data_symbol,
                                         arg_symbols,
                                         arg_layouts,
-                                        ret_layout,
+                                        *ret_layout,
                                         assigned,
                                         hole,
                                     );
@@ -3897,8 +3903,11 @@ pub fn with_hole<'a>(
                                         env.arena.alloc(result),
                                     );
                                 }
-                                _ => {
-                                    todo!("{:?}", full_layout)
+                                RawFunctionLayout::ZeroArgumentThunk(_) => {
+                                    unreachable!(
+                                        "{:?} cannot be called in the source language",
+                                        full_layout
+                                    )
                                 }
                             }
                         }
