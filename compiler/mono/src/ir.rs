@@ -1887,17 +1887,7 @@ fn specialize_all_help<'a>(
             }) => {
                 let proc = generate_runtime_error_function(env, name, attempted_layout);
 
-                let top_level = {
-                    match attempted_layout {
-                        RawFunctionLayout::Function(a, b, c) => {
-                            let l = Layout::Closure(a, b, c);
-                            TopLevelFunctionLayout::from_layout(env.arena, l)
-                        }
-                        RawFunctionLayout::ZeroArgumentThunk(result) => {
-                            TopLevelFunctionLayout::new(env.arena, &[], result)
-                        }
-                    }
-                };
+                let top_level = TopLevelFunctionLayout::from_raw(env.arena, attempted_layout);
 
                 procs.specialized.insert((name, top_level), Done(proc));
             }
@@ -3784,7 +3774,7 @@ pub fn with_hole<'a>(
         }
 
         Call(boxed, loc_args, _) => {
-            let (fn_var, loc_expr, _lambda_set_var, ret_var) = *boxed;
+            let (fn_var, loc_expr, _lambda_set_var, _ret_var) = *boxed;
 
             // even if a call looks like it's by name, it may in fact be by-pointer.
             // E.g. in `(\f, x -> f x)` the call is in fact by pointer.
@@ -6218,7 +6208,7 @@ fn call_by_name<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     // Register a pending_specialization for this function
-    match layout_cache.from_var(env.arena, fn_var, env.subs) {
+    match layout_cache.raw_from_var(env.arena, fn_var, env.subs) {
         Err(LayoutProblem::UnresolvedTypeVar(var)) => {
             let msg = format!(
                 "Hit an unresolved type variable {:?} when creating a layout for {:?} (var {:?})",
@@ -6233,110 +6223,107 @@ fn call_by_name<'a>(
             );
             Stmt::RuntimeError(env.arena.alloc(msg))
         }
-        Ok(layout) if procs.module_thunks.contains(&proc_name) => {
-            // here we turn a call to a module thunk into  forcing of that thunk
-            if loc_args.is_empty() {
+        Ok(RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout)) => {
+            if procs.module_thunks.contains(&proc_name) {
+                if loc_args.is_empty() {
+                    call_by_name_module_thunk(
+                        env,
+                        procs,
+                        fn_var,
+                        proc_name,
+                        env.arena.alloc(lambda_set.runtime_representation()),
+                        layout_cache,
+                        assigned,
+                        hole,
+                    )
+                } else {
+                    // here we turn a call to a module thunk into forcing of that thunk
+                    // the thunk represents the closure environment for the body, so we then match
+                    // on the closure environment to perform the call that the body represents.
+                    //
+                    // Example:
+                    //
+                    // > main = parseA  "foo" "bar"
+                    // > parseA = Str.concat
+
+                    let closure_data_symbol = env.unique_symbol();
+
+                    let arena = env.arena;
+                    let arg_symbols = Vec::from_iter_in(
+                        loc_args.iter().map(|(_, arg_expr)| {
+                            possible_reuse_symbol(env, procs, &arg_expr.value)
+                        }),
+                        arena,
+                    )
+                    .into_bump_slice();
+
+                    debug_assert_eq!(arg_symbols.len(), arg_layouts.len());
+
+                    let result = match_on_lambda_set(
+                        env,
+                        lambda_set,
+                        closure_data_symbol,
+                        arg_symbols,
+                        arg_layouts,
+                        *ret_layout,
+                        assigned,
+                        hole,
+                    );
+
+                    let result = call_by_name_module_thunk(
+                        env,
+                        procs,
+                        fn_var,
+                        proc_name,
+                        env.arena.alloc(lambda_set.runtime_representation()),
+                        layout_cache,
+                        closure_data_symbol,
+                        env.arena.alloc(result),
+                    );
+
+                    let iter = loc_args.into_iter().rev().zip(arg_symbols.iter().rev());
+                    assign_to_symbols(env, procs, layout_cache, iter, result)
+                }
+            } else {
+                let orig = Layout::Closure(arg_layouts, lambda_set, ret_layout);
+                match lambda_set.extend_function_layout(env.arena, arg_layouts, ret_layout) {
+                    Layout::FunctionPointer(argument_layouts, ret_layout) => call_by_name_help(
+                        env,
+                        procs,
+                        fn_var,
+                        proc_name,
+                        loc_args,
+                        orig,
+                        argument_layouts,
+                        ret_layout,
+                        layout_cache,
+                        assigned,
+                        hole,
+                    ),
+                    _ => unreachable!(),
+                }
+            }
+        }
+        Ok(RawFunctionLayout::ZeroArgumentThunk(ret_layout)) => {
+            if procs.module_thunks.contains(&proc_name) {
+                // here we turn a call to a module thunk into  forcing of that thunk
                 call_by_name_module_thunk(
                     env,
                     procs,
                     fn_var,
                     proc_name,
-                    env.arena.alloc(layout),
+                    env.arena.alloc(ret_layout),
                     layout_cache,
                     assigned,
                     hole,
                 )
-            } else if let Layout::Closure(arg_layouts, lambda_set, ret_layout) = layout {
-                // here we turn a call to a module thunk into forcing of that thunk
-                // the thunk represents the closure environment for the body, so we then match
-                // on the closure environment to perform the call that the body represents.
-                //
-                // Example:
-                //
-                // > main = parseA  "foo" "bar"
-                // > parseA = Str.concat
-
-                let closure_data_symbol = env.unique_symbol();
-
-                let arena = env.arena;
-                let arg_symbols = Vec::from_iter_in(
-                    loc_args
-                        .iter()
-                        .map(|(_, arg_expr)| possible_reuse_symbol(env, procs, &arg_expr.value)),
-                    arena,
-                )
-                .into_bump_slice();
-
-                let result = match_on_lambda_set(
-                    env,
-                    lambda_set,
-                    closure_data_symbol,
-                    arg_symbols,
-                    arg_layouts,
-                    *ret_layout,
-                    assigned,
-                    hole,
-                );
-
-                let result = call_by_name_module_thunk(
-                    env,
-                    procs,
-                    fn_var,
-                    proc_name,
-                    env.arena.alloc(layout),
-                    layout_cache,
-                    closure_data_symbol,
-                    env.arena.alloc(result),
-                );
-
-                let iter = loc_args.into_iter().rev().zip(arg_symbols.iter().rev());
-                assign_to_symbols(env, procs, layout_cache, iter, result)
-            } else {
-                unreachable!("calling a non-closure layout")
-            }
-        }
-        Ok(Layout::FunctionPointer(argument_layouts, ret_layout)) => call_by_name_help(
-            env,
-            procs,
-            fn_var,
-            proc_name,
-            loc_args,
-            Layout::FunctionPointer(argument_layouts, ret_layout),
-            argument_layouts,
-            ret_layout,
-            layout_cache,
-            assigned,
-            hole,
-        ),
-        Ok(Layout::Closure(c_argument_layouts, lambda_set, c_ret_layout)) => {
-            match lambda_set.extend_function_layout(env.arena, c_argument_layouts, c_ret_layout) {
-                Layout::FunctionPointer(argument_layouts, ret_layout) => call_by_name_help(
-                    env,
-                    procs,
-                    fn_var,
-                    proc_name,
-                    loc_args,
-                    Layout::Closure(c_argument_layouts, lambda_set, c_ret_layout),
-                    argument_layouts,
-                    ret_layout,
-                    layout_cache,
-                    assigned,
-                    hole,
-                ),
-                _ => unreachable!(),
-            }
-        }
-        Ok(other) if loc_args.is_empty() => {
-            // this is a 0-argument thunk
-            if env.is_imported_symbol(proc_name) {
+            } else if env.is_imported_symbol(proc_name) {
                 add_needed_external(procs, env, fn_var, proc_name);
+                force_thunk(env, proc_name, ret_layout, assigned, hole)
+            } else {
+                panic!("most likely we're trying to call something that is not a function");
             }
-            force_thunk(env, proc_name, other, assigned, hole)
         }
-        other => panic!(
-            "calling {:?}, which is not a function but received arguments, and is a {:?}",
-            proc_name, other,
-        ),
     }
 }
 

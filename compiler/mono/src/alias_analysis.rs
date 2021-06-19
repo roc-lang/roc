@@ -144,7 +144,7 @@ where
                     "{:?}: {:?} with {:?} args",
                     proc.name,
                     bytes_as_ascii(&bytes),
-                    proc.args.len()
+                    (proc.args, proc.ret_layout),
                 );
             }
 
