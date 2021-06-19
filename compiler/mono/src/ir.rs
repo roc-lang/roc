@@ -6285,22 +6285,21 @@ fn call_by_name<'a>(
                     assign_to_symbols(env, procs, layout_cache, iter, result)
                 }
             } else {
-                match lambda_set.extend_function_layout(env.arena, arg_layouts, ret_layout) {
-                    Layout::FunctionPointer(argument_layouts, ret_layout) => call_by_name_help(
-                        env,
-                        procs,
-                        fn_var,
-                        proc_name,
-                        loc_args,
-                        lambda_set,
-                        argument_layouts,
-                        ret_layout,
-                        layout_cache,
-                        assigned,
-                        hole,
-                    ),
-                    _ => unreachable!(),
-                }
+                let argument_layouts = lambda_set.extend_argument_list(env.arena, arg_layouts);
+
+                call_by_name_help(
+                    env,
+                    procs,
+                    fn_var,
+                    proc_name,
+                    loc_args,
+                    lambda_set,
+                    argument_layouts,
+                    ret_layout,
+                    layout_cache,
+                    assigned,
+                    hole,
+                )
             }
         }
         Ok(RawFunctionLayout::ZeroArgumentThunk(ret_layout)) => {

@@ -210,26 +210,37 @@ impl<'a> LambdaSet<'a> {
         argument_layouts: &'a [Layout<'a>],
         ret_layout: &'a Layout<'a>,
     ) -> Layout<'a> {
+        Layout::FunctionPointer(
+            self.extend_argument_list(arena, argument_layouts),
+            ret_layout,
+        )
+    }
+
+    pub fn extend_argument_list(
+        &self,
+        arena: &'a Bump,
+        argument_layouts: &'a [Layout<'a>],
+    ) -> &'a [Layout<'a>] {
         if let [] = self.set {
             // TERRIBLE HACK for builting functions
-            Layout::FunctionPointer(argument_layouts, ret_layout)
+            argument_layouts
         } else {
             match self.representation {
                 Layout::Struct(&[]) => {
                     // this function does not have anything in its closure, and the lambda set is a
                     // singleton, so we pass no extra argument
-                    Layout::FunctionPointer(argument_layouts, ret_layout)
+                    argument_layouts
                 }
                 Layout::Builtin(Builtin::Int1) | Layout::Builtin(Builtin::Int8) => {
                     // we don't pass this along either
-                    Layout::FunctionPointer(argument_layouts, ret_layout)
+                    argument_layouts
                 }
                 _ => {
                     let mut arguments = Vec::with_capacity_in(argument_layouts.len() + 1, arena);
                     arguments.extend(argument_layouts);
                     arguments.push(self.runtime_representation());
 
-                    Layout::FunctionPointer(arguments.into_bump_slice(), ret_layout)
+                    arguments.into_bump_slice()
                 }
             }
         }
