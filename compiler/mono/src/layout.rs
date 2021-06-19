@@ -1935,7 +1935,7 @@ impl LayoutId {
 
 struct IdsByLayout<'a> {
     by_id: MutMap<Layout<'a>, u32>,
-    toplevels_by_id: MutMap<crate::ir::TopLevelFunctionLayout<'a>, u32>,
+    toplevels_by_id: MutMap<crate::ir::ProcLayout<'a>, u32>,
     next_id: u32,
 }
 
@@ -1975,7 +1975,7 @@ impl<'a> LayoutIds<'a> {
     pub fn get_toplevel<'b>(
         &mut self,
         symbol: Symbol,
-        layout: &'b crate::ir::TopLevelFunctionLayout<'a>,
+        layout: &'b crate::ir::ProcLayout<'a>,
     ) -> LayoutId {
         // Note: this function does some weird stuff to satisfy the borrow checker.
         // There's probably a nicer way to write it that still works.

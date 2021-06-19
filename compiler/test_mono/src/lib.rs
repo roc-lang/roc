@@ -23,7 +23,7 @@ use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::Proc;
 
-use roc_mono::ir::TopLevelFunctionLayout;
+use roc_mono::ir::ProcLayout;
 
 /// Without this, some tests pass in `cargo test --release` but fail without
 /// the --release flag because they run out of stack space. This increases
@@ -146,7 +146,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 #[cfg(debug_assertions)]
 fn verify_procedures(
     test_name: &str,
-    procedures: MutMap<(Symbol, TopLevelFunctionLayout<'_>), Proc<'_>>,
+    procedures: MutMap<(Symbol, ProcLayout<'_>), Proc<'_>>,
     main_fn_symbol: Symbol,
 ) {
     let index = procedures

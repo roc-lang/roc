@@ -65,7 +65,7 @@ pub enum MonoProblem {
 #[derive(Debug, Clone, Copy)]
 pub struct EntryPoint<'a> {
     pub symbol: Symbol,
-    pub layout: TopLevelFunctionLayout<'a>,
+    pub layout: ProcLayout<'a>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -150,7 +150,7 @@ pub enum HostExposedLayouts<'a> {
     NotHostExposed,
     HostExposed {
         rigids: BumpMap<Lowercase, Layout<'a>>,
-        aliases: BumpMap<Symbol, (Symbol, TopLevelFunctionLayout<'a>, Layout<'a>)>,
+        aliases: BumpMap<Symbol, (Symbol, ProcLayout<'a>, Layout<'a>)>,
     },
 }
 
@@ -218,7 +218,7 @@ impl<'a> Proc<'a> {
 
     pub fn insert_refcount_operations(
         arena: &'a Bump,
-        procs: &mut MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
+        procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     ) {
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, procs));
 
@@ -307,8 +307,8 @@ pub struct Procs<'a> {
     pub imported_module_thunks: BumpSet<Symbol>,
     pub module_thunks: BumpSet<Symbol>,
     pub pending_specializations:
-        Option<BumpMap<Symbol, MutMap<TopLevelFunctionLayout<'a>, PendingSpecialization<'a>>>>,
-    pub specialized: BumpMap<(Symbol, TopLevelFunctionLayout<'a>), InProgressProc<'a>>,
+        Option<BumpMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>>,
+    pub specialized: BumpMap<(Symbol, ProcLayout<'a>), InProgressProc<'a>>,
     pub runtime_errors: BumpMap<Symbol, &'a str>,
     pub call_by_pointer_wrappers: BumpMap<Symbol, Symbol>,
     pub externals_we_need: BumpMap<ModuleId, ExternalSpecializations<'a>>,
@@ -339,7 +339,7 @@ impl<'a> Procs<'a> {
     pub fn get_specialized_procs_without_rc(
         self,
         arena: &'a Bump,
-    ) -> MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>> {
+    ) -> MutMap<(Symbol, ProcLayout<'a>), Proc<'a>> {
         let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
         let cloned = self.specialized.clone();
@@ -387,7 +387,7 @@ impl<'a> Procs<'a> {
     pub fn get_specialized_procs(
         self,
         arena: &'a Bump,
-    ) -> MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>> {
+    ) -> MutMap<(Symbol, ProcLayout<'a>), Proc<'a>> {
         let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
         for ((s, toplevel), in_prog_proc) in self.specialized.into_iter() {
@@ -428,7 +428,7 @@ impl<'a> Procs<'a> {
         self,
         arena: &'a Bump,
     ) -> (
-        MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
+        MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
         &'a crate::borrow::ParamMap<'a>,
     ) {
         let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
@@ -535,7 +535,7 @@ impl<'a> Procs<'a> {
         captured_symbols: CapturedSymbols<'a>,
         ret_var: Variable,
         layout_cache: &mut LayoutCache<'a>,
-    ) -> Result<TopLevelFunctionLayout<'a>, RuntimeError> {
+    ) -> Result<ProcLayout<'a>, RuntimeError> {
         // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
         let is_self_recursive = false;
 
@@ -543,7 +543,7 @@ impl<'a> Procs<'a> {
             .from_var(env.arena, annotation, env.subs)
             .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-        let top_level = TopLevelFunctionLayout::from_layout(env.arena, layout);
+        let top_level = ProcLayout::from_layout(env.arena, layout);
 
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
@@ -608,8 +608,7 @@ impl<'a> Procs<'a> {
                             match specialize(env, self, symbol, layout_cache, pending, partial_proc)
                             {
                                 Ok((proc, layout)) => {
-                                    let top_level =
-                                        TopLevelFunctionLayout::from_raw(env.arena, layout);
+                                    let top_level = ProcLayout::from_raw(env.arena, layout);
 
                                     debug_assert_eq!(outside_layout, top_level);
 
@@ -637,7 +636,7 @@ impl<'a> Procs<'a> {
     pub fn insert_exposed(
         &mut self,
         name: Symbol,
-        layout: TopLevelFunctionLayout<'a>,
+        layout: ProcLayout<'a>,
         arena: &'a Bump,
         subs: &Subs,
         opt_annotation: Option<roc_can::def::Annotation>,
@@ -681,7 +680,7 @@ impl<'a> Procs<'a> {
         env: &mut Env<'a, '_>,
         fn_var: Variable,
         name: Symbol,
-        layout: TopLevelFunctionLayout<'a>,
+        layout: ProcLayout<'a>,
         layout_cache: &mut LayoutCache<'a>,
     ) {
         let tuple = (name, layout);
@@ -745,10 +744,10 @@ impl<'a> Procs<'a> {
 fn add_pending<'a>(
     pending_specializations: &mut BumpMap<
         Symbol,
-        MutMap<TopLevelFunctionLayout<'a>, PendingSpecialization<'a>>,
+        MutMap<ProcLayout<'a>, PendingSpecialization<'a>>,
     >,
     symbol: Symbol,
-    layout: TopLevelFunctionLayout<'a>,
+    layout: ProcLayout<'a>,
     pending: PendingSpecialization<'a>,
 ) {
     let all_pending = pending_specializations
@@ -1792,7 +1791,7 @@ pub fn specialize_all<'a>(
                 ) {
                     Ok((proc, layout)) => {
                         // TODO thiscode is duplicated elsewhere
-                        let top_level = TopLevelFunctionLayout::from_raw(env.arena, layout);
+                        let top_level = ProcLayout::from_raw(env.arena, layout);
 
                         if procs.module_thunks.contains(&proc.name) {
                             debug_assert!(
@@ -1811,8 +1810,7 @@ pub fn specialize_all<'a>(
                     }) => {
                         let proc = generate_runtime_error_function(env, name, attempted_layout);
 
-                        let top_level =
-                            TopLevelFunctionLayout::from_raw(env.arena, attempted_layout);
+                        let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
 
                         procs.specialized.insert((name, top_level), Done(proc));
                     }
@@ -1873,7 +1871,7 @@ fn specialize_all_help<'a>(
             partial_proc,
         ) {
             Ok((proc, layout)) => {
-                let top_level = TopLevelFunctionLayout::from_raw(env.arena, layout);
+                let top_level = ProcLayout::from_raw(env.arena, layout);
 
                 if procs.module_thunks.contains(&name) {
                     debug_assert!(top_level.arguments.is_empty());
@@ -1887,7 +1885,7 @@ fn specialize_all_help<'a>(
             }) => {
                 let proc = generate_runtime_error_function(env, name, attempted_layout);
 
-                let top_level = TopLevelFunctionLayout::from_raw(env.arena, attempted_layout);
+                let top_level = ProcLayout::from_raw(env.arena, attempted_layout);
 
                 procs.specialized.insert((name, top_level), Done(proc));
             }
@@ -2027,7 +2025,7 @@ fn specialize_external<'a>(
                         host_exposed_layouts: HostExposedLayouts::NotHostExposed,
                     };
 
-                    let top_level = TopLevelFunctionLayout::new(
+                    let top_level = ProcLayout::new(
                         env.arena,
                         env.arena.alloc([lambda_set.runtime_representation()]),
                         *return_layout,
@@ -2599,12 +2597,12 @@ fn specialize_solved_type<'a>(
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct TopLevelFunctionLayout<'a> {
+pub struct ProcLayout<'a> {
     pub arguments: &'a [Layout<'a>],
     pub result: Layout<'a>,
 }
 
-impl<'a> TopLevelFunctionLayout<'a> {
+impl<'a> ProcLayout<'a> {
     pub fn new(arena: &'a Bump, old_arguments: &'a [Layout<'a>], result: Layout<'a>) -> Self {
         let mut arguments = Vec::with_capacity_in(old_arguments.len(), arena);
 
@@ -2623,7 +2621,7 @@ impl<'a> TopLevelFunctionLayout<'a> {
             other => other,
         };
 
-        TopLevelFunctionLayout {
+        ProcLayout {
             arguments: arguments.into_bump_slice(),
             result: new_result,
         }
@@ -2632,9 +2630,9 @@ impl<'a> TopLevelFunctionLayout<'a> {
         match layout {
             Layout::Closure(arguments, lambda_set, result) => {
                 let arguments = lambda_set.extend_argument_list(arena, arguments);
-                TopLevelFunctionLayout::new(arena, arguments, *result)
+                ProcLayout::new(arena, arguments, *result)
             }
-            _ => TopLevelFunctionLayout {
+            _ => ProcLayout {
                 arguments: &[],
                 result: layout,
             },
@@ -2645,11 +2643,9 @@ impl<'a> TopLevelFunctionLayout<'a> {
         match raw {
             RawFunctionLayout::Function(a, b, c) => {
                 let l = Layout::Closure(a, b, c);
-                TopLevelFunctionLayout::from_layout(arena, l)
+                ProcLayout::from_layout(arena, l)
             }
-            RawFunctionLayout::ZeroArgumentThunk(result) => {
-                TopLevelFunctionLayout::new(arena, &[], result)
-            }
+            RawFunctionLayout::ZeroArgumentThunk(result) => ProcLayout::new(arena, &[], result),
         }
     }
 }
@@ -2729,7 +2725,7 @@ macro_rules! match_on_closure_argument {
             $layout_cache.from_var($env.arena, $closure_data_var, $env.subs)
         );
 
-        let top_level = TopLevelFunctionLayout::from_layout($env.arena, closure_data_layout);
+        let top_level = ProcLayout::from_layout($env.arena, closure_data_layout);
 
         let arena = $env.arena;
 
@@ -5913,7 +5909,7 @@ fn reuse_function_symbol<'a>(
                         .expect("creating layout does not fail");
 
                     if procs.imported_module_thunks.contains(&original) {
-                        let top_level = TopLevelFunctionLayout::new(env.arena, &[], layout);
+                        let top_level = ProcLayout::new(env.arena, &[], layout);
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
@@ -5924,7 +5920,7 @@ fn reuse_function_symbol<'a>(
 
                         force_thunk(env, original, layout, symbol, env.arena.alloc(result))
                     } else {
-                        let top_level = TopLevelFunctionLayout::from_layout(env.arena, layout);
+                        let top_level = ProcLayout::from_layout(env.arena, layout);
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
@@ -5967,7 +5963,7 @@ fn reuse_function_symbol<'a>(
                 Ok(Layout::Closure(argument_layouts, lambda_set, ret_layout)) => {
                     // define the function pointer
                     let function_ptr_layout =
-                        TopLevelFunctionLayout::from_layout(env.arena, res_layout.unwrap());
+                        ProcLayout::from_layout(env.arena, res_layout.unwrap());
 
                     if captures {
                         // this is a closure by capture, meaning it itself captures local variables.
@@ -6000,7 +5996,7 @@ fn reuse_function_symbol<'a>(
                     } else if procs.module_thunks.contains(&original) {
                         // this is a 0-argument thunk
                         let layout = Layout::Closure(argument_layouts, lambda_set, ret_layout);
-                        let top_level = TopLevelFunctionLayout::new(env.arena, &[], layout);
+                        let top_level = ProcLayout::new(env.arena, &[], layout);
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
@@ -6026,7 +6022,7 @@ fn reuse_function_symbol<'a>(
                 }
                 Ok(layout) => {
                     // this is a 0-argument thunk
-                    let top_level = TopLevelFunctionLayout::new(env.arena, &[], layout);
+                    let top_level = ProcLayout::new(env.arena, &[], layout);
                     procs.insert_passed_by_name(env, arg_var, original, top_level, layout_cache);
 
                     force_thunk(env, original, layout, symbol, env.arena.alloc(result))
@@ -6334,7 +6330,7 @@ fn call_by_name_help<'a>(
 
     // debug_assert!(!procs.module_thunks.contains(&proc_name), "{:?}", proc_name);
 
-    let top_level_layout = TopLevelFunctionLayout::new(env.arena, argument_layouts, *ret_layout);
+    let top_level_layout = ProcLayout::new(env.arena, argument_layouts, *ret_layout);
 
     // the arguments given to the function, stored in symbols
     let field_symbols = Vec::from_iter_in(
@@ -6556,7 +6552,7 @@ fn call_by_name_module_thunk<'a>(
 
     // debug_assert!(!procs.module_thunks.contains(&proc_name), "{:?}", proc_name);
 
-    let top_level_layout = TopLevelFunctionLayout::new(env.arena, &[], *ret_layout);
+    let top_level_layout = ProcLayout::new(env.arena, &[], *ret_layout);
 
     let inner_layout = *ret_layout;
 
@@ -6673,7 +6669,7 @@ fn call_specialized_proc<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    let function_layout = TopLevelFunctionLayout::from_raw(env.arena, layout);
+    let function_layout = ProcLayout::from_raw(env.arena, layout);
 
     procs.specialized.remove(&(proc_name, function_layout));
 

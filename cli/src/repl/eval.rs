@@ -6,7 +6,7 @@ use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::operator::CalledVia;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::ir::TopLevelFunctionLayout;
+use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{union_sorted_tags_help, Builtin, Layout, UnionLayout, UnionVariant};
 use roc_parse::ast::{AssignedField, Expr, StrLiteral};
 use roc_region::all::{Located, Region};
@@ -38,7 +38,7 @@ pub unsafe fn jit_to_ast<'a>(
     arena: &'a Bump,
     lib: Library,
     main_fn_name: &str,
-    layout: TopLevelFunctionLayout<'a>,
+    layout: ProcLayout<'a>,
     content: &Content,
     interns: &Interns,
     home: ModuleId,
@@ -54,7 +54,7 @@ pub unsafe fn jit_to_ast<'a>(
     };
 
     match layout {
-        TopLevelFunctionLayout {
+        ProcLayout {
             arguments: [],
             result,
         } => {

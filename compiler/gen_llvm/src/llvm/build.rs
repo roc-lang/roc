@@ -49,8 +49,8 @@ use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
-    BranchInfo, CallType, EntryPoint, ExceptionId, JoinPointId, ModifyRc, OptLevel,
-    TopLevelFunctionLayout, Wrapped,
+    BranchInfo, CallType, EntryPoint, ExceptionId, JoinPointId, ModifyRc, OptLevel, ProcLayout,
+    Wrapped,
 };
 use roc_mono::layout::{Builtin, InPlace, LambdaSet, Layout, LayoutIds, UnionLayout};
 
@@ -117,7 +117,7 @@ impl<'ctx> Iterator for FunctionIterator<'ctx> {
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Scope<'a, 'ctx> {
     symbols: ImMap<Symbol, (Layout<'a>, BasicValueEnum<'ctx>)>,
-    pub top_level_thunks: ImMap<Symbol, (TopLevelFunctionLayout<'a>, FunctionValue<'ctx>)>,
+    pub top_level_thunks: ImMap<Symbol, (ProcLayout<'a>, FunctionValue<'ctx>)>,
     join_points: ImMap<JoinPointId, (BasicBlock<'ctx>, &'a [PointerValue<'ctx>])>,
 }
 
@@ -131,7 +131,7 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
     pub fn insert_top_level_thunk(
         &mut self,
         symbol: Symbol,
-        layout: &'a TopLevelFunctionLayout<'a>,
+        layout: &'a ProcLayout<'a>,
         function_value: FunctionValue<'ctx>,
     ) {
         self.top_level_thunks
@@ -587,7 +587,7 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     mod_solutions: &'a ModSolutions,
     symbol: Symbol,
-    top_level: TopLevelFunctionLayout<'a>,
+    top_level: ProcLayout<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
     let it = top_level.arguments.iter().copied();
     let bytes = roc_mono::alias_analysis::func_name_bytes_help(symbol, it, top_level.result);
@@ -3101,7 +3101,7 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
 pub fn build_proc_headers<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     mod_solutions: &'a ModSolutions,
-    procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     scope: &mut Scope<'a, 'ctx>,
     // alias_analysis_solutions: AliasAnalysisSolutions,
 ) -> Vec<
@@ -3143,7 +3143,7 @@ pub fn build_proc_headers<'a, 'ctx, 'env>(
 pub fn build_procedures<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
-    procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: EntryPoint<'a>,
 ) {
     build_procedures_help(env, opt_level, procedures, entry_point);
@@ -3152,7 +3152,7 @@ pub fn build_procedures<'a, 'ctx, 'env>(
 pub fn build_procedures_return_main<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
-    procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: EntryPoint<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
     let mod_solutions = build_procedures_help(env, opt_level, procedures, entry_point);
@@ -3163,7 +3163,7 @@ pub fn build_procedures_return_main<'a, 'ctx, 'env>(
 fn build_procedures_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
-    procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: EntryPoint<'a>,
 ) -> &'a ModSolutions {
     let mut layout_ids = roc_mono::layout::LayoutIds::default();

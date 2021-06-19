@@ -1,5 +1,5 @@
 use crate::borrow::{ParamMap, BORROWED, OWNED};
-use crate::ir::{Expr, JoinPointId, ModifyRc, Param, Proc, Stmt, TopLevelFunctionLayout};
+use crate::ir::{Expr, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -497,7 +497,7 @@ impl<'a> Context<'a> {
                 const FUNCTION: bool = BORROWED;
                 const CLOSURE_DATA: bool = BORROWED;
 
-                let function_layout = TopLevelFunctionLayout {
+                let function_layout = ProcLayout {
                     arguments: arg_layouts,
                     result: *ret_layout,
                 };
@@ -687,7 +687,7 @@ impl<'a> Context<'a> {
                 arg_layouts,
                 ..
             } => {
-                let top_level = TopLevelFunctionLayout::new(self.arena, arg_layouts, *ret_layout);
+                let top_level = ProcLayout::new(self.arena, arg_layouts, *ret_layout);
 
                 // get the borrow signature
                 let ps = self
@@ -976,8 +976,7 @@ impl<'a> Context<'a> {
                         arg_layouts,
                         ..
                     } => {
-                        let top_level =
-                            TopLevelFunctionLayout::new(self.arena, arg_layouts, *ret_layout);
+                        let top_level = ProcLayout::new(self.arena, arg_layouts, *ret_layout);
 
                         // get the borrow signature
                         let ps = self
@@ -1236,7 +1235,7 @@ pub fn visit_proc<'a>(
     arena: &'a Bump,
     param_map: &'a ParamMap<'a>,
     proc: &mut Proc<'a>,
-    layout: TopLevelFunctionLayout<'a>,
+    layout: ProcLayout<'a>,
 ) {
     let ctx = Context::new(arena, param_map);
 

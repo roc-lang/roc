@@ -173,10 +173,7 @@ where
     morphic_lib::solve(program)
 }
 
-fn build_entry_point(
-    layout: crate::ir::TopLevelFunctionLayout,
-    func_name: FuncName,
-) -> Result<FuncDef> {
+fn build_entry_point(layout: crate::ir::ProcLayout, func_name: FuncName) -> Result<FuncDef> {
     let mut builder = FuncDefBuilder::new();
     let block = builder.add_block();
 
