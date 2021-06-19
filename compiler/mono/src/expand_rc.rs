@@ -397,19 +397,15 @@ pub fn expand_and_cancel_proc<'a>(
 fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
     use Stmt::*;
 
-    let mut deferred_default = Deferred {
+    let mut deferred = Deferred {
         inc_dec_map: Default::default(),
         assignments: Vec::new_in(env.arena),
         decrefs: Vec::new_in(env.arena),
     };
 
-    let deferred = if can_push_inc_through(stmt) {
-        deferred_default
-    } else {
-        std::mem::swap(&mut deferred_default, &mut env.deferred);
-
-        deferred_default
-    };
+    if !can_push_inc_through(stmt) {
+        std::mem::swap(&mut deferred, &mut env.deferred);
+    }
 
     let mut result = {
         match stmt {

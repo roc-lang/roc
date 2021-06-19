@@ -278,10 +278,10 @@ impl ModuleId {
         // This is a no-op that should get DCE'd
     }
 
-    pub fn to_string<'a>(&self, interns: &'a Interns) -> &'a InlinableString {
+    pub fn to_string(self, interns: &Interns) -> &InlinableString {
         interns
             .module_ids
-            .get_name(*self)
+            .get_name(self)
             .unwrap_or_else(|| panic!("Could not find ModuleIds for {:?}", self))
     }
 }

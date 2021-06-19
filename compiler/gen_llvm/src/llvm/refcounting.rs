@@ -1184,7 +1184,7 @@ pub enum Mode {
 }
 
 impl Mode {
-    fn to_call_mode<'ctx>(&self, function: FunctionValue<'ctx>) -> CallMode<'ctx> {
+    fn to_call_mode(self, function: FunctionValue<'_>) -> CallMode<'_> {
         match self {
             Mode::Inc => {
                 let amount = function.get_nth_param(1).unwrap().into_int_value();
