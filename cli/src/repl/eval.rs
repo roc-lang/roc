@@ -153,23 +153,30 @@ fn jit_to_ast_help<'a>(
         Layout::Struct(field_layouts) => {
             let ptr_to_ast = |ptr: *const u8| match content {
                 Content::Structure(FlatType::Record(fields, _)) => {
-                    struct_to_ast(env, ptr, field_layouts, fields)
+                    Ok(struct_to_ast(env, ptr, field_layouts, fields))
                 }
                 Content::Structure(FlatType::EmptyRecord) => {
-                    struct_to_ast(env, ptr, field_layouts, &MutMap::default())
+                    Ok(struct_to_ast(env, ptr, field_layouts, &MutMap::default()))
                 }
                 Content::Structure(FlatType::TagUnion(tags, _)) => {
                     debug_assert_eq!(tags.len(), 1);
 
                     let (tag_name, payload_vars) = tags.iter().next().unwrap();
 
-                    single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), payload_vars)
+                    Ok(single_tag_union_to_ast(
+                        env,
+                        ptr,
+                        field_layouts,
+                        tag_name.clone(),
+                        payload_vars,
+                    ))
                 }
-                Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
-                    single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), &[])
-                }
+                Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => Ok(
+                    single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), &[]),
+                ),
                 Content::Structure(FlatType::Func(_, _, _)) => {
-                    return Err(ToAstProblem::FunctionLayout)
+                    // a function with a struct as the closure environment
+                    return Err(ToAstProblem::FunctionLayout);
                 }
                 other => {
                     unreachable!(
@@ -184,12 +191,12 @@ fn jit_to_ast_help<'a>(
 
             let result_stack_size = layout.stack_size(env.ptr_bytes);
 
-            Ok(run_jit_function_dynamic_type!(
+            run_jit_function_dynamic_type!(
                 lib,
                 main_fn_name,
                 result_stack_size as usize,
                 |bytes: *const u8| { ptr_to_ast(bytes as *const u8) }
-            ))
+            )
         }
         Layout::Union(UnionLayout::NonRecursive(union_layouts)) => match content {
             Content::Structure(FlatType::TagUnion(tags, _)) => {
