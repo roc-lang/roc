@@ -1,7 +1,7 @@
 #![crate_type = "lib"]
 #![no_std]
 use core::ffi::c_void;
-use core::fmt;
+use core::{fmt, mem, ptr};
 
 pub mod alloca;
 
@@ -19,7 +19,7 @@ extern "C" {
     pub fn roc_dealloc(ptr: *mut c_void, alignment: u32);
 }
 
-const REFCOUNT_1: usize = isize::MIN as usize;
+const REFCOUNT_1: isize = isize::MIN;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,7 +48,7 @@ pub struct RocList<T> {
 #[derive(Clone, Copy, Debug)]
 pub enum Storage {
     ReadOnly,
-    Refcounted(usize),
+    Refcounted(isize),
     Capacity(usize),
 }
 
@@ -91,22 +91,26 @@ impl<T> RocList<T> {
             let value = *self.get_storage_ptr();
 
             // NOTE doesn't work with elements of 16 or more bytes
-            match isize::cmp(&(value as isize), &0) {
+            match isize::cmp(&value, &0) {
                 Equal => Some(Storage::ReadOnly),
                 Less => Some(Storage::Refcounted(value)),
-                Greater => Some(Storage::Capacity(value)),
+                Greater => Some(Storage::Capacity(value as usize)),
             }
         }
     }
 
-    fn get_storage_ptr(&self) -> *const usize {
-        let ptr = self.elements as *const usize;
+    fn get_storage_ptr(&self) -> *const isize {
+        let ptr = self.elements as *const isize;
 
         unsafe { ptr.offset(-1) }
     }
 
-    fn get_storage_ptr_mut(&mut self) -> *mut usize {
-        self.get_storage_ptr() as *mut usize
+    fn get_storage_ptr_mut(&mut self) -> *mut isize {
+        self.get_storage_ptr() as *mut isize
+    }
+
+    fn set_storage_ptr(&mut self, ptr: *const isize) {
+        self.elements = unsafe { ptr.offset(1) as *mut T };
     }
 
     fn get_element_ptr(elements: *const T) -> *const T {
@@ -115,13 +119,13 @@ impl<T> RocList<T> {
 
         unsafe {
             if elem_alignment <= core::mem::align_of::<usize>() {
-                ptr.offset(1) as *const T
+                ptr.add(1) as *const T
             } else {
                 // If elements have an alignment bigger than usize (e.g. an i128),
                 // we will have necessarily allocated two usize slots worth of
                 // space for the storage value (with the first usize slot being
                 // padding for alignment's sake), and we need to skip past both.
-                ptr.offset(2) as *const T
+                ptr.add(2) as *const T
             }
         }
     }
@@ -197,6 +201,91 @@ impl<T> RocList<T> {
     pub fn as_slice(&self) -> &[T] {
         unsafe { core::slice::from_raw_parts(self.elements, self.length) }
     }
+
+    /// Copy the contents of the given slice into the end of this list,
+    /// reallocating and resizing as necessary.
+    pub fn append_slice(&mut self, slice: &[T]) {
+        let new_len = self.len() + slice.len();
+        let storage_ptr = self.get_storage_ptr_mut();
+
+        // First, ensure that there's enough storage space.
+        unsafe {
+            let storage_val = *storage_ptr as isize;
+
+            // Check if this is refcounted, readonly, or has a capcacity.
+            // (Capacity will be positive if it has a capacity.)
+            if storage_val > 0 {
+                let capacity = storage_val as usize;
+
+                // We don't have enough capacity, so we need to get some more.
+                if capacity < new_len {
+                    // Double our capacity using realloc
+                    let new_cap = 2 * capacity;
+                    let new_ptr = roc_realloc(
+                        storage_ptr as *mut c_void,
+                        new_cap,
+                        capacity,
+                        Self::align_of_storage_ptr(),
+                    ) as *mut isize;
+
+                    // Write the new capacity into the new memory
+                    *new_ptr = new_cap as isize;
+
+                    // Copy all the existing elements into the new allocation.
+                    ptr::copy_nonoverlapping(self.elements, new_ptr as *mut T, self.len());
+
+                    // Update our storage pointer to be the new one
+                    self.set_storage_ptr(new_ptr);
+                }
+            } else {
+                // If this was reference counted, decrement the refcount!
+                if storage_val < 0 {
+                    let refcount = storage_val;
+
+                    // Either deallocate or decrement.
+                    if refcount == REFCOUNT_1 {
+                        roc_dealloc(storage_ptr as *mut c_void, Self::align_of_storage_ptr());
+                    } else {
+                        *storage_ptr = refcount - 1;
+                    }
+                }
+
+                // This is either refcounted or readonly; either way, we need
+                // to clone the elements!
+
+                // Double the capacity we need, in case there are future additions.
+                let new_cap = new_len * 2;
+                let new_ptr = roc_alloc(new_cap, Self::align_of_storage_ptr()) as *mut isize;
+
+                // Write the new capacity into the new memory; this list is
+                // now unique, and gets its own capacity!
+                *new_ptr = new_cap as isize;
+
+                // Copy all the existing elements into the new allocation.
+                ptr::copy_nonoverlapping(self.elements, new_ptr as *mut T, self.len());
+
+                // Update our storage pointer to be the new one
+                self.set_storage_ptr(new_ptr);
+            }
+
+            // Since this is an append, we want to start writing new elements
+            // into the memory immediately after the current last element.
+            let dest = self.elements.add(self.len());
+
+            // There's now enough storage to append the contents of the slice
+            // in-place, so do that!
+            ptr::copy_nonoverlapping(slice.as_ptr(), dest, self.len());
+        }
+
+        self.length = new_len;
+    }
+
+    /// The alignment we need is either the alignment of T, or else
+    /// the alignment of usize, whichever is higher. That's because we need
+    /// to store both T values as well as the refcount/capacity storage slot.
+    fn align_of_storage_ptr() -> u32 {
+        mem::align_of::<T>().max(mem::align_of::<usize>()) as u32
+    }
 }
 
 impl<T: fmt::Debug> fmt::Debug for RocList<T> {
@@ -215,9 +304,9 @@ impl<T: PartialEq> PartialEq for RocList<T> {
             return false;
         }
 
-        for i in 0..(self.length as isize) {
+        for i in 0..self.length {
             unsafe {
-                if *self.elements.offset(i) != *other.elements.offset(i) {
+                if *self.elements.add(i) != *other.elements.add(i) {
                     return false;
                 }
             }
@@ -231,17 +320,23 @@ impl<T: Eq> Eq for RocList<T> {}
 
 impl<T> Drop for RocList<T> {
     fn drop(&mut self) {
-        use Storage::*;
-        match self.storage() {
-            None | Some(ReadOnly) => {}
-            Some(Capacity(_)) | Some(Refcounted(REFCOUNT_1)) => unsafe {
-                libc::free(self.get_storage_ptr() as *mut libc::c_void);
-            },
-            Some(Refcounted(rc)) => {
-                let sptr = self.get_storage_ptr_mut();
-                unsafe {
-                    *sptr = rc - 1;
+        if !self.is_empty() {
+            let storage_ptr = self.get_storage_ptr_mut();
+
+            unsafe {
+                let storage_val = *storage_ptr;
+
+                if storage_val == REFCOUNT_1 || storage_val > 0 {
+                    // If we have no more references, or if this was unique,
+                    // deallocate it.
+                    roc_dealloc(storage_ptr as *mut c_void, Self::align_of_storage_ptr());
+                } else if storage_val < 0 {
+                    // If this still has more references, decrement one.
+                    *storage_ptr = storage_val - 1;
                 }
+
+                // The only remaining option is that this is in readonly memory,
+                // in which case we shouldn't attempt to do anything to it.
             }
         }
     }
@@ -310,19 +405,19 @@ impl RocStr {
             match isize::cmp(&(value as isize), &0) {
                 Equal => Some(Storage::ReadOnly),
                 Less => Some(Storage::Refcounted(value)),
-                Greater => Some(Storage::Capacity(value)),
+                Greater => Some(Storage::Capacity(value as usize)),
             }
         }
     }
 
-    fn get_storage_ptr(&self) -> *const usize {
-        let ptr = self.elements as *const usize;
+    fn get_storage_ptr(&self) -> *const isize {
+        let ptr = self.elements as *const isize;
 
         unsafe { ptr.offset(-1) }
     }
 
-    fn get_storage_ptr_mut(&mut self) -> *mut usize {
-        self.get_storage_ptr() as *mut usize
+    fn get_storage_ptr_mut(&mut self) -> *mut isize {
+        self.get_storage_ptr() as *mut isize
     }
 
     fn get_element_ptr(elements: *const u8) -> *const usize {
@@ -331,13 +426,13 @@ impl RocStr {
 
         unsafe {
             if elem_alignment <= core::mem::align_of::<usize>() {
-                ptr.offset(1)
+                ptr.add(1)
             } else {
                 // If elements have an alignment bigger than usize (e.g. an i128),
                 // we will have necessarily allocated two usize slots worth of
                 // space for the storage value (with the first usize slot being
                 // padding for alignment's sake), and we need to skip past both.
-                ptr.offset(2)
+                ptr.add(2)
             }
         }
     }
@@ -390,9 +485,10 @@ impl RocStr {
                     // NOTE: using a memcpy here causes weird issues
                     let target_ptr = raw_ptr as *mut u8;
                     let source_ptr = ptr as *const u8;
-                    let length = slice.len() as isize;
+                    let length = slice.len();
+
                     for index in 0..length {
-                        *target_ptr.offset(index) = *source_ptr.offset(index);
+                        *target_ptr.add(index) = *source_ptr.add(index);
                     }
                 }
 
@@ -417,11 +513,31 @@ impl RocStr {
             unsafe { core::slice::from_raw_parts(self.elements, self.length) }
         }
     }
+
     #[allow(clippy::missing_safety_doc)]
     pub unsafe fn as_str(&self) -> &str {
         let slice = self.as_slice();
 
         core::str::from_utf8_unchecked(slice)
+    }
+
+    /// Write a CStr (null-terminated) representation of this RocStr into
+    /// the given buffer.
+    ///
+    /// # Safety
+    /// This assumes the given buffer has enough space, so make sure you only
+    /// pass in a pointer to an allocation that's at least as long as this Str!
+    pub unsafe fn write_c_str(&self, buf: *mut u8) -> *mut char {
+        if self.is_small_str() {
+            ptr::copy_nonoverlapping(self.get_small_str_ptr(), buf, self.len());
+        } else {
+            ptr::copy_nonoverlapping(self.elements, buf, self.len());
+        }
+
+        // null-terminate
+        *(buf.add(self.len())) = 0;
+
+        buf as *mut char
     }
 }
 
@@ -485,18 +601,22 @@ impl Clone for RocStr {
 impl Drop for RocStr {
     fn drop(&mut self) {
         if !self.is_small_str() {
-            use Storage::*;
-            match self.storage() {
-                None | Some(ReadOnly) => {}
-                Some(Capacity(_)) | Some(Refcounted(REFCOUNT_1)) => unsafe {
-                    libc::free(self.get_storage_ptr() as *mut libc::c_void);
-                },
-                Some(Refcounted(rc)) => {
-                    let sptr = self.get_storage_ptr_mut();
-                    unsafe {
-                        *sptr = rc - 1;
-                    }
+            let storage_ptr = self.get_storage_ptr_mut();
+
+            unsafe {
+                let storage_val = *storage_ptr;
+
+                if storage_val == REFCOUNT_1 || storage_val > 0 {
+                    // If we have no more references, or if this was unique,
+                    // deallocate it.
+                    roc_dealloc(storage_ptr as *mut c_void, mem::align_of::<isize>() as u32);
+                } else if storage_val < 0 {
+                    // If this still has more references, decrement one.
+                    *storage_ptr = storage_val - 1;
                 }
+
+                // The only remaining option is that this is in readonly memory,
+                // in which case we shouldn't attempt to do anything to it.
             }
         }
     }

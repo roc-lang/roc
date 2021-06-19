@@ -4,10 +4,9 @@ use inkwell::types::{BasicType, BasicTypeEnum, IntType, StructType};
 use inkwell::AddressSpace;
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
 
-fn basic_type_from_function_layout<'a, 'ctx, 'env>(
+pub fn basic_type_from_function_layout<'a, 'ctx, 'env>(
     env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
     args: &[Layout<'_>],
-    closure_type: Option<BasicTypeEnum<'ctx>>,
     ret_layout: &Layout<'_>,
 ) -> BasicTypeEnum<'ctx> {
     let ret_type = basic_type_from_layout(env, &ret_layout);
@@ -15,10 +14,6 @@ fn basic_type_from_function_layout<'a, 'ctx, 'env>(
 
     for arg_layout in args.iter() {
         arg_basic_types.push(basic_type_from_layout(env, arg_layout));
-    }
-
-    if let Some(closure) = closure_type {
-        arg_basic_types.push(closure);
     }
 
     let fn_type = ret_type.fn_type(arg_basic_types.into_bump_slice(), false);
@@ -49,9 +44,7 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
     use Layout::*;
 
     match layout {
-        FunctionPointer(args, ret_layout) => {
-            basic_type_from_function_layout(env, args, None, ret_layout)
-        }
+        FunctionPointer(args, ret_layout) => basic_type_from_function_layout(env, args, ret_layout),
         Closure(_args, closure_layout, _ret_layout) => {
             let closure_data_layout = closure_layout.runtime_representation();
             basic_type_from_layout(env, &closure_data_layout)
