@@ -4,7 +4,7 @@
 # make sure not to use-after-close, because you might end up reading from a
 # totally different file! Managed resources let platform authors silently
 # prevent both of these problems.
-
+#
 # NOTES
 #
 # This should be a capability module, and all other file operations should
@@ -53,88 +53,142 @@
 # * O_SYMLINK - unsupported because it's BSD-only and doesn't seem critical
 
 ## A stream of bytes. This could be coming from a file, a socket,
-interface File
+interface File.Stream
     exposes [ Stream ]
-    imports [ Stream.Internal.{ toRaw, fromRaw }, Task.{ Task }, File.{ Path } ]
+    imports [ (File.Internal as Internal).{ Fd, toRaw, fromRaw }, Task.{ Task } ]
 
 ## On UNIX systems, this refers to a file descriptor.
 ## On Windows, it refers to a file handle.
-Stream a : Stream.Internal.Stream a
+Stream a : Internal.Stream a
 
 Mode :
     {
-        # TODO file modes
+        # TODO file modes - how will we handle these in a cross-OS way?
     }
 
 OpenConfig :
-    {
-        ## Default: Fail
-        ifNotExists ? [ Fail, Create Mode ] # O_CREAT
+    [
+        # NOTE: need to figure out what to do about O_EXCL here
+        #
+        # Uses for this, from the docs: https://www.man7.org/linux/man-pages/man2/open.2.html
+        #
+        # * Improved tmpfile(3) functionality: race-free creation
+        #   of temporary files that (1) are automatically deleted
+        #   when closed; (2) can never be reached via any pathname;
+        #   (3) are not subject to symlink attacks; and (4) do not
+        #   require the caller to devise unique names.
 
-        ## Default: False
-        truncate ? Bool # O_TRUNC
+        # *  Creating a file that is initially invisible, which is
+        #   then populated with data and adjusted to have
+        #   appropriate filesystem attributes (fchown(2),
+        #   fchmod(2), fsetxattr(2), etc.)  before being atomically
+        #   linked into the filesystem in a fully formed state
+        #   (using linkat(2) as described above).
 
-        ## Default: True
-        fileCanBeSymlink ? Bool # O_NOFOLLOW - TODO: when O_NOFOLLOW is set, ELOOP means something different and should be translated to a different error variant.
-    }
+        ## Create a temporary file in the given directory and open it for writing.
+        Temp,
+        NonTemp
+            {
+                ## When opening a file, if the path references a file that doesn't
+                ## exist, should the operation fail, or should a file be created?
+                ## (If it should be created, specify the [Mode] it should have.)
+                ##
+                ## **Default:** `Fail`
+                ifNotExists ? [ Fail, Create Mode ] # O_CREAT
+
+                ## Once the file is successfully opened, should it be immediately
+                ## truncated to 0 bytes?
+                ##
+                ## This can be useful if you intend to rewrite the contents of the file
+                ## from scratch.
+                ##
+                ## **Default:** `False`
+                truncate ? Bool # O_TRUNC
+
+                ## Can the given path refer to a file that's a symlink?
+                ##
+                ## If not, then opening will fail if given a symlink. (Note that any
+                ## other symlinks in the path besides the filename itself will be
+                ## followed no matter what.)
+                ##
+                ## **Default:** `True`
+                fileCanBeSymlink ? Bool # O_NOFOLLOW - TODO: when O_NOFOLLOW is set, ELOOP means something different and should be translated to a different error variant.
+            }
+    ]
 
 ## An error that can occur when opening a file stream.
 OpenErr :
     [
-
+        ## The filesystem gave an unknown error with this description string.
+        Unknown Str
     ]
 
 ## An error that can occur when closing a file stream.
 CloseErr :
     [
-
+        ## The filesystem gave an unknown error with this description string.
+        Unknown Str,
     ]
 
 ## An error that can occur when reading from a file stream.
-ReadErr others :
+ReadErr :
     [
-        # EAGAIN and EWOULDBLOCK should never happen, because the host should
-        # always choose either nonblocking or blocking I/O.
-        StreamWasClosed
-    ]others
+        StreamWasClosed,
+        ## The filesystem gave an unknown error with this description string.
+        Unknown Str,
+    ]
 
 ## An error that can occur when writing to a stream.
 WriteErr :
     [
-        FileWasOpenedNonBlocking
+        ## The filesystem gave an unknown error with this description string.
+        Unknown Str,
     ]
 
 ## Reads the given number of bytes from a stream, then returns those bytes
 ## along with a new stream which has been [advance]d to right after those bytes.
-read : Stream [ Read ]*, Nat -> Task (List U8) [ FileRead ReadErr ]*
-read = \stream, bytes ->
-    toRaw stream
-        |> Effect.read bytes
-        |> Effect.map (\result -> Result.mapErr FileRead result)
+readStream : Stream [ Read ]*, Nat -> Task (List U8) [ ReadFailed ReadErr Str ]*
+readStream = \stream, bytes ->
+    { fd, path } = toRaw stream
+
+    Effect.read fd bytes
+        |> Effect.map \res -> Result.mapErr res \err -> ReadFailed err path
 
 ## Read from the stream until it ends.
 ##
 ## Note that the task will not complete until the end is encountered, which for
 ## streams like `stdin` may never happen without specific user input - so this
 ## task might never complete!
-readUntilEnd : Stream [ Read ]* -> Task (List U8) [ FileRead ReadErr ]*
-readUntilEnd = \stream ->
-    toRaw stream
-        |> Effect.readUntilEof
-        |> Effect.map (\result -> Result.mapErr FileRead result)
+readToEnd : Stream [ Read ]* -> Task (List U8) [ ReadFailed ReadErr Str ]*
+readToEnd = \stream ->
+    { fd, path } = toRaw stream
+
+    Effect.readUntilEof fd
+        |> Task.mapFail \err -> WriteFailed err path
 
 ## Write the given bytes to a file stream, beginning at the given byte offset
 ## from the start of the stream.
-write : Stream [ Write ]*, Nat, List U8 -> Task {} [ FileWrite WriteErr ]*
-write = \stream, offset, bytes ->
-    toRaw stream
-        # TODO: make sure we're giving pwrite the correct offset size on all
-        # targets (64-bit on 64-bit targets, 32-bit on 32-bit targets) - the
-        # docs for this are confusing.
-        |> Effect.write offset bytes
-        |> Effect.map (\result -> Result.mapErr FileWrite result)
+write : Stream [ Write ]*, Nat, List U8 -> Task {} [ WriteFailed WriteErr Str ]*
+write = \stream, offset, contents ->
+    { fd, path } = toRaw stream
 
+    # TODO: make sure we're giving pwrite the correct offset size on all
+    # targets (64-bit on 64-bit targets, 32-bit on 32-bit targets) - the
+    # docs for this are confusing.
+    Effect.writeStart fd offset contents
+        |> Task.mapFail \err -> WriteFailed err path
 
+## Write the given bytes to a file stream, beginning at the given byte offset
+## from the end of the stream.
+writeFromEnd : Stream [ Write ]*, Nat, List U8 -> Task {} [ WriteFailed WriteErr ]*
+writeFromEnd = \stream, offset, contents ->
+    { fd, path } = toRaw stream
+
+    Effect.writeEnd fd offset contents
+        |> Task.mapFail \err -> WriteFailed err path
+
+# TODO convert this to docs:
+#
 # The file is opened in append mode.  Before each write(2),
 # the file offset is positioned at the end of the file, as
 # if with lseek(2).  The modification of the file offset and
@@ -145,124 +199,53 @@ write = \stream, offset, bytes ->
 # This is because NFS does not support appending to a file,
 # so the client kernel has to simulate it, which can't be
 # done without a race condition.
-append : Stream [ Append ]*, List U8 -> Task {} [ FileWrite WriteErr ]*
-append = \stream, bytes ->
-    toRaw stream
-        |> Effect.writeCur offset bytes
-        |> Effect.map (\result -> Result.mapErr FileWrite result)
+append : Stream [ Append ]*, List U8 -> Task {} [ AppendFailed WriteErr Str ]*
+append = \stream, contents ->
+    { fd, path } = toRaw stream
 
-## Write the given bytes to a file stream, beginning at the given byte offset
-## from the end of the stream.
-writeFromEnd : Stream [ Write ]*, Nat, List U8 -> Task {} [ FileWrite WriteErr ]*
-writeFromEnd = \stream, offset bytes ->
-    toRaw stream
-        # TODO: make sure we're giving pwrite the correct offset size on all
-        # targets (64-bit on 64-bit targets, 32-bit on 32-bit targets) - the
-        # docs for this are confusing.
-        |> Effect.writeEnd offset bytes
-        |> Effect.map (\result -> Result.mapErr FileWrite result)
+    Effect.writeCur fd contents
+        |> Task.mapFail \err -> AppendFailed err path
+
+# Creating Streams
+
+openRead : Str, OpenConfig -> Task (Stream [ Read ]) [ OpenFailed OpenErr Str ]*
+openRead = \path, config ->
+    Effect.openRead
+        |> makeOpenTask path config
+
+openWrite : Str, OpenConfig -> Task (Stream [ Write ]) [ OpenFailed OpenErr Str ]*
+openWrite = \path, config ->
+    Effect.openWrite
+        |> makeOpenTask path config
+
+openAppend : Str, OpenConfig -> Task (Stream [ Append ]) [ OpenFailed OpenErr Str ]*
+openAppend = \path, config ->
+    Effect.openAppend
+        |> makeOpenTask path config
+
+openAppendRead : Str, OpenConfig -> Task (Stream [ Append, Read ]) [ OpenFailed OpenErr Str ]*
+openAppendRead = \path, config ->
+    Effect.openAppendRead
+        |> makeOpenTask path config
+
+openWriteRead : Str, OpenConfig -> Task (Stream [ Write, Read ]) [ OpenFailed OpenErr Str ]*
+openWriteRead = \path, config ->
+    Effect.openWriteRead
+        |> makeOpenTask path config
 
 ## Close a file stream. Any future tasks run on this stream will fail.
-close : Stream * -> Task {} [ FileClose CloseErr ]*
+close : Stream * -> Task {} [ CloseFailed CloseErr Str ]*
 close = \stream ->
-    fromRaw stream
-        |> Effect.close stream
-        |> Effect.map (\result -> Result.mapErr StreamClose result)
+    { fd, path } = toRaw stream
 
-## Open a file and creates a stream that refers to the start of that file.
-openRead : Str -> Task (Stream [ Read ]) [ FileOpen OpenErr ]*
-openRead = \path, mode ->
-    Effect.openRead path
-        |> Effect.map (\result -> Result.mapErr FileOpen result)
+    Effect.close fd
+        |> Task.mapFail \err -> CloseFailed err path
 
-## Open a file and creates a stream that refers to the start of that file.
-openWrite : Str -> Task (Stream [ Write ]) [ FileOpen OpenErr ]*
-openWrite = \path, mode ->
-# O_CLOEXEC, O_CREAT, O_DIRECTORY, O_EXCL, O_NOCTTY, O_NOFOLLOW, O_TMPFILE, O_TRUNC
-    Effect.openWrite path
-        |> Effect.map (\result -> Result.mapErr FileOpen result)
-
-## Creates a temporary file in the given directory and opens it for writing.
-##
-## To open the temporary file for both reading and writing, use [openTempReadWrite].
-openTmp : Str -> Task (Stream [ Write ]) [ FileOpen OpenErr ]*
-openTmp = \path ->
-    # NOTE: need to figure out what to do about O_EXCL here
-    #
-    # Uses for this, from the docs: https://www.man7.org/linux/man-pages/man2/open.2.html
-    #
-    # * Improved tmpfile(3) functionality: race-free creation
-    #   of temporary files that (1) are automatically deleted
-    #   when closed; (2) can never be reached via any pathname;
-    #   (3) are not subject to symlink attacks; and (4) do not
-    #   require the caller to devise unique names.
-
-    # *  Creating a file that is initially invisible, which is
-    #   then populated with data and adjusted to have
-    #   appropriate filesystem attributes (fchown(2),
-    #   fchmod(2), fsetxattr(2), etc.)  before being atomically
-    #   linked into the filesystem in a fully formed state
-    #   (using linkat(2) as described above).
-    Effect.openWrite path
-        |> Effect.map (\result -> Result.mapErr FileOpen result)
-
-openTmpReadWrite : Str -> Task (Stream [ Read, Write ]) [ FileOpen OpenErr ]*
-
-## Open a file and creates a stream that refers to the start of that file.
-openAppend : Str -> Task (Stream [ Append ]) [ FileOpen OpenErr ]*
-openAppend = \path, mode ->
-    fromRaw stream
-        |> Effect.openWrite path
-        |> Effect.map (\result -> Result.mapErr FileOpen result)
-
-## Open a file and creates a stream that refers to the start of that file.
-openReadAppend : Str -> Task (Stream [ Read, Append ]) [ FileOpen OpenErr ]*
-openReadAppend = \path, mode ->
-    fromRaw stream
-        |> Effect.openWrite path
-        |> Effect.map (\result -> Result.mapErr FileOpen result)
-
-## Open a file and creates a stream that refers to the start of that file.
-openReadWrite : Str -> Task (Stream [ Read, Write ]) [ FileOpen OpenErr ]*
-openReadWrite = \path ->
-    fromRaw stream
-        |> Effect.openReadWrite path
-        |> Effect.map (\result -> Result.mapErr FileOpen result)
-
-## Open a file and read all of its bytes.
-##
-## For example, here's how to read a file's bytes and interpret them as a
-## UTF-8 string:
-##
-##     File.readAll "myfile.txt"
-##         |> Task.map Str.fromUtf8
-readAll : Str -> Task (List U8) [ FileOpen OpenErr, FileRead ReadErr ]*
-readAll = \path ->
-    stream <- Task.await (openRead path)
-    bytes <- Task.await (write stream)
-
-    Task.succeed bytes
-
-
-## Open a file and write all of the given bytes to it.
-##
-## For example, here's how to write a string to a file using UTF-8 encoding:
-##
-##     Str.toUtf8 "contents of the file"
-##         |> File.writeAll "myfile.txt"
-writeAll : List U8, Str -> Task.Task {} [ FileOpen OpenErr, FileWrite WriteErr ]*
-writeAll = \bytes, str ->
-    stream <- Task.await (openWrite path)
-
-    write stream 0 bytes
-
-
-## Read a file's bytes, one chunk at a time, and use it to build up a state.
-##
-## After each chunk is read, it gets passed to a callback which builds up a
-## state - optionally while running other tasks.
-#readChunks : Path, U64, state, (state, List U8 -> Task state []err) -> Task state (FileReadErr err)
-
-## Like #readChunks except after each chunk you can either `Continue`,
-## specifying how many bytes you'd like to read next, or `Stop` early.
-#readChunksOrStop : Path, U64, state, (state, List U8 -> [ Continue U64 (Task state []err), Stop (Task state []err) ]) -> Task state (FileReadErr err)
+## Interanl helper for translating raw effect outputs into appropriate tasks
+makeOpenTask : Str, OpenConfig, (Str, OpenConfig -> Task Fd err) -> Task (Stream *) [ OpenFailed err Str ]*
+makeOpenTask = \path, config, toEffect ->
+    toEffect path config
+        |> Effect.map \result ->
+            when result is
+                Ok fd -> Ok (fromRaw { fd, path })
+                Err err -> OpenFailed err path
