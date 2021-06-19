@@ -3627,13 +3627,6 @@ pub fn build_proc<'a, 'ctx, 'env>(
                             env, &fn_name, evaluator, name, arguments, closure, result,
                         )
                     }
-                    Layout::FunctionPointer(arguments, result) => {
-                        // define function size (equal to pointer size) and return value size, e.g.
-                        //
-                        // * roc__mainForHost_1_Update_size() -> i64
-                        // * roc__mainForHost_1_Update_result_size() -> i64
-                        build_function_caller(env, &fn_name, name, arguments, result)
-                    }
 
                     Layout::Builtin(_) => {}
                     Layout::Struct(_) => {}

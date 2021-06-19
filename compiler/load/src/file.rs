@@ -4080,14 +4080,14 @@ fn add_def_to_module<'a>(
                     if is_exposed {
                         let annotation = def.expr_var;
 
-                        let layout = match layout_cache.from_var(
+                        let top_level = match layout_cache.from_var(
                             mono_env.arena,
                             annotation,
                             mono_env.subs,
                         ) {
                             Ok(l) => {
                                 // remember, this is a 0-argument thunk
-                                Layout::FunctionPointer(&[], mono_env.arena.alloc(l))
+                                TopLevelFunctionLayout::new(mono_env.arena, &[], l)
                             }
                             Err(LayoutProblem::Erroneous) => {
                                 let message = "top level function has erroneous type";
@@ -4108,7 +4108,7 @@ fn add_def_to_module<'a>(
 
                         procs.insert_exposed(
                             symbol,
-                            TopLevelFunctionLayout::from_layout(mono_env.arena, layout),
+                            top_level,
                             mono_env.arena,
                             mono_env.subs,
                             def.annotation,

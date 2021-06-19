@@ -750,8 +750,6 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
                 Some(function)
             }
         },
-
-        FunctionPointer(_, _) => None,
     }
 }
 

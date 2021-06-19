@@ -195,7 +195,7 @@ fn build_eq<'a, 'ctx, 'env>(
             }
         },
 
-        Layout::FunctionPointer(_, _) | Layout::Closure(_, _, _) => {
+        Layout::Closure(_, _, _) => {
             unreachable!("the type system will guarantee these are never compared")
         }
     }
@@ -336,7 +336,7 @@ fn build_neq<'a, 'ctx, 'env>(
             unreachable!("recursion pointers should never be compared directly")
         }
 
-        Layout::FunctionPointer(_, _) | Layout::Closure(_, _, _) => {
+        Layout::Closure(_, _, _) => {
             unreachable!("the type system will guarantee these are never compared")
         }
     }

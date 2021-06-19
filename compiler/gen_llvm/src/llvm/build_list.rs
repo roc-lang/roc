@@ -658,7 +658,7 @@ pub fn list_keep_errs<'a, 'ctx, 'env>(
     )
 }
 
-pub fn list_keep_result<'a, 'ctx, 'env>(
+fn list_keep_result<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     transform: FunctionValue<'ctx>,
@@ -673,7 +673,6 @@ pub fn list_keep_result<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     let result_layout = match transform_layout {
-        Layout::FunctionPointer(_, ret) => ret,
         Layout::Closure(_, _, ret) => ret,
         _ => unreachable!("not a callable layout"),
     };

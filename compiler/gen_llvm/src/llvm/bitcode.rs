@@ -151,9 +151,6 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     }
 
     match closure_data_layout {
-        Layout::FunctionPointer(_, _) => {
-            // do nothing
-        }
         Layout::Closure(_, lambda_set, _) => {
             if let Layout::Struct(&[]) = lambda_set.runtime_representation() {
                 // do nothing
@@ -508,7 +505,6 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
             let default = [value1, value2];
 
             let arguments_cast = match closure_data_layout {
-                Layout::FunctionPointer(_, _) => &default,
                 Layout::Closure(_, lambda_set, _) => {
                     if let Layout::Struct(&[]) = lambda_set.runtime_representation() {
                         &default

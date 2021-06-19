@@ -57,7 +57,6 @@ pub enum Layout<'a> {
     RecursivePointer,
 
     /// A function. The types of its arguments, then the type of its return value.
-    FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
     Closure(&'a [Layout<'a>], LambdaSet<'a>, &'a Layout<'a>),
 }
 
@@ -204,16 +203,13 @@ impl<'a> LambdaSet<'a> {
         }
     }
 
-    pub fn extend_function_layout(
+    fn extend_function_layout(
         &self,
         arena: &'a Bump,
         argument_layouts: &'a [Layout<'a>],
         ret_layout: &'a Layout<'a>,
     ) -> Layout<'a> {
-        Layout::FunctionPointer(
-            self.extend_argument_list(arena, argument_layouts),
-            ret_layout,
-        )
+        todo!()
     }
 
     pub fn extend_argument_list(
@@ -526,10 +522,6 @@ impl<'a> Layout<'a> {
                     }
                 }
             }
-            FunctionPointer(_, _) => {
-                // Function pointers are immutable and can always be safely copied
-                true
-            }
             Closure(_, closure_layout, _) => closure_layout.safe_to_memcpy(),
             RecursivePointer => {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
@@ -581,7 +573,6 @@ impl<'a> Layout<'a> {
                 }
             }
             Closure(_, lambda_set, _) => lambda_set.stack_size(pointer_size),
-            FunctionPointer(_, _) => pointer_size,
             RecursivePointer => pointer_size,
         }
     }
@@ -613,7 +604,6 @@ impl<'a> Layout<'a> {
             }
             Layout::Builtin(builtin) => builtin.alignment_bytes(pointer_size),
             Layout::RecursivePointer => pointer_size,
-            Layout::FunctionPointer(_, _) => pointer_size,
             Layout::Closure(_, captured, _) => {
                 pointer_size.max(captured.alignment_bytes(pointer_size))
             }
@@ -668,7 +658,6 @@ impl<'a> Layout<'a> {
             }
             RecursivePointer => true,
             Closure(_, closure_layout, _) => closure_layout.contains_refcounted(),
-            FunctionPointer(_, _) => false,
         }
     }
 
@@ -692,14 +681,6 @@ impl<'a> Layout<'a> {
             }
             Union(union_layout) => union_layout.to_doc(alloc, parens),
             RecursivePointer => alloc.text("*self"),
-            FunctionPointer(args, result) => {
-                let args_doc = args.iter().map(|x| x.to_doc(alloc, Parens::InFunction));
-
-                alloc
-                    .intersperse(args_doc, ", ")
-                    .append(alloc.text(" -> "))
-                    .append(result.to_doc(alloc, Parens::InFunction))
-            }
             Closure(args, closure_layout, result) => {
                 let args_doc = args.iter().map(|x| x.to_doc(alloc, Parens::InFunction));
 
