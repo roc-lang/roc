@@ -2241,8 +2241,8 @@ fn build_specialized_proc_from_var<'a>(
     pattern_symbols: &[Symbol],
     fn_var: Variable,
 ) -> Result<SpecializedLayout<'a>, LayoutProblem> {
-    match layout_cache.from_var(env.arena, fn_var, env.subs) {
-        Ok(Layout::Closure(pattern_layouts, closure_layout, ret_layout)) => {
+    match layout_cache.raw_from_var(env.arena, fn_var, env.subs)? {
+        RawFunctionLayout::Function(pattern_layouts, closure_layout, ret_layout) => {
             let mut pattern_layouts_vec = Vec::with_capacity_in(pattern_layouts.len(), env.arena);
             pattern_layouts_vec.extend_from_slice(pattern_layouts);
 
@@ -2255,40 +2255,17 @@ fn build_specialized_proc_from_var<'a>(
                 *ret_layout,
             )
         }
-        _ => {
-            match env.subs.get_without_compacting(fn_var).content {
-                Content::Structure(FlatType::Func(pattern_vars, closure_var, ret_var)) => {
-                    let closure_layout = LambdaSet::from_var(env.arena, env.subs, closure_var)?;
-                    build_specialized_proc_adapter(
-                        env,
-                        layout_cache,
-                        proc_name,
-                        pattern_symbols,
-                        &pattern_vars,
-                        Some(closure_layout),
-                        ret_var,
-                    )
-                }
-                Content::Alias(_, _, actual) => build_specialized_proc_from_var(
-                    env,
-                    layout_cache,
-                    proc_name,
-                    pattern_symbols,
-                    actual,
-                ),
-                _ => {
-                    // a top-level constant 0-argument thunk
-                    build_specialized_proc_adapter(
-                        env,
-                        layout_cache,
-                        proc_name,
-                        pattern_symbols,
-                        &[],
-                        None,
-                        fn_var,
-                    )
-                }
-            }
+        RawFunctionLayout::ZeroArgumentThunk(_) => {
+            // a top-level constant 0-argument thunk
+            build_specialized_proc_adapter(
+                env,
+                layout_cache,
+                proc_name,
+                pattern_symbols,
+                &[],
+                None,
+                fn_var,
+            )
         }
     }
 }
