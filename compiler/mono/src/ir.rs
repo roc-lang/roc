@@ -2255,48 +2255,18 @@ fn build_specialized_proc_from_var<'a>(
                 *ret_layout,
             )
         }
-        RawFunctionLayout::ZeroArgumentThunk(_) => {
+        RawFunctionLayout::ZeroArgumentThunk(ret_layout) => {
             // a top-level constant 0-argument thunk
-            build_specialized_proc_adapter(
-                env,
-                layout_cache,
+            build_specialized_proc(
+                env.arena,
                 proc_name,
                 pattern_symbols,
-                &[],
+                Vec::new_in(env.arena),
                 None,
-                fn_var,
+                ret_layout,
             )
         }
     }
-}
-#[allow(clippy::type_complexity)]
-fn build_specialized_proc_adapter<'a>(
-    env: &mut Env<'a, '_>,
-    layout_cache: &mut LayoutCache<'a>,
-    proc_name: Symbol,
-    pattern_symbols: &[Symbol],
-    pattern_vars: &[Variable],
-    closure_layout: Option<LambdaSet<'a>>,
-    ret_var: Variable,
-) -> Result<SpecializedLayout<'a>, LayoutProblem> {
-    let mut arg_layouts = Vec::with_capacity_in(pattern_vars.len(), &env.arena);
-
-    for arg_var in pattern_vars {
-        let layout = layout_cache.from_var(&env.arena, *arg_var, env.subs)?;
-
-        arg_layouts.push(layout);
-    }
-
-    let ret_layout = layout_cache.from_var(&env.arena, ret_var, env.subs)?;
-
-    build_specialized_proc(
-        env.arena,
-        proc_name,
-        pattern_symbols,
-        arg_layouts,
-        closure_layout,
-        ret_layout,
-    )
 }
 
 #[allow(clippy::type_complexity)]
@@ -2510,6 +2480,7 @@ fn specialize_solved_type<'a>(
 
     let fn_var = introduce_solved_type_to_subs(env, &solved_type);
 
+    // for debugging only
     let attempted_layout = layout_cache
         .from_var(&env.arena, fn_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
@@ -2618,9 +2589,9 @@ impl<'a> ProcLayout<'a> {
 
     fn from_raw(arena: &'a Bump, raw: RawFunctionLayout<'a>) -> Self {
         match raw {
-            RawFunctionLayout::Function(a, b, c) => {
-                let l = Layout::Closure(a, b, c);
-                ProcLayout::from_layout(arena, l)
+            RawFunctionLayout::Function(arguments, lambda_set, result) => {
+                let arguments = lambda_set.extend_argument_list(arena, arguments);
+                ProcLayout::new(arena, arguments, *result)
             }
             RawFunctionLayout::ZeroArgumentThunk(result) => ProcLayout::new(arena, &[], result),
         }
