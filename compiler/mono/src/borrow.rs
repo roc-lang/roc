@@ -24,9 +24,8 @@ pub fn infer_borrow<'a>(
         items: MutMap::default(),
     };
 
-    for ((s, top_level), proc) in procs {
-        let key = (*s, arena.alloc(*top_level).full());
-        param_map.visit_proc(arena, proc, key);
+    for (key, proc) in procs {
+        param_map.visit_proc(arena, proc, *key);
     }
 
     let mut env = BorrowInfState {
@@ -51,8 +50,7 @@ pub fn infer_borrow<'a>(
         // mutually recursive functions (or just make all their arguments owned)
 
         for (key, proc) in procs {
-            let layout = arena.alloc(key.1).full();
-            env.collect_proc(proc, layout);
+            env.collect_proc(proc, key.1);
         }
 
         if !env.modified {
@@ -69,7 +67,7 @@ pub fn infer_borrow<'a>(
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Key<'a> {
-    Declaration(Symbol, Layout<'a>),
+    Declaration(Symbol, TopLevelFunctionLayout<'a>),
     JoinPoint(JoinPointId),
 }
 
@@ -98,7 +96,11 @@ impl<'a> IntoIterator for &'a ParamMap<'a> {
 }
 
 impl<'a> ParamMap<'a> {
-    pub fn get_symbol(&self, symbol: Symbol, layout: Layout<'a>) -> Option<&'a [Param<'a>]> {
+    pub fn get_symbol(
+        &self,
+        symbol: Symbol,
+        layout: TopLevelFunctionLayout<'a>,
+    ) -> Option<&'a [Param<'a>]> {
         let key = Key::Declaration(symbol, layout);
 
         self.items.get(&key).copied()
@@ -153,7 +155,12 @@ impl<'a> ParamMap<'a> {
         .into_bump_slice()
     }
 
-    fn visit_proc(&mut self, arena: &'a Bump, proc: &Proc<'a>, key: (Symbol, Layout<'a>)) {
+    fn visit_proc(
+        &mut self,
+        arena: &'a Bump,
+        proc: &Proc<'a>,
+        key: (Symbol, TopLevelFunctionLayout<'a>),
+    ) {
         if proc.must_own_arguments {
             self.visit_proc_always_owned(arena, proc, key);
             return;
@@ -171,7 +178,7 @@ impl<'a> ParamMap<'a> {
         &mut self,
         arena: &'a Bump,
         proc: &Proc<'a>,
-        key: (Symbol, Layout<'a>),
+        key: (Symbol, TopLevelFunctionLayout<'a>),
     ) {
         let already_in_there = self.items.insert(
             Key::Declaration(proc.name, key.1),
@@ -359,12 +366,17 @@ impl<'a> BorrowInfState<'a> {
 
         match call_type {
             ByName {
-                name, full_layout, ..
+                name,
+                ret_layout,
+                arg_layouts,
+                ..
             } => {
+                let top_level = TopLevelFunctionLayout::new(self.arena, arg_layouts, *ret_layout);
+
                 // get the borrow signature of the applied function
                 let ps = self
                     .param_map
-                    .get_symbol(*name, *full_layout)
+                    .get_symbol(*name, top_level)
                     .expect("function is defined");
 
                 // the return value will be owned
@@ -402,7 +414,10 @@ impl<'a> BorrowInfState<'a> {
 
                 debug_assert!(op.is_higher_order());
 
-                let closure_layout = Layout::FunctionPointer(arg_layouts, ret_layout);
+                let closure_layout = TopLevelFunctionLayout {
+                    arguments: arg_layouts,
+                    result: *ret_layout,
+                };
 
                 match op {
                     ListMap | ListKeepIf | ListKeepOks | ListKeepErrs => {
@@ -584,7 +599,8 @@ impl<'a> BorrowInfState<'a> {
                 call_type:
                     crate::ir::CallType::ByName {
                         name: g,
-                        full_layout,
+                        arg_layouts,
+                        ret_layout,
                         ..
                     },
                 arguments: ys,
@@ -593,10 +609,12 @@ impl<'a> BorrowInfState<'a> {
             Stmt::Ret(z),
         ) = (v, b)
         {
+            let top_level = TopLevelFunctionLayout::new(self.arena, arg_layouts, *ret_layout);
+
             if self.current_proc == *g && x == *z {
                 // anonymous functions (for which the ps may not be known)
                 // can never be tail-recursive, so this is fine
-                if let Some(ps) = self.param_map.get_symbol(*g, *full_layout) {
+                if let Some(ps) = self.param_map.get_symbol(*g, top_level) {
                     self.own_params_using_args(ys, ps)
                 }
             }
@@ -684,7 +702,7 @@ impl<'a> BorrowInfState<'a> {
         }
     }
 
-    fn collect_proc(&mut self, proc: &Proc<'a>, layout: Layout<'a>) {
+    fn collect_proc(&mut self, proc: &Proc<'a>, layout: TopLevelFunctionLayout<'a>) {
         let old = self.param_set.clone();
 
         let ys = Vec::from_iter_in(proc.args.iter().map(|t| t.1), self.arena).into_bump_slice();

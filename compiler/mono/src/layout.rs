@@ -791,6 +791,50 @@ impl<'a> LayoutCache<'a> {
         }
     }
 
+    pub fn raw_from_var(
+        &mut self,
+        arena: &'a Bump,
+        var: Variable,
+        subs: &Subs,
+    ) -> Result<Layout<'a>, LayoutProblem> {
+        // Store things according to the root Variable, to avoid duplicate work.
+        let var = subs.get_root_key_without_compacting(var);
+
+        let cached_var = CachedVariable::new(var);
+
+        self.expand_to_fit(cached_var);
+
+        use CachedLayout::*;
+        match self.layouts.probe_value(cached_var) {
+            Cached(result) => Ok(result),
+            Problem(problem) => Err(problem),
+            NotCached => {
+                let mut env = Env {
+                    arena,
+                    subs,
+                    seen: MutSet::default(),
+                };
+
+                let result = Layout::from_var(&mut env, var);
+
+                // Don't actually cache. The layout cache is very hard to get right in the presence
+                // of specialization, it's turned of for now so an invalid cache is never the cause
+                // of a problem
+                if false {
+                    let cached_layout = match &result {
+                        Ok(layout) => Cached(*layout),
+                        Err(problem) => Problem(problem.clone()),
+                    };
+
+                    self.layouts
+                        .update_value(cached_var, |existing| existing.value = cached_layout);
+                }
+
+                result
+            }
+        }
+    }
+
     fn expand_to_fit(&mut self, var: CachedVariable<'a>) {
         use ven_ena::unify::UnifyKey;
 
@@ -1909,6 +1953,7 @@ impl LayoutId {
 
 struct IdsByLayout<'a> {
     by_id: MutMap<Layout<'a>, u32>,
+    toplevels_by_id: MutMap<crate::ir::TopLevelFunctionLayout<'a>, u32>,
     next_id: u32,
 }
 
@@ -1925,6 +1970,7 @@ impl<'a> LayoutIds<'a> {
         // There's probably a nicer way to write it that still works.
         let ids = self.by_symbol.entry(symbol).or_insert_with(|| IdsByLayout {
             by_id: HashMap::with_capacity_and_hasher(1, default_hasher()),
+            toplevels_by_id: Default::default(),
             next_id: 1,
         });
 
@@ -1935,6 +1981,39 @@ impl<'a> LayoutIds<'a> {
         // store the ID we're going to return and increment next_id.
         if answer == ids.next_id {
             ids.by_id.insert(*layout, ids.next_id);
+
+            ids.next_id += 1;
+        }
+
+        LayoutId(answer)
+    }
+
+    /// Returns a LayoutId which is unique for the given symbol and layout.
+    /// If given the same symbol and same layout, returns the same LayoutId.
+    pub fn get_toplevel<'b>(
+        &mut self,
+        symbol: Symbol,
+        layout: &'b crate::ir::TopLevelFunctionLayout<'a>,
+    ) -> LayoutId {
+        // Note: this function does some weird stuff to satisfy the borrow checker.
+        // There's probably a nicer way to write it that still works.
+        let ids = self.by_symbol.entry(symbol).or_insert_with(|| IdsByLayout {
+            by_id: Default::default(),
+            toplevels_by_id: HashMap::with_capacity_and_hasher(1, default_hasher()),
+            next_id: 1,
+        });
+
+        // Get the id associated with this layout, or default to next_id.
+        let answer = ids
+            .toplevels_by_id
+            .get(&layout)
+            .copied()
+            .unwrap_or(ids.next_id);
+
+        // If we had to default to next_id, it must not have been found;
+        // store the ID we're going to return and increment next_id.
+        if answer == ids.next_id {
+            ids.toplevels_by_id.insert(*layout, ids.next_id);
 
             ids.next_id += 1;
         }

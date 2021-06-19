@@ -17,8 +17,8 @@ use crate::llvm::build_str::{
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
-    basic_type_from_builtin, basic_type_from_layout, block_of_memory, block_of_memory_slices,
-    ptr_int,
+    basic_type_from_builtin, basic_type_from_function_layout, basic_type_from_layout,
+    block_of_memory, block_of_memory_slices, ptr_int,
 };
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
@@ -118,7 +118,7 @@ impl<'ctx> Iterator for FunctionIterator<'ctx> {
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Scope<'a, 'ctx> {
     symbols: ImMap<Symbol, (Layout<'a>, BasicValueEnum<'ctx>)>,
-    pub top_level_thunks: ImMap<Symbol, (Layout<'a>, FunctionValue<'ctx>)>,
+    pub top_level_thunks: ImMap<Symbol, (TopLevelFunctionLayout<'a>, FunctionValue<'ctx>)>,
     join_points: ImMap<JoinPointId, (BasicBlock<'ctx>, &'a [PointerValue<'ctx>])>,
 }
 
@@ -136,7 +136,7 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
         function_value: FunctionValue<'ctx>,
     ) {
         self.top_level_thunks
-            .insert(symbol, (layout.full(), function_value));
+            .insert(symbol, (*layout, function_value));
     }
     fn remove(&mut self, symbol: &Symbol) {
         self.symbols.remove(symbol);
@@ -602,7 +602,9 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
         "we expect only one specialization of this symbol"
     );
 
-    let roc_main_fn = function_value_by_func_spec(env, *func_spec, symbol, Layout::Struct(&[]));
+    // NOTE fake layout; it is only used for debug prints
+    let roc_main_fn =
+        function_value_by_func_spec(env, *func_spec, symbol, &[], &Layout::Struct(&[]));
 
     let main_fn_name = "$Test.main";
 
@@ -800,8 +802,9 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
     match call_type {
         CallType::ByName {
             name,
-            full_layout,
             specialization_id,
+            arg_layouts,
+            ret_layout,
             ..
         } => {
             let mut arg_tuples: Vec<BasicValueEnum> =
@@ -817,7 +820,8 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
 
             roc_call_with_args(
                 env,
-                &full_layout,
+                arg_layouts,
+                ret_layout,
                 *name,
                 func_spec,
                 arg_tuples.into_bump_slice(),
@@ -839,7 +843,6 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
             let bytes = specialization_id.to_bytes();
             let callee_var = CalleeSpecVar(&bytes);
             let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
-            // let fn_val = function_value_by_func_spec(env, func_spec, symbol, *layout);
 
             run_higher_order_low_level(
                 env,
@@ -2051,7 +2054,8 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
         } => match call.call_type {
             CallType::ByName {
                 name,
-                ref full_layout,
+                arg_layouts,
+                ref ret_layout,
                 specialization_id,
                 ..
             } => {
@@ -2060,7 +2064,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
 
                 let function_value =
-                    function_value_by_func_spec(env, func_spec, name, *full_layout);
+                    function_value_by_func_spec(env, func_spec, name, arg_layouts, ret_layout);
 
                 invoke_roc_function(
                     env,
@@ -3392,8 +3396,8 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     );
 
     // STEP 4: build a {} -> u64 function that gives the size of the closure
-    let layout = Layout::Closure(arguments, lambda_set, result);
-    build_host_exposed_alias_size(env, def_name, alias_symbol, &layout);
+    let layout = lambda_set.runtime_representation();
+    build_host_exposed_alias_size(env, def_name, alias_symbol, layout);
 }
 
 fn build_function_caller<'a, 'ctx, 'env>(
@@ -3431,10 +3435,8 @@ fn build_function_caller<'a, 'ctx, 'env>(
         // pretend the closure layout is empty
         args.push(Layout::Struct(&[]));
 
-        let function_layout = Layout::FunctionPointer(&args, result);
-
         // this is already a (function) pointer type
-        basic_type_from_layout(env, &function_layout)
+        basic_type_from_function_layout(env, &args, result)
     };
     argument_types.push(function_pointer_type);
 
@@ -3474,10 +3476,7 @@ fn build_function_caller<'a, 'ctx, 'env>(
     let _closure_data_ptr = parameters.pop().unwrap().into_pointer_value();
     let function_ptr = parameters.pop().unwrap().into_pointer_value();
 
-    // let closure_data = context.struct_type(&[], false).const_zero().into();
-
-    let actual_function_type =
-        basic_type_from_layout(env, &Layout::FunctionPointer(arguments, result));
+    let actual_function_type = basic_type_from_function_layout(env, arguments, result);
 
     let function_ptr = builder
         .build_bitcast(function_ptr, actual_function_type, "cast")
@@ -3513,22 +3512,22 @@ fn build_function_caller<'a, 'ctx, 'env>(
     );
 
     // STEP 4: build a {} -> u64 function that gives the size of the function
-    let layout = Layout::FunctionPointer(arguments, result);
-    build_host_exposed_alias_size(env, def_name, alias_symbol, &layout);
+    let layout = Layout::Struct(&[]);
+    build_host_exposed_alias_size(env, def_name, alias_symbol, layout);
 }
 
 fn build_host_exposed_alias_size<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
     def_name: &str,
     alias_symbol: Symbol,
-    layout: &Layout<'a>,
+    layout: Layout<'a>,
 ) {
     build_host_exposed_alias_size_help(
         env,
         def_name,
         alias_symbol,
         None,
-        basic_type_from_layout(env, layout),
+        basic_type_from_layout(env, &layout),
     )
 }
 
@@ -3597,8 +3596,6 @@ pub fn build_proc<'a, 'ctx, 'env>(
                         // * roc__mainForHost_1_Update_size() -> i64
                         // * roc__mainForHost_1_Update_result_size() -> i64
 
-                        let evaluator_layout = env.arena.alloc(top_level).full();
-
                         let it = top_level.arguments.iter().copied();
                         let bytes = roc_mono::alias_analysis::func_name_bytes_help(
                             symbol,
@@ -3615,8 +3612,13 @@ pub fn build_proc<'a, 'ctx, 'env>(
                             "we expect only one specialization of this symbol"
                         );
 
-                        let evaluator =
-                            function_value_by_func_spec(env, *func_spec, symbol, evaluator_layout);
+                        let evaluator = function_value_by_func_spec(
+                            env,
+                            *func_spec,
+                            symbol,
+                            top_level.arguments,
+                            &top_level.result,
+                        );
 
                         let ident_string = proc.name.ident_string(&env.interns);
                         let fn_name: String = format!("{}_1", ident_string);
@@ -3690,17 +3692,19 @@ fn function_value_by_func_spec<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     func_spec: FuncSpec,
     symbol: Symbol,
-    layout: Layout<'a>,
+    arguments: &[Layout<'a>],
+    result: &Layout<'a>,
 ) -> FunctionValue<'ctx> {
     let fn_name = func_spec_name(env.arena, &env.interns, symbol, func_spec);
     let fn_name = fn_name.as_str();
 
-    function_value_by_name_help(env, layout, symbol, fn_name)
+    function_value_by_name_help(env, arguments, result, symbol, fn_name)
 }
 
 fn function_value_by_name_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout: Layout<'a>,
+    arguments: &[Layout<'a>],
+    result: &Layout<'a>,
     symbol: Symbol,
     fn_name: &str,
 ) -> FunctionValue<'ctx> {
@@ -3708,7 +3712,8 @@ fn function_value_by_name_help<'a, 'ctx, 'env>(
         if symbol.is_builtin() {
             eprintln!(
                 "Unrecognized builtin function: {:?}\nLayout: {:?}\n",
-                fn_name, layout
+                fn_name,
+                (arguments, result)
             );
             eprintln!("Is the function defined? If so, maybe there is a problem with the layout");
 
@@ -3720,7 +3725,9 @@ fn function_value_by_name_help<'a, 'ctx, 'env>(
             // Unrecognized non-builtin function:
             eprintln!(
                 "Unrecognized non-builtin function: {:?}\n\nSymbol: {:?}\nLayout: {:?}\n",
-                fn_name, symbol, layout
+                fn_name,
+                symbol,
+                (arguments, result)
             );
             eprintln!("Is the function defined? If so, maybe there is a problem with the layout");
 
@@ -3736,12 +3743,14 @@ fn function_value_by_name_help<'a, 'ctx, 'env>(
 #[inline(always)]
 fn roc_call_with_args<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout: &Layout<'a>,
+    argument_layouts: &[Layout<'a>],
+    result_layout: &Layout<'a>,
     symbol: Symbol,
     func_spec: FuncSpec,
     args: &[BasicValueEnum<'ctx>],
 ) -> BasicValueEnum<'ctx> {
-    let fn_val = function_value_by_func_spec(env, func_spec, symbol, *layout);
+    let fn_val =
+        function_value_by_func_spec(env, func_spec, symbol, argument_layouts, result_layout);
 
     let call = env.builder.build_call(fn_val, args, "call");
 
@@ -3837,9 +3846,14 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
     macro_rules! passed_function_at_index {
         ($index:expr) => {{
             let function_symbol = args[$index];
-            let function_layout = Layout::FunctionPointer(argument_layouts, return_layout);
 
-            function_value_by_func_spec(env, func_spec, function_symbol, function_layout)
+            function_value_by_func_spec(
+                env,
+                func_spec,
+                function_symbol,
+                argument_layouts,
+                return_layout,
+            )
         }};
     }
 

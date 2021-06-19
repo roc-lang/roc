@@ -215,7 +215,7 @@ impl<'a> Proc<'a> {
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, procs));
 
         for (key, proc) in procs.iter_mut() {
-            crate::inc_dec::visit_proc(arena, borrow_params, proc, arena.alloc(key.1).full());
+            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1);
         }
     }
 
@@ -410,8 +410,7 @@ impl<'a> Procs<'a> {
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
 
         for (key, proc) in result.iter_mut() {
-            let layout = arena.alloc(key.1).full();
-            crate::inc_dec::visit_proc(arena, borrow_params, proc, layout);
+            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1);
         }
 
         result
@@ -454,8 +453,7 @@ impl<'a> Procs<'a> {
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
 
         for (key, proc) in result.iter_mut() {
-            let layout = arena.alloc(key.1).full();
-            crate::inc_dec::visit_proc(arena, borrow_params, proc, layout);
+            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1);
         }
 
         (result, borrow_params)
@@ -1138,7 +1136,6 @@ impl UpdateModeId {
 pub enum CallType<'a> {
     ByName {
         name: Symbol,
-        full_layout: Layout<'a>,
         ret_layout: Layout<'a>,
         arg_layouts: &'a [Layout<'a>],
         specialization_id: CallSpecId,
@@ -2627,10 +2624,6 @@ impl<'a> TopLevelFunctionLayout<'a> {
             },
         }
     }
-
-    pub fn full(&'a self) -> Layout<'a> {
-        Layout::FunctionPointer(self.arguments, &self.result)
-    }
 }
 
 fn specialize_naked_symbol<'a>(
@@ -3701,7 +3694,7 @@ pub fn with_hole<'a>(
         } => {
             let loc_body = *boxed_body;
 
-            match layout_cache.from_var(env.arena, function_type, env.subs) {
+            match layout_cache.raw_from_var(env.arena, function_type, env.subs) {
                 Err(e) => panic!("invalid layout {:?}", e),
                 Ok(Layout::Closure(_argument_layouts, lambda_set, _ret_layout)) => {
                     let mut captured_symbols = Vec::from_iter_in(captured_symbols, env.arena);
@@ -3737,43 +3730,6 @@ pub fn with_hole<'a>(
                             .into_bump_slice();
 
                     construct_closure_data(env, lambda_set, name, symbols, assigned, hole)
-                }
-                Ok(Layout::FunctionPointer(_, _)) => {
-                    // CLEANUP
-                    unreachable!("closures should never have a function pointer layout");
-
-                    //                    match procs.insert_anonymous(
-                    //                        env,
-                    //                        name,
-                    //                        function_type,
-                    //                        arguments,
-                    //                        loc_body,
-                    //                        CapturedSymbols::None,
-                    //                        return_type,
-                    //                        layout_cache,
-                    //                    ) {
-                    //                        Ok(layout) => {
-                    //                            bg!(name);
-                    //                            // TODO should the let have layout Pointer?
-                    //                            // Stmt::Let(assigned, Expr::Struct(&[]), Layout::Struct(&[]), hole)
-                    //                            if false {
-                    //                                let mut hole = hole.clone();
-                    //                                substitute_in_exprs(env.arena, &mut hole, assigned, name);
-                    //                                hole
-                    //                            } else {
-                    //                                Stmt::Let(
-                    //                                    assigned,
-                    //                                    call_by_pointer(env, procs, name, layout),
-                    //                                    layout,
-                    //                                    hole,
-                    //                                )
-                    //                            }
-                    //                        }
-                    //
-                    //                        Err(_error) => Stmt::RuntimeError(
-                    //                            "TODO convert anonymous function error to a RuntimeError string",
-                    //                        ),
-                    //                    }
                 }
                 Ok(_) => unreachable!(),
             }
@@ -3833,11 +3789,10 @@ pub fn with_hole<'a>(
 
                     let full_layout = return_on_layout_error!(
                         env,
-                        layout_cache.from_var(env.arena, fn_var, env.subs)
+                        layout_cache.raw_from_var(env.arena, fn_var, env.subs)
                     );
 
                     let arg_layouts = match full_layout {
-                        Layout::FunctionPointer(args, _) => args,
                         Layout::Closure(args, _, _) => args,
                         _ => unreachable!("function has layout that is not function pointer"),
                     };
@@ -3904,38 +3859,6 @@ pub fn with_hole<'a>(
                                         closure_data_symbol,
                                         env.arena.alloc(result),
                                     );
-                                }
-                                Layout::FunctionPointer(_, _) => {
-                                    // CLEANUP
-                                    unreachable!("should not be a function pointer");
-
-                                    //                                    let function_symbol = env.unique_symbol();
-                                    //                                    let closure_data_symbol = function_symbol;
-                                    //
-                                    //                                    // layout of the closure record
-                                    //                                    let closure_data_layout = Layout::Struct(&[]);
-                                    //
-                                    //                                    result = lambda_set_to_switch_make_branch_help(
-                                    //                                        env,
-                                    //                                        function_symbol,
-                                    //                                        closure_data_symbol,
-                                    //                                        closure_data_layout,
-                                    //                                        arg_symbols,
-                                    //                                        arg_layouts,
-                                    //                                        ret_layout,
-                                    //                                        assigned,
-                                    //                                        hole,
-                                    //                                    );
-                                    //
-                                    //                                    result = with_hole(
-                                    //                                        env,
-                                    //                                        loc_expr.value,
-                                    //                                        fn_var,
-                                    //                                        procs,
-                                    //                                        layout_cache,
-                                    //                                        closure_data_symbol,
-                                    //                                        env.arena.alloc(result),
-                                    //                                    );
                                 }
                                 _ => {
                                     todo!("{:?}", full_layout)
@@ -5461,13 +5384,11 @@ fn substitute_in_call<'a>(
             name,
             arg_layouts,
             ret_layout,
-            full_layout,
             specialization_id,
         } => substitute(subs, *name).map(|new| CallType::ByName {
             name: new,
             arg_layouts,
             ret_layout: *ret_layout,
-            full_layout: *full_layout,
             specialization_id: *specialization_id,
         }),
         CallType::Foreign { .. } => None,
@@ -5930,13 +5851,10 @@ fn force_thunk<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    let full_layout = Layout::FunctionPointer(&[], env.arena.alloc(layout));
-
     let call = self::Call {
         call_type: CallType::ByName {
             name: thunk_name,
             ret_layout: layout,
-            full_layout,
             arg_layouts: &[],
             specialization_id: env.next_call_specialization_id(),
         },
@@ -6396,7 +6314,6 @@ fn call_by_name_help<'a>(
     // debug_assert!(!procs.module_thunks.contains(&proc_name), "{:?}", proc_name);
 
     let top_level_layout = TopLevelFunctionLayout::new(env.arena, argument_layouts, *ret_layout);
-    let function_layout = env.arena.alloc(top_level_layout).full();
 
     // the arguments given to the function, stored in symbols
     let field_symbols = Vec::from_iter_in(
@@ -6438,7 +6355,6 @@ fn call_by_name_help<'a>(
             call_type: CallType::ByName {
                 name: proc_name,
                 ret_layout: *ret_layout,
-                full_layout: function_layout,
                 arg_layouts: argument_layouts,
                 specialization_id: env.next_call_specialization_id(),
             },
@@ -6471,7 +6387,6 @@ fn call_by_name_help<'a>(
                 call_type: CallType::ByName {
                     name: proc_name,
                     ret_layout: *ret_layout,
-                    full_layout: function_layout,
                     arg_layouts: argument_layouts,
                     specialization_id: env.next_call_specialization_id(),
                 },
@@ -6524,7 +6439,6 @@ fn call_by_name_help<'a>(
                     call_type: CallType::ByName {
                         name: proc_name,
                         ret_layout: *ret_layout,
-                        full_layout: function_layout,
                         arg_layouts: argument_layouts,
                         specialization_id: env.next_call_specialization_id(),
                     },
@@ -6775,7 +6689,6 @@ fn call_specialized_proc<'a>(
                     call_type: CallType::ByName {
                         name: proc_name,
                         ret_layout: function_layout.result,
-                        full_layout: function_layout.full(),
                         arg_layouts: function_layout.arguments,
                         specialization_id: env.next_call_specialization_id(),
                     },
@@ -6795,14 +6708,13 @@ fn call_specialized_proc<'a>(
                     call_type: CallType::ByName {
                         name: proc_name,
                         ret_layout: function_layout.result,
-                        full_layout: function_layout.full(),
                         arg_layouts: function_layout.arguments,
                         specialization_id: env.next_call_specialization_id(),
                     },
                     arguments: field_symbols,
                 };
 
-                build_call(env, call, assigned, function_layout.full(), hole)
+                build_call(env, call, assigned, function_layout.result, hole)
             }
         }
     } else {
@@ -6819,7 +6731,6 @@ fn call_specialized_proc<'a>(
             call_type: CallType::ByName {
                 name: proc_name,
                 ret_layout: function_layout.result,
-                full_layout: function_layout.full(),
                 arg_layouts: function_layout.arguments,
                 specialization_id: env.next_call_specialization_id(),
             },
@@ -8091,13 +8002,10 @@ fn union_lambda_set_branch_help<'a>(
         }
     };
 
-    let full_layout = Layout::FunctionPointer(argument_layouts, env.arena.alloc(return_layout));
-
     // build the call
     let call = self::Call {
         call_type: CallType::ByName {
             name: function_symbol,
-            full_layout,
             ret_layout: return_layout,
             arg_layouts: argument_layouts,
             specialization_id: env.next_call_specialization_id(),
@@ -8212,12 +8120,9 @@ fn enum_lambda_set_branch<'a>(
         }
     };
 
-    let full_layout = Layout::FunctionPointer(argument_layouts, env.arena.alloc(return_layout));
-
     let call = self::Call {
         call_type: CallType::ByName {
             name: function_symbol,
-            full_layout,
             ret_layout: return_layout,
             arg_layouts: argument_layouts,
             specialization_id: env.next_call_specialization_id(),

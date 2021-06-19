@@ -245,9 +245,6 @@ fn layout_for_constructor<'a>(
             HasFields(fields)
         }
         Closure(_arguments, _lambda_set, _result) => {
-            // TODO can this be improved again?
-            // let fpointer = Layout::FunctionPointer(arguments, result);
-            // let fields = arena.alloc([fpointer, *lambda_set.layout]);
             // HasFields(fields)
             ConstructorLayout::Unknown
         }

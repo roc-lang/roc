@@ -69,8 +69,8 @@ pub fn helper<'a>(
 
     let mut procedures = MutMap::default();
 
-    for ((symbol, top_level), proc) in top_procedures {
-        procedures.insert((symbol, arena.alloc(top_level).full()), proc);
+    for (key, proc) in top_procedures {
+        procedures.insert(key, proc);
     }
 
     /*
@@ -87,17 +87,12 @@ pub fn helper<'a>(
     println!("=================================\n");
     */
     debug_assert_eq!(exposed_to_host.len(), 1);
-    let main_fn_symbol = exposed_to_host.keys().copied().next().unwrap();
-
-    let main_fn_layout = procedures
-        .keys()
-        .find(|(s, _)| *s == main_fn_symbol)
-        .map(|t| t.1)
-        .unwrap();
+    let main_fn_symbol = loaded.entry_point.symbol;
+    let main_fn_layout = loaded.entry_point.layout;
 
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
     let main_fn_name = layout_ids
-        .get(main_fn_symbol, &main_fn_layout)
+        .get_toplevel(main_fn_symbol, &main_fn_layout)
         .to_symbol_string(main_fn_symbol, &interns);
 
     let mut lines = Vec::new();
