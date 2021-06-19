@@ -17,8 +17,8 @@ use crate::llvm::build_str::{
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
-    basic_type_from_builtin, basic_type_from_function_layout, basic_type_from_layout,
-    block_of_memory, block_of_memory_slices, ptr_int,
+    basic_type_from_builtin, basic_type_from_layout, block_of_memory, block_of_memory_slices,
+    ptr_int,
 };
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
@@ -53,7 +53,6 @@ use roc_mono::ir::{
     TopLevelFunctionLayout, Wrapped,
 };
 use roc_mono::layout::{Builtin, InPlace, LambdaSet, Layout, LayoutIds, UnionLayout};
-use std::convert::TryFrom;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
 /// output in debug builds, but we don't want it to print to stdout in release builds!
@@ -3400,122 +3399,6 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     build_host_exposed_alias_size(env, def_name, alias_symbol, layout);
 }
 
-fn build_function_caller<'a, 'ctx, 'env>(
-    env: &'a Env<'a, 'ctx, 'env>,
-    def_name: &str,
-    alias_symbol: Symbol,
-    arguments: &[Layout<'a>],
-    result: &Layout<'a>,
-) {
-    let context = &env.context;
-    let builder = env.builder;
-
-    // STEP 1: build function header
-
-    // e.g. `roc__main_1_Fx_caller`
-    let function_name = format!(
-        "roc_{}_{}_caller",
-        def_name,
-        alias_symbol.ident_string(&env.interns)
-    );
-
-    let mut argument_types = Vec::with_capacity_in(arguments.len() + 3, env.arena);
-
-    for layout in arguments {
-        let arg_type = basic_type_from_layout(env, layout);
-        let arg_ptr_type = arg_type.ptr_type(AddressSpace::Generic);
-
-        argument_types.push(arg_ptr_type.into());
-    }
-
-    let function_pointer_type = {
-        let mut args = Vec::new_in(env.arena);
-        args.extend(arguments.iter().cloned());
-
-        // pretend the closure layout is empty
-        args.push(Layout::Struct(&[]));
-
-        // this is already a (function) pointer type
-        basic_type_from_function_layout(env, &args, result)
-    };
-    argument_types.push(function_pointer_type);
-
-    let closure_argument_type = {
-        let basic_type = basic_type_from_layout(env, &Layout::Struct(&[]));
-
-        basic_type.ptr_type(AddressSpace::Generic)
-    };
-    argument_types.push(closure_argument_type.into());
-
-    let result_type = basic_type_from_layout(env, result);
-
-    let roc_call_result_type =
-        context.struct_type(&[context.i64_type().into(), result_type], false);
-
-    let output_type = { roc_call_result_type.ptr_type(AddressSpace::Generic) };
-    argument_types.push(output_type.into());
-
-    let function_type = context.void_type().fn_type(&argument_types, false);
-
-    let function_value = add_func(
-        env.module,
-        function_name.as_str(),
-        function_type,
-        Linkage::External,
-        C_CALL_CONV,
-    );
-
-    // STEP 2: build function body
-
-    let entry = context.append_basic_block(function_value, "entry");
-
-    builder.position_at_end(entry);
-
-    let mut parameters = function_value.get_params();
-    let output = parameters.pop().unwrap().into_pointer_value();
-    let _closure_data_ptr = parameters.pop().unwrap().into_pointer_value();
-    let function_ptr = parameters.pop().unwrap().into_pointer_value();
-
-    let actual_function_type = basic_type_from_function_layout(env, arguments, result);
-
-    let function_ptr = builder
-        .build_bitcast(function_ptr, actual_function_type, "cast")
-        .into_pointer_value();
-
-    let mut parameters = parameters;
-
-    for param in parameters.iter_mut() {
-        debug_assert!(param.is_pointer_value());
-        *param = builder.build_load(param.into_pointer_value(), "load_param");
-    }
-
-    let call_result = invoke_and_catch(
-        env,
-        function_value,
-        CallableValue::try_from(function_ptr).unwrap(),
-        C_CALL_CONV,
-        &parameters,
-        result_type,
-    );
-
-    builder.build_store(output, call_result);
-
-    builder.build_return(None);
-
-    // STEP 3: build a {} -> u64 function that gives the size of the return type
-    build_host_exposed_alias_size_help(
-        env,
-        def_name,
-        alias_symbol,
-        Some("result"),
-        roc_call_result_type.into(),
-    );
-
-    // STEP 4: build a {} -> u64 function that gives the size of the function
-    let layout = Layout::Struct(&[]);
-    build_host_exposed_alias_size(env, def_name, alias_symbol, layout);
-}
-
 fn build_host_exposed_alias_size<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
     def_name: &str,
@@ -3584,7 +3467,6 @@ pub fn build_proc<'a, 'ctx, 'env>(
 ) {
     use roc_mono::ir::HostExposedLayouts;
     let copy = proc.host_exposed_layouts.clone();
-    let fn_name = fn_val.get_name().to_string_lossy();
     match copy {
         HostExposedLayouts::NotHostExposed => {}
         HostExposedLayouts::HostExposed { rigids: _, aliases } => {

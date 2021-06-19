@@ -203,15 +203,6 @@ impl<'a> LambdaSet<'a> {
         }
     }
 
-    fn extend_function_layout(
-        &self,
-        arena: &'a Bump,
-        argument_layouts: &'a [Layout<'a>],
-        ret_layout: &'a Layout<'a>,
-    ) -> Layout<'a> {
-        todo!()
-    }
-
     pub fn extend_argument_list(
         &self,
         arena: &'a Bump,

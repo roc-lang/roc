@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 use crate::llvm::bitcode::{
-    build_dec_wrapper, build_eq_wrapper, build_inc_n_wrapper, build_inc_wrapper,
-    build_transform_caller, call_bitcode_fn, call_void_bitcode_fn,
+    build_dec_wrapper, build_eq_wrapper, build_inc_n_wrapper, build_inc_wrapper, call_bitcode_fn,
+    call_void_bitcode_fn,
 };
 use crate::llvm::build::{
     allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, RocFunctionCall,
@@ -655,53 +655,6 @@ pub fn list_keep_errs<'a, 'ctx, 'env>(
             dec_result_fn.as_global_value().as_pointer_value().into(),
         ],
         bitcode::LIST_KEEP_ERRS,
-    )
-}
-
-fn list_keep_result<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    transform: FunctionValue<'ctx>,
-    transform_layout: Layout<'a>,
-    closure_data: BasicValueEnum<'ctx>,
-    closure_data_layout: Layout<'a>,
-    list: BasicValueEnum<'ctx>,
-    before_layout: &Layout<'a>,
-    after_layout: &Layout<'a>,
-    op: &str,
-) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
-    let result_layout = match transform_layout {
-        Layout::Closure(_, _, ret) => ret,
-        _ => unreachable!("not a callable layout"),
-    };
-
-    let closure_data_ptr = builder.build_alloca(closure_data.get_type(), "closure_data_ptr");
-    env.builder.build_store(closure_data_ptr, closure_data);
-
-    let stepper_caller =
-        build_transform_caller(env, transform, closure_data_layout, &[*before_layout])
-            .as_global_value()
-            .as_pointer_value();
-
-    let inc_closure = build_inc_wrapper(env, layout_ids, &transform_layout);
-    let dec_result_fn = build_dec_wrapper(env, layout_ids, result_layout);
-
-    call_bitcode_fn(
-        env,
-        &[
-            pass_list_as_i128(env, list),
-            pass_as_opaque(env, closure_data_ptr),
-            stepper_caller.into(),
-            env.alignment_intvalue(&before_layout),
-            layout_width(env, before_layout),
-            layout_width(env, after_layout),
-            layout_width(env, result_layout),
-            inc_closure.as_global_value().as_pointer_value().into(),
-            dec_result_fn.as_global_value().as_pointer_value().into(),
-        ],
-        op,
     )
 }
 

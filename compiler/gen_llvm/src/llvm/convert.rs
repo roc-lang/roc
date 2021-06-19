@@ -4,24 +4,6 @@ use inkwell::types::{BasicType, BasicTypeEnum, IntType, StructType};
 use inkwell::AddressSpace;
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
 
-pub fn basic_type_from_function_layout<'a, 'ctx, 'env>(
-    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
-    args: &[Layout<'_>],
-    ret_layout: &Layout<'_>,
-) -> BasicTypeEnum<'ctx> {
-    let ret_type = basic_type_from_layout(env, &ret_layout);
-    let mut arg_basic_types = Vec::with_capacity_in(args.len(), env.arena);
-
-    for arg_layout in args.iter() {
-        arg_basic_types.push(basic_type_from_layout(env, arg_layout));
-    }
-
-    let fn_type = ret_type.fn_type(arg_basic_types.into_bump_slice(), false);
-    let ptr_type = fn_type.ptr_type(AddressSpace::Generic);
-
-    ptr_type.as_basic_type_enum()
-}
-
 fn basic_type_from_record<'a, 'ctx, 'env>(
     env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
     fields: &[Layout<'_>],
