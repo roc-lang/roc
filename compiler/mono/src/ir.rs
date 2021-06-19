@@ -6285,7 +6285,6 @@ fn call_by_name<'a>(
                     assign_to_symbols(env, procs, layout_cache, iter, result)
                 }
             } else {
-                let orig = Layout::Closure(arg_layouts, lambda_set, ret_layout);
                 match lambda_set.extend_function_layout(env.arena, arg_layouts, ret_layout) {
                     Layout::FunctionPointer(argument_layouts, ret_layout) => call_by_name_help(
                         env,
@@ -6293,7 +6292,7 @@ fn call_by_name<'a>(
                         fn_var,
                         proc_name,
                         loc_args,
-                        orig,
+                        lambda_set,
                         argument_layouts,
                         ret_layout,
                         layout_cache,
@@ -6334,7 +6333,7 @@ fn call_by_name_help<'a>(
     fn_var: Variable,
     proc_name: Symbol,
     loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
-    maybe_closure_layout: Layout<'a>,
+    lambda_set: LambdaSet<'a>,
     argument_layouts: &'a [Layout<'a>],
     ret_layout: &'a Layout<'a>,
     layout_cache: &mut LayoutCache<'a>,
@@ -6403,7 +6402,13 @@ fn call_by_name_help<'a>(
 
         debug_assert_ne!(proc_name.module_id(), ModuleId::ATTR);
         if procs.imported_module_thunks.contains(&proc_name) {
-            force_thunk(env, proc_name, maybe_closure_layout, assigned, hole)
+            force_thunk(
+                env,
+                proc_name,
+                lambda_set.runtime_representation(),
+                assigned,
+                hole,
+            )
         } else {
             debug_assert!(
                 !field_symbols.is_empty(),
