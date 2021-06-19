@@ -63,11 +63,22 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
 
     // Write each package's module docs html file
     for loaded_module in package.modules.iter_mut() {
-        let exposed_values = loaded_module
+        let mut exposed_values = loaded_module
             .exposed_to_host
             .iter()
             .map(|(symbol, _)| symbol.ident_string(&loaded_module.interns).to_string())
             .collect::<Vec<String>>();
+
+        let mut exposed_aliases = loaded_module
+            .exposed_aliases
+            .iter()
+            .map(|(symbol, _)| symbol.ident_string(&loaded_module.interns).to_string())
+            .collect::<Vec<String>>();
+
+        let mut exports = Vec::new();
+
+        exports.append(&mut exposed_values);
+        exports.append(&mut exposed_aliases);
 
         for module in loaded_module.documentation.values_mut() {
             let module_dir = build_dir.join(module.name.replace(".", "/").as_str());
@@ -83,7 +94,7 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
                 )
                 .replace(
                     "<!-- Module Docs -->",
-                    render_main_content(&loaded_module.interns, &exposed_values, module).as_str(),
+                    render_main_content(&loaded_module.interns, &exports, module).as_str(),
                 );
 
             fs::write(module_dir.join("index.html"), rendered_module)
