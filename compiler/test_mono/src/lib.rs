@@ -205,7 +205,7 @@ fn verify_procedures(
 #[cfg(not(debug_assertions))]
 fn verify_procedures(
     _expected: &str,
-    _procedures: MutMap<(Symbol, TopLevelFunctionLayout<'_>), Proc<'_>>,
+    _procedures: MutMap<(Symbol, ProcLayout<'_>), Proc<'_>>,
     _main_fn_symbol: Symbol,
 ) {
     // Do nothing
