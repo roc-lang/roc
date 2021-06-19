@@ -2722,10 +2722,10 @@ macro_rules! match_on_closure_argument {
     ($env:expr, $procs:expr, $layout_cache:expr, $closure_data_symbol:expr, $closure_data_var:expr, $op:expr, [$($x:expr),* $(,)?], $layout: expr, $assigned:expr, $hole:expr) => {{
         let closure_data_layout = return_on_layout_error!(
             $env,
-            $layout_cache.from_var($env.arena, $closure_data_var, $env.subs)
+            $layout_cache.raw_from_var($env.arena, $closure_data_var, $env.subs)
         );
 
-        let top_level = ProcLayout::from_layout($env.arena, closure_data_layout);
+        let top_level = ProcLayout::from_raw($env.arena, closure_data_layout);
 
         let arena = $env.arena;
 
@@ -2733,7 +2733,7 @@ macro_rules! match_on_closure_argument {
         let ret_layout = top_level.result;
 
         match closure_data_layout {
-            Layout::Closure(_, lambda_set, _) => {
+            RawFunctionLayout::Function(_, lambda_set, _) =>  {
                 lowlevel_match_on_lambda_set(
                     $env,
                     lambda_set,
@@ -2754,7 +2754,7 @@ macro_rules! match_on_closure_argument {
                     $hole,
                 )
             }
-            _ => unreachable!(),
+            RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
         }
     }};
 }
@@ -3576,16 +3576,16 @@ pub fn with_hole<'a>(
                 layout_cache,
             ) {
                 Ok(_) => {
-                    let full_layout = return_on_layout_error!(
+                    let raw_layout = return_on_layout_error!(
                         env,
-                        layout_cache.from_var(env.arena, function_var, env.subs)
+                        layout_cache.raw_from_var(env.arena, function_var, env.subs)
                     );
 
-                    match full_layout {
-                        Layout::Closure(_, lambda_set, _) => {
+                    match raw_layout {
+                        RawFunctionLayout::Function(_, lambda_set, _) => {
                             construct_closure_data(env, lambda_set, name, &[], assigned, hole)
                         }
-                        _ => unreachable!(),
+                        RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
                     }
                 }
 
@@ -4501,14 +4501,16 @@ fn tag_union_to_function<'a>(
     match inserted {
         Ok(_layout) => {
             // only need to construct closure data
-            let full_layout =
-                return_on_layout_error!(env, layout_cache.from_var(env.arena, whole_var, env.subs));
+            let raw_layout = return_on_layout_error!(
+                env,
+                layout_cache.raw_from_var(env.arena, whole_var, env.subs)
+            );
 
-            match full_layout {
-                Layout::Closure(_, lambda_set, _) => {
+            match raw_layout {
+                RawFunctionLayout::Function(_, lambda_set, _) => {
                     construct_closure_data(env, lambda_set, proc_symbol, &[], assigned, hole)
                 }
-                _ => unreachable!(),
+                RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
             }
         }
 
@@ -4752,28 +4754,36 @@ pub fn from_can<'a>(
 
                             // does this function capture any local values?
                             let function_layout =
-                                layout_cache.from_var(env.arena, function_type, env.subs);
+                                layout_cache.raw_from_var(env.arena, function_type, env.subs);
 
-                            let captured_symbols = if let Ok(Layout::Closure(_, lambda_set, _)) =
-                                &function_layout
-                            {
-                                if let Layout::Struct(&[]) = lambda_set.runtime_representation() {
-                                    CapturedSymbols::None
-                                } else {
-                                    let mut temp = Vec::from_iter_in(captured_symbols, env.arena);
-                                    temp.sort();
-                                    CapturedSymbols::Captured(temp.into_bump_slice())
+                            let captured_symbols = match function_layout {
+                                Ok(RawFunctionLayout::Function(_, lambda_set, _)) => {
+                                    if let Layout::Struct(&[]) = lambda_set.runtime_representation()
+                                    {
+                                        CapturedSymbols::None
+                                    } else {
+                                        let mut temp =
+                                            Vec::from_iter_in(captured_symbols, env.arena);
+                                        temp.sort();
+                                        CapturedSymbols::Captured(temp.into_bump_slice())
+                                    }
                                 }
-                            } else {
-                                debug_assert!(
-                                    captured_symbols.is_empty(),
-                                    "{:?} with layout {:?} {:?} {:?}",
-                                    &captured_symbols,
-                                    function_layout,
-                                    env.subs,
-                                    (function_type, closure_type, closure_ext_var),
-                                );
-                                CapturedSymbols::None
+                                Ok(RawFunctionLayout::ZeroArgumentThunk(_)) => {
+                                    // top-level thunks cannot capture any variables
+                                    debug_assert!(
+                                        captured_symbols.is_empty(),
+                                        "{:?} with layout {:?} {:?} {:?}",
+                                        &captured_symbols,
+                                        function_layout,
+                                        env.subs,
+                                        (function_type, closure_type, closure_ext_var),
+                                    );
+                                    CapturedSymbols::None
+                                }
+                                Err(_) => {
+                                    debug_assert!(captured_symbols.is_empty());
+                                    CapturedSymbols::None
+                                }
                             };
 
                             procs.insert_named(
