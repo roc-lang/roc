@@ -1192,6 +1192,11 @@ pub enum Expr<'a> {
         wrapped: Wrapped,
     },
 
+    GetTagId {
+        structure: Symbol,
+        union_layout: UnionLayout<'a>,
+    },
+
     Array {
         elem_layout: Layout<'a>,
         elems: &'a [Symbol],
@@ -1344,6 +1349,10 @@ impl<'a> Expr<'a> {
                 .append(symbol_to_doc(alloc, *structure)),
 
             RuntimeErrorFunction(s) => alloc.text(format!("ErrorFunction {}", s)),
+
+            GetTagId { structure, .. } => alloc
+                .text("GetTagId")
+                .append(symbol_to_doc(alloc, *structure)),
         }
     }
 }
@@ -5514,6 +5523,17 @@ fn substitute_in_expr<'a>(
             }),
             None => None,
         },
+
+        GetTagId {
+            structure,
+            union_layout,
+        } => match substitute(subs, *structure) {
+            Some(structure) => Some(GetTagId {
+                structure,
+                union_layout: *union_layout,
+            }),
+            None => None,
+        },
     }
 }
 
@@ -7577,7 +7597,7 @@ where
     ToLowLevelCall: Fn(Symbol, Symbol, Option<Layout<'a>>, CallSpecId) -> Call<'a> + Copy,
 {
     match lambda_set.runtime_representation() {
-        Layout::Union(_) => {
+        Layout::Union(union_layout) => {
             let closure_tag_id_symbol = env.unique_symbol();
 
             let result = lowlevel_union_lambda_set_to_switch(
@@ -7594,11 +7614,9 @@ where
             );
 
             // extract & assign the closure_tag_id_symbol
-            let expr = Expr::AccessAtIndex {
-                index: 0,
-                field_layouts: env.arena.alloc([Layout::Builtin(Builtin::Int64)]),
+            let expr = Expr::GetTagId {
                 structure: closure_data_symbol,
-                wrapped: Wrapped::MultiTagUnion,
+                union_layout,
             };
 
             Stmt::Let(

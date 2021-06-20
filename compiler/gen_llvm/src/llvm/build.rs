@@ -1639,6 +1639,83 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         EmptyArray => empty_polymorphic_list(env),
         Array { elem_layout, elems } => list_literal(env, scope, elem_layout, elems),
         RuntimeErrorFunction(_) => todo!(),
+        GetTagId {
+            structure,
+            union_layout,
+        } => {
+            let builder = env.builder;
+
+            // cast the argument bytes into the desired shape for this tag
+            let (argument, _structure_layout) = load_symbol_and_layout(scope, structure);
+
+            match union_layout {
+                UnionLayout::NonRecursive(_) => {
+                    let pointer = builder.build_alloca(argument.get_type(), "get_type");
+                    builder.build_store(pointer, argument);
+                    let tag_id_pointer = builder.build_bitcast(
+                        pointer,
+                        env.context.i64_type().ptr_type(AddressSpace::Generic),
+                        "tag_id_pointer",
+                    );
+                    builder.build_load(tag_id_pointer.into_pointer_value(), "load_tag_id")
+                }
+                UnionLayout::Recursive(_) => {
+                    let pointer = builder.build_alloca(argument.get_type(), "get_type");
+                    builder.build_store(pointer, argument);
+                    let tag_id_pointer = builder.build_bitcast(
+                        pointer,
+                        env.context.i64_type().ptr_type(AddressSpace::Generic),
+                        "tag_id_pointer",
+                    );
+                    builder.build_load(tag_id_pointer.into_pointer_value(), "load_tag_id")
+                }
+                UnionLayout::NonNullableUnwrapped(_) => env.context.i64_type().const_zero().into(),
+                UnionLayout::NullableWrapped { nullable_id, .. } => {
+                    let argument_ptr = argument.into_pointer_value();
+                    let is_null = env.builder.build_is_null(argument_ptr, "is_null");
+
+                    let ctx = env.context;
+                    let then_block = ctx.append_basic_block(parent, "then");
+                    let else_block = ctx.append_basic_block(parent, "else");
+                    let cont_block = ctx.append_basic_block(parent, "cont");
+
+                    let result = builder.build_alloca(ctx.i64_type(), "result");
+
+                    env.builder
+                        .build_conditional_branch(is_null, then_block, else_block);
+
+                    {
+                        env.builder.position_at_end(then_block);
+                        let tag_id = ctx.i64_type().const_int(*nullable_id as u64, false);
+                        env.builder.build_store(result, tag_id);
+                        env.builder.build_unconditional_branch(cont_block);
+                    }
+
+                    {
+                        env.builder.position_at_end(else_block);
+                        let tag_id = extract_tag_discriminant_ptr(env, argument_ptr);
+                        env.builder.build_store(result, tag_id);
+                        env.builder.build_unconditional_branch(cont_block);
+                    }
+
+                    env.builder.position_at_end(cont_block);
+
+                    env.builder.build_load(result, "load_result")
+                }
+                UnionLayout::NullableUnwrapped { nullable_id, .. } => {
+                    let argument_ptr = argument.into_pointer_value();
+                    let is_null = env.builder.build_is_null(argument_ptr, "is_null");
+
+                    let ctx = env.context;
+
+                    let then_value = ctx.i64_type().const_int(*nullable_id as u64, false);
+                    let else_value = ctx.i64_type().const_int(!*nullable_id as u64, false);
+
+                    env.builder
+                        .build_select(is_null, then_value, else_value, "select_tag_id")
+                }
+            }
+        }
     }
 }
 
