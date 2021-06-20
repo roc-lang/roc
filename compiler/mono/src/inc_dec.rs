@@ -743,17 +743,6 @@ impl<'a> Context<'a> {
                 self.arena.alloc(Stmt::Let(z, v, l, b)),
                 &b_live_vars,
             ),
-            AccessAtIndex { structure: x, .. } => {
-                let b = self.add_dec_if_needed(x, b, b_live_vars);
-                let info_x = self.get_var_info(x);
-                let b = if info_x.consume {
-                    self.add_inc(z, 1, b)
-                } else {
-                    b
-                };
-
-                self.arena.alloc(Stmt::Let(z, v, l, b))
-            }
 
             Call(crate::ir::Call {
                 call_type,
@@ -763,6 +752,18 @@ impl<'a> Context<'a> {
             EmptyArray | Literal(_) | Reset(_) | RuntimeErrorFunction(_) => {
                 // EmptyArray is always stack-allocated
                 // function pointers are persistent
+                self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
+
+            AccessAtIndex { structure: x, .. } => {
+                let b = self.add_dec_if_needed(x, b, b_live_vars);
+                let info_x = self.get_var_info(x);
+                let b = if info_x.consume {
+                    self.add_inc(z, 1, b)
+                } else {
+                    b
+                };
+
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 

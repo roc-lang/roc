@@ -1200,6 +1200,8 @@ pub enum Expr<'a> {
     CoerceToTagId {
         structure: Symbol,
         tag_id: u8,
+        union_layout: UnionLayout<'a>,
+        index: u64,
     },
 
     Array {
