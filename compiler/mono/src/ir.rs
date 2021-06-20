@@ -5726,19 +5726,12 @@ fn store_tag_pattern<'a>(
             arg_layout = Layout::Union(union_layout);
         }
 
-                let load = Expr::CoerceToTagId {
-                    index: index as u64,
-                    structure,
-                    tag_id,
-                    union_layout,
-                };
-
-//        let load = Expr::AccessAtIndex {
-//            wrapped,
-//            index: index as u64,
-//            field_layouts: arg_layouts.clone().into_bump_slice(),
-//            structure,
-//        };
+        let load = Expr::CoerceToTagId {
+            index: index as u64,
+            structure,
+            tag_id,
+            union_layout,
+        };
 
         match argument {
             Identifier(symbol) => {
