@@ -1057,37 +1057,32 @@ fn specialize_closures() {
     )
 }
 
-// ignore doesn't seem to work with the new macro
-// #[ignore]
-// #[mono_test]
-// fn specialize_lowlevel() {
-//     indoc!(
-//         r#"
-//         app "test" provides [ main ] to "./platform"
+#[mono_test]
+fn specialize_lowlevel() {
+    indoc!(
+        r#"
+         app "test" provides [ main ] to "./platform"
 
-//         apply : (a -> a), a -> a
-//         apply = \f, x -> f x
+         apply : (a -> a), a -> a
+         apply = \f, x -> f x
 
-//         main =
-//             one : I64
-//             one = 1
+         main =
+             one : I64
+             one = 1
 
-//             two : I64
-//             two = 2
+             two : I64
+             two = 2
 
-//             increment : I64 -> I64
-//             increment = \x -> x + 1
+             increment : I64 -> I64
+             increment = \x -> x + one
 
-//             double : I64 -> I64
-//             double = \x -> x * two
+             double : I64 -> I64
+             double = \x -> x * two
 
-//             when 3 is
-//                 1 -> increment 0
-//                 2 -> double 0
-//                 _ -> List.map [] (if True then increment else double) |> List.len
-//         "#
-//     )
-// }
+             (if True then increment else double) 42
+         "#
+    )
+}
 
 // #[ignore]
 // #[mono_test]
