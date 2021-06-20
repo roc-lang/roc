@@ -1820,7 +1820,8 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
         // a pointer to the block of memory representation
         builder.build_bitcast(
             result,
-            basic_type_from_layout(env, structure_layout),
+            block_of_memory(env.context, structure_layout, env.ptr_bytes)
+                .ptr_type(AddressSpace::Generic),
             "cast_rec_pointer_lookup_at_index_ptr",
         )
     } else {

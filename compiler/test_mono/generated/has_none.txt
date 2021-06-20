@@ -7,7 +7,7 @@ procedure Test.3 (Test.4):
             let Test.14 = false;
             ret Test.14;
         else
-            let Test.19 = Index 1 Test.4;
+            let Test.19 = CoerceToTagId (Id 0) (Index 1) Test.4;
             let Test.20 = 1i64;
             let Test.21 = GetTagId Test.19;
             let Test.22 = lowlevel Eq Test.20 Test.21;

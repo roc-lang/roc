@@ -1066,75 +1066,33 @@ fn path_to_expr_help<'a>(
             Some(wrapped) => {
                 let index = *index;
 
-                let field_layouts = match &layout {
-                    Layout::Union(variant) => {
-                        use UnionLayout::*;
+                let (inner_layout, inner_expr) = match layout {
+                    Layout::Union(union_layout) => {
+                        let expr = Expr::CoerceToTagId {
+                            tag_id: *tag_id,
+                            structure: symbol,
+                            index,
+                            union_layout,
+                        };
 
-                        match variant {
-                            NonRecursive(layouts) | Recursive(layouts) => layouts[*tag_id as usize],
-                            NonNullableUnwrapped(fields) => {
-                                debug_assert_eq!(*tag_id, 0);
-                                fields
-                            }
-                            NullableWrapped {
-                                nullable_id,
-                                other_tags: layouts,
-                                ..
-                            } => {
-                                use std::cmp::Ordering;
-                                match (*tag_id as usize).cmp(&(*nullable_id as usize)) {
-                                    Ordering::Equal => {
-                                        // the nullable tag is going to pretend it stores a tag id
-                                        &*env
-                                            .arena
-                                            .alloc([Layout::Builtin(crate::layout::TAG_SIZE)])
-                                    }
-                                    Ordering::Less => layouts[*tag_id as usize],
-                                    Ordering::Greater => layouts[*tag_id as usize - 1],
-                                }
-                            }
-                            NullableUnwrapped {
-                                nullable_id,
-                                other_fields,
-                            } => {
-                                let tag_id = *tag_id != 0;
-
-                                if tag_id == *nullable_id {
-                                    // the nullable tag has no fields; we can only lookup its tag id
-                                    debug_assert_eq!(index, 0);
-
-                                    // the nullable tag is going to pretend it stores a tag id
-                                    &*env.arena.alloc([Layout::Builtin(crate::layout::TAG_SIZE)])
-                                } else {
-                                    *other_fields
-                                }
-                            }
-                        }
+                        (union_layout.layout_at(*tag_id as u8, index as usize), expr)
                     }
+                    Layout::Struct(field_layouts) => {
+                        debug_assert!(field_layouts.len() > 1);
+                        debug_assert_eq!(wrapped, Wrapped::RecordOrSingleTagUnion);
 
-                    Layout::Struct(layouts) => layouts,
-                    other => env.arena.alloc([*other]),
-                };
+                        let expr = Expr::AccessAtIndex {
+                            index,
+                            field_layouts,
+                            structure: symbol,
+                            wrapped,
+                        };
 
-                debug_assert!(
-                    index < field_layouts.len() as u64,
-                    "{} {:?} {:?} {:?}",
-                    index,
-                    field_layouts,
-                    &layout,
-                    tag_id,
-                );
+                        let layout = field_layouts[index as usize];
 
-                let inner_layout = match &field_layouts[index as usize] {
-                    Layout::RecursivePointer => layout,
-                    other => *other,
-                };
-
-                let inner_expr = Expr::AccessAtIndex {
-                    index,
-                    field_layouts,
-                    structure: symbol,
-                    wrapped,
+                        (layout, expr)
+                    }
+                    _ => unreachable!(),
                 };
 
                 symbol = env.unique_symbol();

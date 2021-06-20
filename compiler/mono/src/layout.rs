@@ -105,6 +105,72 @@ impl<'a> UnionLayout<'a> {
             _ => alloc.text("TODO"),
         }
     }
+
+    pub fn layout_at(self, tag_id: u8, index: usize) -> Layout<'a> {
+        match self {
+            UnionLayout::NonRecursive(tag_layouts) => {
+                let field_layouts = tag_layouts[tag_id as usize];
+
+                field_layouts[index]
+            }
+            UnionLayout::Recursive(tag_layouts) => {
+                let field_layouts = tag_layouts[tag_id as usize];
+
+                let result = field_layouts[index];
+
+                if let Layout::RecursivePointer = result {
+                    Layout::Union(self)
+                } else {
+                    result
+                }
+            }
+            UnionLayout::NonNullableUnwrapped(field_layouts) => {
+                let result = field_layouts[index];
+
+                if let Layout::RecursivePointer = result {
+                    Layout::Union(self)
+                } else {
+                    result
+                }
+            }
+            UnionLayout::NullableWrapped {
+                nullable_id,
+                other_tags,
+            } => {
+                debug_assert_ne!(nullable_id, tag_id as i64);
+
+                let tag_index = if (tag_id as i64) < nullable_id {
+                    tag_id
+                } else {
+                    tag_id - 1
+                };
+
+                let field_layouts = other_tags[tag_index as usize];
+                let result = field_layouts[index];
+
+                if let Layout::RecursivePointer = result {
+                    Layout::Union(self)
+                } else {
+                    result
+                }
+            }
+
+            UnionLayout::NullableUnwrapped {
+                nullable_id,
+                other_fields,
+            } => {
+                debug_assert_ne!(nullable_id, tag_id != 0);
+
+                let result = other_fields[index as usize];
+
+                if let Layout::RecursivePointer = result {
+                    Layout::Union(self)
+                } else {
+                    result
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
