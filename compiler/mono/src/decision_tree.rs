@@ -1161,58 +1161,45 @@ fn test_to_equality<'a>(
     Layout<'a>,
     Option<ConstructorKnown<'a>>,
 ) {
-    let (rhs_symbol, mut stores, _layout) =
+    let (rhs_symbol, mut stores, test_layout) =
         path_to_expr_help(env, cond_symbol, &path, *cond_layout);
 
     match test {
-        Test::IsCtor {
-            tag_id,
-            union,
-            arguments,
-            ..
-        } => {
+        Test::IsCtor { tag_id, union, .. } => {
             let path_symbol = rhs_symbol;
             // the IsCtor check should never be generated for tag unions of size 1
             // (e.g. record pattern guard matches)
             debug_assert!(union.alternatives.len() > 1);
 
-            let lhs = Expr::Literal(Literal::Int(tag_id as i128));
+            match test_layout {
+                Layout::Union(union_layout) => {
+                    let lhs = Expr::Literal(Literal::Int(tag_id as i128));
 
-            let mut field_layouts =
-                bumpalo::collections::Vec::with_capacity_in(arguments.len(), env.arena);
+                    let rhs = Expr::GetTagId {
+                        structure: path_symbol,
+                        union_layout,
+                    };
 
-            // add the tag discriminant
-            field_layouts.push(Layout::Builtin(Builtin::Int64));
+                    let lhs_symbol = env.unique_symbol();
+                    let rhs_symbol = env.unique_symbol();
 
-            for (_, layout) in arguments {
-                field_layouts.push(layout);
+                    stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
+                    stores.push((rhs_symbol, Layout::Builtin(Builtin::Int64), rhs));
+
+                    (
+                        stores,
+                        lhs_symbol,
+                        rhs_symbol,
+                        Layout::Builtin(Builtin::Int64),
+                        Some(ConstructorKnown::OnlyPass {
+                            scrutinee: path_symbol,
+                            layout: *cond_layout,
+                            tag_id,
+                        }),
+                    )
+                }
+                _ => unreachable!("{:?}", (cond_layout, union)),
             }
-            let field_layouts = field_layouts.into_bump_slice();
-
-            let rhs = Expr::AccessAtIndex {
-                index: 0,
-                field_layouts,
-                structure: path_symbol,
-                wrapped: Wrapped::MultiTagUnion,
-            };
-
-            let lhs_symbol = env.unique_symbol();
-            let rhs_symbol = env.unique_symbol();
-
-            stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
-            stores.push((rhs_symbol, Layout::Builtin(Builtin::Int64), rhs));
-
-            (
-                stores,
-                lhs_symbol,
-                rhs_symbol,
-                Layout::Builtin(Builtin::Int64),
-                Some(ConstructorKnown::OnlyPass {
-                    scrutinee: path_symbol,
-                    layout: *cond_layout,
-                    tag_id,
-                }),
-            )
         }
         Test::IsInt(test_int) => {
             // TODO don't downcast i128 here

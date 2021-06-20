@@ -1660,8 +1660,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     builder.build_load(tag_id_pointer.into_pointer_value(), "load_tag_id")
                 }
                 UnionLayout::Recursive(_) => {
-                    let pointer = builder.build_alloca(argument.get_type(), "get_type");
-                    builder.build_store(pointer, argument);
+                    let pointer = argument.into_pointer_value();
                     let tag_id_pointer = builder.build_bitcast(
                         pointer,
                         env.context.i64_type().ptr_type(AddressSpace::Generic),
