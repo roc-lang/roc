@@ -621,6 +621,7 @@ pub struct LoadedModule {
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
+    pub exposed_aliases: MutMap<Symbol, Alias>,
     pub header_sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
@@ -763,6 +764,7 @@ enum Msg<'a> {
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
         exposed_vars_by_symbol: MutMap<Symbol, Variable>,
+        exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
     },
     FoundSpecializations {
@@ -1510,6 +1512,7 @@ where
                     Msg::FinishedAllTypeChecking {
                         solved_subs,
                         exposed_vars_by_symbol,
+                        exposed_aliases_by_symbol,
                         documentation,
                     } => {
                         // We're done! There should be no more messages pending.
@@ -1525,6 +1528,7 @@ where
                         return Ok(LoadResult::TypeChecked(finish(
                             state,
                             solved_subs,
+                            exposed_aliases_by_symbol,
                             exposed_vars_by_symbol,
                             documentation,
                         )));
@@ -1939,6 +1943,7 @@ fn update<'a>(
                     .send(Msg::FinishedAllTypeChecking {
                         solved_subs,
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
+                        exposed_aliases_by_symbol: solved_module.aliases,
                         documentation,
                     })
                     .map_err(|_| LoadingProblem::MsgChannelDied)?;
@@ -2263,6 +2268,7 @@ fn finish_specialization(
 fn finish(
     state: State,
     solved: Solved<Subs>,
+    exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
     exposed_vars_by_symbol: MutMap<Symbol, Variable>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
 ) -> LoadedModule {
@@ -2298,6 +2304,7 @@ fn finish(
         type_problems: state.module_cache.type_problems,
         declarations_by_id: state.declarations_by_id,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
+        exposed_aliases: exposed_aliases_by_symbol,
         header_sources,
         sources,
         timings: state.timings,

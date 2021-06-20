@@ -3,14 +3,15 @@ use roc_builtins::std::StdLib;
 use roc_can::builtins::builtin_defs_map;
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
-use roc_load::file::LoadingProblem;
-use roc_module::symbol::{Interns, ModuleId};
+use roc_load::file::{LoadedModule, LoadingProblem};
+use roc_module::symbol::Interns;
 
 use std::fs;
 extern crate roc_load;
 use bumpalo::Bump;
 use roc_can::scope::Scope;
 use roc_collections::all::MutMap;
+use roc_load::docs::DocEntry::DocDef;
 use roc_region::all::Region;
 use std::path::{Path, PathBuf};
 
@@ -55,14 +56,31 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
             package
                 .modules
                 .iter()
-                .flat_map(|(docs_by_id, _)| docs_by_id.values()),
+                .flat_map(|loaded_module| loaded_module.documentation.values()),
         )
         .as_str(),
     );
 
     // Write each package's module docs html file
-    for (docs_by_id, interns) in package.modules.iter_mut() {
-        for module in docs_by_id.values_mut() {
+    for loaded_module in package.modules.iter_mut() {
+        let mut exposed_values = loaded_module
+            .exposed_to_host
+            .iter()
+            .map(|(symbol, _)| symbol.ident_string(&loaded_module.interns).to_string())
+            .collect::<Vec<String>>();
+
+        let mut exposed_aliases = loaded_module
+            .exposed_aliases
+            .iter()
+            .map(|(symbol, _)| symbol.ident_string(&loaded_module.interns).to_string())
+            .collect::<Vec<String>>();
+
+        let mut exports = Vec::new();
+
+        exports.append(&mut exposed_values);
+        exports.append(&mut exposed_aliases);
+
+        for module in loaded_module.documentation.values_mut() {
             let module_dir = build_dir.join(module.name.replace(".", "/").as_str());
 
             fs::create_dir_all(&module_dir)
@@ -76,7 +94,7 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
                 )
                 .replace(
                     "<!-- Module Docs -->",
-                    render_main_content(interns, module).as_str(),
+                    render_main_content(&loaded_module.interns, &exports, module).as_str(),
                 );
 
             fs::write(module_dir.join("index.html"), rendered_module)
@@ -87,7 +105,11 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
     println!("🎉 Docs generated in {}", build_dir.display());
 }
 
-fn render_main_content(interns: &Interns, module: &mut ModuleDocumentation) -> String {
+fn render_main_content(
+    interns: &Interns,
+    exposed_values: &[String],
+    module: &mut ModuleDocumentation,
+) -> String {
     let mut buf = String::new();
 
     buf.push_str(
@@ -100,6 +122,12 @@ fn render_main_content(interns: &Interns, module: &mut ModuleDocumentation) -> S
     );
 
     for entry in &module.entries {
+        if let DocDef(def) = entry {
+            if !exposed_values.contains(&def.name) {
+                break;
+            }
+        }
+
         match entry {
             DocEntry::DocDef(doc_def) => {
                 let mut href = String::new();
@@ -288,10 +316,7 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
     buf
 }
 
-pub fn files_to_documentations(
-    filenames: Vec<PathBuf>,
-    std_lib: StdLib,
-) -> Vec<(MutMap<ModuleId, ModuleDocumentation>, Interns)> {
+pub fn files_to_documentations(filenames: Vec<PathBuf>, std_lib: StdLib) -> Vec<LoadedModule> {
     let arena = Bump::new();
     let mut files_docs = vec![];
 
@@ -308,7 +333,7 @@ pub fn files_to_documentations(
             std::mem::size_of::<usize>() as u32, // This is just type-checking for docs, so "target" doesn't matter
             builtin_defs_map,
         ) {
-            Ok(loaded) => files_docs.push((loaded.documentation, loaded.interns)),
+            Ok(loaded) => files_docs.push(loaded),
             Err(LoadingProblem::FormattedReport(report)) => {
                 println!("{}", report);
                 panic!();
