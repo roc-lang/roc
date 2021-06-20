@@ -5589,7 +5589,7 @@ fn store_pattern_help<'a>(
         AppliedTag {
             arguments, layout, ..
         } => {
-            let wrapped = Wrapped::from_layout(&Layout::Union(*layout));
+            let wrapped = Wrapped::from_layout(layout);
             let write_tag = wrapped == Wrapped::MultiTagUnion;
 
             let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
@@ -5607,10 +5607,10 @@ fn store_pattern_help<'a>(
             for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
                 let index = if write_tag { index + 1 } else { index };
 
-                let mut arg_layout = *arg_layout;
+                let mut arg_layout = arg_layout;
 
                 if let Layout::RecursivePointer = arg_layout {
-                    arg_layout = Layout::Union(*layout);
+                    arg_layout = layout;
                 }
 
                 let load = Expr::AccessAtIndex {
@@ -5623,7 +5623,7 @@ fn store_pattern_help<'a>(
                 match argument {
                     Identifier(symbol) => {
                         // store immediately in the given symbol
-                        stmt = Stmt::Let(*symbol, load, arg_layout, env.arena.alloc(stmt));
+                        stmt = Stmt::Let(*symbol, load, *arg_layout, env.arena.alloc(stmt));
                         is_productive = true;
                     }
                     Underscore => {
@@ -5645,7 +5645,7 @@ fn store_pattern_help<'a>(
                                 stmt = new;
                                 // only if we bind one of its (sub)fields to a used name should we
                                 // extract the field
-                                stmt = Stmt::Let(symbol, load, arg_layout, env.arena.alloc(stmt));
+                                stmt = Stmt::Let(symbol, load, *arg_layout, env.arena.alloc(stmt));
                             }
                             StorePattern::NotProductive(new) => {
                                 // do nothing
@@ -6734,7 +6734,7 @@ pub enum Pattern<'a> {
         tag_name: TagName,
         tag_id: u8,
         arguments: Vec<'a, (Pattern<'a>, Layout<'a>)>,
-        layout: UnionLayout<'a>,
+        layout: Layout<'a>,
         union: crate::exhaustive::Union,
     },
 }
@@ -6928,9 +6928,7 @@ fn from_can_pattern_help<'a>(
                         ));
                     }
 
-                    let layout = UnionLayout::NonRecursive(
-                        env.arena.alloc([field_layouts.into_bump_slice()]),
-                    );
+                    let layout = Layout::Struct(field_layouts.into_bump_slice());
 
                     Pattern::AppliedTag {
                         tag_name: tag_name.clone(),
@@ -7018,7 +7016,8 @@ fn from_can_pattern_help<'a>(
                                 temp
                             };
 
-                            let layout = UnionLayout::NonRecursive(layouts.into_bump_slice());
+                            let layout =
+                                Layout::Union(UnionLayout::NonRecursive(layouts.into_bump_slice()));
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
@@ -7076,7 +7075,8 @@ fn from_can_pattern_help<'a>(
                             };
 
                             debug_assert!(layouts.len() > 1);
-                            let layout = UnionLayout::Recursive(layouts.into_bump_slice());
+                            let layout =
+                                Layout::Union(UnionLayout::Recursive(layouts.into_bump_slice()));
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
@@ -7121,7 +7121,7 @@ fn from_can_pattern_help<'a>(
                                 ));
                             }
 
-                            let layout = UnionLayout::NonNullableUnwrapped(fields);
+                            let layout = Layout::Union(UnionLayout::NonNullableUnwrapped(fields));
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
@@ -7206,10 +7206,10 @@ fn from_can_pattern_help<'a>(
                                 temp
                             };
 
-                            let layout = UnionLayout::NullableWrapped {
+                            let layout = Layout::Union(UnionLayout::NullableWrapped {
                                 nullable_id,
                                 other_tags: layouts.into_bump_slice(),
-                            };
+                            });
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
@@ -7267,10 +7267,10 @@ fn from_can_pattern_help<'a>(
                                 ));
                             }
 
-                            let layout = UnionLayout::NullableUnwrapped {
+                            let layout = Layout::Union(UnionLayout::NullableUnwrapped {
                                 nullable_id,
                                 other_fields,
-                            };
+                            });
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
