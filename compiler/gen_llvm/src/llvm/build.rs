@@ -1622,9 +1622,11 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         struct_type.into_struct_type(),
                     );
 
-                    builder
+                    let result = builder
                         .build_extract_value(struct_value, *index as u32, "")
-                        .expect("desired field did not decode")
+                        .expect("desired field did not decode");
+
+                    result
                 }
                 UnionLayout::Recursive(tag_layouts) => {
                     debug_assert!(argument.is_pointer_value());
@@ -1643,7 +1645,20 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         &struct_layout,
                     )
                 }
-                UnionLayout::NonNullableUnwrapped(_) => todo!(),
+                UnionLayout::NonNullableUnwrapped(field_layouts) => {
+                    let struct_layout = Layout::Struct(&field_layouts);
+
+                    let struct_type = basic_type_from_layout(env, &struct_layout);
+
+                    lookup_at_index_ptr(
+                        env,
+                        field_layouts,
+                        *index as usize,
+                        argument.into_pointer_value(),
+                        struct_type.into_struct_type(),
+                        &struct_layout,
+                    )
+                }
                 UnionLayout::NullableWrapped {
                     nullable_id,
                     other_tags,
@@ -1678,7 +1693,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     debug_assert!(argument.is_pointer_value());
                     debug_assert_ne!(*tag_id != 0, *nullable_id);
 
-                    let field_layouts = other_fields;
+                    let field_layouts = &other_fields[1..];
                     let struct_layout = Layout::Struct(field_layouts);
 
                     let struct_type = basic_type_from_layout(env, &struct_layout);
@@ -1686,7 +1701,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     lookup_at_index_ptr(
                         env,
                         field_layouts,
-                        *index as usize,
+                        // the tag id is not stored
+                        *index as usize - 1,
                         argument.into_pointer_value(),
                         struct_type.into_struct_type(),
                         &struct_layout,

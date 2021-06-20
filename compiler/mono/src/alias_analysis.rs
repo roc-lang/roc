@@ -854,6 +854,16 @@ fn expr_spec(
             }
         },
         Struct(fields) => build_tuple_value(builder, env, block, fields),
+        CoerceToTagId {
+            index,
+            union_layout,
+            tag_id,
+            structure,
+        } => {
+            let value_id = env.symbols[structure];
+            let result_type = layout_spec(builder, layout)?;
+            builder.add_unknown_with(block, &[value_id], result_type)
+        }
         AccessAtIndex {
             index,
             field_layouts: _,
@@ -935,7 +945,6 @@ fn expr_spec(
             builder.add_terminate(block, type_id)
         }
         GetTagId { .. } => builder.add_make_tuple(block, &[]),
-        CoerceToTagId { .. } => builder.add_make_tuple(block, &[]),
     }
 }
 

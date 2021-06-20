@@ -229,6 +229,10 @@ fn consume_expr(m: &VarMap, e: &Expr<'_>) -> bool {
             Some(info) => info.consume,
             None => true,
         },
+        Expr::CoerceToTagId { structure: x, .. } => match m.get(x) {
+            Some(info) => info.consume,
+            None => true,
+        },
         _ => true,
     }
 }

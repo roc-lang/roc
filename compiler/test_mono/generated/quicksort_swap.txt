@@ -42,9 +42,9 @@ procedure Test.1 (Test.2):
         let Test.27 = lowlevel Eq Test.21 Test.22;
         if Test.27 then
             let Test.18 = Index 0 Test.8;
-            let Test.4 = Index 1 Test.18;
+            let Test.4 = CoerceToTagId (Id 1) (Index 1) Test.18;
             let Test.17 = Index 1 Test.8;
-            let Test.5 = Index 1 Test.17;
+            let Test.5 = CoerceToTagId (Id 1) (Index 1) Test.17;
             let Test.16 = 0i64;
             let Test.10 = CallByName List.4 Test.2 Test.16 Test.5;
             let Test.11 = 0i64;

@@ -6,14 +6,14 @@ procedure Test.0 ():
     let Test.9 = GetTagId Test.5;
     switch Test.9:
         case 2:
-            let Test.2 = Index 1 Test.5;
+            let Test.2 = CoerceToTagId (Id 2) (Index 1) Test.5;
             ret Test.2;
     
         case 0:
-            let Test.3 = Index 1 Test.5;
+            let Test.3 = CoerceToTagId (Id 0) (Index 1) Test.5;
             ret Test.3;
     
         default:
-            let Test.4 = Index 1 Test.5;
+            let Test.4 = CoerceToTagId (Id 1) (Index 1) Test.5;
             ret Test.4;
     

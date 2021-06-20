@@ -15,7 +15,7 @@ procedure Test.3 (Test.4):
                 let Test.15 = true;
                 ret Test.15;
             else
-                let Test.7 = Index 2 Test.4;
+                let Test.7 = CoerceToTagId (Id 0) (Index 2) Test.4;
                 jump Test.13 Test.7;
     in
     jump Test.13 Test.4;
