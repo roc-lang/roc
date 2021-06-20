@@ -5586,22 +5586,6 @@ fn store_pattern_help<'a>(
         | StrLiteral(_) => {
             return StorePattern::NotProductive(stmt);
         }
-        AppliedTag {
-            arguments, layout, ..
-        } => {
-            let wrapped = Wrapped::from_layout(layout);
-
-            return store_tag_pattern(
-                env,
-                procs,
-                layout_cache,
-                outer_symbol,
-                layout,
-                &arguments,
-                wrapped,
-                stmt,
-            );
-        }
         NewtypeDestructure { arguments, .. } => {
             let mut fields = Vec::with_capacity_in(arguments.len(), env.arena);
             fields.extend(arguments.iter().map(|x| x.1));
@@ -5616,6 +5600,23 @@ fn store_pattern_help<'a>(
                 layout_cache,
                 outer_symbol,
                 &layout,
+                &arguments,
+                wrapped,
+                stmt,
+            );
+        }
+        AppliedTag {
+            arguments, layout, ..
+        } => {
+            let union_layout = Layout::Union(*layout);
+            let wrapped = Wrapped::from_layout(&union_layout);
+
+            return store_tag_pattern(
+                env,
+                procs,
+                layout_cache,
+                outer_symbol,
+                &union_layout,
                 &arguments,
                 wrapped,
                 stmt,
@@ -6781,7 +6782,7 @@ pub enum Pattern<'a> {
         tag_name: TagName,
         tag_id: u8,
         arguments: Vec<'a, (Pattern<'a>, Layout<'a>)>,
-        layout: Layout<'a>,
+        layout: UnionLayout<'a>,
         union: crate::exhaustive::Union,
     },
 }
@@ -7049,8 +7050,7 @@ fn from_can_pattern_help<'a>(
                                 temp
                             };
 
-                            let layout =
-                                Layout::Union(UnionLayout::NonRecursive(layouts.into_bump_slice()));
+                            let layout = UnionLayout::NonRecursive(layouts.into_bump_slice());
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
@@ -7108,8 +7108,7 @@ fn from_can_pattern_help<'a>(
                             };
 
                             debug_assert!(layouts.len() > 1);
-                            let layout =
-                                Layout::Union(UnionLayout::Recursive(layouts.into_bump_slice()));
+                            let layout = UnionLayout::Recursive(layouts.into_bump_slice());
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
@@ -7154,7 +7153,7 @@ fn from_can_pattern_help<'a>(
                                 ));
                             }
 
-                            let layout = Layout::Union(UnionLayout::NonNullableUnwrapped(fields));
+                            let layout = UnionLayout::NonNullableUnwrapped(fields);
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
@@ -7239,10 +7238,10 @@ fn from_can_pattern_help<'a>(
                                 temp
                             };
 
-                            let layout = Layout::Union(UnionLayout::NullableWrapped {
+                            let layout = UnionLayout::NullableWrapped {
                                 nullable_id,
                                 other_tags: layouts.into_bump_slice(),
-                            });
+                            };
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
@@ -7300,10 +7299,10 @@ fn from_can_pattern_help<'a>(
                                 ));
                             }
 
-                            let layout = Layout::Union(UnionLayout::NullableUnwrapped {
+                            let layout = UnionLayout::NullableUnwrapped {
                                 nullable_id,
                                 other_fields,
-                            });
+                            };
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),

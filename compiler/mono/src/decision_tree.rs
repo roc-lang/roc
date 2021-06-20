@@ -220,8 +220,7 @@ fn flatten<'a>(
         } if union.alternatives.len() == 1
             && !matches!(
                 layout,
-                Layout::Union(UnionLayout::NullableWrapped { .. })
-                    | Layout::Union(UnionLayout::NullableUnwrapped { .. })
+                UnionLayout::NullableWrapped { .. } | UnionLayout::NullableUnwrapped { .. }
             ) =>
         {
             // TODO ^ do we need to check that guard.is_none() here?
@@ -633,59 +632,60 @@ fn to_relevant_branch_help<'a>(
                     debug_assert_eq!(tag_id, *test_id);
 
                     // the test matches the constructor of this pattern
-
-                    match Wrapped::opt_from_layout(&layout) {
-                        None => todo!(),
-                        Some(wrapped) => {
-                            match wrapped {
-                                Wrapped::SingleElementRecord => {
-                                    // Theory: Unbox doesn't have any value for us
-                                    debug_assert_eq!(arguments.len(), 1);
-                                    let arg = arguments[0].clone();
-                                    {
-                                        // NOTE here elm unboxes, but we ignore that
-                                        // Path::Unbox(Box::new(path.clone()))
-                                        start.push((path.to_vec(), guard, arg.0));
-                                        start.extend(end);
-                                    }
-                                }
-                                Wrapped::RecordOrSingleTagUnion | Wrapped::LikeARoseTree => {
-                                    let sub_positions = arguments.into_iter().enumerate().map(
-                                        |(index, (pattern, _))| {
-                                            let mut new_path = path.to_vec();
-                                            new_path.push(PathInstruction {
-                                                index: index as u64,
-                                                tag_id,
-                                            });
-                                            (new_path, Guard::NoGuard, pattern)
-                                        },
-                                    );
-                                    start.extend(sub_positions);
-                                    start.extend(end);
-                                }
-                                Wrapped::MultiTagUnion => {
-                                    let sub_positions = arguments.into_iter().enumerate().map(
-                                        |(index, (pattern, _))| {
-                                            let mut new_path = path.to_vec();
-                                            new_path.push(PathInstruction {
-                                                index: 1 + index as u64,
-                                                tag_id,
-                                            });
-                                            (new_path, Guard::NoGuard, pattern)
-                                        },
-                                    );
-                                    start.extend(sub_positions);
-                                    start.extend(end);
-                                }
-                                Wrapped::EmptyRecord => todo!(),
+                    match layout {
+                        UnionLayout::NonRecursive([[Layout::Struct([_])]]) => {
+                            // a one-element record equivalent
+                            // Theory: Unbox doesn't have any value for us
+                            debug_assert_eq!(arguments.len(), 1);
+                            let arg = arguments[0].clone();
+                            {
+                                // NOTE here elm unboxes, but we ignore that
+                                // Path::Unbox(Box::new(path.clone()))
+                                start.push((path.to_vec(), guard, arg.0));
+                                start.extend(end);
                             }
-
-                            Some(Branch {
-                                goal: branch.goal,
-                                patterns: start,
-                            })
+                        }
+                        UnionLayout::NonRecursive([_]) | UnionLayout::NonNullableUnwrapped(_) => {
+                            let sub_positions =
+                                arguments
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(index, (pattern, _))| {
+                                        let mut new_path = path.to_vec();
+                                        new_path.push(PathInstruction {
+                                            index: index as u64,
+                                            tag_id,
+                                        });
+                                        (new_path, Guard::NoGuard, pattern)
+                                    });
+                            start.extend(sub_positions);
+                            start.extend(end);
+                        }
+                        UnionLayout::NonRecursive(_)
+                        | UnionLayout::Recursive(_)
+                        | UnionLayout::NullableWrapped { .. }
+                        | UnionLayout::NullableUnwrapped { .. } => {
+                            let sub_positions =
+                                arguments
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(index, (pattern, _))| {
+                                        let mut new_path = path.to_vec();
+                                        new_path.push(PathInstruction {
+                                            index: 1 + index as u64,
+                                            tag_id,
+                                        });
+                                        (new_path, Guard::NoGuard, pattern)
+                                    });
+                            start.extend(sub_positions);
+                            start.extend(end);
                         }
                     }
+
+                    Some(Branch {
+                        goal: branch.goal,
+                        patterns: start,
+                    })
                 }
                 _ => None,
             }
