@@ -20,7 +20,7 @@ use roc_module::symbol::{
 };
 use roc_mono::ir::{
     CapturedSymbols, EntryPoint, ExternalSpecializations, PartialProc, PendingSpecialization, Proc,
-    Procs, TopLevelFunctionLayout,
+    ProcLayout, Procs,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, StrLiteral, TypeAnnotation};
@@ -708,7 +708,7 @@ pub struct MonomorphizedModule<'a> {
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
-    pub procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
+    pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     pub entry_point: EntryPoint<'a>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
     pub header_sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
@@ -781,7 +781,7 @@ enum Msg<'a> {
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
         external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations<'a>>,
-        procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
+        procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         module_timing: ModuleTiming,
         subs: Subs,
@@ -829,7 +829,7 @@ struct State<'a> {
 
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
-    pub procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
+    pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
@@ -860,7 +860,7 @@ struct State<'a> {
     pub needs_specialization: MutSet<ModuleId>,
 
     pub all_pending_specializations:
-        MutMap<Symbol, MutMap<TopLevelFunctionLayout<'a>, PendingSpecialization<'a>>>,
+        MutMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
 
     pub specializations_in_flight: u32,
 
@@ -2065,8 +2065,6 @@ fn update<'a>(
                 && state.dependencies.solved_all()
                 && state.goal_phase == Phase::MakeSpecializations
             {
-                Proc::insert_refcount_operations(arena, &mut state.procedures);
-
                 // display the mono IR of the module, for debug purposes
                 if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
                     let procs_string = state
@@ -2079,6 +2077,8 @@ fn update<'a>(
 
                     println!("{}", result);
                 }
+
+                Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 // This is not safe with the new non-recursive RC updates that we do for tag unions
                 //
@@ -2237,7 +2237,7 @@ fn finish_specialization(
                 // the entry point is not specialized. This can happen if the repl output
                 // is a function value
                 EntryPoint {
-                    layout: roc_mono::ir::TopLevelFunctionLayout {
+                    layout: roc_mono::ir::ProcLayout {
                         arguments: &[],
                         result: Layout::Struct(&[]),
                     },
@@ -4056,7 +4056,7 @@ fn add_def_to_module<'a>(
 
                         procs.insert_exposed(
                             symbol,
-                            TopLevelFunctionLayout::from_layout(mono_env.arena, layout),
+                            ProcLayout::from_layout(mono_env.arena, layout),
                             mono_env.arena,
                             mono_env.subs,
                             def.annotation,
@@ -4087,14 +4087,14 @@ fn add_def_to_module<'a>(
                     if is_exposed {
                         let annotation = def.expr_var;
 
-                        let layout = match layout_cache.from_var(
+                        let top_level = match layout_cache.from_var(
                             mono_env.arena,
                             annotation,
                             mono_env.subs,
                         ) {
                             Ok(l) => {
                                 // remember, this is a 0-argument thunk
-                                Layout::FunctionPointer(&[], mono_env.arena.alloc(l))
+                                ProcLayout::new(mono_env.arena, &[], l)
                             }
                             Err(LayoutProblem::Erroneous) => {
                                 let message = "top level function has erroneous type";
@@ -4115,7 +4115,7 @@ fn add_def_to_module<'a>(
 
                         procs.insert_exposed(
                             symbol,
-                            TopLevelFunctionLayout::from_layout(mono_env.arena, layout),
+                            top_level,
                             mono_env.arena,
                             mono_env.subs,
                             def.annotation,

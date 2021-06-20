@@ -910,13 +910,14 @@ test "endsWith: hello world ends with world" {
 }
 
 // Str.concat
-pub fn strConcatC(result_in_place: InPlace, arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
-    return @call(.{ .modifier = always_inline }, strConcat, .{ result_in_place, arg1, arg2 });
+pub fn strConcatC(arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
+    return @call(.{ .modifier = always_inline }, strConcat, .{ arg1, arg2 });
 }
 
-fn strConcat(result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
+fn strConcat(arg1: RocStr, arg2: RocStr) RocStr {
     if (arg1.isEmpty()) {
         // the second argument is borrowed, so we must increment its refcount before returning
+        const result_in_place = InPlace.Clone;
         return RocStr.clone(result_in_place, arg2);
     } else if (arg2.isEmpty()) {
         // the first argument is owned, so we can return it without cloning
@@ -974,7 +975,7 @@ test "RocStr.concat: small concat small" {
         roc_str3.deinit();
     }
 
-    const result = strConcat(InPlace.Clone, roc_str1, roc_str2);
+    const result = strConcat(roc_str1, roc_str2);
 
     defer result.deinit();
 

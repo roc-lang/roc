@@ -20,17 +20,22 @@ impl Layout<'_> {
     pub const TAG_SIZE: Layout<'static> = Layout::Builtin(Builtin::Int64);
 }
 
-#[derive(Copy, Clone)]
-#[repr(u8)]
-pub enum InPlace {
-    InPlace,
-    Clone,
-}
-
 #[derive(Debug, Clone)]
 pub enum LayoutProblem {
     UnresolvedTypeVar(Variable),
     Erroneous,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RawFunctionLayout<'a> {
+    Function(&'a [Layout<'a>], LambdaSet<'a>, &'a Layout<'a>),
+    ZeroArgumentThunk(Layout<'a>),
+}
+
+impl RawFunctionLayout<'_> {
+    pub fn is_zero_argument_thunk(&self) -> bool {
+        matches!(self, RawFunctionLayout::ZeroArgumentThunk(_))
+    }
 }
 
 /// Types for code gen must be monomorphic. No type variables allowed!
@@ -45,21 +50,7 @@ pub enum Layout<'a> {
     RecursivePointer,
 
     /// A function. The types of its arguments, then the type of its return value.
-    FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
     Closure(&'a [Layout<'a>], LambdaSet<'a>, &'a Layout<'a>),
-}
-
-impl<'a> Layout<'a> {
-    pub fn in_place(&self) -> InPlace {
-        match self {
-            Layout::Builtin(Builtin::EmptyList) => InPlace::InPlace,
-            Layout::Builtin(Builtin::List(_)) => InPlace::Clone,
-            Layout::Builtin(Builtin::EmptyStr) => InPlace::InPlace,
-            Layout::Builtin(Builtin::Str) => InPlace::Clone,
-            Layout::Builtin(Builtin::Int1) => InPlace::Clone,
-            _ => unreachable!("Layout {:?} does not have an inplace", self),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -89,9 +80,9 @@ pub enum UnionLayout<'a> {
 }
 
 impl<'a> UnionLayout<'a> {
-    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, _parens: Parens) -> DocBuilder<'b, D, A>
+    pub fn to_doc<D, A>(self, alloc: &'a D, _parens: Parens) -> DocBuilder<'a, D, A>
     where
-        D: DocAllocator<'b, A>,
+        D: DocAllocator<'a, A>,
         D::Doc: Clone,
         A: Clone,
     {
@@ -192,32 +183,31 @@ impl<'a> LambdaSet<'a> {
         }
     }
 
-    pub fn extend_function_layout(
+    pub fn extend_argument_list(
         &self,
         arena: &'a Bump,
         argument_layouts: &'a [Layout<'a>],
-        ret_layout: &'a Layout<'a>,
-    ) -> Layout<'a> {
+    ) -> &'a [Layout<'a>] {
         if let [] = self.set {
             // TERRIBLE HACK for builting functions
-            Layout::FunctionPointer(argument_layouts, ret_layout)
+            argument_layouts
         } else {
             match self.representation {
                 Layout::Struct(&[]) => {
                     // this function does not have anything in its closure, and the lambda set is a
                     // singleton, so we pass no extra argument
-                    Layout::FunctionPointer(argument_layouts, ret_layout)
+                    argument_layouts
                 }
                 Layout::Builtin(Builtin::Int1) | Layout::Builtin(Builtin::Int8) => {
                     // we don't pass this along either
-                    Layout::FunctionPointer(argument_layouts, ret_layout)
+                    argument_layouts
                 }
                 _ => {
                     let mut arguments = Vec::with_capacity_in(argument_layouts.len() + 1, arena);
                     arguments.extend(argument_layouts);
                     arguments.push(self.runtime_representation());
 
-                    Layout::FunctionPointer(arguments.into_bump_slice(), ret_layout)
+                    arguments.into_bump_slice()
                 }
             }
         }
@@ -503,10 +493,6 @@ impl<'a> Layout<'a> {
                     }
                 }
             }
-            FunctionPointer(_, _) => {
-                // Function pointers are immutable and can always be safely copied
-                true
-            }
             Closure(_, closure_layout, _) => closure_layout.safe_to_memcpy(),
             RecursivePointer => {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
@@ -558,7 +544,6 @@ impl<'a> Layout<'a> {
                 }
             }
             Closure(_, lambda_set, _) => lambda_set.stack_size(pointer_size),
-            FunctionPointer(_, _) => pointer_size,
             RecursivePointer => pointer_size,
         }
     }
@@ -590,7 +575,6 @@ impl<'a> Layout<'a> {
             }
             Layout::Builtin(builtin) => builtin.alignment_bytes(pointer_size),
             Layout::RecursivePointer => pointer_size,
-            Layout::FunctionPointer(_, _) => pointer_size,
             Layout::Closure(_, captured, _) => {
                 pointer_size.max(captured.alignment_bytes(pointer_size))
             }
@@ -645,13 +629,12 @@ impl<'a> Layout<'a> {
             }
             RecursivePointer => true,
             Closure(_, closure_layout, _) => closure_layout.contains_refcounted(),
-            FunctionPointer(_, _) => false,
         }
     }
 
-    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, parens: Parens) -> DocBuilder<'b, D, A>
+    pub fn to_doc<D, A>(self, alloc: &'a D, parens: Parens) -> DocBuilder<'a, D, A>
     where
-        D: DocAllocator<'b, A>,
+        D: DocAllocator<'a, A>,
         D::Doc: Clone,
         A: Clone,
     {
@@ -669,14 +652,6 @@ impl<'a> Layout<'a> {
             }
             Union(union_layout) => union_layout.to_doc(alloc, parens),
             RecursivePointer => alloc.text("*self"),
-            FunctionPointer(args, result) => {
-                let args_doc = args.iter().map(|x| x.to_doc(alloc, Parens::InFunction));
-
-                alloc
-                    .intersperse(args_doc, ", ")
-                    .append(alloc.text(" -> "))
-                    .append(result.to_doc(alloc, Parens::InFunction))
-            }
             Closure(args, closure_layout, result) => {
                 let args_doc = args.iter().map(|x| x.to_doc(alloc, Parens::InFunction));
 
@@ -724,8 +699,6 @@ impl<'a> CachedVariable<'a> {
         CachedVariable(var, std::marker::PhantomData)
     }
 }
-
-// use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 
 impl<'a> ven_ena::unify::UnifyKey for CachedVariable<'a> {
     type Value = CachedLayout<'a>;
@@ -796,7 +769,7 @@ impl<'a> LayoutCache<'a> {
         arena: &'a Bump,
         var: Variable,
         subs: &Subs,
-    ) -> Result<Layout<'a>, LayoutProblem> {
+    ) -> Result<RawFunctionLayout<'a>, LayoutProblem> {
         // Store things according to the root Variable, to avoid duplicate work.
         let var = subs.get_root_key_without_compacting(var);
 
@@ -806,31 +779,18 @@ impl<'a> LayoutCache<'a> {
 
         use CachedLayout::*;
         match self.layouts.probe_value(cached_var) {
-            Cached(result) => Ok(result),
             Problem(problem) => Err(problem),
-            NotCached => {
+            Cached(_) | NotCached => {
                 let mut env = Env {
                     arena,
                     subs,
                     seen: MutSet::default(),
                 };
 
-                let result = Layout::from_var(&mut env, var);
-
-                // Don't actually cache. The layout cache is very hard to get right in the presence
-                // of specialization, it's turned of for now so an invalid cache is never the cause
-                // of a problem
-                if false {
-                    let cached_layout = match &result {
-                        Ok(layout) => Cached(*layout),
-                        Err(problem) => Problem(problem.clone()),
-                    };
-
-                    self.layouts
-                        .update_value(cached_var, |existing| existing.value = cached_layout);
-                }
-
-                result
+                Layout::from_var(&mut env, var).map(|l| match l {
+                    Layout::Closure(a, b, c) => RawFunctionLayout::Function(a, b, c),
+                    other => RawFunctionLayout::ZeroArgumentThunk(other),
+                })
             }
         }
     }
@@ -959,9 +919,9 @@ impl<'a> Builtin<'a> {
         }
     }
 
-    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, _parens: Parens) -> DocBuilder<'b, D, A>
+    pub fn to_doc<D, A>(self, alloc: &'a D, _parens: Parens) -> DocBuilder<'a, D, A>
     where
-        D: DocAllocator<'b, A>,
+        D: DocAllocator<'a, A>,
         D::Doc: Clone,
         A: Clone,
     {
@@ -1953,7 +1913,7 @@ impl LayoutId {
 
 struct IdsByLayout<'a> {
     by_id: MutMap<Layout<'a>, u32>,
-    toplevels_by_id: MutMap<crate::ir::TopLevelFunctionLayout<'a>, u32>,
+    toplevels_by_id: MutMap<crate::ir::ProcLayout<'a>, u32>,
     next_id: u32,
 }
 
@@ -1993,7 +1953,7 @@ impl<'a> LayoutIds<'a> {
     pub fn get_toplevel<'b>(
         &mut self,
         symbol: Symbol,
-        layout: &'b crate::ir::TopLevelFunctionLayout<'a>,
+        layout: &'b crate::ir::ProcLayout<'a>,
     ) -> LayoutId {
         // Note: this function does some weird stuff to satisfy the borrow checker.
         // There's probably a nicer way to write it that still works.

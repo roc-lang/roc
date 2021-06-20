@@ -144,7 +144,7 @@ where
                     "{:?}: {:?} with {:?} args",
                     proc.name,
                     bytes_as_ascii(&bytes),
-                    proc.args.len()
+                    (proc.args, proc.ret_layout),
                 );
             }
 
@@ -173,10 +173,7 @@ where
     morphic_lib::solve(program)
 }
 
-fn build_entry_point(
-    layout: crate::ir::TopLevelFunctionLayout,
-    func_name: FuncName,
-) -> Result<FuncDef> {
+fn build_entry_point(layout: crate::ir::ProcLayout, func_name: FuncName) -> Result<FuncDef> {
     let mut builder = FuncDefBuilder::new();
     let block = builder.add_block();
 
@@ -976,7 +973,6 @@ fn layout_spec(builder: &mut FuncDefBuilder, layout: &Layout) -> Result<TypeId> 
             } => worst_case_type(builder),
         },
         RecursivePointer => worst_case_type(builder),
-        FunctionPointer(_, _) => todo!(),
         Closure(_, lambda_set, _) => layout_spec(builder, &lambda_set.runtime_representation()),
     }
 }

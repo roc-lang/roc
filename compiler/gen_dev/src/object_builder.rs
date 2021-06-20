@@ -9,7 +9,7 @@ use object::{
 };
 use roc_collections::all::MutMap;
 use roc_module::symbol;
-use roc_mono::ir::{Proc, TopLevelFunctionLayout};
+use roc_mono::ir::{Proc, ProcLayout};
 use target_lexicon::{Architecture as TargetArch, BinaryFormat as TargetBF, Triple};
 
 // This is used by some code below which is currently commented out.
@@ -21,7 +21,7 @@ use target_lexicon::{Architecture as TargetArch, BinaryFormat as TargetBF, Tripl
 pub fn build_module<'a>(
     env: &'a Env,
     target: &Triple,
-    procedures: MutMap<(symbol::Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
+    procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Result<Object, String> {
     match target {
         Triple {
@@ -144,7 +144,7 @@ fn generate_wrapper<'a, B: Backend<'a>>(
 
 fn build_object<'a, B: Backend<'a>>(
     env: &'a Env,
-    procedures: MutMap<(symbol::Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
+    procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
     mut backend: B,
     mut output: Object,
 ) -> Result<Object, String> {

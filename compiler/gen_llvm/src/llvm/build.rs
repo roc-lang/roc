@@ -17,8 +17,8 @@ use crate::llvm::build_str::{
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
-    basic_type_from_builtin, basic_type_from_function_layout, basic_type_from_layout,
-    block_of_memory, block_of_memory_slices, ptr_int,
+    basic_type_from_builtin, basic_type_from_layout, block_of_memory, block_of_memory_slices,
+    ptr_int,
 };
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
@@ -49,11 +49,10 @@ use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
-    BranchInfo, CallType, EntryPoint, ExceptionId, JoinPointId, ModifyRc, OptLevel,
-    TopLevelFunctionLayout, Wrapped,
+    BranchInfo, CallType, EntryPoint, ExceptionId, JoinPointId, ModifyRc, OptLevel, ProcLayout,
+    Wrapped,
 };
-use roc_mono::layout::{Builtin, InPlace, LambdaSet, Layout, LayoutIds, UnionLayout};
-use std::convert::TryFrom;
+use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, UnionLayout};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
 /// output in debug builds, but we don't want it to print to stdout in release builds!
@@ -118,7 +117,7 @@ impl<'ctx> Iterator for FunctionIterator<'ctx> {
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Scope<'a, 'ctx> {
     symbols: ImMap<Symbol, (Layout<'a>, BasicValueEnum<'ctx>)>,
-    pub top_level_thunks: ImMap<Symbol, (TopLevelFunctionLayout<'a>, FunctionValue<'ctx>)>,
+    pub top_level_thunks: ImMap<Symbol, (ProcLayout<'a>, FunctionValue<'ctx>)>,
     join_points: ImMap<JoinPointId, (BasicBlock<'ctx>, &'a [PointerValue<'ctx>])>,
 }
 
@@ -132,7 +131,7 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
     pub fn insert_top_level_thunk(
         &mut self,
         symbol: Symbol,
-        layout: &'a TopLevelFunctionLayout<'a>,
+        layout: &'a ProcLayout<'a>,
         function_value: FunctionValue<'ctx>,
     ) {
         self.top_level_thunks
@@ -588,7 +587,7 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     mod_solutions: &'a ModSolutions,
     symbol: Symbol,
-    top_level: TopLevelFunctionLayout<'a>,
+    top_level: ProcLayout<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
     let it = top_level.arguments.iter().copied();
     let bytes = roc_mono::alias_analysis::func_name_bytes_help(symbol, it, top_level.result);
@@ -1638,9 +1637,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             }
         }
         EmptyArray => empty_polymorphic_list(env),
-        Array { elem_layout, elems } => {
-            list_literal(env, layout.in_place(), scope, elem_layout, elems)
-        }
+        Array { elem_layout, elems } => list_literal(env, scope, elem_layout, elems),
         RuntimeErrorFunction(_) => todo!(),
     }
 }
@@ -1794,7 +1791,6 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
 
 fn list_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    inplace: InPlace,
     scope: &Scope<'a, 'ctx>,
     elem_layout: &Layout<'a>,
     elems: &&[Symbol],
@@ -1808,7 +1804,7 @@ fn list_literal<'a, 'ctx, 'env>(
         let len_type = env.ptr_int();
         let len = len_type.const_int(len_u64, false);
 
-        allocate_list(env, inplace, elem_layout, len)
+        allocate_list(env, elem_layout, len)
     };
 
     // Copy the elements from the list literal into the array
@@ -3102,7 +3098,7 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
 pub fn build_proc_headers<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     mod_solutions: &'a ModSolutions,
-    procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     scope: &mut Scope<'a, 'ctx>,
     // alias_analysis_solutions: AliasAnalysisSolutions,
 ) -> Vec<
@@ -3144,7 +3140,7 @@ pub fn build_proc_headers<'a, 'ctx, 'env>(
 pub fn build_procedures<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
-    procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: EntryPoint<'a>,
 ) {
     build_procedures_help(env, opt_level, procedures, entry_point);
@@ -3153,7 +3149,7 @@ pub fn build_procedures<'a, 'ctx, 'env>(
 pub fn build_procedures_return_main<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
-    procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: EntryPoint<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
     let mod_solutions = build_procedures_help(env, opt_level, procedures, entry_point);
@@ -3164,7 +3160,7 @@ pub fn build_procedures_return_main<'a, 'ctx, 'env>(
 fn build_procedures_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
-    procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: EntryPoint<'a>,
 ) -> &'a ModSolutions {
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
@@ -3400,122 +3396,6 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     build_host_exposed_alias_size(env, def_name, alias_symbol, layout);
 }
 
-fn build_function_caller<'a, 'ctx, 'env>(
-    env: &'a Env<'a, 'ctx, 'env>,
-    def_name: &str,
-    alias_symbol: Symbol,
-    arguments: &[Layout<'a>],
-    result: &Layout<'a>,
-) {
-    let context = &env.context;
-    let builder = env.builder;
-
-    // STEP 1: build function header
-
-    // e.g. `roc__main_1_Fx_caller`
-    let function_name = format!(
-        "roc_{}_{}_caller",
-        def_name,
-        alias_symbol.ident_string(&env.interns)
-    );
-
-    let mut argument_types = Vec::with_capacity_in(arguments.len() + 3, env.arena);
-
-    for layout in arguments {
-        let arg_type = basic_type_from_layout(env, layout);
-        let arg_ptr_type = arg_type.ptr_type(AddressSpace::Generic);
-
-        argument_types.push(arg_ptr_type.into());
-    }
-
-    let function_pointer_type = {
-        let mut args = Vec::new_in(env.arena);
-        args.extend(arguments.iter().cloned());
-
-        // pretend the closure layout is empty
-        args.push(Layout::Struct(&[]));
-
-        // this is already a (function) pointer type
-        basic_type_from_function_layout(env, &args, result)
-    };
-    argument_types.push(function_pointer_type);
-
-    let closure_argument_type = {
-        let basic_type = basic_type_from_layout(env, &Layout::Struct(&[]));
-
-        basic_type.ptr_type(AddressSpace::Generic)
-    };
-    argument_types.push(closure_argument_type.into());
-
-    let result_type = basic_type_from_layout(env, result);
-
-    let roc_call_result_type =
-        context.struct_type(&[context.i64_type().into(), result_type], false);
-
-    let output_type = { roc_call_result_type.ptr_type(AddressSpace::Generic) };
-    argument_types.push(output_type.into());
-
-    let function_type = context.void_type().fn_type(&argument_types, false);
-
-    let function_value = add_func(
-        env.module,
-        function_name.as_str(),
-        function_type,
-        Linkage::External,
-        C_CALL_CONV,
-    );
-
-    // STEP 2: build function body
-
-    let entry = context.append_basic_block(function_value, "entry");
-
-    builder.position_at_end(entry);
-
-    let mut parameters = function_value.get_params();
-    let output = parameters.pop().unwrap().into_pointer_value();
-    let _closure_data_ptr = parameters.pop().unwrap().into_pointer_value();
-    let function_ptr = parameters.pop().unwrap().into_pointer_value();
-
-    let actual_function_type = basic_type_from_function_layout(env, arguments, result);
-
-    let function_ptr = builder
-        .build_bitcast(function_ptr, actual_function_type, "cast")
-        .into_pointer_value();
-
-    let mut parameters = parameters;
-
-    for param in parameters.iter_mut() {
-        debug_assert!(param.is_pointer_value());
-        *param = builder.build_load(param.into_pointer_value(), "load_param");
-    }
-
-    let call_result = invoke_and_catch(
-        env,
-        function_value,
-        CallableValue::try_from(function_ptr).unwrap(),
-        C_CALL_CONV,
-        &parameters,
-        result_type,
-    );
-
-    builder.build_store(output, call_result);
-
-    builder.build_return(None);
-
-    // STEP 3: build a {} -> u64 function that gives the size of the return type
-    build_host_exposed_alias_size_help(
-        env,
-        def_name,
-        alias_symbol,
-        Some("result"),
-        roc_call_result_type.into(),
-    );
-
-    // STEP 4: build a {} -> u64 function that gives the size of the function
-    let layout = Layout::Struct(&[]);
-    build_host_exposed_alias_size(env, def_name, alias_symbol, layout);
-}
-
 fn build_host_exposed_alias_size<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
     def_name: &str,
@@ -3583,14 +3463,14 @@ pub fn build_proc<'a, 'ctx, 'env>(
     fn_val: FunctionValue<'ctx>,
 ) {
     use roc_mono::ir::HostExposedLayouts;
+    use roc_mono::layout::RawFunctionLayout;
     let copy = proc.host_exposed_layouts.clone();
-    let fn_name = fn_val.get_name().to_string_lossy();
     match copy {
         HostExposedLayouts::NotHostExposed => {}
         HostExposedLayouts::HostExposed { rigids: _, aliases } => {
             for (name, (symbol, top_level, layout)) in aliases {
                 match layout {
-                    Layout::Closure(arguments, closure, result) => {
+                    RawFunctionLayout::Function(arguments, closure, result) => {
                         // define closure size and return value size, e.g.
                         //
                         // * roc__mainForHost_1_Update_size() -> i64
@@ -3627,18 +3507,10 @@ pub fn build_proc<'a, 'ctx, 'env>(
                             env, &fn_name, evaluator, name, arguments, closure, result,
                         )
                     }
-                    Layout::FunctionPointer(arguments, result) => {
-                        // define function size (equal to pointer size) and return value size, e.g.
-                        //
-                        // * roc__mainForHost_1_Update_size() -> i64
-                        // * roc__mainForHost_1_Update_result_size() -> i64
-                        build_function_caller(env, &fn_name, name, arguments, result)
-                    }
 
-                    Layout::Builtin(_) => {}
-                    Layout::Struct(_) => {}
-                    Layout::Union(_) => {}
-                    Layout::RecursivePointer => {}
+                    RawFunctionLayout::ZeroArgumentThunk(_) => {
+                        // do nothing
+                    }
                 }
             }
         }
@@ -4289,13 +4161,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.concat : Str, Str -> Str
             debug_assert_eq!(args.len(), 2);
 
-            str_concat(env, layout.in_place(), scope, args[0], args[1])
+            str_concat(env, scope, args[0], args[1])
         }
         StrJoinWith => {
             // Str.joinWith : List Str, Str -> Str
             debug_assert_eq!(args.len(), 2);
 
-            str_join_with(env, layout.in_place(), scope, args[0], args[1])
+            str_join_with(env, scope, args[0], args[1])
         }
         StrStartsWith => {
             // Str.startsWith : Str, Str -> Bool
@@ -4349,7 +4221,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.split : Str, Str -> List Str
             debug_assert_eq!(args.len(), 2);
 
-            str_split(env, scope, layout.in_place(), args[0], args[1])
+            str_split(env, scope, args[0], args[1])
         }
         StrIsEmpty => {
             // Str.isEmpty : Str -> Str
@@ -4384,7 +4256,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (arg, arg_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            list_single(env, layout.in_place(), arg, arg_layout)
+            list_single(env, arg, arg_layout)
         }
         ListRepeat => {
             // List.repeat : Int, elem -> List elem
@@ -4401,7 +4273,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            list_reverse(env, layout.in_place(), list, list_layout)
+            list_reverse(env, list, list_layout)
         }
         ListConcat => {
             debug_assert_eq!(args.len(), 2);
@@ -4410,14 +4282,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let second_list = load_symbol(scope, &args[1]);
 
-            list_concat(
-                env,
-                layout.in_place(),
-                parent,
-                first_list,
-                second_list,
-                list_layout,
-            )
+            list_concat(env, parent, first_list, second_list, list_layout)
         }
         ListContains => {
             // List.contains : List elem, elem -> Bool
@@ -4450,7 +4315,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            list_append(env, layout.in_place(), original_wrapper, elem, elem_layout)
+            list_append(env, original_wrapper, elem, elem_layout)
         }
         ListSwap => {
             // List.swap : List elem, Nat, Nat -> List elem
@@ -4502,7 +4367,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            list_prepend(env, layout.in_place(), original_wrapper, elem, elem_layout)
+            list_prepend(env, original_wrapper, elem, elem_layout)
         }
         ListJoin => {
             // List.join : List (List elem) -> List elem
@@ -4510,7 +4375,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, outer_list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            list_join(env, layout.in_place(), parent, list, outer_list_layout)
+            list_join(env, parent, list, outer_list_layout)
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumLogUnchecked | NumSin | NumCos
         | NumCeiling | NumFloor | NumToFloat | NumIsFinite | NumAtan | NumAcos | NumAsin => {
