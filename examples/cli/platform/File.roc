@@ -1,7 +1,7 @@
 ## Interacting with files and directories on the filesystem.
 interface File
     exposes [ read, write, append ]
-    imports [ Task.{ Task }, File.Internal as Internal ]
+    imports [ Task.{ Task }, File.Internal as Internal, File.Stream.{ OpenErr, ReadErr, WriteErr } ]
 
 ## Reading consists of two steps, both of which can fail: opening the file and
 ## actually reading from it.
@@ -18,10 +18,11 @@ AppendProblem a : [ OpenFailed OpenErr Str, AppenFailed WriteErr Str ]a
 ## Open a file and read all of its bytes.
 ##
 ## For example, here's how to read a file's bytes and interpret them as a
-## UTF-8 string:
+## UTF-16 string with a byte order mark:
 ##
-##     File.readAll "myfile.txt"
-##         |> Task.map Str.fromUtf8
+##     bytes <- Task.await (File.readAll "myfile.txt")
+##
+##     Task.fromResult (Str.fromUtf16Bom bytes)
 read : Str -> Task (List U8) (ReadProblem *)
 read = \path ->
     Effect.map (Effect.openRead path (NonTemp {})) \result ->
@@ -32,8 +33,8 @@ read = \path ->
 
             Err err -> OpenFailed err path
 
-## Open a file and read all of its bytes as a string encoded in UTF-8.
-readUtf8 : Str -> Task Str (ReadProblem [ BadUtf8 ]*)
+## Open a file and read its contents as a string encoded in UTF-8.
+readUtf8 : Str -> Task Str (ReadProblem [ BadUtf8 Nat ]*)
 readUtf8 = \path ->
     Effect.map (Effect.openRead path (NonTemp {})) \result ->
         when result is
@@ -45,6 +46,23 @@ readUtf8 = \path ->
 
             Err err -> OpenFailed err path
 
+## Open a file and read its contents as a string encoded in UTF-16.
+##
+## If the bytes begin with a [Byte Order Mark](https://en.wikipedia.org/wiki/Byte_order_mark),
+## it will be used to determine the [byte ordering](https://en.wikipedia.org/wiki/UTF-16#Byte-order_encoding_schemes).
+## Otherwise, the byte ordering will be inferred.
+readUtf16 : Str -> Task Str (ReadProblem [ BadUtf16 Nat ]*)
+readUtf16 = \path ->
+    # How to infer UTF-16 endianness: https://www.autoitconsulting.com/site/development/utf-8-utf-16-text-encoding-detection-library/
+    Effect.map (Effect.openRead path (NonTemp {})) \result ->
+        when result is
+            Ok fd ->
+                Effect.map (Effect.readUntilEof fd) \bytesResult ->
+                    when bytesResult is
+                        Ok bytes -> Str.fromUtf16Bom bytes
+                        Err err -> Err (ReadFailed err path)
+
+            Err err -> OpenFailed err path
 
 ## Open a file and write all of the given bytes to it.
 ##
