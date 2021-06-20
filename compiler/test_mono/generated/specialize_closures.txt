@@ -7,7 +7,7 @@ procedure Num.26 (#Attr.2, #Attr.3):
     ret Test.25;
 
 procedure Test.1 (Test.2, Test.3):
-    let Test.17 = Index 0 Test.2;
+    let Test.17 = GetTagId Test.2;
     joinpoint Test.18 Test.16:
         ret Test.16;
     in
