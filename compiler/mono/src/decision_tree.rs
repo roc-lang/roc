@@ -425,6 +425,21 @@ fn test_at_path<'a>(
                     });
                 }
 
+                NewtypeDestructure {
+                    tag_name,
+                    arguments,
+                } => {
+                    let tag_id = 0;
+                    let union = Union::newtype_wrapper(tag_name.clone(), arguments.len());
+
+                    all_tests.push(IsCtor {
+                        tag_id,
+                        tag_name: tag_name.clone(),
+                        union,
+                        arguments: arguments.to_vec(),
+                    });
+                }
+
                 AppliedTag {
                     tag_name,
                     tag_id,
@@ -562,6 +577,43 @@ fn to_relevant_branch_help<'a>(
                     patterns: start,
                 })
             }
+            _ => None,
+        },
+
+        NewtypeDestructure {
+            tag_name,
+            arguments,
+            ..
+        } => match test {
+            IsCtor {
+                tag_name: test_name,
+                tag_id: test_id,
+                ..
+            } if &tag_name == test_name => {
+                let tag_id = 0;
+                debug_assert_eq!(tag_id, *test_id);
+
+                let sub_positions =
+                    arguments
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, (pattern, _))| {
+                            let mut new_path = path.to_vec();
+                            new_path.push(PathInstruction {
+                                index: index as u64,
+                                tag_id,
+                            });
+                            (new_path, Guard::NoGuard, pattern)
+                        });
+                start.extend(sub_positions);
+                start.extend(end);
+
+                Some(Branch {
+                    goal: branch.goal,
+                    patterns: start,
+                })
+            }
+
             _ => None,
         },
 
@@ -750,6 +802,7 @@ fn needs_tests(pattern: &Pattern) -> bool {
         Identifier(_) | Underscore => false,
 
         RecordDestructure(_, _)
+        | NewtypeDestructure { .. }
         | AppliedTag { .. }
         | BitLiteral { .. }
         | EnumLiteral { .. }

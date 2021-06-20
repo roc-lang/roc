@@ -4177,7 +4177,7 @@ fn convert_tag_union<'a>(
             )
         }
 
-        Unwrapped {
+        Newtype {
             arguments: field_layouts,
             ..
         } => {
@@ -5590,75 +5590,36 @@ fn store_pattern_help<'a>(
             arguments, layout, ..
         } => {
             let wrapped = Wrapped::from_layout(layout);
-            let write_tag = wrapped == Wrapped::MultiTagUnion;
 
-            let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
-            let mut is_productive = false;
+            return store_tag_pattern(
+                env,
+                procs,
+                layout_cache,
+                outer_symbol,
+                layout,
+                &arguments,
+                wrapped,
+                stmt,
+            );
+        }
+        NewtypeDestructure { arguments, .. } => {
+            let mut fields = Vec::with_capacity_in(arguments.len(), env.arena);
+            fields.extend(arguments.iter().map(|x| x.1));
 
-            if write_tag {
-                // add an element for the tag discriminant
-                arg_layouts.push(Layout::Builtin(TAG_SIZE));
-            }
+            let layout = Layout::Struct(fields.into_bump_slice());
 
-            for (_, layout) in arguments {
-                arg_layouts.push(*layout);
-            }
+            let wrapped = Wrapped::from_layout(&layout);
 
-            for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
-                let index = if write_tag { index + 1 } else { index };
-
-                let mut arg_layout = arg_layout;
-
-                if let Layout::RecursivePointer = arg_layout {
-                    arg_layout = layout;
-                }
-
-                let load = Expr::AccessAtIndex {
-                    wrapped,
-                    index: index as u64,
-                    field_layouts: arg_layouts.clone().into_bump_slice(),
-                    structure: outer_symbol,
-                };
-
-                match argument {
-                    Identifier(symbol) => {
-                        // store immediately in the given symbol
-                        stmt = Stmt::Let(*symbol, load, *arg_layout, env.arena.alloc(stmt));
-                        is_productive = true;
-                    }
-                    Underscore => {
-                        // ignore
-                    }
-                    IntLiteral(_)
-                    | FloatLiteral(_)
-                    | EnumLiteral { .. }
-                    | BitLiteral { .. }
-                    | StrLiteral(_) => {}
-                    _ => {
-                        // store the field in a symbol, and continue matching on it
-                        let symbol = env.unique_symbol();
-
-                        // first recurse, continuing to unpack symbol
-                        match store_pattern_help(env, procs, layout_cache, argument, symbol, stmt) {
-                            StorePattern::Productive(new) => {
-                                is_productive = true;
-                                stmt = new;
-                                // only if we bind one of its (sub)fields to a used name should we
-                                // extract the field
-                                stmt = Stmt::Let(symbol, load, *arg_layout, env.arena.alloc(stmt));
-                            }
-                            StorePattern::NotProductive(new) => {
-                                // do nothing
-                                stmt = new;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if !is_productive {
-                return StorePattern::NotProductive(stmt);
-            }
+            return store_tag_pattern(
+                env,
+                procs,
+                layout_cache,
+                outer_symbol,
+                &layout,
+                &arguments,
+                wrapped,
+                stmt,
+            );
         }
         RecordDestructure(destructs, sorted_fields) => {
             let mut is_productive = false;
@@ -5690,6 +5651,92 @@ fn store_pattern_help<'a>(
     }
 
     StorePattern::Productive(stmt)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn store_tag_pattern<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    structure: Symbol,
+    layout: &Layout<'a>,
+    arguments: &[(Pattern<'a>, Layout<'a>)],
+    wrapped: Wrapped,
+    mut stmt: Stmt<'a>,
+) -> StorePattern<'a> {
+    use Pattern::*;
+
+    let write_tag = wrapped == Wrapped::MultiTagUnion;
+
+    let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
+    let mut is_productive = false;
+
+    if write_tag {
+        // add an element for the tag discriminant
+        arg_layouts.push(Layout::Builtin(TAG_SIZE));
+    }
+
+    for (_, layout) in arguments {
+        arg_layouts.push(*layout);
+    }
+
+    for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
+        let index = if write_tag { index + 1 } else { index };
+
+        let mut arg_layout = *arg_layout;
+
+        if let Layout::RecursivePointer = arg_layout {
+            arg_layout = *layout;
+        }
+
+        let load = Expr::AccessAtIndex {
+            wrapped,
+            index: index as u64,
+            field_layouts: arg_layouts.clone().into_bump_slice(),
+            structure,
+        };
+
+        match argument {
+            Identifier(symbol) => {
+                // store immediately in the given symbol
+                stmt = Stmt::Let(*symbol, load, arg_layout, env.arena.alloc(stmt));
+                is_productive = true;
+            }
+            Underscore => {
+                // ignore
+            }
+            IntLiteral(_)
+            | FloatLiteral(_)
+            | EnumLiteral { .. }
+            | BitLiteral { .. }
+            | StrLiteral(_) => {}
+            _ => {
+                // store the field in a symbol, and continue matching on it
+                let symbol = env.unique_symbol();
+
+                // first recurse, continuing to unpack symbol
+                match store_pattern_help(env, procs, layout_cache, argument, symbol, stmt) {
+                    StorePattern::Productive(new) => {
+                        is_productive = true;
+                        stmt = new;
+                        // only if we bind one of its (sub)fields to a used name should we
+                        // extract the field
+                        stmt = Stmt::Let(symbol, load, arg_layout, env.arena.alloc(stmt));
+                    }
+                    StorePattern::NotProductive(new) => {
+                        // do nothing
+                        stmt = new;
+                    }
+                }
+            }
+        }
+    }
+
+    if is_productive {
+        StorePattern::Productive(stmt)
+    } else {
+        StorePattern::NotProductive(stmt)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6726,6 +6773,10 @@ pub enum Pattern<'a> {
     StrLiteral(Box<str>),
 
     RecordDestructure(Vec<'a, RecordDestruct<'a>>, &'a [Layout<'a>]),
+    NewtypeDestructure {
+        tag_name: TagName,
+        arguments: Vec<'a, (Pattern<'a>, Layout<'a>)>,
+    },
     AppliedTag {
         tag_name: TagName,
         tag_id: u8,
@@ -6887,19 +6938,10 @@ fn from_can_pattern_help<'a>(
                         union,
                     }
                 }
-                Unwrapped {
+                Newtype {
                     arguments: field_layouts,
                     ..
                 } => {
-                    let union = crate::exhaustive::Union {
-                        render_as: RenderAs::Tag,
-                        alternatives: vec![Ctor {
-                            tag_id: TagId(0),
-                            name: tag_name.clone(),
-                            arity: field_layouts.len(),
-                        }],
-                    };
-
                     let mut arguments = arguments.clone();
 
                     arguments.sort_by(|arg1, arg2| {
@@ -6924,14 +6966,9 @@ fn from_can_pattern_help<'a>(
                         ));
                     }
 
-                    let layout = Layout::Struct(field_layouts.into_bump_slice());
-
-                    Pattern::AppliedTag {
+                    Pattern::NewtypeDestructure {
                         tag_name: tag_name.clone(),
-                        tag_id: 0,
                         arguments: mono_args,
-                        union,
-                        layout,
                     }
                 }
                 Wrapped(variant) => {

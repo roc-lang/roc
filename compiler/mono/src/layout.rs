@@ -279,7 +279,7 @@ impl<'a> LambdaSet<'a> {
             Unit | UnitWithArguments => Layout::Struct(&[]),
             BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
             ByteUnion(_) => Layout::Builtin(Builtin::Int8),
-            Unwrapped {
+            Newtype {
                 arguments: layouts, ..
             } => Layout::Struct(layouts.into_bump_slice()),
             Wrapped(variant) => {
@@ -1285,7 +1285,7 @@ pub enum UnionVariant<'a> {
         ffalse: TagName,
     },
     ByteUnion(Vec<'a, TagName>),
-    Unwrapped {
+    Newtype {
         tag_name: TagName,
         arguments: Vec<'a, Layout<'a>>,
     },
@@ -1506,7 +1506,7 @@ pub fn union_sorted_tags_help<'a>(
                     fields: layouts.into_bump_slice(),
                 })
             } else {
-                UnionVariant::Unwrapped {
+                UnionVariant::Newtype {
                     tag_name,
                     arguments: layouts,
                 }
@@ -1661,7 +1661,7 @@ pub fn layout_from_tag_union<'a>(
                 Unit | UnitWithArguments => Layout::Struct(&[]),
                 BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
                 ByteUnion(_) => Layout::Builtin(Builtin::Int8),
-                Unwrapped {
+                Newtype {
                     arguments: mut field_layouts,
                     ..
                 } => {
