@@ -592,7 +592,6 @@ impl<'a> BorrowInfState<'a> {
                     self.own_var(*x);
                 }
             }
-
         }
     }
 

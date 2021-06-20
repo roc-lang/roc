@@ -771,7 +771,6 @@ impl<'a> Context<'a> {
 
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
-
         };
 
         (new_b, live_vars)
