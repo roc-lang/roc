@@ -1361,8 +1361,13 @@ impl<'a> Expr<'a> {
                 .text("GetTagId ")
                 .append(symbol_to_doc(alloc, *structure)),
 
-            CoerceToTagId { tag_id, structure } => alloc
-                .text(format!("CoerceToTagId {} ", tag_id))
+            CoerceToTagId {
+                tag_id,
+                structure,
+                index,
+                ..
+            } => alloc
+                .text(format!("CoerceToTagId (Id {}) (Index {}) ", tag_id, index))
                 .append(symbol_to_doc(alloc, *structure)),
         }
     }
@@ -5546,10 +5551,12 @@ fn substitute_in_expr<'a>(
             None => None,
         },
 
-        CoerceToTagId { structure, tag_id } => match substitute(subs, *structure) {
+        CoerceToTagId { structure, tag_id, index, union_layout } => match substitute(subs, *structure) {
             Some(structure) => Some(CoerceToTagId {
                 structure,
                 tag_id: *tag_id,
+                index: *index,
+                union_layout: *union_layout,
             }),
             None => None,
         },
