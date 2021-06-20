@@ -1351,7 +1351,7 @@ impl<'a> Expr<'a> {
             RuntimeErrorFunction(s) => alloc.text(format!("ErrorFunction {}", s)),
 
             GetTagId { structure, .. } => alloc
-                .text("GetTagId")
+                .text("GetTagId ")
                 .append(symbol_to_doc(alloc, *structure)),
         }
     }
@@ -7755,7 +7755,7 @@ fn match_on_lambda_set<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     match lambda_set.runtime_representation() {
-        Layout::Union(_) => {
+        Layout::Union(union_layout) => {
             let closure_tag_id_symbol = env.unique_symbol();
 
             let result = union_lambda_set_to_switch(
@@ -7773,11 +7773,9 @@ fn match_on_lambda_set<'a>(
             );
 
             // extract & assign the closure_tag_id_symbol
-            let expr = Expr::AccessAtIndex {
-                index: 0,
-                field_layouts: env.arena.alloc([Layout::Builtin(Builtin::Int64)]),
+            let expr = Expr::GetTagId {
                 structure: closure_data_symbol,
-                wrapped: Wrapped::MultiTagUnion,
+                union_layout,
             };
 
             Stmt::Let(

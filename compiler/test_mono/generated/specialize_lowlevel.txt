@@ -21,7 +21,7 @@ procedure Test.0 ():
     let Test.5 = 2i64;
     let Test.12 = 42i64;
     joinpoint Test.19 Test.13:
-        let Test.14 = Index 0 Test.13;
+        let Test.14 = GetTagId Test.13;
         joinpoint Test.15 Test.11:
             ret Test.11;
         in
