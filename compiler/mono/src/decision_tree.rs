@@ -1746,7 +1746,7 @@ fn decide_to_branching<'a>(
 
             // We have learned more about the exact layout of the cond (based on the path)
             // but tests are still relative to the original cond symbol
-            let mut switch = if let Layout::Union(_) = inner_cond_layout {
+            let mut switch = if let Layout::Union(union_layout) = inner_cond_layout {
                 let tag_id_symbol = env.unique_symbol();
 
                 let temp = Stmt::Switch {
@@ -1757,11 +1757,9 @@ fn decide_to_branching<'a>(
                     ret_layout,
                 };
 
-                let expr = Expr::AccessAtIndex {
-                    index: 0,
-                    field_layouts: &[Layout::TAG_SIZE],
+                let expr = Expr::GetTagId {
                     structure: inner_cond_symbol,
-                    wrapped: Wrapped::MultiTagUnion,
+                    union_layout,
                 };
 
                 Stmt::Let(tag_id_symbol, expr, Layout::TAG_SIZE, env.arena.alloc(temp))

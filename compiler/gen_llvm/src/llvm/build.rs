@@ -1554,55 +1554,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     }
                 }
                 PointerValue(value) => match structure_layout {
-                    Layout::Union(UnionLayout::NullableWrapped { nullable_id, .. })
-                        if *index == 0 =>
-                    {
-                        let ptr = value;
-                        let is_null = env.builder.build_is_null(ptr, "is_null");
-
-                        let ctx = env.context;
-                        let then_block = ctx.append_basic_block(parent, "then");
-                        let else_block = ctx.append_basic_block(parent, "else");
-                        let cont_block = ctx.append_basic_block(parent, "cont");
-
-                        let result = builder.build_alloca(ctx.i64_type(), "result");
-
-                        env.builder
-                            .build_conditional_branch(is_null, then_block, else_block);
-
-                        {
-                            env.builder.position_at_end(then_block);
-                            let tag_id = ctx.i64_type().const_int(*nullable_id as u64, false);
-                            env.builder.build_store(result, tag_id);
-                            env.builder.build_unconditional_branch(cont_block);
-                        }
-
-                        {
-                            env.builder.position_at_end(else_block);
-                            let tag_id = extract_tag_discriminant_ptr(env, ptr);
-                            env.builder.build_store(result, tag_id);
-                            env.builder.build_unconditional_branch(cont_block);
-                        }
-
-                        env.builder.position_at_end(cont_block);
-
-                        env.builder.build_load(result, "load_result")
+                    Layout::Union(UnionLayout::NullableWrapped { .. }) if *index == 0 => {
+                        panic!("this should not happen any more")
                     }
-                    Layout::Union(UnionLayout::NullableUnwrapped { nullable_id, .. }) => {
+                    Layout::Union(UnionLayout::NullableUnwrapped { .. }) => {
                         if *index == 0 {
-                            let is_null = env.builder.build_is_null(value, "is_null");
-
-                            let ctx = env.context;
-
-                            let then_value = ctx.i64_type().const_int(*nullable_id as u64, false);
-                            let else_value = ctx.i64_type().const_int(!*nullable_id as u64, false);
-
-                            env.builder.build_select(
-                                is_null,
-                                then_value,
-                                else_value,
-                                "select_tag_id",
-                            )
+                            panic!("this should not happen any more")
                         } else {
                             let struct_type = env
                                 .context
