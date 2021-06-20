@@ -1596,6 +1596,11 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         EmptyArray => empty_polymorphic_list(env),
         Array { elem_layout, elems } => list_literal(env, scope, elem_layout, elems),
         RuntimeErrorFunction(_) => todo!(),
+        CoerceToTagId { .. } => {
+            // we will do more here in the future
+
+            env.context.struct_type(&[], false).const_zero().into()
+        }
         GetTagId {
             structure,
             union_layout,

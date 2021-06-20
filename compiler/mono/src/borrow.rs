@@ -581,6 +581,10 @@ impl<'a> BorrowInfState<'a> {
 
             Literal(_) | RuntimeErrorFunction(_) => {}
 
+            CoerceToTagId { .. } => {
+                // do nothing for now; when we extract the fields here, that must change
+            }
+
             GetTagId { structure: x, .. } => {
                 // if the structure (record/tag/array) is owned, the extracted value is
                 if self.is_owned(*x) {
@@ -592,7 +596,6 @@ impl<'a> BorrowInfState<'a> {
                     self.own_var(*x);
                 }
             }
-
         }
     }
 

@@ -1197,6 +1197,11 @@ pub enum Expr<'a> {
         union_layout: UnionLayout<'a>,
     },
 
+    CoerceToTagId {
+        structure: Symbol,
+        tag_id: u8,
+    },
+
     Array {
         elem_layout: Layout<'a>,
         elems: &'a [Symbol],
@@ -1352,6 +1357,10 @@ impl<'a> Expr<'a> {
 
             GetTagId { structure, .. } => alloc
                 .text("GetTagId ")
+                .append(symbol_to_doc(alloc, *structure)),
+
+            CoerceToTagId { tag_id, structure } => alloc
+                .text(format!("CoerceToTagId {} ", tag_id))
                 .append(symbol_to_doc(alloc, *structure)),
         }
     }
@@ -5531,6 +5540,14 @@ fn substitute_in_expr<'a>(
             Some(structure) => Some(GetTagId {
                 structure,
                 union_layout: *union_layout,
+            }),
+            None => None,
+        },
+
+        CoerceToTagId { structure, tag_id } => match substitute(subs, *structure) {
+            Some(structure) => Some(CoerceToTagId {
+                structure,
+                tag_id: *tag_id,
             }),
             None => None,
         },

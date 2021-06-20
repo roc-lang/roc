@@ -935,6 +935,7 @@ fn expr_spec(
             builder.add_terminate(block, type_id)
         }
         GetTagId { .. } => builder.add_make_tuple(block, &[]),
+        CoerceToTagId { .. } => builder.add_make_tuple(block, &[]),
     }
 }
 
