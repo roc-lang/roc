@@ -5660,7 +5660,7 @@ fn store_pattern_help<'a>(
                 return StorePattern::NotProductive(stmt);
             }
         }
-        RecordDestructure(destructs, Layout::Struct(sorted_fields)) => {
+        RecordDestructure(destructs, sorted_fields) => {
             let mut is_productive = false;
             for (index, destruct) in destructs.iter().enumerate().rev() {
                 match store_record_destruct(
@@ -5686,10 +5686,6 @@ fn store_pattern_help<'a>(
             if !is_productive {
                 return StorePattern::NotProductive(stmt);
             }
-        }
-
-        RecordDestructure(_, _) => {
-            unreachable!("a record destructure must always occur on a struct layout");
         }
     }
 
@@ -6729,7 +6725,7 @@ pub enum Pattern<'a> {
     },
     StrLiteral(Box<str>),
 
-    RecordDestructure(Vec<'a, RecordDestruct<'a>>, Layout<'a>),
+    RecordDestructure(Vec<'a, RecordDestruct<'a>>, &'a [Layout<'a>]),
     AppliedTag {
         tag_name: TagName,
         tag_id: u8,
@@ -7404,7 +7400,7 @@ fn from_can_pattern_help<'a>(
 
             Ok(Pattern::RecordDestructure(
                 mono_destructs,
-                Layout::Struct(field_layouts.into_bump_slice()),
+                field_layouts.into_bump_slice(),
             ))
         }
     }
