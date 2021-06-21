@@ -135,9 +135,9 @@ pub enum Expr2 {
         body_id: NodeId<Expr2>,     // 4B
     },
     LetFunction {
-        def: NodeId<FunctionDef>, // 4B
-        body_var: Variable,       // 8B
-        body_id: NodeId<Expr2>,   // 4B
+        def_id: NodeId<FunctionDef>, // 4B
+        body_var: Variable,          // 8B
+        body_id: NodeId<Expr2>,      // 4B
     },
     LetValue {
         def_id: NodeId<ValueDef>, // 4B
