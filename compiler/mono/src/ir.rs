@@ -5631,25 +5631,30 @@ fn store_pattern_help<'a>(
         | StrLiteral(_) => {
             return StorePattern::NotProductive(stmt);
         }
-        NewtypeDestructure { arguments, .. } => {
-            let mut fields = Vec::with_capacity_in(arguments.len(), env.arena);
-            fields.extend(arguments.iter().map(|x| x.1));
+        NewtypeDestructure { arguments, .. } => match arguments.as_slice() {
+            [single] => {
+                return store_pattern_help(env, procs, layout_cache, &single.0, outer_symbol, stmt);
+            }
+            _ => {
+                let mut fields = Vec::with_capacity_in(arguments.len(), env.arena);
+                fields.extend(arguments.iter().map(|x| x.1));
 
-            let layout = Layout::Struct(fields.into_bump_slice());
+                let layout = Layout::Struct(fields.into_bump_slice());
 
-            let wrapped = Wrapped::from_layout(&layout);
+                let wrapped = Wrapped::from_layout(&layout);
 
-            return store_newtype_pattern(
-                env,
-                procs,
-                layout_cache,
-                outer_symbol,
-                &layout,
-                &arguments,
-                wrapped,
-                stmt,
-            );
-        }
+                return store_newtype_pattern(
+                    env,
+                    procs,
+                    layout_cache,
+                    outer_symbol,
+                    &layout,
+                    &arguments,
+                    wrapped,
+                    stmt,
+                );
+            }
+        },
         AppliedTag {
             arguments,
             layout,
@@ -5798,23 +5803,14 @@ fn store_newtype_pattern<'a>(
 ) -> StorePattern<'a> {
     use Pattern::*;
 
-    let write_tag = false;
-
     let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
     let mut is_productive = false;
-
-    if write_tag {
-        // add an element for the tag discriminant
-        arg_layouts.push(Layout::Builtin(TAG_SIZE));
-    }
 
     for (_, layout) in arguments {
         arg_layouts.push(*layout);
     }
 
     for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
-        let index = if write_tag { index + 1 } else { index };
-
         let mut arg_layout = *arg_layout;
 
         if let Layout::RecursivePointer = arg_layout {
