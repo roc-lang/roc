@@ -17,7 +17,7 @@ const InPlace = packed enum(u8) {
 
 const SMALL_STR_MAX_LENGTH = small_string_size - 1;
 const small_string_size = 2 * @sizeOf(usize);
-const blank_small_string: [16]u8 = init_blank_small_string(small_string_size);
+const blank_small_string: [@sizeOf(RocStr)]u8 = init_blank_small_string(small_string_size);
 
 fn init_blank_small_string(comptime n: usize) [n]u8 {
     var prime_list: [n]u8 = undefined;
@@ -246,7 +246,7 @@ pub const RocStr = extern struct {
     pub fn asU8ptr(self: RocStr) [*]u8 {
         // Since this conditional would be prone to branch misprediction,
         // make sure it will compile to a cmov.
-        return if (self.isSmallStr() or self.isEmpty()) (&@bitCast([16]u8, self)) else (@ptrCast([*]u8, self.str_bytes));
+        return if (self.isSmallStr() or self.isEmpty()) (&@bitCast([@sizeOf(RocStr)]u8, self)) else (@ptrCast([*]u8, self.str_bytes));
     }
 
     // Given a pointer to some bytes, write the first (len) bytes of this
