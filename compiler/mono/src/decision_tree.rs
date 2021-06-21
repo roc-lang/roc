@@ -1057,9 +1057,9 @@ fn path_to_expr_help<'a>(
                     wrapped: Wrapped::SingleElementRecord,
                 };
 
-                symbol = env.unique_symbol();
-                let inner_layout = layout;
-                stores.push((symbol, inner_layout, inner_expr));
+                // symbol = env.unique_symbol();
+                // let inner_layout = layout;
+                // stores.push((symbol, inner_layout, inner_expr));
 
                 break;
             }
