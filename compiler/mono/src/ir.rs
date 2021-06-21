@@ -1016,7 +1016,6 @@ pub enum Literal<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Wrapped {
-    EmptyRecord,
     SingleElementRecord,
     RecordOrSingleTagUnion,
 }
@@ -1036,7 +1035,7 @@ impl Wrapped {
     pub fn opt_from_layout(layout: &Layout<'_>) -> Option<Self> {
         match layout {
             Layout::Struct(fields) => match fields.len() {
-                0 => Some(Wrapped::EmptyRecord),
+                0 => unreachable!(),
                 1 => Some(Wrapped::SingleElementRecord),
                 _ => Some(Wrapped::RecordOrSingleTagUnion),
             },
@@ -1048,7 +1047,7 @@ impl Wrapped {
                     Recursive(tags) | NonRecursive(tags) => match tags {
                         [] => todo!("how to handle empty tag unions?"),
                         [single] => match single.len() {
-                            0 => Some(Wrapped::EmptyRecord),
+                            0 => unreachable!(),
                             1 => Some(Wrapped::SingleElementRecord),
                             _ => Some(Wrapped::RecordOrSingleTagUnion),
                         },
