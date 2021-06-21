@@ -5674,7 +5674,9 @@ fn store_tag_pattern<'a>(
 ) -> StorePattern<'a> {
     use Pattern::*;
 
-    let write_tag = union_layout.stores_tag();
+    // rosetree-like structures don't store the tag ID, the others do from the perspective of the IR
+    // The backend can make different choices there (and will, for UnionLayout::NullableUnwrapped)
+    let write_tag = !matches!(union_layout, UnionLayout::NonNullableUnwrapped(_));
 
     let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
     let mut is_productive = false;

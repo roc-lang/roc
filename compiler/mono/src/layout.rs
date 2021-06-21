@@ -107,32 +107,19 @@ impl<'a> UnionLayout<'a> {
     }
 
     pub fn layout_at(self, tag_id: u8, index: usize) -> Layout<'a> {
-        match self {
+        let result = match self {
             UnionLayout::NonRecursive(tag_layouts) => {
                 let field_layouts = tag_layouts[tag_id as usize];
 
-                field_layouts[index]
+                // this cannot be recursive; return immediately
+                return field_layouts[index];
             }
             UnionLayout::Recursive(tag_layouts) => {
                 let field_layouts = tag_layouts[tag_id as usize];
 
-                let result = field_layouts[index];
-
-                if let Layout::RecursivePointer = result {
-                    Layout::Union(self)
-                } else {
-                    result
-                }
+                field_layouts[index]
             }
-            UnionLayout::NonNullableUnwrapped(field_layouts) => {
-                let result = field_layouts[index];
-
-                if let Layout::RecursivePointer = result {
-                    Layout::Union(self)
-                } else {
-                    result
-                }
-            }
+            UnionLayout::NonNullableUnwrapped(field_layouts) => field_layouts[index],
             UnionLayout::NullableWrapped {
                 nullable_id,
                 other_tags,
@@ -146,13 +133,7 @@ impl<'a> UnionLayout<'a> {
                 };
 
                 let field_layouts = other_tags[tag_index as usize];
-                let result = field_layouts[index];
-
-                if let Layout::RecursivePointer = result {
-                    Layout::Union(self)
-                } else {
-                    result
-                }
+                field_layouts[index]
             }
 
             UnionLayout::NullableUnwrapped {
@@ -161,24 +142,14 @@ impl<'a> UnionLayout<'a> {
             } => {
                 debug_assert_ne!(nullable_id, tag_id != 0);
 
-                let result = other_fields[index as usize];
-
-                if let Layout::RecursivePointer = result {
-                    Layout::Union(self)
-                } else {
-                    result
-                }
+                other_fields[index as usize]
             }
-        }
-    }
+        };
 
-    pub fn stores_tag(&self) -> bool {
-        match self {
-            UnionLayout::NonRecursive(_) => true,
-            UnionLayout::Recursive(_) => true,
-            UnionLayout::NonNullableUnwrapped(_) => false,
-            UnionLayout::NullableWrapped { .. } => true,
-            UnionLayout::NullableUnwrapped { .. } => true,
+        if let Layout::RecursivePointer = result {
+            Layout::Union(self)
+        } else {
+            result
         }
     }
 }
