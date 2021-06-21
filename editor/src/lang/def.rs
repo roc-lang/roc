@@ -79,7 +79,7 @@ impl ShallowClone for Def {
 /// but no Expr canonicalization has happened yet. Also, it has had spaces
 /// and nesting resolved, and knows whether annotations are standalone or not.
 #[derive(Debug)]
-enum PendingDef<'a> {
+pub enum PendingDef<'a> {
     /// A standalone annotation with no body
     AnnotationOnly(
         &'a Located<ast::Pattern<'a>>,
