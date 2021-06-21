@@ -1,11 +1,16 @@
 #![allow(clippy::all)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
+use std::collections::HashMap;
+
 use crate::lang::ast::expr2_to_string;
 use crate::lang::ast::RecordField;
 use crate::lang::ast::{ClosureExtra, Expr2, ExprId, FloatVal, IntStyle, IntVal, WhenBranch};
-use crate::lang::def::References;
-use crate::lang::pattern::to_pattern2;
+use crate::lang::def::canonicalize_defs;
+use crate::lang::def::sort_can_defs;
+use crate::lang::def::Def;
+use crate::lang::def::{CanDefs, PendingDef, References};
+use crate::lang::pattern::{to_pattern2, Pattern2};
 use crate::lang::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
 use crate::lang::scope::Scope;
 use crate::lang::types::{Alias, Type2, TypeId};
@@ -13,7 +18,10 @@ use bumpalo::Bump;
 use inlinable_string::InlinableString;
 use roc_can::expr::Recursive;
 use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
+use roc_can::operator::desugar_expr;
+use roc_collections::all::default_hasher;
 use roc_collections::all::{MutMap, MutSet};
+use roc_module::ident::Lowercase;
 use roc_module::ident::ModuleName;
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
@@ -21,14 +29,69 @@ use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast;
 use roc_parse::ast::StrLiteral;
 use roc_parse::parser::{loc, Parser, State, SyntaxError};
+use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
+
+use super::def::Declaration;
+use super::pattern::PatternId;
+use super::types::Annotation2;
+
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct IntroducedVariables {
+    // NOTE on rigids
+    //
+    // Rigids must be unique within a type annoation.
+    // E.g. in `identity : a -> a`, there should only be one
+    // variable (a rigid one, with name "a").
+    // Hence `rigids : ImMap<Lowercase, Variable>`
+    //
+    // But then between annotations, the same name can occur multiple times,
+    // but a variable can only have one name. Therefore
+    // `ftv : SendMap<Variable, Lowercase>`.
+    pub wildcards: Vec<Variable>,
+    pub var_by_name: MutMap<Lowercase, Variable>,
+    pub name_by_var: MutMap<Variable, Lowercase>,
+    pub host_exposed_aliases: MutMap<Symbol, Variable>,
+}
+
+impl IntroducedVariables {
+    pub fn insert_named(&mut self, name: Lowercase, var: Variable) {
+        self.var_by_name.insert(name.clone(), var);
+        self.name_by_var.insert(var, name);
+    }
+
+    pub fn insert_wildcard(&mut self, var: Variable) {
+        self.wildcards.push(var);
+    }
+
+    pub fn insert_host_exposed_alias(&mut self, symbol: Symbol, var: Variable) {
+        self.host_exposed_aliases.insert(symbol, var);
+    }
+
+    pub fn union(&mut self, other: &Self) {
+        self.wildcards.extend(other.wildcards.iter().cloned());
+        self.var_by_name.extend(other.var_by_name.clone());
+        self.name_by_var.extend(other.name_by_var.clone());
+        self.host_exposed_aliases
+            .extend(other.host_exposed_aliases.clone());
+    }
+
+    pub fn var_by_name(&self, name: &Lowercase) -> Option<&Variable> {
+        self.var_by_name.get(name)
+    }
+
+    pub fn name_by_var(&self, var: Variable) -> Option<&Lowercase> {
+        self.name_by_var.get(&var)
+    }
+}
 
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct Output {
     pub references: References,
     pub tail_call: Option<Symbol>,
+    pub introduced_variables: IntroducedVariables,
     pub aliases: MutMap<Symbol, NodeId<Alias>>,
     pub non_closures: MutSet<Symbol>,
 }
@@ -236,7 +299,16 @@ pub fn str_to_expr2<'a>(
     region: Region,
 ) -> Result<(Expr2, self::Output), SyntaxError<'a>> {
     match roc_parse::test_helpers::parse_loc_with(arena, input.trim()) {
-        Ok(loc_expr) => Ok(to_expr2(env, scope, arena.alloc(loc_expr.value), region)),
+        Ok(loc_expr) => {
+            let desugared_loc_expr = desugar_expr(arena, arena.alloc(loc_expr));
+
+            Ok(to_expr2(
+                env,
+                scope,
+                arena.alloc(desugared_loc_expr.value),
+                region,
+            ))
+        }
         Err(fail) => Err(fail),
     }
 }
@@ -780,7 +852,50 @@ pub fn to_expr2<'a>(
         }
 
         Defs(loc_defs, loc_ret) => {
-            todo!("{:?} {:?}", loc_defs, loc_ret)
+            let (unsorted, mut scope, defs_output, symbols_introduced) = canonicalize_defs(
+                env,
+                Output::default(),
+                &scope,
+                loc_defs,
+                PatternType::DefExpr,
+            );
+
+            // The def as a whole is a tail call iff its return expression is a tail call.
+            // Use its output as a starting point because its tail_call already has the right answer!
+            let (ret_expr, mut output) = to_expr2(env, &mut scope, &loc_ret.value, loc_ret.region);
+
+            output
+                .introduced_variables
+                .union(&defs_output.introduced_variables);
+
+            output.references.union_mut(defs_output.references);
+
+            // Now that we've collected all the references, check to see if any of the new idents
+            // we defined went unused by the return expression. If any were unused, report it.
+            for (symbol, region) in symbols_introduced {
+                if !output.references.has_lookup(symbol) {
+                    env.problem(Problem::UnusedDef(symbol, region));
+                }
+            }
+
+            let (can_defs, output) = sort_can_defs(env, unsorted, output);
+
+            match can_defs {
+                Ok(decls) => {
+                    let mut expr = ret_expr;
+
+                    for declaration in decls.into_iter().rev() {
+                        expr = decl_to_let(env.pool, env.var_store, declaration, expr);
+                    }
+
+                    (expr, output)
+                }
+                Err(_err) => {
+                    // TODO: fix this to be something from Expr2
+                    // (RuntimeError(err), output)
+                    todo!()
+                }
+            }
         }
 
         PrecedenceConflict { .. } => {
@@ -1293,4 +1408,60 @@ fn canonicalize_lookup(
     // If it's valid, this ident should be in scope already.
 
     (can_expr, output)
+}
+
+fn decl_to_let(pool: &mut Pool, var_store: &mut VarStore, decl: Declaration, ret: Expr2) -> Expr2 {
+    match decl {
+        Declaration::Declare(def) => match def {
+            Def::AnnotationOnly { .. } => todo!(),
+            Def::Value(value_def) => {
+                let def_id = pool.add(value_def);
+                let body_id = pool.add(ret);
+
+                Expr2::LetValue {
+                    def_id,
+                    body_id,
+                    body_var: var_store.fresh(),
+                }
+            }
+            Def::Function(function_def) => {
+                let def_id = pool.add(function_def);
+                let body_id = pool.add(ret);
+
+                Expr2::LetFunction {
+                    def_id,
+                    body_id,
+                    body_var: var_store.fresh(),
+                }
+            }
+        },
+        Declaration::DeclareRec(defs) => {
+            let mut function_defs = vec![];
+
+            for def in defs {
+                match def {
+                    Def::AnnotationOnly { .. } => todo!(),
+                    Def::Function(function_def) => function_defs.push(function_def),
+                    Def::Value(_) => unreachable!(),
+                }
+            }
+
+            let body_id = pool.add(ret);
+
+            Expr2::LetRec {
+                defs: PoolVec::new(function_defs.into_iter(), pool),
+                body_var: var_store.fresh(),
+                body_id,
+            }
+        }
+        Declaration::InvalidCycle(_entries, _) => {
+            // TODO: replace with something from Expr2
+            // Expr::RuntimeError(RuntimeError::CircularDef(entries))
+            todo!()
+        }
+        Declaration::Builtin(_) => {
+            // Builtins should only be added to top-level decls, not to let-exprs!
+            unreachable!()
+        }
+    }
 }
