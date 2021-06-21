@@ -390,10 +390,10 @@ impl<'a> LambdaSet<'a> {
         use crate::ir::Wrapped;
 
         match self.representation {
-            Layout::Struct(fields) if fields.len() == 1 => Wrapped::SingleElementRecord,
+            Layout::Struct(fields) if fields.len() == 1 => unreachable!(),
             Layout::Struct(_) => Wrapped::RecordOrSingleTagUnion,
             Layout::Union(_) => unreachable!(),
-            _ => Wrapped::SingleElementRecord,
+            _ => unreachable!(),
         }
     }
 

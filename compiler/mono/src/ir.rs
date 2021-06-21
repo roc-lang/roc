@@ -1016,7 +1016,6 @@ pub enum Literal<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Wrapped {
-    SingleElementRecord,
     RecordOrSingleTagUnion,
 }
 
@@ -1036,7 +1035,7 @@ impl Wrapped {
         match layout {
             Layout::Struct(fields) => match fields.len() {
                 0 => unreachable!(),
-                1 => Some(Wrapped::SingleElementRecord),
+                1 => unreachable!(),
                 _ => Some(Wrapped::RecordOrSingleTagUnion),
             },
 
@@ -1048,7 +1047,7 @@ impl Wrapped {
                         [] => todo!("how to handle empty tag unions?"),
                         [single] => match single.len() {
                             0 => unreachable!(),
-                            1 => Some(Wrapped::SingleElementRecord),
+                            1 => unreachable!(),
                             _ => Some(Wrapped::RecordOrSingleTagUnion),
                         },
                         _ => {
@@ -5895,15 +5894,12 @@ fn store_record_destruct<'a>(
 ) -> StorePattern<'a> {
     use Pattern::*;
 
-    // let wrapped = Wrapped::from_layout(&Layout::Struct(sorted_fields));
-    let wrapped = Wrapped::RecordOrSingleTagUnion;
-
     // TODO wrapped could be SingleElementRecord
     let load = Expr::AccessAtIndex {
         index,
         field_layouts: sorted_fields,
         structure: outer_symbol,
-        wrapped,
+        wrapped: Wrapped::RecordOrSingleTagUnion,
     };
 
     match &destruct.typ {

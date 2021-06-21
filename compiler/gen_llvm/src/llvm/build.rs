@@ -1426,18 +1426,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         AccessAtIndex {
             index,
             structure,
-            wrapped: Wrapped::SingleElementRecord,
-            field_layouts,
-            ..
-        } => {
-            debug_assert_eq!(field_layouts.len(), 1);
-            debug_assert_eq!(*index, 0);
-            load_symbol(scope, structure)
-        }
-
-        AccessAtIndex {
-            index,
-            structure,
             wrapped: Wrapped::RecordOrSingleTagUnion,
             ..
         } => {

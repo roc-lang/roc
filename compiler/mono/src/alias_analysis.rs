@@ -885,10 +885,6 @@ fn expr_spec(
             let value_id = env.symbols[structure];
 
             match wrapped {
-                Wrapped::SingleElementRecord => {
-                    // builder.add_get_tuple_field(block, value_id, *index as u32)
-                    Ok(env.symbols[structure])
-                }
                 Wrapped::RecordOrSingleTagUnion => {
                     builder.add_get_tuple_field(block, value_id, *index as u32)
                 }
