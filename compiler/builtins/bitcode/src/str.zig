@@ -197,8 +197,8 @@ pub const RocStr = extern struct {
         return result;
     }
 
+    // NOTE: returns false for empty string!
     pub fn isSmallStr(self: RocStr) bool {
-        // NOTE: returns False for empty string!
         return @bitCast(isize, self.str_len) < 0;
     }
 
