@@ -1062,13 +1062,14 @@ impl Wrapped {
                             1 => Some(Wrapped::SingleElementRecord),
                             _ => Some(Wrapped::RecordOrSingleTagUnion),
                         },
-                        _ => Some(Wrapped::MultiTagUnion),
+                        _ => {
+                            unreachable!()
+                        }
                     },
                     NonNullableUnwrapped(_) => Some(Wrapped::LikeARoseTree),
 
                     NullableWrapped { .. } | NullableUnwrapped { .. } => {
-                        todo!();
-                        Some(Wrapped::MultiTagUnion)
+                        unreachable!();
                     }
                 }
             }
