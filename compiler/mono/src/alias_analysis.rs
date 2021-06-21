@@ -900,17 +900,6 @@ fn expr_spec(
                     let result_type = layout_spec(builder, layout)?;
                     builder.add_unknown_with(block, &[value_id], result_type)
                 }
-                Wrapped::MultiTagUnion => {
-                    // Clearly this is not generally correct, but it should be for our examples
-                    // let hacky_is_recursive = field_layouts.iter().any(|l| l == &Layout::RecursivePointer);
-                    // if hacky_is_recursive {
-
-                    // we don't know what constructor we are at this point, so how can we get a
-                    // field from an enum value?
-
-                    let result_type = layout_spec(builder, layout)?;
-                    builder.add_unknown_with(block, &[value_id], result_type)
-                }
             }
         }
         Array { elem_layout, elems } => {

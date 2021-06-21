@@ -1021,7 +1021,6 @@ pub enum Wrapped {
     RecordOrSingleTagUnion,
     /// Like a rose tree; recursive, but only one tag
     LikeARoseTree,
-    MultiTagUnion,
 }
 
 impl Wrapped {
@@ -1033,14 +1032,7 @@ impl Wrapped {
     }
 
     pub fn is_indexable(layout: &Layout<'_>) -> bool {
-        match layout {
-            Layout::Struct(fields) => match fields.len() {
-                _ => true,
-            },
-
-            Layout::Union(variant) => true,
-            _ => false,
-        }
+        matches!(layout, Layout::Struct(_) | Layout::Union(_))
     }
 
     pub fn opt_from_layout(layout: &Layout<'_>) -> Option<Self> {
@@ -2140,8 +2132,6 @@ fn specialize_external<'a>(
             match (opt_closure_layout, captured_symbols) {
                 (Some(closure_layout), CapturedSymbols::Captured(captured)) => {
                     // debug_assert!(!captured.is_empty());
-
-                    let wrapped = closure_layout.get_wrapped();
 
                     match closure_layout.layout_for_member(proc_name) {
                         ClosureRepresentation::Union {

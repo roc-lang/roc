@@ -191,7 +191,7 @@ impl<'a, 'i> Env<'a, 'i> {
 
         Symbol::new(self.home, ident_id)
     }
-
+    #[allow(dead_code)]
     fn manual_unique_symbol(home: ModuleId, ident_ids: &mut IdentIds) -> Symbol {
         let ident_id = ident_ids.gen_unique();
 
@@ -302,11 +302,13 @@ fn work_for_constructor<'a>(
                             // we have to extract it now, but we only extract it
                             // if at least one field is aliased.
 
+                            todo!("get the tag id");
+                            /*
                             let expr = Expr::AccessAtIndex {
                                 index: i as u64,
                                 field_layouts: constructor_layout,
                                 structure: *symbol,
-                                wrapped: Wrapped::MultiTagUnion,
+                                wrapped: todo!("get the tag id"),
                             };
 
                             // create a fresh symbol for this field
@@ -320,6 +322,7 @@ fn work_for_constructor<'a>(
 
                             env.deferred.assignments.push((alias_symbol, expr, layout));
                             result.push(alias_symbol);
+                            */
                         }
                         None => {
                             // if all refcounted fields were unaliased, generate a normal decrement

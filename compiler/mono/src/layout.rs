@@ -392,7 +392,7 @@ impl<'a> LambdaSet<'a> {
         match self.representation {
             Layout::Struct(fields) if fields.len() == 1 => Wrapped::SingleElementRecord,
             Layout::Struct(_) => Wrapped::RecordOrSingleTagUnion,
-            Layout::Union(_) => Wrapped::MultiTagUnion,
+            Layout::Union(_) => unreachable!(),
             _ => Wrapped::SingleElementRecord,
         }
     }
