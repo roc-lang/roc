@@ -5641,8 +5641,6 @@ fn store_pattern_help<'a>(
 
                 let layout = Layout::Struct(fields.into_bump_slice());
 
-                let wrapped = Wrapped::from_layout(&layout);
-
                 return store_newtype_pattern(
                     env,
                     procs,
@@ -5650,7 +5648,6 @@ fn store_pattern_help<'a>(
                     outer_symbol,
                     &layout,
                     &arguments,
-                    wrapped,
                     stmt,
                 );
             }
@@ -5671,6 +5668,25 @@ fn store_pattern_help<'a>(
                 *tag_id,
                 stmt,
             );
+        }
+        RecordDestructure(destructs, [_single_field]) => {
+            for destruct in destructs {
+                match &destruct.typ {
+                    DestructType::Required(symbol) => {
+                        substitute_in_exprs(env.arena, &mut stmt, *symbol, outer_symbol);
+                    }
+                    DestructType::Guard(guard_pattern) => {
+                        return store_pattern_help(
+                            env,
+                            procs,
+                            layout_cache,
+                            guard_pattern,
+                            outer_symbol,
+                            stmt,
+                        );
+                    }
+                }
+            }
         }
         RecordDestructure(destructs, sorted_fields) => {
             let mut is_productive = false;
@@ -5798,7 +5814,6 @@ fn store_newtype_pattern<'a>(
     structure: Symbol,
     layout: &Layout<'a>,
     arguments: &[(Pattern<'a>, Layout<'a>)],
-    wrapped: Wrapped,
     mut stmt: Stmt<'a>,
 ) -> StorePattern<'a> {
     use Pattern::*;
@@ -5818,7 +5833,7 @@ fn store_newtype_pattern<'a>(
         }
 
         let load = Expr::AccessAtIndex {
-            wrapped,
+            wrapped: Wrapped::RecordOrSingleTagUnion,
             index: index as u64,
             field_layouts: arg_layouts.clone().into_bump_slice(),
             structure,
@@ -5880,7 +5895,8 @@ fn store_record_destruct<'a>(
 ) -> StorePattern<'a> {
     use Pattern::*;
 
-    let wrapped = Wrapped::from_layout(&Layout::Struct(sorted_fields));
+    // let wrapped = Wrapped::from_layout(&Layout::Struct(sorted_fields));
+    let wrapped = Wrapped::RecordOrSingleTagUnion;
 
     // TODO wrapped could be SingleElementRecord
     let load = Expr::AccessAtIndex {
