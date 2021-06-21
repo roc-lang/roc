@@ -231,24 +231,7 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
                         }
                     }
 
-                    // Run the compiled app
-                    let exit_status = cmd
-                        .current_dir(original_cwd)
-                        .spawn()
-                        .unwrap_or_else(|err| panic!("Failed to run app after building it: {:?}", err))
-                        .wait()
-                        .expect("TODO gracefully handle block_on failing when roc run spawns a subprocess for the compiled app");
-
-                    // `roc run` exits with the same status code as the app it ran.
-                    //
-                    // If you want to know whether there were compilation problems
-                    // via status code, use either `roc build` or `roc check` instead!
-                    match exit_status.code() {
-                        Some(code) => Ok(code),
-                        None => {
-                            todo!("TODO gracefully handle the roc run subprocess terminating with a signal.");
-                        }
-                    }
+                    roc_run(cmd.current_dir(original_cwd))
                 }
             }
         }
@@ -259,6 +242,40 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
         }
         Err(other) => {
             panic!("build_file failed with error:\n{:?}", other);
+        }
+    }
+}
+
+#[cfg(target_family = "unix")]
+fn roc_run(cmd: &mut Command) -> io::Result<i32> {
+    use std::os::unix::process::CommandExt;
+
+    // This is much faster than spawning a subprocess if we're on a UNIX system!
+    let err = cmd.exec();
+
+    // If exec actually returned, it was definitely an error! (Otherwise,
+    // this process would have been replaced by the other one, and we'd
+    // never actually reach this line of code.)
+    Err(err)
+}
+
+#[cfg(not(target_family = "unix"))]
+fn roc_run(cmd: &mut Command) -> io::Result<i32> {
+    // Run the compiled app
+    let exit_status = cmd
+                        .spawn()
+                        .unwrap_or_else(|err| panic!("Failed to run app after building it: {:?}", err))
+                        .wait()
+                        .expect("TODO gracefully handle block_on failing when roc run spawns a subprocess for the compiled app");
+
+    // `roc run` exits with the same status code as the app it ran.
+    //
+    // If you want to know whether there were compilation problems
+    // via status code, use either `roc build` or `roc check` instead!
+    match exit_status.code() {
+        Some(code) => Ok(code),
+        None => {
+            todo!("TODO gracefully handle the roc run subprocess terminating with a signal.");
         }
     }
 }
