@@ -240,8 +240,6 @@ pub const RocStr = extern struct {
     }
 
     pub fn asSlice(self: RocStr) []u8 {
-        // Since this conditional would be prone to branch misprediction,
-        // make sure it will compile to a cmov.
         return self.asU8ptr()[0..self.len()];
     }
 
