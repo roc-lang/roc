@@ -1423,8 +1423,14 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         Reuse { .. } => todo!(),
 
         StructAtIndex {
-            index, structure, ..
+            index,
+            structure,
+            field_layouts,
         } => {
+            // if you hit this: we unwrap 1-element records, so instead of `x = StructAtIndex 0 y`
+            // you should substitute `x` with `y` in the remainder of the statement
+            debug_assert!(field_layouts.len() > 1, "one-element records are unwrapped");
+
             // extract field from a record
             match load_symbol_and_layout(scope, structure) {
                 (StructValue(argument), Layout::Struct(fields)) => {
