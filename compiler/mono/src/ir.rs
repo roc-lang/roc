@@ -1014,58 +1014,6 @@ pub enum Literal<'a> {
     Byte(u8),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Wrapped {
-    RecordOrSingleTagUnion,
-}
-
-impl Wrapped {
-    pub fn from_layout(layout: &Layout<'_>) -> Self {
-        match Self::opt_from_layout(layout) {
-            Some(result) => result,
-            None => unreachable!("not an indexable type {:?}", layout),
-        }
-    }
-
-    pub fn is_indexable(layout: &Layout<'_>) -> bool {
-        matches!(layout, Layout::Struct(_) | Layout::Union(_))
-    }
-
-    pub fn opt_from_layout(layout: &Layout<'_>) -> Option<Self> {
-        match layout {
-            Layout::Struct(fields) => match fields.len() {
-                0 => unreachable!(),
-                1 => unreachable!(),
-                _ => Some(Wrapped::RecordOrSingleTagUnion),
-            },
-
-            Layout::Union(variant) => {
-                use UnionLayout::*;
-
-                match variant {
-                    Recursive(tags) | NonRecursive(tags) => match tags {
-                        [] => todo!("how to handle empty tag unions?"),
-                        [single] => match single.len() {
-                            0 => unreachable!(),
-                            1 => unreachable!(),
-                            _ => Some(Wrapped::RecordOrSingleTagUnion),
-                        },
-                        _ => {
-                            unreachable!()
-                        }
-                    },
-                    NonNullableUnwrapped(_) => unreachable!(),
-
-                    NullableWrapped { .. } | NullableUnwrapped { .. } => {
-                        unreachable!();
-                    }
-                }
-            }
-            _ => None,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Call<'a> {
     pub call_type: CallType<'a>,
@@ -1190,7 +1138,6 @@ pub enum Expr<'a> {
         index: u64,
         field_layouts: &'a [Layout<'a>],
         structure: Symbol,
-        wrapped: Wrapped,
     },
 
     GetTagId {
@@ -2177,7 +2124,6 @@ fn specialize_external<'a>(
                                         index: index as _,
                                         field_layouts,
                                         structure: Symbol::ARG_CLOSURE,
-                                        wrapped: Wrapped::RecordOrSingleTagUnion,
                                     };
 
                                     let layout = field_layouts[index];
@@ -3479,7 +3425,6 @@ pub fn with_hole<'a>(
                         index: index.expect("field not in its own type") as u64,
                         field_layouts: field_layouts.into_bump_slice(),
                         structure: record_symbol,
-                        wrapped: Wrapped::RecordOrSingleTagUnion,
                     };
 
                     let layout = layout_cache
@@ -3683,7 +3628,6 @@ pub fn with_hole<'a>(
                                 structure,
                                 index,
                                 field_layouts,
-                                wrapped: Wrapped::RecordOrSingleTagUnion,
                             };
                             stmt =
                                 Stmt::Let(*symbol, access_expr, *field_layout, arena.alloc(stmt));
@@ -5542,12 +5486,10 @@ fn substitute_in_expr<'a>(
             index,
             structure,
             field_layouts,
-            wrapped,
         } => match substitute(subs, *structure) {
             Some(structure) => Some(StructAtIndex {
                 index: *index,
                 field_layouts: *field_layouts,
-                wrapped: *wrapped,
                 structure,
             }),
             None => None,
@@ -5832,7 +5774,6 @@ fn store_newtype_pattern<'a>(
         }
 
         let load = Expr::StructAtIndex {
-            wrapped: Wrapped::RecordOrSingleTagUnion,
             index: index as u64,
             field_layouts: arg_layouts.clone().into_bump_slice(),
             structure,
@@ -5894,12 +5835,10 @@ fn store_record_destruct<'a>(
 ) -> StorePattern<'a> {
     use Pattern::*;
 
-    // TODO wrapped could be SingleElementRecord
     let load = Expr::StructAtIndex {
         index,
         field_layouts: sorted_fields,
         structure: outer_symbol,
-        wrapped: Wrapped::RecordOrSingleTagUnion,
     };
 
     match &destruct.typ {

@@ -386,17 +386,6 @@ impl<'a> LambdaSet<'a> {
         }
     }
 
-    pub fn get_wrapped(&self) -> crate::ir::Wrapped {
-        use crate::ir::Wrapped;
-
-        match self.representation {
-            Layout::Struct(fields) if fields.len() == 1 => unreachable!(),
-            Layout::Struct(_) => Wrapped::RecordOrSingleTagUnion,
-            Layout::Union(_) => unreachable!(),
-            _ => unreachable!(),
-        }
-    }
-
     pub fn stack_size(&self, pointer_size: u32) -> u32 {
         self.representation.stack_size(pointer_size)
     }

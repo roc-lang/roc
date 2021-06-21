@@ -50,7 +50,6 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
     BranchInfo, CallType, EntryPoint, ExceptionId, JoinPointId, ModifyRc, OptLevel, ProcLayout,
-    Wrapped,
 };
 use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, UnionLayout};
 
@@ -1424,10 +1423,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         Reuse { .. } => todo!(),
 
         StructAtIndex {
-            index,
-            structure,
-            wrapped: Wrapped::RecordOrSingleTagUnion,
-            ..
+            index, structure, ..
         } => {
             // extract field from a record
             match load_symbol_and_layout(scope, structure) {

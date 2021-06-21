@@ -875,20 +875,10 @@ fn expr_spec(
             }
         },
         StructAtIndex {
-            index,
-            field_layouts: _,
-            structure,
-            wrapped,
+            index, structure, ..
         } => {
-            use crate::ir::Wrapped;
-
             let value_id = env.symbols[structure];
-
-            match wrapped {
-                Wrapped::RecordOrSingleTagUnion => {
-                    builder.add_get_tuple_field(block, value_id, *index as u32)
-                }
-            }
+            builder.add_get_tuple_field(block, value_id, *index as u32)
         }
         Array { elem_layout, elems } => {
             let type_id = layout_spec(builder, elem_layout)?;

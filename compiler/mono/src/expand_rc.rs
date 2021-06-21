@@ -1,4 +1,4 @@
-use crate::ir::{BranchInfo, Expr, ModifyRc, Stmt, Wrapped};
+use crate::ir::{BranchInfo, Expr, ModifyRc, Stmt};
 use crate::layout::{Layout, UnionLayout};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -442,7 +442,6 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                         structure,
                         index,
                         field_layouts,
-                        wrapped,
                     } => {
                         let entry = env
                             .alias_map
@@ -451,11 +450,8 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
 
                         entry.insert(*index, symbol);
 
-                        // fixes https://github.com/rtfeldman/roc/issues/1099
-                        if matches!(wrapped, Wrapped::RecordOrSingleTagUnion) {
-                            env.layout_map
-                                .insert(*structure, Layout::Struct(field_layouts));
-                        }
+                        env.layout_map
+                            .insert(*structure, Layout::Struct(field_layouts));
 
                         // if the field is a struct, we know its constructor too!
                         let field_layout = &field_layouts[*index as usize];
