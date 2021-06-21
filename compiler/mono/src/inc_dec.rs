@@ -135,6 +135,12 @@ pub fn occurring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
         } => {
             result.insert(*symbol);
         }
+
+        CoerceToTagId {
+            structure: symbol, ..
+        } => {
+            result.insert(*symbol);
+        }
     }
 }
 
@@ -220,6 +226,10 @@ fn is_borrow_param(x: Symbol, ys: &[Symbol], ps: &[Param]) -> bool {
 fn consume_expr(m: &VarMap, e: &Expr<'_>) -> bool {
     match e {
         Expr::AccessAtIndex { structure: x, .. } => match m.get(x) {
+            Some(info) => info.consume,
+            None => true,
+        },
+        Expr::CoerceToTagId { structure: x, .. } => match m.get(x) {
             Some(info) => info.consume,
             None => true,
         },
@@ -737,17 +747,6 @@ impl<'a> Context<'a> {
                 self.arena.alloc(Stmt::Let(z, v, l, b)),
                 &b_live_vars,
             ),
-            AccessAtIndex { structure: x, .. } => {
-                let b = self.add_dec_if_needed(x, b, b_live_vars);
-                let info_x = self.get_var_info(x);
-                let b = if info_x.consume {
-                    self.add_inc(z, 1, b)
-                } else {
-                    b
-                };
-
-                self.arena.alloc(Stmt::Let(z, v, l, b))
-            }
 
             Call(crate::ir::Call {
                 call_type,
@@ -760,7 +759,31 @@ impl<'a> Context<'a> {
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
+            AccessAtIndex { structure: x, .. } => {
+                let b = self.add_dec_if_needed(x, b, b_live_vars);
+                let info_x = self.get_var_info(x);
+                let b = if info_x.consume {
+                    self.add_inc(z, 1, b)
+                } else {
+                    b
+                };
+
+                self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
+
             GetTagId { structure: x, .. } => {
+                let b = self.add_dec_if_needed(x, b, b_live_vars);
+                let info_x = self.get_var_info(x);
+                let b = if info_x.consume {
+                    self.add_inc(z, 1, b)
+                } else {
+                    b
+                };
+
+                self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
+
+            CoerceToTagId { structure: x, .. } => {
                 let b = self.add_dec_if_needed(x, b, b_live_vars);
                 let info_x = self.get_var_info(x);
                 let b = if info_x.consume {

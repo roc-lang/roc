@@ -11,7 +11,7 @@ procedure Test.0 ():
     let Test.16 = GetTagId Test.2;
     let Test.17 = lowlevel Eq Test.15 Test.16;
     if Test.17 then
-        let Test.11 = Index 1 Test.2;
+        let Test.11 = CoerceToTagId (Id 0) (Index 1) Test.2;
         inc Test.11;
         dec Test.2;
         let Test.12 = 0i64;

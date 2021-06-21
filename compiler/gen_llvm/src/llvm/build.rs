@@ -1596,6 +1596,121 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         EmptyArray => empty_polymorphic_list(env),
         Array { elem_layout, elems } => list_literal(env, scope, elem_layout, elems),
         RuntimeErrorFunction(_) => todo!(),
+
+        CoerceToTagId {
+            tag_id,
+            structure,
+            index,
+            union_layout,
+        } => {
+            let builder = env.builder;
+
+            // cast the argument bytes into the desired shape for this tag
+            let (argument, _structure_layout) = load_symbol_and_layout(scope, structure);
+
+            match union_layout {
+                UnionLayout::NonRecursive(tag_layouts) => {
+                    debug_assert!(argument.is_struct_value());
+                    let field_layouts = tag_layouts[*tag_id as usize];
+                    let struct_layout = Layout::Struct(field_layouts);
+
+                    let struct_type = basic_type_from_layout(env, &struct_layout);
+
+                    let struct_value = access_index_struct_value(
+                        builder,
+                        argument.into_struct_value(),
+                        struct_type.into_struct_type(),
+                    );
+
+                    let result = builder
+                        .build_extract_value(struct_value, *index as u32, "")
+                        .expect("desired field did not decode");
+
+                    result
+                }
+                UnionLayout::Recursive(tag_layouts) => {
+                    debug_assert!(argument.is_pointer_value());
+
+                    let field_layouts = tag_layouts[*tag_id as usize];
+                    let struct_layout = Layout::Struct(field_layouts);
+
+                    let struct_type = basic_type_from_layout(env, &struct_layout);
+
+                    lookup_at_index_ptr(
+                        env,
+                        field_layouts,
+                        *index as usize,
+                        argument.into_pointer_value(),
+                        struct_type.into_struct_type(),
+                        &struct_layout,
+                    )
+                }
+                UnionLayout::NonNullableUnwrapped(field_layouts) => {
+                    let struct_layout = Layout::Struct(&field_layouts);
+
+                    let struct_type = basic_type_from_layout(env, &struct_layout);
+
+                    lookup_at_index_ptr(
+                        env,
+                        field_layouts,
+                        *index as usize,
+                        argument.into_pointer_value(),
+                        struct_type.into_struct_type(),
+                        &struct_layout,
+                    )
+                }
+                UnionLayout::NullableWrapped {
+                    nullable_id,
+                    other_tags,
+                } => {
+                    debug_assert!(argument.is_pointer_value());
+                    debug_assert_ne!(*tag_id as i64, *nullable_id);
+
+                    let tag_index = if (*tag_id as i64) < *nullable_id {
+                        *tag_id
+                    } else {
+                        tag_id - 1
+                    };
+
+                    let field_layouts = other_tags[tag_index as usize];
+                    let struct_layout = Layout::Struct(field_layouts);
+
+                    let struct_type = basic_type_from_layout(env, &struct_layout);
+
+                    lookup_at_index_ptr(
+                        env,
+                        field_layouts,
+                        *index as usize,
+                        argument.into_pointer_value(),
+                        struct_type.into_struct_type(),
+                        &struct_layout,
+                    )
+                }
+                UnionLayout::NullableUnwrapped {
+                    nullable_id,
+                    other_fields,
+                } => {
+                    debug_assert!(argument.is_pointer_value());
+                    debug_assert_ne!(*tag_id != 0, *nullable_id);
+
+                    let field_layouts = &other_fields[1..];
+                    let struct_layout = Layout::Struct(field_layouts);
+
+                    let struct_type = basic_type_from_layout(env, &struct_layout);
+
+                    lookup_at_index_ptr(
+                        env,
+                        field_layouts,
+                        // the tag id is not stored
+                        *index as usize - 1,
+                        argument.into_pointer_value(),
+                        struct_type.into_struct_type(),
+                        &struct_layout,
+                    )
+                }
+            }
+        }
+
         GetTagId {
             structure,
             union_layout,
@@ -1705,7 +1820,8 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
         // a pointer to the block of memory representation
         builder.build_bitcast(
             result,
-            basic_type_from_layout(env, structure_layout),
+            block_of_memory(env.context, structure_layout, env.ptr_bytes)
+                .ptr_type(AddressSpace::Generic),
             "cast_rec_pointer_lookup_at_index_ptr",
         )
     } else {

@@ -1197,6 +1197,13 @@ pub enum Expr<'a> {
         union_layout: UnionLayout<'a>,
     },
 
+    CoerceToTagId {
+        structure: Symbol,
+        tag_id: u8,
+        union_layout: UnionLayout<'a>,
+        index: u64,
+    },
+
     Array {
         elem_layout: Layout<'a>,
         elems: &'a [Symbol],
@@ -1352,6 +1359,15 @@ impl<'a> Expr<'a> {
 
             GetTagId { structure, .. } => alloc
                 .text("GetTagId ")
+                .append(symbol_to_doc(alloc, *structure)),
+
+            CoerceToTagId {
+                tag_id,
+                structure,
+                index,
+                ..
+            } => alloc
+                .text(format!("CoerceToTagId (Id {}) (Index {}) ", tag_id, index))
                 .append(symbol_to_doc(alloc, *structure)),
         }
     }
@@ -5534,6 +5550,21 @@ fn substitute_in_expr<'a>(
             }),
             None => None,
         },
+
+        CoerceToTagId {
+            structure,
+            tag_id,
+            index,
+            union_layout,
+        } => match substitute(subs, *structure) {
+            Some(structure) => Some(CoerceToTagId {
+                structure,
+                tag_id: *tag_id,
+                index: *index,
+                union_layout: *union_layout,
+            }),
+            None => None,
+        },
     }
 }
 
@@ -5594,7 +5625,7 @@ fn store_pattern_help<'a>(
 
             let wrapped = Wrapped::from_layout(&layout);
 
-            return store_tag_pattern(
+            return store_newtype_pattern(
                 env,
                 procs,
                 layout_cache,
@@ -5606,7 +5637,10 @@ fn store_pattern_help<'a>(
             );
         }
         AppliedTag {
-            arguments, layout, ..
+            arguments,
+            layout,
+            tag_id,
+            ..
         } => {
             let union_layout = Layout::Union(*layout);
             let wrapped = Wrapped::from_layout(&union_layout);
@@ -5616,9 +5650,10 @@ fn store_pattern_help<'a>(
                 procs,
                 layout_cache,
                 outer_symbol,
-                &union_layout,
+                *layout,
                 &arguments,
                 wrapped,
+                *tag_id,
                 stmt,
             );
         }
@@ -5656,6 +5691,93 @@ fn store_pattern_help<'a>(
 
 #[allow(clippy::too_many_arguments)]
 fn store_tag_pattern<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    structure: Symbol,
+    union_layout: UnionLayout<'a>,
+    arguments: &[(Pattern<'a>, Layout<'a>)],
+    wrapped: Wrapped,
+    tag_id: u8,
+    mut stmt: Stmt<'a>,
+) -> StorePattern<'a> {
+    use Pattern::*;
+
+    let write_tag = wrapped == Wrapped::MultiTagUnion;
+
+    let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
+    let mut is_productive = false;
+
+    if write_tag {
+        // add an element for the tag discriminant
+        arg_layouts.push(Layout::Builtin(TAG_SIZE));
+    }
+
+    for (_, layout) in arguments {
+        arg_layouts.push(*layout);
+    }
+
+    for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
+        let index = if write_tag { index + 1 } else { index };
+
+        let mut arg_layout = *arg_layout;
+
+        if let Layout::RecursivePointer = arg_layout {
+            arg_layout = Layout::Union(union_layout);
+        }
+
+        let load = Expr::CoerceToTagId {
+            index: index as u64,
+            structure,
+            tag_id,
+            union_layout,
+        };
+
+        match argument {
+            Identifier(symbol) => {
+                // store immediately in the given symbol
+                stmt = Stmt::Let(*symbol, load, arg_layout, env.arena.alloc(stmt));
+                is_productive = true;
+            }
+            Underscore => {
+                // ignore
+            }
+            IntLiteral(_)
+            | FloatLiteral(_)
+            | EnumLiteral { .. }
+            | BitLiteral { .. }
+            | StrLiteral(_) => {}
+            _ => {
+                // store the field in a symbol, and continue matching on it
+                let symbol = env.unique_symbol();
+
+                // first recurse, continuing to unpack symbol
+                match store_pattern_help(env, procs, layout_cache, argument, symbol, stmt) {
+                    StorePattern::Productive(new) => {
+                        is_productive = true;
+                        stmt = new;
+                        // only if we bind one of its (sub)fields to a used name should we
+                        // extract the field
+                        stmt = Stmt::Let(symbol, load, arg_layout, env.arena.alloc(stmt));
+                    }
+                    StorePattern::NotProductive(new) => {
+                        // do nothing
+                        stmt = new;
+                    }
+                }
+            }
+        }
+    }
+
+    if is_productive {
+        StorePattern::Productive(stmt)
+    } else {
+        StorePattern::NotProductive(stmt)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn store_newtype_pattern<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,

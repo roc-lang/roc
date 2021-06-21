@@ -854,6 +854,26 @@ fn expr_spec(
             }
         },
         Struct(fields) => build_tuple_value(builder, env, block, fields),
+        CoerceToTagId {
+            index,
+            tag_id,
+            structure,
+            union_layout,
+        } => match union_layout {
+            UnionLayout::NonRecursive(_) => {
+                let tag_value_id = env.symbols[structure];
+                let tuple_value_id =
+                    builder.add_unwrap_union(block, tag_value_id, *tag_id as u32)?;
+
+                builder.add_get_tuple_field(block, tuple_value_id, *index as u32)
+            }
+            _ => {
+                // for the moment recursive tag unions don't quite work
+                let value_id = env.symbols[structure];
+                let result_type = layout_spec(builder, layout)?;
+                builder.add_unknown_with(block, &[value_id], result_type)
+            }
+        },
         AccessAtIndex {
             index,
             field_layouts: _,
