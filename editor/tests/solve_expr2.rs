@@ -300,3 +300,17 @@ fn constrain_when() {
         "[ Blue, Purple ]*",
     )
 }
+
+#[test]
+fn constrain_update() {
+    infer_eq(
+        indoc!(
+            r#"
+            thing = { name: "roc" }
+
+            { thing & name: "bird" } 
+            "#
+        ),
+        "{ name : Str }*",
+    )
+}
