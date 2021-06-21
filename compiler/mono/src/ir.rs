@@ -1032,6 +1032,17 @@ impl Wrapped {
         }
     }
 
+    pub fn is_indexable(layout: &Layout<'_>) -> bool {
+        match layout {
+            Layout::Struct(fields) => match fields.len() {
+                _ => true,
+            },
+
+            Layout::Union(variant) => true,
+            _ => false,
+        }
+    }
+
     pub fn opt_from_layout(layout: &Layout<'_>) -> Option<Self> {
         match layout {
             Layout::Struct(fields) => match fields.len() {
@@ -1056,6 +1067,7 @@ impl Wrapped {
                     NonNullableUnwrapped(_) => Some(Wrapped::LikeARoseTree),
 
                     NullableWrapped { .. } | NullableUnwrapped { .. } => {
+                        todo!();
                         Some(Wrapped::MultiTagUnion)
                     }
                 }
@@ -2133,6 +2145,8 @@ fn specialize_external<'a>(
                     match closure_layout.layout_for_member(proc_name) {
                         ClosureRepresentation::Union {
                             tag_layout: field_layouts,
+                            union_layout,
+                            tag_id,
                             ..
                         } => {
                             debug_assert_eq!(field_layouts.len() - 1, captured.len());
@@ -2143,11 +2157,11 @@ fn specialize_external<'a>(
                                 index += 1;
 
                                 // TODO therefore should the wrapped here not be RecordOrSingleTagUnion?
-                                let expr = Expr::AccessAtIndex {
-                                    index: index as _,
-                                    field_layouts,
+                                let expr = Expr::CoerceToTagId {
+                                    tag_id,
                                     structure: Symbol::ARG_CLOSURE,
-                                    wrapped,
+                                    index: index as _,
+                                    union_layout,
                                 };
 
                                 let layout = field_layouts[index];
@@ -4074,21 +4088,17 @@ fn construct_closure_data<'a>(
             tag_layout: _,
             union_size,
             tag_name,
+            union_layout,
         } => {
             let tag_id_symbol = env.unique_symbol();
             let mut tag_symbols = Vec::with_capacity_in(symbols.len() + 1, env.arena);
             tag_symbols.push(tag_id_symbol);
             tag_symbols.extend(symbols);
 
-            let tag_layout = match lambda_set.runtime_representation() {
-                Layout::Union(inner) => inner,
-                _ => unreachable!(),
-            };
-
             let expr1 = Expr::Literal(Literal::Int(tag_id as i128));
             let expr2 = Expr::Tag {
                 tag_id,
-                tag_layout,
+                tag_layout: union_layout,
                 union_size,
                 tag_name,
                 arguments: tag_symbols.into_bump_slice(),

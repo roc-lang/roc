@@ -22,13 +22,13 @@ procedure Test.1 (Test.2, Test.3):
     
 
 procedure Test.7 (Test.10, #Attr.12):
-    let Test.4 = Index 1 #Attr.12;
+    let Test.4 = CoerceToTagId (Id 0) (Index 1) #Attr.12;
     let Test.29 = CallByName Num.24 Test.10 Test.4;
     ret Test.29;
 
 procedure Test.8 (Test.11, #Attr.12):
-    let Test.6 = Index 2 #Attr.12;
-    let Test.5 = Index 1 #Attr.12;
+    let Test.6 = CoerceToTagId (Id 1) (Index 2) #Attr.12;
+    let Test.5 = CoerceToTagId (Id 1) (Index 1) #Attr.12;
     if Test.6 then
         let Test.24 = CallByName Num.26 Test.11 Test.5;
         ret Test.24;

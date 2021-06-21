@@ -1036,8 +1036,8 @@ fn path_to_expr_help<'a>(
     let mut it = instructions.iter().peekable();
 
     while let Some(PathInstruction { index, tag_id }) = it.next() {
-        match Wrapped::opt_from_layout(&layout) {
-            None => {
+        match Wrapped::is_indexable(&layout) {
+            false => {
                 // this MUST be an index into a single-element (hence unwrapped) record
 
                 debug_assert_eq!(*index, 0, "{:?}", &layout);
@@ -1063,7 +1063,7 @@ fn path_to_expr_help<'a>(
 
                 break;
             }
-            Some(wrapped) => {
+            true => {
                 let index = *index;
 
                 let (inner_layout, inner_expr) = match layout {
@@ -1078,6 +1078,7 @@ fn path_to_expr_help<'a>(
                         (union_layout.layout_at(*tag_id as u8, index as usize), expr)
                     }
                     Layout::Struct(field_layouts) => {
+                        let wrapped = Wrapped::opt_from_layout(&layout).unwrap();
                         debug_assert!(field_layouts.len() > 1);
                         debug_assert_eq!(wrapped, Wrapped::RecordOrSingleTagUnion);
 

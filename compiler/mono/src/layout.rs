@@ -200,6 +200,7 @@ pub enum ClosureRepresentation<'a> {
         tag_name: TagName,
         tag_id: u8,
         union_size: u8,
+        union_layout: UnionLayout<'a>,
     },
     /// the representation is anything but a union
     Other(Layout<'a>),
@@ -241,6 +242,7 @@ impl<'a> LambdaSet<'a> {
                             tag_id: index as u8,
                             tag_layout: tags[index],
                             tag_name: TagName::Closure(function_symbol),
+                            union_layout: *union,
                         }
                     }
                     UnionLayout::Recursive(_) => todo!("recursive closures"),
