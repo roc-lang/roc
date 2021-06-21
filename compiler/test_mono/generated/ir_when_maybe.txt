@@ -3,7 +3,7 @@ procedure Test.0 ():
     let Test.9 = 3i64;
     let Test.3 = Just Test.10 Test.9;
     let Test.6 = 0i64;
-    let Test.7 = Index 0 Test.3;
+    let Test.7 = GetTagId Test.3;
     let Test.8 = lowlevel Eq Test.6 Test.7;
     if Test.8 then
         let Test.2 = Index 1 Test.3;

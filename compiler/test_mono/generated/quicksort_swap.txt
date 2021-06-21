@@ -33,12 +33,12 @@ procedure Test.1 (Test.2):
     in
     let Test.23 = Index 1 Test.8;
     let Test.24 = 1i64;
-    let Test.25 = Index 0 Test.23;
+    let Test.25 = GetTagId Test.23;
     let Test.28 = lowlevel Eq Test.24 Test.25;
     if Test.28 then
         let Test.20 = Index 0 Test.8;
         let Test.21 = 1i64;
-        let Test.22 = Index 0 Test.20;
+        let Test.22 = GetTagId Test.20;
         let Test.27 = lowlevel Eq Test.21 Test.22;
         if Test.27 then
             let Test.18 = Index 0 Test.8;

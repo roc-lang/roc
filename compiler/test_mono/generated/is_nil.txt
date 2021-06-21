@@ -1,6 +1,6 @@
 procedure Test.2 (Test.3):
     let Test.12 = 1i64;
-    let Test.13 = Index 0 Test.3;
+    let Test.13 = GetTagId Test.3;
     let Test.14 = lowlevel Eq Test.12 Test.13;
     if Test.14 then
         let Test.10 = true;

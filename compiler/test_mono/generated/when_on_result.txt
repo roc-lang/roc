@@ -6,7 +6,7 @@ procedure Test.1 (Test.5):
         ret Test.3;
     in
     let Test.16 = 1i64;
-    let Test.17 = Index 0 Test.2;
+    let Test.17 = GetTagId Test.2;
     let Test.18 = lowlevel Eq Test.16 Test.17;
     if Test.18 then
         let Test.13 = Index 1 Test.2;

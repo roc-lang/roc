@@ -220,8 +220,7 @@ fn flatten<'a>(
         } if union.alternatives.len() == 1
             && !matches!(
                 layout,
-                Layout::Union(UnionLayout::NullableWrapped { .. })
-                    | Layout::Union(UnionLayout::NullableUnwrapped { .. })
+                UnionLayout::NullableWrapped { .. } | UnionLayout::NullableUnwrapped { .. }
             ) =>
         {
             // TODO ^ do we need to check that guard.is_none() here?
@@ -425,6 +424,21 @@ fn test_at_path<'a>(
                     });
                 }
 
+                NewtypeDestructure {
+                    tag_name,
+                    arguments,
+                } => {
+                    let tag_id = 0;
+                    let union = Union::newtype_wrapper(tag_name.clone(), arguments.len());
+
+                    all_tests.push(IsCtor {
+                        tag_id,
+                        tag_name: tag_name.clone(),
+                        union,
+                        arguments: arguments.to_vec(),
+                    });
+                }
+
                 AppliedTag {
                     tag_name,
                     tag_id,
@@ -565,6 +579,43 @@ fn to_relevant_branch_help<'a>(
             _ => None,
         },
 
+        NewtypeDestructure {
+            tag_name,
+            arguments,
+            ..
+        } => match test {
+            IsCtor {
+                tag_name: test_name,
+                tag_id: test_id,
+                ..
+            } if &tag_name == test_name => {
+                let tag_id = 0;
+                debug_assert_eq!(tag_id, *test_id);
+
+                let sub_positions =
+                    arguments
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, (pattern, _))| {
+                            let mut new_path = path.to_vec();
+                            new_path.push(PathInstruction {
+                                index: index as u64,
+                                tag_id,
+                            });
+                            (new_path, Guard::NoGuard, pattern)
+                        });
+                start.extend(sub_positions);
+                start.extend(end);
+
+                Some(Branch {
+                    goal: branch.goal,
+                    patterns: start,
+                })
+            }
+
+            _ => None,
+        },
+
         AppliedTag {
             tag_name,
             tag_id,
@@ -581,59 +632,60 @@ fn to_relevant_branch_help<'a>(
                     debug_assert_eq!(tag_id, *test_id);
 
                     // the test matches the constructor of this pattern
-
-                    match Wrapped::opt_from_layout(&layout) {
-                        None => todo!(),
-                        Some(wrapped) => {
-                            match wrapped {
-                                Wrapped::SingleElementRecord => {
-                                    // Theory: Unbox doesn't have any value for us
-                                    debug_assert_eq!(arguments.len(), 1);
-                                    let arg = arguments[0].clone();
-                                    {
-                                        // NOTE here elm unboxes, but we ignore that
-                                        // Path::Unbox(Box::new(path.clone()))
-                                        start.push((path.to_vec(), guard, arg.0));
-                                        start.extend(end);
-                                    }
-                                }
-                                Wrapped::RecordOrSingleTagUnion | Wrapped::LikeARoseTree => {
-                                    let sub_positions = arguments.into_iter().enumerate().map(
-                                        |(index, (pattern, _))| {
-                                            let mut new_path = path.to_vec();
-                                            new_path.push(PathInstruction {
-                                                index: index as u64,
-                                                tag_id,
-                                            });
-                                            (new_path, Guard::NoGuard, pattern)
-                                        },
-                                    );
-                                    start.extend(sub_positions);
-                                    start.extend(end);
-                                }
-                                Wrapped::MultiTagUnion => {
-                                    let sub_positions = arguments.into_iter().enumerate().map(
-                                        |(index, (pattern, _))| {
-                                            let mut new_path = path.to_vec();
-                                            new_path.push(PathInstruction {
-                                                index: 1 + index as u64,
-                                                tag_id,
-                                            });
-                                            (new_path, Guard::NoGuard, pattern)
-                                        },
-                                    );
-                                    start.extend(sub_positions);
-                                    start.extend(end);
-                                }
-                                Wrapped::EmptyRecord => todo!(),
+                    match layout {
+                        UnionLayout::NonRecursive([[Layout::Struct([_])]]) => {
+                            // a one-element record equivalent
+                            // Theory: Unbox doesn't have any value for us
+                            debug_assert_eq!(arguments.len(), 1);
+                            let arg = arguments[0].clone();
+                            {
+                                // NOTE here elm unboxes, but we ignore that
+                                // Path::Unbox(Box::new(path.clone()))
+                                start.push((path.to_vec(), guard, arg.0));
+                                start.extend(end);
                             }
-
-                            Some(Branch {
-                                goal: branch.goal,
-                                patterns: start,
-                            })
+                        }
+                        UnionLayout::NonRecursive([_]) | UnionLayout::NonNullableUnwrapped(_) => {
+                            let sub_positions =
+                                arguments
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(index, (pattern, _))| {
+                                        let mut new_path = path.to_vec();
+                                        new_path.push(PathInstruction {
+                                            index: index as u64,
+                                            tag_id,
+                                        });
+                                        (new_path, Guard::NoGuard, pattern)
+                                    });
+                            start.extend(sub_positions);
+                            start.extend(end);
+                        }
+                        UnionLayout::NonRecursive(_)
+                        | UnionLayout::Recursive(_)
+                        | UnionLayout::NullableWrapped { .. }
+                        | UnionLayout::NullableUnwrapped { .. } => {
+                            let sub_positions =
+                                arguments
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(index, (pattern, _))| {
+                                        let mut new_path = path.to_vec();
+                                        new_path.push(PathInstruction {
+                                            index: 1 + index as u64,
+                                            tag_id,
+                                        });
+                                        (new_path, Guard::NoGuard, pattern)
+                                    });
+                            start.extend(sub_positions);
+                            start.extend(end);
                         }
                     }
+
+                    Some(Branch {
+                        goal: branch.goal,
+                        patterns: start,
+                    })
                 }
                 _ => None,
             }
@@ -750,6 +802,7 @@ fn needs_tests(pattern: &Pattern) -> bool {
         Identifier(_) | Underscore => false,
 
         RecordDestructure(_, _)
+        | NewtypeDestructure { .. }
         | AppliedTag { .. }
         | BitLiteral { .. }
         | EnumLiteral { .. }
@@ -1108,58 +1161,45 @@ fn test_to_equality<'a>(
     Layout<'a>,
     Option<ConstructorKnown<'a>>,
 ) {
-    let (rhs_symbol, mut stores, _layout) =
+    let (rhs_symbol, mut stores, test_layout) =
         path_to_expr_help(env, cond_symbol, &path, *cond_layout);
 
     match test {
-        Test::IsCtor {
-            tag_id,
-            union,
-            arguments,
-            ..
-        } => {
+        Test::IsCtor { tag_id, union, .. } => {
             let path_symbol = rhs_symbol;
             // the IsCtor check should never be generated for tag unions of size 1
             // (e.g. record pattern guard matches)
             debug_assert!(union.alternatives.len() > 1);
 
-            let lhs = Expr::Literal(Literal::Int(tag_id as i128));
+            match test_layout {
+                Layout::Union(union_layout) => {
+                    let lhs = Expr::Literal(Literal::Int(tag_id as i128));
 
-            let mut field_layouts =
-                bumpalo::collections::Vec::with_capacity_in(arguments.len(), env.arena);
+                    let rhs = Expr::GetTagId {
+                        structure: path_symbol,
+                        union_layout,
+                    };
 
-            // add the tag discriminant
-            field_layouts.push(Layout::Builtin(Builtin::Int64));
+                    let lhs_symbol = env.unique_symbol();
+                    let rhs_symbol = env.unique_symbol();
 
-            for (_, layout) in arguments {
-                field_layouts.push(layout);
+                    stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
+                    stores.push((rhs_symbol, Layout::Builtin(Builtin::Int64), rhs));
+
+                    (
+                        stores,
+                        lhs_symbol,
+                        rhs_symbol,
+                        Layout::Builtin(Builtin::Int64),
+                        Some(ConstructorKnown::OnlyPass {
+                            scrutinee: path_symbol,
+                            layout: *cond_layout,
+                            tag_id,
+                        }),
+                    )
+                }
+                _ => unreachable!("{:?}", (cond_layout, union)),
             }
-            let field_layouts = field_layouts.into_bump_slice();
-
-            let rhs = Expr::AccessAtIndex {
-                index: 0,
-                field_layouts,
-                structure: path_symbol,
-                wrapped: Wrapped::MultiTagUnion,
-            };
-
-            let lhs_symbol = env.unique_symbol();
-            let rhs_symbol = env.unique_symbol();
-
-            stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
-            stores.push((rhs_symbol, Layout::Builtin(Builtin::Int64), rhs));
-
-            (
-                stores,
-                lhs_symbol,
-                rhs_symbol,
-                Layout::Builtin(Builtin::Int64),
-                Some(ConstructorKnown::OnlyPass {
-                    scrutinee: path_symbol,
-                    layout: *cond_layout,
-                    tag_id,
-                }),
-            )
         }
         Test::IsInt(test_int) => {
             // TODO don't downcast i128 here
@@ -1706,7 +1746,7 @@ fn decide_to_branching<'a>(
 
             // We have learned more about the exact layout of the cond (based on the path)
             // but tests are still relative to the original cond symbol
-            let mut switch = if let Layout::Union(_) = inner_cond_layout {
+            let mut switch = if let Layout::Union(union_layout) = inner_cond_layout {
                 let tag_id_symbol = env.unique_symbol();
 
                 let temp = Stmt::Switch {
@@ -1717,11 +1757,9 @@ fn decide_to_branching<'a>(
                     ret_layout,
                 };
 
-                let expr = Expr::AccessAtIndex {
-                    index: 0,
-                    field_layouts: &[Layout::TAG_SIZE],
+                let expr = Expr::GetTagId {
                     structure: inner_cond_symbol,
-                    wrapped: Wrapped::MultiTagUnion,
+                    union_layout,
                 };
 
                 Stmt::Let(tag_id_symbol, expr, Layout::TAG_SIZE, env.arena.alloc(temp))

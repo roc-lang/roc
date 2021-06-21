@@ -1192,6 +1192,11 @@ pub enum Expr<'a> {
         wrapped: Wrapped,
     },
 
+    GetTagId {
+        structure: Symbol,
+        union_layout: UnionLayout<'a>,
+    },
+
     Array {
         elem_layout: Layout<'a>,
         elems: &'a [Symbol],
@@ -1344,6 +1349,10 @@ impl<'a> Expr<'a> {
                 .append(symbol_to_doc(alloc, *structure)),
 
             RuntimeErrorFunction(s) => alloc.text(format!("ErrorFunction {}", s)),
+
+            GetTagId { structure, .. } => alloc
+                .text("GetTagId ")
+                .append(symbol_to_doc(alloc, *structure)),
         }
     }
 }
@@ -4168,7 +4177,7 @@ fn convert_tag_union<'a>(
             )
         }
 
-        Unwrapped {
+        Newtype {
             arguments: field_layouts,
             ..
         } => {
@@ -5514,6 +5523,17 @@ fn substitute_in_expr<'a>(
             }),
             None => None,
         },
+
+        GetTagId {
+            structure,
+            union_layout,
+        } => match substitute(subs, *structure) {
+            Some(structure) => Some(GetTagId {
+                structure,
+                union_layout: *union_layout,
+            }),
+            None => None,
+        },
     }
 }
 
@@ -5566,81 +5586,43 @@ fn store_pattern_help<'a>(
         | StrLiteral(_) => {
             return StorePattern::NotProductive(stmt);
         }
+        NewtypeDestructure { arguments, .. } => {
+            let mut fields = Vec::with_capacity_in(arguments.len(), env.arena);
+            fields.extend(arguments.iter().map(|x| x.1));
+
+            let layout = Layout::Struct(fields.into_bump_slice());
+
+            let wrapped = Wrapped::from_layout(&layout);
+
+            return store_tag_pattern(
+                env,
+                procs,
+                layout_cache,
+                outer_symbol,
+                &layout,
+                &arguments,
+                wrapped,
+                stmt,
+            );
+        }
         AppliedTag {
             arguments, layout, ..
         } => {
-            let wrapped = Wrapped::from_layout(layout);
-            let write_tag = wrapped == Wrapped::MultiTagUnion;
+            let union_layout = Layout::Union(*layout);
+            let wrapped = Wrapped::from_layout(&union_layout);
 
-            let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
-            let mut is_productive = false;
-
-            if write_tag {
-                // add an element for the tag discriminant
-                arg_layouts.push(Layout::Builtin(TAG_SIZE));
-            }
-
-            for (_, layout) in arguments {
-                arg_layouts.push(*layout);
-            }
-
-            for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
-                let index = if write_tag { index + 1 } else { index };
-
-                let mut arg_layout = arg_layout;
-
-                if let Layout::RecursivePointer = arg_layout {
-                    arg_layout = layout;
-                }
-
-                let load = Expr::AccessAtIndex {
-                    wrapped,
-                    index: index as u64,
-                    field_layouts: arg_layouts.clone().into_bump_slice(),
-                    structure: outer_symbol,
-                };
-
-                match argument {
-                    Identifier(symbol) => {
-                        // store immediately in the given symbol
-                        stmt = Stmt::Let(*symbol, load, *arg_layout, env.arena.alloc(stmt));
-                        is_productive = true;
-                    }
-                    Underscore => {
-                        // ignore
-                    }
-                    IntLiteral(_)
-                    | FloatLiteral(_)
-                    | EnumLiteral { .. }
-                    | BitLiteral { .. }
-                    | StrLiteral(_) => {}
-                    _ => {
-                        // store the field in a symbol, and continue matching on it
-                        let symbol = env.unique_symbol();
-
-                        // first recurse, continuing to unpack symbol
-                        match store_pattern_help(env, procs, layout_cache, argument, symbol, stmt) {
-                            StorePattern::Productive(new) => {
-                                is_productive = true;
-                                stmt = new;
-                                // only if we bind one of its (sub)fields to a used name should we
-                                // extract the field
-                                stmt = Stmt::Let(symbol, load, *arg_layout, env.arena.alloc(stmt));
-                            }
-                            StorePattern::NotProductive(new) => {
-                                // do nothing
-                                stmt = new;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if !is_productive {
-                return StorePattern::NotProductive(stmt);
-            }
+            return store_tag_pattern(
+                env,
+                procs,
+                layout_cache,
+                outer_symbol,
+                &union_layout,
+                &arguments,
+                wrapped,
+                stmt,
+            );
         }
-        RecordDestructure(destructs, Layout::Struct(sorted_fields)) => {
+        RecordDestructure(destructs, sorted_fields) => {
             let mut is_productive = false;
             for (index, destruct) in destructs.iter().enumerate().rev() {
                 match store_record_destruct(
@@ -5667,13 +5649,95 @@ fn store_pattern_help<'a>(
                 return StorePattern::NotProductive(stmt);
             }
         }
-
-        RecordDestructure(_, _) => {
-            unreachable!("a record destructure must always occur on a struct layout");
-        }
     }
 
     StorePattern::Productive(stmt)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn store_tag_pattern<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    structure: Symbol,
+    layout: &Layout<'a>,
+    arguments: &[(Pattern<'a>, Layout<'a>)],
+    wrapped: Wrapped,
+    mut stmt: Stmt<'a>,
+) -> StorePattern<'a> {
+    use Pattern::*;
+
+    let write_tag = wrapped == Wrapped::MultiTagUnion;
+
+    let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
+    let mut is_productive = false;
+
+    if write_tag {
+        // add an element for the tag discriminant
+        arg_layouts.push(Layout::Builtin(TAG_SIZE));
+    }
+
+    for (_, layout) in arguments {
+        arg_layouts.push(*layout);
+    }
+
+    for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
+        let index = if write_tag { index + 1 } else { index };
+
+        let mut arg_layout = *arg_layout;
+
+        if let Layout::RecursivePointer = arg_layout {
+            arg_layout = *layout;
+        }
+
+        let load = Expr::AccessAtIndex {
+            wrapped,
+            index: index as u64,
+            field_layouts: arg_layouts.clone().into_bump_slice(),
+            structure,
+        };
+
+        match argument {
+            Identifier(symbol) => {
+                // store immediately in the given symbol
+                stmt = Stmt::Let(*symbol, load, arg_layout, env.arena.alloc(stmt));
+                is_productive = true;
+            }
+            Underscore => {
+                // ignore
+            }
+            IntLiteral(_)
+            | FloatLiteral(_)
+            | EnumLiteral { .. }
+            | BitLiteral { .. }
+            | StrLiteral(_) => {}
+            _ => {
+                // store the field in a symbol, and continue matching on it
+                let symbol = env.unique_symbol();
+
+                // first recurse, continuing to unpack symbol
+                match store_pattern_help(env, procs, layout_cache, argument, symbol, stmt) {
+                    StorePattern::Productive(new) => {
+                        is_productive = true;
+                        stmt = new;
+                        // only if we bind one of its (sub)fields to a used name should we
+                        // extract the field
+                        stmt = Stmt::Let(symbol, load, arg_layout, env.arena.alloc(stmt));
+                    }
+                    StorePattern::NotProductive(new) => {
+                        // do nothing
+                        stmt = new;
+                    }
+                }
+            }
+        }
+    }
+
+    if is_productive {
+        StorePattern::Productive(stmt)
+    } else {
+        StorePattern::NotProductive(stmt)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6709,12 +6773,16 @@ pub enum Pattern<'a> {
     },
     StrLiteral(Box<str>),
 
-    RecordDestructure(Vec<'a, RecordDestruct<'a>>, Layout<'a>),
+    RecordDestructure(Vec<'a, RecordDestruct<'a>>, &'a [Layout<'a>]),
+    NewtypeDestructure {
+        tag_name: TagName,
+        arguments: Vec<'a, (Pattern<'a>, Layout<'a>)>,
+    },
     AppliedTag {
         tag_name: TagName,
         tag_id: u8,
         arguments: Vec<'a, (Pattern<'a>, Layout<'a>)>,
-        layout: Layout<'a>,
+        layout: UnionLayout<'a>,
         union: crate::exhaustive::Union,
     },
 }
@@ -6871,19 +6939,10 @@ fn from_can_pattern_help<'a>(
                         union,
                     }
                 }
-                Unwrapped {
+                Newtype {
                     arguments: field_layouts,
                     ..
                 } => {
-                    let union = crate::exhaustive::Union {
-                        render_as: RenderAs::Tag,
-                        alternatives: vec![Ctor {
-                            tag_id: TagId(0),
-                            name: tag_name.clone(),
-                            arity: field_layouts.len(),
-                        }],
-                    };
-
                     let mut arguments = arguments.clone();
 
                     arguments.sort_by(|arg1, arg2| {
@@ -6908,14 +6967,9 @@ fn from_can_pattern_help<'a>(
                         ));
                     }
 
-                    let layout = Layout::Struct(field_layouts.into_bump_slice());
-
-                    Pattern::AppliedTag {
+                    Pattern::NewtypeDestructure {
                         tag_name: tag_name.clone(),
-                        tag_id: 0,
                         arguments: mono_args,
-                        union,
-                        layout,
                     }
                 }
                 Wrapped(variant) => {
@@ -6996,8 +7050,7 @@ fn from_can_pattern_help<'a>(
                                 temp
                             };
 
-                            let layout =
-                                Layout::Union(UnionLayout::NonRecursive(layouts.into_bump_slice()));
+                            let layout = UnionLayout::NonRecursive(layouts.into_bump_slice());
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
@@ -7055,8 +7108,7 @@ fn from_can_pattern_help<'a>(
                             };
 
                             debug_assert!(layouts.len() > 1);
-                            let layout =
-                                Layout::Union(UnionLayout::Recursive(layouts.into_bump_slice()));
+                            let layout = UnionLayout::Recursive(layouts.into_bump_slice());
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
@@ -7101,7 +7153,7 @@ fn from_can_pattern_help<'a>(
                                 ));
                             }
 
-                            let layout = Layout::Union(UnionLayout::NonNullableUnwrapped(fields));
+                            let layout = UnionLayout::NonNullableUnwrapped(fields);
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
@@ -7186,10 +7238,10 @@ fn from_can_pattern_help<'a>(
                                 temp
                             };
 
-                            let layout = Layout::Union(UnionLayout::NullableWrapped {
+                            let layout = UnionLayout::NullableWrapped {
                                 nullable_id,
                                 other_tags: layouts.into_bump_slice(),
-                            });
+                            };
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
@@ -7247,10 +7299,10 @@ fn from_can_pattern_help<'a>(
                                 ));
                             }
 
-                            let layout = Layout::Union(UnionLayout::NullableUnwrapped {
+                            let layout = UnionLayout::NullableUnwrapped {
                                 nullable_id,
                                 other_fields,
-                            });
+                            };
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
@@ -7384,7 +7436,7 @@ fn from_can_pattern_help<'a>(
 
             Ok(Pattern::RecordDestructure(
                 mono_destructs,
-                Layout::Struct(field_layouts.into_bump_slice()),
+                field_layouts.into_bump_slice(),
             ))
         }
     }
@@ -7577,7 +7629,7 @@ where
     ToLowLevelCall: Fn(Symbol, Symbol, Option<Layout<'a>>, CallSpecId) -> Call<'a> + Copy,
 {
     match lambda_set.runtime_representation() {
-        Layout::Union(_) => {
+        Layout::Union(union_layout) => {
             let closure_tag_id_symbol = env.unique_symbol();
 
             let result = lowlevel_union_lambda_set_to_switch(
@@ -7594,11 +7646,9 @@ where
             );
 
             // extract & assign the closure_tag_id_symbol
-            let expr = Expr::AccessAtIndex {
-                index: 0,
-                field_layouts: env.arena.alloc([Layout::Builtin(Builtin::Int64)]),
+            let expr = Expr::GetTagId {
                 structure: closure_data_symbol,
-                wrapped: Wrapped::MultiTagUnion,
+                union_layout,
             };
 
             Stmt::Let(
@@ -7737,7 +7787,7 @@ fn match_on_lambda_set<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     match lambda_set.runtime_representation() {
-        Layout::Union(_) => {
+        Layout::Union(union_layout) => {
             let closure_tag_id_symbol = env.unique_symbol();
 
             let result = union_lambda_set_to_switch(
@@ -7755,11 +7805,9 @@ fn match_on_lambda_set<'a>(
             );
 
             // extract & assign the closure_tag_id_symbol
-            let expr = Expr::AccessAtIndex {
-                index: 0,
-                field_layouts: env.arena.alloc([Layout::Builtin(Builtin::Int64)]),
+            let expr = Expr::GetTagId {
                 structure: closure_data_symbol,
-                wrapped: Wrapped::MultiTagUnion,
+                union_layout,
             };
 
             Stmt::Let(
