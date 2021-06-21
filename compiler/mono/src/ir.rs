@@ -1300,7 +1300,7 @@ impl<'a> Expr<'a> {
             StructAtIndex {
                 index, structure, ..
             } => alloc
-                .text(format!("Index {} ", index))
+                .text(format!("StructAtIndex {} ", index))
                 .append(symbol_to_doc(alloc, *structure)),
 
             RuntimeErrorFunction(s) => alloc.text(format!("ErrorFunction {}", s)),
@@ -1315,7 +1315,7 @@ impl<'a> Expr<'a> {
                 index,
                 ..
             } => alloc
-                .text(format!("CoerceToTagId (Id {}) (Index {}) ", tag_id, index))
+                .text(format!("UnionAtIndex (Id {}) (Index {}) ", tag_id, index))
                 .append(symbol_to_doc(alloc, *structure)),
         }
     }

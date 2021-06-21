@@ -3,8 +3,8 @@ procedure Num.24 (#Attr.2, #Attr.3):
     ret Test.8;
 
 procedure Test.1 (Test.2):
-    let Test.3 = Index 0 Test.2;
-    let Test.4 = Index 1 Test.2;
+    let Test.3 = StructAtIndex 0 Test.2;
+    let Test.4 = StructAtIndex 1 Test.2;
     let Test.7 = CallByName Num.24 Test.3 Test.4;
     ret Test.7;
 

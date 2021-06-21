@@ -3,14 +3,14 @@ procedure Num.26 (#Attr.2, #Attr.3):
     ret Test.17;
 
 procedure Test.1 (Test.6):
-    let Test.25 = Index 1 Test.6;
+    let Test.25 = StructAtIndex 1 Test.6;
     let Test.26 = false;
     let Test.27 = lowlevel Eq Test.26 Test.25;
     if Test.27 then
-        let Test.8 = Index 0 Test.6;
+        let Test.8 = StructAtIndex 0 Test.6;
         ret Test.8;
     else
-        let Test.10 = Index 0 Test.6;
+        let Test.10 = StructAtIndex 0 Test.6;
         ret Test.10;
 
 procedure Test.1 (Test.6):
