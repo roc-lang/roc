@@ -444,7 +444,7 @@ where
                             self.set_last_seen(*sym, stmt);
                         }
                     }
-                    Expr::AccessAtIndex { structure, .. } => {
+                    Expr::StructAtIndex { structure, .. } => {
                         self.set_last_seen(*structure, stmt);
                     }
                     Expr::GetTagId { structure, .. } => {

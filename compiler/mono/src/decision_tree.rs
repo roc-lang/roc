@@ -1063,7 +1063,7 @@ fn path_to_expr_help<'a>(
                     Layout::Struct(field_layouts) => {
                         debug_assert!(field_layouts.len() > 1);
 
-                        let expr = Expr::AccessAtIndex {
+                        let expr = Expr::StructAtIndex {
                             index,
                             field_layouts,
                             structure: symbol,

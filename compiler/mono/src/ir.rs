@@ -1186,7 +1186,7 @@ pub enum Expr<'a> {
     },
     Struct(&'a [Symbol]),
 
-    AccessAtIndex {
+    StructAtIndex {
         index: u64,
         field_layouts: &'a [Layout<'a>],
         structure: Symbol,
@@ -1350,7 +1350,7 @@ impl<'a> Expr<'a> {
             }
             EmptyArray => alloc.text("Array []"),
 
-            AccessAtIndex {
+            StructAtIndex {
                 index, structure, ..
             } => alloc
                 .text(format!("Index {} ", index))
@@ -2173,7 +2173,7 @@ fn specialize_external<'a>(
                                 );
 
                                 for (index, (symbol, _variable)) in captured.iter().enumerate() {
-                                    let expr = Expr::AccessAtIndex {
+                                    let expr = Expr::StructAtIndex {
                                         index: index as _,
                                         field_layouts,
                                         structure: Symbol::ARG_CLOSURE,
@@ -3475,7 +3475,7 @@ pub fn with_hole<'a>(
                     hole
                 }
                 _ => {
-                    let expr = Expr::AccessAtIndex {
+                    let expr = Expr::StructAtIndex {
                         index: index.expect("field not in its own type") as u64,
                         field_layouts: field_layouts.into_bump_slice(),
                         structure: record_symbol,
@@ -3679,7 +3679,7 @@ pub fn with_hole<'a>(
                             );
                         }
                         CopyExisting(index) => {
-                            let access_expr = Expr::AccessAtIndex {
+                            let access_expr = Expr::StructAtIndex {
                                 structure,
                                 index,
                                 field_layouts,
@@ -5538,13 +5538,13 @@ fn substitute_in_expr<'a>(
             }
         }
 
-        AccessAtIndex {
+        StructAtIndex {
             index,
             structure,
             field_layouts,
             wrapped,
         } => match substitute(subs, *structure) {
-            Some(structure) => Some(AccessAtIndex {
+            Some(structure) => Some(StructAtIndex {
                 index: *index,
                 field_layouts: *field_layouts,
                 wrapped: *wrapped,
@@ -5831,7 +5831,7 @@ fn store_newtype_pattern<'a>(
             arg_layout = *layout;
         }
 
-        let load = Expr::AccessAtIndex {
+        let load = Expr::StructAtIndex {
             wrapped: Wrapped::RecordOrSingleTagUnion,
             index: index as u64,
             field_layouts: arg_layouts.clone().into_bump_slice(),
@@ -5895,7 +5895,7 @@ fn store_record_destruct<'a>(
     use Pattern::*;
 
     // TODO wrapped could be SingleElementRecord
-    let load = Expr::AccessAtIndex {
+    let load = Expr::StructAtIndex {
         index,
         field_layouts: sorted_fields,
         structure: outer_symbol,

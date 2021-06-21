@@ -570,7 +570,7 @@ impl<'a> BorrowInfState<'a> {
 
             Literal(_) | RuntimeErrorFunction(_) => {}
 
-            AccessAtIndex { structure: x, .. } => {
+            StructAtIndex { structure: x, .. } => {
                 // if the structure (record/tag/array) is owned, the extracted value is
                 if self.is_owned(*x) {
                     self.own_var(z);

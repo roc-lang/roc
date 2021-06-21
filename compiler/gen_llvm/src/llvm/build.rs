@@ -1423,7 +1423,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         Reset(_) => todo!(),
         Reuse { .. } => todo!(),
 
-        AccessAtIndex {
+        StructAtIndex {
             index,
             structure,
             wrapped: Wrapped::RecordOrSingleTagUnion,

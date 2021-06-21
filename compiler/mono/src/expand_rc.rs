@@ -343,7 +343,7 @@ fn can_push_inc_through(stmt: &Stmt) -> bool {
     match stmt {
         Let(_, expr, _, _) => {
             // we can always delay an increment/decrement until after a field access
-            matches!(expr, Expr::AccessAtIndex { .. } | Expr::Literal(_))
+            matches!(expr, Expr::StructAtIndex { .. } | Expr::Literal(_))
         }
 
         Refcounting(ModifyRc::Inc(_, _), _) => true,
@@ -421,7 +421,7 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
 
                 while !matches!(
                     &expr,
-                    Expr::AccessAtIndex { .. } | Expr::Struct(_) | Expr::Call(_)
+                    Expr::StructAtIndex { .. } | Expr::Struct(_) | Expr::Call(_)
                 ) {
                     if let Stmt::Let(symbol1, expr1, layout1, cont1) = cont {
                         literal_stack.push((symbol, expr.clone(), *layout));
@@ -438,7 +438,7 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                 let new_cont;
 
                 match &expr {
-                    Expr::AccessAtIndex {
+                    Expr::StructAtIndex {
                         structure,
                         index,
                         field_layouts,

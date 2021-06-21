@@ -874,7 +874,7 @@ fn expr_spec(
                 builder.add_unknown_with(block, &[value_id], result_type)
             }
         },
-        AccessAtIndex {
+        StructAtIndex {
             index,
             field_layouts: _,
             structure,
