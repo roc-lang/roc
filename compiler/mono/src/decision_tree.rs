@@ -1044,23 +1044,6 @@ fn path_to_expr_help<'a>(
                 debug_assert_eq!(*tag_id, 0);
                 debug_assert!(it.peek().is_none());
 
-                let field_layouts = vec![layout];
-
-                debug_assert!(*index < field_layouts.len() as u64);
-
-                debug_assert_eq!(field_layouts.len(), 1);
-
-                let inner_expr = Expr::AccessAtIndex {
-                    index: *index,
-                    field_layouts: env.arena.alloc(field_layouts),
-                    structure: symbol,
-                    wrapped: Wrapped::SingleElementRecord,
-                };
-
-                // symbol = env.unique_symbol();
-                // let inner_layout = layout;
-                // stores.push((symbol, inner_layout, inner_expr));
-
                 break;
             }
             true => {
