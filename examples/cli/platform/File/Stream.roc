@@ -1,15 +1,8 @@
-# TODO: we need to give platform authors a way to declare streams as
-# "managed resources" that get automatically cleaned up during panic unwinding
-# or when they become unreachable. Until then, these are risky to use! You need to remember to close them manually, or else they'll leak. Also you need to
-# make sure not to use-after-close, because you might end up reading from a
-# totally different file! Managed resources let platform authors silently
-# prevent both of these problems.
-#
-# NOTES
-#
-# This should be a capability module, and all other file operations should
-# be built using it.
-#
+## A stream of bytes from a file.
+interface File.Stream
+    exposes [ Stream ]
+    imports [ (File.Internal as Internal).{ Fd, toRaw, fromRaw }, Task.{ Task } ]
+
 # How Linux file status flags are handled by this API:
 # https://www.man7.org/linux/man-pages/man2/open.2.html
 #
@@ -52,10 +45,6 @@
 # * O_SHLOCK, O_EXLOCK - unsupported because they're BSD-only and atomicity for "open and lock" doesn't seem crucial
 # * O_SYMLINK - unsupported because it's BSD-only and doesn't seem critical
 
-## A stream of bytes. This could be coming from a file, a socket,
-interface File.Stream
-    exposes [ Stream ]
-    imports [ (File.Internal as Internal).{ Fd, toRaw, fromRaw }, Task.{ Task } ]
 
 ## On UNIX systems, this refers to a file descriptor.
 ## On Windows, it refers to a file handle.
@@ -111,6 +100,7 @@ CloseErr :
 ## An error that can occur when reading from a file stream.
 ReadErr :
     [
+        StreamWasClosed,
         ## The filesystem gave an unknown error with this description string.
         Unknown Str,
     ]
@@ -118,6 +108,7 @@ ReadErr :
 ## An error that can occur when writing to a stream.
 WriteErr :
     [
+        StreamWasClosed,
         ## The filesystem gave an unknown error with this description string.
         Unknown Str,
     ]
@@ -172,8 +163,8 @@ openReadAppendClose = \path, config ->
     Effect.openReadAppend
         |> makeOpenCloseTask path config
 
-## Open a file with `Read` permission as a stream, use that stream to run a
-## task, and close the file afterwards.
+## Open a file with `Read` and `Write` permissions as a stream, use that stream
+## to run a task, and close the file after that task either succeeds or fails.
 ##
 ## >>> writeSmileyIfEmpty :
 ## >>>     Task {}
@@ -198,6 +189,51 @@ openReadWriteClose = \path, config ->
     Effect.openReadWrite
         |> makeOpenCloseTask path config
 
+# Temporary files
+#
+# Different OSes have different ways to create temporary files. Characteristics
+# we want:
+#
+# 1. The OS will delete the file automatically when the fd is closed. Even if the Roc program segfaults, the tempfile will be deleted.
+# 2. It should be secure; an attacker shouldn't be able to open it.
+#
+# MACOS, FREEBSD, NETBSD
+#
+# Create the file with O_CREAT, O_EXCL, and O_EXLOCK - this guarantees that
+# either creating will fail, or else we have the exclusive lock on the file.
+# That in turn means we can unlink it being certain that no other process got a
+# handle to it in the meantime; as long as our process doesn't crash right
+# between when the open and the unlink happen, we'll be in the state we want.
+# (Also, if it does crash, then we end up with an empty file in the tempdir,
+# but nothing was written to it yet!) If creating fails because there's already
+# a file in the tempdir with that name, keep retrying with different names
+# until we find one that works.
+#
+# LINUX
+#
+# https://www.man7.org/linux/man-pages/man2/openat.2.html
+# use open with O_TMPFILE - must be specified with either write or readwrite
+# permissions, no appending! Gives us an unlinked file, which is what we want.
+# (For a named file, use File.Temp instead. I guess we can also have File.Temp.link?)
+
+## Open an unnamed temporary file with `Read` and `Write` permissions as a stream,
+## use that stream to run a task, and delete the file after that task either succeeds
+## or fails.
+##
+## This is designed to be secure, which means:
+## * This temporary file should be both unique and inaccessible to other processes while it is open.
+## * It should not be possible for the temporary file to be deleted before the stream is closed.
+## * Once the stream is closed, or if the Roc program is terminated early, the operating system should delete the file immediately. There should be no opportunity for any other process to read the file before it is deleted.
+##
+## > If the Roc program is terminated early at precisely the wrong moment, it's
+## > theoretically possible for an empty file with a randomly-generated name to
+## > end up left behind in the sytem's temporary directory. In the extremely
+## > unlikely event that this happens, the file will be guaranteed to be empty;
+## > nothing will ever have been written to it. This situation cannot happen on
+## > Windows or Linux, but it can happen on other operating systems.
+openTemp : (Stream [ Read, Write ] -> Task ok []err) -> Task ok [ OpenTempFailed OpenErr ]err
+
+openTempClose : Task (Stream [ Read, Write, Close ]) [ OpenTempFailed OpenErr ]*
 
 ## Close a file stream. Any future tasks run on this stream will fail.
 close : Stream [ Close ]* -> Task {} [ CloseFailed CloseErr Str ]*

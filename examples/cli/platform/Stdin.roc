@@ -31,12 +31,3 @@ readUntil = \str ->
 readUntilEof : Task Str [ BadUtf8 ]Io.Err
 readUntilEof = \str ->
     Effect.map (Effect.readUntilEof str) Ok
-
-## Open a `stdin` stream.
-##
-## Note that in Windows, attempting to write bytes to `stdin` that are not
-## valid UTF-8 will result in an error.
-stream : Task Stream Io.Err
-stream =
-    Effect.openStdin
-        |> Effect.map (\raw -> Ok (Stream.fromRaw raw))

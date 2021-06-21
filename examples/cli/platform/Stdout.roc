@@ -12,12 +12,3 @@ ln = \str -> Effect.map (Effect.putLine str) (\_ -> Ok {})
 ## To write a line instead (with a newline at the end), see [ln].
 write : Str -> Task {} Io.Err
 write = \str -> Effect.map (Effect.putLine str) (\_ -> Ok {})
-
-## Open a `stdout` stream.
-##
-## Note that in Windows, attempting to write bytes to `stdout` that are not
-## valid UTF-8 will result in an error.
-stream : Task Stream Io.Err
-stream =
-    Effect.openStdout
-        |> Effect.map (\raw -> Ok (Stream.fromRaw raw))
