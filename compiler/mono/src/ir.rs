@@ -3468,32 +3468,30 @@ pub fn with_hole<'a>(
 
             let record_symbol = possible_reuse_symbol(env, procs, &loc_expr.value);
 
-            let wrapped = {
-                let record_layout = layout_cache
-                    .from_var(env.arena, record_var, env.subs)
-                    .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+            let mut stmt = match field_layouts.as_slice() {
+                [_] => {
+                    let mut hole = hole.clone();
+                    substitute_in_exprs(env.arena, &mut hole, assigned, record_symbol);
 
-                match Wrapped::opt_from_layout(&record_layout) {
-                    Some(result) => result,
-                    None => {
-                        debug_assert_eq!(field_layouts.len(), 1);
-                        Wrapped::SingleElementRecord
-                    }
+                    hole
+                }
+                _ => {
+                    let expr = Expr::AccessAtIndex {
+                        index: index.expect("field not in its own type") as u64,
+                        field_layouts: field_layouts.into_bump_slice(),
+                        structure: record_symbol,
+                        wrapped: Wrapped::RecordOrSingleTagUnion,
+                    };
+
+                    let layout = layout_cache
+                        .from_var(env.arena, field_var, env.subs)
+                        .unwrap_or_else(|err| {
+                            panic!("TODO turn fn_var into a RuntimeError {:?}", err)
+                        });
+
+                    Stmt::Let(assigned, expr, layout, hole)
                 }
             };
-
-            let expr = Expr::AccessAtIndex {
-                index: index.expect("field not in its own type") as u64,
-                field_layouts: field_layouts.into_bump_slice(),
-                structure: record_symbol,
-                wrapped,
-            };
-
-            let layout = layout_cache
-                .from_var(env.arena, field_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
-
-            let mut stmt = Stmt::Let(assigned, expr, layout, hole);
 
             stmt = assign_to_symbol(
                 env,
@@ -3632,26 +3630,16 @@ pub fn with_hole<'a>(
                 other => arena.alloc([*other]),
             };
 
-            let wrapped = if field_layouts.len() == 1 {
-                Wrapped::SingleElementRecord
-            } else {
-                Wrapped::RecordOrSingleTagUnion
-            };
-
-            let mut stmt = if symbols.len() == 1 {
-                let mut hole = hole.clone();
-                substitute_in_exprs(env.arena, &mut hole, assigned, symbols[0]);
-                hole
-            } else {
-                let expr = Expr::Struct(symbols);
-                Stmt::Let(assigned, expr, record_layout, hole)
-            };
-
             debug_assert_eq!(field_layouts.len(), symbols.len());
             debug_assert_eq!(fields.len(), symbols.len());
-            let it = field_layouts.iter().zip(symbols.iter()).zip(fields);
 
-            for ((field_layout, symbol), what_to_do) in it {
+            if symbols.len() == 1 {
+                // TODO we can probably special-case this more, skippiing the generation of
+                // UpdateExisting
+                let mut stmt = hole.clone();
+
+                let what_to_do = &fields[0];
+
                 match what_to_do {
                     UpdateExisting(field) => {
                         stmt = assign_to_symbol(
@@ -3660,23 +3648,51 @@ pub fn with_hole<'a>(
                             layout_cache,
                             field.var,
                             *field.loc_expr.clone(),
-                            *symbol,
+                            assigned,
                             stmt,
                         );
                     }
-                    CopyExisting(index) => {
-                        let access_expr = Expr::AccessAtIndex {
-                            structure,
-                            index,
-                            field_layouts,
-                            wrapped,
-                        };
-                        stmt = Stmt::Let(*symbol, access_expr, *field_layout, arena.alloc(stmt));
+                    CopyExisting(_) => {
+                        unreachable!(
+                            r"when a record has just one field and is updated, it must update that one field"
+                        );
                     }
                 }
-            }
 
-            stmt
+                stmt
+            } else {
+                let expr = Expr::Struct(symbols);
+                let mut stmt = Stmt::Let(assigned, expr, record_layout, hole);
+
+                let it = field_layouts.iter().zip(symbols.iter()).zip(fields);
+
+                for ((field_layout, symbol), what_to_do) in it {
+                    match what_to_do {
+                        UpdateExisting(field) => {
+                            stmt = assign_to_symbol(
+                                env,
+                                procs,
+                                layout_cache,
+                                field.var,
+                                *field.loc_expr.clone(),
+                                *symbol,
+                                stmt,
+                            );
+                        }
+                        CopyExisting(index) => {
+                            let access_expr = Expr::AccessAtIndex {
+                                structure,
+                                index,
+                                field_layouts,
+                                wrapped: Wrapped::RecordOrSingleTagUnion,
+                            };
+                            stmt =
+                                Stmt::Let(*symbol, access_expr, *field_layout, arena.alloc(stmt));
+                        }
+                    }
+                }
+                stmt
+            }
         }
 
         Closure {

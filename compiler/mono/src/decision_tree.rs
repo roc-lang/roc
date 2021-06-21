@@ -1061,15 +1061,13 @@ fn path_to_expr_help<'a>(
                         (union_layout.layout_at(*tag_id as u8, index as usize), expr)
                     }
                     Layout::Struct(field_layouts) => {
-                        let wrapped = Wrapped::opt_from_layout(&layout).unwrap();
                         debug_assert!(field_layouts.len() > 1);
-                        debug_assert_eq!(wrapped, Wrapped::RecordOrSingleTagUnion);
 
                         let expr = Expr::AccessAtIndex {
                             index,
                             field_layouts,
                             structure: symbol,
-                            wrapped,
+                            wrapped: Wrapped::RecordOrSingleTagUnion,
                         };
 
                         let layout = field_layouts[index as usize];
