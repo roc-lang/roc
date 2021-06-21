@@ -854,7 +854,7 @@ fn expr_spec(
             }
         },
         Struct(fields) => build_tuple_value(builder, env, block, fields),
-        CoerceToTagId {
+        UnionAtIndex {
             index,
             tag_id,
             structure,
@@ -874,44 +874,11 @@ fn expr_spec(
                 builder.add_unknown_with(block, &[value_id], result_type)
             }
         },
-        AccessAtIndex {
-            index,
-            field_layouts: _,
-            structure,
-            wrapped,
+        StructAtIndex {
+            index, structure, ..
         } => {
-            use crate::ir::Wrapped;
-
             let value_id = env.symbols[structure];
-
-            match wrapped {
-                Wrapped::EmptyRecord => {
-                    // this is a unit value
-                    builder.add_make_tuple(block, &[])
-                }
-                Wrapped::SingleElementRecord => {
-                    // builder.add_get_tuple_field(block, value_id, *index as u32)
-                    Ok(env.symbols[structure])
-                }
-                Wrapped::RecordOrSingleTagUnion => {
-                    builder.add_get_tuple_field(block, value_id, *index as u32)
-                }
-                Wrapped::LikeARoseTree => {
-                    let result_type = layout_spec(builder, layout)?;
-                    builder.add_unknown_with(block, &[value_id], result_type)
-                }
-                Wrapped::MultiTagUnion => {
-                    // Clearly this is not generally correct, but it should be for our examples
-                    // let hacky_is_recursive = field_layouts.iter().any(|l| l == &Layout::RecursivePointer);
-                    // if hacky_is_recursive {
-
-                    // we don't know what constructor we are at this point, so how can we get a
-                    // field from an enum value?
-
-                    let result_type = layout_spec(builder, layout)?;
-                    builder.add_unknown_with(block, &[value_id], result_type)
-                }
-            }
+            builder.add_get_tuple_field(block, value_id, *index as u32)
         }
         Array { elem_layout, elems } => {
             let type_id = layout_spec(builder, elem_layout)?;

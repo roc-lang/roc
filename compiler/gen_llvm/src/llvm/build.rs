@@ -50,7 +50,6 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
     BranchInfo, CallType, EntryPoint, ExceptionId, JoinPointId, ModifyRc, OptLevel, ProcLayout,
-    Wrapped,
 };
 use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, UnionLayout};
 
@@ -1423,29 +1422,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         Reset(_) => todo!(),
         Reuse { .. } => todo!(),
 
-        AccessAtIndex {
-            index,
-            structure,
-            wrapped: Wrapped::SingleElementRecord,
-            field_layouts,
-            ..
-        } => {
-            debug_assert_eq!(field_layouts.len(), 1);
-            debug_assert_eq!(*index, 0);
-            load_symbol(scope, structure)
-        }
-
-        AccessAtIndex {
-            index,
-            structure,
-            wrapped: Wrapped::RecordOrSingleTagUnion,
-            ..
-        }
-        | AccessAtIndex {
-            index,
-            structure,
-            wrapped: Wrapped::LikeARoseTree,
-            ..
+        StructAtIndex {
+            index, structure, ..
         } => {
             // extract field from a record
             match load_symbol_and_layout(scope, structure) {
@@ -1495,109 +1473,21 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     env.builder.build_load(ptr, "load_rosetree_like")
                 }
-                (other, layout) => unreachable!(
-                    "can only index into struct layout\nValue: {:?}\nLayout: {:?}\nIndex: {:?}",
-                    other, layout, index
-                ),
-            }
-        }
-
-        AccessAtIndex {
-            index,
-            structure,
-            field_layouts,
-            ..
-        } => {
-            use BasicValueEnum::*;
-
-            let builder = env.builder;
-
-            // Determine types, assumes the discriminant is in the field layouts
-            let num_fields = field_layouts.len();
-            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-
-            for field_layout in field_layouts.iter() {
-                let field_type = basic_type_from_layout(env, &field_layout);
-                field_types.push(field_type);
-            }
-
-            // cast the argument bytes into the desired shape for this tag
-            let (argument, structure_layout) = load_symbol_and_layout(scope, structure);
-
-            match argument {
-                StructValue(value) => {
-                    let struct_layout = Layout::Struct(field_layouts);
-                    let struct_type = env
-                        .context
-                        .struct_type(field_types.into_bump_slice(), false);
-
-                    let struct_value = access_index_struct_value(builder, value, struct_type);
-
-                    let result = builder
-                        .build_extract_value(struct_value, *index as u32, "")
-                        .expect("desired field did not decode");
-
-                    if let Some(Layout::RecursivePointer) = field_layouts.get(*index as usize) {
-                        let desired_type =
-                            block_of_memory(env.context, &struct_layout, env.ptr_bytes);
-
-                        // the value is a pointer to the actual value; load that value!
-                        let ptr = env.builder.build_bitcast(
-                            result,
-                            desired_type.ptr_type(AddressSpace::Generic),
-                            "cast_struct_value_pointer",
-                        );
-
-                        builder.build_load(ptr.into_pointer_value(), "load_recursive_field")
-                    } else {
-                        result
-                    }
+                (other, layout) => {
+                    // potential cause: indexing into an unwrapped 1-element record/tag?
+                    unreachable!(
+                        "can only index into struct layout\nValue: {:?}\nLayout: {:?}\nIndex: {:?}",
+                        other, layout, index
+                    )
                 }
-                PointerValue(value) => match structure_layout {
-                    Layout::Union(UnionLayout::NullableWrapped { .. }) if *index == 0 => {
-                        panic!("this should not happen any more")
-                    }
-                    Layout::Union(UnionLayout::NullableUnwrapped { .. }) => {
-                        if *index == 0 {
-                            panic!("this should not happen any more")
-                        } else {
-                            let struct_type = env
-                                .context
-                                .struct_type(&field_types.into_bump_slice()[1..], false);
-
-                            lookup_at_index_ptr(
-                                env,
-                                &field_layouts[1..],
-                                *index as usize - 1,
-                                value,
-                                struct_type,
-                                structure_layout,
-                            )
-                        }
-                    }
-                    _ => {
-                        let struct_type = env
-                            .context
-                            .struct_type(field_types.into_bump_slice(), false);
-
-                        lookup_at_index_ptr(
-                            env,
-                            field_layouts,
-                            *index as usize,
-                            value,
-                            struct_type,
-                            structure_layout,
-                        )
-                    }
-                },
-                _ => panic!("cannot look up index in {:?}", argument),
             }
         }
+
         EmptyArray => empty_polymorphic_list(env),
         Array { elem_layout, elems } => list_literal(env, scope, elem_layout, elems),
         RuntimeErrorFunction(_) => todo!(),
 
-        CoerceToTagId {
+        UnionAtIndex {
             tag_id,
             structure,
             index,

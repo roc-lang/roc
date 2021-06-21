@@ -18,8 +18,8 @@ procedure Test.1 (Test.2, Test.3, Test.4):
             let Test.27 = Array [];
             let Test.26 = 0i64;
             let Test.25 = Struct {Test.26, Test.27};
-            let Test.5 = Index 0 Test.25;
-            let Test.6 = Index 1 Test.25;
+            let Test.5 = StructAtIndex 0 Test.25;
+            let Test.6 = StructAtIndex 1 Test.25;
             let Test.22 = 1i64;
             let Test.21 = CallByName Num.25 Test.5 Test.22;
             let Test.16 = CallByName Test.1 Test.6 Test.3 Test.21;

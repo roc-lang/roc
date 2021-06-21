@@ -107,32 +107,19 @@ impl<'a> UnionLayout<'a> {
     }
 
     pub fn layout_at(self, tag_id: u8, index: usize) -> Layout<'a> {
-        match self {
+        let result = match self {
             UnionLayout::NonRecursive(tag_layouts) => {
                 let field_layouts = tag_layouts[tag_id as usize];
 
-                field_layouts[index]
+                // this cannot be recursive; return immediately
+                return field_layouts[index];
             }
             UnionLayout::Recursive(tag_layouts) => {
                 let field_layouts = tag_layouts[tag_id as usize];
 
-                let result = field_layouts[index];
-
-                if let Layout::RecursivePointer = result {
-                    Layout::Union(self)
-                } else {
-                    result
-                }
+                field_layouts[index]
             }
-            UnionLayout::NonNullableUnwrapped(field_layouts) => {
-                let result = field_layouts[index];
-
-                if let Layout::RecursivePointer = result {
-                    Layout::Union(self)
-                } else {
-                    result
-                }
-            }
+            UnionLayout::NonNullableUnwrapped(field_layouts) => field_layouts[index],
             UnionLayout::NullableWrapped {
                 nullable_id,
                 other_tags,
@@ -146,13 +133,7 @@ impl<'a> UnionLayout<'a> {
                 };
 
                 let field_layouts = other_tags[tag_index as usize];
-                let result = field_layouts[index];
-
-                if let Layout::RecursivePointer = result {
-                    Layout::Union(self)
-                } else {
-                    result
-                }
+                field_layouts[index]
             }
 
             UnionLayout::NullableUnwrapped {
@@ -161,14 +142,14 @@ impl<'a> UnionLayout<'a> {
             } => {
                 debug_assert_ne!(nullable_id, tag_id != 0);
 
-                let result = other_fields[index as usize];
-
-                if let Layout::RecursivePointer = result {
-                    Layout::Union(self)
-                } else {
-                    result
-                }
+                other_fields[index as usize]
             }
+        };
+
+        if let Layout::RecursivePointer = result {
+            Layout::Union(self)
+        } else {
+            result
         }
     }
 }
@@ -190,6 +171,7 @@ pub enum ClosureRepresentation<'a> {
         tag_name: TagName,
         tag_id: u8,
         union_size: u8,
+        union_layout: UnionLayout<'a>,
     },
     /// the representation is anything but a union
     Other(Layout<'a>),
@@ -231,6 +213,7 @@ impl<'a> LambdaSet<'a> {
                             tag_id: index as u8,
                             tag_layout: tags[index],
                             tag_name: TagName::Closure(function_symbol),
+                            union_layout: *union,
                         }
                     }
                     UnionLayout::Recursive(_) => todo!("recursive closures"),
@@ -371,17 +354,6 @@ impl<'a> LambdaSet<'a> {
                     _ => panic!("handle recursive layouts"),
                 }
             }
-        }
-    }
-
-    pub fn get_wrapped(&self) -> crate::ir::Wrapped {
-        use crate::ir::Wrapped;
-
-        match self.representation {
-            Layout::Struct(fields) if fields.len() == 1 => Wrapped::SingleElementRecord,
-            Layout::Struct(_) => Wrapped::RecordOrSingleTagUnion,
-            Layout::Union(_) => Wrapped::MultiTagUnion,
-            _ => Wrapped::SingleElementRecord,
         }
     }
 

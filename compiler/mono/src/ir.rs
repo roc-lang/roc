@@ -1014,57 +1014,6 @@ pub enum Literal<'a> {
     Byte(u8),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Wrapped {
-    EmptyRecord,
-    SingleElementRecord,
-    RecordOrSingleTagUnion,
-    /// Like a rose tree; recursive, but only one tag
-    LikeARoseTree,
-    MultiTagUnion,
-}
-
-impl Wrapped {
-    pub fn from_layout(layout: &Layout<'_>) -> Self {
-        match Self::opt_from_layout(layout) {
-            Some(result) => result,
-            None => unreachable!("not an indexable type {:?}", layout),
-        }
-    }
-
-    pub fn opt_from_layout(layout: &Layout<'_>) -> Option<Self> {
-        match layout {
-            Layout::Struct(fields) => match fields.len() {
-                0 => Some(Wrapped::EmptyRecord),
-                1 => Some(Wrapped::SingleElementRecord),
-                _ => Some(Wrapped::RecordOrSingleTagUnion),
-            },
-
-            Layout::Union(variant) => {
-                use UnionLayout::*;
-
-                match variant {
-                    Recursive(tags) | NonRecursive(tags) => match tags {
-                        [] => todo!("how to handle empty tag unions?"),
-                        [single] => match single.len() {
-                            0 => Some(Wrapped::EmptyRecord),
-                            1 => Some(Wrapped::SingleElementRecord),
-                            _ => Some(Wrapped::RecordOrSingleTagUnion),
-                        },
-                        _ => Some(Wrapped::MultiTagUnion),
-                    },
-                    NonNullableUnwrapped(_) => Some(Wrapped::LikeARoseTree),
-
-                    NullableWrapped { .. } | NullableUnwrapped { .. } => {
-                        Some(Wrapped::MultiTagUnion)
-                    }
-                }
-            }
-            _ => None,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Call<'a> {
     pub call_type: CallType<'a>,
@@ -1185,11 +1134,10 @@ pub enum Expr<'a> {
     },
     Struct(&'a [Symbol]),
 
-    AccessAtIndex {
+    StructAtIndex {
         index: u64,
         field_layouts: &'a [Layout<'a>],
         structure: Symbol,
-        wrapped: Wrapped,
     },
 
     GetTagId {
@@ -1197,7 +1145,7 @@ pub enum Expr<'a> {
         union_layout: UnionLayout<'a>,
     },
 
-    CoerceToTagId {
+    UnionAtIndex {
         structure: Symbol,
         tag_id: u8,
         union_layout: UnionLayout<'a>,
@@ -1349,10 +1297,10 @@ impl<'a> Expr<'a> {
             }
             EmptyArray => alloc.text("Array []"),
 
-            AccessAtIndex {
+            StructAtIndex {
                 index, structure, ..
             } => alloc
-                .text(format!("Index {} ", index))
+                .text(format!("StructAtIndex {} ", index))
                 .append(symbol_to_doc(alloc, *structure)),
 
             RuntimeErrorFunction(s) => alloc.text(format!("ErrorFunction {}", s)),
@@ -1361,13 +1309,13 @@ impl<'a> Expr<'a> {
                 .text("GetTagId ")
                 .append(symbol_to_doc(alloc, *structure)),
 
-            CoerceToTagId {
+            UnionAtIndex {
                 tag_id,
                 structure,
                 index,
                 ..
             } => alloc
-                .text(format!("CoerceToTagId (Id {}) (Index {}) ", tag_id, index))
+                .text(format!("UnionAtIndex (Id {}) (Index {}) ", tag_id, index))
                 .append(symbol_to_doc(alloc, *structure)),
         }
     }
@@ -2128,11 +2076,11 @@ fn specialize_external<'a>(
                 (Some(closure_layout), CapturedSymbols::Captured(captured)) => {
                     // debug_assert!(!captured.is_empty());
 
-                    let wrapped = closure_layout.get_wrapped();
-
                     match closure_layout.layout_for_member(proc_name) {
                         ClosureRepresentation::Union {
                             tag_layout: field_layouts,
+                            union_layout,
+                            tag_id,
                             ..
                         } => {
                             debug_assert_eq!(field_layouts.len() - 1, captured.len());
@@ -2143,11 +2091,11 @@ fn specialize_external<'a>(
                                 index += 1;
 
                                 // TODO therefore should the wrapped here not be RecordOrSingleTagUnion?
-                                let expr = Expr::AccessAtIndex {
-                                    index: index as _,
-                                    field_layouts,
+                                let expr = Expr::UnionAtIndex {
+                                    tag_id,
                                     structure: Symbol::ARG_CLOSURE,
-                                    wrapped,
+                                    index: index as _,
+                                    union_layout,
                                 };
 
                                 let layout = field_layouts[index];
@@ -2172,11 +2120,10 @@ fn specialize_external<'a>(
                                 );
 
                                 for (index, (symbol, _variable)) in captured.iter().enumerate() {
-                                    let expr = Expr::AccessAtIndex {
+                                    let expr = Expr::StructAtIndex {
                                         index: index as _,
                                         field_layouts,
                                         structure: Symbol::ARG_CLOSURE,
-                                        wrapped: Wrapped::RecordOrSingleTagUnion,
                                     };
 
                                     let layout = field_layouts[index];
@@ -3466,32 +3413,29 @@ pub fn with_hole<'a>(
 
             let record_symbol = possible_reuse_symbol(env, procs, &loc_expr.value);
 
-            let wrapped = {
-                let record_layout = layout_cache
-                    .from_var(env.arena, record_var, env.subs)
-                    .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+            let mut stmt = match field_layouts.as_slice() {
+                [_] => {
+                    let mut hole = hole.clone();
+                    substitute_in_exprs(env.arena, &mut hole, assigned, record_symbol);
 
-                match Wrapped::opt_from_layout(&record_layout) {
-                    Some(result) => result,
-                    None => {
-                        debug_assert_eq!(field_layouts.len(), 1);
-                        Wrapped::SingleElementRecord
-                    }
+                    hole
+                }
+                _ => {
+                    let expr = Expr::StructAtIndex {
+                        index: index.expect("field not in its own type") as u64,
+                        field_layouts: field_layouts.into_bump_slice(),
+                        structure: record_symbol,
+                    };
+
+                    let layout = layout_cache
+                        .from_var(env.arena, field_var, env.subs)
+                        .unwrap_or_else(|err| {
+                            panic!("TODO turn fn_var into a RuntimeError {:?}", err)
+                        });
+
+                    Stmt::Let(assigned, expr, layout, hole)
                 }
             };
-
-            let expr = Expr::AccessAtIndex {
-                index: index.expect("field not in its own type") as u64,
-                field_layouts: field_layouts.into_bump_slice(),
-                structure: record_symbol,
-                wrapped,
-            };
-
-            let layout = layout_cache
-                .from_var(env.arena, field_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
-
-            let mut stmt = Stmt::Let(assigned, expr, layout, hole);
 
             stmt = assign_to_symbol(
                 env,
@@ -3630,26 +3574,16 @@ pub fn with_hole<'a>(
                 other => arena.alloc([*other]),
             };
 
-            let wrapped = if field_layouts.len() == 1 {
-                Wrapped::SingleElementRecord
-            } else {
-                Wrapped::RecordOrSingleTagUnion
-            };
-
-            let mut stmt = if symbols.len() == 1 {
-                let mut hole = hole.clone();
-                substitute_in_exprs(env.arena, &mut hole, assigned, symbols[0]);
-                hole
-            } else {
-                let expr = Expr::Struct(symbols);
-                Stmt::Let(assigned, expr, record_layout, hole)
-            };
-
             debug_assert_eq!(field_layouts.len(), symbols.len());
             debug_assert_eq!(fields.len(), symbols.len());
-            let it = field_layouts.iter().zip(symbols.iter()).zip(fields);
 
-            for ((field_layout, symbol), what_to_do) in it {
+            if symbols.len() == 1 {
+                // TODO we can probably special-case this more, skippiing the generation of
+                // UpdateExisting
+                let mut stmt = hole.clone();
+
+                let what_to_do = &fields[0];
+
                 match what_to_do {
                     UpdateExisting(field) => {
                         stmt = assign_to_symbol(
@@ -3658,23 +3592,50 @@ pub fn with_hole<'a>(
                             layout_cache,
                             field.var,
                             *field.loc_expr.clone(),
-                            *symbol,
+                            assigned,
                             stmt,
                         );
                     }
-                    CopyExisting(index) => {
-                        let access_expr = Expr::AccessAtIndex {
-                            structure,
-                            index,
-                            field_layouts,
-                            wrapped,
-                        };
-                        stmt = Stmt::Let(*symbol, access_expr, *field_layout, arena.alloc(stmt));
+                    CopyExisting(_) => {
+                        unreachable!(
+                            r"when a record has just one field and is updated, it must update that one field"
+                        );
                     }
                 }
-            }
 
-            stmt
+                stmt
+            } else {
+                let expr = Expr::Struct(symbols);
+                let mut stmt = Stmt::Let(assigned, expr, record_layout, hole);
+
+                let it = field_layouts.iter().zip(symbols.iter()).zip(fields);
+
+                for ((field_layout, symbol), what_to_do) in it {
+                    match what_to_do {
+                        UpdateExisting(field) => {
+                            stmt = assign_to_symbol(
+                                env,
+                                procs,
+                                layout_cache,
+                                field.var,
+                                *field.loc_expr.clone(),
+                                *symbol,
+                                stmt,
+                            );
+                        }
+                        CopyExisting(index) => {
+                            let access_expr = Expr::StructAtIndex {
+                                structure,
+                                index,
+                                field_layouts,
+                            };
+                            stmt =
+                                Stmt::Let(*symbol, access_expr, *field_layout, arena.alloc(stmt));
+                        }
+                    }
+                }
+                stmt
+            }
         }
 
         Closure {
@@ -4074,21 +4035,17 @@ fn construct_closure_data<'a>(
             tag_layout: _,
             union_size,
             tag_name,
+            union_layout,
         } => {
             let tag_id_symbol = env.unique_symbol();
             let mut tag_symbols = Vec::with_capacity_in(symbols.len() + 1, env.arena);
             tag_symbols.push(tag_id_symbol);
             tag_symbols.extend(symbols);
 
-            let tag_layout = match lambda_set.runtime_representation() {
-                Layout::Union(inner) => inner,
-                _ => unreachable!(),
-            };
-
             let expr1 = Expr::Literal(Literal::Int(tag_id as i128));
             let expr2 = Expr::Tag {
                 tag_id,
-                tag_layout,
+                tag_layout: union_layout,
                 union_size,
                 tag_name,
                 arguments: tag_symbols.into_bump_slice(),
@@ -5525,16 +5482,14 @@ fn substitute_in_expr<'a>(
             }
         }
 
-        AccessAtIndex {
+        StructAtIndex {
             index,
             structure,
             field_layouts,
-            wrapped,
         } => match substitute(subs, *structure) {
-            Some(structure) => Some(AccessAtIndex {
+            Some(structure) => Some(StructAtIndex {
                 index: *index,
                 field_layouts: *field_layouts,
-                wrapped: *wrapped,
                 structure,
             }),
             None => None,
@@ -5551,13 +5506,13 @@ fn substitute_in_expr<'a>(
             None => None,
         },
 
-        CoerceToTagId {
+        UnionAtIndex {
             structure,
             tag_id,
             index,
             union_layout,
         } => match substitute(subs, *structure) {
-            Some(structure) => Some(CoerceToTagId {
+            Some(structure) => Some(UnionAtIndex {
                 structure,
                 tag_id: *tag_id,
                 index: *index,
@@ -5617,34 +5572,33 @@ fn store_pattern_help<'a>(
         | StrLiteral(_) => {
             return StorePattern::NotProductive(stmt);
         }
-        NewtypeDestructure { arguments, .. } => {
-            let mut fields = Vec::with_capacity_in(arguments.len(), env.arena);
-            fields.extend(arguments.iter().map(|x| x.1));
+        NewtypeDestructure { arguments, .. } => match arguments.as_slice() {
+            [single] => {
+                return store_pattern_help(env, procs, layout_cache, &single.0, outer_symbol, stmt);
+            }
+            _ => {
+                let mut fields = Vec::with_capacity_in(arguments.len(), env.arena);
+                fields.extend(arguments.iter().map(|x| x.1));
 
-            let layout = Layout::Struct(fields.into_bump_slice());
+                let layout = Layout::Struct(fields.into_bump_slice());
 
-            let wrapped = Wrapped::from_layout(&layout);
-
-            return store_newtype_pattern(
-                env,
-                procs,
-                layout_cache,
-                outer_symbol,
-                &layout,
-                &arguments,
-                wrapped,
-                stmt,
-            );
-        }
+                return store_newtype_pattern(
+                    env,
+                    procs,
+                    layout_cache,
+                    outer_symbol,
+                    &layout,
+                    &arguments,
+                    stmt,
+                );
+            }
+        },
         AppliedTag {
             arguments,
             layout,
             tag_id,
             ..
         } => {
-            let union_layout = Layout::Union(*layout);
-            let wrapped = Wrapped::from_layout(&union_layout);
-
             return store_tag_pattern(
                 env,
                 procs,
@@ -5652,10 +5606,28 @@ fn store_pattern_help<'a>(
                 outer_symbol,
                 *layout,
                 &arguments,
-                wrapped,
                 *tag_id,
                 stmt,
             );
+        }
+        RecordDestructure(destructs, [_single_field]) => {
+            for destruct in destructs {
+                match &destruct.typ {
+                    DestructType::Required(symbol) => {
+                        substitute_in_exprs(env.arena, &mut stmt, *symbol, outer_symbol);
+                    }
+                    DestructType::Guard(guard_pattern) => {
+                        return store_pattern_help(
+                            env,
+                            procs,
+                            layout_cache,
+                            guard_pattern,
+                            outer_symbol,
+                            stmt,
+                        );
+                    }
+                }
+            }
         }
         RecordDestructure(destructs, sorted_fields) => {
             let mut is_productive = false;
@@ -5697,13 +5669,14 @@ fn store_tag_pattern<'a>(
     structure: Symbol,
     union_layout: UnionLayout<'a>,
     arguments: &[(Pattern<'a>, Layout<'a>)],
-    wrapped: Wrapped,
     tag_id: u8,
     mut stmt: Stmt<'a>,
 ) -> StorePattern<'a> {
     use Pattern::*;
 
-    let write_tag = wrapped == Wrapped::MultiTagUnion;
+    // rosetree-like structures don't store the tag ID, the others do from the perspective of the IR
+    // The backend can make different choices there (and will, for UnionLayout::NullableUnwrapped)
+    let write_tag = !matches!(union_layout, UnionLayout::NonNullableUnwrapped(_));
 
     let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
     let mut is_productive = false;
@@ -5726,7 +5699,7 @@ fn store_tag_pattern<'a>(
             arg_layout = Layout::Union(union_layout);
         }
 
-        let load = Expr::CoerceToTagId {
+        let load = Expr::UnionAtIndex {
             index: index as u64,
             structure,
             tag_id,
@@ -5784,36 +5757,25 @@ fn store_newtype_pattern<'a>(
     structure: Symbol,
     layout: &Layout<'a>,
     arguments: &[(Pattern<'a>, Layout<'a>)],
-    wrapped: Wrapped,
     mut stmt: Stmt<'a>,
 ) -> StorePattern<'a> {
     use Pattern::*;
 
-    let write_tag = wrapped == Wrapped::MultiTagUnion;
-
     let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
     let mut is_productive = false;
-
-    if write_tag {
-        // add an element for the tag discriminant
-        arg_layouts.push(Layout::Builtin(TAG_SIZE));
-    }
 
     for (_, layout) in arguments {
         arg_layouts.push(*layout);
     }
 
     for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
-        let index = if write_tag { index + 1 } else { index };
-
         let mut arg_layout = *arg_layout;
 
         if let Layout::RecursivePointer = arg_layout {
             arg_layout = *layout;
         }
 
-        let load = Expr::AccessAtIndex {
-            wrapped,
+        let load = Expr::StructAtIndex {
             index: index as u64,
             field_layouts: arg_layouts.clone().into_bump_slice(),
             structure,
@@ -5875,14 +5837,10 @@ fn store_record_destruct<'a>(
 ) -> StorePattern<'a> {
     use Pattern::*;
 
-    let wrapped = Wrapped::from_layout(&Layout::Struct(sorted_fields));
-
-    // TODO wrapped could be SingleElementRecord
-    let load = Expr::AccessAtIndex {
+    let load = Expr::StructAtIndex {
         index,
         field_layouts: sorted_fields,
         structure: outer_symbol,
-        wrapped,
     };
 
     match &destruct.typ {
