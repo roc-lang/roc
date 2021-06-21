@@ -85,12 +85,6 @@ pub const RocStr = extern struct {
         }
     }
 
-    pub fn toSlice(self: RocStr) []u8 {
-        const str_bytes_ptr: [*]u8 = self.str_bytes orelse unreachable;
-        const str_bytes: []u8 = str_bytes_ptr[0..self.str_len];
-        return str_bytes;
-    }
-
     // This takes ownership of the pointed-to bytes if they won't fit in a
     // small string, and returns a (pointer, len) tuple which points to them.
     pub fn withCapacity(length: usize) RocStr {
