@@ -302,15 +302,29 @@ fn constrain_when() {
 }
 
 #[test]
+fn constrain_let_value() {
+    infer_eq(
+        indoc!(
+            r#"
+            person = { name: "roc" }
+
+            person
+            "#
+        ),
+        "{ name : Str }",
+    )
+}
+
+#[test]
 fn constrain_update() {
     infer_eq(
         indoc!(
             r#"
-            thing = { name: "roc" }
+            person = { name: "roc" }
 
-            { thing & name: "bird" } 
+            { person & name: "bird" } 
             "#
         ),
-        "{ name : Str }*",
+        "{ name : Str }",
     )
 }
