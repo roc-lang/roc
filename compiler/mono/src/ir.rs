@@ -5784,7 +5784,7 @@ fn store_newtype_pattern<'a>(
 ) -> StorePattern<'a> {
     use Pattern::*;
 
-    let write_tag = wrapped == Wrapped::MultiTagUnion;
+    let write_tag = false;
 
     let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
     let mut is_productive = false;

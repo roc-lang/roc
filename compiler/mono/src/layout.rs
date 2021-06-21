@@ -178,7 +178,7 @@ impl<'a> UnionLayout<'a> {
             UnionLayout::Recursive(_) => true,
             UnionLayout::NonNullableUnwrapped(_) => false,
             UnionLayout::NullableWrapped { .. } => true,
-            UnionLayout::NullableUnwrapped { .. } => false,
+            UnionLayout::NullableUnwrapped { .. } => true,
         }
     }
 }
