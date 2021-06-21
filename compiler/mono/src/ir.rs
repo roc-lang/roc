@@ -5642,9 +5642,6 @@ fn store_pattern_help<'a>(
             tag_id,
             ..
         } => {
-            let union_layout = Layout::Union(*layout);
-            let wrapped = Wrapped::from_layout(&union_layout);
-
             return store_tag_pattern(
                 env,
                 procs,
@@ -5652,7 +5649,6 @@ fn store_pattern_help<'a>(
                 outer_symbol,
                 *layout,
                 &arguments,
-                wrapped,
                 *tag_id,
                 stmt,
             );
@@ -5697,13 +5693,12 @@ fn store_tag_pattern<'a>(
     structure: Symbol,
     union_layout: UnionLayout<'a>,
     arguments: &[(Pattern<'a>, Layout<'a>)],
-    wrapped: Wrapped,
     tag_id: u8,
     mut stmt: Stmt<'a>,
 ) -> StorePattern<'a> {
     use Pattern::*;
 
-    let write_tag = wrapped == Wrapped::MultiTagUnion;
+    let write_tag = union_layout.stores_tag();
 
     let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
     let mut is_productive = false;

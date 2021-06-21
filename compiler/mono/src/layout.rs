@@ -171,6 +171,16 @@ impl<'a> UnionLayout<'a> {
             }
         }
     }
+
+    pub fn stores_tag(&self) -> bool {
+        match self {
+            UnionLayout::NonRecursive(_) => true,
+            UnionLayout::Recursive(_) => true,
+            UnionLayout::NonNullableUnwrapped(_) => false,
+            UnionLayout::NullableWrapped { .. } => true,
+            UnionLayout::NullableUnwrapped { .. } => false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
