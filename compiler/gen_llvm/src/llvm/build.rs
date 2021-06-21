@@ -1440,12 +1440,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             structure,
             wrapped: Wrapped::RecordOrSingleTagUnion,
             ..
-        }
-        | AccessAtIndex {
-            index,
-            structure,
-            wrapped: Wrapped::LikeARoseTree,
-            ..
         } => {
             // extract field from a record
             match load_symbol_and_layout(scope, structure) {

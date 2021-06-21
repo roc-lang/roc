@@ -896,10 +896,6 @@ fn expr_spec(
                 Wrapped::RecordOrSingleTagUnion => {
                     builder.add_get_tuple_field(block, value_id, *index as u32)
                 }
-                Wrapped::LikeARoseTree => {
-                    let result_type = layout_spec(builder, layout)?;
-                    builder.add_unknown_with(block, &[value_id], result_type)
-                }
             }
         }
         Array { elem_layout, elems } => {

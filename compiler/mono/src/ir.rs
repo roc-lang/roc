@@ -1019,8 +1019,6 @@ pub enum Wrapped {
     EmptyRecord,
     SingleElementRecord,
     RecordOrSingleTagUnion,
-    /// Like a rose tree; recursive, but only one tag
-    LikeARoseTree,
 }
 
 impl Wrapped {
@@ -1058,7 +1056,7 @@ impl Wrapped {
                             unreachable!()
                         }
                     },
-                    NonNullableUnwrapped(_) => Some(Wrapped::LikeARoseTree),
+                    NonNullableUnwrapped(_) => unreachable!(),
 
                     NullableWrapped { .. } | NullableUnwrapped { .. } => {
                         unreachable!();
