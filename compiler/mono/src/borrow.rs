@@ -582,7 +582,7 @@ impl<'a> BorrowInfState<'a> {
                 }
             }
 
-            CoerceToTagId { structure: x, .. } => {
+            UnionAtIndex { structure: x, .. } => {
                 // if the structure (record/tag/array) is owned, the extracted value is
                 if self.is_owned(*x) {
                     self.own_var(z);

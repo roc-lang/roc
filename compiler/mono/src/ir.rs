@@ -1145,7 +1145,7 @@ pub enum Expr<'a> {
         union_layout: UnionLayout<'a>,
     },
 
-    CoerceToTagId {
+    UnionAtIndex {
         structure: Symbol,
         tag_id: u8,
         union_layout: UnionLayout<'a>,
@@ -1309,7 +1309,7 @@ impl<'a> Expr<'a> {
                 .text("GetTagId ")
                 .append(symbol_to_doc(alloc, *structure)),
 
-            CoerceToTagId {
+            UnionAtIndex {
                 tag_id,
                 structure,
                 index,
@@ -2091,7 +2091,7 @@ fn specialize_external<'a>(
                                 index += 1;
 
                                 // TODO therefore should the wrapped here not be RecordOrSingleTagUnion?
-                                let expr = Expr::CoerceToTagId {
+                                let expr = Expr::UnionAtIndex {
                                     tag_id,
                                     structure: Symbol::ARG_CLOSURE,
                                     index: index as _,
@@ -5506,13 +5506,13 @@ fn substitute_in_expr<'a>(
             None => None,
         },
 
-        CoerceToTagId {
+        UnionAtIndex {
             structure,
             tag_id,
             index,
             union_layout,
         } => match substitute(subs, *structure) {
-            Some(structure) => Some(CoerceToTagId {
+            Some(structure) => Some(UnionAtIndex {
                 structure,
                 tag_id: *tag_id,
                 index: *index,
@@ -5697,7 +5697,7 @@ fn store_tag_pattern<'a>(
             arg_layout = Layout::Union(union_layout);
         }
 
-        let load = Expr::CoerceToTagId {
+        let load = Expr::UnionAtIndex {
             index: index as u64,
             structure,
             tag_id,

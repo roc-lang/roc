@@ -1040,7 +1040,7 @@ fn path_to_expr_help<'a>(
 
         match &layout {
             Layout::Union(union_layout) => {
-                let inner_expr = Expr::CoerceToTagId {
+                let inner_expr = Expr::UnionAtIndex {
                     tag_id: *tag_id,
                     structure: symbol,
                     index,

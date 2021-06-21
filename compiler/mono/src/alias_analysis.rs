@@ -854,7 +854,7 @@ fn expr_spec(
             }
         },
         Struct(fields) => build_tuple_value(builder, env, block, fields),
-        CoerceToTagId {
+        UnionAtIndex {
             index,
             tag_id,
             structure,

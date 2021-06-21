@@ -136,7 +136,7 @@ pub fn occurring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
             result.insert(*symbol);
         }
 
-        CoerceToTagId {
+        UnionAtIndex {
             structure: symbol, ..
         } => {
             result.insert(*symbol);
@@ -229,7 +229,7 @@ fn consume_expr(m: &VarMap, e: &Expr<'_>) -> bool {
             Some(info) => info.consume,
             None => true,
         },
-        Expr::CoerceToTagId { structure: x, .. } => match m.get(x) {
+        Expr::UnionAtIndex { structure: x, .. } => match m.get(x) {
             Some(info) => info.consume,
             None => true,
         },
@@ -783,7 +783,7 @@ impl<'a> Context<'a> {
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            CoerceToTagId { structure: x, .. } => {
+            UnionAtIndex { structure: x, .. } => {
                 let b = self.add_dec_if_needed(x, b, b_live_vars);
                 let info_x = self.get_var_info(x);
                 let b = if info_x.consume {

@@ -1490,7 +1490,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         Array { elem_layout, elems } => list_literal(env, scope, elem_layout, elems),
         RuntimeErrorFunction(_) => todo!(),
 
-        CoerceToTagId {
+        UnionAtIndex {
             tag_id,
             structure,
             index,

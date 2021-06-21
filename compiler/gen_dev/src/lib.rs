@@ -450,7 +450,7 @@ where
                     Expr::GetTagId { structure, .. } => {
                         self.set_last_seen(*structure, stmt);
                     }
-                    Expr::CoerceToTagId { structure, .. } => {
+                    Expr::UnionAtIndex { structure, .. } => {
                         self.set_last_seen(*structure, stmt);
                     }
                     Expr::Array { elems, .. } => {
