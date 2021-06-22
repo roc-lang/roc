@@ -11,6 +11,21 @@ pub struct Union {
     pub render_as: RenderAs,
 }
 
+impl Union {
+    pub fn newtype_wrapper(tag_name: TagName, arity: usize) -> Self {
+        let alternatives = vec![Ctor {
+            name: tag_name,
+            tag_id: TagId(0),
+            arity,
+        }];
+
+        Union {
+            alternatives,
+            render_as: RenderAs::Tag,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RenderAs {
     Tag,
@@ -82,6 +97,20 @@ fn simplify(pattern: &crate::ir::Pattern) -> Pattern {
             };
 
             Ctor(union, tag_id, patterns)
+        }
+
+        NewtypeDestructure {
+            arguments,
+            tag_name,
+        } => {
+            let tag_id = 0;
+            let simplified_args: std::vec::Vec<_> =
+                arguments.iter().map(|v| simplify(&v.0)).collect();
+            Ctor(
+                Union::newtype_wrapper(tag_name.clone(), arguments.len()),
+                TagId(tag_id),
+                simplified_args,
+            )
         }
 
         AppliedTag {

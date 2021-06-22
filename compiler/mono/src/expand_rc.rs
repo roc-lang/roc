@@ -1,4 +1,4 @@
-use crate::ir::{BranchInfo, Expr, ModifyRc, Stmt, Wrapped};
+use crate::ir::{BranchInfo, Expr, ModifyRc, Stmt};
 use crate::layout::{Layout, UnionLayout};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -191,7 +191,7 @@ impl<'a, 'i> Env<'a, 'i> {
 
         Symbol::new(self.home, ident_id)
     }
-
+    #[allow(dead_code)]
     fn manual_unique_symbol(home: ModuleId, ident_ids: &mut IdentIds) -> Symbol {
         let ident_id = ident_ids.gen_unique();
 
@@ -302,11 +302,13 @@ fn work_for_constructor<'a>(
                             // we have to extract it now, but we only extract it
                             // if at least one field is aliased.
 
+                            todo!("get the tag id");
+                            /*
                             let expr = Expr::AccessAtIndex {
                                 index: i as u64,
                                 field_layouts: constructor_layout,
                                 structure: *symbol,
-                                wrapped: Wrapped::MultiTagUnion,
+                                wrapped: todo!("get the tag id"),
                             };
 
                             // create a fresh symbol for this field
@@ -320,6 +322,7 @@ fn work_for_constructor<'a>(
 
                             env.deferred.assignments.push((alias_symbol, expr, layout));
                             result.push(alias_symbol);
+                            */
                         }
                         None => {
                             // if all refcounted fields were unaliased, generate a normal decrement
@@ -340,7 +343,7 @@ fn can_push_inc_through(stmt: &Stmt) -> bool {
     match stmt {
         Let(_, expr, _, _) => {
             // we can always delay an increment/decrement until after a field access
-            matches!(expr, Expr::AccessAtIndex { .. } | Expr::Literal(_))
+            matches!(expr, Expr::StructAtIndex { .. } | Expr::Literal(_))
         }
 
         Refcounting(ModifyRc::Inc(_, _), _) => true,
@@ -418,7 +421,7 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
 
                 while !matches!(
                     &expr,
-                    Expr::AccessAtIndex { .. } | Expr::Struct(_) | Expr::Call(_)
+                    Expr::StructAtIndex { .. } | Expr::Struct(_) | Expr::Call(_)
                 ) {
                     if let Stmt::Let(symbol1, expr1, layout1, cont1) = cont {
                         literal_stack.push((symbol, expr.clone(), *layout));
@@ -435,11 +438,10 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                 let new_cont;
 
                 match &expr {
-                    Expr::AccessAtIndex {
+                    Expr::StructAtIndex {
                         structure,
                         index,
                         field_layouts,
-                        wrapped,
                     } => {
                         let entry = env
                             .alias_map
@@ -448,14 +450,8 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
 
                         entry.insert(*index, symbol);
 
-                        // fixes https://github.com/rtfeldman/roc/issues/1099
-                        if matches!(
-                            wrapped,
-                            Wrapped::SingleElementRecord | Wrapped::RecordOrSingleTagUnion
-                        ) {
-                            env.layout_map
-                                .insert(*structure, Layout::Struct(field_layouts));
-                        }
+                        env.layout_map
+                            .insert(*structure, Layout::Struct(field_layouts));
 
                         // if the field is a struct, we know its constructor too!
                         let field_layout = &field_layouts[*index as usize];

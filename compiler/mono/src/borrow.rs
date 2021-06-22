@@ -565,7 +565,12 @@ impl<'a> BorrowInfState<'a> {
             EmptyArray => {
                 self.own_var(z);
             }
-            AccessAtIndex { structure: x, .. } => {
+
+            Call(call) => self.collect_call(z, call),
+
+            Literal(_) | RuntimeErrorFunction(_) => {}
+
+            StructAtIndex { structure: x, .. } => {
                 // if the structure (record/tag/array) is owned, the extracted value is
                 if self.is_owned(*x) {
                     self.own_var(z);
@@ -577,9 +582,29 @@ impl<'a> BorrowInfState<'a> {
                 }
             }
 
-            Call(call) => self.collect_call(z, call),
+            UnionAtIndex { structure: x, .. } => {
+                // if the structure (record/tag/array) is owned, the extracted value is
+                if self.is_owned(*x) {
+                    self.own_var(z);
+                }
 
-            Literal(_) | RuntimeErrorFunction(_) => {}
+                // if the extracted value is owned, the structure must be too
+                if self.is_owned(z) {
+                    self.own_var(*x);
+                }
+            }
+
+            GetTagId { structure: x, .. } => {
+                // if the structure (record/tag/array) is owned, the extracted value is
+                if self.is_owned(*x) {
+                    self.own_var(z);
+                }
+
+                // if the extracted value is owned, the structure must be too
+                if self.is_owned(z) {
+                    self.own_var(*x);
+                }
+            }
         }
     }
 

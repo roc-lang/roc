@@ -29,20 +29,20 @@ procedure Test.1 (Test.2, Test.3, Test.4):
         let Test.22 = Array [];
         ret Test.22;
     in
-    let Test.26 = Index 1 Test.13;
+    let Test.26 = StructAtIndex 1 Test.13;
     let Test.27 = 1i64;
-    let Test.28 = Index 0 Test.26;
+    let Test.28 = GetTagId Test.26;
     let Test.31 = lowlevel Eq Test.27 Test.28;
     if Test.31 then
-        let Test.23 = Index 0 Test.13;
+        let Test.23 = StructAtIndex 0 Test.13;
         let Test.24 = 1i64;
-        let Test.25 = Index 0 Test.23;
+        let Test.25 = GetTagId Test.23;
         let Test.30 = lowlevel Eq Test.24 Test.25;
         if Test.30 then
-            let Test.21 = Index 0 Test.13;
-            let Test.6 = Index 1 Test.21;
-            let Test.20 = Index 1 Test.13;
-            let Test.7 = Index 1 Test.20;
+            let Test.21 = StructAtIndex 0 Test.13;
+            let Test.6 = UnionAtIndex (Id 1) (Index 1) Test.21;
+            let Test.20 = StructAtIndex 1 Test.13;
+            let Test.7 = UnionAtIndex (Id 1) (Index 1) Test.20;
             let Test.15 = CallByName List.4 Test.4 Test.2 Test.7;
             let Test.14 = CallByName List.4 Test.15 Test.3 Test.6;
             ret Test.14;

@@ -4,13 +4,13 @@ procedure Num.24 (#Attr.2, #Attr.3):
 
 procedure Test.3 (Test.5):
     let Test.18 = 1i64;
-    let Test.19 = Index 0 Test.5;
+    let Test.19 = GetTagId Test.5;
     let Test.20 = lowlevel Eq Test.18 Test.19;
     if Test.20 then
         let Test.13 = 0i64;
         ret Test.13;
     else
-        let Test.6 = Index 2 Test.5;
+        let Test.6 = UnionAtIndex (Id 0) (Index 2) Test.5;
         let Test.15 = 1i64;
         let Test.16 = CallByName Test.3 Test.6;
         let Test.14 = CallByName Num.24 Test.15 Test.16;

@@ -13,16 +13,16 @@ procedure Test.0 ():
         ret Test.11;
     in
     let Test.15 = 0i64;
-    let Test.16 = Index 0 Test.2;
+    let Test.16 = GetTagId Test.2;
     let Test.19 = lowlevel Eq Test.15 Test.16;
     if Test.19 then
-        let Test.12 = Index 1 Test.2;
+        let Test.12 = UnionAtIndex (Id 0) (Index 1) Test.2;
         let Test.13 = 0i64;
-        let Test.14 = Index 0 Test.12;
+        let Test.14 = GetTagId Test.12;
         let Test.18 = lowlevel Eq Test.13 Test.14;
         if Test.18 then
-            let Test.10 = Index 1 Test.2;
-            let Test.5 = Index 1 Test.10;
+            let Test.10 = UnionAtIndex (Id 0) (Index 1) Test.2;
+            let Test.5 = UnionAtIndex (Id 0) (Index 1) Test.10;
             let Test.7 = 1i64;
             let Test.6 = CallByName Num.24 Test.5 Test.7;
             ret Test.6;

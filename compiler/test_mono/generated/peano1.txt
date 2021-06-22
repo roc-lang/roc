@@ -8,7 +8,7 @@ procedure Test.0 ():
     let Test.12 = S Test.15 Test.14;
     let Test.2 = S Test.13 Test.12;
     let Test.9 = 1i64;
-    let Test.10 = Index 0 Test.2;
+    let Test.10 = GetTagId Test.2;
     dec Test.2;
     let Test.11 = lowlevel Eq Test.9 Test.10;
     if Test.11 then

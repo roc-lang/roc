@@ -105,6 +105,53 @@ impl<'a> UnionLayout<'a> {
             _ => alloc.text("TODO"),
         }
     }
+
+    pub fn layout_at(self, tag_id: u8, index: usize) -> Layout<'a> {
+        let result = match self {
+            UnionLayout::NonRecursive(tag_layouts) => {
+                let field_layouts = tag_layouts[tag_id as usize];
+
+                // this cannot be recursive; return immediately
+                return field_layouts[index];
+            }
+            UnionLayout::Recursive(tag_layouts) => {
+                let field_layouts = tag_layouts[tag_id as usize];
+
+                field_layouts[index]
+            }
+            UnionLayout::NonNullableUnwrapped(field_layouts) => field_layouts[index],
+            UnionLayout::NullableWrapped {
+                nullable_id,
+                other_tags,
+            } => {
+                debug_assert_ne!(nullable_id, tag_id as i64);
+
+                let tag_index = if (tag_id as i64) < nullable_id {
+                    tag_id
+                } else {
+                    tag_id - 1
+                };
+
+                let field_layouts = other_tags[tag_index as usize];
+                field_layouts[index]
+            }
+
+            UnionLayout::NullableUnwrapped {
+                nullable_id,
+                other_fields,
+            } => {
+                debug_assert_ne!(nullable_id, tag_id != 0);
+
+                other_fields[index as usize]
+            }
+        };
+
+        if let Layout::RecursivePointer = result {
+            Layout::Union(self)
+        } else {
+            result
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -124,6 +171,7 @@ pub enum ClosureRepresentation<'a> {
         tag_name: TagName,
         tag_id: u8,
         union_size: u8,
+        union_layout: UnionLayout<'a>,
     },
     /// the representation is anything but a union
     Other(Layout<'a>),
@@ -165,6 +213,7 @@ impl<'a> LambdaSet<'a> {
                             tag_id: index as u8,
                             tag_layout: tags[index],
                             tag_name: TagName::Closure(function_symbol),
+                            union_layout: *union,
                         }
                     }
                     UnionLayout::Recursive(_) => todo!("recursive closures"),
@@ -279,7 +328,7 @@ impl<'a> LambdaSet<'a> {
             Unit | UnitWithArguments => Layout::Struct(&[]),
             BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
             ByteUnion(_) => Layout::Builtin(Builtin::Int8),
-            Unwrapped {
+            Newtype {
                 arguments: layouts, ..
             } => Layout::Struct(layouts.into_bump_slice()),
             Wrapped(variant) => {
@@ -305,17 +354,6 @@ impl<'a> LambdaSet<'a> {
                     _ => panic!("handle recursive layouts"),
                 }
             }
-        }
-    }
-
-    pub fn get_wrapped(&self) -> crate::ir::Wrapped {
-        use crate::ir::Wrapped;
-
-        match self.representation {
-            Layout::Struct(fields) if fields.len() == 1 => Wrapped::SingleElementRecord,
-            Layout::Struct(_) => Wrapped::RecordOrSingleTagUnion,
-            Layout::Union(_) => Wrapped::MultiTagUnion,
-            _ => Wrapped::SingleElementRecord,
         }
     }
 
@@ -1285,7 +1323,7 @@ pub enum UnionVariant<'a> {
         ffalse: TagName,
     },
     ByteUnion(Vec<'a, TagName>),
-    Unwrapped {
+    Newtype {
         tag_name: TagName,
         arguments: Vec<'a, Layout<'a>>,
     },
@@ -1506,7 +1544,7 @@ pub fn union_sorted_tags_help<'a>(
                     fields: layouts.into_bump_slice(),
                 })
             } else {
-                UnionVariant::Unwrapped {
+                UnionVariant::Newtype {
                     tag_name,
                     arguments: layouts,
                 }
@@ -1661,7 +1699,7 @@ pub fn layout_from_tag_union<'a>(
                 Unit | UnitWithArguments => Layout::Struct(&[]),
                 BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
                 ByteUnion(_) => Layout::Builtin(Builtin::Int8),
-                Unwrapped {
+                Newtype {
                     arguments: mut field_layouts,
                     ..
                 } => {

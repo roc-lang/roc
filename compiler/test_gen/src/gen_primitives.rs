@@ -2488,3 +2488,44 @@ fn hit_unresolved_type_variable() {
         RocStr
     );
 }
+
+#[test]
+fn pattern_match_empty_record() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                main : I64
+                main =
+                    when {} is
+                        {} -> 0
+
+            "#
+        ),
+        0,
+        i64
+    );
+}
+
+#[test]
+fn pattern_match_unit_tag() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                unit : [ Unit ]
+                unit = Unit
+
+                main : I64
+                main =
+                    when unit is
+                        Unit -> 0
+
+            "#
+        ),
+        0,
+        i64
+    );
+}
