@@ -1009,7 +1009,25 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
     return output;
 }
 
-// input: RocList,
+pub fn listSetInPlace(
+    bytes: ?[*]u8,
+    length: usize,
+    alignment: u32,
+    index: usize,
+    element: Opaque,
+    element_width: usize,
+    dec: Dec,
+) callconv(.C) ?[*]u8 {
+    // INVARIANT: bounds checking happens on the roc side
+    //
+    // at the time of writing, the function is implemented roughly as
+    // `if inBounds then LowLevelListGet input index item else input`
+    // so we don't do a bounds check here. Hence, the list is also non-empty,
+    // because inserting into an empty list is always out of bounds
+
+    return listSetInPlaceHelp(bytes, length, alignment, index, element, element_width, dec);
+}
+
 pub fn listSet(
     bytes: ?[*]u8,
     length: usize,
@@ -1028,23 +1046,34 @@ pub fn listSet(
     const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, bytes));
 
     if ((ptr - 1)[0] == utils.REFCOUNT_ONE) {
-
-        // the element we will replace
-        var element_at_index = (bytes orelse undefined) + (index * element_width);
-
-        // decrement its refcount
-        dec(element_at_index);
-
-        // copy in the new element
-        @memcpy(element_at_index, element orelse undefined, element_width);
-
-        return bytes;
+        return listSetInPlaceHelp(bytes, length, alignment, index, element, element_width, dec);
     } else {
-        return listSetClone(bytes, length, alignment, index, element, element_width, dec);
+        return listSetImmutable(bytes, length, alignment, index, element, element_width, dec);
     }
 }
 
-inline fn listSetClone(
+inline fn listSetInPlaceHelp(
+    bytes: ?[*]u8,
+    length: usize,
+    alignment: u32,
+    index: usize,
+    element: Opaque,
+    element_width: usize,
+    dec: Dec,
+) ?[*]u8 {
+    // the element we will replace
+    var element_at_index = (bytes orelse undefined) + (index * element_width);
+
+    // decrement its refcount
+    dec(element_at_index);
+
+    // copy in the new element
+    @memcpy(element_at_index, element orelse undefined, element_width);
+
+    return bytes;
+}
+
+inline fn listSetImmutable(
     old_bytes: ?[*]u8,
     length: usize,
     alignment: u32,
@@ -1053,8 +1082,6 @@ inline fn listSetClone(
     element_width: usize,
     dec: Dec,
 ) ?[*]u8 {
-    @setCold(true);
-
     const data_bytes = length * element_width;
 
     var new_bytes = utils.allocateWithRefcount(data_bytes, alignment);
