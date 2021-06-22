@@ -4648,27 +4648,6 @@ fn run_low_level<'a, 'ctx, 'env>(
                 wrapper_struct,
             )
         }
-        ListSetInPlace => {
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (index, _) = load_symbol_and_layout(scope, &args[1]);
-            let (element, _) = load_symbol_and_layout(scope, &args[2]);
-
-            match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => {
-                    // no elements, so nothing to remove
-                    empty_list(env)
-                }
-                Layout::Builtin(Builtin::List(element_layout)) => list_set(
-                    env,
-                    layout_ids,
-                    list,
-                    index.into_int_value(),
-                    element,
-                    element_layout,
-                ),
-                _ => unreachable!("invalid dict layout"),
-            }
-        }
         ListSet => {
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
             let (index, _) = load_symbol_and_layout(scope, &args[1]);
