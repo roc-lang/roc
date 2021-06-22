@@ -831,7 +831,7 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
         CallType::LowLevel { op, update_mode } => {
             let bytes = update_mode.to_bytes();
             let update_var = UpdateModeVar(&bytes);
-            let update_mode = func_spec_solutions.update_mode(update_var).unwrap();
+            let update_mode = func_spec_solutions.update_mode(update_var).ok();
 
             run_low_level(
                 env,
@@ -4205,7 +4205,7 @@ fn run_low_level<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
     op: LowLevel,
     args: &[Symbol],
-    update_mode: UpdateMode,
+    update_mode: Option<UpdateMode>,
 ) -> BasicValueEnum<'ctx> {
     use LowLevel::*;
 
@@ -4681,7 +4681,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     index.into_int_value(),
                     element,
                     element_layout,
-                    update_mode,
+                    update_mode.unwrap(),
                 ),
                 _ => unreachable!("invalid dict layout"),
             }
