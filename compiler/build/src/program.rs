@@ -193,7 +193,7 @@ pub fn gen_from_mono_module(
         // run the debugir https://github.com/vaivaswatha/debugir tool
         match Command::new("debugir")
             .env_clear()
-            .args(&[app_ll_file.to_str().unwrap()])
+            .args(&["-instnamer", app_ll_file.to_str().unwrap()])
             .output()
         {
             Ok(_) => {}
