@@ -13,6 +13,7 @@ use inkwell::context::Context;
 use inkwell::types::{BasicType, BasicTypeEnum, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
+use morphic_lib::UpdateMode;
 use roc_builtins::bitcode;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
@@ -350,6 +351,7 @@ pub fn list_set<'a, 'ctx, 'env>(
     index: IntValue<'ctx>,
     element: BasicValueEnum<'ctx>,
     element_layout: &'a Layout<'a>,
+    update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
     let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
 
@@ -358,6 +360,11 @@ pub fn list_set<'a, 'ctx, 'env>(
         list.into_struct_value(),
         env.context.i8_type().ptr_type(AddressSpace::Generic),
     );
+
+    let symbol = match update_mode {
+        UpdateMode::InPlace => bitcode::LIST_SET_IN_PLACE,
+        UpdateMode::Immutable => bitcode::LIST_SET,
+    };
 
     let new_bytes = call_bitcode_fn(
         env,
@@ -370,7 +377,7 @@ pub fn list_set<'a, 'ctx, 'env>(
             layout_width(env, element_layout),
             dec_element_fn.as_global_value().as_pointer_value().into(),
         ],
-        &bitcode::LIST_SET,
+        &symbol,
     );
 
     store_list(env, new_bytes.into_pointer_value(), length)

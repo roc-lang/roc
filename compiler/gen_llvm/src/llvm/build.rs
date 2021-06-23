@@ -42,7 +42,9 @@ use inkwell::values::{
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
-use morphic_lib::{CalleeSpecVar, FuncName, FuncSpec, FuncSpecSolutions, ModSolutions};
+use morphic_lib::{
+    CalleeSpecVar, FuncName, FuncSpec, FuncSpecSolutions, ModSolutions, UpdateMode, UpdateModeVar,
+};
 use roc_builtins::bitcode;
 use roc_collections::all::{ImMap, MutMap, MutSet};
 use roc_module::ident::TagName;
@@ -826,8 +828,21 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
             )
         }
 
-        CallType::LowLevel { op, update_mode: _ } => {
-            run_low_level(env, layout_ids, scope, parent, layout, *op, arguments)
+        CallType::LowLevel { op, update_mode } => {
+            let bytes = update_mode.to_bytes();
+            let update_var = UpdateModeVar(&bytes);
+            let update_mode = func_spec_solutions.update_mode(update_var).ok();
+
+            run_low_level(
+                env,
+                layout_ids,
+                scope,
+                parent,
+                layout,
+                *op,
+                arguments,
+                update_mode,
+            )
         }
 
         CallType::HigherOrderLowLevel {
@@ -4190,6 +4205,7 @@ fn run_low_level<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
     op: LowLevel,
     args: &[Symbol],
+    update_mode: Option<UpdateMode>,
 ) -> BasicValueEnum<'ctx> {
     use LowLevel::*;
 
@@ -4648,27 +4664,6 @@ fn run_low_level<'a, 'ctx, 'env>(
                 wrapper_struct,
             )
         }
-        ListSetInPlace => {
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (index, _) = load_symbol_and_layout(scope, &args[1]);
-            let (element, _) = load_symbol_and_layout(scope, &args[2]);
-
-            match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => {
-                    // no elements, so nothing to remove
-                    empty_list(env)
-                }
-                Layout::Builtin(Builtin::List(element_layout)) => list_set(
-                    env,
-                    layout_ids,
-                    list,
-                    index.into_int_value(),
-                    element,
-                    element_layout,
-                ),
-                _ => unreachable!("invalid dict layout"),
-            }
-        }
         ListSet => {
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
             let (index, _) = load_symbol_and_layout(scope, &args[1]);
@@ -4686,6 +4681,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     index.into_int_value(),
                     element,
                     element_layout,
+                    update_mode.unwrap(),
                 ),
                 _ => unreachable!("invalid dict layout"),
             }
