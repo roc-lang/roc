@@ -3,13 +3,12 @@ interface File
     exposes [ read, write, append ]
     imports [ Task.{ Task }, File.Internal as Internal ]
 
-## Reading consists of two steps, both of which can fail: opening the file and
-## actually reading from it.
 ReadErr : [ FileNotFound, Unknown Str ]
 
-## Writing consists of two steps, both of which can fail: opening the file and
-## actually writing to it.
 WriteErr : [ FileNotFound, Unknown Str ]
+
+## Error getting metadata about a file.
+MetaErr : [ FileNotFound, Unknown Str ]
 
 ## Open a file and read all of its bytes.
 ##
@@ -99,6 +98,8 @@ append = \bytes, str ->
                     AppendFailed err path
 
             Err err -> OpenFailed err path
+
+exists : Str -> Task Bool [ MetaFailed MetaErr Str ]*
 
 ## Read a file's bytes, one chunk at a time, and use it to build up a state.
 ##

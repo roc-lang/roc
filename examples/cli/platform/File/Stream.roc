@@ -55,34 +55,6 @@ Mode :
         # TODO file modes - how will we handle these in a cross-OS way?
     }
 
-OpenConfig :
-    {
-        ## When opening a file, if the path references a file that doesn't
-        ## exist, should the operation fail, or should a file be created?
-        ## (If it should be created, specify the [Mode] it should have.)
-        ##
-        ## **Default:** `Fail`
-        ifNotExists ? [ Fail, Create Mode ] # O_CREAT
-
-        ## Once the file is successfully opened, should it be immediately
-        ## truncated to 0 bytes?
-        ##
-        ## This can be useful if you intend to rewrite the contents of the file
-        ## from scratch.
-        ##
-        ## **Default:** `False`
-        truncate ? Bool # O_TRUNC
-
-        ## Can the given path refer to a file that's a symlink?
-        ##
-        ## If not, then opening will fail if given a symlink. (Note that any
-        ## other symlinks in the path besides the filename itself will be
-        ## followed no matter what.)
-        ##
-        ## **Default:** `True`
-        fileCanBeSymlink ? Bool # O_NOFOLLOW - TODO: when O_NOFOLLOW is set, ELOOP means something different and should be translated to a different error variant.
-    }
-
 ## An error that can occur when opening a file stream.
 OpenErr :
     [
@@ -123,7 +95,7 @@ WriteErr :
 ##     stream <- openRead "source.txt" {}
 ##
 ##     text <- Task.await (readUntilEof stream)
-openRead : Str, OpenConfig, (Stream [ Read ] -> Task ok []err) -> Task ok [ OpenFailed OpenErr Str ]err
+openRead : Str, (Stream [ Read ] -> Task ok []err) -> Task ok [ OpenFailed OpenErr Str ]err
 openRead = \path, config, fdToTask ->
     Effect.openRead path config
         |> Effect.after \result ->
@@ -137,28 +109,28 @@ openRead = \path, config, fdToTask ->
 ## this lets you close the file sooner with [Stream.close] if you like. If you
 ## don't, the platform will decide when to close the file - which could result
 ## in the the file staying open longer than it would have with [openRead].
-openReadClose : Str, OpenConfig -> Task (Stream [ Read, Close ]) [ OpenFailed OpenErr Str ]*
+openReadClose : Str -> Task (Stream [ Read, Close ]) [ OpenFailed OpenErr Str ]*
 openReadClose = \path, config ->
     Effect.openRead
         |> makeOpenCloseTask path config
 
-openWrite : Str, OpenConfig, (Stream [ Write ] -> Task ok []err) -> Task ok [ OpenFailed OpenErr Str ]err
+openWrite : Str, (Stream [ Write ] -> Task ok []err) -> Task ok [ OpenFailed OpenErr Str ]err
 
-openWriteClose : Str, OpenConfig -> Task (Stream [ Write, Close ]) [ OpenFailed OpenErr Str ]*
+openWriteClose : Str -> Task (Stream [ Write, Close ]) [ OpenFailed OpenErr Str ]*
 openWriteClose = \path, config ->
     Effect.openWrite
         |> makeOpenCloseTask path config
 
-openAppend : Str, OpenConfig, (Stream [ Append ] -> Task ok []err) -> Task ok [ OpenFailed OpenErr Str ]err
+openAppend : Str, (Stream [ Append ] -> Task ok []err) -> Task ok [ OpenFailed OpenErr Str ]err
 
-openAppendClose : Str, OpenConfig -> Task (Stream [ Append, Close ]) [ OpenFailed OpenErr Str ]*
+openAppendClose : Str -> Task (Stream [ Append, Close ]) [ OpenFailed OpenErr Str ]*
 openAppendClose = \path, config ->
     Effect.openAppend
         |> makeOpenCloseTask path config
 
-openReadAppend : Str, OpenConfig, (Stream [ Read, Append ] -> Task ok []err) -> Task ok [ OpenFailed OpenErr Str ]err
+openReadAppend : Str, (Stream [ Read, Append ] -> Task ok []err) -> Task ok [ OpenFailed OpenErr Str ]err
 
-openReadAppendClose : Str, OpenConfig -> Task (Stream [ Read, Append, Close ]) [ OpenFailed OpenErr Str ]*
+openReadAppendClose : Str -> Task (Stream [ Read, Append, Close ]) [ OpenFailed OpenErr Str ]*
 openReadAppendClose = \path, config ->
     Effect.openReadAppend
         |> makeOpenCloseTask path config
@@ -182,12 +154,45 @@ openReadAppendClose = \path, config ->
 ## >>>         write stream 0 (Str.toUtf8 ":)")
 ## >>>     else
 ## >>>         Task.succeed {}
-openReadWrite : Str, OpenConfig, (Stream [ Read, Write ] -> Task ok []err) -> Task ok [ OpenFailed OpenErr Str ]err
+openReadWrite : Str, (Stream [ Read, Write ] -> Task ok []err) -> Task ok [ OpenFailed OpenErr Str ]err
 
-openReadWriteClose : Str, OpenConfig -> Task (Stream [ Read, Write, Close ]) [ OpenFailed OpenErr Str ]*
+openReadWriteClose : Str -> Task (Stream [ Read, Write, Close ]) [ OpenFailed OpenErr Str ]*
 openReadWriteClose = \path, config ->
     Effect.openReadWrite
         |> makeOpenCloseTask path config
+
+# Create - create a file
+#
+## Create a file at the given path, and open it as a stream with write permissions only.
+##
+## Fails if there is already a file with that name.
+createWrite : Str, Mode, (Stream [ Write ] -> Task ok []err) -> Task ok [ CreateFailed OpenErr Str ]err
+
+# On Windows, use CreateFileA with the CREATE_NEW flag to create files and error if they exist already:
+# https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea
+
+createWriteClose : Str, Mode -> Task (Stream [ Write, Close ]) [ CreateFailed OpenErr Str ]*
+
+createReadWrite : Str, Mode, (Stream [ Read, Write ] -> Task ok []err) -> Task ok [ CreateFailed OpenErr Str ]err
+
+createReadWriteClose : Str, Mode -> Task (Stream [ Read, Write, Close ]) [ CreateFailed OpenErr Str ]*
+
+# Truncation - open an existing file and immediately truncate it to 0 bytes
+
+# NOTE: to do this on Windows, use CreateFileA with the TRUNCATE_EXISTING flag
+# https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea
+
+truncWrite : Str, (Stream [ Write ] -> Task ok []err) -> Task ok [ TruncFailed OpenErr Str ]err
+
+truncWriteClose : Str -> Task (Stream [ Write, Close ]) [ TruncFailed OpenErr Str ]*
+
+truncReadWrite : Str, (Stream [ Read, Write ] -> Task ok []err) -> Task ok [ TruncFailed OpenErr Str ]err
+
+truncReadWriteClose : Str -> Task (Stream [ Read, Write, Close ]) [ TruncFailed OpenErr Str ]*
+
+truncAppend : Str, (Stream [ Append ] -> Task ok []err) -> Task ok [ TruncFailed OpenErr Str ]err
+
+truncAppendClose : Str -> Task (Stream [ Append, Close ]) [ TruncFailed OpenErr Str ]*
 
 # Temporary files
 #
@@ -317,7 +322,7 @@ append = \stream, contents ->
         |> Task.mapFail \err -> AppendFailed err path
 
 ## Internal helper for translating raw effect outputs into appropriate tasks
-makeOpenCloseTask : Str, OpenConfig, (Str, OpenConfig -> Task Fd err) -> Task (Stream *) [ OpenFailed err Str ]*
+makeOpenCloseTask : Str, (Str -> Task Fd err) -> Task (Stream *) [ OpenFailed err Str ]*
 makeOpenCloseTask = \path, config, toEffect ->
     toEffect path config
         |> Effect.map \result ->
