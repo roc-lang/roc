@@ -951,57 +951,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         }
 
         Tag {
-            union_size,
-            arguments,
-            tag_layout,
-            ..
-        } if *union_size == 1 && matches!(tag_layout, UnionLayout::NonRecursive(_)) => {
-            let it = arguments.iter();
-
-            let ctx = env.context;
-            let builder = env.builder;
-
-            // Determine types
-            let num_fields = arguments.len() + 1;
-            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-            for field_symbol in it {
-                let (val, field_layout) = load_symbol_and_layout(scope, field_symbol);
-                if !field_layout.is_dropped_because_empty() {
-                    let field_type = basic_type_from_layout(env, &field_layout);
-
-                    field_types.push(field_type);
-                    field_vals.push(val);
-                }
-            }
-
-            // If the struct has only one field that isn't zero-sized,
-            // unwrap it. This is what the layout expects us to do.
-            if field_vals.len() == 1 {
-                field_vals.pop().unwrap()
-            } else {
-                // Create the struct_type
-                let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-                let mut struct_val = struct_type.const_zero().into();
-
-                // Insert field exprs into struct_val
-                for (index, field_val) in field_vals.into_iter().enumerate() {
-                    struct_val = builder
-                        .build_insert_value(
-                            struct_val,
-                            field_val,
-                            index as u32,
-                            "insert_single_tag_field",
-                        )
-                        .unwrap();
-                }
-
-                BasicValueEnum::StructValue(struct_val.into_struct_value())
-            }
-        }
-
-        Tag {
             arguments,
             tag_layout: UnionLayout::NonRecursive(fields),
             union_size,
