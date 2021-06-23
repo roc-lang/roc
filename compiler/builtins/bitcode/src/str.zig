@@ -17,7 +17,7 @@ const InPlace = packed enum(u8) {
 
 const SMALL_STR_MAX_LENGTH = small_string_size - 1;
 const small_string_size = 2 * @sizeOf(usize);
-const blank_small_string: [16]u8 = init_blank_small_string(small_string_size);
+const blank_small_string: [@sizeOf(RocStr)]u8 = init_blank_small_string(small_string_size);
 
 fn init_blank_small_string(comptime n: usize) [n]u8 {
     var prime_list: [n]u8 = undefined;
@@ -83,12 +83,6 @@ pub const RocStr = extern struct {
         if (!self.isSmallStr() and !self.isEmpty()) {
             utils.decref(self.str_bytes, self.str_len, RocStr.alignment);
         }
-    }
-
-    pub fn toSlice(self: RocStr) []u8 {
-        const str_bytes_ptr: [*]u8 = self.str_bytes orelse unreachable;
-        const str_bytes: []u8 = str_bytes_ptr[0..self.str_len];
-        return str_bytes;
     }
 
     // This takes ownership of the pointed-to bytes if they won't fit in a
@@ -203,8 +197,8 @@ pub const RocStr = extern struct {
         return result;
     }
 
+    // NOTE: returns false for empty string!
     pub fn isSmallStr(self: RocStr) bool {
-        // NOTE: returns False for empty string!
         return @bitCast(isize, self.str_len) < 0;
     }
 
@@ -221,6 +215,82 @@ pub const RocStr = extern struct {
 
     pub fn isEmpty(self: RocStr) bool {
         return self.len() == 0;
+    }
+
+    // If a string happens to be null-terminated already, then we can pass its
+    // bytes directly to functions (e.g. for opening files) that require
+    // null-terminated strings. Otherwise, we need to allocate and copy a new
+    // null-terminated string, which has a much higher performance cost!
+    fn isNullTerminated(self: RocStr) bool {
+        const len = self.len();
+        const longest_small_str = @sizeOf(RocStr) - 1;
+
+        // NOTE: We want to compare length here, *NOT* check for is_small_str!
+        // This is because we explicitly want the empty string to be handled in
+        // this branch, even though the empty string is not a small string.
+        //
+        // (The other branch dereferences the bytes pointer, which is not safe
+        // to do for the empty string.)
+        if (len <= longest_small_str) {
+            // If we're a small string, then usually the next byte after the
+            // end of the string will be zero. (Small strings set all their
+            // unused bytes to 0, so that comparison for equality can be fast.)
+            //
+            // However, empty strings are *not* null terminated, so if this is
+            // empty, it should return false.
+            //
+            // Also, if we are exactly a maximum-length small string,
+            // then the next byte is off the end of the struct;
+            // in that case, we are also not null-terminated!
+            return len != 0 and len != longest_small_str;
+        } else {
+            // This is a big string, and it's not empty, so we can safely
+            // dereference the pointer.
+            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.str_bytes));
+            const capacity_or_refcount: isize = (ptr - 1)[0];
+
+            // If capacity_or_refcount is positive, then it's a capacity value.
+            //
+            // If we have excess capacity, then we can safely read the next
+            // byte after the end of the string. Maybe it happens to be zero!
+            if (capacity_or_refcount > @intCast(isize, len)) {
+                return self.str_bytes[len] == 0;
+            } else {
+                // This string was refcounted or immortal; we can't safely read
+                // the next byte, so assume the string is not null-terminated.
+                return false;
+            }
+        }
+    }
+
+    // Returns (@sizeOf(RocStr) - 1) for small strings and the empty string.
+    // Returns 0 for refcounted stirngs and immortal strings.
+    // Returns the stored capacity value for all other strings.
+    pub fn capacity(self: RocStr) usize {
+        const len = self.len();
+        const longest_small_str = @sizeOf(RocStr) - 1;
+
+        if (len <= longest_small_str) {
+            // Note that although empty strings technically have the full
+            // capacity of a small string available, they aren't marked as small
+            // strings, so if you want to make use of that capacity, you need
+            // to first change its flag to mark it as a small string!
+            return longest_small_str;
+        } else {
+            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.str_bytes));
+            const capacity_or_refcount: isize = (ptr - 1)[0];
+
+            if (capacity_or_refcount > 0) {
+                // If capacity_or_refcount is positive, that means it's a
+                // capacity value.
+                return capacity_or_refcount;
+            } else {
+                // This is either a refcount or else this big string is stored
+                // in a readonly section; either way, it has no capacity,
+                // because we cannot mutate it in-place!
+                return 0;
+            }
+        }
     }
 
     pub fn isUnique(self: RocStr) bool {
@@ -240,15 +310,13 @@ pub const RocStr = extern struct {
     }
 
     pub fn asSlice(self: RocStr) []u8 {
-        // Since this conditional would be prone to branch misprediction,
-        // make sure it will compile to a cmov.
         return self.asU8ptr()[0..self.len()];
     }
 
     pub fn asU8ptr(self: RocStr) [*]u8 {
         // Since this conditional would be prone to branch misprediction,
         // make sure it will compile to a cmov.
-        return if (self.isSmallStr() or self.isEmpty()) (&@bitCast([16]u8, self)) else (@ptrCast([*]u8, self.str_bytes));
+        return if (self.isSmallStr() or self.isEmpty()) (&@bitCast([@sizeOf(RocStr)]u8, self)) else (@ptrCast([*]u8, self.str_bytes));
     }
 
     // Given a pointer to some bytes, write the first (len) bytes of this
