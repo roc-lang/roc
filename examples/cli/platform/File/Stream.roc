@@ -52,12 +52,14 @@ Stream a : Internal.Stream a
 
 Mode :
     {
-        # TODO file modes - how will we handle these in a cross-OS way?
+        # TODO file modes like read-only, executable, etc.
     }
 
 ## An error that can occur when opening a file stream.
 OpenErr :
     [
+        # TODO list all the errors that can happen when opening a file
+
         ## The filesystem gave an unknown error with this description string.
         Unknown Str
     ]
@@ -65,6 +67,8 @@ OpenErr :
 ## An error that can occur when closing a file stream.
 CloseErr :
     [
+        # TODO list all the errors that can happen when closing a file
+
         ## The filesystem gave an unknown error with this description string.
         Unknown Str,
     ]
@@ -73,6 +77,8 @@ CloseErr :
 ReadErr :
     [
         StreamWasClosed,
+        # TODO list all the other errors that can happen when reading from a file
+
         ## The filesystem gave an unknown error with this description string.
         Unknown Str,
     ]
@@ -81,6 +87,8 @@ ReadErr :
 WriteErr :
     [
         StreamWasClosed,
+        # TODO list all the other errors that can happen when writing to a file
+
         ## The filesystem gave an unknown error with this description string.
         Unknown Str,
     ]
@@ -251,22 +259,23 @@ close = \stream ->
 
 
 ## Read from a stream starting at the given byte index, reading either until
-## the end of the file (`Eof`) or up to the given number of bytes.
+## the end of the file (`Eof`) or at most the given number of bytes (`AtMost`).
 #
 ## This may encounter the end of the file before reading the requested number of
-## `Max` bytes, in which case # it will return all the bytes it read before the
-## end of the file was reached.
-read : Stream [ Read ]*, Nat, [ Eof, Max Nat ] -> Task (List U8) [ ReadFailed ReadErr Str ]*
+## `AtMost` bytes, in which case it will return all the bytes it read before it
+## hit the end of the file.
+read : Stream [ Read ]*, Nat, [ Eof, AtMost Nat ] -> Task (List U8) [ ReadFailed ReadErr Str ]*
 read = \stream, index, config ->
-    # This API mainly takes the [ Eof, Max Nat ] argument as a way to prevent
-    # something like `readMaxBytes` from taking two `Nat` arguments in a row,
+    # This API mainly takes the [ Eof, AtMost Nat ] argument as a way to prevent
+    # something like `readAtMostBytes` from taking two `Nat` arguments in a row,
     # which could get mixed up. Immediately delegate to more specialized
     # functions, so that the function will be reliably inlined, and this
     # conditional will be optimized away!
     when config is
         Eof -> readUntilEof stream index
-        Max bytes, -> readMaxBytes stream index bytes
+        AtMost bytes, -> readAtMostBytes stream index bytes
 
+## Helper for `read` (not exposed)
 readUntilEof : Stream [ Read ]*, Nat  -> Task (List U8) [ ReadFailed ReadErr Str ]*
 readUntilEof = \stream, index ->
     { fd, path } = toRaw stream
@@ -274,11 +283,12 @@ readUntilEof = \stream, index ->
     Effect.readUntilEof fd
         |> Effect.map \res -> Result.mapErr res \err -> ReadFailed err path
 
-readMaxBytes : Stream [ Read ]*, Nat, Nat  -> Task (List U8) [ ReadFailed ReadErr Str ]*
-readMaxBytes = \stream, index, bytes ->
+## Helper for `read` (not exposed)
+readAtMostBytes : Stream [ Read ]*, Nat, Nat  -> Task (List U8) [ ReadFailed ReadErr Str ]*
+readAtMostBytes = \stream, index, bytes ->
     { fd, path } = toRaw stream
 
-    Effect.readMaxBytes fd bytes
+    Effect.readAtMostBytes fd bytes
         |> Effect.map \res -> Result.mapErr res \err -> ReadFailed err path
 
 ## Write the given bytes to a file stream, beginning at the given byte offset
@@ -302,18 +312,17 @@ writeFromEnd = \stream, offset, contents ->
     Effect.writeEnd fd offset contents
         |> Task.mapFail \err -> WriteFailed err path
 
-# TODO convert this to docs:
-#
-# The file is opened in append mode.  Before each write(2),
-# the file offset is positioned at the end of the file, as
-# if with lseek(2).  The modification of the file offset and
-# the write operation are performed as a single atomic step.
-
-# O_APPEND may lead to corrupted files on NFS filesystems if
-# more than one process appends data to a file at once.
-# This is because NFS does not support appending to a file,
-# so the client kernel has to simulate it, which can't be
-# done without a race condition.
+## Append
+##
+## Note: On typical filesystems, it's safe if different processes append to the
+## same file at once, because the append process finds the end of the file and
+## writes to it as an atomic operation. (TODO: that's true on Linux; is it true
+## on every OS?)
+##
+## However, on NFS filesystems, appending to the same file from different
+## processes can cause file corruption. This is because NFS does not support an
+## atomic append operation, which creates an unavoidable race condition between
+## finding the end of the file and writing to it.
 append : Stream [ Append ]*, List U8 -> Task {} [ AppendFailed WriteErr Str ]*
 append = \stream, contents ->
     { fd, path } = toRaw stream
@@ -321,7 +330,7 @@ append = \stream, contents ->
     Effect.writeCur fd contents
         |> Task.mapFail \err -> AppendFailed err path
 
-## Internal helper for translating raw effect outputs into appropriate tasks
+## Helper for translating raw effect outputs into appropriate tasks (not exposed)
 makeOpenCloseTask : Str, (Str -> Task Fd err) -> Task (Stream *) [ OpenFailed err Str ]*
 makeOpenCloseTask = \path, config, toEffect ->
     toEffect path config
