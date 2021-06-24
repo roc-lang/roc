@@ -40,6 +40,26 @@ pub enum RocOrder {
 //}
 
 #[repr(C)]
+pub struct RocDec {
+    pub num: i128,
+}
+
+impl fmt::Debug for RocDec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // RocList { num: 123 }
+        f.debug_struct("RocDec").field("num", &self.num).finish()
+    }
+}
+
+impl PartialEq for RocDec {
+    fn eq(&self, other: &Self) -> bool {
+        self.num == other.num
+    }
+}
+
+impl Eq for RocDec {}
+
+#[repr(C)]
 pub struct RocList<T> {
     elements: *mut T,
     length: usize,

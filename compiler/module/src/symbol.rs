@@ -873,6 +873,9 @@ define_builtins! {
         97 NUM_INT_CAST: "intCast"
         98 NUM_MAX_I128: "maxI128"
         99 NUM_IS_MULTIPLE_OF: "isMultipleOf"
+        100 NUM_AT_DECIMAL: "@Decimal"
+        101 NUM_DECIMAL: "Decimal" imported
+        102 NUM_DEC: "Dec" imported // the Num.Dectype alias
 
     }
     2 BOOL: "Bool" => {

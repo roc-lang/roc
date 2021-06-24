@@ -3,7 +3,7 @@ mod gen_num {
     use crate::assert_evals_to;
     use crate::assert_llvm_evals_to;
     use indoc::indoc;
-    use roc_std::RocOrder;
+    use roc_std::{RocDec, RocOrder};
 
     #[test]
     fn nat_alias() {
@@ -328,6 +328,29 @@ mod gen_num {
         );
     }
 
+    #[test]
+    fn dec_float_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : Dec
+                    x = 3.6
+
+                    y : Dec
+                    y = 3.4
+
+                    z : Dec
+                    z = x + y
+
+                    z
+                "#
+            ),
+            RocDec {
+                num: 7000000000000000000
+            },
+            RocDec
+        );
+    }
     #[test]
     fn f64_float_alias() {
         assert_evals_to!(

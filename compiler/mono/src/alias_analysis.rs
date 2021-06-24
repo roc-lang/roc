@@ -970,7 +970,7 @@ fn builtin_spec(builder: &mut FuncDefBuilder, builtin: &Builtin) -> Result<TypeI
 
     match builtin {
         Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize => builder.add_tuple_type(&[]),
-        Float128 | Float64 | Float32 | Float16 => builder.add_tuple_type(&[]),
+        Decimal | Float128 | Float64 | Float32 | Float16 => builder.add_tuple_type(&[]),
         Str | EmptyStr => str_type(builder),
         Dict(key_layout, value_layout) => {
             let value_type = layout_spec(builder, value_layout)?;

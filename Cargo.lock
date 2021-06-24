@@ -3310,6 +3310,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_solve",
+ "roc_std",
  "roc_types",
  "roc_unify",
  "ven_ena",

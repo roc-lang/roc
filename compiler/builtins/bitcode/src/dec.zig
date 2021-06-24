@@ -2,9 +2,10 @@ const std = @import("std");
 const str = @import("str.zig");
 
 const math = std.math;
+const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 const RocStr = str.RocStr;
 
-pub const RocDec = struct {
+pub const RocDec = extern struct {
     num: i128,
 
     pub const decimal_places: comptime u5 = 18;
@@ -952,4 +953,12 @@ test "div: 10 / 3" {
     var res: RocDec = RocDec.fromStr(roc_str).?;
 
     try expectEqual(res, numer.div(denom));
+}
+
+// exports
+
+const FromStrResult = extern struct { dec: RocDec, is_ok: bool };
+
+pub fn fromStrC(arg: RocStr, output: *FromStrResult) callconv(.C) void {
+    output.* = if (@call(.{ .modifier = always_inline }, RocDec.fromStr, .{arg})) |dec| .{ .dec = dec, .is_ok = true } else .{ .dec = RocDec.one_point_zero, .is_ok = false };
 }

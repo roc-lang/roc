@@ -4,6 +4,7 @@ use bumpalo::Bump;
 use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
+use roc_std::RocDec;
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 use roc_types::types::RecordField;
 use std::collections::HashMap;
@@ -381,6 +382,7 @@ pub enum Builtin<'a> {
     Int8,
     Int1,
     Usize,
+    Decimal,
     Float128,
     Float64,
     Float32,
@@ -868,6 +870,7 @@ impl<'a> Builtin<'a> {
     const I8_SIZE: u32 = std::mem::size_of::<i8>() as u32;
     const I1_SIZE: u32 = std::mem::size_of::<bool>() as u32;
     const USIZE_SIZE: u32 = std::mem::size_of::<usize>() as u32;
+    const DECIMAL_SIZE: u32 = std::mem::size_of::<RocDec>() as u32; // TODO: Is this right?
     const F128_SIZE: u32 = 16;
     const F64_SIZE: u32 = std::mem::size_of::<f64>() as u32;
     const F32_SIZE: u32 = std::mem::size_of::<f32>() as u32;
@@ -897,6 +900,7 @@ impl<'a> Builtin<'a> {
             Int8 => Builtin::I8_SIZE,
             Int1 => Builtin::I1_SIZE,
             Usize => Builtin::USIZE_SIZE,
+            Decimal => Builtin::DECIMAL_SIZE,
             Float128 => Builtin::F128_SIZE,
             Float64 => Builtin::F64_SIZE,
             Float32 => Builtin::F32_SIZE,
@@ -923,6 +927,7 @@ impl<'a> Builtin<'a> {
             Int8 => align_of::<i8>() as u32,
             Int1 => align_of::<bool>() as u32,
             Usize => align_of::<usize>() as u32,
+            Decimal => align_of::<RocDec>() as u32, // TODO: Is this right?
             Float128 => align_of::<i128>() as u32,
             Float64 => align_of::<f64>() as u32,
             Float32 => align_of::<f32>() as u32,
@@ -938,8 +943,8 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize | Float128 | Float64 | Float32
-            | Float16 | EmptyStr | EmptyDict | EmptyList | EmptySet => true,
+            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize | Decimal | Float128 | Float64
+            | Float32 | Float16 | EmptyStr | EmptyDict | EmptyList | EmptySet => true,
             Str | Dict(_, _) | Set(_) | List(_) => false,
         }
     }
@@ -949,8 +954,8 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize | Float128 | Float64 | Float32
-            | Float16 | EmptyStr | EmptyDict | EmptyList | EmptySet => false,
+            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize | Decimal | Float128 | Float64
+            | Float32 | Float16 | EmptyStr | EmptyDict | EmptyList | EmptySet => false,
             List(_) => true,
 
             Str | Dict(_, _) | Set(_) => true,
@@ -973,6 +978,7 @@ impl<'a> Builtin<'a> {
             Int8 => alloc.text("Int8"),
             Int1 => alloc.text("Int1"),
             Usize => alloc.text("Usize"),
+            Decimal => alloc.text("Decimal"),
             Float128 => alloc.text("Float128"),
             Float64 => alloc.text("Float64"),
             Float32 => alloc.text("Float32"),
@@ -1060,6 +1066,10 @@ fn layout_from_flat_type<'a>(
                 }
 
                 // Floats
+                Symbol::NUM_DEC => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Decimal))
+                }
                 Symbol::NUM_F64 => {
                     debug_assert_eq!(args.len(), 0);
                     Ok(Layout::Builtin(Builtin::Float64))
@@ -1803,6 +1813,7 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutPro
 
             // Floats
             Symbol::NUM_FLOATINGPOINT => Ok(Layout::Builtin(Builtin::Float64)),
+            Symbol::NUM_DEC => Ok(Layout::Builtin(Builtin::Decimal)),
             Symbol::NUM_F64 => Ok(Layout::Builtin(Builtin::Float64)),
             Symbol::NUM_F32 => Ok(Layout::Builtin(Builtin::Float32)),
 
@@ -1877,6 +1888,11 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
                     debug_assert!(args.is_empty());
 
                     Ok(Layout::Builtin(Builtin::Float64))
+                }
+                Content::Alias(Symbol::NUM_DECIMAL, args, _) => {
+                    debug_assert!(args.is_empty());
+
+                    Ok(Layout::Builtin(Builtin::Decimal))
                 }
                 Content::FlexVar(_) | Content::RigidVar(_) => {
                     // default to f64

@@ -82,6 +82,7 @@ pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
         Int8 => context.i8_type().as_basic_type_enum(),
         Int1 => context.bool_type().as_basic_type_enum(),
         Usize => ptr_int(context, ptr_bytes).as_basic_type_enum(),
+        Decimal => zig_dec_type(env).into(),
         Float128 => context.f128_type().as_basic_type_enum(),
         Float64 => context.f64_type().as_basic_type_enum(),
         Float32 => context.f32_type().as_basic_type_enum(),
@@ -179,4 +180,10 @@ pub fn zig_str_type<'a, 'ctx, 'env>(
     env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
 ) -> StructType<'ctx> {
     env.module.get_struct_type("str.RocStr").unwrap()
+}
+
+pub fn zig_dec_type<'a, 'ctx, 'env>(
+    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
+) -> StructType<'ctx> {
+    env.module.get_struct_type("dec.RocDec").unwrap()
 }

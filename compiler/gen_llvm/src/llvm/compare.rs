@@ -96,6 +96,7 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
 
         Builtin::Usize => int_cmp(IntPredicate::EQ, "eq_usize"),
 
+        Builtin::Decimal => panic!("TODO: eq decimal"),
         Builtin::Float128 => float_cmp(FloatPredicate::OEQ, "eq_f128"),
         Builtin::Float64 => float_cmp(FloatPredicate::OEQ, "eq_f64"),
         Builtin::Float32 => float_cmp(FloatPredicate::OEQ, "eq_f32"),
@@ -241,6 +242,7 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
 
         Builtin::Usize => int_cmp(IntPredicate::NE, "neq_usize"),
 
+        Builtin::Decimal => panic!("TODO: negate decimal"),
         Builtin::Float128 => float_cmp(FloatPredicate::ONE, "neq_f128"),
         Builtin::Float64 => float_cmp(FloatPredicate::ONE, "neq_f64"),
         Builtin::Float32 => float_cmp(FloatPredicate::ONE, "neq_f32"),

@@ -5,6 +5,10 @@ const testing = std.testing;
 // Dec Module
 const dec = @import("dec.zig");
 
+comptime {
+    // exportDecFn(dec.fromStrC, "from_str");
+}
+
 // List Module
 const list = @import("list.zig");
 
@@ -101,9 +105,11 @@ fn exportStrFn(comptime func: anytype, comptime func_name: []const u8) void {
 fn exportDictFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "dict." ++ func_name);
 }
-
 fn exportListFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "list." ++ func_name);
+}
+fn exportDecFn(comptime func: anytype, comptime func_name: []const u8) void {
+    exportBuiltinFn(func, "dec." ++ func_name);
 }
 
 // Run all tests in imported modules

@@ -131,6 +131,9 @@ fn hash_builtin<'a, 'ctx, 'env>(
             let hash_bytes = store_and_use_as_u8_ptr(env, val, &layout);
             hash_bitcode_fn(env, seed, hash_bytes, layout.stack_size(ptr_bytes))
         }
+        Builtin::Decimal => {
+            panic!("TODO: Hash Decimal");
+        }
         Builtin::Str => {
             // let zig deal with big vs small string
             call_bitcode_fn(
