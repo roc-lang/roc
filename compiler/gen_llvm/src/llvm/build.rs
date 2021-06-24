@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::llvm::bitcode::call_bitcode_fn;
 use crate::llvm::build_dict::{
     dict_contains, dict_difference, dict_empty, dict_get, dict_insert, dict_intersection,
@@ -17,8 +19,8 @@ use crate::llvm::build_str::{
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
-    basic_type_from_builtin, basic_type_from_layout, block_of_memory, block_of_memory_slices,
-    ptr_int,
+    basic_type_from_builtin, basic_type_from_layout, basic_type_from_layout_old, block_of_memory,
+    block_of_memory_slices, ptr_int,
 };
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
@@ -892,6 +894,32 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
     }
 }
 
+pub const TAG_ID_INDEX: u32 = 1;
+pub const TAG_DATA_INDEX: u32 = 0;
+
+pub fn struct_from_fields<'a, 'ctx, 'env, I>(
+    env: &Env<'a, 'ctx, 'env>,
+    struct_type: StructType<'ctx>,
+    values: I,
+) -> StructValue<'ctx>
+where
+    I: Iterator<Item = (usize, BasicValueEnum<'ctx>)>,
+{
+    let mut struct_value = struct_type.const_zero().into();
+
+    // Insert field exprs into struct_val
+    for (index, field_val) in values {
+        let index: u32 = index as u32;
+
+        struct_value = env
+            .builder
+            .build_insert_value(struct_value, field_val, index, "insert_record_field")
+            .unwrap();
+    }
+
+    struct_value.into_struct_value()
+}
+
 pub fn build_exp_expr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -938,16 +966,9 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             // Create the struct_type
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let mut struct_val = struct_type.const_zero().into();
 
             // Insert field exprs into struct_val
-            for (index, field_val) in field_vals.into_iter().enumerate() {
-                struct_val = builder
-                    .build_insert_value(struct_val, field_val, index as u32, "insert_record_field")
-                    .unwrap();
-            }
-
-            BasicValueEnum::StructValue(struct_val.into_struct_value())
+            struct_from_fields(env, struct_type, field_vals.into_iter().enumerate()).into()
         }
 
         Tag {
@@ -957,8 +978,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             tag_id,
             ..
         } => {
-            let tag_layout = Layout::Union(UnionLayout::NonRecursive(fields));
-
             debug_assert!(*union_size > 1);
 
             let ctx = env.context;
@@ -1034,9 +1053,22 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             // This tricks comes from
             // https://github.com/raviqqe/ssf/blob/bc32aae68940d5bddf5984128e85af75ca4f4686/ssf-llvm/src/expression_compiler.rs#L116
 
-            let internal_type = basic_type_from_layout(env, &tag_layout);
+            let internal_type = block_of_memory(env.context, layout, env.ptr_bytes);
 
-            cast_tag_to_block_of_memory(builder, struct_val.into_struct_value(), internal_type)
+            let data =
+                cast_tag_to_block_of_memory(builder, struct_val.into_struct_value(), internal_type);
+            let wrapper_type = env
+                .context
+                .struct_type(&[data.get_type(), env.context.i64_type().into()], false);
+
+            let tag_id_intval = env.context.i64_type().const_int(*tag_id as u64, false);
+
+            let field_vals = [
+                (TAG_ID_INDEX as usize, tag_id_intval.into()),
+                (TAG_DATA_INDEX as usize, data),
+            ];
+
+            struct_from_fields(env, wrapper_type, field_vals.iter().copied()).into()
         }
         Tag {
             arguments,
@@ -1569,77 +1601,82 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             structure,
             union_layout,
         } => {
-            let builder = env.builder;
-
             // cast the argument bytes into the desired shape for this tag
             let (argument, _structure_layout) = load_symbol_and_layout(scope, structure);
 
-            match union_layout {
-                UnionLayout::NonRecursive(_) => {
-                    let pointer = builder.build_alloca(argument.get_type(), "get_type");
-                    builder.build_store(pointer, argument);
-                    let tag_id_pointer = builder.build_bitcast(
-                        pointer,
-                        env.context.i64_type().ptr_type(AddressSpace::Generic),
-                        "tag_id_pointer",
-                    );
-                    builder.build_load(tag_id_pointer.into_pointer_value(), "load_tag_id")
-                }
-                UnionLayout::Recursive(_) => {
-                    let pointer = argument.into_pointer_value();
-                    let tag_id_pointer = builder.build_bitcast(
-                        pointer,
-                        env.context.i64_type().ptr_type(AddressSpace::Generic),
-                        "tag_id_pointer",
-                    );
-                    builder.build_load(tag_id_pointer.into_pointer_value(), "load_tag_id")
-                }
-                UnionLayout::NonNullableUnwrapped(_) => env.context.i64_type().const_zero().into(),
-                UnionLayout::NullableWrapped { nullable_id, .. } => {
-                    let argument_ptr = argument.into_pointer_value();
-                    let is_null = env.builder.build_is_null(argument_ptr, "is_null");
+            get_tag_id(env, parent, union_layout, argument)
+        }
+    }
+}
 
-                    let ctx = env.context;
-                    let then_block = ctx.append_basic_block(parent, "then");
-                    let else_block = ctx.append_basic_block(parent, "else");
-                    let cont_block = ctx.append_basic_block(parent, "cont");
+pub fn get_tag_id<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    union_layout: &UnionLayout<'a>,
+    argument: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+    match union_layout {
+        UnionLayout::NonRecursive(_) => {
+            let tag = argument.into_struct_value();
 
-                    let result = builder.build_alloca(ctx.i64_type(), "result");
+            builder
+                .build_extract_value(tag, TAG_ID_INDEX, "get_tag_id")
+                .unwrap()
+        }
+        UnionLayout::Recursive(_) => {
+            let pointer = argument.into_pointer_value();
+            let tag_id_pointer = builder.build_bitcast(
+                pointer,
+                env.context.i64_type().ptr_type(AddressSpace::Generic),
+                "tag_id_pointer",
+            );
+            builder.build_load(tag_id_pointer.into_pointer_value(), "load_tag_id")
+        }
+        UnionLayout::NonNullableUnwrapped(_) => env.context.i64_type().const_zero().into(),
+        UnionLayout::NullableWrapped { nullable_id, .. } => {
+            let argument_ptr = argument.into_pointer_value();
+            let is_null = env.builder.build_is_null(argument_ptr, "is_null");
 
-                    env.builder
-                        .build_conditional_branch(is_null, then_block, else_block);
+            let ctx = env.context;
+            let then_block = ctx.append_basic_block(parent, "then");
+            let else_block = ctx.append_basic_block(parent, "else");
+            let cont_block = ctx.append_basic_block(parent, "cont");
 
-                    {
-                        env.builder.position_at_end(then_block);
-                        let tag_id = ctx.i64_type().const_int(*nullable_id as u64, false);
-                        env.builder.build_store(result, tag_id);
-                        env.builder.build_unconditional_branch(cont_block);
-                    }
+            let result = builder.build_alloca(ctx.i64_type(), "result");
 
-                    {
-                        env.builder.position_at_end(else_block);
-                        let tag_id = extract_tag_discriminant_ptr(env, argument_ptr);
-                        env.builder.build_store(result, tag_id);
-                        env.builder.build_unconditional_branch(cont_block);
-                    }
+            env.builder
+                .build_conditional_branch(is_null, then_block, else_block);
 
-                    env.builder.position_at_end(cont_block);
-
-                    env.builder.build_load(result, "load_result")
-                }
-                UnionLayout::NullableUnwrapped { nullable_id, .. } => {
-                    let argument_ptr = argument.into_pointer_value();
-                    let is_null = env.builder.build_is_null(argument_ptr, "is_null");
-
-                    let ctx = env.context;
-
-                    let then_value = ctx.i64_type().const_int(*nullable_id as u64, false);
-                    let else_value = ctx.i64_type().const_int(!*nullable_id as u64, false);
-
-                    env.builder
-                        .build_select(is_null, then_value, else_value, "select_tag_id")
-                }
+            {
+                env.builder.position_at_end(then_block);
+                let tag_id = ctx.i64_type().const_int(*nullable_id as u64, false);
+                env.builder.build_store(result, tag_id);
+                env.builder.build_unconditional_branch(cont_block);
             }
+
+            {
+                env.builder.position_at_end(else_block);
+                let tag_id = extract_tag_discriminant_ptr(env, argument_ptr);
+                env.builder.build_store(result, tag_id);
+                env.builder.build_unconditional_branch(cont_block);
+            }
+
+            env.builder.position_at_end(cont_block);
+
+            env.builder.build_load(result, "load_result")
+        }
+        UnionLayout::NullableUnwrapped { nullable_id, .. } => {
+            let argument_ptr = argument.into_pointer_value();
+            let is_null = env.builder.build_is_null(argument_ptr, "is_null");
+
+            let ctx = env.context;
+
+            let then_value = ctx.i64_type().const_int(*nullable_id as u64, false);
+            let else_value = ctx.i64_type().const_int(!*nullable_id as u64, false);
+
+            env.builder
+                .build_select(is_null, then_value, else_value, "select_tag_id")
         }
     }
 }
@@ -1721,7 +1758,7 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     let builder = env.builder;
     let ctx = env.context;
 
-    let value_type = basic_type_from_layout(env, layout);
+    let value_type = basic_type_from_layout_old(env, layout);
     let len_type = env.ptr_int();
 
     let extra_bytes = layout.alignment_bytes(env.ptr_bytes).max(env.ptr_bytes);
@@ -2436,27 +2473,6 @@ pub fn complex_bitcast<'ctx>(
     }
 }
 
-fn extract_tag_discriminant_struct<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    from_value: StructValue<'ctx>,
-) -> IntValue<'ctx> {
-    let struct_type = env
-        .context
-        .struct_type(&[env.context.i64_type().into()], false);
-
-    let struct_value = complex_bitcast_struct_struct(
-        env.builder,
-        from_value,
-        struct_type,
-        "extract_tag_discriminant_struct",
-    );
-
-    env.builder
-        .build_extract_value(struct_value, 0, "")
-        .expect("desired field did not decode")
-        .into_int_value()
-}
-
 fn extract_tag_discriminant_ptr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     from_value: PointerValue<'ctx>,
@@ -2547,59 +2563,7 @@ fn build_switch_ir<'a, 'ctx, 'env>(
                 .build_bitcast(cond_value, env.context.i32_type(), "")
                 .into_int_value()
         }
-        Layout::Union(variant) => {
-            use UnionLayout::*;
-
-            match variant {
-                NonRecursive(_) => {
-                    // we match on the discriminant, not the whole Tag
-                    cond_layout = Layout::Builtin(Builtin::Int64);
-                    let full_cond = cond_value.into_struct_value();
-
-                    extract_tag_discriminant_struct(env, full_cond)
-                }
-                Recursive(_) => {
-                    // we match on the discriminant, not the whole Tag
-                    cond_layout = Layout::Builtin(Builtin::Int64);
-
-                    debug_assert!(cond_value.is_pointer_value());
-                    extract_tag_discriminant_ptr(env, cond_value.into_pointer_value())
-                }
-                NonNullableUnwrapped(_) => unreachable!("there is no tag to switch on"),
-                NullableWrapped { nullable_id, .. } => {
-                    // we match on the discriminant, not the whole Tag
-                    cond_layout = Layout::Builtin(Builtin::Int64);
-                    let full_cond_ptr = cond_value.into_pointer_value();
-
-                    let comparison: IntValue =
-                        env.builder.build_is_null(full_cond_ptr, "is_null_cond");
-
-                    let when_null = || {
-                        env.context
-                            .i64_type()
-                            .const_int(nullable_id as u64, false)
-                            .into()
-                    };
-                    let when_not_null = || extract_tag_discriminant_ptr(env, full_cond_ptr).into();
-
-                    crate::llvm::build_list::build_basic_phi2(
-                        env,
-                        parent,
-                        comparison,
-                        when_null,
-                        when_not_null,
-                        BasicTypeEnum::IntType(env.context.i64_type()),
-                    )
-                    .into_int_value()
-                }
-                NullableUnwrapped { .. } => {
-                    // there are only two options, so we do a `tag_id == 0` check and branch on that
-                    unreachable!(
-                        "we never switch on the tag id directly for NullableUnwrapped unions"
-                    )
-                }
-            }
-        }
+        Layout::Union(variant) => get_tag_id(env, parent, &variant, cond_value).into_int_value(),
         Layout::Builtin(_) => cond_value.into_int_value(),
         other => todo!("Build switch value from layout: {:?}", other),
     };
@@ -3145,8 +3109,9 @@ pub fn build_procedures<'a, 'ctx, 'env>(
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: EntryPoint<'a>,
+    debug_output_file: Option<&Path>,
 ) {
-    build_procedures_help(env, opt_level, procedures, entry_point);
+    build_procedures_help(env, opt_level, procedures, entry_point, debug_output_file);
 }
 
 pub fn build_procedures_return_main<'a, 'ctx, 'env>(
@@ -3155,7 +3120,7 @@ pub fn build_procedures_return_main<'a, 'ctx, 'env>(
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: EntryPoint<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
-    let mod_solutions = build_procedures_help(env, opt_level, procedures, entry_point);
+    let mod_solutions = build_procedures_help(env, opt_level, procedures, entry_point, None);
 
     promote_to_main_function(env, mod_solutions, entry_point.symbol, entry_point.layout)
 }
@@ -3165,6 +3130,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: EntryPoint<'a>,
+    debug_output_file: Option<&Path>,
 ) -> &'a ModSolutions {
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
     let mut scope = Scope::default();
@@ -3223,13 +3189,22 @@ fn build_procedures_help<'a, 'ctx, 'env>(
                 );
 
                 fn_val.print_to_stderr();
-                // module.print_to_stderr();
 
-                panic!(
+                if let Some(app_ll_file) = debug_output_file {
+                    env.module.print_to_file(&app_ll_file).unwrap();
+
+                    panic!(
+                        r"😱 LLVM errors when defining function {:?}; I wrote the full LLVM IR to {:?}",
+                        fn_val.get_name().to_str().unwrap(),
+                        app_ll_file,
+                    );
+                } else {
+                    panic!(
                     "The preceding code was from {:?}, which failed LLVM verification in {} build.",
-                    fn_val.get_name().to_str().unwrap(),
+                     fn_val.get_name().to_str().unwrap(),
                     mode,
-                );
+                    )
+                }
             }
         }
     }

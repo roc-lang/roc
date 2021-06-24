@@ -741,6 +741,7 @@ pub fn list_map<'a, 'ctx, 'env>(
     element_layout: &Layout<'a>,
     return_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
+    dbg!(return_layout, layout_width(env, return_layout));
     call_bitcode_fn_returns_list(
         env,
         &[

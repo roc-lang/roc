@@ -564,16 +564,21 @@ impl<'a> Layout<'a> {
                 use UnionLayout::*;
 
                 match variant {
-                    NonRecursive(fields) => fields
-                        .iter()
-                        .map(|tag_layout| {
-                            tag_layout
-                                .iter()
-                                .map(|field| field.stack_size(pointer_size))
-                                .sum()
-                        })
-                        .max()
-                        .unwrap_or_default(),
+                    NonRecursive(fields) => {
+                        let data_size: u32 = fields
+                            .iter()
+                            .map(|tag_layout| {
+                                tag_layout
+                                    .iter()
+                                    .map(|field| field.stack_size(pointer_size))
+                                    .sum()
+                            })
+                            .max()
+                            .unwrap_or_default();
+
+                        // TEMPORARY
+                        pointer_size + data_size
+                    }
 
                     Recursive(_)
                     | NullableWrapped { .. }

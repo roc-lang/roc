@@ -1003,7 +1003,7 @@ fn applied_tag_function_result() {
             x : List (Result Str *)
             x = List.map [ "a", "b" ] Ok
 
-            x
+            List.keepOks x (\y -> y)
             "#
         ),
         RocList::from_slice(&[
