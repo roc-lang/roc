@@ -180,3 +180,9 @@ pub fn zig_str_type<'a, 'ctx, 'env>(
 ) -> StructType<'ctx> {
     env.module.get_struct_type("str.RocStr").unwrap()
 }
+
+pub fn zig_has_tag_id_type<'a, 'ctx, 'env>(
+    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
+) -> StructType<'ctx> {
+    env.module.get_struct_type("list.HasTagId").unwrap()
+}

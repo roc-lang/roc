@@ -996,19 +996,10 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             // Create the struct_type
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let mut struct_val = struct_type.const_zero().into();
 
             // Insert field exprs into struct_val
-            for (index, field_val) in field_vals.into_iter().enumerate() {
-                struct_val = builder
-                    .build_insert_value(
-                        struct_val,
-                        field_val,
-                        index as u32,
-                        "insert_multi_tag_field",
-                    )
-                    .unwrap();
-            }
+            let struct_val =
+                struct_from_fields(env, struct_type, field_vals.into_iter().enumerate());
 
             // How we create tag values
             //
@@ -1036,7 +1027,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             let internal_type = basic_type_from_layout(env, &tag_layout);
 
-            cast_tag_to_block_of_memory(builder, struct_val.into_struct_value(), internal_type)
+            cast_tag_to_block_of_memory(builder, struct_val, internal_type)
         }
         Tag {
             arguments,
@@ -1573,6 +1564,29 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             extract_tag_discriminant(env, parent, *union_layout, value).into()
         }
     }
+}
+
+pub fn struct_from_fields<'a, 'ctx, 'env, I>(
+    env: &Env<'a, 'ctx, 'env>,
+    struct_type: StructType<'ctx>,
+    values: I,
+) -> StructValue<'ctx>
+where
+    I: Iterator<Item = (usize, BasicValueEnum<'ctx>)>,
+{
+    let mut struct_value = struct_type.const_zero().into();
+
+    // Insert field exprs into struct_val
+    for (index, field_val) in values {
+        let index: u32 = index as u32;
+
+        struct_value = env
+            .builder
+            .build_insert_value(struct_value, field_val, index, "insert_record_field")
+            .unwrap();
+    }
+
+    struct_value.into_struct_value()
 }
 
 fn lookup_at_index_ptr<'a, 'ctx, 'env>(
