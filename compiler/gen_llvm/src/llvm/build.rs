@@ -362,7 +362,6 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     // https://releases.llvm.org/10.0.0/docs/LangRef.html#standard-c-library-intrinsics
     let i1_type = ctx.bool_type();
     let f64_type = ctx.f64_type();
-    let i128_type = ctx.i128_type();
     let i64_type = ctx.i64_type();
     let i32_type = ctx.i32_type();
     let i16_type = ctx.i16_type();
@@ -442,11 +441,12 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
             .fn_type(&[i64_type.into(), i64_type.into()], false)
     });
 
-    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I128, {
-        let fields = [i128_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i128_type.into(), i128_type.into()], false)
-    });
+    // TODO: This is now exported by zig. Not sure what to do here?
+    // add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I128, {
+    //     let fields = [i128_type.into(), i1_type.into()];
+    //     ctx.struct_type(&fields, false)
+    //         .fn_type(&[i128_type.into(), i128_type.into()], false)
+    // });
 
     // sub with overflow
 
@@ -474,11 +474,12 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
             .fn_type(&[i64_type.into(), i64_type.into()], false)
     });
 
-    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I128, {
-        let fields = [i128_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i128_type.into(), i128_type.into()], false)
-    });
+    // TODO: This is now exported by zig. Not sure what to do here?
+    // add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I128, {
+    //     let fields = [i128_type.into(), i1_type.into()];
+    //     ctx.struct_type(&fields, false)
+    //         .fn_type(&[i128_type.into(), i128_type.into()], false)
+    // });
 }
 
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
@@ -637,10 +638,15 @@ pub fn float_with_precision<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     value: f64,
     precision: &Builtin,
-) -> FloatValue<'ctx> {
+) -> BasicValueEnum<'ctx> {
     match precision {
-        Builtin::Float64 => env.context.f64_type().const_float(value),
-        Builtin::Float32 => env.context.f32_type().const_float(value),
+        Builtin::Decimal => call_bitcode_fn(
+            env,
+            &[env.context.f64_type().const_float(value).into()],
+            &bitcode::DEC_FROM_F64,
+        ),
+        Builtin::Float64 => env.context.f64_type().const_float(value).into(),
+        Builtin::Float32 => env.context.f32_type().const_float(value).into(),
         _ => panic!("Invalid layout for float literal = {:?}", precision),
     }
 }
@@ -659,7 +665,7 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
         },
 
         Float(float) => match layout {
-            Layout::Builtin(builtin) => float_with_precision(env, *float, builtin).into(),
+            Layout::Builtin(builtin) => float_with_precision(env, *float, builtin),
             _ => panic!("Invalid layout for float literal = {:?}", layout),
         },
 
@@ -5339,6 +5345,9 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
                     rhs_layout,
                     op,
                 ),
+                Decimal => {
+                    build_dec_binop(env, parent, lhs_arg, lhs_layout, rhs_arg, rhs_layout, op)
+                }
                 _ => {
                     unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, lhs_layout);
                 }
@@ -5522,6 +5531,23 @@ fn build_float_binop<'a, 'ctx, 'env>(
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
+    }
+}
+
+fn build_dec_binop<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    _parent: FunctionValue<'ctx>,
+    lhs: BasicValueEnum<'ctx>,
+    _lhs_layout: &Layout<'a>,
+    rhs: BasicValueEnum<'ctx>,
+    _rhs_layout: &Layout<'a>,
+    op: LowLevel,
+) -> BasicValueEnum<'ctx> {
+    use roc_module::low_level::LowLevel::*;
+
+    match op {
+        NumAdd => call_bitcode_fn(env, &[lhs, rhs], &bitcode::DEC_ADD),
+        _ => panic!("TODO: Add RocDec function for op"),
     }
 }
 

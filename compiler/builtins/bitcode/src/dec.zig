@@ -23,6 +23,23 @@ pub const RocDec = extern struct {
         return .{ .num = num * one_point_zero_i128 };
     }
 
+    // TODO: There's got to be a better way to do this other than converting to Str
+    pub fn fromF64(num: f64) RocDec {
+        var digit_bytes: [19]u8 = undefined; // Max f64 digits + '.' + '-'
+
+        var fbs = std.io.fixedBufferStream(digit_bytes[0..]);
+        std.fmt.formatFloatDecimal(num, .{}, fbs.writer()) catch
+            @panic("TODO runtime exception failing to print float!");
+
+        var dec = RocDec.fromStr(RocStr.init(&digit_bytes, fbs.pos));
+
+        if (dec) |d| {
+            return d;
+        } else {
+            @panic("TODO runtime exception failing convert f64 to RocDec");
+        }
+    }
+
     pub fn fromStr(roc_str: RocStr) ?RocDec {
         if (roc_str.isEmpty()) {
             return null;
@@ -58,7 +75,7 @@ pub const RocDec = extern struct {
 
             var after_str_len = (length - 1) - pi;
             if (after_str_len > decimal_places) {
-                std.debug.panic("TODO runtime exception for too many decimal places!", .{});
+                @panic("TODO runtime exception for too many decimal places!");
             }
             var diff_decimal_places = decimal_places - after_str_len;
 
@@ -75,7 +92,7 @@ pub const RocDec = extern struct {
             var result: i128 = undefined;
             var overflowed = @mulWithOverflow(i128, before, one_point_zero_i128, &result);
             if (overflowed) {
-                std.debug.panic("TODO runtime exception for overflow!", .{});
+                @panic("TODO runtime exception for overflow!");
             }
             before_val_i128 = result;
         }
@@ -86,7 +103,7 @@ pub const RocDec = extern struct {
                 var result: i128 = undefined;
                 var overflowed = @addWithOverflow(i128, before, after, &result);
                 if (overflowed) {
-                    std.debug.panic("TODO runtime exception for overflow!", .{});
+                    @panic("TODO runtime exception for overflow!");
                 }
                 dec = .{ .num = result };
             } else {
@@ -119,7 +136,7 @@ pub const RocDec = extern struct {
         // We will handle adding the '-' later
         const is_negative = self.num < 0;
         const num = if (is_negative) std.math.negate(self.num) catch {
-            std.debug.panic("TODO runtime exception failing to negate", .{});
+            @panic("TODO runtime exception failing to negate");
         } else self.num;
 
         // Format the backing i128 into an array of digits (u8s)
@@ -135,7 +152,7 @@ pub const RocDec = extern struct {
             before_digits_slice = digit_bytes[0..before_digits_offset];
         } else {
             before_digits_adjust = @intCast(u6, math.absInt(@intCast(i7, num_digits) - decimal_places) catch {
-                std.debug.panic("TODO runtime exception for overflow when getting abs", .{});
+                @panic("TODO runtime exception for overflow when getting abs");
             });
             before_digits_slice = "0";
         }
@@ -185,7 +202,7 @@ pub const RocDec = extern struct {
         // Ideally, we'd use str_len here
         var str_bytes: [max_digits + 2]u8 = undefined;
         _ = std.fmt.bufPrint(str_bytes[0..str_len], "{s}{s}.{s}{s}", .{ sign_slice, before_digits_slice, after_zeros_slice, after_digits_slice }) catch {
-            std.debug.panic("TODO runtime exception failing to print slices", .{});
+            @panic("TODO runtime exception failing to print slices");
         };
 
         return RocStr.init(&str_bytes, str_len);
@@ -203,7 +220,7 @@ pub const RocDec = extern struct {
         if (!overflowed) {
             return RocDec{ .num = answer };
         } else {
-            std.debug.panic("TODO runtime exception for overflow!", .{});
+            @panic("TODO runtime exception for overflow!");
         }
     }
 
@@ -214,7 +231,7 @@ pub const RocDec = extern struct {
         if (!overflowed) {
             return RocDec{ .num = answer };
         } else {
-            std.debug.panic("TODO runtime exception for overflow!", .{});
+            @panic("TODO runtime exception for overflow!");
         }
     }
 
@@ -231,7 +248,7 @@ pub const RocDec = extern struct {
             } else if (other_i128 == RocDec.one_point_zero.num) {
                 return self;
             } else {
-                std.debug.panic("TODO runtime exception for overflow!", .{});
+                @panic("TODO runtime exception for overflow!");
             }
         });
 
@@ -241,7 +258,7 @@ pub const RocDec = extern struct {
             } else if (self_i128 == RocDec.one_point_zero.num) {
                 return other;
             } else {
-                std.debug.panic("TODO runtime exception for overflow!", .{});
+                @panic("TODO runtime exception for overflow!");
             }
         });
 
@@ -265,7 +282,7 @@ pub const RocDec = extern struct {
 
         // (n / 0) is an error
         if (denominator_i128 == 0) {
-            std.debug.panic("TODO runtime exception for divide by 0!", .{});
+            @panic("TODO runtime exception for divide by 0!");
         }
 
         // If they're both negative, or if neither is negative, the final answer
@@ -293,7 +310,7 @@ pub const RocDec = extern struct {
             if (denominator_i128 == one_point_zero_i128) {
                 return self;
             } else {
-                std.debug.panic("TODO runtime exception for overflow when dividing!", .{});
+                @panic("TODO runtime exception for overflow when dividing!");
             }
         };
         const numerator_u128 = @intCast(u128, numerator_abs_i128);
@@ -306,7 +323,7 @@ pub const RocDec = extern struct {
             if (numerator_i128 == one_point_zero_i128) {
                 return other;
             } else {
-                std.debug.panic("TODO runtime exception for overflow when dividing!", .{});
+                @panic("TODO runtime exception for overflow when dividing!");
             }
         };
         const denominator_u128 = @intCast(u128, denominator_abs_i128);
@@ -318,7 +335,7 @@ pub const RocDec = extern struct {
         if (answer.hi == 0 and answer.lo <= math.maxInt(i128)) {
             unsigned_answer = @intCast(i128, answer.lo);
         } else {
-            std.debug.panic("TODO runtime exception for overflow when dividing!", .{});
+            @panic("TODO runtime exception for overflow when dividing!");
         }
 
         return RocDec{ .num = if (is_answer_negative) -unsigned_answer else unsigned_answer };
@@ -438,7 +455,7 @@ fn mul_and_decimalize(a: u128, b: u128) i128 {
     overflowed = overflowed or @addWithOverflow(u128, d, c_carry4, &d);
 
     if (overflowed) {
-        std.debug.panic("TODO runtime exception for overflow!", .{});
+        @panic("TODO runtime exception for overflow!");
     }
 
     // Final 512bit value is d, c, b, a
@@ -651,6 +668,11 @@ test "fromU64" {
     var dec = RocDec.fromU64(25);
 
     try expectEqual(RocDec{ .num = 25000000000000000000 }, dec);
+}
+
+test "fromF64" {
+    var dec = RocDec.fromF64(25.5);
+    try expectEqual(RocDec{ .num = 25500000000000000000 }, dec);
 }
 
 test "fromStr: empty" {
@@ -957,8 +979,10 @@ test "div: 10 / 3" {
 
 // exports
 
-const FromStrResult = extern struct { dec: RocDec, is_ok: bool };
+pub fn fromF64(arg: f64) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.fromF64, .{arg}).num;
+}
 
-pub fn fromStrC(arg: RocStr, output: *FromStrResult) callconv(.C) void {
-    output.* = if (@call(.{ .modifier = always_inline }, RocDec.fromStr, .{arg})) |dec| .{ .dec = dec, .is_ok = true } else .{ .dec = RocDec.one_point_zero, .is_ok = false };
+pub fn add(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.add, .{ arg1, arg2 }).num;
 }

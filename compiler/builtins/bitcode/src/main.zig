@@ -6,7 +6,8 @@ const testing = std.testing;
 const dec = @import("dec.zig");
 
 comptime {
-    // exportDecFn(dec.fromStrC, "from_str");
+    exportDecFn(dec.fromF64, "from_f64");
+    exportDecFn(dec.add, "add");
 }
 
 // List Module
@@ -110,6 +111,11 @@ fn exportListFn(comptime func: anytype, comptime func_name: []const u8) void {
 }
 fn exportDecFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "dec." ++ func_name);
+}
+
+pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace) noreturn {
+    std.debug.print("{s}", .{message});
+    unreachable;
 }
 
 // Run all tests in imported modules

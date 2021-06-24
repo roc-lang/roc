@@ -65,3 +65,7 @@ pub const LIST_REVERSE: &str = "roc_builtins.list.reverse";
 pub const LIST_SORT_WITH: &str = "roc_builtins.list.sort_with";
 pub const LIST_CONCAT: &str = "roc_builtins.list.concat";
 pub const LIST_SET: &str = "roc_builtins.list.set";
+
+pub const DEC_FROM_F64: &str = "roc_builtins.dec.from_f64";
+pub const DEC_ADD: &str = "roc_builtins.dec.add";
+pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";

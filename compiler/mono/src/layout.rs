@@ -4,7 +4,6 @@ use bumpalo::Bump;
 use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
-use roc_std::RocDec;
 use roc_types::subs::{Content, FlatType, Subs, Variable};
 use roc_types::types::RecordField;
 use std::collections::HashMap;
@@ -870,7 +869,7 @@ impl<'a> Builtin<'a> {
     const I8_SIZE: u32 = std::mem::size_of::<i8>() as u32;
     const I1_SIZE: u32 = std::mem::size_of::<bool>() as u32;
     const USIZE_SIZE: u32 = std::mem::size_of::<usize>() as u32;
-    const DECIMAL_SIZE: u32 = std::mem::size_of::<RocDec>() as u32; // TODO: Is this right?
+    const DECIMAL_SIZE: u32 = std::mem::size_of::<i128>() as u32;
     const F128_SIZE: u32 = 16;
     const F64_SIZE: u32 = std::mem::size_of::<f64>() as u32;
     const F32_SIZE: u32 = std::mem::size_of::<f32>() as u32;
@@ -927,7 +926,7 @@ impl<'a> Builtin<'a> {
             Int8 => align_of::<i8>() as u32,
             Int1 => align_of::<bool>() as u32,
             Usize => align_of::<usize>() as u32,
-            Decimal => align_of::<RocDec>() as u32, // TODO: Is this right?
+            Decimal => align_of::<i128>() as u32,
             Float128 => align_of::<i128>() as u32,
             Float64 => align_of::<f64>() as u32,
             Float32 => align_of::<f32>() as u32,
