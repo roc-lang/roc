@@ -1,8 +1,6 @@
 /// Helpers for interacting with the zig that generates bitcode
 use crate::debug_info_init;
-use crate::llvm::build::{
-    struct_from_fields, Env, C_CALL_CONV, FAST_CALL_CONV, TAG_DATA_INDEX, TAG_ID_INDEX,
-};
+use crate::llvm::build::{struct_from_fields, Env, C_CALL_CONV, FAST_CALL_CONV};
 use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_n_refcount_layout, increment_refcount_layout,
@@ -138,9 +136,12 @@ fn build_has_tag_id_help<'a, 'ctx, 'env>(
 
             let input = env.builder.build_load(argument_cast, "get_value");
 
-            let tag_value =
-                crate::llvm::build::get_tag_id(env, function_value, &union_layout, input)
-                    .into_int_value();
+            let tag_value = crate::llvm::build::extract_tag_discriminant(
+                env,
+                function_value,
+                union_layout,
+                input,
+            );
 
             let actual_tag_id =
                 env.builder

@@ -1569,77 +1569,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             structure,
             union_layout,
         } => {
-            let builder = env.builder;
-
-            // cast the argument bytes into the desired shape for this tag
-            let (argument, _structure_layout) = load_symbol_and_layout(scope, structure);
-
-            match union_layout {
-                UnionLayout::NonRecursive(_) => {
-                    let pointer = builder.build_alloca(argument.get_type(), "get_type");
-                    builder.build_store(pointer, argument);
-                    let tag_id_pointer = builder.build_bitcast(
-                        pointer,
-                        env.context.i64_type().ptr_type(AddressSpace::Generic),
-                        "tag_id_pointer",
-                    );
-                    builder.build_load(tag_id_pointer.into_pointer_value(), "load_tag_id")
-                }
-                UnionLayout::Recursive(_) => {
-                    let pointer = argument.into_pointer_value();
-                    let tag_id_pointer = builder.build_bitcast(
-                        pointer,
-                        env.context.i64_type().ptr_type(AddressSpace::Generic),
-                        "tag_id_pointer",
-                    );
-                    builder.build_load(tag_id_pointer.into_pointer_value(), "load_tag_id")
-                }
-                UnionLayout::NonNullableUnwrapped(_) => env.context.i64_type().const_zero().into(),
-                UnionLayout::NullableWrapped { nullable_id, .. } => {
-                    let argument_ptr = argument.into_pointer_value();
-                    let is_null = env.builder.build_is_null(argument_ptr, "is_null");
-
-                    let ctx = env.context;
-                    let then_block = ctx.append_basic_block(parent, "then");
-                    let else_block = ctx.append_basic_block(parent, "else");
-                    let cont_block = ctx.append_basic_block(parent, "cont");
-
-                    let result = builder.build_alloca(ctx.i64_type(), "result");
-
-                    env.builder
-                        .build_conditional_branch(is_null, then_block, else_block);
-
-                    {
-                        env.builder.position_at_end(then_block);
-                        let tag_id = ctx.i64_type().const_int(*nullable_id as u64, false);
-                        env.builder.build_store(result, tag_id);
-                        env.builder.build_unconditional_branch(cont_block);
-                    }
-
-                    {
-                        env.builder.position_at_end(else_block);
-                        let tag_id = extract_tag_discriminant_ptr(env, argument_ptr);
-                        env.builder.build_store(result, tag_id);
-                        env.builder.build_unconditional_branch(cont_block);
-                    }
-
-                    env.builder.position_at_end(cont_block);
-
-                    env.builder.build_load(result, "load_result")
-                }
-                UnionLayout::NullableUnwrapped { nullable_id, .. } => {
-                    let argument_ptr = argument.into_pointer_value();
-                    let is_null = env.builder.build_is_null(argument_ptr, "is_null");
-
-                    let ctx = env.context;
-
-                    let then_value = ctx.i64_type().const_int(*nullable_id as u64, false);
-                    let else_value = ctx.i64_type().const_int(!*nullable_id as u64, false);
-
-                    env.builder
-                        .build_select(is_null, then_value, else_value, "select_tag_id")
-                }
-            }
+            let value = load_symbol(scope, structure);
+            extract_tag_discriminant(env, parent, *union_layout, value).into()
         }
     }
 }
@@ -2436,6 +2367,89 @@ pub fn complex_bitcast<'ctx>(
     }
 }
 
+pub fn extract_tag_discriminant<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    union_layout: UnionLayout<'a>,
+    cond_value: BasicValueEnum<'ctx>,
+) -> IntValue<'ctx> {
+    let builder = env.builder;
+
+    match union_layout {
+        UnionLayout::NonRecursive(_) => {
+            let pointer = builder.build_alloca(cond_value.get_type(), "get_type");
+            builder.build_store(pointer, cond_value);
+            let tag_id_pointer = builder.build_bitcast(
+                pointer,
+                env.context.i64_type().ptr_type(AddressSpace::Generic),
+                "tag_id_pointer",
+            );
+            builder
+                .build_load(tag_id_pointer.into_pointer_value(), "load_tag_id")
+                .into_int_value()
+        }
+        UnionLayout::Recursive(_) => {
+            let pointer = cond_value.into_pointer_value();
+            let tag_id_pointer = builder.build_bitcast(
+                pointer,
+                env.context.i64_type().ptr_type(AddressSpace::Generic),
+                "tag_id_pointer",
+            );
+            builder
+                .build_load(tag_id_pointer.into_pointer_value(), "load_tag_id")
+                .into_int_value()
+        }
+        UnionLayout::NonNullableUnwrapped(_) => env.context.i64_type().const_zero(),
+        UnionLayout::NullableWrapped { nullable_id, .. } => {
+            let argument_ptr = cond_value.into_pointer_value();
+            let is_null = env.builder.build_is_null(argument_ptr, "is_null");
+
+            let ctx = env.context;
+            let then_block = ctx.append_basic_block(parent, "then");
+            let else_block = ctx.append_basic_block(parent, "else");
+            let cont_block = ctx.append_basic_block(parent, "cont");
+
+            let result = builder.build_alloca(ctx.i64_type(), "result");
+
+            env.builder
+                .build_conditional_branch(is_null, then_block, else_block);
+
+            {
+                env.builder.position_at_end(then_block);
+                let tag_id = ctx.i64_type().const_int(nullable_id as u64, false);
+                env.builder.build_store(result, tag_id);
+                env.builder.build_unconditional_branch(cont_block);
+            }
+
+            {
+                env.builder.position_at_end(else_block);
+                let tag_id = extract_tag_discriminant_ptr(env, argument_ptr);
+                env.builder.build_store(result, tag_id);
+                env.builder.build_unconditional_branch(cont_block);
+            }
+
+            env.builder.position_at_end(cont_block);
+
+            env.builder
+                .build_load(result, "load_result")
+                .into_int_value()
+        }
+        UnionLayout::NullableUnwrapped { nullable_id, .. } => {
+            let argument_ptr = cond_value.into_pointer_value();
+            let is_null = env.builder.build_is_null(argument_ptr, "is_null");
+
+            let ctx = env.context;
+
+            let then_value = ctx.i64_type().const_int(nullable_id as u64, false);
+            let else_value = ctx.i64_type().const_int(!nullable_id as u64, false);
+
+            env.builder
+                .build_select(is_null, then_value, else_value, "select_tag_id")
+                .into_int_value()
+        }
+    }
+}
+
 fn extract_tag_discriminant_struct<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     from_value: StructValue<'ctx>,
@@ -2548,57 +2562,9 @@ fn build_switch_ir<'a, 'ctx, 'env>(
                 .into_int_value()
         }
         Layout::Union(variant) => {
-            use UnionLayout::*;
+            cond_layout = Layout::Builtin(Builtin::Int64);
 
-            match variant {
-                NonRecursive(_) => {
-                    // we match on the discriminant, not the whole Tag
-                    cond_layout = Layout::Builtin(Builtin::Int64);
-                    let full_cond = cond_value.into_struct_value();
-
-                    extract_tag_discriminant_struct(env, full_cond)
-                }
-                Recursive(_) => {
-                    // we match on the discriminant, not the whole Tag
-                    cond_layout = Layout::Builtin(Builtin::Int64);
-
-                    debug_assert!(cond_value.is_pointer_value());
-                    extract_tag_discriminant_ptr(env, cond_value.into_pointer_value())
-                }
-                NonNullableUnwrapped(_) => unreachable!("there is no tag to switch on"),
-                NullableWrapped { nullable_id, .. } => {
-                    // we match on the discriminant, not the whole Tag
-                    cond_layout = Layout::Builtin(Builtin::Int64);
-                    let full_cond_ptr = cond_value.into_pointer_value();
-
-                    let comparison: IntValue =
-                        env.builder.build_is_null(full_cond_ptr, "is_null_cond");
-
-                    let when_null = || {
-                        env.context
-                            .i64_type()
-                            .const_int(nullable_id as u64, false)
-                            .into()
-                    };
-                    let when_not_null = || extract_tag_discriminant_ptr(env, full_cond_ptr).into();
-
-                    crate::llvm::build_list::build_basic_phi2(
-                        env,
-                        parent,
-                        comparison,
-                        when_null,
-                        when_not_null,
-                        BasicTypeEnum::IntType(env.context.i64_type()),
-                    )
-                    .into_int_value()
-                }
-                NullableUnwrapped { .. } => {
-                    // there are only two options, so we do a `tag_id == 0` check and branch on that
-                    unreachable!(
-                        "we never switch on the tag id directly for NullableUnwrapped unions"
-                    )
-                }
-            }
+            extract_tag_discriminant(env, parent, variant, cond_value)
         }
         Layout::Builtin(_) => cond_value.into_int_value(),
         other => todo!("Build switch value from layout: {:?}", other),
