@@ -489,10 +489,14 @@ pub fn listKeepResult(
             const before_element = source_ptr + (i * before_width);
             caller(data, before_element, temporary);
 
-            const foo = has_tag_id(good_constructor, temporary);
-            if (foo.matched) {
+            // a record { matched: bool, data: ?[*]u8 }
+            // for now, that data pointer is just the input `temporary` pointer
+            // this will change in the future to only return a pointer to the
+            // payload of the tag
+            const answer = has_tag_id(good_constructor, temporary);
+            if (answer.matched) {
                 // drop the tag id
-                const contents = (foo.data orelse unreachable) + @sizeOf(i64);
+                const contents = (answer.data orelse unreachable) + @sizeOf(i64);
                 @memcpy(target_ptr + (kept * after_width), contents, after_width);
                 kept += 1;
             } else {
