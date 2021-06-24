@@ -2464,27 +2464,6 @@ pub fn extract_tag_discriminant<'a, 'ctx, 'env>(
     }
 }
 
-fn extract_tag_discriminant_struct<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    from_value: StructValue<'ctx>,
-) -> IntValue<'ctx> {
-    let struct_type = env
-        .context
-        .struct_type(&[env.context.i64_type().into()], false);
-
-    let struct_value = complex_bitcast_struct_struct(
-        env.builder,
-        from_value,
-        struct_type,
-        "extract_tag_discriminant_struct",
-    );
-
-    env.builder
-        .build_extract_value(struct_value, 0, "")
-        .expect("desired field did not decode")
-        .into_int_value()
-}
-
 fn extract_tag_discriminant_ptr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     from_value: PointerValue<'ctx>,
