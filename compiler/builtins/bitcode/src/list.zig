@@ -12,6 +12,7 @@ const Opaque = ?[*]u8;
 const Inc = fn (?[*]u8) callconv(.C) void;
 const IncN = fn (?[*]u8, usize) callconv(.C) void;
 const Dec = fn (?[*]u8) callconv(.C) void;
+const HasTagId = fn (u16, ?[*]u8) callconv(.C) extern struct { matched: bool, data: ?[*]u8 };
 
 pub const RocList = extern struct {
     bytes: ?[*]u8,
@@ -405,6 +406,7 @@ pub fn listKeepOks(
     before_width: usize,
     result_width: usize,
     after_width: usize,
+    has_tag_id: HasTagId,
     dec_result: Dec,
 ) callconv(.C) RocList {
     return listKeepResult(
@@ -418,6 +420,7 @@ pub fn listKeepOks(
         before_width,
         result_width,
         after_width,
+        has_tag_id,
         dec_result,
     );
 }
@@ -432,6 +435,7 @@ pub fn listKeepErrs(
     before_width: usize,
     result_width: usize,
     after_width: usize,
+    has_tag_id: HasTagId,
     dec_result: Dec,
 ) callconv(.C) RocList {
     return listKeepResult(
@@ -445,6 +449,7 @@ pub fn listKeepErrs(
         before_width,
         result_width,
         after_width,
+        has_tag_id,
         dec_result,
     );
 }
@@ -460,6 +465,7 @@ pub fn listKeepResult(
     before_width: usize,
     result_width: usize,
     after_width: usize,
+    has_tag_id: HasTagId,
     dec_result: Dec,
 ) RocList {
     if (list.bytes) |source_ptr| {
@@ -479,11 +485,9 @@ pub fn listKeepResult(
             const before_element = source_ptr + (i * before_width);
             caller(data, before_element, temporary);
 
-            const result = utils.RocResult{ .bytes = temporary };
-
-            const after_element = temporary + @sizeOf(i64);
-            if (is_good_constructor(result)) {
-                @memcpy(target_ptr + (kept * after_width), after_element, after_width);
+            const foo = has_tag_id(1, temporary);
+            if (foo.matched) {
+                @memcpy(target_ptr + (kept * after_width), foo.data orelse unreachable, after_width);
                 kept += 1;
             } else {
                 dec_result(temporary);
