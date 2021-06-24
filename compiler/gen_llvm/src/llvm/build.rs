@@ -1015,19 +1015,10 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             // Create the struct_type
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let mut struct_val = struct_type.const_zero().into();
 
             // Insert field exprs into struct_val
-            for (index, field_val) in field_vals.into_iter().enumerate() {
-                struct_val = builder
-                    .build_insert_value(
-                        struct_val,
-                        field_val,
-                        index as u32,
-                        "insert_multi_tag_field",
-                    )
-                    .unwrap();
-            }
+            let struct_val =
+                struct_from_fields(env, struct_type, field_vals.into_iter().enumerate());
 
             // How we create tag values
             //
@@ -1055,8 +1046,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             let internal_type = block_of_memory(env.context, layout, env.ptr_bytes);
 
-            let data =
-                cast_tag_to_block_of_memory(builder, struct_val.into_struct_value(), internal_type);
+            let data = cast_tag_to_block_of_memory(builder, struct_val, internal_type);
             let wrapper_type = env
                 .context
                 .struct_type(&[data.get_type(), env.context.i64_type().into()], false);
@@ -1068,6 +1058,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 (TAG_DATA_INDEX as usize, data),
             ];
 
+            // cast_tag_to_block_of_memory(builder, struct_val, internal_type)
             struct_from_fields(env, wrapper_type, field_vals.iter().copied()).into()
         }
         Tag {
@@ -2473,6 +2464,89 @@ pub fn complex_bitcast<'ctx>(
     }
 }
 
+pub fn extract_tag_discriminant<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    union_layout: UnionLayout<'a>,
+    cond_value: BasicValueEnum<'ctx>,
+) -> IntValue<'ctx> {
+    let builder = env.builder;
+
+    match union_layout {
+        UnionLayout::NonRecursive(_) => {
+            let pointer = builder.build_alloca(cond_value.get_type(), "get_type");
+            builder.build_store(pointer, cond_value);
+            let tag_id_pointer = builder.build_bitcast(
+                pointer,
+                env.context.i64_type().ptr_type(AddressSpace::Generic),
+                "tag_id_pointer",
+            );
+            builder
+                .build_load(tag_id_pointer.into_pointer_value(), "load_tag_id")
+                .into_int_value()
+        }
+        UnionLayout::Recursive(_) => {
+            let pointer = cond_value.into_pointer_value();
+            let tag_id_pointer = builder.build_bitcast(
+                pointer,
+                env.context.i64_type().ptr_type(AddressSpace::Generic),
+                "tag_id_pointer",
+            );
+            builder
+                .build_load(tag_id_pointer.into_pointer_value(), "load_tag_id")
+                .into_int_value()
+        }
+        UnionLayout::NonNullableUnwrapped(_) => env.context.i64_type().const_zero(),
+        UnionLayout::NullableWrapped { nullable_id, .. } => {
+            let argument_ptr = cond_value.into_pointer_value();
+            let is_null = env.builder.build_is_null(argument_ptr, "is_null");
+
+            let ctx = env.context;
+            let then_block = ctx.append_basic_block(parent, "then");
+            let else_block = ctx.append_basic_block(parent, "else");
+            let cont_block = ctx.append_basic_block(parent, "cont");
+
+            let result = builder.build_alloca(ctx.i64_type(), "result");
+
+            env.builder
+                .build_conditional_branch(is_null, then_block, else_block);
+
+            {
+                env.builder.position_at_end(then_block);
+                let tag_id = ctx.i64_type().const_int(nullable_id as u64, false);
+                env.builder.build_store(result, tag_id);
+                env.builder.build_unconditional_branch(cont_block);
+            }
+
+            {
+                env.builder.position_at_end(else_block);
+                let tag_id = extract_tag_discriminant_ptr(env, argument_ptr);
+                env.builder.build_store(result, tag_id);
+                env.builder.build_unconditional_branch(cont_block);
+            }
+
+            env.builder.position_at_end(cont_block);
+
+            env.builder
+                .build_load(result, "load_result")
+                .into_int_value()
+        }
+        UnionLayout::NullableUnwrapped { nullable_id, .. } => {
+            let argument_ptr = cond_value.into_pointer_value();
+            let is_null = env.builder.build_is_null(argument_ptr, "is_null");
+
+            let ctx = env.context;
+
+            let then_value = ctx.i64_type().const_int(nullable_id as u64, false);
+            let else_value = ctx.i64_type().const_int(!nullable_id as u64, false);
+
+            env.builder
+                .build_select(is_null, then_value, else_value, "select_tag_id")
+                .into_int_value()
+        }
+    }
+}
+
 fn extract_tag_discriminant_ptr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     from_value: PointerValue<'ctx>,
@@ -2563,7 +2637,11 @@ fn build_switch_ir<'a, 'ctx, 'env>(
                 .build_bitcast(cond_value, env.context.i32_type(), "")
                 .into_int_value()
         }
-        Layout::Union(variant) => get_tag_id(env, parent, &variant, cond_value).into_int_value(),
+        Layout::Union(variant) => {
+            cond_layout = Layout::Builtin(Builtin::Int64);
+
+            extract_tag_discriminant(env, parent, variant, cond_value)
+        }
         Layout::Builtin(_) => cond_value.into_int_value(),
         other => todo!("Build switch value from layout: {:?}", other),
     };

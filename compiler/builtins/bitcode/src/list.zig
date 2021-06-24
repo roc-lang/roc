@@ -409,9 +409,11 @@ pub fn listKeepOks(
     has_tag_id: HasTagId,
     dec_result: Dec,
 ) callconv(.C) RocList {
+    const good_constructor: u16 = 1;
+
     return listKeepResult(
         list,
-        RocResult.isOk,
+        good_constructor,
         caller,
         data,
         inc_n_data,
@@ -438,9 +440,11 @@ pub fn listKeepErrs(
     has_tag_id: HasTagId,
     dec_result: Dec,
 ) callconv(.C) RocList {
+    const good_constructor: u16 = 0;
+
     return listKeepResult(
         list,
-        RocResult.isErr,
+        good_constructor,
         caller,
         data,
         inc_n_data,
@@ -456,7 +460,7 @@ pub fn listKeepErrs(
 
 pub fn listKeepResult(
     list: RocList,
-    is_good_constructor: fn (RocResult) bool,
+    good_constructor: u16,
     caller: Caller1,
     data: Opaque,
     inc_n_data: IncN,
@@ -485,9 +489,15 @@ pub fn listKeepResult(
             const before_element = source_ptr + (i * before_width);
             caller(data, before_element, temporary);
 
-            const foo = has_tag_id(1, temporary);
-            if (foo.matched) {
-                @memcpy(target_ptr + (kept * after_width), foo.data orelse unreachable, after_width);
+            // a record { matched: bool, data: ?[*]u8 }
+            // for now, that data pointer is just the input `temporary` pointer
+            // this will change in the future to only return a pointer to the
+            // payload of the tag
+            const answer = has_tag_id(good_constructor, temporary);
+            if (answer.matched) {
+                // drop the tag id
+                const contents = (answer.data orelse unreachable) + @sizeOf(i64);
+                @memcpy(target_ptr + (kept * after_width), contents, after_width);
                 kept += 1;
             } else {
                 dec_result(temporary);

@@ -1,8 +1,6 @@
 /// Helpers for interacting with the zig that generates bitcode
 use crate::debug_info_init;
-use crate::llvm::build::{
-    struct_from_fields, Env, C_CALL_CONV, FAST_CALL_CONV, TAG_DATA_INDEX, TAG_ID_INDEX,
-};
+use crate::llvm::build::{struct_from_fields, Env, C_CALL_CONV, FAST_CALL_CONV};
 use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_n_refcount_layout, increment_refcount_layout,
@@ -136,27 +134,18 @@ fn build_has_tag_id_help<'a, 'ctx, 'env>(
                 )
                 .into_pointer_value();
 
-            let input = env.builder.build_load(argument_cast, "get_value");
+            let tag_value = env.builder.build_load(argument_cast, "get_value");
 
-            let tag_value =
-                crate::llvm::build::get_tag_id(env, function_value, &union_layout, input)
-                    .into_int_value();
+            let actual_tag_id = {
+                let tag_id_i64 = crate::llvm::build::extract_tag_discriminant(
+                    env,
+                    function_value,
+                    union_layout,
+                    tag_value,
+                );
 
-            let actual_tag_id =
                 env.builder
-                    .build_int_cast(tag_value, env.context.i16_type(), "to_i16");
-
-            let data_ptr = {
-                let index = env
-                    .context
-                    .i64_type()
-                    .const_int(TAG_DATA_INDEX as u64, false);
-                let ptr = unsafe {
-                    env.builder
-                        .build_in_bounds_gep(argument_cast, &[index], "get_tag_id")
-                };
-
-                env.builder.build_bitcast(ptr, i8_ptr_type, "to_opaque")
+                    .build_int_cast(tag_id_i64, env.context.i16_type(), "to_i16")
             };
 
             let answer = env.builder.build_int_compare(
@@ -166,7 +155,7 @@ fn build_has_tag_id_help<'a, 'ctx, 'env>(
                 "compare",
             );
 
-            let field_vals = [(0, answer.into()), (1, data_ptr)];
+            let field_vals = [(0, answer.into()), (1, *tag_value_ptr)];
 
             let output = struct_from_fields(env, output_type, field_vals.iter().copied());
 
