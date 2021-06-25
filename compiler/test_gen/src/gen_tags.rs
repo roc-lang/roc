@@ -1007,10 +1007,10 @@ fn applied_tag_function_result() {
             "#
         ),
         RocList::from_slice(&[
-            (1, RocStr::from_slice("a".as_bytes())),
-            (1, RocStr::from_slice("b".as_bytes()))
+            (RocStr::from_slice("a".as_bytes())),
+            (RocStr::from_slice("b".as_bytes()))
         ]),
-        RocList<(i64, RocStr)>
+        RocList<RocStr>
     );
 }
 

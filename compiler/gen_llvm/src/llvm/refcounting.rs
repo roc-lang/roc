@@ -4,9 +4,7 @@ use crate::llvm::build::{
     LLVM_SADD_WITH_OVERFLOW_I64, TAG_DATA_INDEX, TAG_ID_INDEX,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
-use crate::llvm::convert::{
-    basic_type_from_layout, block_of_memory, block_of_memory_slices, ptr_int,
-};
+use crate::llvm::convert::{basic_type_from_layout, block_of_memory_slices, ptr_int};
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;

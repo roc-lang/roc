@@ -19,8 +19,8 @@ use crate::llvm::build_str::{
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
-    basic_type_from_builtin, basic_type_from_layout, basic_type_from_layout_old, block_of_memory,
-    block_of_memory_slices, ptr_int,
+    basic_type_from_builtin, basic_type_from_layout, block_of_memory, block_of_memory_slices,
+    ptr_int,
 };
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
@@ -946,7 +946,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
         Struct(sorted_fields) => {
             let ctx = env.context;
-            let builder = env.builder;
 
             // Determine types
             let num_fields = sorted_fields.len();
@@ -1068,8 +1067,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             tag_id,
             ..
         } => {
-            let tag_layout = Layout::Union(UnionLayout::NonRecursive(fields));
-
             debug_assert!(*union_size > 1);
 
             let ctx = env.context;
@@ -1113,7 +1110,22 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             }
 
             // Create the struct_type
-            let data_ptr = reserve_with_refcount(env, &tag_layout);
+            let basic_type = block_of_memory_slices(env.context, fields, env.ptr_bytes);
+
+            let stack_size = fields
+                .iter()
+                .map(|tag| tag.iter().map(|l| l.stack_size(env.ptr_bytes)).sum())
+                .max()
+                .unwrap_or(0);
+
+            let alignment_bytes = fields
+                .iter()
+                .map(|tag| tag.iter().map(|l| l.alignment_bytes(env.ptr_bytes)))
+                .flatten()
+                .max()
+                .unwrap_or(0);
+
+            let data_ptr = reserve_with_refcount_help(env, basic_type, stack_size, alignment_bytes);
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
             let struct_ptr = env
                 .builder
@@ -1146,9 +1158,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             debug_assert_eq!(*union_size, 1);
             debug_assert_eq!(*tag_id, 0);
             debug_assert_eq!(arguments.len(), fields.len());
-
-            let struct_layout =
-                Layout::Union(UnionLayout::NonRecursive(env.arena.alloc([*fields])));
 
             let ctx = env.context;
             let builder = env.builder;
@@ -1188,7 +1197,14 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             }
 
             // Create the struct_type
-            let data_ptr = reserve_with_refcount(env, &struct_layout);
+            let basic_type = block_of_memory_slices(env.context, &[*fields], env.ptr_bytes);
+
+            // layout we abuse to get the right stack size and alignment
+            let false_layout = Layout::Struct(fields);
+            let stack_size = false_layout.stack_size(env.ptr_bytes);
+            let alignment_bytes = false_layout.alignment_bytes(env.ptr_bytes);
+            let data_ptr = reserve_with_refcount_help(env, basic_type, stack_size, alignment_bytes);
+
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
             let struct_ptr = env
                 .builder
@@ -1222,8 +1238,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             tag_id,
             ..
         } => {
-            let tag_layout = Layout::Union(UnionLayout::NonRecursive(fields));
-            let tag_struct_type = basic_type_from_layout(env, &tag_layout);
+            let tag_struct_type = block_of_memory_slices(env.context, fields, env.ptr_bytes);
             if *tag_id == *nullable_id as u8 {
                 let output_type = tag_struct_type.ptr_type(AddressSpace::Generic);
 
@@ -1280,7 +1295,22 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             }
 
             // Create the struct_type
-            let data_ptr = reserve_with_refcount(env, &tag_layout);
+            let basic_type = block_of_memory_slices(env.context, fields, env.ptr_bytes);
+
+            let stack_size = fields
+                .iter()
+                .map(|tag| tag.iter().map(|l| l.stack_size(env.ptr_bytes)).sum())
+                .max()
+                .unwrap_or(0);
+
+            let alignment_bytes = fields
+                .iter()
+                .map(|tag| tag.iter().map(|l| l.alignment_bytes(env.ptr_bytes)))
+                .flatten()
+                .max()
+                .unwrap_or(0);
+
+            let data_ptr = reserve_with_refcount_help(env, basic_type, stack_size, alignment_bytes);
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
             let struct_ptr = env
                 .builder
@@ -1379,10 +1409,11 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             }
 
             // Create the struct_type
-            let data_ptr = reserve_with_refcount(
-                env,
-                &Layout::Union(UnionLayout::NonRecursive(&[other_fields])),
-            );
+            let basic_type = block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
+            let false_layout = Layout::Struct(other_fields);
+            let stack_size = false_layout.stack_size(env.ptr_bytes);
+            let alignment_bytes = false_layout.alignment_bytes(env.ptr_bytes);
+            let data_ptr = reserve_with_refcount_help(env, basic_type, stack_size, alignment_bytes);
 
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
             let struct_ptr = env
@@ -1715,16 +1746,29 @@ pub fn reserve_with_refcount<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'a>,
 ) -> PointerValue<'ctx> {
+    let stack_size = layout.stack_size(env.ptr_bytes);
+    let alignment_bytes = layout.alignment_bytes(env.ptr_bytes);
+
+    let basic_type = basic_type_from_layout(env, layout);
+
+    reserve_with_refcount_help(env, basic_type, stack_size, alignment_bytes)
+}
+
+fn reserve_with_refcount_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    basic_type: impl BasicType<'ctx>,
+    stack_size: u32,
+    alignment_bytes: u32,
+) -> PointerValue<'ctx> {
     let ctx = env.context;
 
     let len_type = env.ptr_int();
 
-    let value_bytes = layout.stack_size(env.ptr_bytes);
-    let value_bytes_intvalue = len_type.const_int(value_bytes as u64, false);
+    let value_bytes_intvalue = len_type.const_int(stack_size as u64, false);
 
     let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes);
 
-    allocate_with_refcount_help(env, layout, value_bytes_intvalue, rc1)
+    allocate_with_refcount_help(env, basic_type, alignment_bytes, value_bytes_intvalue, rc1)
 }
 
 pub fn allocate_with_refcount<'a, 'ctx, 'env>(
@@ -1742,17 +1786,17 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
 
 pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout: &Layout<'a>,
+    value_type: impl BasicType<'ctx>,
+    alignment_bytes: u32,
     number_of_data_bytes: IntValue<'ctx>,
     initial_refcount: IntValue<'ctx>,
 ) -> PointerValue<'ctx> {
     let builder = env.builder;
     let ctx = env.context;
 
-    let value_type = basic_type_from_layout_old(env, layout);
     let len_type = env.ptr_int();
 
-    let extra_bytes = layout.alignment_bytes(env.ptr_bytes).max(env.ptr_bytes);
+    let extra_bytes = alignment_bytes.max(env.ptr_bytes);
 
     let ptr = {
         // number of bytes we will allocated
@@ -1762,7 +1806,7 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
             "add_extra_bytes",
         );
 
-        env.call_alloc(number_of_bytes, layout.alignment_bytes(env.ptr_bytes))
+        env.call_alloc(number_of_bytes, alignment_bytes)
     };
 
     // We must return a pointer to the first element:
@@ -2639,6 +2683,13 @@ fn build_switch_ir<'a, 'ctx, 'env>(
         }
         Layout::Union(variant) => {
             cond_layout = Layout::Builtin(Builtin::Int64);
+
+            /*
+            cond_layout = match variant {
+                UnionLayout::NonRecursive(_) => Layout::Builtin(Builtin::Int16),
+                _ => Layout::Builtin(Builtin::Int64),
+            };
+            */
 
             extract_tag_discriminant(env, parent, variant, cond_value)
         }

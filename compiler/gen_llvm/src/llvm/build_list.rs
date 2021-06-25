@@ -741,7 +741,6 @@ pub fn list_map<'a, 'ctx, 'env>(
     element_layout: &Layout<'a>,
     return_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    dbg!(return_layout, layout_width(env, return_layout));
     call_bitcode_fn_returns_list(
         env,
         &[
@@ -1114,7 +1113,9 @@ pub fn allocate_list<'a, 'ctx, 'env>(
     // we assume that the list is indeed used (dead variables are eliminated)
     let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes);
 
-    allocate_with_refcount_help(env, elem_layout, number_of_data_bytes, rc1)
+    let basic_type = basic_type_from_layout(env, elem_layout);
+    let alignment_bytes = elem_layout.alignment_bytes(env.ptr_bytes);
+    allocate_with_refcount_help(env, basic_type, alignment_bytes, number_of_data_bytes, rc1)
 }
 
 pub fn store_list<'a, 'ctx, 'env>(
