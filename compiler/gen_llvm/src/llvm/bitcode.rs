@@ -73,6 +73,9 @@ pub fn build_has_tag_id<'a, 'ctx, 'env>(
 ) -> FunctionValue<'ctx> {
     let fn_name: &str = &format!("{}_has_tag_id", function.get_name().to_string_lossy());
 
+    // currently the code assumes we're dealing with a non-recursive layout
+    debug_assert!(matches!(union_layout, UnionLayout::NonRecursive(_)));
+
     match env.module.get_function(fn_name) {
         Some(function_value) => function_value,
         None => build_has_tag_id_help(env, union_layout, &fn_name),
