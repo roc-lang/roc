@@ -1110,22 +1110,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             }
 
             // Create the struct_type
-            let basic_type = block_of_memory_slices(env.context, fields, env.ptr_bytes);
+            let data_ptr = reserve_with_refcount_union_as_block_of_memory(env, fields);
 
-            let stack_size = fields
-                .iter()
-                .map(|tag| tag.iter().map(|l| l.stack_size(env.ptr_bytes)).sum())
-                .max()
-                .unwrap_or(0);
-
-            let alignment_bytes = fields
-                .iter()
-                .map(|tag| tag.iter().map(|l| l.alignment_bytes(env.ptr_bytes)))
-                .flatten()
-                .max()
-                .unwrap_or(0);
-
-            let data_ptr = reserve_with_refcount_help(env, basic_type, stack_size, alignment_bytes);
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
             let struct_ptr = env
                 .builder
@@ -1197,13 +1183,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             }
 
             // Create the struct_type
-            let basic_type = block_of_memory_slices(env.context, &[*fields], env.ptr_bytes);
-
-            // layout we abuse to get the right stack size and alignment
-            let false_layout = Layout::Struct(fields);
-            let stack_size = false_layout.stack_size(env.ptr_bytes);
-            let alignment_bytes = false_layout.alignment_bytes(env.ptr_bytes);
-            let data_ptr = reserve_with_refcount_help(env, basic_type, stack_size, alignment_bytes);
+            let data_ptr = reserve_with_refcount_union_as_block_of_memory(env, &[fields]);
 
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
             let struct_ptr = env
@@ -1409,11 +1389,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             }
 
             // Create the struct_type
-            let basic_type = block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
-            let false_layout = Layout::Struct(other_fields);
-            let stack_size = false_layout.stack_size(env.ptr_bytes);
-            let alignment_bytes = false_layout.alignment_bytes(env.ptr_bytes);
-            let data_ptr = reserve_with_refcount_help(env, basic_type, stack_size, alignment_bytes);
+            let data_ptr = reserve_with_refcount_union_as_block_of_memory(env, &[other_fields]);
 
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
             let struct_ptr = env
@@ -1750,6 +1726,28 @@ pub fn reserve_with_refcount<'a, 'ctx, 'env>(
     let alignment_bytes = layout.alignment_bytes(env.ptr_bytes);
 
     let basic_type = basic_type_from_layout(env, layout);
+
+    reserve_with_refcount_help(env, basic_type, stack_size, alignment_bytes)
+}
+
+fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    fields: &[&[Layout<'a>]],
+) -> PointerValue<'ctx> {
+    let basic_type = block_of_memory_slices(env.context, fields, env.ptr_bytes);
+
+    let stack_size = fields
+        .iter()
+        .map(|tag| tag.iter().map(|l| l.stack_size(env.ptr_bytes)).sum())
+        .max()
+        .unwrap_or(0);
+
+    let alignment_bytes = fields
+        .iter()
+        .map(|tag| tag.iter().map(|l| l.alignment_bytes(env.ptr_bytes)))
+        .flatten()
+        .max()
+        .unwrap_or(0);
 
     reserve_with_refcount_help(env, basic_type, stack_size, alignment_bytes)
 }
