@@ -148,6 +148,7 @@ pub fn gen_from_mono_module(
         opt_level,
         loaded.procedures,
         loaded.entry_point,
+        Some(&app_ll_file),
     );
 
     env.dibuilder.finalize();

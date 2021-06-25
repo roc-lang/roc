@@ -1,6 +1,6 @@
 /// Helpers for interacting with the zig that generates bitcode
 use crate::debug_info_init;
-use crate::llvm::build::{struct_from_fields, Env, C_CALL_CONV, FAST_CALL_CONV};
+use crate::llvm::build::{struct_from_fields, Env, C_CALL_CONV, FAST_CALL_CONV, TAG_DATA_INDEX};
 use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_n_refcount_layout, increment_refcount_layout,
@@ -72,6 +72,9 @@ pub fn build_has_tag_id<'a, 'ctx, 'env>(
     union_layout: UnionLayout<'a>,
 ) -> FunctionValue<'ctx> {
     let fn_name: &str = &format!("{}_has_tag_id", function.get_name().to_string_lossy());
+
+    // currently the code assumes we're dealing with a non-recursive layout
+    debug_assert!(matches!(union_layout, UnionLayout::NonRecursive(_)));
 
     match env.module.get_function(fn_name) {
         Some(function_value) => function_value,
@@ -155,7 +158,23 @@ fn build_has_tag_id_help<'a, 'ctx, 'env>(
                 "compare",
             );
 
-            let field_vals = [(0, answer.into()), (1, *tag_value_ptr)];
+            let tag_data_ptr = {
+                let data_index = env
+                    .context
+                    .i64_type()
+                    .const_int(TAG_DATA_INDEX as u64, false);
+
+                let ptr = unsafe {
+                    env.builder.build_gep(
+                        tag_value_ptr.into_pointer_value(),
+                        &[data_index],
+                        "get_data_ptr",
+                    )
+                };
+                env.builder.build_bitcast(ptr, i8_ptr_type, "to_opaque")
+            };
+
+            let field_vals = [(0, answer.into()), (1, tag_data_ptr)];
 
             let output = struct_from_fields(env, output_type, field_vals.iter().copied());
 

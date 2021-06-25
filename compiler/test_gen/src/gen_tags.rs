@@ -1003,14 +1003,14 @@ fn applied_tag_function_result() {
             x : List (Result Str *)
             x = List.map [ "a", "b" ] Ok
 
-            x
+            List.keepOks x (\y -> y)
             "#
         ),
         RocList::from_slice(&[
-            (1, RocStr::from_slice("a".as_bytes())),
-            (1, RocStr::from_slice("b".as_bytes()))
+            (RocStr::from_slice("a".as_bytes())),
+            (RocStr::from_slice("b".as_bytes()))
         ]),
-        RocList<(i64, RocStr)>
+        RocList<RocStr>
     );
 }
 
