@@ -24,19 +24,19 @@ pub const RocDec = extern struct {
     }
 
     // TODO: There's got to be a better way to do this other than converting to Str
-    pub fn fromF64(num: f64) RocDec {
+    pub fn fromF64(num: f64) ?RocDec {
         var digit_bytes: [19]u8 = undefined; // Max f64 digits + '.' + '-'
 
         var fbs = std.io.fixedBufferStream(digit_bytes[0..]);
         std.fmt.formatFloatDecimal(num, .{}, fbs.writer()) catch
-            @panic("TODO runtime exception failing to print float!");
+            return null;
 
         var dec = RocDec.fromStr(RocStr.init(&digit_bytes, fbs.pos));
 
         if (dec) |d| {
             return d;
         } else {
-            @panic("TODO runtime exception failing convert f64 to RocDec");
+            return null;
         }
     }
 
@@ -206,6 +206,14 @@ pub const RocDec = extern struct {
         };
 
         return RocStr.init(&str_bytes, str_len);
+    }
+
+    pub fn eq(self: RocDec, other: RocDec) bool {
+        return self.num == other.num;
+    }
+
+    pub fn neq(self: RocDec, other: RocDec) bool {
+        return self.num != other.num;
     }
 
     pub fn negate(self: RocDec) ?RocDec {
@@ -672,7 +680,7 @@ test "fromU64" {
 
 test "fromF64" {
     var dec = RocDec.fromF64(25.5);
-    try expectEqual(RocDec{ .num = 25500000000000000000 }, dec);
+    try expectEqual(RocDec{ .num = 25500000000000000000 }, dec.?);
 }
 
 test "fromStr: empty" {
@@ -979,10 +987,34 @@ test "div: 10 / 3" {
 
 // exports
 
-pub fn fromF64(arg: f64) callconv(.C) i128 {
-    return @call(.{ .modifier = always_inline }, RocDec.fromF64, .{arg}).num;
+pub fn fromF64C(arg: f64) callconv(.C) i128 {
+    return if (@call(.{ .modifier = always_inline }, RocDec.fromF64, .{arg})) |dec| dec.num else @panic("TODO runtime exception failing convert f64 to RocDec");
 }
 
-pub fn add(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
+pub fn eqC(arg1: RocDec, arg2: RocDec) callconv(.C) bool {
+    return @call(.{ .modifier = always_inline }, RocDec.eq, .{ arg1, arg2 });
+}
+
+pub fn neqC(arg1: RocDec, arg2: RocDec) callconv(.C) bool {
+    return @call(.{ .modifier = always_inline }, RocDec.neq, .{ arg1, arg2 });
+}
+
+pub fn negateC(arg: RocDec) callconv(.C) i128 {
+    return if (@call(.{ .modifier = always_inline }, RocDec.negate, .{arg})) |dec| dec.num else @panic("TODO overflow for negating RocDec");
+}
+
+pub fn addC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
     return @call(.{ .modifier = always_inline }, RocDec.add, .{ arg1, arg2 }).num;
+}
+
+pub fn subC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.sub, .{ arg1, arg2 }).num;
+}
+
+pub fn mulC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.mul, .{ arg1, arg2 }).num;
+}
+
+pub fn divC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.div, .{ arg1, arg2 }).num;
 }

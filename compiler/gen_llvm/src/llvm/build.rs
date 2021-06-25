@@ -5547,7 +5547,12 @@ fn build_dec_binop<'a, 'ctx, 'env>(
 
     match op {
         NumAdd => call_bitcode_fn(env, &[lhs, rhs], &bitcode::DEC_ADD),
-        _ => panic!("TODO: Add RocDec function for op"),
+        NumSub => call_bitcode_fn(env, &[lhs, rhs], &bitcode::DEC_SUB),
+        NumMul => call_bitcode_fn(env, &[lhs, rhs], &bitcode::DEC_MUL),
+        NumDivUnchecked => call_bitcode_fn(env, &[lhs, rhs], &bitcode::DEC_DIV),
+        _ => {
+            unreachable!("Unrecognized int binary operation: {:?}", op);
+        }
     }
 }
 

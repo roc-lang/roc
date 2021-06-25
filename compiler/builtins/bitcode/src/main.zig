@@ -6,8 +6,14 @@ const testing = std.testing;
 const dec = @import("dec.zig");
 
 comptime {
-    exportDecFn(dec.fromF64, "from_f64");
-    exportDecFn(dec.add, "add");
+    exportDecFn(dec.fromF64C, "from_f64");
+    exportDecFn(dec.eqC, "eq");
+    exportDecFn(dec.neqC, "neq");
+    exportDecFn(dec.negateC, "negate");
+    exportDecFn(dec.addC, "add");
+    exportDecFn(dec.subC, "sub");
+    exportDecFn(dec.mulC, "mul");
+    exportDecFn(dec.divC, "div");
 }
 
 // List Module
@@ -113,8 +119,9 @@ fn exportDecFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "dec." ++ func_name);
 }
 
+// Cusotm panic function, as builtin Zig version errors during LLVM verification
 pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace) noreturn {
-    std.debug.print("{s}", .{message});
+    std.debug.print("{s}: {?}", .{ message, stacktrace });
     unreachable;
 }
 

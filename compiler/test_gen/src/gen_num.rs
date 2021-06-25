@@ -336,19 +336,14 @@ mod gen_num {
                     x : Dec
                     x = 2.1
 
-                    y : Dec
-                    y = 3.1
-
-                    z : Dec
-                    z = x + y
-
-                    z
+                    x
                 "#
             ),
-            5200000000000000000,
+            2100000000000000000,
             i128
         );
     }
+
     #[test]
     fn f64_float_alias() {
         assert_evals_to!(
@@ -565,6 +560,27 @@ mod gen_num {
     }
 
     #[test]
+    fn gen_add_dec() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : Dec
+                    x = 2.1
+
+                    y : Dec
+                    y = 3.1
+
+                    z : Dec
+                    z = x + y
+
+                    z
+                "#
+            ),
+            5200000000000000000,
+            i128
+        );
+    }
+    #[test]
     fn gen_add_f64() {
         assert_evals_to!(
             indoc!(
@@ -607,6 +623,26 @@ mod gen_num {
             f64
         );
     }
+    #[test]
+    fn gen_div_dec() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : Dec
+                    x = 10
+
+                    y : Dec
+                    y = 3
+
+                    when x / y is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+            ),
+            3333333333333333333,
+            i128
+        );
+    }
 
     #[test]
     fn gen_int_eq() {
@@ -627,6 +663,44 @@ mod gen_num {
             indoc!(
                 r#"
                     4 != 5
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn gen_dec_eq() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : Dec
+                    x = 4
+
+                    y : Dec
+                    y = 4
+
+                    x == y
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn gen_dec_neq() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : Dec
+                    x = 4
+
+                    y : Dec
+                    y = 5
+
+                    x != y
                 "#
             ),
             true,
@@ -665,6 +739,28 @@ mod gen_num {
     }
 
     #[test]
+    fn gen_sub_dec() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : Dec
+                    x = 1.5
+
+                    y : Dec
+                    y = 2.4
+                    
+                    z : Dec
+                    z = 3
+
+                    x - y - z
+                "#
+            ),
+            -3900000000000000000,
+            i128
+        );
+    }
+
+    #[test]
     fn gen_sub_f64() {
         assert_evals_to!(
             indoc!(
@@ -690,6 +786,27 @@ mod gen_num {
         );
     }
 
+    #[test]
+    fn gen_mul_dec() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : Dec
+                    x = 2
+
+                    y : Dec
+                    y = 4
+
+                    z : Dec
+                    z = 6
+
+                    x * y * z
+                "#
+            ),
+            48000000000000000000,
+            i128
+        );
+    }
     #[test]
     fn gen_mul_i64() {
         assert_evals_to!(
