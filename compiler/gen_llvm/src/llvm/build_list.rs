@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 use crate::llvm::bitcode::{
-    build_dec_wrapper, build_eq_wrapper, build_inc_n_wrapper, build_inc_wrapper, call_bitcode_fn,
-    call_void_bitcode_fn,
+    build_dec_wrapper, build_eq_wrapper, build_has_tag_id, build_inc_n_wrapper, build_inc_wrapper,
+    call_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
     allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, RocFunctionCall,
@@ -611,6 +611,18 @@ pub fn list_keep_oks<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let dec_result_fn = build_dec_wrapper(env, layout_ids, result_layout);
 
+    let function = env
+        .builder
+        .get_insert_block()
+        .unwrap()
+        .get_parent()
+        .unwrap();
+
+    let has_tag_id = match result_layout {
+        Layout::Union(union_layout) => build_has_tag_id(env, function, *union_layout),
+        _ => unreachable!(),
+    };
+
     call_bitcode_fn(
         env,
         &[
@@ -623,6 +635,7 @@ pub fn list_keep_oks<'a, 'ctx, 'env>(
             layout_width(env, before_layout),
             layout_width(env, result_layout),
             layout_width(env, after_layout),
+            has_tag_id.as_global_value().as_pointer_value().into(),
             dec_result_fn.as_global_value().as_pointer_value().into(),
         ],
         bitcode::LIST_KEEP_OKS,
@@ -642,6 +655,18 @@ pub fn list_keep_errs<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let dec_result_fn = build_dec_wrapper(env, layout_ids, result_layout);
 
+    let function = env
+        .builder
+        .get_insert_block()
+        .unwrap()
+        .get_parent()
+        .unwrap();
+
+    let has_tag_id = match result_layout {
+        Layout::Union(union_layout) => build_has_tag_id(env, function, *union_layout),
+        _ => unreachable!(),
+    };
+
     call_bitcode_fn(
         env,
         &[
@@ -654,6 +679,7 @@ pub fn list_keep_errs<'a, 'ctx, 'env>(
             layout_width(env, before_layout),
             layout_width(env, result_layout),
             layout_width(env, after_layout),
+            has_tag_id.as_global_value().as_pointer_value().into(),
             dec_result_fn.as_global_value().as_pointer_value().into(),
         ],
         bitcode::LIST_KEEP_ERRS,

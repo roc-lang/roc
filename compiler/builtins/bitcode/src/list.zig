@@ -12,6 +12,7 @@ const Opaque = ?[*]u8;
 const Inc = fn (?[*]u8) callconv(.C) void;
 const IncN = fn (?[*]u8, usize) callconv(.C) void;
 const Dec = fn (?[*]u8) callconv(.C) void;
+const HasTagId = fn (u16, ?[*]u8) callconv(.C) extern struct { matched: bool, data: ?[*]u8 };
 
 pub const RocList = extern struct {
     bytes: ?[*]u8,
@@ -405,11 +406,14 @@ pub fn listKeepOks(
     before_width: usize,
     result_width: usize,
     after_width: usize,
+    has_tag_id: HasTagId,
     dec_result: Dec,
 ) callconv(.C) RocList {
+    const good_constructor: u16 = 1;
+
     return listKeepResult(
         list,
-        RocResult.isOk,
+        good_constructor,
         caller,
         data,
         inc_n_data,
@@ -418,6 +422,7 @@ pub fn listKeepOks(
         before_width,
         result_width,
         after_width,
+        has_tag_id,
         dec_result,
     );
 }
@@ -432,11 +437,14 @@ pub fn listKeepErrs(
     before_width: usize,
     result_width: usize,
     after_width: usize,
+    has_tag_id: HasTagId,
     dec_result: Dec,
 ) callconv(.C) RocList {
+    const good_constructor: u16 = 0;
+
     return listKeepResult(
         list,
-        RocResult.isErr,
+        good_constructor,
         caller,
         data,
         inc_n_data,
@@ -445,13 +453,14 @@ pub fn listKeepErrs(
         before_width,
         result_width,
         after_width,
+        has_tag_id,
         dec_result,
     );
 }
 
 pub fn listKeepResult(
     list: RocList,
-    is_good_constructor: fn (RocResult) bool,
+    good_constructor: u16,
     caller: Caller1,
     data: Opaque,
     inc_n_data: IncN,
@@ -460,6 +469,7 @@ pub fn listKeepResult(
     before_width: usize,
     result_width: usize,
     after_width: usize,
+    has_tag_id: HasTagId,
     dec_result: Dec,
 ) RocList {
     if (list.bytes) |source_ptr| {
@@ -479,11 +489,15 @@ pub fn listKeepResult(
             const before_element = source_ptr + (i * before_width);
             caller(data, before_element, temporary);
 
-            const result = utils.RocResult{ .bytes = temporary };
-
-            const after_element = temporary + @sizeOf(i64);
-            if (is_good_constructor(result)) {
-                @memcpy(target_ptr + (kept * after_width), after_element, after_width);
+            // a record { matched: bool, data: ?[*]u8 }
+            // for now, that data pointer is just the input `temporary` pointer
+            // this will change in the future to only return a pointer to the
+            // payload of the tag
+            const answer = has_tag_id(good_constructor, temporary);
+            if (answer.matched) {
+                // drop the tag id
+                const contents = (answer.data orelse unreachable) + @sizeOf(i64);
+                @memcpy(target_ptr + (kept * after_width), contents, after_width);
                 kept += 1;
             } else {
                 dec_result(temporary);
