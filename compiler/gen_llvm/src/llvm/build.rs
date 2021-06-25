@@ -1057,7 +1057,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 (TAG_DATA_INDEX as usize, data),
             ];
 
-            // cast_tag_to_block_of_memory(builder, struct_val, internal_type)
             struct_from_fields(env, wrapper_type, field_vals.iter().copied()).into()
         }
         Tag {
@@ -1275,22 +1274,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             }
 
             // Create the struct_type
-            let basic_type = block_of_memory_slices(env.context, fields, env.ptr_bytes);
+            let data_ptr = reserve_with_refcount_union_as_block_of_memory(env, fields);
 
-            let stack_size = fields
-                .iter()
-                .map(|tag| tag.iter().map(|l| l.stack_size(env.ptr_bytes)).sum())
-                .max()
-                .unwrap_or(0);
-
-            let alignment_bytes = fields
-                .iter()
-                .map(|tag| tag.iter().map(|l| l.alignment_bytes(env.ptr_bytes)))
-                .flatten()
-                .max()
-                .unwrap_or(0);
-
-            let data_ptr = reserve_with_refcount_help(env, basic_type, stack_size, alignment_bytes);
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
             let struct_ptr = env
                 .builder
@@ -2681,13 +2666,6 @@ fn build_switch_ir<'a, 'ctx, 'env>(
         }
         Layout::Union(variant) => {
             cond_layout = Layout::Builtin(Builtin::Int64);
-
-            /*
-            cond_layout = match variant {
-                UnionLayout::NonRecursive(_) => Layout::Builtin(Builtin::Int16),
-                _ => Layout::Builtin(Builtin::Int64),
-            };
-            */
 
             extract_tag_discriminant(env, parent, variant, cond_value)
         }
