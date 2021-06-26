@@ -19,8 +19,8 @@ fn applied_tag_nothing_ir() {
                 "#
         ),
         1,
-        (i64, i64),
-        |(tag, _)| tag
+        (i64, u8),
+        |(_, tag)| tag
     );
 }
 
@@ -38,8 +38,8 @@ fn applied_tag_nothing() {
                 "#
         ),
         1,
-        (i64, i64),
-        |(tag, _)| tag
+        (i64, u8),
+        |(_, tag)| tag
     );
 }
 
@@ -56,8 +56,8 @@ fn applied_tag_just() {
                 y
                 "#
         ),
-        (0, 0x4),
-        (i64, i64)
+        (0x4, 0),
+        (i64, u8)
     );
 }
 
@@ -74,8 +74,8 @@ fn applied_tag_just_ir() {
                 y
                 "#
         ),
-        (0, 0x4),
-        (i64, i64)
+        (0x4, 0),
+        (i64, u8)
     );
 }
 
@@ -96,8 +96,8 @@ fn applied_tag_just_enum() {
                 y
                 "#
         ),
-        (0, 2),
-        (i64, u8)
+        (2, 0),
+        (u8, u8)
     );
 }
 
@@ -633,8 +633,8 @@ fn nested_tag_union() {
                     x
                 "#
         ),
-        (0, (0, 41)),
-        (i64, (i64, i64))
+        ((41, 0), 0),
+        ((i64, i64), i64)
     );
 }
 #[test]
@@ -805,8 +805,8 @@ fn alignment_in_multi_tag_construction() {
 
                 #"
         ),
-        (1, 32i64, true),
-        (i64, i64, bool)
+        (32i64, true, 1),
+        (i64, bool, i64)
     );
 
     assert_evals_to!(
@@ -818,8 +818,8 @@ fn alignment_in_multi_tag_construction() {
                 x
                 #"
         ),
-        (1, 32i64, true, 2u8),
-        (i64, i64, bool, u8)
+        (32i64, true, 2u8, 1),
+        (i64, bool, u8, i64)
     );
 }
 

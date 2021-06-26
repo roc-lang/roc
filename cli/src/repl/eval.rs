@@ -214,8 +214,48 @@ fn jit_to_ast_help<'a>(
                         match variant {
                             NonRecursive {
                                 sorted_tag_layouts: tags_and_layouts,
+                            } => {
+                                Ok(run_jit_function_dynamic_type!(
+                                    lib,
+                                    main_fn_name,
+                                    size as usize,
+                                    |ptr: *const u8| {
+                                        // Because this is a `Wrapped`, the first 8 bytes encode the tag ID
+                                        let offset = tags_and_layouts
+                                            .iter()
+                                            .map(|(_, fields)| {
+                                                fields
+                                                    .iter()
+                                                    .map(|l| l.stack_size(env.ptr_bytes))
+                                                    .sum()
+                                            })
+                                            .max()
+                                            .unwrap_or(0);
+
+                                        let tag_id = *(ptr.add(offset as usize) as *const i64);
+
+                                        // use the tag ID as an index, to get its name and layout of any arguments
+                                        let (tag_name, arg_layouts) =
+                                            &tags_and_layouts[tag_id as usize];
+
+                                        let tag_expr = tag_name_to_expr(env, tag_name);
+                                        let loc_tag_expr =
+                                            &*env.arena.alloc(Located::at_zero(tag_expr));
+
+                                        let variables = &tags[tag_name];
+
+                                        debug_assert_eq!(arg_layouts.len(), variables.len());
+
+                                        // NOTE assumes the data bytes are the first bytes
+                                        let it = variables.iter().copied().zip(arg_layouts.iter());
+                                        let output = sequence_of_expr(env, ptr, it);
+                                        let output = output.into_bump_slice();
+
+                                        Expr::Apply(loc_tag_expr, output, CalledVia::Space)
+                                    }
+                                ))
                             }
-                            | Recursive {
+                            Recursive {
                                 sorted_tag_layouts: tags_and_layouts,
                             } => {
                                 Ok(run_jit_function_dynamic_type!(

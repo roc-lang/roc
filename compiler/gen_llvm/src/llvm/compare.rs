@@ -1,5 +1,5 @@
 use crate::llvm::build::Env;
-use crate::llvm::build::{cast_block_of_memory_to_tag, complex_bitcast, FAST_CALL_CONV};
+use crate::llvm::build::{cast_block_of_memory_to_tag, FAST_CALL_CONV};
 use crate::llvm::build_list::{list_len, load_list_ptr};
 use crate::llvm::build_str::str_equal;
 use crate::llvm::convert::basic_type_from_layout;
@@ -846,9 +846,10 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
     match union_layout {
         NonRecursive(tags) => {
-            // SAFETY we know that non-recursive tags cannot be NULL
-            let id1 = nonrec_tag_id(env, tag1.into_struct_value());
-            let id2 = nonrec_tag_id(env, tag2.into_struct_value());
+            let id1 =
+                crate::llvm::build::get_tag_id(env, parent, union_layout, tag1).into_int_value();
+            let id2 =
+                crate::llvm::build::get_tag_id(env, parent, union_layout, tag2).into_int_value();
 
             let compare_tag_fields = ctx.append_basic_block(parent, "compare_tag_fields");
 
@@ -1208,19 +1209,6 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
         WhenRecursive::Loop(*union_layout),
         struct1,
         struct2,
-    )
-    .into_int_value()
-}
-
-fn nonrec_tag_id<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    tag: StructValue<'ctx>,
-) -> IntValue<'ctx> {
-    complex_bitcast(
-        env.builder,
-        tag.into(),
-        env.context.i64_type().into(),
-        "load_tag_id",
     )
     .into_int_value()
 }
