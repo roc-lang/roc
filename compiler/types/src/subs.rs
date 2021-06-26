@@ -52,7 +52,7 @@ impl fmt::Debug for Subs {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug)]
 pub struct VarStore {
     next: u32,
 }

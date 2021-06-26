@@ -242,17 +242,20 @@ impl<'a> EdModel<'a> {
             Region::zero(),
         );
 
-        // extract the var_store out of the env again
-        //let mut var_store = VarStore::default();
-        //std::mem::swap(self.module.env.var_store, &mut var_store);
+        // extract the var_store out of the env
+        let mut var_store = VarStore::default();
+        std::mem::swap(self.module.env.var_store, &mut var_store);
 
         let (mut solved, _, _) = EdModel::run_solve(
             self.module.env.pool,
             Default::default(),
             Default::default(),
             constrained,
-            *self.module.env.var_store,
+            var_store,
         );
+
+        // put the updated var_store back in env
+        std::mem::swap( &mut VarStore::new_from_subs(solved.inner()), self.module.env.var_store);
 
         let subs = solved.inner_mut();
 
