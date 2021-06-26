@@ -1081,30 +1081,26 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
                 let (val, _val_layout) = load_symbol_and_layout(scope, field_symbol);
 
-                // Zero-sized fields have no runtime representation.
-                // The layout of the struct expects them to be dropped!
-                if !tag_field_layout.is_dropped_because_empty() {
-                    let field_type = basic_type_from_layout(env, tag_field_layout);
+                let field_type = basic_type_from_layout(env, tag_field_layout);
 
-                    field_types.push(field_type);
+                field_types.push(field_type);
 
-                    if let Layout::RecursivePointer = tag_field_layout {
-                        debug_assert!(val.is_pointer_value());
+                if let Layout::RecursivePointer = tag_field_layout {
+                    debug_assert!(val.is_pointer_value());
 
-                        // we store recursive pointers as `i64*`
-                        let ptr = env.builder.build_bitcast(
-                            val,
-                            ctx.i64_type().ptr_type(AddressSpace::Generic),
-                            "cast_recursive_pointer",
-                        );
+                    // we store recursive pointers as `i64*`
+                    let ptr = env.builder.build_bitcast(
+                        val,
+                        ctx.i64_type().ptr_type(AddressSpace::Generic),
+                        "cast_recursive_pointer",
+                    );
 
-                        field_vals.push(ptr);
-                    } else {
-                        // this check fails for recursive tag unions, but can be helpful while debugging
-                        // debug_assert_eq!(tag_field_layout, val_layout);
+                    field_vals.push(ptr);
+                } else {
+                    // this check fails for recursive tag unions, but can be helpful while debugging
+                    // debug_assert_eq!(tag_field_layout, val_layout);
 
-                        field_vals.push(val);
-                    }
+                    field_vals.push(val);
                 }
             }
 
