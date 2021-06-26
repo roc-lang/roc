@@ -176,12 +176,12 @@ impl<'a> EdModel<'a> {
 
         self.set_caret(expr_start_pos);
 
-        //let type_str = self.expr2_to_type(ast_node_id);
+        let type_str = self.expr2_to_type(ast_node_id);
 
         self.selected_expr_opt = Some(SelectedExpression {
             ast_node_id,
             mark_node_id,
-            type_str: PoolStr::new("{}", self.module.env.pool), // TODO get this PoolStr from type inference
+            type_str,
         });
 
         self.dirty = true;
@@ -243,15 +243,15 @@ impl<'a> EdModel<'a> {
         );
 
         // extract the var_store out of the env again
-        let mut var_store = VarStore::default();
-        std::mem::swap(self.module.env.var_store, &mut var_store);
+        //let mut var_store = VarStore::default();
+        //std::mem::swap(self.module.env.var_store, &mut var_store);
 
         let (mut solved, _, _) = EdModel::run_solve(
             self.module.env.pool,
             Default::default(),
             Default::default(),
             constrained,
-            var_store,
+            *self.module.env.var_store,
         );
 
         let subs = solved.inner_mut();
