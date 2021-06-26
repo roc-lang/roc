@@ -31,7 +31,7 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 * [Self](https://selflanguage.org/) programming language
 * [Primitive](https://primitive.io/) code exploration in Virtual Reality
 * [Luna](https://www.luna-lang.org/) language for interactive data processing and visualization
-
+* [Hazel Livelits](https://hazel.org/papers/livelits-paper.pdf) interactive plugins, see GIF's [here](https://twitter.com/disconcision/status/1408155781120376833).
 ### Debugging
 
 * [VS code debug visualization](https://marketplace.visualstudio.com/items?itemName=hediet.debug-visualizer)
