@@ -1683,11 +1683,11 @@ fn binary_tree_double_pattern_match() {
             foo = \btree ->
                 when btree is
                     Node (Node (Leaf x) _) _ -> x
-                    _ -> 0
+                    _ -> 1
 
             main : I64
             main =
-                foo (Node (Node (Leaf 32) (Leaf 0)) (Leaf 0))
+                foo (Node (Node (Leaf 32) (Leaf 2)) (Leaf 3))
             "#
         ),
         32,

@@ -1,7 +1,9 @@
 use crate::debug_info_init;
 use crate::llvm::bitcode::call_bitcode_fn;
 use crate::llvm::build::Env;
-use crate::llvm::build::{cast_block_of_memory_to_tag, complex_bitcast, FAST_CALL_CONV};
+use crate::llvm::build::{
+    cast_block_of_memory_to_tag, complex_bitcast, get_tag_id, FAST_CALL_CONV,
+};
 use crate::llvm::build_str;
 use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
@@ -406,7 +408,6 @@ fn hash_tag<'a, 'ctx, 'env>(
     env.builder.position_at_end(entry_block);
     match union_layout {
         NonRecursive(tags) => {
-            // SAFETY we know that non-recursive tags cannot be NULL
             let tag_id = nonrec_tag_id(env, tag.into_struct_value());
 
             let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
@@ -449,8 +450,7 @@ fn hash_tag<'a, 'ctx, 'env>(
             env.builder.build_switch(tag_id, default, &cases);
         }
         Recursive(tags) => {
-            // SAFETY recursive tag unions are not NULL
-            let tag_id = unsafe { rec_tag_id_unsafe(env, tag.into_pointer_value()) };
+            let tag_id = get_tag_id(env, parent, union_layout, tag).into_int_value();
 
             let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
