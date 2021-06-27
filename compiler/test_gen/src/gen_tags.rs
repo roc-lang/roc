@@ -948,8 +948,8 @@ fn nested_recursive_literal() {
                 #"
         ),
         0,
-        &i64,
-        |x: &i64| *x
+        &(i64, i64, i64),
+        |x: &(i64, i64, i64)| x.2
     );
 }
 
