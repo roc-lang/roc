@@ -1164,29 +1164,25 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             for (field_symbol, tag_field_layout) in arguments.iter().zip(fields.iter()) {
                 let val = load_symbol(scope, field_symbol);
 
-                // Zero-sized fields have no runtime representation.
-                // The layout of the struct expects them to be dropped!
-                if !tag_field_layout.is_dropped_because_empty() {
-                    let field_type = basic_type_from_layout(env, tag_field_layout);
+                let field_type = basic_type_from_layout(env, tag_field_layout);
 
-                    field_types.push(field_type);
+                field_types.push(field_type);
 
-                    if let Layout::RecursivePointer = tag_field_layout {
-                        debug_assert!(val.is_pointer_value());
+                if let Layout::RecursivePointer = tag_field_layout {
+                    debug_assert!(val.is_pointer_value());
 
-                        // we store recursive pointers as `i64*`
-                        let ptr = env.builder.build_bitcast(
-                            val,
-                            ctx.i64_type().ptr_type(AddressSpace::Generic),
-                            "cast_recursive_pointer",
-                        );
+                    // we store recursive pointers as `i64*`
+                    let ptr = env.builder.build_bitcast(
+                        val,
+                        ctx.i64_type().ptr_type(AddressSpace::Generic),
+                        "cast_recursive_pointer",
+                    );
 
-                        field_vals.push(ptr);
-                    } else {
-                        // this check fails for recursive tag unions, but can be helpful while debugging
+                    field_vals.push(ptr);
+                } else {
+                    // this check fails for recursive tag unions, but can be helpful while debugging
 
-                        field_vals.push(val);
-                    }
+                    field_vals.push(val);
                 }
             }
 
@@ -1337,8 +1333,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             tag_name,
             ..
         } => {
-            let other_fields = &other_fields[1..];
-
             let tag_struct_type =
                 block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
 
@@ -1364,12 +1358,9 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             debug_assert!(!matches!(tag_name, TagName::Closure(_)));
 
-            let tag_field_layouts = other_fields;
-            let arguments = &arguments[1..];
+            debug_assert_eq!(arguments.len(), other_fields.len());
 
-            debug_assert_eq!(arguments.len(), tag_field_layouts.len());
-
-            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(other_fields.iter()) {
                 let val = load_symbol(scope, field_symbol);
 
                 // Zero-sized fields have no runtime representation.
@@ -1505,8 +1496,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             match union_layout {
                 UnionLayout::NonRecursive(tag_layouts) => {
-                    let index = *index - 1;
-
                     debug_assert!(argument.is_struct_value());
                     let field_layouts = tag_layouts[*tag_id as usize];
                     let struct_layout = Layout::Struct(field_layouts);
@@ -1520,7 +1509,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     );
 
                     let result = builder
-                        .build_extract_value(struct_value, index as u32, "")
+                        .build_extract_value(struct_value, *index as u32, "")
                         .expect("desired field did not decode");
 
                     result
@@ -1580,7 +1569,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     debug_assert!(argument.is_pointer_value());
                     debug_assert_ne!(*tag_id != 0, *nullable_id);
 
-                    let field_layouts = &other_fields[1..];
+                    let field_layouts = other_fields;
                     let struct_layout = Layout::Struct(field_layouts);
 
                     let struct_type = basic_type_from_layout(env, &struct_layout);
@@ -1589,7 +1578,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         env,
                         field_layouts,
                         // the tag id is not stored
-                        *index as usize - 1,
+                        *index as usize,
                         argument.into_pointer_value(),
                         struct_type.into_struct_type(),
                         &struct_layout,

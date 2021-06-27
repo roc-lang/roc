@@ -662,15 +662,13 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
                 }
 
                 NullableUnwrapped { other_fields, .. } => {
-                    let other_fields = &other_fields[1..];
-
                     let function = build_rec_union(
                         env,
                         layout_ids,
                         mode,
                         &WhenRecursive::Loop(*variant),
                         *variant,
-                        &*env.arena.alloc([other_fields]),
+                        env.arena.alloc([*other_fields]),
                         true,
                     );
 
@@ -1443,11 +1441,14 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
                 // therefore we must cast it to our desired type
 
                 let union_type = match union_layout {
+                    UnionLayout::NonRecursive(_) => unreachable!(),
                     UnionLayout::Recursive(_) | UnionLayout::NullableWrapped { .. } => {
                         union_data_block_of_memory(env.context, tags, env.ptr_bytes).into()
                     }
-                    UnionLayout::NonRecursive(_) => unreachable!(),
-                    _ => block_of_memory_slices(env.context, tags, env.ptr_bytes),
+                    UnionLayout::NonNullableUnwrapped { .. }
+                    | UnionLayout::NullableUnwrapped { .. } => {
+                        block_of_memory_slices(env.context, tags, env.ptr_bytes)
+                    }
                 };
 
                 let recursive_field_ptr = cast_basic_basic(
