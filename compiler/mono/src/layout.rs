@@ -565,19 +565,18 @@ impl<'a> Layout<'a> {
 
                 match variant {
                     NonRecursive(fields) => {
-                        let data_size: u32 = fields
+                        fields
                             .iter()
                             .map(|tag_layout| {
                                 tag_layout
                                     .iter()
                                     .map(|field| field.stack_size(pointer_size))
-                                    .sum()
+                                    .sum::<u32>()
                             })
                             .max()
-                            .unwrap_or_default();
-
-                        // TEMPORARY
-                        pointer_size + data_size
+                            .unwrap_or_default()
+                            // TODO remove
+                            + pointer_size
                     }
 
                     Recursive(_)

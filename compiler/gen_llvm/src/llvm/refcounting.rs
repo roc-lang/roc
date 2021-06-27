@@ -1,6 +1,6 @@
 use crate::debug_info_init;
 use crate::llvm::build::{
-    add_func, cast_basic_basic, cast_block_of_memory_to_tag, Env, FAST_CALL_CONV,
+    add_func, cast_basic_basic, cast_block_of_memory_to_tag, get_tag_id, Env, FAST_CALL_CONV,
     LLVM_SADD_WITH_OVERFLOW_I64, TAG_DATA_INDEX, TAG_ID_INDEX,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
@@ -1520,7 +1520,8 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         env.builder.build_unconditional_branch(only_branch);
     } else {
         // read the tag_id
-        let current_tag_id = rec_union_read_tag(env, value_ptr);
+        let current_tag_id =
+            get_tag_id(env, parent, &union_layout, value_ptr.into()).into_int_value();
 
         let merge_block = env.context.append_basic_block(parent, "decrement_merge");
 
@@ -1536,23 +1537,6 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         // this function returns void
         builder.build_return(None);
     }
-}
-
-fn rec_union_read_tag<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    value_ptr: PointerValue<'ctx>,
-) -> IntValue<'ctx> {
-    // Assumption: the tag is the first thing stored
-    // so cast the pointer to the data to a `i64*`
-    let tag_ptr_type = env.context.i64_type().ptr_type(AddressSpace::Generic);
-    let tag_ptr = env
-        .builder
-        .build_bitcast(value_ptr, tag_ptr_type, "cast_tag_ptr")
-        .into_pointer_value();
-
-    env.builder
-        .build_load(tag_ptr, "load_tag_id")
-        .into_int_value()
 }
 
 fn function_name_from_mode<'a>(

@@ -7,7 +7,7 @@ procedure Test.3 (Test.4):
             let Test.14 = false;
             ret Test.14;
         else
-            let Test.19 = UnionAtIndex (Id 0) (Index 1) Test.4;
+            let Test.19 = UnionAtIndex (Id 0) (Index 0) Test.4;
             let Test.20 = 1i64;
             let Test.21 = GetTagId Test.19;
             let Test.22 = lowlevel Eq Test.20 Test.21;
@@ -15,7 +15,7 @@ procedure Test.3 (Test.4):
                 let Test.15 = true;
                 ret Test.15;
             else
-                let Test.7 = UnionAtIndex (Id 0) (Index 2) Test.4;
+                let Test.7 = UnionAtIndex (Id 0) (Index 1) Test.4;
                 jump Test.13 Test.7;
     in
     jump Test.13 Test.4;
@@ -25,8 +25,8 @@ procedure Test.0 ():
     let Test.30 = 3i64;
     let Test.26 = Just Test.30;
     let Test.29 = 1i64;
-    let Test.27 = Nil Test.29;
-    let Test.12 = Cons Test.28 Test.26 Test.27;
+    let Test.27 = Nil ;
+    let Test.12 = Cons Test.26 Test.27;
     let Test.11 = CallByName Test.3 Test.12;
     dec Test.12;
     ret Test.11;

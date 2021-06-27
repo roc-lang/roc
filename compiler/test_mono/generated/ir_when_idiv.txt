@@ -18,7 +18,7 @@ procedure Test.0 ():
     let Test.6 = GetTagId Test.2;
     let Test.7 = lowlevel Eq Test.5 Test.6;
     if Test.7 then
-        let Test.1 = UnionAtIndex (Id 1) (Index 1) Test.2;
+        let Test.1 = UnionAtIndex (Id 1) (Index 0) Test.2;
         ret Test.1;
     else
         let Test.4 = -1i64;
