@@ -846,8 +846,8 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
     match union_layout {
         NonRecursive(tags) => {
-            let id1 = get_tag_id(env, parent, union_layout, tag1).into_int_value();
-            let id2 = get_tag_id(env, parent, union_layout, tag2).into_int_value();
+            let id1 = get_tag_id(env, parent, union_layout, tag1);
+            let id2 = get_tag_id(env, parent, union_layout, tag2);
 
             let compare_tag_fields = ctx.append_basic_block(parent, "compare_tag_fields");
 
@@ -925,8 +925,8 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             env.builder.position_at_end(compare_tag_ids);
 
-            let id1 = get_tag_id(env, parent, union_layout, tag1).into_int_value();
-            let id2 = get_tag_id(env, parent, union_layout, tag2).into_int_value();
+            let id1 = get_tag_id(env, parent, union_layout, tag1);
+            let id2 = get_tag_id(env, parent, union_layout, tag2);
 
             let compare_tag_fields = ctx.append_basic_block(parent, "compare_tag_fields");
 
@@ -1076,8 +1076,8 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             env.builder.position_at_end(compare_other);
 
-            let id1 = get_tag_id(env, parent, union_layout, tag1).into_int_value();
-            let id2 = get_tag_id(env, parent, union_layout, tag2).into_int_value();
+            let id1 = get_tag_id(env, parent, union_layout, tag1);
+            let id2 = get_tag_id(env, parent, union_layout, tag2);
 
             let compare_tag_fields = ctx.append_basic_block(parent, "compare_tag_fields");
 

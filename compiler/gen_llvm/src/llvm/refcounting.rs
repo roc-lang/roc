@@ -1520,8 +1520,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         env.builder.build_unconditional_branch(only_branch);
     } else {
         // read the tag_id
-        let current_tag_id =
-            get_tag_id(env, parent, &union_layout, value_ptr.into()).into_int_value();
+        let current_tag_id = get_tag_id(env, parent, &union_layout, value_ptr.into());
 
         let merge_block = env.context.append_basic_block(parent, "decrement_merge");
 

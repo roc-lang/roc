@@ -1156,7 +1156,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             // cast the argument bytes into the desired shape for this tag
             let (argument, _structure_layout) = load_symbol_and_layout(scope, structure);
 
-            get_tag_id(env, parent, union_layout, argument)
+            get_tag_id(env, parent, &union_layout, argument).into()
         }
     }
 }
@@ -1584,20 +1584,18 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     union_layout: &UnionLayout<'a>,
     argument: BasicValueEnum<'ctx>,
-) -> BasicValueEnum<'ctx> {
+) -> IntValue<'ctx> {
     let builder = env.builder;
     match union_layout {
         UnionLayout::NonRecursive(_) => {
             let tag = argument.into_struct_value();
 
-            builder
-                .build_extract_value(tag, TAG_ID_INDEX, "get_tag_id")
-                .unwrap()
+            extract_tag_discriminant_non_recursive(env, tag)
         }
         UnionLayout::Recursive(_) => {
-            extract_tag_discriminant_ptr2(env, argument.into_pointer_value()).into()
+            extract_tag_discriminant_ptr(env, argument.into_pointer_value())
         }
-        UnionLayout::NonNullableUnwrapped(_) => env.context.i64_type().const_zero().into(),
+        UnionLayout::NonNullableUnwrapped(_) => env.context.i64_type().const_zero(),
         UnionLayout::NullableWrapped { nullable_id, .. } => {
             let argument_ptr = argument.into_pointer_value();
             let is_null = env.builder.build_is_null(argument_ptr, "is_null");
@@ -1621,14 +1619,16 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
 
             {
                 env.builder.position_at_end(else_block);
-                let tag_id = extract_tag_discriminant_ptr2(env, argument_ptr);
+                let tag_id = extract_tag_discriminant_ptr(env, argument_ptr);
                 env.builder.build_store(result, tag_id);
                 env.builder.build_unconditional_branch(cont_block);
             }
 
             env.builder.position_at_end(cont_block);
 
-            env.builder.build_load(result, "load_result")
+            env.builder
+                .build_load(result, "load_result")
+                .into_int_value()
         }
         UnionLayout::NullableUnwrapped { nullable_id, .. } => {
             let argument_ptr = argument.into_pointer_value();
@@ -1641,6 +1641,7 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
 
             env.builder
                 .build_select(is_null, then_value, else_value, "select_tag_id")
+                .into_int_value()
         }
     }
 }
@@ -2545,16 +2546,7 @@ pub fn complex_bitcast<'ctx>(
     }
 }
 
-pub fn extract_tag_discriminant<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    union_layout: UnionLayout<'a>,
-    cond_value: BasicValueEnum<'ctx>,
-) -> IntValue<'ctx> {
-    get_tag_id(env, parent, &union_layout, cond_value).into_int_value()
-}
-
-fn extract_tag_discriminant_ptr2<'a, 'ctx, 'env>(
+fn extract_tag_discriminant_ptr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     from_value: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
@@ -2565,6 +2557,16 @@ fn extract_tag_discriminant_ptr2<'a, 'ctx, 'env>(
 
     env.builder
         .build_load(tag_id_ptr, "load_tag_id")
+        .into_int_value()
+}
+
+fn extract_tag_discriminant_non_recursive<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    tag: StructValue<'ctx>,
+) -> IntValue<'ctx> {
+    env.builder
+        .build_extract_value(tag, TAG_ID_INDEX, "get_tag_id")
+        .unwrap()
         .into_int_value()
 }
 
@@ -2647,7 +2649,7 @@ fn build_switch_ir<'a, 'ctx, 'env>(
         Layout::Union(variant) => {
             cond_layout = Layout::Builtin(Builtin::Int64);
 
-            extract_tag_discriminant(env, parent, variant, cond_value)
+            get_tag_id(env, parent, &variant, cond_value)
         }
         Layout::Builtin(_) => cond_value.into_int_value(),
         other => todo!("Build switch value from layout: {:?}", other),

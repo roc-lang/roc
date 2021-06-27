@@ -406,7 +406,7 @@ fn hash_tag<'a, 'ctx, 'env>(
     env.builder.position_at_end(entry_block);
     match union_layout {
         NonRecursive(tags) => {
-            let tag_id = get_tag_id(env, parent, union_layout, tag).into_int_value();
+            let tag_id = get_tag_id(env, parent, union_layout, tag);
 
             let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
@@ -448,7 +448,7 @@ fn hash_tag<'a, 'ctx, 'env>(
             env.builder.build_switch(tag_id, default, &cases);
         }
         Recursive(tags) => {
-            let tag_id = get_tag_id(env, parent, union_layout, tag).into_int_value();
+            let tag_id = get_tag_id(env, parent, union_layout, tag);
 
             let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
@@ -551,7 +551,7 @@ fn hash_tag<'a, 'ctx, 'env>(
 
                 env.builder.position_at_end(hash_other_block);
 
-                let tag_id = get_tag_id(env, parent, union_layout, tag.into()).into_int_value();
+                let tag_id = get_tag_id(env, parent, union_layout, tag.into());
 
                 let default = cases.pop().unwrap().1;
 
