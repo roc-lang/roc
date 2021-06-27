@@ -1,9 +1,7 @@
 use crate::debug_info_init;
 use crate::llvm::bitcode::call_bitcode_fn;
 use crate::llvm::build::Env;
-use crate::llvm::build::{
-    cast_block_of_memory_to_tag, complex_bitcast, get_tag_id, FAST_CALL_CONV,
-};
+use crate::llvm::build::{cast_block_of_memory_to_tag, get_tag_id, FAST_CALL_CONV, TAG_DATA_INDEX};
 use crate::llvm::build_str;
 use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
@@ -408,7 +406,7 @@ fn hash_tag<'a, 'ctx, 'env>(
     env.builder.position_at_end(entry_block);
     match union_layout {
         NonRecursive(tags) => {
-            let tag_id = nonrec_tag_id(env, tag.into_struct_value());
+            let tag_id = get_tag_id(env, parent, union_layout, tag).into_int_value();
 
             let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
@@ -484,7 +482,6 @@ fn hash_tag<'a, 'ctx, 'env>(
         }
         NullableUnwrapped { other_fields, .. } => {
             let tag = tag.into_pointer_value();
-            let other_fields = &other_fields[1..];
 
             let is_null = env.builder.build_is_null(tag, "is_null");
 
@@ -534,11 +531,6 @@ fn hash_tag<'a, 'ctx, 'env>(
             }
 
             {
-                env.builder.position_at_end(hash_other_block);
-
-                // SAFETY recursive tag unions are not NULL
-                let tag_id = unsafe { rec_tag_id_unsafe(env, tag) };
-
                 let mut cases = Vec::with_capacity_in(other_tags.len(), env.arena);
 
                 for (tag_id, field_layouts) in other_tags.iter().enumerate() {
@@ -558,6 +550,8 @@ fn hash_tag<'a, 'ctx, 'env>(
                 }
 
                 env.builder.position_at_end(hash_other_block);
+
+                let tag_id = get_tag_id(env, parent, union_layout, tag.into()).into_int_value();
 
                 let default = cases.pop().unwrap().1;
 
@@ -765,18 +759,27 @@ fn hash_ptr_to_struct<'a, 'ctx, 'env>(
 ) -> IntValue<'ctx> {
     use inkwell::types::BasicType;
 
-    let struct_layout = Layout::Struct(field_layouts);
-
-    let wrapper_type = basic_type_from_layout(env, &struct_layout);
-    debug_assert!(wrapper_type.is_struct_type());
+    let wrapper_type = basic_type_from_layout(env, &Layout::Union(*union_layout));
 
     // cast the opaque pointer to a pointer of the correct shape
+    let wrapper_ptr = env
+        .builder
+        .build_bitcast(tag, wrapper_type, "opaque_to_correct")
+        .into_pointer_value();
+
+    let struct_ptr = env
+        .builder
+        .build_struct_gep(wrapper_ptr, TAG_DATA_INDEX, "get_tag_data")
+        .unwrap();
+
+    let struct_layout = Layout::Struct(field_layouts);
+    let struct_type = basic_type_from_layout(env, &struct_layout);
     let struct_ptr = env
         .builder
         .build_bitcast(
-            tag,
-            wrapper_type.ptr_type(inkwell::AddressSpace::Generic),
-            "opaque_to_correct",
+            struct_ptr,
+            struct_type.ptr_type(inkwell::AddressSpace::Generic),
+            "cast_tag_data",
         )
         .into_pointer_value();
 
@@ -829,35 +832,4 @@ fn hash_bitcode_fn<'a, 'ctx, 'env>(
         &bitcode::DICT_HASH,
     )
     .into_int_value()
-}
-
-fn nonrec_tag_id<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    tag: StructValue<'ctx>,
-) -> IntValue<'ctx> {
-    complex_bitcast(
-        env.builder,
-        tag.into(),
-        env.context.i64_type().into(),
-        "load_tag_id",
-    )
-    .into_int_value()
-}
-
-unsafe fn rec_tag_id_unsafe<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    tag: PointerValue<'ctx>,
-) -> IntValue<'ctx> {
-    let ptr = env
-        .builder
-        .build_bitcast(
-            tag,
-            env.context
-                .i64_type()
-                .ptr_type(inkwell::AddressSpace::Generic),
-            "cast_for_tag_id",
-        )
-        .into_pointer_value();
-
-    env.builder.build_load(ptr, "load_tag_id").into_int_value()
 }

@@ -2092,7 +2092,7 @@ fn specialize_external<'a>(
                                     structure: Symbol::ARG_CLOSURE,
                                     // union at index still expects the index to be +1; it thinks
                                     // the tag id is stored
-                                    index: index as u64 + 1,
+                                    index: index as u64,
                                     union_layout,
                                 };
 
@@ -4179,12 +4179,10 @@ fn convert_tag_union<'a>(
             let (tag, layout) = match variant {
                 Recursive { sorted_tag_layouts } => {
                     debug_assert!(sorted_tag_layouts.len() > 1);
-                    let tag_id_symbol = env.unique_symbol();
-                    opt_tag_id_symbol = Some(tag_id_symbol);
+                    opt_tag_id_symbol = None;
 
                     field_symbols = {
                         let mut temp = Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
-                        temp.push(tag_id_symbol);
 
                         temp.extend(field_symbols_temp.iter().map(|r| r.1));
 
@@ -4274,12 +4272,10 @@ fn convert_tag_union<'a>(
                     nullable_name: _,
                     sorted_tag_layouts,
                 } => {
-                    let tag_id_symbol = env.unique_symbol();
-                    opt_tag_id_symbol = Some(tag_id_symbol);
+                    opt_tag_id_symbol = None;
 
                     field_symbols = {
                         let mut temp = Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
-                        temp.push(tag_id_symbol);
 
                         temp.extend(field_symbols_temp.iter().map(|r| r.1));
 
@@ -4320,8 +4316,6 @@ fn convert_tag_union<'a>(
 
                     field_symbols = {
                         let mut temp = Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
-                        // FIXME drop tag
-                        temp.push(tag_id_symbol);
 
                         temp.extend(field_symbols_temp.iter().map(|r| r.1));
 
@@ -5661,25 +5655,9 @@ fn store_tag_pattern<'a>(
 ) -> StorePattern<'a> {
     use Pattern::*;
 
-    // rosetree-like structures don't store the tag ID, the others do from the perspective of the IR
-    // The backend can make different choices there (and will, for UnionLayout::NullableUnwrapped)
-    let write_tag = !matches!(union_layout, UnionLayout::NonNullableUnwrapped(_));
-
-    let mut arg_layouts = Vec::with_capacity_in(arguments.len(), env.arena);
     let mut is_productive = false;
 
-    if write_tag {
-        // add an element for the tag discriminant
-        arg_layouts.push(Layout::Builtin(TAG_SIZE));
-    }
-
-    for (_, layout) in arguments {
-        arg_layouts.push(*layout);
-    }
-
     for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
-        let index = if write_tag { index + 1 } else { index };
-
         let mut arg_layout = *arg_layout;
 
         if let Layout::RecursivePointer = arg_layout {
@@ -7148,8 +7126,8 @@ fn from_can_pattern_help<'a>(
 
                             let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
 
-                            debug_assert_eq!(arguments.len(), argument_layouts[1..].len());
-                            let it = argument_layouts[1..].iter();
+                            debug_assert_eq!(arguments.len(), argument_layouts.len());
+                            let it = argument_layouts.iter();
 
                             for ((_, loc_pat), layout) in arguments.iter().zip(it) {
                                 mono_args.push((
@@ -7279,7 +7257,7 @@ fn from_can_pattern_help<'a>(
                             let it = if tag_name == &nullable_name {
                                 [].iter()
                             } else {
-                                argument_layouts[1..].iter()
+                                argument_layouts.iter()
                             };
 
                             for ((_, loc_pat), layout) in arguments.iter().zip(it) {
@@ -7350,7 +7328,7 @@ fn from_can_pattern_help<'a>(
                                 [].iter()
                             } else {
                                 // FIXME drop tag
-                                argument_layouts[1..].iter()
+                                argument_layouts.iter()
                             };
 
                             for ((_, loc_pat), layout) in arguments.iter().zip(it) {
