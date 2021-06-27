@@ -109,8 +109,6 @@ impl<'a> UnionLayout<'a> {
     pub fn layout_at(self, tag_id: u8, index: usize) -> Layout<'a> {
         let result = match self {
             UnionLayout::NonRecursive(tag_layouts) => {
-                let index = index - 1;
-
                 let field_layouts = tag_layouts[tag_id as usize];
 
                 // this cannot be recursive; return immediately
@@ -152,6 +150,15 @@ impl<'a> UnionLayout<'a> {
             Layout::Union(self)
         } else {
             result
+        }
+    }
+
+    pub fn tag_id_layout(&self) -> Option<Layout<'a>> {
+        match self {
+            UnionLayout::NonRecursive(_)
+            | UnionLayout::Recursive(_)
+            | UnionLayout::NullableWrapped { .. } => Some(Layout::Builtin(Builtin::Int64)),
+            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => None,
         }
     }
 }
@@ -567,19 +574,18 @@ impl<'a> Layout<'a> {
 
                 match variant {
                     NonRecursive(fields) => {
-                        let data_size: u32 = fields
+                        fields
                             .iter()
                             .map(|tag_layout| {
                                 tag_layout
                                     .iter()
                                     .map(|field| field.stack_size(pointer_size))
-                                    .sum()
+                                    .sum::<u32>()
                             })
                             .max()
-                            .unwrap_or_default();
-
-                        // TEMPORARY
-                        pointer_size + data_size
+                            .unwrap_or_default()
+                            // the size of the tag_id
+                            + pointer_size
                     }
 
                     Recursive(_)
@@ -1193,14 +1199,11 @@ fn layout_from_flat_type<'a>(
             env.insert_seen(rec_var);
             for (index, (_name, variables)) in tags_vec.into_iter().enumerate() {
                 if matches!(nullable, Some(i) if i == index as i64) {
-                    // don't add the
+                    // don't add the nullable case
                     continue;
                 }
 
                 let mut tag_layout = Vec::with_capacity_in(variables.len() + 1, arena);
-
-                // store the discriminant
-                tag_layout.push(Layout::Builtin(TAG_SIZE));
 
                 for var in variables {
                     // TODO does this cause problems with mutually recursive unions?
@@ -1242,7 +1245,7 @@ fn layout_from_flat_type<'a>(
                 }
             } else if tag_layouts.len() == 1 {
                 // drop the tag id
-                UnionLayout::NonNullableUnwrapped(&tag_layouts.pop().unwrap()[1..])
+                UnionLayout::NonNullableUnwrapped(&tag_layouts.pop().unwrap())
             } else {
                 UnionLayout::Recursive(tag_layouts.into_bump_slice())
             };
@@ -1583,11 +1586,6 @@ pub fn union_sorted_tags_help<'a>(
                 }
 
                 let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, arena);
-
-                // add the tag discriminant (size currently always hardcoded to i64)
-                if is_recursive {
-                    arg_layouts.push(Layout::Builtin(TAG_SIZE));
-                }
 
                 for var in arguments {
                     match Layout::from_var(&mut env, var) {

@@ -5,14 +5,14 @@ procedure Test.0 ():
     let Test.9 = GetTagId Test.5;
     switch Test.9:
         case 2:
-            let Test.2 = UnionAtIndex (Id 2) (Index 1) Test.5;
+            let Test.2 = UnionAtIndex (Id 2) (Index 0) Test.5;
             ret Test.2;
     
         case 0:
-            let Test.3 = UnionAtIndex (Id 0) (Index 1) Test.5;
+            let Test.3 = UnionAtIndex (Id 0) (Index 0) Test.5;
             ret Test.3;
     
         default:
-            let Test.4 = UnionAtIndex (Id 1) (Index 1) Test.5;
+            let Test.4 = UnionAtIndex (Id 1) (Index 0) Test.5;
             ret Test.4;
     
