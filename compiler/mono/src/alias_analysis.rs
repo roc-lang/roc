@@ -861,11 +861,13 @@ fn expr_spec(
             union_layout,
         } => match union_layout {
             UnionLayout::NonRecursive(_) => {
+                // let index = (*index - 1) as u32;
+                let index = (*index - 1) as u32;
                 let tag_value_id = env.symbols[structure];
                 let tuple_value_id =
                     builder.add_unwrap_union(block, tag_value_id, *tag_id as u32)?;
 
-                builder.add_get_tuple_field(block, tuple_value_id, *index as u32)
+                builder.add_get_tuple_field(block, tuple_value_id, index)
             }
             _ => {
                 // for the moment recursive tag unions don't quite work

@@ -50,7 +50,13 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
                     let block = block_of_memory_slices(env.context, &[fields], env.ptr_bytes);
                     block.ptr_type(AddressSpace::Generic).into()
                 }
-                NonRecursive(_) => block_of_memory(env.context, layout, env.ptr_bytes),
+                NonRecursive(_) => {
+                    let data = block_of_memory(env.context, layout, env.ptr_bytes);
+
+                    env.context
+                        .struct_type(&[data, env.context.i64_type().into()], false)
+                        .into()
+                }
             }
         }
         RecursivePointer => {
@@ -118,7 +124,11 @@ pub fn block_of_memory<'ctx>(
     ptr_bytes: u32,
 ) -> BasicTypeEnum<'ctx> {
     // TODO make this dynamic
-    let union_size = layout.stack_size(ptr_bytes as u32);
+    let mut union_size = layout.stack_size(ptr_bytes as u32);
+
+    if let Layout::Union(UnionLayout::NonRecursive { .. }) = layout {
+        union_size -= ptr_bytes;
+    }
 
     block_of_memory_help(context, union_size)
 }
@@ -182,8 +192,8 @@ pub fn zig_str_type<'a, 'ctx, 'env>(
     env.module.get_struct_type("str.RocStr").unwrap()
 }
 
-// pub fn zig_dec_type<'a, 'ctx, 'env>(
-//     env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
-// ) -> StructType<'ctx> {
-//     env.module.get_struct_type("dec.RocDec").unwrap()
-// }
+pub fn zig_has_tag_id_type<'a, 'ctx, 'env>(
+    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
+) -> StructType<'ctx> {
+    env.module.get_struct_type("list.HasTagId").unwrap()
+}

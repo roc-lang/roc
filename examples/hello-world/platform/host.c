@@ -1,7 +1,9 @@
-#include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <errno.h>
 #include <string.h>
-#include <math.h>
+#include <stdbool.h>
 
 void* roc_alloc(size_t size, unsigned int alignment) {
     return malloc(size);
@@ -20,6 +22,29 @@ struct RocStr {
     size_t len;
 };
 
+bool is_small_str(struct RocStr str) {
+    return ((ssize_t)str.len) < 0;
+}
+
+// Determine the length of the string, taking into
+// account the small string optimization
+size_t roc_str_len(struct RocStr str) {
+    char* bytes = (char*)&str;
+    char last_byte = bytes[sizeof(str) - 1];
+    char last_byte_xored = last_byte ^ 0b10000000;
+    size_t small_len = (size_t)(last_byte_xored);
+    size_t big_len = str.len;
+
+    // Avoid branch misprediction costs by always
+    // determining both small_len and big_len,
+    // so this compiles to a cmov instruction.
+    if (is_small_str(str)) {
+        return small_len;
+    } else {
+        return big_len;
+    }
+}
+
 struct RocCallResult {
     size_t flag;
     struct RocStr content;
@@ -27,50 +52,32 @@ struct RocCallResult {
 
 extern void roc__mainForHost_1_exposed(struct RocCallResult *re);
 
-const size_t MAX_STACK_STR_BYTES = 1024;
-
 int main() {
-    // make space for the result
-    struct RocCallResult callresult;
+    // Make space for the Roc call result
+    struct RocCallResult call_result;
 
-    // call roc to populate the callresult
-    roc__mainForHost_1_exposed(&callresult);
-    struct RocStr str = callresult.content;
+    // Call Roc to populate call_result
+    roc__mainForHost_1_exposed(&call_result);
 
-    // Convert from RocStr to C string (null-terminated char*)
-    size_t len = str.len;
-    char* c_str;
+    // Determine str_len and the str_bytes pointer,
+    // taking into account the small string optimization.
+    struct RocStr str = call_result.content;
+    size_t str_len = roc_str_len(str);
+    char* str_bytes;
 
-    // Allocate on the stack unless the string is particularly big.
-    // (Don't want a stack overflow!)
-    if (len <= MAX_STACK_STR_BYTES) {
-        c_str = (char*)alloca(len + 1);
+    if (is_small_str(str)) {
+        str_bytes = (char*)&str;
     } else {
-        c_str = (char*)malloc(len + 1);
+        str_bytes = str.bytes;
     }
 
-    memcpy(c_str, str.bytes, len);
+    // Write to stdout
+    if (write(1, str_bytes, str_len) >= 0) {
+        // Writing succeeded!
+        return 0;
+    } else {
+        printf("Error writing to stdout: %s\n", strerror(errno));
 
-    // null-terminate
-    c_str[len] = 0;
-
-    // Print the string to stdout
-    printf("%s\n", c_str);
-
-    // Pointer to the beginning of the RocStr's actual allocation, which is
-    // the size_t immediately preceding the first stored byte.
-    size_t* str_base_ptr = (size_t*)str.bytes - 1;
-
-    // If *str_base_ptr is equal to 0, then the string is in the
-    // read-only data section of the binary, and can't be freed!
-    if (*str_base_ptr != 0) {
-        roc_dealloc(str_base_ptr, 8);
+        return 1;
     }
-
-    // If we malloc'd c_str, free it.
-    if (len > MAX_STACK_STR_BYTES) {
-        free(c_str);
-    }
-
-    return 0;
 }

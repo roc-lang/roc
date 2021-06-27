@@ -1,12 +1,10 @@
 use crate::debug_info_init;
 use crate::llvm::build::{
     add_func, cast_basic_basic, cast_block_of_memory_to_tag, Env, FAST_CALL_CONV,
-    LLVM_SADD_WITH_OVERFLOW_I64,
+    LLVM_SADD_WITH_OVERFLOW_I64, TAG_DATA_INDEX, TAG_ID_INDEX,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
-use crate::llvm::convert::{
-    basic_type_from_layout, block_of_memory, block_of_memory_slices, ptr_int,
-};
+use crate::llvm::convert::{basic_type_from_layout, block_of_memory_slices, ptr_int};
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;
@@ -1584,7 +1582,7 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = block_of_memory(env.context, &layout, env.ptr_bytes);
+            let basic_type = basic_type_from_layout(env, &layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_union_help(
@@ -1640,19 +1638,11 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
     let wrapper_struct = arg_val.into_struct_value();
 
     // read the tag_id
-    let tag_id = {
-        // the first element of the wrapping struct is an array of i64
-        let first_array = env
-            .builder
-            .build_extract_value(wrapper_struct, 0, "read_tag_id")
-            .unwrap()
-            .into_array_value();
-
-        env.builder
-            .build_extract_value(first_array, 0, "read_tag_id_2")
-            .unwrap()
-            .into_int_value()
-    };
+    let tag_id = env
+        .builder
+        .build_extract_value(wrapper_struct, TAG_ID_INDEX, "read_tag_id")
+        .unwrap()
+        .into_int_value();
 
     let tag_id_u8 = env
         .builder
@@ -1680,7 +1670,12 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
         let wrapper_type = basic_type_from_layout(env, &Layout::Struct(field_layouts));
 
         debug_assert!(wrapper_type.is_struct_type());
-        let wrapper_struct = cast_block_of_memory_to_tag(env.builder, wrapper_struct, wrapper_type);
+        let data_bytes = env
+            .builder
+            .build_extract_value(wrapper_struct, TAG_DATA_INDEX, "read_tag_id")
+            .unwrap()
+            .into_struct_value();
+        let wrapper_struct = cast_block_of_memory_to_tag(env.builder, data_bytes, wrapper_type);
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
             if let Layout::RecursivePointer = field_layout {

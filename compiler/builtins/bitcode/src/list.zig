@@ -12,6 +12,7 @@ const Opaque = ?[*]u8;
 const Inc = fn (?[*]u8) callconv(.C) void;
 const IncN = fn (?[*]u8, usize) callconv(.C) void;
 const Dec = fn (?[*]u8) callconv(.C) void;
+const HasTagId = fn (u16, ?[*]u8) callconv(.C) extern struct { matched: bool, data: ?[*]u8 };
 
 pub const RocList = extern struct {
     bytes: ?[*]u8,
@@ -405,11 +406,14 @@ pub fn listKeepOks(
     before_width: usize,
     result_width: usize,
     after_width: usize,
+    has_tag_id: HasTagId,
     dec_result: Dec,
 ) callconv(.C) RocList {
+    const good_constructor: u16 = 1;
+
     return listKeepResult(
         list,
-        RocResult.isOk,
+        good_constructor,
         caller,
         data,
         inc_n_data,
@@ -418,6 +422,7 @@ pub fn listKeepOks(
         before_width,
         result_width,
         after_width,
+        has_tag_id,
         dec_result,
     );
 }
@@ -432,11 +437,14 @@ pub fn listKeepErrs(
     before_width: usize,
     result_width: usize,
     after_width: usize,
+    has_tag_id: HasTagId,
     dec_result: Dec,
 ) callconv(.C) RocList {
+    const good_constructor: u16 = 0;
+
     return listKeepResult(
         list,
-        RocResult.isErr,
+        good_constructor,
         caller,
         data,
         inc_n_data,
@@ -445,13 +453,14 @@ pub fn listKeepErrs(
         before_width,
         result_width,
         after_width,
+        has_tag_id,
         dec_result,
     );
 }
 
 pub fn listKeepResult(
     list: RocList,
-    is_good_constructor: fn (RocResult) bool,
+    good_constructor: u16,
     caller: Caller1,
     data: Opaque,
     inc_n_data: IncN,
@@ -460,6 +469,7 @@ pub fn listKeepResult(
     before_width: usize,
     result_width: usize,
     after_width: usize,
+    has_tag_id: HasTagId,
     dec_result: Dec,
 ) RocList {
     if (list.bytes) |source_ptr| {
@@ -479,11 +489,14 @@ pub fn listKeepResult(
             const before_element = source_ptr + (i * before_width);
             caller(data, before_element, temporary);
 
-            const result = utils.RocResult{ .bytes = temporary };
-
-            const after_element = temporary + @sizeOf(i64);
-            if (is_good_constructor(result)) {
-                @memcpy(target_ptr + (kept * after_width), after_element, after_width);
+            // a record { matched: bool, data: ?[*]u8 }
+            // for now, that data pointer is just the input `temporary` pointer
+            // this will change in the future to only return a pointer to the
+            // payload of the tag
+            const answer = has_tag_id(good_constructor, temporary);
+            if (answer.matched) {
+                const contents = (answer.data orelse unreachable);
+                @memcpy(target_ptr + (kept * after_width), contents, after_width);
                 kept += 1;
             } else {
                 dec_result(temporary);
@@ -606,7 +619,9 @@ pub fn listWalkUntil(
     accum: Opaque,
     alignment: u32,
     element_width: usize,
+    continue_stop_width: usize,
     accum_width: usize,
+    has_tag_id: HasTagId,
     dec: Dec,
     output: Opaque,
 ) callconv(.C) void {
@@ -622,9 +637,10 @@ pub fn listWalkUntil(
         return;
     }
 
-    const bytes_ptr: [*]u8 = utils.alloc(TAG_WIDTH + accum_width, alignment);
+    const bytes_ptr: [*]u8 = utils.alloc(continue_stop_width, alignment);
 
-    @memcpy(bytes_ptr + TAG_WIDTH, accum orelse unreachable, accum_width);
+    // NOTE: assumes data bytes are the first bytes in a tag
+    @memcpy(bytes_ptr, accum orelse unreachable, accum_width);
 
     if (list.bytes) |source_ptr| {
         var i: usize = 0;
@@ -636,10 +652,12 @@ pub fn listWalkUntil(
                 inc_n_data(data, 1);
             }
 
-            caller(data, element, bytes_ptr + TAG_WIDTH, bytes_ptr);
+            caller(data, element, bytes_ptr, bytes_ptr);
 
-            const usizes: [*]usize = @ptrCast([*]usize, @alignCast(8, bytes_ptr));
-            if (usizes[0] != 0) {
+            // [ Continue ..., Stop ]
+            const tag_id = has_tag_id(0, bytes_ptr);
+
+            if (!tag_id.matched) {
                 // decrement refcount of the remaining items
                 i += 1;
                 while (i < size) : (i += 1) {
@@ -650,7 +668,7 @@ pub fn listWalkUntil(
         }
     }
 
-    @memcpy(output orelse unreachable, bytes_ptr + TAG_WIDTH, accum_width);
+    @memcpy(output orelse unreachable, bytes_ptr, accum_width);
     utils.dealloc(bytes_ptr, alignment);
 }
 
@@ -1009,7 +1027,25 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
     return output;
 }
 
-// input: RocList,
+pub fn listSetInPlace(
+    bytes: ?[*]u8,
+    length: usize,
+    alignment: u32,
+    index: usize,
+    element: Opaque,
+    element_width: usize,
+    dec: Dec,
+) callconv(.C) ?[*]u8 {
+    // INVARIANT: bounds checking happens on the roc side
+    //
+    // at the time of writing, the function is implemented roughly as
+    // `if inBounds then LowLevelListGet input index item else input`
+    // so we don't do a bounds check here. Hence, the list is also non-empty,
+    // because inserting into an empty list is always out of bounds
+
+    return listSetInPlaceHelp(bytes, length, alignment, index, element, element_width, dec);
+}
+
 pub fn listSet(
     bytes: ?[*]u8,
     length: usize,
@@ -1028,23 +1064,34 @@ pub fn listSet(
     const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, bytes));
 
     if ((ptr - 1)[0] == utils.REFCOUNT_ONE) {
-
-        // the element we will replace
-        var element_at_index = (bytes orelse undefined) + (index * element_width);
-
-        // decrement its refcount
-        dec(element_at_index);
-
-        // copy in the new element
-        @memcpy(element_at_index, element orelse undefined, element_width);
-
-        return bytes;
+        return listSetInPlaceHelp(bytes, length, alignment, index, element, element_width, dec);
     } else {
-        return listSetClone(bytes, length, alignment, index, element, element_width, dec);
+        return listSetImmutable(bytes, length, alignment, index, element, element_width, dec);
     }
 }
 
-inline fn listSetClone(
+inline fn listSetInPlaceHelp(
+    bytes: ?[*]u8,
+    length: usize,
+    alignment: u32,
+    index: usize,
+    element: Opaque,
+    element_width: usize,
+    dec: Dec,
+) ?[*]u8 {
+    // the element we will replace
+    var element_at_index = (bytes orelse undefined) + (index * element_width);
+
+    // decrement its refcount
+    dec(element_at_index);
+
+    // copy in the new element
+    @memcpy(element_at_index, element orelse undefined, element_width);
+
+    return bytes;
+}
+
+inline fn listSetImmutable(
     old_bytes: ?[*]u8,
     length: usize,
     alignment: u32,
@@ -1053,8 +1100,6 @@ inline fn listSetClone(
     element_width: usize,
     dec: Dec,
 ) ?[*]u8 {
-    @setCold(true);
-
     const data_bytes = length * element_width;
 
     var new_bytes = utils.allocateWithRefcount(data_bytes, alignment);

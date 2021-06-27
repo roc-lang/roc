@@ -109,6 +109,8 @@ impl<'a> UnionLayout<'a> {
     pub fn layout_at(self, tag_id: u8, index: usize) -> Layout<'a> {
         let result = match self {
             UnionLayout::NonRecursive(tag_layouts) => {
+                let index = index - 1;
+
                 let field_layouts = tag_layouts[tag_id as usize];
 
                 // this cannot be recursive; return immediately
@@ -565,16 +567,21 @@ impl<'a> Layout<'a> {
                 use UnionLayout::*;
 
                 match variant {
-                    NonRecursive(fields) => fields
-                        .iter()
-                        .map(|tag_layout| {
-                            tag_layout
-                                .iter()
-                                .map(|field| field.stack_size(pointer_size))
-                                .sum()
-                        })
-                        .max()
-                        .unwrap_or_default(),
+                    NonRecursive(fields) => {
+                        let data_size: u32 = fields
+                            .iter()
+                            .map(|tag_layout| {
+                                tag_layout
+                                    .iter()
+                                    .map(|field| field.stack_size(pointer_size))
+                                    .sum()
+                            })
+                            .max()
+                            .unwrap_or_default();
+
+                        // TEMPORARY
+                        pointer_size + data_size
+                    }
 
                     Recursive(_)
                     | NullableWrapped { .. }
@@ -1587,7 +1594,9 @@ pub fn union_sorted_tags_help<'a>(
                 let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, arena);
 
                 // add the tag discriminant (size currently always hardcoded to i64)
-                arg_layouts.push(Layout::Builtin(TAG_SIZE));
+                if is_recursive {
+                    arg_layouts.push(Layout::Builtin(TAG_SIZE));
+                }
 
                 for var in arguments {
                     match Layout::from_var(&mut env, var) {
