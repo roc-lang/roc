@@ -575,7 +575,7 @@ impl<'a> Layout<'a> {
                             })
                             .max()
                             .unwrap_or_default()
-                            // TODO remove
+                            // the size of the tag_id
                             + pointer_size
                     }
 
