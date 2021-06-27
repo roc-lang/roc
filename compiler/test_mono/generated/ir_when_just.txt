@@ -3,9 +3,8 @@ procedure Num.24 (#Attr.2, #Attr.3):
     ret Test.6;
 
 procedure Test.0 ():
-    let Test.13 = 0i64;
     let Test.12 = 41i64;
-    let Test.1 = Just Test.13 Test.12;
+    let Test.1 = Just Test.12;
     let Test.9 = 0i64;
     let Test.10 = GetTagId Test.1;
     let Test.11 = lowlevel Eq Test.9 Test.10;

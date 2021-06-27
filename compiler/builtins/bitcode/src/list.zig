@@ -495,8 +495,7 @@ pub fn listKeepResult(
             // payload of the tag
             const answer = has_tag_id(good_constructor, temporary);
             if (answer.matched) {
-                // drop the tag id
-                const contents = (answer.data orelse unreachable) + @sizeOf(i64);
+                const contents = (answer.data orelse unreachable);
                 @memcpy(target_ptr + (kept * after_width), contents, after_width);
                 kept += 1;
             } else {
@@ -620,7 +619,9 @@ pub fn listWalkUntil(
     accum: Opaque,
     alignment: u32,
     element_width: usize,
+    continue_stop_width: usize,
     accum_width: usize,
+    has_tag_id: HasTagId,
     dec: Dec,
     output: Opaque,
 ) callconv(.C) void {
@@ -636,9 +637,10 @@ pub fn listWalkUntil(
         return;
     }
 
-    const bytes_ptr: [*]u8 = utils.alloc(TAG_WIDTH + accum_width, alignment);
+    const bytes_ptr: [*]u8 = utils.alloc(continue_stop_width, alignment);
 
-    @memcpy(bytes_ptr + TAG_WIDTH, accum orelse unreachable, accum_width);
+    // NOTE: assumes data bytes are the first bytes in a tag
+    @memcpy(bytes_ptr, accum orelse unreachable, accum_width);
 
     if (list.bytes) |source_ptr| {
         var i: usize = 0;
@@ -650,10 +652,12 @@ pub fn listWalkUntil(
                 inc_n_data(data, 1);
             }
 
-            caller(data, element, bytes_ptr + TAG_WIDTH, bytes_ptr);
+            caller(data, element, bytes_ptr, bytes_ptr);
 
-            const usizes: [*]usize = @ptrCast([*]usize, @alignCast(8, bytes_ptr));
-            if (usizes[0] != 0) {
+            // [ Continue ..., Stop ]
+            const tag_id = has_tag_id(0, bytes_ptr);
+
+            if (!tag_id.matched) {
                 // decrement refcount of the remaining items
                 i += 1;
                 while (i < size) : (i += 1) {
@@ -664,7 +668,7 @@ pub fn listWalkUntil(
         }
     }
 
-    @memcpy(output orelse unreachable, bytes_ptr + TAG_WIDTH, accum_width);
+    @memcpy(output orelse unreachable, bytes_ptr, accum_width);
     utils.dealloc(bytes_ptr, alignment);
 }
 

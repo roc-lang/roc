@@ -1479,6 +1479,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             match union_layout {
                 UnionLayout::NonRecursive(tag_layouts) => {
+                    let index = *index - 1;
+
                     debug_assert!(argument.is_struct_value());
                     let field_layouts = tag_layouts[*tag_id as usize];
                     let struct_layout = Layout::Struct(field_layouts);
@@ -1492,7 +1494,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     );
 
                     let result = builder
-                        .build_extract_value(struct_value, *index as u32, "")
+                        .build_extract_value(struct_value, index as u32, "")
                         .expect("desired field did not decode");
 
                     result
@@ -3841,6 +3843,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         env,
                         layout_ids,
                         roc_function_call,
+                        result_layout,
                         list,
                         element_layout,
                         default,

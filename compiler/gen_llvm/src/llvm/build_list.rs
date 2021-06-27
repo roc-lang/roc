@@ -417,6 +417,7 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     roc_function_call: RocFunctionCall<'ctx>,
+    function_call_return_layout: &Layout<'a>,
     list: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
     default: BasicValueEnum<'ctx>,
@@ -457,6 +458,18 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
             );
         }
         ListWalk::WalkUntil | ListWalk::WalkBackwardsUntil => {
+            let function = env
+                .builder
+                .get_insert_block()
+                .unwrap()
+                .get_parent()
+                .unwrap();
+
+            let has_tag_id = match function_call_return_layout {
+                Layout::Union(union_layout) => build_has_tag_id(env, function, *union_layout),
+                _ => unreachable!(),
+            };
+
             let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
             call_void_bitcode_fn(
                 env,
@@ -469,7 +482,9 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
                     pass_as_opaque(env, default_ptr),
                     env.alignment_intvalue(&element_layout),
                     layout_width(env, element_layout),
+                    layout_width(env, function_call_return_layout),
                     layout_width(env, default_layout),
+                    has_tag_id.as_global_value().as_pointer_value().into(),
                     dec_element_fn.as_global_value().as_pointer_value().into(),
                     pass_as_opaque(env, result_ptr),
                 ],
