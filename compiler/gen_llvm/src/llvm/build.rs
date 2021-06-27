@@ -49,7 +49,6 @@ use morphic_lib::{
 };
 use roc_builtins::bitcode;
 use roc_collections::all::{ImMap, MutMap, MutSet};
-use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
@@ -972,448 +971,11 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
         Tag {
             arguments,
-            tag_layout: UnionLayout::NonRecursive(fields),
+            tag_layout: union_layout,
             union_size,
             tag_id,
             ..
-        } => {
-            debug_assert!(*union_size > 1);
-
-            let ctx = env.context;
-            let builder = env.builder;
-
-            // Determine types
-            let num_fields = arguments.len() + 1;
-            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-            let tag_field_layouts = &fields[*tag_id as usize];
-
-            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
-                let (val, _val_layout) = load_symbol_and_layout(scope, field_symbol);
-
-                // Zero-sized fields have no runtime representation.
-                // The layout of the struct expects them to be dropped!
-                if !tag_field_layout.is_dropped_because_empty() {
-                    let field_type = basic_type_from_layout(env, tag_field_layout);
-
-                    field_types.push(field_type);
-
-                    if let Layout::RecursivePointer = tag_field_layout {
-                        panic!(
-                            r"non-recursive tag unions cannot directly contain a recursive pointer"
-                        );
-                    } else {
-                        // this check fails for recursive tag unions, but can be helpful while debugging
-                        // debug_assert_eq!(tag_field_layout, val_layout);
-
-                        field_vals.push(val);
-                    }
-                }
-            }
-
-            // Create the struct_type
-            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-
-            // Insert field exprs into struct_val
-            let struct_val =
-                struct_from_fields(env, struct_type, field_vals.into_iter().enumerate());
-
-            // How we create tag values
-            //
-            // The memory layout of tags can be different. e.g. in
-            //
-            // [ Ok Int, Err Str ]
-            //
-            // the `Ok` tag stores a 64-bit integer, the `Err` tag stores a struct.
-            // All tags of a union must have the same length, for easy addressing (e.g. array lookups).
-            // So we need to ask for the maximum of all tag's sizes, even if most tags won't use
-            // all that memory, and certainly won't use it in the same way (the tags have fields of
-            // different types/sizes)
-            //
-            // In llvm, we must be explicit about the type of value we're creating: we can't just
-            // make a unspecified block of memory. So what we do is create a byte array of the
-            // desired size. Then when we know which tag we have (which is here, in this function),
-            // we need to cast that down to the array of bytes that llvm expects
-            //
-            // There is the bitcast instruction, but it doesn't work for arrays. So we need to jump
-            // through some hoops using store and load to get this to work: the array is put into a
-            // one-element struct, which can be cast to the desired type.
-            //
-            // This tricks comes from
-            // https://github.com/raviqqe/ssf/blob/bc32aae68940d5bddf5984128e85af75ca4f4686/ssf-llvm/src/expression_compiler.rs#L116
-
-            let internal_type = block_of_memory_slices(env.context, fields, env.ptr_bytes);
-
-            let data = cast_tag_to_block_of_memory(builder, struct_val, internal_type);
-            let tag_id_type = env.context.i64_type();
-            let wrapper_type = env
-                .context
-                .struct_type(&[data.get_type(), tag_id_type.into()], false);
-
-            let tag_id_intval = tag_id_type.const_int(*tag_id as u64, false);
-
-            let field_vals = [
-                (TAG_ID_INDEX as usize, tag_id_intval.into()),
-                (TAG_DATA_INDEX as usize, data),
-            ];
-
-            struct_from_fields(env, wrapper_type, field_vals.iter().copied()).into()
-        }
-        Tag {
-            arguments,
-            tag_layout: UnionLayout::Recursive(tags),
-            union_size,
-            tag_id,
-            ..
-        } => {
-            debug_assert!(*union_size > 1);
-
-            let ctx = env.context;
-            let builder = env.builder;
-
-            // Determine types
-            let num_fields = arguments.len() + 1;
-            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-            let tag_field_layouts = &tags[*tag_id as usize];
-
-            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
-                let (val, _val_layout) = load_symbol_and_layout(scope, field_symbol);
-
-                let field_type = basic_type_from_layout(env, tag_field_layout);
-
-                field_types.push(field_type);
-
-                if let Layout::RecursivePointer = tag_field_layout {
-                    debug_assert!(val.is_pointer_value());
-
-                    // we store recursive pointers as `i64*`
-                    let ptr = env.builder.build_bitcast(
-                        val,
-                        ctx.i64_type().ptr_type(AddressSpace::Generic),
-                        "cast_recursive_pointer",
-                    );
-
-                    field_vals.push(ptr);
-                } else {
-                    // this check fails for recursive tag unions, but can be helpful while debugging
-                    // debug_assert_eq!(tag_field_layout, val_layout);
-
-                    field_vals.push(val);
-                }
-            }
-
-            // Create the struct_type
-            let raw_data_ptr = reserve_with_refcount_union_as_block_of_memory2(env, tags);
-
-            let tag_id_ptr = builder
-                .build_struct_gep(raw_data_ptr, TAG_ID_INDEX, "tag_id_index")
-                .unwrap();
-
-            let tag_id_type = env.context.i64_type();
-            env.builder
-                .build_store(tag_id_ptr, tag_id_type.const_int(*tag_id as u64, false));
-
-            let opaque_struct_ptr = builder
-                .build_struct_gep(raw_data_ptr, TAG_DATA_INDEX, "tag_data_index")
-                .unwrap();
-
-            let struct_type = env.context.struct_type(&field_types, false);
-            let struct_ptr = env
-                .builder
-                .build_bitcast(
-                    opaque_struct_ptr,
-                    struct_type.ptr_type(AddressSpace::Generic),
-                    "struct_ptr",
-                )
-                .into_pointer_value();
-
-            // Insert field exprs into struct_val
-            for (index, field_val) in field_vals.into_iter().enumerate() {
-                let field_ptr = builder
-                    .build_struct_gep(struct_ptr, index as u32, "field_struct_gep")
-                    .unwrap();
-
-                builder.build_store(field_ptr, field_val);
-            }
-
-            raw_data_ptr.into()
-        }
-
-        Tag {
-            arguments,
-            tag_layout: UnionLayout::NonNullableUnwrapped(fields),
-            union_size,
-            tag_id,
-            ..
-        } => {
-            debug_assert_eq!(*union_size, 1);
-            debug_assert_eq!(*tag_id, 0);
-            debug_assert_eq!(arguments.len(), fields.len());
-
-            let ctx = env.context;
-            let builder = env.builder;
-
-            // Determine types
-            let num_fields = arguments.len() + 1;
-            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-            for (field_symbol, tag_field_layout) in arguments.iter().zip(fields.iter()) {
-                let val = load_symbol(scope, field_symbol);
-
-                let field_type = basic_type_from_layout(env, tag_field_layout);
-
-                field_types.push(field_type);
-
-                if let Layout::RecursivePointer = tag_field_layout {
-                    debug_assert!(val.is_pointer_value());
-
-                    // we store recursive pointers as `i64*`
-                    let ptr = env.builder.build_bitcast(
-                        val,
-                        ctx.i64_type().ptr_type(AddressSpace::Generic),
-                        "cast_recursive_pointer",
-                    );
-
-                    field_vals.push(ptr);
-                } else {
-                    // this check fails for recursive tag unions, but can be helpful while debugging
-
-                    field_vals.push(val);
-                }
-            }
-
-            // Create the struct_type
-            let data_ptr = reserve_with_refcount_union_as_block_of_memory(env, &[fields]);
-
-            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let struct_ptr = env
-                .builder
-                .build_bitcast(
-                    data_ptr,
-                    struct_type.ptr_type(AddressSpace::Generic),
-                    "block_of_memory_to_tag",
-                )
-                .into_pointer_value();
-
-            // Insert field exprs into struct_val
-            for (index, field_val) in field_vals.into_iter().enumerate() {
-                let field_ptr = builder
-                    .build_struct_gep(struct_ptr, index as u32, "struct_gep")
-                    .unwrap();
-
-                builder.build_store(field_ptr, field_val);
-            }
-
-            data_ptr.into()
-        }
-
-        Tag {
-            arguments,
-            tag_layout:
-                UnionLayout::NullableWrapped {
-                    nullable_id,
-                    other_tags: tags,
-                },
-            union_size,
-            tag_id,
-            ..
-        } => {
-            if *tag_id == *nullable_id as u8 {
-                let layout = Layout::Union(UnionLayout::NullableWrapped {
-                    nullable_id: *nullable_id,
-                    other_tags: tags,
-                });
-
-                return basic_type_from_layout(env, &layout)
-                    .into_pointer_type()
-                    .const_null()
-                    .into();
-            }
-
-            debug_assert!(*union_size > 1);
-
-            let ctx = env.context;
-            let builder = env.builder;
-
-            // Determine types
-            let num_fields = arguments.len() + 1;
-            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-            let tag_field_layouts = {
-                use std::cmp::Ordering::*;
-                match tag_id.cmp(&(*nullable_id as u8)) {
-                    Equal => unreachable!("early return above"),
-                    Less => &tags[*tag_id as usize],
-                    Greater => &tags[*tag_id as usize - 1],
-                }
-            };
-
-            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
-                let val = load_symbol(scope, field_symbol);
-
-                // Zero-sized fields have no runtime representation.
-                // The layout of the struct expects them to be dropped!
-                if !tag_field_layout.is_dropped_because_empty() {
-                    let field_type = basic_type_from_layout(env, tag_field_layout);
-
-                    field_types.push(field_type);
-
-                    if let Layout::RecursivePointer = tag_field_layout {
-                        debug_assert!(val.is_pointer_value());
-
-                        // we store recursive pointers as `i64*`
-                        let ptr = env.builder.build_bitcast(
-                            val,
-                            ctx.i64_type().ptr_type(AddressSpace::Generic),
-                            "cast_recursive_pointer",
-                        );
-
-                        field_vals.push(ptr);
-                    } else {
-                        // this check fails for recursive tag unions, but can be helpful while debugging
-                        // debug_assert_eq!(tag_field_layout, val_layout);
-
-                        field_vals.push(val);
-                    }
-                }
-            }
-
-            // Create the struct_type
-            let raw_data_ptr = reserve_with_refcount_union_as_block_of_memory2(env, tags);
-
-            let tag_id_ptr = builder
-                .build_struct_gep(raw_data_ptr, TAG_ID_INDEX, "tag_id_index")
-                .unwrap();
-
-            let tag_id_type = env.context.i64_type();
-            env.builder
-                .build_store(tag_id_ptr, tag_id_type.const_int(*tag_id as u64, false));
-
-            let opaque_struct_ptr = builder
-                .build_struct_gep(raw_data_ptr, TAG_DATA_INDEX, "tag_data_index")
-                .unwrap();
-
-            let struct_type = env.context.struct_type(&field_types, false);
-            let struct_ptr = env
-                .builder
-                .build_bitcast(
-                    opaque_struct_ptr,
-                    struct_type.ptr_type(AddressSpace::Generic),
-                    "struct_ptr",
-                )
-                .into_pointer_value();
-
-            // Insert field exprs into struct_val
-            for (index, field_val) in field_vals.into_iter().enumerate() {
-                let field_ptr = builder
-                    .build_struct_gep(struct_ptr, index as u32, "field_struct_gep")
-                    .unwrap();
-
-                builder.build_store(field_ptr, field_val);
-            }
-
-            raw_data_ptr.into()
-        }
-
-        Tag {
-            arguments,
-            tag_layout:
-                UnionLayout::NullableUnwrapped {
-                    nullable_id,
-                    other_fields,
-                    ..
-                },
-            union_size,
-            tag_id,
-            tag_name,
-            ..
-        } => {
-            let tag_struct_type =
-                block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
-
-            if *tag_id == *nullable_id as u8 {
-                let output_type = tag_struct_type.ptr_type(AddressSpace::Generic);
-
-                return output_type.const_null().into();
-            }
-
-            // this tag id is not the nullable one. For the type to be recursive, the other
-            // constructor must have at least one argument!
-            debug_assert!(!arguments.is_empty());
-
-            debug_assert!(*union_size == 2);
-
-            let ctx = env.context;
-            let builder = env.builder;
-
-            // Determine types
-            let num_fields = arguments.len() + 1;
-            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-            debug_assert!(!matches!(tag_name, TagName::Closure(_)));
-
-            debug_assert_eq!(arguments.len(), other_fields.len());
-
-            for (field_symbol, tag_field_layout) in arguments.iter().zip(other_fields.iter()) {
-                let val = load_symbol(scope, field_symbol);
-
-                // Zero-sized fields have no runtime representation.
-                // The layout of the struct expects them to be dropped!
-                if !tag_field_layout.is_dropped_because_empty() {
-                    let field_type = basic_type_from_layout(env, tag_field_layout);
-
-                    field_types.push(field_type);
-
-                    if let Layout::RecursivePointer = tag_field_layout {
-                        debug_assert!(val.is_pointer_value());
-
-                        // we store recursive pointers as `i64*`
-                        let ptr = env.builder.build_bitcast(
-                            val,
-                            ctx.i64_type().ptr_type(AddressSpace::Generic),
-                            "cast_recursive_pointer",
-                        );
-
-                        field_vals.push(ptr);
-                    } else {
-                        // this check fails for recursive tag unions, but can be helpful while debugging
-                        // debug_assert_eq!(tag_field_layout, val_layout);
-
-                        field_vals.push(val);
-                    }
-                }
-            }
-
-            // Create the struct_type
-            let data_ptr = reserve_with_refcount_union_as_block_of_memory(env, &[other_fields]);
-
-            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let struct_ptr = env
-                .builder
-                .build_bitcast(
-                    data_ptr,
-                    struct_type.ptr_type(AddressSpace::Generic),
-                    "block_of_memory_to_tag",
-                )
-                .into_pointer_value();
-
-            // Insert field exprs into struct_val
-            for (index, field_val) in field_vals.into_iter().enumerate() {
-                let field_ptr = builder
-                    .build_struct_gep(struct_ptr, index as u32, "struct_gep")
-                    .unwrap();
-
-                builder.build_store(field_ptr, field_val);
-            }
-
-            data_ptr.into()
-        }
+        } => build_tag(env, scope, union_layout, *union_size, *tag_id, arguments),
 
         Reset(_) => todo!(),
         Reuse { .. } => todo!(),
@@ -1599,6 +1161,424 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
     }
 }
 
+pub fn build_tag<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    union_layout: &UnionLayout<'a>,
+    union_size: u8,
+    tag_id: u8,
+    arguments: &[Symbol],
+) -> BasicValueEnum<'ctx> {
+    match union_layout {
+        UnionLayout::NonRecursive(fields) => {
+            debug_assert!(union_size > 1);
+
+            let ctx = env.context;
+            let builder = env.builder;
+
+            // Determine types
+            let num_fields = arguments.len() + 1;
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+            let tag_field_layouts = &fields[tag_id as usize];
+
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
+                let (val, _val_layout) = load_symbol_and_layout(scope, field_symbol);
+
+                // Zero-sized fields have no runtime representation.
+                // The layout of the struct expects them to be dropped!
+                if !tag_field_layout.is_dropped_because_empty() {
+                    let field_type = basic_type_from_layout(env, tag_field_layout);
+
+                    field_types.push(field_type);
+
+                    if let Layout::RecursivePointer = tag_field_layout {
+                        panic!(
+                            r"non-recursive tag unions cannot directly contain a recursive pointer"
+                        );
+                    } else {
+                        // this check fails for recursive tag unions, but can be helpful while debugging
+                        // debug_assert_eq!(tag_field_layout, val_layout);
+
+                        field_vals.push(val);
+                    }
+                }
+            }
+
+            // Create the struct_type
+            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+
+            // Insert field exprs into struct_val
+            let struct_val =
+                struct_from_fields(env, struct_type, field_vals.into_iter().enumerate());
+
+            // How we create tag values
+            //
+            // The memory layout of tags can be different. e.g. in
+            //
+            // [ Ok Int, Err Str ]
+            //
+            // the `Ok` tag stores a 64-bit integer, the `Err` tag stores a struct.
+            // All tags of a union must have the same length, for easy addressing (e.g. array lookups).
+            // So we need to ask for the maximum of all tag's sizes, even if most tags won't use
+            // all that memory, and certainly won't use it in the same way (the tags have fields of
+            // different types/sizes)
+            //
+            // In llvm, we must be explicit about the type of value we're creating: we can't just
+            // make a unspecified block of memory. So what we do is create a byte array of the
+            // desired size. Then when we know which tag we have (which is here, in this function),
+            // we need to cast that down to the array of bytes that llvm expects
+            //
+            // There is the bitcast instruction, but it doesn't work for arrays. So we need to jump
+            // through some hoops using store and load to get this to work: the array is put into a
+            // one-element struct, which can be cast to the desired type.
+            //
+            // This tricks comes from
+            // https://github.com/raviqqe/ssf/blob/bc32aae68940d5bddf5984128e85af75ca4f4686/ssf-llvm/src/expression_compiler.rs#L116
+
+            let internal_type = block_of_memory_slices(env.context, fields, env.ptr_bytes);
+
+            let data = cast_tag_to_block_of_memory(builder, struct_val, internal_type);
+            let tag_id_type = env.context.i64_type();
+            let wrapper_type = env
+                .context
+                .struct_type(&[data.get_type(), tag_id_type.into()], false);
+
+            let tag_id_intval = tag_id_type.const_int(tag_id as u64, false);
+
+            let field_vals = [
+                (TAG_ID_INDEX as usize, tag_id_intval.into()),
+                (TAG_DATA_INDEX as usize, data),
+            ];
+
+            struct_from_fields(env, wrapper_type, field_vals.iter().copied()).into()
+        }
+        UnionLayout::Recursive(tags) => {
+            debug_assert!(union_size > 1);
+
+            let ctx = env.context;
+            let builder = env.builder;
+
+            // Determine types
+            let num_fields = arguments.len() + 1;
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+            let tag_field_layouts = &tags[tag_id as usize];
+
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
+                let (val, _val_layout) = load_symbol_and_layout(scope, field_symbol);
+
+                let field_type = basic_type_from_layout(env, tag_field_layout);
+
+                field_types.push(field_type);
+
+                if let Layout::RecursivePointer = tag_field_layout {
+                    debug_assert!(val.is_pointer_value());
+
+                    // we store recursive pointers as `i64*`
+                    let ptr = env.builder.build_bitcast(
+                        val,
+                        ctx.i64_type().ptr_type(AddressSpace::Generic),
+                        "cast_recursive_pointer",
+                    );
+
+                    field_vals.push(ptr);
+                } else {
+                    // this check fails for recursive tag unions, but can be helpful while debugging
+                    // debug_assert_eq!(tag_field_layout, val_layout);
+
+                    field_vals.push(val);
+                }
+            }
+
+            // Create the struct_type
+            let raw_data_ptr =
+                reserve_with_refcount_union_as_block_of_memory(env, *union_layout, tags);
+
+            let tag_id_ptr = builder
+                .build_struct_gep(raw_data_ptr, TAG_ID_INDEX, "tag_id_index")
+                .unwrap();
+
+            let tag_id_type = env.context.i64_type();
+            env.builder
+                .build_store(tag_id_ptr, tag_id_type.const_int(tag_id as u64, false));
+
+            let opaque_struct_ptr = builder
+                .build_struct_gep(raw_data_ptr, TAG_DATA_INDEX, "tag_data_index")
+                .unwrap();
+
+            let struct_type = env.context.struct_type(&field_types, false);
+            let struct_ptr = env
+                .builder
+                .build_bitcast(
+                    opaque_struct_ptr,
+                    struct_type.ptr_type(AddressSpace::Generic),
+                    "struct_ptr",
+                )
+                .into_pointer_value();
+
+            // Insert field exprs into struct_val
+            for (index, field_val) in field_vals.into_iter().enumerate() {
+                let field_ptr = builder
+                    .build_struct_gep(struct_ptr, index as u32, "field_struct_gep")
+                    .unwrap();
+
+                builder.build_store(field_ptr, field_val);
+            }
+
+            raw_data_ptr.into()
+        }
+        UnionLayout::NonNullableUnwrapped(fields) => {
+            debug_assert_eq!(union_size, 1);
+            debug_assert_eq!(tag_id, 0);
+            debug_assert_eq!(arguments.len(), fields.len());
+
+            let ctx = env.context;
+            let builder = env.builder;
+
+            // Determine types
+            let num_fields = arguments.len() + 1;
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(fields.iter()) {
+                let val = load_symbol(scope, field_symbol);
+
+                let field_type = basic_type_from_layout(env, tag_field_layout);
+
+                field_types.push(field_type);
+
+                if let Layout::RecursivePointer = tag_field_layout {
+                    debug_assert!(val.is_pointer_value());
+
+                    // we store recursive pointers as `i64*`
+                    let ptr = env.builder.build_bitcast(
+                        val,
+                        ctx.i64_type().ptr_type(AddressSpace::Generic),
+                        "cast_recursive_pointer",
+                    );
+
+                    field_vals.push(ptr);
+                } else {
+                    // this check fails for recursive tag unions, but can be helpful while debugging
+
+                    field_vals.push(val);
+                }
+            }
+
+            // Create the struct_type
+            let data_ptr =
+                reserve_with_refcount_union_as_block_of_memory(env, *union_layout, &[fields]);
+
+            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+            let struct_ptr = env
+                .builder
+                .build_bitcast(
+                    data_ptr,
+                    struct_type.ptr_type(AddressSpace::Generic),
+                    "block_of_memory_to_tag",
+                )
+                .into_pointer_value();
+
+            // Insert field exprs into struct_val
+            for (index, field_val) in field_vals.into_iter().enumerate() {
+                let field_ptr = builder
+                    .build_struct_gep(struct_ptr, index as u32, "struct_gep")
+                    .unwrap();
+
+                builder.build_store(field_ptr, field_val);
+            }
+
+            data_ptr.into()
+        }
+        UnionLayout::NullableWrapped {
+            nullable_id,
+            other_tags: tags,
+        } => {
+            if tag_id == *nullable_id as u8 {
+                let layout = Layout::Union(*union_layout);
+
+                return basic_type_from_layout(env, &layout)
+                    .into_pointer_type()
+                    .const_null()
+                    .into();
+            }
+
+            debug_assert!(union_size > 1);
+
+            let ctx = env.context;
+            let builder = env.builder;
+
+            // Determine types
+            let num_fields = arguments.len() + 1;
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+            let tag_field_layouts = {
+                use std::cmp::Ordering::*;
+                match tag_id.cmp(&(*nullable_id as u8)) {
+                    Equal => unreachable!("early return above"),
+                    Less => &tags[tag_id as usize],
+                    Greater => &tags[tag_id as usize - 1],
+                }
+            };
+
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
+                let val = load_symbol(scope, field_symbol);
+
+                // Zero-sized fields have no runtime representation.
+                // The layout of the struct expects them to be dropped!
+                if !tag_field_layout.is_dropped_because_empty() {
+                    let field_type = basic_type_from_layout(env, tag_field_layout);
+
+                    field_types.push(field_type);
+
+                    if let Layout::RecursivePointer = tag_field_layout {
+                        debug_assert!(val.is_pointer_value());
+
+                        // we store recursive pointers as `i64*`
+                        let ptr = env.builder.build_bitcast(
+                            val,
+                            ctx.i64_type().ptr_type(AddressSpace::Generic),
+                            "cast_recursive_pointer",
+                        );
+
+                        field_vals.push(ptr);
+                    } else {
+                        // this check fails for recursive tag unions, but can be helpful while debugging
+                        // debug_assert_eq!(tag_field_layout, val_layout);
+
+                        field_vals.push(val);
+                    }
+                }
+            }
+
+            // Create the struct_type
+            let raw_data_ptr =
+                reserve_with_refcount_union_as_block_of_memory(env, *union_layout, tags);
+
+            let tag_id_ptr = builder
+                .build_struct_gep(raw_data_ptr, TAG_ID_INDEX, "tag_id_index")
+                .unwrap();
+
+            let tag_id_type = env.context.i64_type();
+            env.builder
+                .build_store(tag_id_ptr, tag_id_type.const_int(tag_id as u64, false));
+
+            let opaque_struct_ptr = builder
+                .build_struct_gep(raw_data_ptr, TAG_DATA_INDEX, "tag_data_index")
+                .unwrap();
+
+            let struct_type = env.context.struct_type(&field_types, false);
+            let struct_ptr = env
+                .builder
+                .build_bitcast(
+                    opaque_struct_ptr,
+                    struct_type.ptr_type(AddressSpace::Generic),
+                    "struct_ptr",
+                )
+                .into_pointer_value();
+
+            // Insert field exprs into struct_val
+            for (index, field_val) in field_vals.into_iter().enumerate() {
+                let field_ptr = builder
+                    .build_struct_gep(struct_ptr, index as u32, "field_struct_gep")
+                    .unwrap();
+
+                builder.build_store(field_ptr, field_val);
+            }
+
+            raw_data_ptr.into()
+        }
+        UnionLayout::NullableUnwrapped {
+            nullable_id,
+            other_fields,
+        } => {
+            let tag_struct_type =
+                block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
+
+            if tag_id == *nullable_id as u8 {
+                let output_type = tag_struct_type.ptr_type(AddressSpace::Generic);
+
+                return output_type.const_null().into();
+            }
+
+            // this tag id is not the nullable one. For the type to be recursive, the other
+            // constructor must have at least one argument!
+            debug_assert!(!arguments.is_empty());
+
+            debug_assert!(union_size == 2);
+
+            let ctx = env.context;
+            let builder = env.builder;
+
+            // Determine types
+            let num_fields = arguments.len() + 1;
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+            debug_assert_eq!(arguments.len(), other_fields.len());
+
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(other_fields.iter()) {
+                let val = load_symbol(scope, field_symbol);
+
+                // Zero-sized fields have no runtime representation.
+                // The layout of the struct expects them to be dropped!
+                if !tag_field_layout.is_dropped_because_empty() {
+                    let field_type = basic_type_from_layout(env, tag_field_layout);
+
+                    field_types.push(field_type);
+
+                    if let Layout::RecursivePointer = tag_field_layout {
+                        debug_assert!(val.is_pointer_value());
+
+                        // we store recursive pointers as `i64*`
+                        let ptr = env.builder.build_bitcast(
+                            val,
+                            ctx.i64_type().ptr_type(AddressSpace::Generic),
+                            "cast_recursive_pointer",
+                        );
+
+                        field_vals.push(ptr);
+                    } else {
+                        // this check fails for recursive tag unions, but can be helpful while debugging
+                        // debug_assert_eq!(tag_field_layout, val_layout);
+
+                        field_vals.push(val);
+                    }
+                }
+            }
+
+            // Create the struct_type
+            let data_ptr =
+                reserve_with_refcount_union_as_block_of_memory(env, *union_layout, &[other_fields]);
+
+            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+            let struct_ptr = env
+                .builder
+                .build_bitcast(
+                    data_ptr,
+                    struct_type.ptr_type(AddressSpace::Generic),
+                    "block_of_memory_to_tag",
+                )
+                .into_pointer_value();
+
+            // Insert field exprs into struct_val
+            for (index, field_val) in field_vals.into_iter().enumerate() {
+                let field_ptr = builder
+                    .build_struct_gep(struct_ptr, index as u32, "struct_gep")
+                    .unwrap();
+
+                builder.build_store(field_ptr, field_val);
+            }
+
+            data_ptr.into()
+        }
+    }
+}
+
 pub fn get_tag_id<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
@@ -1774,44 +1754,32 @@ pub fn reserve_with_refcount<'a, 'ctx, 'env>(
 
 fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    fields: &[&[Layout<'a>]],
-) -> PointerValue<'ctx> {
-    let basic_type = block_of_memory_slices(env.context, fields, env.ptr_bytes);
-
-    let stack_size = fields
-        .iter()
-        .map(|tag| tag.iter().map(|l| l.stack_size(env.ptr_bytes)).sum())
-        .max()
-        .unwrap_or(0);
-
-    let alignment_bytes = fields
-        .iter()
-        .map(|tag| tag.iter().map(|l| l.alignment_bytes(env.ptr_bytes)))
-        .flatten()
-        .max()
-        .unwrap_or(0);
-
-    reserve_with_refcount_help(env, basic_type, stack_size, alignment_bytes)
-}
-
-fn reserve_with_refcount_union_as_block_of_memory2<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+    union_layout: UnionLayout<'a>,
     fields: &[&[Layout<'a>]],
 ) -> PointerValue<'ctx> {
     let block_type = block_of_memory_slices(env.context, fields, env.ptr_bytes);
 
-    let tag_id_type = env.context.i64_type();
-    let basic_type = env
-        .context
-        .struct_type(&[block_type, tag_id_type.into()], false);
+    let tag_id_stack_size = union_layout
+        .tag_id_layout()
+        .map(|l| l.stack_size(env.ptr_bytes));
 
-    let stack_size = fields
+    let basic_type = if tag_id_stack_size.is_some() {
+        let tag_id_type = env.context.i64_type();
+
+        env.context
+            .struct_type(&[block_type, tag_id_type.into()], false)
+            .into()
+    } else {
+        block_type
+    };
+
+    let mut stack_size = fields
         .iter()
         .map(|tag| tag.iter().map(|l| l.stack_size(env.ptr_bytes)).sum())
         .max()
-        .unwrap_or(0)
-        // add tag id
-        + env.ptr_bytes;
+        .unwrap_or_default();
+
+    stack_size += tag_id_stack_size.unwrap_or_default();
 
     let alignment_bytes = fields
         .iter()

@@ -152,6 +152,15 @@ impl<'a> UnionLayout<'a> {
             result
         }
     }
+
+    pub fn tag_id_layout(&self) -> Option<Layout<'a>> {
+        match self {
+            UnionLayout::NonRecursive(_)
+            | UnionLayout::Recursive(_)
+            | UnionLayout::NullableWrapped { .. } => Some(Layout::Builtin(Builtin::Int64)),
+            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
