@@ -3,11 +3,9 @@ procedure Num.24 (#Attr.2, #Attr.3):
     ret Test.8;
 
 procedure Test.0 ():
-    let Test.21 = 0i64;
-    let Test.23 = 0i64;
-    let Test.22 = 41i64;
-    let Test.20 = Just Test.23 Test.22;
-    let Test.2 = Just Test.21 Test.20;
+    let Test.21 = 41i64;
+    let Test.20 = Just Test.21;
+    let Test.2 = Just Test.20;
     joinpoint Test.17:
         let Test.11 = 1i64;
         ret Test.11;
