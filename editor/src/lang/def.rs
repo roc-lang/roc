@@ -626,7 +626,9 @@ fn canonicalize_pending_def<'a>(
 
                             let value_def = ValueDef {
                                 pattern: loc_can_pattern,
-                                expr_type: Some((annotation, rigids)),
+                                expr: env.pool.add(loc_can_expr),
+                                // annotation
+                                expr_type: Some(rigids),
                                 expr_var: env.var_store.fresh(),
                             };
 
@@ -747,6 +749,7 @@ fn canonicalize_pending_def<'a>(
                 _ => {
                     let value_def = ValueDef {
                         pattern: loc_can_pattern,
+                        expr: env.pool.add(loc_can_expr),
                         expr_type: None,
                         expr_var: env.var_store.fresh(),
                     };
