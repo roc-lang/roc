@@ -1122,8 +1122,10 @@ fn test_to_equality<'a>(
                     let lhs_symbol = env.unique_symbol();
                     let rhs_symbol = env.unique_symbol();
 
-                    stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
-                    stores.push((rhs_symbol, Layout::Builtin(Builtin::Int64), rhs));
+                    let tag_id_layout = union_layout.tag_id_layout();
+
+                    stores.push((lhs_symbol, tag_id_layout, lhs));
+                    stores.push((rhs_symbol, tag_id_layout, rhs));
 
                     (
                         stores,

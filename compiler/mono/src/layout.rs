@@ -159,12 +159,23 @@ impl<'a> UnionLayout<'a> {
         Self::BIGGEST_TAG_ID_TYPE
     }
 
-    pub fn tag_id_layout(&self) -> Option<Layout<'a>> {
+    pub fn tag_id_layout(&self) -> Layout<'a> {
         match self {
             UnionLayout::NonRecursive(_)
             | UnionLayout::Recursive(_)
-            | UnionLayout::NullableWrapped { .. } => Some(Self::BIGGEST_TAG_ID_TYPE),
-            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => None,
+            | UnionLayout::NullableWrapped { .. } => Self::BIGGEST_TAG_ID_TYPE,
+            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => {
+                Self::BIGGEST_TAG_ID_TYPE
+            }
+        }
+    }
+
+    pub fn stores_tag_id(&self) -> bool {
+        match self {
+            UnionLayout::NonRecursive(_)
+            | UnionLayout::Recursive(_)
+            | UnionLayout::NullableWrapped { .. } => true,
+            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => false,
         }
     }
 }

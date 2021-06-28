@@ -7698,7 +7698,7 @@ where
             Stmt::Let(
                 closure_tag_id_symbol,
                 expr,
-                Layout::Builtin(Builtin::Int64),
+                union_layout.tag_id_layout(),
                 env.arena.alloc(result),
             )
         }
@@ -7857,7 +7857,7 @@ fn match_on_lambda_set<'a>(
             Stmt::Let(
                 closure_tag_id_symbol,
                 expr,
-                Layout::Builtin(Builtin::Int64),
+                union_layout.tag_id_layout(),
                 env.arena.alloc(result),
             )
         }

@@ -1780,12 +1780,8 @@ fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx, 'env>(
 ) -> PointerValue<'ctx> {
     let block_type = block_of_memory_slices(env.context, fields, env.ptr_bytes);
 
-    let tag_id_stack_size = union_layout
-        .tag_id_layout()
-        .map(|l| l.stack_size(env.ptr_bytes));
-
-    let basic_type = if tag_id_stack_size.is_some() {
-        let tag_id_type = basic_type_from_layout(env, &union_layout.tag_id_layout().unwrap());
+    let basic_type = if union_layout.stores_tag_id() {
+        let tag_id_type = basic_type_from_layout(env, &union_layout.tag_id_layout());
 
         env.context
             .struct_type(&[block_type, tag_id_type], false)
@@ -1800,7 +1796,9 @@ fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx, 'env>(
         .max()
         .unwrap_or_default();
 
-    stack_size += tag_id_stack_size.unwrap_or_default();
+    if union_layout.stores_tag_id() {
+        stack_size += union_layout.tag_id_layout().stack_size(env.ptr_bytes);
+    }
 
     let alignment_bytes = fields
         .iter()
