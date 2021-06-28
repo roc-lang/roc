@@ -140,12 +140,9 @@ fn build_has_tag_id_help<'a, 'ctx, 'env>(
             let tag_value = env.builder.build_load(argument_cast, "get_value");
 
             let actual_tag_id = {
-                let tag_id_i64 = crate::llvm::build::extract_tag_discriminant(
-                    env,
-                    function_value,
-                    union_layout,
-                    tag_value,
-                );
+                let tag_id_i64 =
+                    crate::llvm::build::get_tag_id(env, function_value, &union_layout, tag_value)
+                        .into_int_value();
 
                 env.builder
                     .build_int_cast(tag_id_i64, env.context.i16_type(), "to_i16")

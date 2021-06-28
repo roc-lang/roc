@@ -672,7 +672,7 @@ fn to_relevant_branch_help<'a>(
                                     .map(|(index, (pattern, _))| {
                                         let mut new_path = path.to_vec();
                                         new_path.push(PathInstruction {
-                                            index: 1 + index as u64,
+                                            index: index as u64,
                                             tag_id,
                                         });
                                         (new_path, Guard::NoGuard, pattern)
