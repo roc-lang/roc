@@ -805,7 +805,7 @@ pub fn constrain_expr<'a>(
                 ret_constraint: body_con,
             }));
 
-            let mut and_constraints = BumpVec::with_capacity_in(1, arena);
+            let mut and_constraints = BumpVec::with_capacity_in(2, arena);
 
             and_constraints.push(constrained_def);
             and_constraints.push(Eq(

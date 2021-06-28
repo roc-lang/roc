@@ -37,16 +37,14 @@ use roc_types::subs::{VarStore, Variable};
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct IntroducedVariables {
-    // NOTE on rigids
-    //
     // Rigids must be unique within a type annoation.
     // E.g. in `identity : a -> a`, there should only be one
     // variable (a rigid one, with name "a").
-    // Hence `rigids : ImMap<Lowercase, Variable>`
+    // Hence `rigids : Map<Lowercase, Variable>`
     //
     // But then between annotations, the same name can occur multiple times,
     // but a variable can only have one name. Therefore
-    // `ftv : SendMap<Variable, Lowercase>`.
+    // `ftv : Map<Variable, Lowercase>`.
     pub wildcards: Vec<Variable>,
     pub var_by_name: MutMap<Lowercase, Variable>,
     pub name_by_var: MutMap<Variable, Lowercase>,
