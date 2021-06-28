@@ -37,7 +37,7 @@ fn hash_record() {
 fn hash_result() {
     assert_evals_to!(
         "Dict.hashTestOnly 0 (List.get [ 0x1 ] 0) ",
-        2878521786781103245,
+        10806428154792634888,
         u64
     );
 }
@@ -88,7 +88,7 @@ fn hash_expr() {
                 Dict.hashTestOnly 0 (Add x x) 
             "#
         ),
-        18264046914072177411,
+        2878521786781103245,
         u64
     );
 }
@@ -106,7 +106,7 @@ fn hash_nullable_expr() {
                 Dict.hashTestOnly 0 (Add x x) 
             "#
         ),
-        11103255846683455235,
+        2878521786781103245,
         u64
     );
 }

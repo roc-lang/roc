@@ -18,7 +18,6 @@ pub enum LowLevel {
     ListLen,
     ListGetUnsafe,
     ListSet,
-    ListSetInPlace,
     ListSingle,
     ListRepeat,
     ListReverse,
@@ -125,7 +124,6 @@ impl LowLevel {
             | ListLen
             | ListGetUnsafe
             | ListSet
-            | ListSetInPlace
             | ListDrop
             | ListSingle
             | ListRepeat

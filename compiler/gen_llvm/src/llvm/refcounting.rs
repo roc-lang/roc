@@ -1,11 +1,11 @@
 use crate::debug_info_init;
 use crate::llvm::build::{
-    add_func, cast_basic_basic, cast_block_of_memory_to_tag, Env, FAST_CALL_CONV,
-    LLVM_SADD_WITH_OVERFLOW_I64,
+    add_func, cast_basic_basic, cast_block_of_memory_to_tag, get_tag_id, Env, FAST_CALL_CONV,
+    LLVM_SADD_WITH_OVERFLOW_I64, TAG_DATA_INDEX, TAG_ID_INDEX,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
 use crate::llvm::convert::{
-    basic_type_from_layout, block_of_memory, block_of_memory_slices, ptr_int,
+    basic_type_from_layout, block_of_memory_slices, ptr_int, union_data_block_of_memory,
 };
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
@@ -653,6 +653,7 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
                         layout_ids,
                         mode,
                         &WhenRecursive::Loop(*variant),
+                        *variant,
                         tags,
                         true,
                     );
@@ -661,14 +662,13 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
                 }
 
                 NullableUnwrapped { other_fields, .. } => {
-                    let other_fields = &other_fields[1..];
-
                     let function = build_rec_union(
                         env,
                         layout_ids,
                         mode,
                         &WhenRecursive::Loop(*variant),
-                        &*env.arena.alloc([other_fields]),
+                        *variant,
+                        env.arena.alloc([*other_fields]),
                         true,
                     );
 
@@ -681,6 +681,7 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
                         layout_ids,
                         mode,
                         &WhenRecursive::Loop(*variant),
+                        *variant,
                         &*env.arena.alloc([*fields]),
                         true,
                     );
@@ -693,6 +694,7 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
                         layout_ids,
                         mode,
                         &WhenRecursive::Loop(*variant),
+                        *variant,
                         tags,
                         false,
                     );
@@ -1205,10 +1207,11 @@ fn build_rec_union<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
     when_recursive: &WhenRecursive<'a>,
-    fields: &'a [&'a [Layout<'a>]],
+    union_layout: UnionLayout<'a>,
+    tags: &'a [&'a [Layout<'a>]],
     is_nullable: bool,
 ) -> FunctionValue<'ctx> {
-    let layout = Layout::Union(UnionLayout::Recursive(fields));
+    let layout = Layout::Union(UnionLayout::Recursive(tags));
 
     let (_, fn_name) = function_name_from_mode(
         layout_ids,
@@ -1225,9 +1228,7 @@ fn build_rec_union<'a, 'ctx, 'env>(
             let block = env.builder.get_insert_block().expect("to be in a function");
             let di_location = env.builder.get_current_debug_location().unwrap();
 
-            let basic_type = block_of_memory_slices(env.context, fields, env.ptr_bytes)
-                .ptr_type(AddressSpace::Generic)
-                .into();
+            let basic_type = basic_type_from_layout(env, &Layout::Union(union_layout));
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             build_rec_union_help(
@@ -1235,7 +1236,8 @@ fn build_rec_union<'a, 'ctx, 'env>(
                 layout_ids,
                 mode,
                 when_recursive,
-                fields,
+                union_layout,
+                tags,
                 function_value,
                 is_nullable,
             );
@@ -1251,11 +1253,13 @@ fn build_rec_union<'a, 'ctx, 'env>(
     function
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_rec_union_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
     when_recursive: &WhenRecursive<'a>,
+    union_layout: UnionLayout<'a>,
     tags: &'a [&'a [roc_mono::layout::Layout<'a>]],
     fn_val: FunctionValue<'ctx>,
     is_nullable: bool,
@@ -1280,8 +1284,6 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
     arg_val.set_name(arg_symbol.ident_string(&env.interns));
 
     let parent = fn_val;
-
-    let layout = Layout::Union(UnionLayout::Recursive(tags));
 
     debug_assert!(arg_val.is_pointer_value());
     let value_ptr = arg_val.into_pointer_value();
@@ -1310,6 +1312,8 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
     }
 
     env.builder.position_at_end(should_recurse_block);
+
+    let layout = Layout::Union(union_layout);
 
     match mode {
         Mode::Inc => {
@@ -1344,7 +1348,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
                     when_recursive,
                     parent,
                     fn_val,
-                    layout,
+                    union_layout,
                     tags,
                     value_ptr,
                     refcount_ptr,
@@ -1362,7 +1366,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
     when_recursive: &WhenRecursive<'a>,
     parent: FunctionValue<'ctx>,
     decrement_fn: FunctionValue<'ctx>,
-    layout: Layout<'a>,
+    union_layout: UnionLayout<'a>,
     tags: &[&[Layout<'a>]],
     value_ptr: PointerValue<'ctx>,
     refcount_ptr: PointerToRefcount<'ctx>,
@@ -1435,7 +1439,18 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
                 debug_assert!(ptr_as_i64_ptr.is_pointer_value());
 
                 // therefore we must cast it to our desired type
-                let union_type = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+
+                let union_type = match union_layout {
+                    UnionLayout::NonRecursive(_) => unreachable!(),
+                    UnionLayout::Recursive(_) | UnionLayout::NullableWrapped { .. } => {
+                        union_data_block_of_memory(env.context, tags, env.ptr_bytes).into()
+                    }
+                    UnionLayout::NonNullableUnwrapped { .. }
+                    | UnionLayout::NullableUnwrapped { .. } => {
+                        block_of_memory_slices(env.context, tags, env.ptr_bytes)
+                    }
+                };
+
                 let recursive_field_ptr = cast_basic_basic(
                     env.builder,
                     ptr_as_i64_ptr,
@@ -1463,7 +1478,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         // lists. To achieve it, we must first load all fields that we want to inc/dec (done above)
         // and store them on the stack, then modify (and potentially free) the current cell, then
         // actually inc/dec the fields.
-        refcount_ptr.modify(call_mode, &layout, env);
+        refcount_ptr.modify(call_mode, &Layout::Union(union_layout), env);
 
         for (field, field_layout) in deferred_nonrec {
             modify_refcount_layout_help(
@@ -1505,7 +1520,8 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         env.builder.build_unconditional_branch(only_branch);
     } else {
         // read the tag_id
-        let current_tag_id = rec_union_read_tag(env, value_ptr);
+        let current_tag_id =
+            get_tag_id(env, parent, &union_layout, value_ptr.into()).into_int_value();
 
         let merge_block = env.context.append_basic_block(parent, "decrement_merge");
 
@@ -1516,28 +1532,11 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         env.builder.position_at_end(merge_block);
 
         // increment/decrement the cons-cell itself
-        refcount_ptr.modify(call_mode, &layout, env);
+        refcount_ptr.modify(call_mode, &Layout::Union(union_layout), env);
 
         // this function returns void
         builder.build_return(None);
     }
-}
-
-fn rec_union_read_tag<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    value_ptr: PointerValue<'ctx>,
-) -> IntValue<'ctx> {
-    // Assumption: the tag is the first thing stored
-    // so cast the pointer to the data to a `i64*`
-    let tag_ptr_type = env.context.i64_type().ptr_type(AddressSpace::Generic);
-    let tag_ptr = env
-        .builder
-        .build_bitcast(value_ptr, tag_ptr_type, "cast_tag_ptr")
-        .into_pointer_value();
-
-    env.builder
-        .build_load(tag_ptr, "load_tag_id")
-        .into_int_value()
 }
 
 fn function_name_from_mode<'a>(
@@ -1584,7 +1583,7 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = block_of_memory(env.context, &layout, env.ptr_bytes);
+            let basic_type = basic_type_from_layout(env, &layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_union_help(
@@ -1640,19 +1639,11 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
     let wrapper_struct = arg_val.into_struct_value();
 
     // read the tag_id
-    let tag_id = {
-        // the first element of the wrapping struct is an array of i64
-        let first_array = env
-            .builder
-            .build_extract_value(wrapper_struct, 0, "read_tag_id")
-            .unwrap()
-            .into_array_value();
-
-        env.builder
-            .build_extract_value(first_array, 0, "read_tag_id_2")
-            .unwrap()
-            .into_int_value()
-    };
+    let tag_id = env
+        .builder
+        .build_extract_value(wrapper_struct, TAG_ID_INDEX, "read_tag_id")
+        .unwrap()
+        .into_int_value();
 
     let tag_id_u8 = env
         .builder
@@ -1680,7 +1671,12 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
         let wrapper_type = basic_type_from_layout(env, &Layout::Struct(field_layouts));
 
         debug_assert!(wrapper_type.is_struct_type());
-        let wrapper_struct = cast_block_of_memory_to_tag(env.builder, wrapper_struct, wrapper_type);
+        let data_bytes = env
+            .builder
+            .build_extract_value(wrapper_struct, TAG_DATA_INDEX, "read_tag_id")
+            .unwrap()
+            .into_struct_value();
+        let wrapper_struct = cast_block_of_memory_to_tag(env.builder, data_bytes, wrapper_type);
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
             if let Layout::RecursivePointer = field_layout {

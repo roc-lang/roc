@@ -3,21 +3,20 @@ procedure Num.26 (#Attr.2, #Attr.3):
     ret Test.17;
 
 procedure Test.1 (Test.6):
-    let Test.25 = Index 1 Test.6;
+    let Test.25 = StructAtIndex 1 Test.6;
     let Test.26 = false;
     let Test.27 = lowlevel Eq Test.26 Test.25;
     if Test.27 then
-        let Test.8 = Index 0 Test.6;
+        let Test.8 = StructAtIndex 0 Test.6;
         ret Test.8;
     else
-        let Test.10 = Index 0 Test.6;
+        let Test.10 = StructAtIndex 0 Test.6;
         ret Test.10;
 
 procedure Test.1 (Test.6):
-    let Test.36 = Index 0 Test.6;
-    let Test.37 = false;
-    let Test.38 = lowlevel Eq Test.37 Test.36;
-    if Test.38 then
+    let Test.36 = false;
+    let Test.37 = lowlevel Eq Test.36 Test.6;
+    if Test.37 then
         let Test.8 = 3i64;
         ret Test.8;
     else
@@ -25,10 +24,10 @@ procedure Test.1 (Test.6):
         ret Test.10;
 
 procedure Test.0 ():
-    let Test.41 = true;
-    let Test.5 = CallByName Test.1 Test.41;
-    let Test.39 = false;
-    let Test.3 = CallByName Test.1 Test.39;
+    let Test.40 = true;
+    let Test.5 = CallByName Test.1 Test.40;
+    let Test.38 = false;
+    let Test.3 = CallByName Test.1 Test.38;
     let Test.31 = 11i64;
     let Test.32 = true;
     let Test.30 = Struct {Test.31, Test.32};

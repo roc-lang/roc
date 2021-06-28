@@ -1,6 +1,6 @@
 use crate::exhaustive::{Ctor, RenderAs, TagId, Union};
 use crate::ir::{
-    BranchInfo, DestructType, Env, Expr, JoinPointId, Literal, Param, Pattern, Procs, Stmt, Wrapped,
+    BranchInfo, DestructType, Env, Expr, JoinPointId, Literal, Param, Pattern, Procs, Stmt,
 };
 use crate::layout::{Builtin, Layout, LayoutCache, UnionLayout};
 use roc_collections::all::{MutMap, MutSet};
@@ -672,7 +672,7 @@ fn to_relevant_branch_help<'a>(
                                     .map(|(index, (pattern, _))| {
                                         let mut new_path = path.to_vec();
                                         new_path.push(PathInstruction {
-                                            index: 1 + index as u64,
+                                            index: index as u64,
                                             tag_id,
                                         });
                                         (new_path, Guard::NoGuard, pattern)
@@ -1036,69 +1036,50 @@ fn path_to_expr_help<'a>(
     let mut it = instructions.iter().peekable();
 
     while let Some(PathInstruction { index, tag_id }) = it.next() {
-        match Wrapped::opt_from_layout(&layout) {
-            None => {
-                // this MUST be an index into a single-element (hence unwrapped) record
+        let index = *index;
 
-                debug_assert_eq!(*index, 0, "{:?}", &layout);
-                debug_assert_eq!(*tag_id, 0);
-                debug_assert!(it.peek().is_none());
-
-                let field_layouts = vec![layout];
-
-                debug_assert!(*index < field_layouts.len() as u64);
-
-                debug_assert_eq!(field_layouts.len(), 1);
-
-                let inner_expr = Expr::AccessAtIndex {
-                    index: *index,
-                    field_layouts: env.arena.alloc(field_layouts),
+        match &layout {
+            Layout::Union(union_layout) => {
+                let inner_expr = Expr::UnionAtIndex {
+                    tag_id: *tag_id,
                     structure: symbol,
-                    wrapped: Wrapped::SingleElementRecord,
+                    index,
+                    union_layout: *union_layout,
                 };
 
-                symbol = env.unique_symbol();
-                let inner_layout = layout;
-                stores.push((symbol, inner_layout, inner_expr));
-
-                break;
-            }
-            Some(wrapped) => {
-                let index = *index;
-
-                let (inner_layout, inner_expr) = match layout {
-                    Layout::Union(union_layout) => {
-                        let expr = Expr::CoerceToTagId {
-                            tag_id: *tag_id,
-                            structure: symbol,
-                            index,
-                            union_layout,
-                        };
-
-                        (union_layout.layout_at(*tag_id as u8, index as usize), expr)
-                    }
-                    Layout::Struct(field_layouts) => {
-                        debug_assert!(field_layouts.len() > 1);
-                        debug_assert_eq!(wrapped, Wrapped::RecordOrSingleTagUnion);
-
-                        let expr = Expr::AccessAtIndex {
-                            index,
-                            field_layouts,
-                            structure: symbol,
-                            wrapped,
-                        };
-
-                        let layout = field_layouts[index as usize];
-
-                        (layout, expr)
-                    }
-                    _ => unreachable!(),
-                };
+                let inner_layout = union_layout.layout_at(*tag_id as u8, index as usize);
 
                 symbol = env.unique_symbol();
                 stores.push((symbol, inner_layout, inner_expr));
 
                 layout = inner_layout;
+            }
+
+            Layout::Struct(field_layouts) => {
+                debug_assert!(field_layouts.len() > 1);
+
+                let inner_expr = Expr::StructAtIndex {
+                    index,
+                    field_layouts,
+                    structure: symbol,
+                };
+
+                let inner_layout = field_layouts[index as usize];
+
+                symbol = env.unique_symbol();
+                stores.push((symbol, inner_layout, inner_expr));
+
+                layout = inner_layout;
+            }
+
+            _ => {
+                // this MUST be an index into a single-element (hence unwrapped) record
+
+                debug_assert_eq!(index, 0, "{:?}", &layout);
+                debug_assert_eq!(*tag_id, 0);
+                debug_assert!(it.peek().is_none());
+
+                break;
             }
         }
     }
