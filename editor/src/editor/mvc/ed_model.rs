@@ -43,7 +43,7 @@ pub struct EdModel<'a> {
     pub dirty: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct SelectedExpression {
     pub ast_node_id: NodeId<Expr2>,
     pub mark_node_id: MarkNodeId,
