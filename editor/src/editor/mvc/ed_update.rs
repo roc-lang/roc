@@ -21,6 +21,7 @@ use crate::editor::mvc::record_update::update_record_field;
 use crate::editor::mvc::string_update::start_new_string;
 use crate::editor::mvc::string_update::update_small_string;
 use crate::editor::mvc::string_update::update_string;
+use crate::editor::mvc::list_update::start_new_list;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
@@ -44,7 +45,7 @@ use bumpalo::Bump;
 use roc_can::expected::Expected;
 use roc_collections::all::MutMap;
 use roc_module::ident::Lowercase;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{Interns, Symbol};
 use roc_region::all::Region;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, Variable};
@@ -264,8 +265,13 @@ impl<'a> EdModel<'a> {
 
         let content = subs.get(var).content;
 
+        let interns = Interns {
+            module_ids: *self.module.env.module_ids,
+            all_ident_ids: self.module.env.dep_idents,
+        };
+
         PoolStr::new(
-            &content_to_string(content, &subs, self.module.env.home, &Default::default()),
+            &content_to_string(content, &subs, self.module.env.home, &interns),
             self.module.env.pool,
         )
     }
@@ -580,6 +586,10 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                     }
                                     '0'..='9' => {
                                         start_new_int(ed_model, ch)?
+                                    }
+                                    '[' => {
+                                        // this can also be a tag union or become a set, assuming list for now
+                                        start_new_list(ed_model)?
                                     }
                                     _ => InputOutcome::Ignored
                                 }
@@ -1721,6 +1731,20 @@ pub mod test_ed_update {
             9,
         )?;*/
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_ctrl_shift_up_list() -> Result<(), String> {
+        assert_ctrl_shift_up(&["[ ┃ ]"], &["┃❮[  ]❯"])?;
+        assert_ctrl_shift_up(&["[┃  ]"], &["┃❮[  ]❯"])?;
+        assert_ctrl_shift_up(&["[  ┃]"], &["┃❮[  ]❯"])?;
+        assert_ctrl_shift_up(&["┃[  ]"], &["┃❮[  ]❯"])?;
+        assert_ctrl_shift_up(&["[  ]┃"], &["┃❮[  ]❯"])?;
+
+        assert_ctrl_shift_up_repeat(&["[ ┃ ]"], &["┃❮[  ]❯"], 4)?;
+
+        //TODO non-empty list
         Ok(())
     }
 

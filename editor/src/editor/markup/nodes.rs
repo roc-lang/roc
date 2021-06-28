@@ -143,6 +143,8 @@ fn get_string<'a>(env: &Env<'a>, pool_str: &PoolStr) -> String {
 pub const BLANK_PLACEHOLDER: &str = " ";
 pub const LEFT_ACCOLADE: &str = "{ ";
 pub const RIGHT_ACCOLADE: &str = " }";
+pub const LEFT_SQUARE_BR: &str = "[ ";
+pub const RIGHT_SQUARE_BR: &str = " ]";
 pub const COLON: &str = ": ";
 pub const STRING_QUOTES: &str = "\"\"";
 

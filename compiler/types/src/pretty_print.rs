@@ -356,6 +356,8 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
 fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String, parens: Parens) {
     use crate::subs::FlatType::*;
 
+    println!("REMOVE ME");
+
     match flat_type {
         Apply(symbol, args) => write_apply(env, symbol, args, subs, buf, parens),
         EmptyRecord => buf.push_str(EMPTY_RECORD),

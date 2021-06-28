@@ -196,7 +196,6 @@ pub mod test_ed_model {
         let file_path = Path::new("");
 
         let dep_idents = IdentIds::exposed_builtins(8);
-
         let exposed_ident_ids = IdentIds::default();
         let mod_id = ed_model_refs.module_ids.get_or_insert(&"ModId123".into());
 
