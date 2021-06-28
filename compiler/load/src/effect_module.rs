@@ -48,7 +48,7 @@ pub fn build_effect_builtins(
     scope: &mut Scope,
     effect_symbol: Symbol,
     var_store: &mut VarStore,
-    exposed_symbols: &mut MutSet<Symbol>,
+    exposed_symbols: &mut Vec<Symbol>,
     declarations: &mut Vec<Declaration>,
 ) {
     for (_, f) in BUILTIN_EFFECT_FUNCTIONS.iter() {
@@ -60,7 +60,7 @@ pub fn build_effect_builtins(
             var_store,
         );
 
-        exposed_symbols.insert(symbol);
+        exposed_symbols.push(symbol);
         declarations.push(Declaration::Declare(def));
     }
 }

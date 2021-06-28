@@ -487,7 +487,9 @@ fn start_phase<'a>(
                 let exposed_symbols = state
                     .exposed_symbols_by_module
                     .remove(&module_id)
-                    .expect("Could not find listener ID in exposed_symbols_by_module");
+                    .expect("Could not find listener ID in exposed_symbols_by_module")
+                    .into_iter()
+                    .collect::<Vec<Symbol>>();
 
                 let mut aliases = MutMap::default();
 
@@ -621,7 +623,7 @@ pub struct LoadedModule {
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
-    pub exposed_aliases: MutMap<Symbol, Alias>,
+    pub exposed_values: Vec<Symbol>,
     pub header_sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
@@ -764,7 +766,7 @@ enum Msg<'a> {
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
         exposed_vars_by_symbol: MutMap<Symbol, Variable>,
-        exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
+        exposed_values: Vec<Symbol>,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
     },
     FoundSpecializations {
@@ -972,7 +974,7 @@ enum BuildTask<'a> {
         parsed: ParsedModule<'a>,
         module_ids: ModuleIds,
         dep_idents: MutMap<ModuleId, IdentIds>,
-        exposed_symbols: MutSet<Symbol>,
+        exposed_symbols: Vec<Symbol>,
         aliases: MutMap<Symbol, Alias>,
     },
     Solve {
@@ -1512,7 +1514,7 @@ where
                     Msg::FinishedAllTypeChecking {
                         solved_subs,
                         exposed_vars_by_symbol,
-                        exposed_aliases_by_symbol,
+                        exposed_values,
                         documentation,
                     } => {
                         // We're done! There should be no more messages pending.
@@ -1528,7 +1530,7 @@ where
                         return Ok(LoadResult::TypeChecked(finish(
                             state,
                             solved_subs,
-                            exposed_aliases_by_symbol,
+                            exposed_values,
                             exposed_vars_by_symbol,
                             documentation,
                         )));
@@ -1943,7 +1945,7 @@ fn update<'a>(
                     .send(Msg::FinishedAllTypeChecking {
                         solved_subs,
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
-                        exposed_aliases_by_symbol: solved_module.aliases,
+                        exposed_values: solved_module.exposed_symbols,
                         documentation,
                     })
                     .map_err(|_| LoadingProblem::MsgChannelDied)?;
@@ -2268,7 +2270,7 @@ fn finish_specialization(
 fn finish(
     state: State,
     solved: Solved<Subs>,
-    exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
+    exposed_values: Vec<Symbol>,
     exposed_vars_by_symbol: MutMap<Symbol, Variable>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
 ) -> LoadedModule {
@@ -2303,8 +2305,8 @@ fn finish(
         can_problems: state.module_cache.can_problems,
         type_problems: state.module_cache.type_problems,
         declarations_by_id: state.declarations_by_id,
+        exposed_values,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
-        exposed_aliases: exposed_aliases_by_symbol,
         header_sources,
         sources,
         timings: state.timings,
@@ -3297,6 +3299,7 @@ fn run_solve<'a>(
 
     let solved_module = SolvedModule {
         exposed_vars_by_symbol,
+        exposed_symbols: exposed_symbols.into_iter().collect::<Vec<_>>(),
         solved_types,
         problems,
         aliases: solved_env.aliases,
@@ -3500,8 +3503,8 @@ fn fabricate_effects_module<'a>(
 
     let mut declarations = Vec::new();
 
-    let exposed_symbols: MutSet<Symbol> = {
-        let mut exposed_symbols = MutSet::default();
+    let exposed_symbols: Vec<Symbol> = {
+        let mut exposed_symbols = Vec::new();
 
         {
             for (ident, ann) in effect_entries {
@@ -3534,7 +3537,7 @@ fn fabricate_effects_module<'a>(
                     annotation,
                 );
 
-                exposed_symbols.insert(symbol);
+                exposed_symbols.push(symbol);
 
                 declarations.push(Declaration::Declare(def));
             }
@@ -3648,7 +3651,7 @@ fn canonicalize_and_constrain<'a, F>(
     arena: &'a Bump,
     module_ids: &ModuleIds,
     dep_idents: MutMap<ModuleId, IdentIds>,
-    exposed_symbols: MutSet<Symbol>,
+    exposed_symbols: Vec<Symbol>,
     aliases: MutMap<Symbol, Alias>,
     parsed: ParsedModule<'a>,
     look_up_builtins: F,
