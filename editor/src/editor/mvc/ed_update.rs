@@ -1016,27 +1016,27 @@ pub mod test_ed_update {
     fn test_record() -> Result<(), String> {
         assert_insert(&["┃"], &["{ ┃ }"], '{')?;
         assert_insert(&["{ ┃ }"], &["{ a┃ }"], 'a')?;
-        assert_insert(&["{ a┃ }"], &["{ ab┃ }"], 'b')?;
-        assert_insert(&["{ a┃ }"], &["{ a1┃ }"], '1')?;
-        assert_insert(&["{ a1┃ }"], &["{ a1z┃ }"], 'z')?;
-        assert_insert(&["{ a1┃ }"], &["{ a15┃ }"], '5')?;
-        assert_insert(&["{ ab┃ }"], &["{ abc┃ }"], 'c')?;
-        assert_insert(&["{ ┃abc }"], &["{ z┃abc }"], 'z')?;
-        assert_insert(&["{ a┃b }"], &["{ az┃b }"], 'z')?;
-        assert_insert(&["{ a┃b }"], &["{ a9┃b }"], '9')?;
+        assert_insert(&["{ a┃ }"], &["{ ab┃: RunTimeError }"], 'b')?;
+        assert_insert(&["{ a┃ }"], &["{ a1┃: RunTimeError }"], '1')?;
+        assert_insert(&["{ a1┃ }"], &["{ a1z┃: RunTimeError }"], 'z')?;
+        assert_insert(&["{ a1┃ }"], &["{ a15┃: RunTimeError }"], '5')?;
+        assert_insert(&["{ ab┃ }"], &["{ abc┃: RunTimeError }"], 'c')?;
+        assert_insert(&["{ ┃abc }"], &["{ z┃abc: RunTimeError }"], 'z')?;
+        assert_insert(&["{ a┃b }"], &["{ az┃b: RunTimeError }"], 'z')?;
+        assert_insert(&["{ a┃b }"], &["{ a9┃b: RunTimeError }"], '9')?;
 
         // extra space for Blank node
-        assert_insert(&["{ a┃ }"], &["{ a: ┃  }"], ':')?;
-        assert_insert(&["{ abc┃ }"], &["{ abc: ┃  }"], ':')?;
-        assert_insert(&["{ aBc┃ }"], &["{ aBc: ┃  }"], ':')?;
+        assert_insert(&["{ a┃ }"], &["{ a┃: RunTimeError }"], ':')?;
+        assert_insert(&["{ abc┃ }"], &["{ abc┃: RunTimeError }"], ':')?;
+        assert_insert(&["{ aBc┃ }"], &["{ aBc┃: RunTimeError }"], ':')?;
 
-        assert_insert_seq(&["{ a┃ }"], &["{ a: \"┃\" }"], ":\"")?;
-        assert_insert_seq(&["{ abc┃ }"], &["{ abc: \"┃\" }"], ":\"")?;
+        assert_insert_seq(&["{ a┃ }"], &["{ a┃: RunTimeError }"], ":\"")?;
+        assert_insert_seq(&["{ abc┃ }"], &["{ abc┃: RunTimeError }"], ":\"")?;
 
-        assert_insert_seq(&["{ a┃ }"], &["{ a: 0┃ }"], ":0")?;
-        assert_insert_seq(&["{ abc┃ }"], &["{ abc: 9┃ }"], ":9")?;
-        assert_insert_seq(&["{ a┃ }"], &["{ a: 1000┃ }"], ":1000")?;
-        assert_insert_seq(&["{ abc┃ }"], &["{ abc: 98761┃ }"], ":98761")?;
+        assert_insert_seq(&["{ a┃ }"], &["{ a0┃: RunTimeError }"], ":0")?;
+        assert_insert_seq(&["{ abc┃ }"], &["{ abc9┃: RunTimeError }"], ":9")?;
+        assert_insert_seq(&["{ a┃ }"], &["{ a1000┃: RunTimeError }"], ":1000")?;
+        assert_insert_seq(&["{ abc┃ }"], &["{ abc98761┃: RunTimeError }"], ":98761")?;
 
         assert_insert(&["{ a: \"┃\" }"], &["{ a: \"a┃\" }"], 'a')?;
         assert_insert(&["{ a: \"a┃\" }"], &["{ a: \"ab┃\" }"], 'b')?;
@@ -1092,9 +1092,9 @@ pub mod test_ed_update {
 
     #[test]
     fn test_nested_record() -> Result<(), String> {
-        assert_insert_seq(&["{ a┃ }"], &["{ a: { ┃ } }"], ":{")?;
-        assert_insert_seq(&["{ abc┃ }"], &["{ abc: { ┃ } }"], ":{")?;
-        assert_insert_seq(&["{ camelCase┃ }"], &["{ camelCase: { ┃ } }"], ":{")?;
+        assert_insert_seq(&["{ a┃ }"], &["{ a┃: RunTimeError }"], ":{")?;
+        assert_insert_seq(&["{ abc┃ }"], &["{ abc┃: RunTimeError }"], ":{")?;
+        assert_insert_seq(&["{ camelCase┃ }"], &["{ camelCase┃: RunTimeError }"], ":{")?;
 
         assert_insert_seq(&["{ a: { ┃ } }"], &["{ a: { zulu┃ } }"], "zulu")?;
         assert_insert_seq(
@@ -1104,35 +1104,51 @@ pub mod test_ed_update {
         )?;
         assert_insert_seq(&["{ camelCase: { ┃ } }"], &["{ camelCase: { z┃ } }"], "z")?;
 
-        assert_insert_seq(&["{ a: { zulu┃ } }"], &["{ a: { zulu: ┃  } }"], ":")?;
+        assert_insert_seq(
+            &["{ a: { zulu┃ } }"],
+            &["{ a: { zulu┃: RunTimeError } }"],
+            ":",
+        )?;
         assert_insert_seq(
             &["{ abc: { camelCase┃ } }"],
-            &["{ abc: { camelCase: ┃  } }"],
+            &["{ abc: { camelCase┃: RunTimeError } }"],
             ":",
         )?;
         assert_insert_seq(
             &["{ camelCase: { z┃ } }"],
-            &["{ camelCase: { z: ┃  } }"],
+            &["{ camelCase: { z┃: RunTimeError } }"],
             ":",
         )?;
 
-        assert_insert_seq(&["{ a┃: { zulu } }"], &["{ a0┃: { zulu } }"], "0")?;
+        assert_insert_seq(
+            &["{ a┃: { zulu } }"],
+            &["{ a0┃: { zulu: RunTimeError } }"],
+            "0",
+        )?;
         assert_insert_seq(
             &["{ ab┃c: { camelCase } }"],
-            &["{ abz┃c: { camelCase } }"],
+            &["{ abz┃c: { camelCase: RunTimeError } }"],
             "z",
         )?;
-        assert_insert_seq(&["{ ┃camelCase: { z } }"], &["{ x┃camelCase: { z } }"], "x")?;
+        assert_insert_seq(
+            &["{ ┃camelCase: { z } }"],
+            &["{ x┃camelCase: { z: RunTimeError } }"],
+            "x",
+        )?;
 
-        assert_insert_seq(&["{ a: { zulu┃ } }"], &["{ a: { zulu: \"┃\" } }"], ":\"")?;
+        assert_insert_seq(
+            &["{ a: { zulu┃ } }"],
+            &["{ a: { zulu┃: RunTimeError } }"],
+            ":\"",
+        )?;
         assert_insert_seq(
             &["{ abc: { camelCase┃ } }"],
-            &["{ abc: { camelCase: \"┃\" } }"],
+            &["{ abc: { camelCase┃: RunTimeError } }"],
             ":\"",
         )?;
         assert_insert_seq(
             &["{ camelCase: { z┃ } }"],
-            &["{ camelCase: { z: \"┃\" } }"],
+            &["{ camelCase: { z┃: RunTimeError } }"],
             ":\"",
         )?;
 
@@ -1147,15 +1163,19 @@ pub mod test_ed_update {
             "ul",
         )?;
 
-        assert_insert_seq(&["{ a: { zulu┃ } }"], &["{ a: { zulu: 1┃ } }"], ":1")?;
+        assert_insert_seq(
+            &["{ a: { zulu┃ } }"],
+            &["{ a: { zulu1┃: RunTimeError } }"],
+            ":1",
+        )?;
         assert_insert_seq(
             &["{ abc: { camelCase┃ } }"],
-            &["{ abc: { camelCase: 0┃ } }"],
+            &["{ abc: { camelCase0┃: RunTimeError } }"],
             ":0",
         )?;
         assert_insert_seq(
             &["{ camelCase: { z┃ } }"],
-            &["{ camelCase: { z: 45┃ } }"],
+            &["{ camelCase: { z45┃: RunTimeError } }"],
             ":45",
         )?;
 
@@ -1166,15 +1186,19 @@ pub mod test_ed_update {
             "77",
         )?;
 
-        assert_insert_seq(&["{ a: { zulu┃ } }"], &["{ a: { zulu: { ┃ } } }"], ":{")?;
+        assert_insert_seq(
+            &["{ a: { zulu┃ } }"],
+            &["{ a: { zulu┃: RunTimeError } }"],
+            ":{",
+        )?;
         assert_insert_seq(
             &["{ abc: { camelCase┃ } }"],
-            &["{ abc: { camelCase: { ┃ } } }"],
+            &["{ abc: { camelCase┃: RunTimeError } }"],
             ":{",
         )?;
         assert_insert_seq(
             &["{ camelCase: { z┃ } }"],
-            &["{ camelCase: { z: { ┃ } } }"],
+            &["{ camelCase: { z┃: RunTimeError } }"],
             ":{",
         )?;
 
@@ -1201,17 +1225,17 @@ pub mod test_ed_update {
 
         assert_insert_seq(
             &["{ a┃: { bcD: { eFgHij: { k15 } } } }"],
-            &["{ a4┃: { bcD: { eFgHij: { k15 } } } }"],
+            &["{ a4┃: { bcD: { eFgHij: { k15: RunTimeError } } } }"],
             "4",
         )?;
         assert_insert_seq(
             &["{ ┃a: { bcD: { eFgHij: { k15 } } } }"],
-            &["{ y┃a: { bcD: { eFgHij: { k15 } } } }"],
+            &["{ y┃a: { bcD: { eFgHij: { k15: RunTimeError } } } }"],
             "y",
         )?;
         assert_insert_seq(
             &["{ a: { bcD: { eF┃gHij: { k15 } } } }"],
-            &["{ a: { bcD: { eFxyz┃gHij: { k15 } } } }"],
+            &["{ a: { bcD: { eFxyz┃gHij: { k15: RunTimeError } } } }"],
             "xyz",
         )?;
 
@@ -1236,23 +1260,23 @@ pub mod test_ed_update {
         assert_insert_seq_ignore(&["{  ┃}"], IGNORE_CHARS)?;
 
         assert_insert_seq_ignore(&["{ ┃ }"], IGNORE_NO_LTR)?;
-        assert_insert_seq_ignore(&["{ ┃a }"], IGNORE_NO_LTR)?;
-        assert_insert_seq_ignore(&["{ ┃abc }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ ┃a: RunTimeError }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ ┃abc: RunTimeError }"], IGNORE_NO_LTR)?;
 
-        assert_insert_seq_ignore(&["┃{ a }"], IGNORE_CHARS)?;
-        assert_insert_seq_ignore(&["{ a }┃"], IGNORE_CHARS)?;
-        assert_insert_seq_ignore(&["{┃ a }"], IGNORE_CHARS)?;
-        assert_insert_seq_ignore(&["{ a ┃}"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["┃{ a: RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ a: ┃RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{┃ a: RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ a:┃ RunTimeError }"], IGNORE_CHARS)?;
 
-        assert_insert_seq_ignore(&["┃{ a15 }"], IGNORE_CHARS)?;
-        assert_insert_seq_ignore(&["{ a15 }┃"], IGNORE_CHARS)?;
-        assert_insert_seq_ignore(&["{┃ a15 }"], IGNORE_CHARS)?;
-        assert_insert_seq_ignore(&["{ a15 ┃}"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["┃{ a15: RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ a15: ┃RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{┃ a15: RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ a15:┃ RunTimeError }"], IGNORE_CHARS)?;
 
-        assert_insert_seq_ignore(&["┃{ camelCase }"], IGNORE_CHARS)?;
-        assert_insert_seq_ignore(&["{ camelCase }┃"], IGNORE_CHARS)?;
-        assert_insert_seq_ignore(&["{┃ camelCase }"], IGNORE_CHARS)?;
-        assert_insert_seq_ignore(&["{ camelCase ┃}"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["┃{ camelCase: RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ camelCase: ┃RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{┃ camelCase: RunTimeError }"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["{ camelCase:┃ RunTimeError }"], IGNORE_CHARS)?;
 
         assert_insert_seq_ignore(&["┃{ a: \"\" }"], IGNORE_CHARS)?;
         assert_insert_seq_ignore(&["{┃ a: \"\" }"], IGNORE_CHARS)?;
@@ -1328,17 +1352,17 @@ pub mod test_ed_update {
         assert_insert_seq_ignore(&["┃{ a: {  } }"], IGNORE_NO_LTR)?;
         assert_insert_seq_ignore(&["{ ┃a: {  } }"], "1")?;
 
-        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a ┃} }"], IGNORE_NO_LTR)?;
-        assert_insert_seq_ignore(&["{ camelCaseB1: {┃ z15a } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq_ignore(&["{ camelCaseB1: ┃{ z15a } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a }┃ }"], IGNORE_NO_LTR)?;
-        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a } ┃}"], IGNORE_NO_LTR)?;
-        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a } }┃"], IGNORE_NO_LTR)?;
-        assert_insert_seq_ignore(&["{ camelCaseB1:┃ { z15a } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq_ignore(&["{┃ camelCaseB1: { z15a } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq_ignore(&["┃{ camelCaseB1: { z15a } }"], IGNORE_NO_LTR)?;
-        assert_insert_seq_ignore(&["{ ┃camelCaseB1: { z15a } }"], "1")?;
-        assert_insert_seq_ignore(&["{ camelCaseB1: { ┃z15a } }"], "1")?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a:┃ RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: {┃ z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: ┃{ z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: ┃RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: R┃unTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: Ru┃nTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ camelCaseB1:┃ { z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{┃ camelCaseB1: { z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["┃{ camelCaseB1: { z15a: RunTimeError } }"], IGNORE_NO_LTR)?;
+        assert_insert_seq_ignore(&["{ ┃camelCaseB1: { z15a: RunTimeError } }"], "1")?;
+        assert_insert_seq_ignore(&["{ camelCaseB1: { ┃z15a: RunTimeError } }"], "1")?;
 
         assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: \"\"┃ } }"], IGNORE_NO_LTR)?;
         assert_insert_seq_ignore(&["{ camelCaseB1: { z15a: ┃\"\" } }"], IGNORE_NO_LTR)?;
@@ -1428,39 +1452,39 @@ pub mod test_ed_update {
         )?;
 
         assert_insert_seq_ignore(
-            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase ┃} } } } } } } }"],
+            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase:┃ RunTimeError } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
-            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase } ┃} } } } } } }"],
+            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase: R┃unTimeError } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
-            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }┃"],
+            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }┃"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
-            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } ┃} } }"],
+            &["{ g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeEr┃ror } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
-            &["{ g: { oi: { ng: { d: { e: {┃ e: { p: { camelCase } } } } } } } }"],
+            &["{ g: { oi: { ng: { d: { e: {┃ e: { p: { camelCase: RunTimeError } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
-            &["{ g: { oi: { ng: { d: { e: { e:┃ { p: { camelCase } } } } } } } }"],
+            &["{ g: { oi: { ng: { d: { e: { e:┃ { p: { camelCase: RunTimeError } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
-            &["{┃ g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }"],
+            &["{┃ g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
-            &["┃{ g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }"],
+            &["┃{ g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }"],
             IGNORE_NO_LTR,
         )?;
         assert_insert_seq_ignore(
-            &["{ ┃g: { oi: { ng: { d: { e: { e: { p: { camelCase } } } } } } } }"],
+            &["{ ┃g: { oi: { ng: { d: { e: { e: { p: { camelCase: RunTimeError } } } } } } } }"],
             "2",
         )?;
         Ok(())
