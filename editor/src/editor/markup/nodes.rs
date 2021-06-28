@@ -347,6 +347,9 @@ pub fn expr2_to_markup<'a, 'b>(
             syn_high_style: HighlightStyle::Blank,
             parent_id_opt: None,
         }),
+        Expr2::RuntimeError() => {
+            todo!("Handle Expr2::RuntimeError")
+        }
         rest => todo!("implement expr2_to_markup for {:?}", rest),
     }
 }
