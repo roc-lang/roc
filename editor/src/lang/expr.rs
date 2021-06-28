@@ -1,21 +1,22 @@
 #![allow(clippy::all)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
+use bumpalo::{collections::Vec as BumpVec, Bump};
+use inlinable_string::InlinableString;
 use std::collections::HashMap;
 
-use crate::lang::ast::expr2_to_string;
-use crate::lang::ast::RecordField;
-use crate::lang::ast::{ClosureExtra, Expr2, ExprId, FloatVal, IntStyle, IntVal, WhenBranch};
-use crate::lang::def::canonicalize_defs;
-use crate::lang::def::sort_can_defs;
-use crate::lang::def::Def;
-use crate::lang::def::{CanDefs, PendingDef, References};
-use crate::lang::pattern::{to_pattern2, Pattern2};
+use crate::lang::ast::{
+    expr2_to_string, ClosureExtra, Expr2, ExprId, FloatVal, IntStyle, IntVal, RecordField,
+    WhenBranch,
+};
+use crate::lang::def::{
+    canonicalize_defs, sort_can_defs, CanDefs, Declaration, Def, PendingDef, References,
+};
+use crate::lang::pattern::{to_pattern2, Pattern2, PatternId};
 use crate::lang::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
 use crate::lang::scope::Scope;
-use crate::lang::types::{Alias, Type2, TypeId};
-use bumpalo::Bump;
-use inlinable_string::InlinableString;
+use crate::lang::types::{Alias, Annotation2, Type2, TypeId};
+
 use roc_can::expr::Recursive;
 use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int};
 use roc_can::operator::desugar_expr;
@@ -33,10 +34,6 @@ use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
-
-use super::def::Declaration;
-use super::pattern::PatternId;
-use super::types::Annotation2;
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct IntroducedVariables {
