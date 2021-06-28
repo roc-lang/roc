@@ -1,7 +1,7 @@
 use crate::debug_info_init;
 use crate::llvm::build::{
-    add_func, cast_basic_basic, cast_block_of_memory_to_tag, get_tag_id, Env, FAST_CALL_CONV,
-    LLVM_SADD_WITH_OVERFLOW_I64, TAG_DATA_INDEX, TAG_ID_INDEX,
+    add_func, cast_basic_basic, cast_block_of_memory_to_tag, get_tag_id, get_tag_id_non_recursive,
+    Env, FAST_CALL_CONV, LLVM_SADD_WITH_OVERFLOW_I64, TAG_DATA_INDEX,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
 use crate::llvm::convert::{
@@ -1638,11 +1638,7 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
     let wrapper_struct = arg_val.into_struct_value();
 
     // read the tag_id
-    let tag_id = env
-        .builder
-        .build_extract_value(wrapper_struct, TAG_ID_INDEX, "read_tag_id")
-        .unwrap()
-        .into_int_value();
+    let tag_id = get_tag_id_non_recursive(env, wrapper_struct);
 
     let tag_id_u8 = env
         .builder

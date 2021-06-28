@@ -153,11 +153,17 @@ impl<'a> UnionLayout<'a> {
         }
     }
 
+    const BIGGEST_TAG_ID_TYPE: Layout<'static> = Layout::Builtin(Builtin::Int64);
+
+    pub fn tag_id_layout_from_slices(_slices: &[&[Layout<'a>]]) -> Layout<'a> {
+        Self::BIGGEST_TAG_ID_TYPE
+    }
+
     pub fn tag_id_layout(&self) -> Option<Layout<'a>> {
         match self {
             UnionLayout::NonRecursive(_)
             | UnionLayout::Recursive(_)
-            | UnionLayout::NullableWrapped { .. } => Some(Layout::Builtin(Builtin::Int64)),
+            | UnionLayout::NullableWrapped { .. } => Some(Self::BIGGEST_TAG_ID_TYPE),
             UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => None,
         }
     }

@@ -1081,8 +1081,15 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     let field_layouts = tag_layouts[*tag_id as usize];
 
+                    let tag_id_type = basic_type_from_layout(
+                        env,
+                        &UnionLayout::tag_id_layout_from_slices(tag_layouts),
+                    )
+                    .into_int_type();
+
                     lookup_at_index_ptr2(
                         env,
+                        tag_id_type,
                         field_layouts,
                         *index as usize,
                         argument.into_pointer_value(),
@@ -1117,8 +1124,15 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     let field_layouts = other_tags[tag_index as usize];
 
+                    let tag_id_type = basic_type_from_layout(
+                        env,
+                        &UnionLayout::tag_id_layout_from_slices(other_tags),
+                    )
+                    .into_int_type();
+
                     lookup_at_index_ptr2(
                         env,
+                        tag_id_type,
                         field_layouts,
                         *index as usize,
                         argument.into_pointer_value(),
@@ -1170,7 +1184,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
     arguments: &[Symbol],
 ) -> BasicValueEnum<'ctx> {
     match union_layout {
-        UnionLayout::NonRecursive(fields) => {
+        UnionLayout::NonRecursive(tags) => {
             debug_assert!(union_size > 1);
 
             let ctx = env.context;
@@ -1181,7 +1195,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            let tag_field_layouts = &fields[tag_id as usize];
+            let tag_field_layouts = &tags[tag_id as usize];
 
             for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
                 let (val, _val_layout) = load_symbol_and_layout(scope, field_symbol);
@@ -1237,10 +1251,12 @@ pub fn build_tag<'a, 'ctx, 'env>(
             // This tricks comes from
             // https://github.com/raviqqe/ssf/blob/bc32aae68940d5bddf5984128e85af75ca4f4686/ssf-llvm/src/expression_compiler.rs#L116
 
-            let internal_type = block_of_memory_slices(env.context, fields, env.ptr_bytes);
+            let internal_type = block_of_memory_slices(env.context, tags, env.ptr_bytes);
 
             let data = cast_tag_to_block_of_memory(builder, struct_val, internal_type);
-            let tag_id_type = env.context.i64_type();
+            let tag_id_type =
+                basic_type_from_layout(env, &UnionLayout::tag_id_layout_from_slices(tags))
+                    .into_int_type();
             let wrapper_type = env
                 .context
                 .struct_type(&[data.get_type(), tag_id_type.into()], false);
@@ -1301,7 +1317,10 @@ pub fn build_tag<'a, 'ctx, 'env>(
                 .build_struct_gep(raw_data_ptr, TAG_ID_INDEX, "tag_id_index")
                 .unwrap();
 
-            let tag_id_type = env.context.i64_type();
+            let tag_id_type =
+                basic_type_from_layout(env, &UnionLayout::tag_id_layout_from_slices(tags))
+                    .into_int_type();
+
             env.builder
                 .build_store(tag_id_ptr, tag_id_type.const_int(tag_id as u64, false));
 
@@ -1463,7 +1482,10 @@ pub fn build_tag<'a, 'ctx, 'env>(
                 .build_struct_gep(raw_data_ptr, TAG_ID_INDEX, "tag_id_index")
                 .unwrap();
 
-            let tag_id_type = env.context.i64_type();
+            let tag_id_type =
+                basic_type_from_layout(env, &UnionLayout::tag_id_layout_from_slices(tags))
+                    .into_int_type();
+
             env.builder
                 .build_store(tag_id_ptr, tag_id_type.const_int(tag_id as u64, false));
 
@@ -1590,11 +1612,9 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
         UnionLayout::NonRecursive(_) => {
             let tag = argument.into_struct_value();
 
-            extract_tag_discriminant_non_recursive(env, tag)
+            get_tag_id_non_recursive(env, tag)
         }
-        UnionLayout::Recursive(_) => {
-            extract_tag_discriminant_ptr(env, argument.into_pointer_value())
-        }
+        UnionLayout::Recursive(_) => get_tag_id_wrapped(env, argument.into_pointer_value()),
         UnionLayout::NonNullableUnwrapped(_) => env.context.i64_type().const_zero(),
         UnionLayout::NullableWrapped { nullable_id, .. } => {
             let argument_ptr = argument.into_pointer_value();
@@ -1619,7 +1639,7 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
 
             {
                 env.builder.position_at_end(else_block);
-                let tag_id = extract_tag_discriminant_ptr(env, argument_ptr);
+                let tag_id = get_tag_id_wrapped(env, argument_ptr);
                 env.builder.build_store(result, tag_id);
                 env.builder.build_unconditional_branch(cont_block);
             }
@@ -1687,6 +1707,7 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
 
 fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    tag_id_type: IntType<'ctx>,
     field_layouts: &[Layout<'_>],
     index: usize,
     value: PointerValue<'ctx>,
@@ -1696,7 +1717,6 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
     let struct_layout = Layout::Struct(field_layouts);
     let struct_type = basic_type_from_layout(env, &struct_layout);
 
-    let tag_id_type = env.context.i64_type();
     let wrapper_type = env
         .context
         .struct_type(&[struct_type, tag_id_type.into()], false);
@@ -1724,12 +1744,12 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
         // a recursive field is stored as a `i64*`, to use it we must cast it to
         // a pointer to the block of memory representation
 
-        let struct_type = block_of_memory_slices(env.context, &[field_layouts], env.ptr_bytes);
-        let tag_id_type = env.context.i64_type();
+        let tags = &[field_layouts];
+        let struct_type = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+        let tag_id_type =
+            basic_type_from_layout(env, &UnionLayout::tag_id_layout_from_slices(tags));
 
-        let opaque_wrapper_type = env
-            .context
-            .struct_type(&[struct_type, tag_id_type.into()], false);
+        let opaque_wrapper_type = env.context.struct_type(&[struct_type, tag_id_type], false);
 
         builder.build_bitcast(
             result,
@@ -1765,10 +1785,10 @@ fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx, 'env>(
         .map(|l| l.stack_size(env.ptr_bytes));
 
     let basic_type = if tag_id_stack_size.is_some() {
-        let tag_id_type = env.context.i64_type();
+        let tag_id_type = basic_type_from_layout(env, &union_layout.tag_id_layout().unwrap());
 
         env.context
-            .struct_type(&[block_type, tag_id_type.into()], false)
+            .struct_type(&[block_type, tag_id_type], false)
             .into()
     } else {
         block_type
@@ -2546,7 +2566,8 @@ pub fn complex_bitcast<'ctx>(
     }
 }
 
-fn extract_tag_discriminant_ptr<'a, 'ctx, 'env>(
+/// get the tag id out of a pointer to a wrapped (i.e. stores the tag id at runtime) layout
+fn get_tag_id_wrapped<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     from_value: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
@@ -2560,7 +2581,7 @@ fn extract_tag_discriminant_ptr<'a, 'ctx, 'env>(
         .into_int_value()
 }
 
-fn extract_tag_discriminant_non_recursive<'a, 'ctx, 'env>(
+pub fn get_tag_id_non_recursive<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     tag: StructValue<'ctx>,
 ) -> IntValue<'ctx> {
