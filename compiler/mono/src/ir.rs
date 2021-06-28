@@ -4,7 +4,7 @@ use self::InProgressProc::*;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{
     Builtin, ClosureRepresentation, LambdaSet, Layout, LayoutCache, LayoutProblem,
-    RawFunctionLayout, UnionLayout, WrappedVariant, TAG_SIZE,
+    RawFunctionLayout, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -4176,7 +4176,7 @@ fn convert_tag_union<'a>(
             let opt_tag_id_symbol;
 
             use WrappedVariant::*;
-            let (tag, layout) = match variant {
+            let (tag, union_layout) = match variant {
                 Recursive { sorted_tag_layouts } => {
                     debug_assert!(sorted_tag_layouts.len() > 1);
                     opt_tag_id_symbol = None;
@@ -4207,7 +4207,7 @@ fn convert_tag_union<'a>(
                         arguments: field_symbols,
                     };
 
-                    (tag, Layout::Union(union_layout))
+                    (tag, union_layout)
                 }
                 NonNullableUnwrapped {
                     fields,
@@ -4235,7 +4235,7 @@ fn convert_tag_union<'a>(
                         arguments: field_symbols,
                     };
 
-                    (tag, Layout::Union(union_layout))
+                    (tag, union_layout)
                 }
                 NonRecursive { sorted_tag_layouts } => {
                     opt_tag_id_symbol = None;
@@ -4265,7 +4265,7 @@ fn convert_tag_union<'a>(
                         arguments: field_symbols,
                     };
 
-                    (tag, Layout::Union(union_layout))
+                    (tag, union_layout)
                 }
                 NullableWrapped {
                     nullable_id,
@@ -4302,7 +4302,7 @@ fn convert_tag_union<'a>(
                         arguments: field_symbols,
                     };
 
-                    (tag, Layout::Union(union_layout))
+                    (tag, union_layout)
                 }
                 NullableUnwrapped {
                     nullable_id,
@@ -4335,11 +4335,11 @@ fn convert_tag_union<'a>(
                         arguments: field_symbols,
                     };
 
-                    (tag, Layout::Union(union_layout))
+                    (tag, union_layout)
                 }
             };
 
-            let mut stmt = Stmt::Let(assigned, tag, layout, hole);
+            let mut stmt = Stmt::Let(assigned, tag, Layout::Union(union_layout), hole);
             let iter = field_symbols_temp
                 .into_iter()
                 .map(|x| x.2 .0)
@@ -4353,7 +4353,7 @@ fn convert_tag_union<'a>(
                 stmt = Stmt::Let(
                     tag_id_symbol,
                     Expr::Literal(Literal::Int(tag_id as i128)),
-                    Layout::Builtin(TAG_SIZE),
+                    union_layout.tag_id_layout(),
                     arena.alloc(stmt),
                 );
             }
@@ -7680,7 +7680,7 @@ where
                 env,
                 lambda_set.set,
                 closure_tag_id_symbol,
-                Layout::Builtin(crate::layout::TAG_SIZE),
+                union_layout.tag_id_layout(),
                 closure_data_symbol,
                 lambda_set.is_represented(),
                 to_lowlevel_call,
@@ -7839,7 +7839,7 @@ fn match_on_lambda_set<'a>(
                 lambda_set.set,
                 lambda_set.runtime_representation(),
                 closure_tag_id_symbol,
-                Layout::Builtin(crate::layout::TAG_SIZE),
+                union_layout.tag_id_layout(),
                 closure_data_symbol,
                 argument_symbols,
                 argument_layouts,

@@ -1691,7 +1691,7 @@ fn decide_to_branching<'a>(
                 let tag_id_symbol = env.unique_symbol();
 
                 let temp = Stmt::Switch {
-                    cond_layout: Layout::TAG_SIZE,
+                    cond_layout: union_layout.tag_id_layout(),
                     cond_symbol: tag_id_symbol,
                     branches: branches.into_bump_slice(),
                     default_branch: (default_branch_info, env.arena.alloc(default_branch)),
@@ -1703,7 +1703,12 @@ fn decide_to_branching<'a>(
                     union_layout,
                 };
 
-                Stmt::Let(tag_id_symbol, expr, Layout::TAG_SIZE, env.arena.alloc(temp))
+                Stmt::Let(
+                    tag_id_symbol,
+                    expr,
+                    union_layout.tag_id_layout(),
+                    env.arena.alloc(temp),
+                )
             } else {
                 Stmt::Switch {
                     cond_layout: inner_cond_layout,

@@ -896,10 +896,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
                 env.builder.build_return(Some(&answer));
 
-                cases.push((
-                    env.context.i64_type().const_int(tag_id as u64, false),
-                    block,
-                ));
+                cases.push((id1.get_type().const_int(tag_id as u64, false), block));
             }
 
             env.builder.position_at_end(compare_tag_fields);
@@ -958,10 +955,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
                 env.builder.build_return(Some(&answer));
 
-                cases.push((
-                    env.context.i64_type().const_int(tag_id as u64, false),
-                    block,
-                ));
+                cases.push((id1.get_type().const_int(tag_id as u64, false), block));
             }
 
             env.builder.position_at_end(compare_tag_fields);
@@ -1110,10 +1104,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
                 env.builder.build_return(Some(&answer));
 
-                cases.push((
-                    env.context.i64_type().const_int(tag_id as u64, false),
-                    block,
-                ));
+                cases.push((id1.get_type().const_int(tag_id as u64, false), block));
             }
 
             env.builder.position_at_end(compare_tag_fields);

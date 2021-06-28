@@ -1394,6 +1394,9 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
     // next, make a jump table for all possible values of the tag_id
     let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
+    let tag_id_int_type =
+        basic_type_from_layout(env, &union_layout.tag_id_layout()).into_int_type();
+
     for (tag_id, field_layouts) in tags.iter().enumerate() {
         // if none of the fields are or contain anything refcounted, just move on
         if !field_layouts
@@ -1439,11 +1442,16 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
                 debug_assert!(ptr_as_i64_ptr.is_pointer_value());
 
                 // therefore we must cast it to our desired type
-
                 let union_type = match union_layout {
                     UnionLayout::NonRecursive(_) => unreachable!(),
                     UnionLayout::Recursive(_) | UnionLayout::NullableWrapped { .. } => {
-                        union_data_block_of_memory(env.context, tags, env.ptr_bytes).into()
+                        union_data_block_of_memory(
+                            env.context,
+                            tag_id_int_type,
+                            tags,
+                            env.ptr_bytes,
+                        )
+                        .into()
                     }
                     UnionLayout::NonNullableUnwrapped { .. }
                     | UnionLayout::NullableUnwrapped { .. } => {
@@ -1501,10 +1509,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         // this function returns void
         builder.build_return(None);
 
-        cases.push((
-            env.context.i64_type().const_int(tag_id as u64, false),
-            block,
-        ));
+        cases.push((tag_id_int_type.const_int(tag_id as u64, false), block));
     }
 
     env.builder.position_at_end(match_block);

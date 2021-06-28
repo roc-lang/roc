@@ -401,12 +401,14 @@ fn hash_tag<'a, 'ctx, 'env>(
     let merge_block = env.context.append_basic_block(parent, "merge_block");
     env.builder.position_at_end(merge_block);
 
-    let merge_phi = env.builder.build_phi(env.context.i64_type(), "merge_hash");
+    let tag_id_basic_type = basic_type_from_layout(env, &union_layout.tag_id_layout());
+
+    let merge_phi = env.builder.build_phi(seed.get_type(), "merge_hash");
 
     env.builder.position_at_end(entry_block);
     match union_layout {
         NonRecursive(tags) => {
-            let tag_id = get_tag_id(env, parent, union_layout, tag);
+            let current_tag_id = get_tag_id(env, parent, union_layout, tag);
 
             let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
@@ -414,7 +416,6 @@ fn hash_tag<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                // TODO drop tag id?
                 let struct_layout = Layout::Struct(field_layouts);
 
                 let wrapper_type = basic_type_from_layout(env, &struct_layout);
@@ -436,7 +437,7 @@ fn hash_tag<'a, 'ctx, 'env>(
                 env.builder.build_unconditional_branch(merge_block);
 
                 cases.push((
-                    env.context.i64_type().const_int(tag_id as u64, false),
+                    current_tag_id.get_type().const_int(tag_id as u64, false),
                     block,
                 ));
             }
@@ -445,10 +446,10 @@ fn hash_tag<'a, 'ctx, 'env>(
 
             let default = cases.pop().unwrap().1;
 
-            env.builder.build_switch(tag_id, default, &cases);
+            env.builder.build_switch(current_tag_id, default, &cases);
         }
         Recursive(tags) => {
-            let tag_id = get_tag_id(env, parent, union_layout, tag);
+            let current_tag_id = get_tag_id(env, parent, union_layout, tag);
 
             let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
@@ -469,7 +470,7 @@ fn hash_tag<'a, 'ctx, 'env>(
                 env.builder.build_unconditional_branch(merge_block);
 
                 cases.push((
-                    env.context.i64_type().const_int(tag_id as u64, false),
+                    current_tag_id.get_type().const_int(tag_id as u64, false),
                     block,
                 ));
             }
@@ -478,7 +479,7 @@ fn hash_tag<'a, 'ctx, 'env>(
 
             let default = cases.pop().unwrap().1;
 
-            env.builder.build_switch(tag_id, default, &cases);
+            env.builder.build_switch(current_tag_id, default, &cases);
         }
         NullableUnwrapped { other_fields, .. } => {
             let tag = tag.into_pointer_value();
@@ -544,7 +545,9 @@ fn hash_tag<'a, 'ctx, 'env>(
                     env.builder.build_unconditional_branch(merge_block);
 
                     cases.push((
-                        env.context.i64_type().const_int(tag_id as u64, false),
+                        tag_id_basic_type
+                            .into_int_type()
+                            .const_int(tag_id as u64, false),
                         block,
                     ));
                 }

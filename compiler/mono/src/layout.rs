@@ -14,11 +14,6 @@ const GENERATE_NULLABLE: bool = true;
 
 /// If a (Num *) gets translated to a Layout, this is the numeric type it defaults to.
 const DEFAULT_NUM_BUILTIN: Builtin<'_> = Builtin::Int64;
-pub const TAG_SIZE: Builtin<'_> = Builtin::Int64;
-
-impl Layout<'_> {
-    pub const TAG_SIZE: Layout<'static> = Layout::Builtin(Builtin::Int64);
-}
 
 #[derive(Debug, Clone)]
 pub enum LayoutProblem {
@@ -153,21 +148,34 @@ impl<'a> UnionLayout<'a> {
         }
     }
 
-    const BIGGEST_TAG_ID_TYPE: Layout<'static> = Layout::Builtin(Builtin::Int64);
+    fn tag_id_builtin_help(union_size: usize) -> Builtin<'a> {
+        if union_size <= u8::MAX as usize {
+            Builtin::Int8
+        } else if union_size <= u16::MAX as usize {
+            Builtin::Int16
+        } else {
+            panic!("tag union is too big")
+        }
+    }
 
-    pub fn tag_id_layout_from_slices(_slices: &[&[Layout<'a>]]) -> Layout<'a> {
-        Self::BIGGEST_TAG_ID_TYPE
+    pub fn tag_id_builtin(&self) -> Builtin<'a> {
+        match self {
+            UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => {
+                let union_size = tags.len();
+
+                Self::tag_id_builtin_help(union_size)
+            }
+
+            UnionLayout::NullableWrapped { other_tags, .. } => {
+                Self::tag_id_builtin_help(other_tags.len() + 1)
+            }
+            UnionLayout::NonNullableUnwrapped(_) => Builtin::Int1,
+            UnionLayout::NullableUnwrapped { .. } => Builtin::Int1,
+        }
     }
 
     pub fn tag_id_layout(&self) -> Layout<'a> {
-        match self {
-            UnionLayout::NonRecursive(_)
-            | UnionLayout::Recursive(_)
-            | UnionLayout::NullableWrapped { .. } => Self::BIGGEST_TAG_ID_TYPE,
-            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => {
-                Self::BIGGEST_TAG_ID_TYPE
-            }
-        }
+        Layout::Builtin(self.tag_id_builtin())
     }
 
     pub fn stores_tag_id(&self) -> bool {
