@@ -118,7 +118,7 @@ fn infer_eq(actual: &str, expected_str: &str) {
             let content = subs.get(var).content;
 
             let interns = Interns {
-                module_ids,
+                module_ids: env.module_ids.clone(),
                 all_ident_ids: dep_idents,
             };
             let actual_str = content_to_string(content, &subs, mod_id, &interns);

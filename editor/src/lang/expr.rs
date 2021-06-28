@@ -113,6 +113,8 @@ pub struct Env<'a> {
     pub pool: &'a mut Pool,
     pub arena: &'a Bump,
 
+    pub problems: BumpVec<'a, Problem>,
+
     pub dep_idents: MutMap<ModuleId, IdentIds>,
     pub module_ids: &'a ModuleIds,
     pub ident_ids: IdentIds,
@@ -142,6 +144,7 @@ impl<'a> Env<'a> {
             home,
             arena,
             pool,
+            problems: BumpVec::new_in(arena),
             var_store,
             dep_idents,
             module_ids,
@@ -162,8 +165,8 @@ impl<'a> Env<'a> {
         id
     }
 
-    pub fn problem(&mut self, _problem: Problem) {
-        todo!();
+    pub fn problem(&mut self, problem: Problem) {
+        self.problems.push(problem);
     }
 
     pub fn set_region<T>(&mut self, _node_id: NodeId<T>, _region: Region) {
@@ -1374,11 +1377,10 @@ fn canonicalize_lookup(
 
                 Var(symbol)
             }
-            Err(_problem) => {
-                // env.problem(Problem::RuntimeError(problem.clone()));
+            Err(problem) => {
+                env.problem(Problem::RuntimeError(problem.clone()));
 
-                // RuntimeError(problem)
-                todo!()
+                RuntimeError()
             }
         }
     } else {
@@ -1390,14 +1392,12 @@ fn canonicalize_lookup(
 
                 Var(symbol)
             }
-            Err(_problem) => {
+            Err(problem) => {
                 // Either the module wasn't imported, or
                 // it was imported but it doesn't expose this ident.
-                // env.problem(Problem::RuntimeError(problem.clone()));
+                env.problem(Problem::RuntimeError(problem.clone()));
 
-                // RuntimeError(problem)
-
-                todo!()
+                RuntimeError()
             }
         }
     };
