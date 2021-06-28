@@ -765,52 +765,58 @@ pub fn constrain_expr<'a>(
             let value_def = env.pool.get(*def_id);
             let body = env.pool.get(*body_id);
 
-            let mut body_con = constrain_expr(arena, env, body, expected.shallow_clone(), region);
+            let body_con = constrain_expr(arena, env, body, expected.shallow_clone(), region);
+            let pattern = env.pool.get(value_def.pattern);
 
-            if let Some((expr_type_id, _)) = value_def.expr_type {
-                let mut flex_vars = BumpVec::with_capacity_in(1, arena);
-                flex_vars.push(*body_var);
+            let mut flex_vars = BumpVec::with_capacity_in(1, arena);
+            flex_vars.push(*body_var);
 
-                // Constrain Def
-                let mut and_constraints = BumpVec::with_capacity_in(1, arena);
+            let expr_type = Type2::Variable(value_def.expr_var);
 
-                let pattern = env.pool.get(value_def.pattern);
+            let pattern_expected = PExpected::NoExpectation(expr_type.shallow_clone());
+            let mut state = PatternState2 {
+                headers: BumpMap::new_in(arena),
+                vars: BumpVec::with_capacity_in(1, arena),
+                constraints: BumpVec::with_capacity_in(1, arena),
+            };
 
-                let expr_type = env.pool.get(expr_type_id);
+            constrain_pattern(arena, env, pattern, region, pattern_expected, &mut state);
+            state.vars.push(value_def.expr_var);
 
-                let pattern_expected = PExpected::NoExpectation(expr_type.shallow_clone());
+            let def_expr = env.pool.get(value_def.expr);
 
-                let mut state = PatternState2 {
-                    headers: BumpMap::new_in(arena),
-                    vars: BumpVec::with_capacity_in(1, arena),
-                    constraints: BumpVec::with_capacity_in(1, arena),
-                };
-
-                constrain_pattern(arena, env, pattern, region, pattern_expected, &mut state);
-
-                state.vars.push(value_def.expr_var);
-
-                let constrained_def = Let(arena.alloc(LetConstraint {
-                    rigid_vars: BumpVec::new_in(arena),
-                    flex_vars: state.vars,
-                    def_types: state.headers,
+            let constrained_def = Let(arena.alloc(LetConstraint {
+                rigid_vars: BumpVec::new_in(arena),
+                flex_vars: state.vars,
+                def_types: state.headers,
+                defs_constraint: Let(arena.alloc(LetConstraint {
+                    rigid_vars: BumpVec::new_in(arena), // always empty
+                    flex_vars: BumpVec::new_in(arena), // empty, because our functions have no arguments
+                    def_types: BumpMap::new_in(arena), // empty, because our functions have no arguments!
                     defs_constraint: And(state.constraints),
-                    ret_constraint: body_con,
-                }));
+                    ret_constraint: constrain_expr(
+                        arena,
+                        env,
+                        def_expr,
+                        Expected::NoExpectation(expr_type),
+                        region,
+                    ),
+                })),
+                ret_constraint: body_con,
+            }));
 
-                and_constraints.push(constrained_def);
-                and_constraints.push(Eq(
-                    Type2::Variable(*body_var),
-                    expected,
-                    Category::Storage(std::file!(), std::line!()),
-                    // TODO: needs to be ret region
-                    region,
-                ));
+            let mut and_constraints = BumpVec::with_capacity_in(1, arena);
 
-                body_con = exists(arena, flex_vars, And(and_constraints));
-            }
+            and_constraints.push(constrained_def);
+            and_constraints.push(Eq(
+                Type2::Variable(*body_var),
+                expected,
+                Category::Storage(std::file!(), std::line!()),
+                // TODO: needs to be ret region
+                region,
+            ));
 
-            body_con
+            exists(arena, flex_vars, And(and_constraints))
         }
         Expr2::Update {
             symbol,
