@@ -1933,9 +1933,26 @@ pub mod test_ed_update {
         assert_type_tooltips_seq(&["┃"], &vec!["List (Num *)"], "[0")?;
         assert_type_tooltips_seq(&["┃"], &vec!["List (Num *)", "List (List (Num *))"], "[[0")?;
         assert_type_tooltips_seq(&["┃"], &vec!["Str", "List Str"], "[\"a")?;
-        assert_type_tooltips_seq(&["┃"], &vec!["Str", "List Str", "List (List Str)", "List (List (List Str))"], "[[[\"a")?;
-        assert_type_tooltips_seq(&["┃"], &vec!["{ a : Num * }", "List { a : Num * }", "List (List { a : Num * })"], "[[{a:1")?;
-        
+        assert_type_tooltips_seq(
+            &["┃"],
+            &vec![
+                "Str",
+                "List Str",
+                "List (List Str)",
+                "List (List (List Str))",
+            ],
+            "[[[\"a",
+        )?;
+        assert_type_tooltips_seq(
+            &["┃"],
+            &vec![
+                "{ a : Num * }",
+                "List { a : Num * }",
+                "List (List { a : Num * })",
+            ],
+            "[[{a:1",
+        )?;
+
         Ok(())
     }
 
