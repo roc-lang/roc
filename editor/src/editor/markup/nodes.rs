@@ -143,6 +143,8 @@ fn get_string<'a>(env: &Env<'a>, pool_str: &PoolStr) -> String {
 pub const BLANK_PLACEHOLDER: &str = " ";
 pub const LEFT_ACCOLADE: &str = "{ ";
 pub const RIGHT_ACCOLADE: &str = " }";
+pub const LEFT_SQUARE_BR: &str = "[ ";
+pub const RIGHT_SQUARE_BR: &str = " ]";
 pub const COLON: &str = ": ";
 pub const STRING_QUOTES: &str = "\"\"";
 
@@ -209,7 +211,7 @@ pub fn expr2_to_markup<'a, 'b>(
         }
         Expr2::List { elems, .. } => {
             let mut children_ids = vec![new_markup_node(
-                "[ ".to_string(),
+                LEFT_SQUARE_BR.to_string(),
                 expr2_node_id,
                 HighlightStyle::Bracket,
                 markup_node_pool,
@@ -236,7 +238,7 @@ pub fn expr2_to_markup<'a, 'b>(
                 }
             }
             children_ids.push(new_markup_node(
-                "] ".to_string(),
+                RIGHT_SQUARE_BR.to_string(),
                 expr2_node_id,
                 HighlightStyle::Bracket,
                 markup_node_pool,
