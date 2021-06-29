@@ -431,7 +431,7 @@ fn expr2_to_string_helper(
 
             out_string.push_str(&format!("{}]\n", get_spacing(indent_level + 1)));
         }
-        Expr2::List { elem_var, elems} => {
+        Expr2::List { elem_var, elems } => {
             out_string.push_str("List:\n");
             out_string.push_str(&var_to_string(elem_var, indent_level + 1));
             out_string.push_str(&format!("{}elems: [\n", get_spacing(indent_level + 1)));
@@ -445,7 +445,7 @@ fn expr2_to_string_helper(
                     first_elt = false;
                 }
 
-                expr2_to_string_helper(elem_expr2, indent_level + 1, pool, out_string)
+                expr2_to_string_helper(elem_expr2, indent_level + 2, pool, out_string)
             }
 
             out_string.push_str(&format!("{}]\n", get_spacing(indent_level + 1)));
@@ -462,12 +462,8 @@ fn expr2_to_string_helper(
     out_string.push('\n');
 }
 
-fn var_to_string( some_var: &Variable, indent_level: usize) -> String {
-    format!(
-        "{}Var({:?})\n",
-        get_spacing(indent_level + 1),
-        some_var
-    )
+fn var_to_string(some_var: &Variable, indent_level: usize) -> String {
+    format!("{}Var({:?})\n", get_spacing(indent_level + 1), some_var)
 }
 
 #[test]

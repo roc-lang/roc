@@ -4,7 +4,7 @@ pub mod ed_model;
 pub mod ed_update;
 pub mod ed_view;
 mod int_update;
+mod list_update;
 mod lookup_update;
 mod record_update;
-mod list_update;
 mod string_update;

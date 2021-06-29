@@ -66,10 +66,6 @@ impl Symbol {
     }
 
     pub fn ident_string(self, interns: &Interns) -> &InlinableString {
-
-        dbg!(&self.module_id());
-        dbg!(interns);
-        println!("DONE");
         let ident_ids = interns
             .all_ident_ids
             .get(&self.module_id())
