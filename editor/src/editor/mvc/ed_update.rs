@@ -13,6 +13,7 @@ use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_model::SelectedExpression;
 use crate::editor::mvc::int_update::start_new_int;
 use crate::editor::mvc::int_update::update_int;
+use crate::editor::mvc::list_update::{prep_empty_list, start_new_list};
 use crate::editor::mvc::lookup_update::update_invalid_lookup;
 use crate::editor::mvc::record_update::start_new_record;
 use crate::editor::mvc::record_update::update_empty_record;
@@ -265,7 +266,7 @@ impl<'a> EdModel<'a> {
         let content = subs.get(var).content;
 
         PoolStr::new(
-            &content_to_string(content, &subs, self.module.env.home, &Default::default()),
+            &content_to_string(content, &subs, self.module.env.home, self.interns),
             self.module.env.pool,
         )
     }
@@ -581,11 +582,18 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                     '0'..='9' => {
                                         start_new_int(ed_model, ch)?
                                     }
+                                    '[' => {
+                                        // this can also be a tag union or become a set, assuming list for now
+                                        start_new_list(ed_model)?
+                                    }
                                     _ => InputOutcome::Ignored
                                 }
                             } else if let Some(prev_mark_node_id) = prev_mark_node_id_opt{
                                 if prev_mark_node_id == curr_mark_node_id {
                                     match ast_node_ref {
+                                        Expr2::SmallInt{ .. } => {
+                                            update_int(ed_model, curr_mark_node_id, ch)?
+                                        }
                                         Expr2::SmallStr(old_arr_str) => {
                                             update_small_string(
                                                 &ch, old_arr_str, ed_model
@@ -622,9 +630,6 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                 InputOutcome::Ignored
                                             }
                                         }
-                                        Expr2::SmallInt{ .. } => {
-                                            update_int(ed_model, curr_mark_node_id, ch)?
-                                        }
                                         _ => InputOutcome::Ignored
                                     }
                                 } else if ch.is_ascii_alphanumeric() { // prev_mark_node_id != curr_mark_node_id
@@ -643,6 +648,9 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                             let prev_node_ref = ed_model.module.env.pool.get(prev_ast_node_id);
 
                                             match prev_node_ref {
+                                                Expr2::SmallInt{ .. } => {
+                                                    update_int(ed_model, prev_mark_node_id, ch)?
+                                                }
                                                 Expr2::InvalidLookup(old_pool_str) => {
                                                     update_invalid_lookup(
                                                         &ch.to_string(),
@@ -676,8 +684,19 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                         InputOutcome::Ignored
                                                     }
                                                 }
-                                                Expr2::SmallInt{ .. } => {
-                                                    update_int(ed_model, prev_mark_node_id, ch)?
+                                                Expr2::List{ elem_var: _, elems: _} => {
+                                                    let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
+
+                                                    if prev_mark_node.get_content()? == nodes::LEFT_SQUARE_BR {
+                                                        if curr_mark_node.get_content()? == nodes::RIGHT_SQUARE_BR {
+                                                            prep_empty_list(ed_model)?; // insert a Blank first, this results in cleaner code
+                                                            handle_new_char(received_char, ed_model)?
+                                                        } else {
+                                                            InputOutcome::Ignored
+                                                        }
+                                                    } else {
+                                                        InputOutcome::Ignored
+                                                    }
                                                 }
                                                 _ => {
                                                     match ast_node_ref {
@@ -704,6 +723,19 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                         let parent_ast_id = ed_model.markup_node_pool.get(mark_parent_id).get_ast_node_id();
 
                                         update_record_colon(ed_model, parent_ast_id)?
+                                    } else {
+                                        InputOutcome::Ignored
+                                    }
+                                } else if "\"{[".contains(*ch) {
+                                    let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
+
+                                    if prev_mark_node.get_content()? == nodes::LEFT_SQUARE_BR {
+                                        if curr_mark_node.get_content()? == nodes::RIGHT_SQUARE_BR {
+                                            prep_empty_list(ed_model)?; // insert a Blank first, this results in cleaner code
+                                            handle_new_char(received_char, ed_model)?
+                                        } else {
+                                            InputOutcome::Ignored
+                                        }
                                     } else {
                                         InputOutcome::Ignored
                                     }
@@ -1466,6 +1498,90 @@ pub mod test_ed_update {
         Ok(())
     }
 
+    #[test]
+    fn test_list() -> Result<(), String> {
+        assert_insert(&["┃"], &["[ ┃ ]"], '[')?;
+
+        assert_insert_seq(&["┃"], &["[ 0┃ ]"], "[0")?;
+        assert_insert_seq(&["┃"], &["[ 1┃ ]"], "[1")?;
+        assert_insert_seq(&["┃"], &["[ 9┃ ]"], "[9")?;
+
+        assert_insert_seq(&["┃"], &["[ \"┃\" ]"], "[\"")?;
+        assert_insert_seq(
+            &["┃"],
+            &["[ \"hello, hello.0123456789ZXY{}[]-><-┃\" ]"],
+            "[\"hello, hello.0123456789ZXY{}[]-><-",
+        )?;
+
+        assert_insert_seq(&["┃"], &["[ { ┃ } ]"], "[{")?;
+        assert_insert_seq(&["┃"], &["[ { a┃ } ]"], "[{a")?;
+        assert_insert_seq(
+            &["┃"],
+            &["[ { camelCase: { zulu: \"nested┃\" } } ]"],
+            "[{camelCase:{zulu:\"nested",
+        )?;
+
+        assert_insert_seq(&["┃"], &["[ [ ┃ ] ]"], "[[")?;
+        assert_insert_seq(&["┃"], &["[ [ [ ┃ ] ] ]"], "[[[")?;
+        assert_insert_seq(&["┃"], &["[ [ 0┃ ] ]"], "[[0")?;
+        assert_insert_seq(&["┃"], &["[ [ \"abc┃\" ] ]"], "[[\"abc")?;
+        assert_insert_seq(
+            &["┃"],
+            &["[ [ { camelCase: { a: 79000┃ } } ] ]"],
+            "[[{camelCase:{a:79000",
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ignore_list() -> Result<(), String> {
+        assert_insert_seq_ignore(&["┃[  ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[  ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[┃  ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[  ┃]"], IGNORE_CHARS)?;
+
+        assert_insert_seq_ignore(&["┃[ 0 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ 0 ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[┃ 0 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ 0 ┃]"], IGNORE_CHARS)?;
+
+        assert_insert_seq_ignore(&["┃[ 137 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ 137 ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[┃ 137 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ 137 ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ ┃137 ]"], IGNORE_NO_NUM)?;
+        assert_insert_seq_ignore(&["[ 137┃ ]"], IGNORE_NO_NUM)?;
+
+        assert_insert_seq_ignore(&["┃[ \"teststring\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ \"teststring\" ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[┃ \"teststring\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ \"teststring\" ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ ┃\"teststring\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ \"teststring\"┃ ]"], IGNORE_CHARS)?;
+
+        assert_insert_seq_ignore(&["┃[ { a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ { a: 1 } ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[┃ { a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ { a: 1 } ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ ┃{ a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ {┃ a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ { a:┃ 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ { a: 1 ┃} ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ { a: 1 }┃ ]"], IGNORE_CHARS)?;
+
+        assert_insert_seq_ignore(&["┃[ [  ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [  ] ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[┃ [  ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [  ] ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ ┃[  ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [  ]┃ ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [┃  ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [  ┃] ]"], IGNORE_CHARS)?;
+
+        Ok(())
+    }
+
     // Create ed_model from pre_lines DSL, do ctrl+shift+up as many times as repeat.
     // check if modified ed_model has expected string representation of code, caret position and active selection.
     pub fn assert_ctrl_shift_up_repeat(
@@ -1811,6 +1927,30 @@ pub mod test_ed_update {
                 "{ b : { c : Str } }",
                 "{ a : { b : { c : Str } } }",
             ],
+        )?;
+
+        assert_type_tooltip(&["┃"], "List *", '[')?;
+        assert_type_tooltips_seq(&["┃"], &vec!["List (Num *)"], "[0")?;
+        assert_type_tooltips_seq(&["┃"], &vec!["List (Num *)", "List (List (Num *))"], "[[0")?;
+        assert_type_tooltips_seq(&["┃"], &vec!["Str", "List Str"], "[\"a")?;
+        assert_type_tooltips_seq(
+            &["┃"],
+            &vec![
+                "Str",
+                "List Str",
+                "List (List Str)",
+                "List (List (List Str))",
+            ],
+            "[[[\"a",
+        )?;
+        assert_type_tooltips_seq(
+            &["┃"],
+            &vec![
+                "{ a : Num * }",
+                "List { a : Num * }",
+                "List (List { a : Num * })",
+            ],
+            "[[{a:1",
         )?;
 
         Ok(())
