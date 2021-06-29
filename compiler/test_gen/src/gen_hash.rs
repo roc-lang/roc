@@ -37,7 +37,7 @@ fn hash_record() {
 fn hash_result() {
     assert_evals_to!(
         "Dict.hashTestOnly 0 (List.get [ 0x1 ] 0) ",
-        10806428154792634888,
+        6707068610910845221,
         u64
     );
 }
@@ -85,10 +85,13 @@ fn hash_expr() {
                 x : Expr 
                 x = Val 1
 
-                Dict.hashTestOnly 0 (Add x x) 
+                add : Expr
+                add = Add x x
+
+                Dict.hashTestOnly 0 add
             "#
         ),
-        2878521786781103245,
+        10825806964604997723,
         u64
     );
 }
@@ -103,10 +106,13 @@ fn hash_nullable_expr() {
                 x : Expr 
                 x = Val 1
 
-                Dict.hashTestOnly 0 (Add x x) 
+                add : Expr
+                add = Add x x
+
+                Dict.hashTestOnly 0 add
             "#
         ),
-        2878521786781103245,
+        1907558799788307114,
         u64
     );
 }
@@ -126,6 +132,72 @@ fn hash_rosetree() {
         ),
         0,
         u64
+    );
+}
+
+#[test]
+fn hash_union_same_content() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Foo : [ A I64, B I64 ]
+
+            a : Foo
+            a = A 42
+
+            b : Foo
+            b = B 42
+
+            { a: Dict.hashTestOnly 0 a, b : Dict.hashTestOnly 0 b }
+            "#
+        ),
+        true,
+        (i64, i64),
+        |(a, b)| a != b
+    );
+}
+
+#[test]
+fn hash_recursive_union_same_content() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Expr : [ Add Expr Expr, Mul Expr Expr, Val1 I64, Val2 I64 ]
+
+                v1 : Expr 
+                v1 = Val1 42
+
+                v2 : Expr 
+                v2 = Val2 42
+
+                { a: Dict.hashTestOnly 0 v1, b : Dict.hashTestOnly 0 v2 }
+            "#
+        ),
+        true,
+        (i64, i64),
+        |(a, b)| a != b
+    );
+}
+
+#[test]
+fn hash_nullable_recursive_union_same_content() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Expr : [ Add Expr Expr, Mul Expr Expr, Val1 I64, Val2 I64, Empty ]
+
+                v1 : Expr 
+                v1 = Val1 42
+
+                v2 : Expr 
+                v2 = Val2 42
+
+                { a: Dict.hashTestOnly 0 v1, b : Dict.hashTestOnly 0 v2 }
+            "#
+        ),
+        true,
+        (i64, i64),
+        |(a, b)| a != b
     );
 }
 

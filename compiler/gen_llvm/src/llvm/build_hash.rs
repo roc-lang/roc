@@ -401,7 +401,8 @@ fn hash_tag<'a, 'ctx, 'env>(
     let merge_block = env.context.append_basic_block(parent, "merge_block");
     env.builder.position_at_end(merge_block);
 
-    let tag_id_basic_type = basic_type_from_layout(env, &union_layout.tag_id_layout());
+    let tag_id_layout = union_layout.tag_id_layout();
+    let tag_id_basic_type = basic_type_from_layout(env, &tag_id_layout);
 
     let merge_phi = env.builder.build_phi(seed.get_type(), "merge_hash");
 
@@ -424,6 +425,24 @@ fn hash_tag<'a, 'ctx, 'env>(
                 let as_struct =
                     cast_block_of_memory_to_tag(env.builder, tag.into_struct_value(), wrapper_type);
 
+                // hash the tag id
+                let hash_bytes = store_and_use_as_u8_ptr(
+                    env,
+                    tag_id_basic_type
+                        .into_int_type()
+                        .const_int(tag_id as u64, false)
+                        .into(),
+                    &tag_id_layout,
+                );
+
+                let seed = hash_bitcode_fn(
+                    env,
+                    seed,
+                    hash_bytes,
+                    tag_id_layout.stack_size(env.ptr_bytes),
+                );
+
+                // hash the tag data
                 let answer = build_hash_struct(
                     env,
                     layout_ids,
@@ -457,6 +476,23 @@ fn hash_tag<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
+                // hash the tag id
+                let hash_bytes = store_and_use_as_u8_ptr(
+                    env,
+                    tag_id_basic_type
+                        .into_int_type()
+                        .const_int(tag_id as u64, false)
+                        .into(),
+                    &tag_id_layout,
+                );
+                let seed = hash_bitcode_fn(
+                    env,
+                    seed,
+                    hash_bytes,
+                    tag_id_layout.stack_size(env.ptr_bytes),
+                );
+
+                // hash the tag data
                 let answer = hash_ptr_to_struct(
                     env,
                     layout_ids,
@@ -511,7 +547,10 @@ fn hash_tag<'a, 'ctx, 'env>(
                 env.builder.build_unconditional_branch(merge_block);
             }
         }
-        NullableWrapped { other_tags, .. } => {
+        NullableWrapped {
+            other_tags,
+            nullable_id,
+        } => {
             let tag = tag.into_pointer_value();
 
             let is_null = env.builder.build_is_null(tag, "is_null");
@@ -534,12 +573,39 @@ fn hash_tag<'a, 'ctx, 'env>(
             {
                 let mut cases = Vec::with_capacity_in(other_tags.len(), env.arena);
 
-                for (tag_id, field_layouts) in other_tags.iter().enumerate() {
+                for (mut tag_id, field_layouts) in other_tags.iter().enumerate() {
+                    if tag_id >= *nullable_id as usize {
+                        tag_id += 1;
+                    }
+
                     let block = env.context.append_basic_block(parent, "tag_id_modify");
                     env.builder.position_at_end(block);
 
-                    let answer =
-                        hash_ptr_to_struct(env, layout_ids, union_layout, field_layouts, seed, tag);
+                    // hash the tag id
+                    let hash_bytes = store_and_use_as_u8_ptr(
+                        env,
+                        tag_id_basic_type
+                            .into_int_type()
+                            .const_int(tag_id as u64, false)
+                            .into(),
+                        &tag_id_layout,
+                    );
+                    let seed1 = hash_bitcode_fn(
+                        env,
+                        seed,
+                        hash_bytes,
+                        tag_id_layout.stack_size(env.ptr_bytes),
+                    );
+
+                    // hash tag data
+                    let answer = hash_ptr_to_struct(
+                        env,
+                        layout_ids,
+                        union_layout,
+                        field_layouts,
+                        seed1,
+                        tag,
+                    );
 
                     merge_phi.add_incoming(&[(&answer, block)]);
                     env.builder.build_unconditional_branch(merge_block);
@@ -810,14 +876,13 @@ fn store_and_use_as_u8_ptr<'a, 'ctx, 'env>(
     let alloc = env.builder.build_alloca(basic_type, "store");
     env.builder.build_store(alloc, value);
 
+    let u8_ptr = env
+        .context
+        .i8_type()
+        .ptr_type(inkwell::AddressSpace::Generic);
+
     env.builder
-        .build_bitcast(
-            alloc,
-            env.context
-                .i8_type()
-                .ptr_type(inkwell::AddressSpace::Generic),
-            "as_u8_ptr",
-        )
+        .build_bitcast(alloc, u8_ptr, "as_u8_ptr")
         .into_pointer_value()
 }
 
