@@ -208,7 +208,7 @@ fn constrain_empty_list() {
     infer_eq(
         indoc!(
             r#"
-            [  ]
+            []
             "#
         ),
         "List *",
