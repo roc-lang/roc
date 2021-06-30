@@ -246,7 +246,7 @@ pub fn helper<'a>(
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
-        panic!("Errors defining module: {:?}", errors);
+        panic!("Errors defining module:\n\n{}", errors.to_string());
     }
 
     // Uncomment this to see the module's optimized LLVM instruction output:

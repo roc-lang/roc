@@ -164,8 +164,9 @@ pub fn gen_from_mono_module(
         env.module.print_to_file(&app_ll_file).unwrap();
 
         panic!(
-            "😱 LLVM errors when defining module; I wrote the full LLVM IR to {:?}\n\n {:?}",
-            app_ll_file, errors,
+            "😱 LLVM errors when defining module; I wrote the full LLVM IR to {:?}\n\n {}",
+            app_ll_file,
+            errors.to_string(),
         );
     }
 
