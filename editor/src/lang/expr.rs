@@ -19,6 +19,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast;
+use roc_parse::ast::Expr;
 use roc_parse::ast::StrLiteral;
 use roc_parse::parser::{loc, Parser, State, SyntaxError};
 use roc_problem::can::{Problem, RuntimeError};
@@ -337,12 +338,18 @@ pub fn to_expr2<'a>(
 
             let elems = PoolVec::with_capacity(items.len() as u32, env.pool);
 
-            for (node_id, item) in elems.iter_node_ids().zip(items.iter()) {
+            let node_id_item_tups: Vec<(ExprId, &Located<Expr>)> = elems
+                .iter(env.pool)
+                .map(|node_ref| *node_ref)
+                .zip(items.iter().map(|item_ref| *item_ref))
+                .collect();
+
+            for (node_id, item) in node_id_item_tups.iter() {
                 let (expr, sub_output) = to_expr2(env, scope, &item.value, item.region);
 
                 output_ref.union(sub_output);
 
-                env.pool[node_id] = expr;
+                env.pool.set(*node_id, expr);
             }
 
             let expr = Expr2::List {

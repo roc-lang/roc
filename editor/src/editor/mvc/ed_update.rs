@@ -13,7 +13,7 @@ use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_model::SelectedExpression;
 use crate::editor::mvc::int_update::start_new_int;
 use crate::editor::mvc::int_update::update_int;
-use crate::editor::mvc::list_update::{prep_empty_list, start_new_list};
+use crate::editor::mvc::list_update::{add_blank_child, start_new_list};
 use crate::editor::mvc::lookup_update::update_invalid_lookup;
 use crate::editor::mvc::record_update::start_new_record;
 use crate::editor::mvc::record_update::update_empty_record;
@@ -689,7 +689,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
                                                     if prev_mark_node.get_content()? == nodes::LEFT_SQUARE_BR {
                                                         if curr_mark_node.get_content()? == nodes::RIGHT_SQUARE_BR {
-                                                            prep_empty_list(ed_model)?; // insert a Blank first, this results in cleaner code
+                                                            add_blank_child(ed_model)?; // insert a Blank first, this results in cleaner code
                                                             handle_new_char(received_char, ed_model)?
                                                         } else {
                                                             InputOutcome::Ignored
@@ -726,12 +726,33 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                     } else {
                                         InputOutcome::Ignored
                                     }
+                                } else if *ch == ',' {
+                                    let mark_parent_id_opt = curr_mark_node.get_parent_id_opt();
+
+                                    if let Some(mark_parent_id) = mark_parent_id_opt {
+                                        let parent_ast_id = ed_model.markup_node_pool.get(mark_parent_id).get_ast_node_id();
+                                        let parent_expr2 = ed_model.module.env.pool.get(parent_ast_id);
+
+                                        match parent_expr2 {
+                                            Expr2::List { elem_var:_, elems:_} => {
+                                                add_blank_child(ed_model)?
+                                            }
+                                            Expr2::Record { record_var:_, fields:_ } => {
+                                                todo!("multiple record fields")
+                                            }
+                                            _ => {
+                                                InputOutcome::Ignored
+                                            }
+                                        }
+                                    } else {
+                                        InputOutcome::Ignored
+                                    }
                                 } else if "\"{[".contains(*ch) {
                                     let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
 
                                     if prev_mark_node.get_content()? == nodes::LEFT_SQUARE_BR {
                                         if curr_mark_node.get_content()? == nodes::RIGHT_SQUARE_BR {
-                                            prep_empty_list(ed_model)?; // insert a Blank first, this results in cleaner code
+                                            add_blank_child(ed_model)?; // insert a Blank first, this results in cleaner code
                                             handle_new_char(received_char, ed_model)?
                                         } else {
                                             InputOutcome::Ignored

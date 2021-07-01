@@ -6,6 +6,7 @@ use crate::editor::ed_error::NestedNodeRequired;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
+use crate::lang::ast::ExprId;
 use crate::lang::ast::RecordField;
 use crate::lang::{
     ast::Expr2,
@@ -146,6 +147,7 @@ pub const RIGHT_ACCOLADE: &str = " }";
 pub const LEFT_SQUARE_BR: &str = "[ ";
 pub const RIGHT_SQUARE_BR: &str = " ]";
 pub const COLON: &str = ": ";
+pub const COMMA: &str = ", ";
 pub const STRING_QUOTES: &str = "\"\"";
 
 fn new_markup_node(
@@ -217,21 +219,24 @@ pub fn expr2_to_markup<'a, 'b>(
                 markup_node_pool,
             )];
 
-            for (idx, node_id) in elems.iter_node_ids().enumerate() {
-                let sub_expr2 = env.pool.get(node_id);
+            let indexed_node_ids: Vec<(usize, ExprId)> =
+                elems.iter(env.pool).copied().enumerate().collect();
+
+            for (idx, node_id) in indexed_node_ids.iter() {
+                let sub_expr2 = env.pool.get(*node_id);
 
                 children_ids.push(expr2_to_markup(
                     arena,
                     env,
                     sub_expr2,
-                    node_id,
+                    *node_id,
                     markup_node_pool,
                 ));
 
                 if idx + 1 < elems.len() {
                     children_ids.push(new_markup_node(
                         ", ".to_string(),
-                        node_id,
+                        *node_id,
                         HighlightStyle::Operator,
                         markup_node_pool,
                     ));
