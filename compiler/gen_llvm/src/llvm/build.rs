@@ -973,10 +973,9 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         Tag {
             arguments,
             tag_layout: union_layout,
-            union_size,
             tag_id,
             ..
-        } => build_tag(env, scope, union_layout, *union_size, *tag_id, arguments),
+        } => build_tag(env, scope, union_layout, *tag_id, arguments),
 
         Reset(_) => todo!(),
         Reuse { .. } => todo!(),
@@ -1174,11 +1173,12 @@ pub fn build_tag<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     union_layout: &UnionLayout<'a>,
-    union_size: u8,
     tag_id: u8,
     arguments: &[Symbol],
 ) -> BasicValueEnum<'ctx> {
     let tag_id_layout = union_layout.tag_id_layout();
+
+    let union_size = union_layout.number_of_tags();
 
     match union_layout {
         UnionLayout::NonRecursive(tags) => {

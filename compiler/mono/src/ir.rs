@@ -1129,7 +1129,6 @@ pub enum Expr<'a> {
         tag_layout: UnionLayout<'a>,
         tag_name: TagName,
         tag_id: u8,
-        union_size: u8,
         arguments: &'a [Symbol],
     },
     Struct(&'a [Symbol]),
@@ -1160,6 +1159,9 @@ pub enum Expr<'a> {
 
     Reuse {
         symbol: Symbol,
+        update_tag_id: bool,
+        // normal Tag fields
+        tag_layout: UnionLayout<'a>,
         tag_name: TagName,
         tag_id: u8,
         arguments: &'a [Symbol],
@@ -4031,14 +4033,12 @@ fn construct_closure_data<'a>(
         ClosureRepresentation::Union {
             tag_id,
             tag_layout: _,
-            union_size,
             tag_name,
             union_layout,
         } => {
             let expr = Expr::Tag {
                 tag_id,
                 tag_layout: union_layout,
-                union_size,
                 tag_name,
                 arguments: symbols,
             };
@@ -4167,7 +4167,6 @@ fn convert_tag_union<'a>(
             assign_to_symbols(env, procs, layout_cache, iter, stmt)
         }
         Wrapped(variant) => {
-            let union_size = variant.number_of_tags() as u8;
             let (tag_id, _) = variant.tag_name_to_id(&tag_name);
 
             let field_symbols_temp = sorted_field_symbols(env, procs, layout_cache, args);
@@ -4203,7 +4202,6 @@ fn convert_tag_union<'a>(
                         tag_layout: union_layout,
                         tag_name,
                         tag_id: tag_id as u8,
-                        union_size,
                         arguments: field_symbols,
                     };
 
@@ -4231,7 +4229,6 @@ fn convert_tag_union<'a>(
                         tag_layout: union_layout,
                         tag_name,
                         tag_id: tag_id as u8,
-                        union_size,
                         arguments: field_symbols,
                     };
 
@@ -4261,7 +4258,6 @@ fn convert_tag_union<'a>(
                         tag_layout: union_layout,
                         tag_name,
                         tag_id: tag_id as u8,
-                        union_size,
                         arguments: field_symbols,
                     };
 
@@ -4298,7 +4294,6 @@ fn convert_tag_union<'a>(
                         tag_layout: union_layout,
                         tag_name,
                         tag_id: tag_id as u8,
-                        union_size,
                         arguments: field_symbols,
                     };
 
@@ -4331,7 +4326,6 @@ fn convert_tag_union<'a>(
                         tag_layout: union_layout,
                         tag_name,
                         tag_id: tag_id as u8,
-                        union_size,
                         arguments: field_symbols,
                     };
 
@@ -5381,7 +5375,6 @@ fn substitute_in_expr<'a>(
             tag_layout,
             tag_name,
             tag_id,
-            union_size,
             arguments: args,
         } => {
             let mut did_change = false;
@@ -5403,7 +5396,6 @@ fn substitute_in_expr<'a>(
                     tag_layout: *tag_layout,
                     tag_name: tag_name.clone(),
                     tag_id: *tag_id,
-                    union_size: *union_size,
                     arguments,
                 })
             } else {

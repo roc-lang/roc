@@ -836,7 +836,6 @@ fn expr_spec(
             tag_layout,
             tag_name: _,
             tag_id,
-            union_size: _,
             arguments,
         } => match tag_layout {
             UnionLayout::NonRecursive(_) => {

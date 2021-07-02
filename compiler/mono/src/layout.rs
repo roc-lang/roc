@@ -148,6 +148,16 @@ impl<'a> UnionLayout<'a> {
         }
     }
 
+    pub fn number_of_tags(&'a self) -> usize {
+        match self {
+            UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => tags.len(),
+
+            UnionLayout::NullableWrapped { other_tags, .. } => other_tags.len() + 1,
+            UnionLayout::NonNullableUnwrapped(_) => 1,
+            UnionLayout::NullableUnwrapped { .. } => 2,
+        }
+    }
+
     fn tag_id_builtin_help(union_size: usize) -> Builtin<'a> {
         if union_size <= u8::MAX as usize {
             Builtin::Int8
@@ -204,7 +214,6 @@ pub enum ClosureRepresentation<'a> {
         tag_layout: &'a [Layout<'a>],
         tag_name: TagName,
         tag_id: u8,
-        union_size: u8,
         union_layout: UnionLayout<'a>,
     },
     /// the representation is anything but a union
@@ -243,7 +252,6 @@ impl<'a> LambdaSet<'a> {
                             .unwrap();
 
                         ClosureRepresentation::Union {
-                            union_size: self.set.len() as u8,
                             tag_id: index as u8,
                             tag_layout: tags[index],
                             tag_name: TagName::Closure(function_symbol),
