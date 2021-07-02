@@ -218,10 +218,10 @@ pub enum Expr2 {
 
 #[derive(Debug)]
 pub struct ValueDef {
-    pub pattern: PatternId,        // 4B
-    pub expr: ExprId,              // 4B
-    pub expr_type: Option<Rigids>, // ?
-    pub expr_var: Variable,        // 4B
+    pub pattern: PatternId,                      // 4B
+    pub expr: ExprId,                            // 4B
+    pub opt_expr_type: Option<(TypeId, Rigids)>, // ?
+    pub expr_var: Variable,                      // 4B
 }
 
 impl ShallowClone for ValueDef {
@@ -229,8 +229,8 @@ impl ShallowClone for ValueDef {
         Self {
             pattern: self.pattern,
             expr: self.expr,
-            expr_type: match &self.expr_type {
-                Some(rigids) => Some(rigids.shallow_clone()),
+            opt_expr_type: match &self.opt_expr_type {
+                Some((annotation, rigids)) => Some((*annotation, rigids.shallow_clone())),
                 None => None,
             },
             expr_var: self.expr_var,

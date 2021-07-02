@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 #![allow(unused_variables)]
-use crate::lang::ast::{FunctionDef, ValueDef};
+use crate::lang::ast::{Expr2, FunctionDef, ValueDef};
 use crate::lang::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
 use crate::lang::expr::Env;
 use crate::lang::expr::Output;
@@ -175,7 +175,7 @@ pub fn canonicalize_module_defs<'a>(
     // this is now done later, in file.rs.
 
     match sort_can_defs(&mut env, defs, Output::default()) {
-        (Ok(declarations), output) => {
+        (Ok(mut declarations), output) => {
             use Declaration::*;
 
             for decl in declarations.iter() {
@@ -238,29 +238,31 @@ pub fn canonicalize_module_defs<'a>(
             // exposed_symbols and added to exposed_vars_by_symbol. If any were
             // not, that means they were declared as exposed but there was
             // no actual declaration with that name!
-            // for symbol in exposed_symbols {
-            //     env.problem(Problem::ExposedButNotDefined(symbol));
+            for symbol in exposed_symbols {
+                env.problem(Problem::ExposedButNotDefined(symbol));
 
-            //     // In case this exposed value is referenced by other modules,
-            //     // create a decl for it whose implementation is a runtime error.
-            //     let mut pattern_vars = SendMap::default();
-            //     pattern_vars.insert(symbol, env.var_store.fresh());
+                // In case this exposed value is referenced by other modules,
+                // create a decl for it whose implementation is a runtime error.
+                let mut pattern_vars = SendMap::default();
+                pattern_vars.insert(symbol, env.var_store.fresh());
 
-            //     let runtime_error = RuntimeError::ExposedButNotDefined(symbol);
+                let runtime_error = RuntimeError::ExposedButNotDefined(symbol);
 
-            //     let value_def = {
-            //         let pattern = env.pool.add(Pattern2::Identifier(symbol));
-            //         ValueDef {
-            //             pattern,
-            //             expr_type: None,
-            //             expr_var: env.var_store.fresh(),
-            //         }
-            //     };
+                let value_def = {
+                    let pattern = env.pool.add(Pattern2::Identifier(symbol));
+                    let expr = env.pool.add(Expr2::RuntimeError());
+                    ValueDef {
+                        pattern,
+                        expr,
+                        opt_expr_type: None,
+                        expr_var: env.var_store.fresh(),
+                    }
+                };
 
-            //     let def = Def::Value(value_def);
+                let def = Def::Value(value_def);
 
-            //     declarations.push(Declaration::Declare(def));
-            // }
+                declarations.push(Declaration::Declare(def));
+            }
 
             // Incorporate any remaining output.lookups entries into references.
             for symbol in output.references.lookups {
