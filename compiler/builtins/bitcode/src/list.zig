@@ -626,7 +626,6 @@ pub fn listWalkUntil(
     output: Opaque,
 ) callconv(.C) void {
     // [ Continue a, Stop a ]
-    const CONTINUE: usize = 0;
 
     if (accum_width == 0) {
         return;
@@ -922,7 +921,7 @@ inline fn swapHelp(width: usize, temporary: [*]u8, ptr1: [*]u8, ptr2: [*]u8) voi
 }
 
 fn swap(width_initial: usize, p1: [*]u8, p2: [*]u8) void {
-    const threshold: comptime usize = 64;
+    const threshold: usize = 64;
 
     var width = width_initial;
 
@@ -948,11 +947,6 @@ fn swap(width_initial: usize, p1: [*]u8, p2: [*]u8) void {
 }
 
 fn swapElements(source_ptr: [*]u8, element_width: usize, index_1: usize, index_2: usize) void {
-    const threshold: comptime usize = 64;
-
-    var buffer_actual: [threshold]u8 = undefined;
-    var buffer: [*]u8 = buffer_actual[0..];
-
     var element_at_i = source_ptr + (index_1 * element_width);
     var element_at_j = source_ptr + (index_2 * element_width);
 
@@ -1029,8 +1023,6 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
 
 pub fn listSetInPlace(
     bytes: ?[*]u8,
-    length: usize,
-    alignment: u32,
     index: usize,
     element: Opaque,
     element_width: usize,
@@ -1043,7 +1035,7 @@ pub fn listSetInPlace(
     // so we don't do a bounds check here. Hence, the list is also non-empty,
     // because inserting into an empty list is always out of bounds
 
-    return listSetInPlaceHelp(bytes, length, alignment, index, element, element_width, dec);
+    return listSetInPlaceHelp(bytes, index, element, element_width, dec);
 }
 
 pub fn listSet(
@@ -1064,7 +1056,7 @@ pub fn listSet(
     const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, bytes));
 
     if ((ptr - 1)[0] == utils.REFCOUNT_ONE) {
-        return listSetInPlaceHelp(bytes, length, alignment, index, element, element_width, dec);
+        return listSetInPlaceHelp(bytes, index, element, element_width, dec);
     } else {
         return listSetImmutable(bytes, length, alignment, index, element, element_width, dec);
     }
@@ -1072,8 +1064,6 @@ pub fn listSet(
 
 inline fn listSetInPlaceHelp(
     bytes: ?[*]u8,
-    length: usize,
-    alignment: u32,
     index: usize,
     element: Opaque,
     element_width: usize,

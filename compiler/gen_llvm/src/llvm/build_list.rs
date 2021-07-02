@@ -361,24 +361,32 @@ pub fn list_set<'a, 'ctx, 'env>(
         env.context.i8_type().ptr_type(AddressSpace::Generic),
     );
 
-    let symbol = match update_mode {
-        UpdateMode::InPlace => bitcode::LIST_SET_IN_PLACE,
-        UpdateMode::Immutable => bitcode::LIST_SET,
+    let new_bytes = match update_mode {
+        UpdateMode::InPlace => call_bitcode_fn(
+            env,
+            &[
+                bytes.into(),
+                index.into(),
+                pass_element_as_opaque(env, element),
+                layout_width(env, element_layout),
+                dec_element_fn.as_global_value().as_pointer_value().into(),
+            ],
+            bitcode::LIST_SET_IN_PLACE,
+        ),
+        UpdateMode::Immutable => call_bitcode_fn(
+            env,
+            &[
+                bytes.into(),
+                length.into(),
+                env.alignment_intvalue(&element_layout),
+                index.into(),
+                pass_element_as_opaque(env, element),
+                layout_width(env, element_layout),
+                dec_element_fn.as_global_value().as_pointer_value().into(),
+            ],
+            bitcode::LIST_SET,
+        ),
     };
-
-    let new_bytes = call_bitcode_fn(
-        env,
-        &[
-            bytes.into(),
-            length.into(),
-            env.alignment_intvalue(&element_layout),
-            index.into(),
-            pass_element_as_opaque(env, element),
-            layout_width(env, element_layout),
-            dec_element_fn.as_global_value().as_pointer_value().into(),
-        ],
-        &symbol,
-    );
 
     store_list(env, new_bytes.into_pointer_value(), length)
 }
