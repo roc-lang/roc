@@ -137,12 +137,14 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - Machine Learning:
    * GPT-3 can generate correct python functions based on a comment describing the functionality, video [here](https://www.youtube.com/watch?v=utuz7wBGjKM). It's possible that training a model using ast's may lead to better results than text based models.
 - Current autocomplete lacks flow, moving through suggestions with arrows is slow. Being able to code by weaving together autocomplete suggestions laid out in rows using eye tracking, that could flow.
+- It's possible that with strong static types, pure functions and a good search algorithm we can develop a more reliable autocomplete than one with machine learning. 
 
 #### Productivity Inspiration
 
 * [Kite](https://www.kite.com/) AI autocomplete and doc viewer.
 * [Tabnine](https://www.tabnine.com/) AI autocomplete.
 * [Codota](https://www.codota.com) AI autocomplete and example searching.
+* [Github copilot](https://copilot.github.com/) AI autocomplete.
 * [Aroma](https://ai.facebook.com/blog/aroma-ml-for-code-recommendation) showing examples similar to current code.
 * [MISM](https://arxiv.org/abs/2006.05265) neural network based code similarity scoring.
 * [Inquisitive code editor](https://web.eecs.utk.edu/~azh/blog/inquisitivecodeeditor.html) Interactive bug detection with doc+test generation.
@@ -169,7 +171,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
         * See [codata](https://www.codota.com/code/java/classes/okhttp3.OkHttpClient) for inspiration on a snippet/example finder.
 * Fuzzy natural language based setting adjustment in search bar or with voice input: increase font size, enable autosave, switch to light theme...
 * Detect deviation of best practices, example case: alert developer when they are defining a color inline (rgb(30,30,30)) while all colors have been previously imported from a single file. See also [Codota](https://www.codota.com).
-* It would be valuable to record the user's interactions with the editor when debugging as well as the AST. On enough data we could train a model to perform a bunch of debugging steps and show values of the most important variables in relation to the bug. Having assistance in finding the exact code that causes the problem could be super valuable. There could be sensitive data, so it should only be recorded and or shared for open source codebases with explicit user permission.
+* It would be valuable to record the user's interactions with the editor when debugging as well as the AST. On enough data we could train a model to perform a bunch of debugging steps and show values of the most important variables in relation to the bug. Having assistance in finding the exact code that causes the problem could be super valuable. There could be sensitive data, so it should only be recorded and or shared for open source codebases with permissive licenses and with explicit user permission.
 
 
 ## Testing
@@ -194,6 +196,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Ability to see module as it would be presented on a package website.
     * Modern editors may guide developers to the source code too easily.
     The API and documentation are meant to interface with humans.
+* [DocC](https://developer.apple.com/videos/play/wwdc2021/10166/) neat documentation approach for swift. 
 
 ## General Thoughts/Ideas
 

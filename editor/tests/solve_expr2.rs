@@ -62,7 +62,6 @@ fn infer_eq(actual: &str, expected_str: &str) {
     let mut var_store = VarStore::default();
     let var = var_store.fresh();
     let dep_idents = IdentIds::exposed_builtins(8);
-
     let exposed_ident_ids = IdentIds::default();
     let mut module_ids = ModuleIds::default();
     let mod_id = module_ids.get_or_insert(&"ModId123".into());
@@ -121,6 +120,7 @@ fn infer_eq(actual: &str, expected_str: &str) {
                 module_ids: env.module_ids.clone(),
                 all_ident_ids: dep_idents,
             };
+
             let actual_str = content_to_string(content, &subs, mod_id, &interns);
 
             assert_eq!(actual_str, expected_str);
