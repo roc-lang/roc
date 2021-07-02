@@ -133,6 +133,35 @@ pub fn add_blank_child(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
 
     let (blank_elt_id, new_child_index, list_ast_node_id, parent_id) = trip_result?;
 
+    let list_ast_node = ed_model.module.env.pool.get(list_ast_node_id);
+
+    match list_ast_node {
+        Expr2::List {
+            elem_var,
+            elems,
+        } => {
+            let mut new_elems: Vec<ExprId> =
+                elems.iter(ed_model.module.env.pool).copied().collect();
+
+            new_elems.push(blank_elt_id);
+
+            let new_list_node = 
+                Expr2::List {
+                    elem_var: *elem_var,
+                    elems: PoolVec::new(new_elems.into_iter(), ed_model.module.env.pool),
+                };
+
+            ed_model.module.env.pool.set(list_ast_node_id, new_list_node);
+
+            Ok(())
+        }
+        _ => UnexpectedASTNode {
+            required_node_type: "List".to_string(),
+            encountered_node_type: expr2_to_string(ast_node_id, ed_model.module.env.pool),
+        }
+        .fail(),
+    }?;
+
     let new_mark_children = make_mark_children(
         new_child_index,
         blank_elt_id,
@@ -147,8 +176,6 @@ pub fn add_blank_child(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     for (indx, child) in new_mark_children.iter().enumerate() {
         parent.add_child_at_index(new_child_index + indx, *child)?;
     }
-
-    //TODO add ast children
 
     Ok(InputOutcome::Accepted)
 }

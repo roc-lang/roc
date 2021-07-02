@@ -352,11 +352,11 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
             let index = first_node_id.index as isize;
             let mut next_node_ptr = unsafe { pool.nodes.offset(index) } as *mut T;
 
-            for node in nodes {
+            for (indx_inc, node) in nodes.enumerate() {
                 unsafe {
                     *next_node_ptr = node;
 
-                    next_node_ptr = next_node_ptr.offset(1);
+                    next_node_ptr = pool.nodes.offset(index + (indx_inc as isize) + 1) as *mut T;
                 }
             }
 
@@ -601,6 +601,18 @@ impl<T> Iterator for PoolVecIterNodeIds<T> {
             }
         }
     }
+}
+
+#[test]
+fn pool_vec_iter_test() {
+    let expected_vec: Vec<usize> = vec![2, 4, 8, 16];
+
+    let mut test_pool = Pool::with_capacity(1024);
+    let pool_vec = PoolVec::new(expected_vec.clone().into_iter(), &mut test_pool);
+
+    let current_vec: Vec<usize> = pool_vec.iter(&test_pool).copied().collect();
+
+    assert_eq!(current_vec, expected_vec);
 }
 
 /// Clones the outer node, but does not clone any nodeids
