@@ -1,5 +1,5 @@
 use crate::inc_dec::{collect_stmt, occurring_variables_expr, JPLiveVarMap, LiveVarSet};
-use crate::ir::{Call, Expr, Proc, Stmt, BranchInfo};
+use crate::ir::{BranchInfo, Call, Expr, Proc, Stmt};
 use crate::layout::{Layout, UnionLayout};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -25,15 +25,16 @@ pub fn insert_reset_reuse<'a, 'i>(
     proc
 }
 
+#[derive(Debug)]
 struct CtorInfo<'a> {
     id: u8,
     layout: UnionLayout<'a>,
 }
 
 fn may_reuse(tag_layout: UnionLayout, tag_id: u8, other: &CtorInfo) -> bool {
-    if tag_layout != other.layout {
-        return false;
-    }
+    //    if tag_layout != other.layout {
+    //        return false;
+    //    }
 
     // if the tag id is represented as NULL, there is no memory to re-use
     match tag_layout {
@@ -248,32 +249,34 @@ fn function_d_main<'a, 'i>(
     let arena = env.arena;
 
     match stmt {
-        Let(symbol, expr, layout, continuation) => match expr {
-            Expr::Tag { arguments, .. } if arguments.iter().any(|s| *s == x) => {
-                // If the scrutinee `x` (the one that is providing memory) is being
-                // stored in a constructor, then reuse will probably not be able to reuse memory at runtime.
-                // It may work only if the new cell is consumed, but we ignore this case.
-                (stmt, true)
-            }
-            _ => {
-                let (b, found) = function_d_main(env, x, c, continuation);
+        Let(symbol, expr, layout, continuation) => {
+            match expr {
+                Expr::Tag { arguments, .. } if arguments.iter().any(|s| *s == x) => {
+                    // If the scrutinee `x` (the one that is providing memory) is being
+                    // stored in a constructor, then reuse will probably not be able to reuse memory at runtime.
+                    // It may work only if the new cell is consumed, but we ignore this case.
+                    (stmt, true)
+                }
+                _ => {
+                    let (b, found) = function_d_main(env, x, c, continuation);
 
-                let mut result = MutSet::default();
-                if found || {
-                    occurring_variables_expr(expr, &mut result);
-                    !result.contains(&x)
-                } {
-                    let let_stmt = Let(*symbol, expr.clone(), *layout, b);
+                    let mut result = MutSet::default();
+                    if found || {
+                        occurring_variables_expr(expr, &mut result);
+                        !result.contains(&x)
+                    } {
+                        let let_stmt = Let(*symbol, expr.clone(), *layout, b);
 
-                    (arena.alloc(let_stmt), found)
-                } else {
-                    let b = try_function_s(env, x, c, b);
-                    let let_stmt = Let(*symbol, expr.clone(), *layout, b);
+                        (arena.alloc(let_stmt), found)
+                    } else {
+                        let b = try_function_s(env, x, c, b);
+                        let let_stmt = Let(*symbol, expr.clone(), *layout, b);
 
-                    (arena.alloc(let_stmt), found)
+                        (arena.alloc(let_stmt), found)
+                    }
                 }
             }
-        },
+        }
         Invoke {
             symbol,
             call,
@@ -409,17 +412,19 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
 
                 let new_body = match info {
                     BranchInfo::None => temp,
-                    BranchInfo::Constructor { scrutinee, layout, tag_id } => {
-                        match layout {
-                            Layout::Union(union_layout) => {
-                                let ctor_info = CtorInfo {
-                                    layout: *union_layout,
-                                    id: *tag_id,
-                                };
-                                function_d(env, *scrutinee, &ctor_info, temp)
-                            },
-                            _ => temp,
+                    BranchInfo::Constructor {
+                        scrutinee,
+                        layout,
+                        tag_id,
+                    } => match layout {
+                        Layout::Union(union_layout) => {
+                            let ctor_info = CtorInfo {
+                                layout: *union_layout,
+                                id: *tag_id,
+                            };
+                            function_d(env, *scrutinee, &ctor_info, temp)
                         }
+                        _ => temp,
                     },
                 };
 
@@ -432,17 +437,19 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
 
                 let new_body = match info {
                     BranchInfo::None => temp,
-                    BranchInfo::Constructor { scrutinee, layout, tag_id } => {
-                        match layout {
-                            Layout::Union(union_layout) => {
-                                let ctor_info = CtorInfo {
-                                    layout: *union_layout,
-                                    id: *tag_id,
-                                };
-                                function_d(env, *scrutinee, &ctor_info, temp)
-                            },
-                            _ => temp,
+                    BranchInfo::Constructor {
+                        scrutinee,
+                        layout,
+                        tag_id,
+                    } => match layout {
+                        Layout::Union(union_layout) => {
+                            let ctor_info = CtorInfo {
+                                layout: *union_layout,
+                                id: *tag_id,
+                            };
+                            function_d(env, *scrutinee, &ctor_info, temp)
                         }
+                        _ => temp,
                     },
                 };
 

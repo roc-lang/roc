@@ -234,7 +234,8 @@ impl<'a> Proc<'a> {
         procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     ) {
         for (key, proc) in procs.iter_mut() {
-            let new_proc = crate::reset_reuse::insert_reset_reuse(arena, home, ident_ids, proc.clone());
+            let new_proc =
+                crate::reset_reuse::insert_reset_reuse(arena, home, ident_ids, proc.clone());
             *proc = new_proc;
         }
     }
@@ -1287,11 +1288,12 @@ impl<'a> Expr<'a> {
                 alloc
                     .text("Reuse ")
                     .append(symbol_to_doc(alloc, *symbol))
+                    .append(alloc.space())
                     .append(doc_tag)
                     .append(alloc.space())
                     .append(alloc.intersperse(it, " "))
             }
-            Reset(symbol) => alloc.text("Reuse ").append(symbol_to_doc(alloc, *symbol)),
+            Reset(symbol) => alloc.text("Reset ").append(symbol_to_doc(alloc, *symbol)),
 
             Struct(args) => {
                 let it = args.iter().map(|s| symbol_to_doc(alloc, *s));

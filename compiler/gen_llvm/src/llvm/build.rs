@@ -970,15 +970,25 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             struct_from_fields(env, struct_type, field_vals.into_iter().enumerate()).into()
         }
 
-        Tag {
+        Reuse {
+            arguments,
+            tag_layout: union_layout,
+            tag_id,
+            ..
+        }
+        | Tag {
             arguments,
             tag_layout: union_layout,
             tag_id,
             ..
         } => build_tag(env, scope, union_layout, *tag_id, arguments),
 
-        Reset(_) => todo!(),
-        Reuse { .. } => todo!(),
+        Reset(_) => {
+            // 1. fetch refcount
+            // 2. if rc == 1, reset the value
+            // TODO
+            env.context.i64_type().const_zero().into()
+        }
 
         StructAtIndex {
             index, structure, ..
