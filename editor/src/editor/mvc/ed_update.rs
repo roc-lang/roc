@@ -870,7 +870,11 @@ pub mod test_ed_update {
         let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
 
         for input_char in new_char_seq.chars() {
-            ed_res_to_res(handle_new_char(&input_char, &mut ed_model))?;
+            if input_char == '➔' {
+                ed_model.simple_move_carets_right(1);
+            } else {
+                ed_res_to_res(handle_new_char(&input_char, &mut ed_model))?;
+            }
         }
 
         let post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
@@ -1520,7 +1524,7 @@ pub mod test_ed_update {
     }
 
     #[test]
-    fn test_list() -> Result<(), String> {
+    fn test_single_elt_list() -> Result<(), String> {
         assert_insert(&["┃"], &["[ ┃ ]"], '[')?;
 
         assert_insert_seq(&["┃"], &["[ 0┃ ]"], "[0")?;
@@ -1552,6 +1556,30 @@ pub mod test_ed_update {
             "[[{camelCase:{a:79000",
         )?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_multi_elt_list() -> Result<(), String> {
+        assert_insert_seq(&["┃"], &["[ 0, 1┃ ]"], "[0,1")?;
+        assert_insert_seq(&["┃"], &["[ 987, 6543, 210┃ ]"], "[987,6543,210")?;
+
+        assert_insert_seq(
+            &["┃"],
+            &["[ \"a\", \"bcd\", \"EFGH┃\" ]"],
+            "[\"a➔,\"bcd➔,\"EFGH",
+        )?;
+
+        assert_insert_seq(
+            &["┃"],
+            &["[ { a: 1 }, { b: 23 }, { c: 456┃ } ]"],
+            "[{a:1➔➔,{b:23➔➔,{c:456",
+        )?;
+
+        assert_insert_seq(&["┃"], &["[ [ 1 ], [ 23 ], [ 456┃ ] ]"], "[[1➔➔,[23➔➔,[456")?;
+
+        // TODO issue #1448: assert_insert_seq(&["┃"], &["[ 0, ┃  ]"], "[0,\"")?;
+        //                   assert_insert_seq(&["┃"], &["[ [ [ 0 ], [ 1 ] ], ┃"], "[[[0➔➔,[1➔➔➔➔,[[\"")?
         Ok(())
     }
 

@@ -136,22 +136,22 @@ pub fn add_blank_child(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     let list_ast_node = ed_model.module.env.pool.get(list_ast_node_id);
 
     match list_ast_node {
-        Expr2::List {
-            elem_var,
-            elems,
-        } => {
+        Expr2::List { elem_var, elems } => {
             let mut new_elems: Vec<ExprId> =
                 elems.iter(ed_model.module.env.pool).copied().collect();
 
             new_elems.push(blank_elt_id);
 
-            let new_list_node = 
-                Expr2::List {
-                    elem_var: *elem_var,
-                    elems: PoolVec::new(new_elems.into_iter(), ed_model.module.env.pool),
-                };
+            let new_list_node = Expr2::List {
+                elem_var: *elem_var,
+                elems: PoolVec::new(new_elems.into_iter(), ed_model.module.env.pool),
+            };
 
-            ed_model.module.env.pool.set(list_ast_node_id, new_list_node);
+            ed_model
+                .module
+                .env
+                .pool
+                .set(list_ast_node_id, new_list_node);
 
             Ok(())
         }
