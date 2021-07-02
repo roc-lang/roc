@@ -157,8 +157,8 @@ struct VarInfo {
 }
 
 type VarMap = MutMap<Symbol, VarInfo>;
-type LiveVarSet = MutSet<Symbol>;
-type JPLiveVarMap = MutMap<JoinPointId, LiveVarSet>;
+pub type LiveVarSet = MutSet<Symbol>;
+pub type JPLiveVarMap = MutMap<JoinPointId, LiveVarSet>;
 
 #[derive(Clone, Debug)]
 struct Context<'a> {
