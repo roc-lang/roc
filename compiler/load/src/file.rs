@@ -2042,7 +2042,7 @@ fn update<'a>(
         }
         MadeSpecializations {
             module_id,
-            ident_ids,
+            mut ident_ids,
             subs,
             procedures,
             external_specializations_requested,
@@ -2065,6 +2065,13 @@ fn update<'a>(
                 && state.dependencies.solved_all()
                 && state.goal_phase == Phase::MakeSpecializations
             {
+                Proc::insert_reset_reuse_operations(
+                    arena,
+                    module_id,
+                    &mut ident_ids,
+                    &mut state.procedures,
+                );
+
                 // display the mono IR of the module, for debug purposes
                 if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
                     let procs_string = state

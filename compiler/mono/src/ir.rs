@@ -227,6 +227,18 @@ impl<'a> Proc<'a> {
         }
     }
 
+    pub fn insert_reset_reuse_operations<'i>(
+        arena: &'a Bump,
+        home: ModuleId,
+        ident_ids: &'i mut IdentIds,
+        procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    ) {
+        for (key, proc) in procs.iter_mut() {
+            let new_proc = crate::reset_reuse::insert_reset_reuse(arena, home, ident_ids, proc.clone());
+            *proc = new_proc;
+        }
+    }
+
     pub fn optimize_refcount_operations<'i, T>(
         arena: &'a Bump,
         home: ModuleId,

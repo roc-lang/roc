@@ -1,5 +1,5 @@
 use crate::inc_dec::{collect_stmt, occurring_variables_expr, JPLiveVarMap, LiveVarSet};
-use crate::ir::{Call, Expr, Proc, Stmt};
+use crate::ir::{Call, Expr, Proc, Stmt, BranchInfo};
 use crate::layout::{Layout, UnionLayout};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -407,17 +407,20 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
             for (tag, info, body) in branches.iter() {
                 let temp = function_r(env, body);
 
-                // TODO the branch info stores the tag ID
-                let new_body = match benefits_from_reuse {
-                    Some(union_layout) => {
-                        let x = *cond_symbol;
-                        let ctor_info = CtorInfo {
-                            layout: *union_layout,
-                            id: 0,
-                        };
-                        function_d(env, x, &ctor_info, temp)
-                    }
-                    None => temp,
+                let new_body = match info {
+                    BranchInfo::None => temp,
+                    BranchInfo::Constructor { scrutinee, layout, tag_id } => {
+                        match layout {
+                            Layout::Union(union_layout) => {
+                                let ctor_info = CtorInfo {
+                                    layout: *union_layout,
+                                    id: *tag_id,
+                                };
+                                function_d(env, *scrutinee, &ctor_info, temp)
+                            },
+                            _ => temp,
+                        }
+                    },
                 };
 
                 new_branches.push((*tag, info.clone(), new_body.clone()));
@@ -427,16 +430,20 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
                 let (info, body) = default_branch;
                 let temp = function_r(env, body);
 
-                let new_body = match benefits_from_reuse {
-                    Some(union_layout) => {
-                        let x = *cond_symbol;
-                        let ctor_info = CtorInfo {
-                            layout: *union_layout,
-                            id: 0,
-                        };
-                        function_d(env, x, &ctor_info, temp)
-                    }
-                    None => temp,
+                let new_body = match info {
+                    BranchInfo::None => temp,
+                    BranchInfo::Constructor { scrutinee, layout, tag_id } => {
+                        match layout {
+                            Layout::Union(union_layout) => {
+                                let ctor_info = CtorInfo {
+                                    layout: *union_layout,
+                                    id: *tag_id,
+                                };
+                                function_d(env, *scrutinee, &ctor_info, temp)
+                            },
+                            _ => temp,
+                        }
+                    },
                 };
 
                 (info.clone(), new_body)
@@ -493,7 +500,10 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
             pass,
             fail,
             exception_id,
-        } => todo!(),
+        } => {
+            // TODO implement this
+            stmt
+        }
         Refcounting(modify_rc, continuation) => {
             let b = function_r(env, continuation);
 
