@@ -26,6 +26,16 @@ pub enum BuildOutcome {
     Errors,
 }
 
+impl BuildOutcome {
+    pub fn status_code(&self) -> i32 {
+        match self {
+            Self::NoProblems => 0,
+            Self::OnlyWarnings => 1,
+            Self::Errors => 2,
+        }
+    }
+}
+
 pub struct BuiltFile {
     pub binary_path: PathBuf,
     pub outcome: BuildOutcome,
