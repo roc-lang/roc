@@ -4127,7 +4127,6 @@ fn convert_tag_union<'a>(
         ),
         ByteUnion(tag_names) => {
             let opt_tag_id = tag_names.iter().position(|key| key == &tag_name);
-            // .expect("tag must be in its own type");
 
             match opt_tag_id {
                 Some(tag_id) => Stmt::Let(
