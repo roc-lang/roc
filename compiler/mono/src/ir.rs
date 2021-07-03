@@ -4126,17 +4126,17 @@ fn convert_tag_union<'a>(
             hole,
         ),
         ByteUnion(tag_names) => {
-            let tag_id = tag_names
-                .iter()
-                .position(|key| key == &tag_name)
-                .expect("tag must be in its own type");
+            let opt_tag_id = tag_names.iter().position(|key| key == &tag_name);
 
-            Stmt::Let(
-                assigned,
-                Expr::Literal(Literal::Byte(tag_id as u8)),
-                Layout::Builtin(Builtin::Int8),
-                hole,
-            )
+            match opt_tag_id {
+                Some(tag_id) => Stmt::Let(
+                    assigned,
+                    Expr::Literal(Literal::Byte(tag_id as u8)),
+                    Layout::Builtin(Builtin::Int8),
+                    hole,
+                ),
+                None => Stmt::RuntimeError("tag must be in its own type"),
+            }
         }
 
         Newtype {
