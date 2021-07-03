@@ -217,23 +217,48 @@ pub enum Expr2 {
 }
 
 #[derive(Debug)]
-pub struct ValueDef {
-    pub pattern: PatternId,                      // 4B
-    pub expr: ExprId,                            // 4B
-    pub opt_expr_type: Option<(TypeId, Rigids)>, // ?
-    pub expr_var: Variable,                      // 4B
+pub enum ValueDef {
+    WithAnnotation {
+        pattern_id: PatternId, // 4B
+        expr_id: ExprId,       // 4B
+        type_id: TypeId,
+        rigids: NodeId<Rigids>,
+        expr_var: Variable, // 4B
+    },
+    NoAnnotation {
+        pattern_id: PatternId, // 4B
+        expr_id: ExprId,       // 4B
+        expr_var: Variable,    // 4B
+    },
 }
 
 impl ShallowClone for ValueDef {
     fn shallow_clone(&self) -> Self {
-        Self {
-            pattern: self.pattern,
-            expr: self.expr,
-            opt_expr_type: match &self.opt_expr_type {
-                Some((annotation, rigids)) => Some((*annotation, rigids.shallow_clone())),
-                None => None,
+        match self {
+            Self::WithAnnotation {
+                pattern_id,
+                expr_id,
+                type_id,
+                rigids,
+                expr_var,
+                padding,
+            } => Self::WithAnnotation {
+                pattern_id: *pattern_id,
+                expr_id: *expr_id,
+                type_id: *type_id,
+                rigids: *rigids,
+                expr_var: *expr_var,
+                padding: *padding,
             },
-            expr_var: self.expr_var,
+            Self::NoAnnotation {
+                pattern_id,
+                expr_id,
+                expr_var,
+            } => Self::NoAnnotation {
+                pattern_id: *pattern_id,
+                expr_id: *expr_id,
+                expr_var: *expr_var,
+            },
         }
     }
 }

@@ -249,12 +249,11 @@ pub fn canonicalize_module_defs<'a>(
                 let runtime_error = RuntimeError::ExposedButNotDefined(symbol);
 
                 let value_def = {
-                    let pattern = env.pool.add(Pattern2::Identifier(symbol));
-                    let expr = env.pool.add(Expr2::RuntimeError());
-                    ValueDef {
-                        pattern,
-                        expr,
-                        opt_expr_type: None,
+                    let pattern_id = env.pool.add(Pattern2::Identifier(symbol));
+                    let expr_id = env.pool.add(Expr2::RuntimeError());
+                    ValueDef::NoAnnotation {
+                        pattern_id,
+                        expr_id,
                         expr_var: env.var_store.fresh(),
                     }
                 };

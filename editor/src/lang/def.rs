@@ -46,8 +46,11 @@ impl Def {
 
         match self {
             Def::AnnotationOnly { .. } => todo!("lost pattern information here ... "),
-            Def::Value(ValueDef { pattern, .. }) => {
-                let pattern2 = &pool[*pattern];
+            Def::Value(
+                ValueDef::WithAnnotation { pattern_id, .. }
+                | ValueDef::NoAnnotation { pattern_id, .. },
+            ) => {
+                let pattern2 = &pool[*pattern_id];
                 output.extend(symbols_from_pattern(pool, pattern2));
             }
             Def::Function(function_def) => match function_def {
@@ -624,12 +627,13 @@ fn canonicalize_pending_def<'a>(
                             };
                             let annotation = env.add(annotation, loc_ann.region);
 
-                            let value_def = ValueDef {
-                                pattern: loc_can_pattern,
-                                expr: env.pool.add(loc_can_expr),
-                                // annotation
-                                opt_expr_type: Some((annotation, rigids)),
+                            let value_def = ValueDef::WithAnnotation {
+                                pattern_id: loc_can_pattern,
+                                expr_id: env.pool.add(loc_can_expr),
+                                type_id: annotation,
+                                rigids: env.pool.add(rigids),
                                 expr_var: env.var_store.fresh(),
+                                padding: Default::default(),
                             };
 
                             let def = Def::Value(value_def);
@@ -747,10 +751,9 @@ fn canonicalize_pending_def<'a>(
                 }
 
                 _ => {
-                    let value_def = ValueDef {
-                        pattern: loc_can_pattern,
-                        expr: env.pool.add(loc_can_expr),
-                        opt_expr_type: None,
+                    let value_def = ValueDef::NoAnnotation {
+                        pattern_id: loc_can_pattern,
+                        expr_id: env.pool.add(loc_can_expr),
                         expr_var: env.var_store.fresh(),
                     };
 
