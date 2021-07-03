@@ -32,20 +32,24 @@ struct CtorInfo<'a> {
 }
 
 fn may_reuse(tag_layout: UnionLayout, tag_id: u8, other: &CtorInfo) -> bool {
-    //    if tag_layout != other.layout {
-    //        return false;
-    //    }
+    if tag_layout != other.layout {
+        return false;
+    }
 
-    // if the tag id is represented as NULL, there is no memory to re-use
     match tag_layout {
         UnionLayout::NonRecursive(_)
         | UnionLayout::Recursive(_)
         | UnionLayout::NonNullableUnwrapped(_) => true,
-        UnionLayout::NullableWrapped { nullable_id, .. } => tag_id as i64 != nullable_id,
-        UnionLayout::NullableUnwrapped {
-            nullable_id,
-            other_fields,
-        } => (tag_id != 0) != nullable_id,
+        UnionLayout::NullableWrapped { nullable_id, .. } => {
+            // if the source tag id is represented as NULL, there is no memory to re-use
+            // if the current tag id is represented as NULL, then we don't need to re-use the
+            // memory here and can use it somewhere else
+            other.id as i64 != nullable_id && tag_id as i64 != nullable_id
+        }
+        UnionLayout::NullableUnwrapped { nullable_id, .. } => {
+            // idem
+            (other.id != 0) != nullable_id && (tag_id != 0) != nullable_id
+        }
     }
 }
 

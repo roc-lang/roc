@@ -1508,6 +1508,18 @@ fn get_recursion_var(subs: &Subs, var: Variable) -> Option<Variable> {
     }
 }
 
+fn is_recursive_tag_union(layout: &Layout) -> bool {
+    match layout {
+        Layout::Union(
+            UnionLayout::NullableUnwrapped { .. }
+            | UnionLayout::Recursive(_)
+            | UnionLayout::NullableWrapped { .. }
+            | UnionLayout::NonNullableUnwrapped { .. },
+        ) => true,
+        _ => false,
+    }
+}
+
 pub fn union_sorted_tags_help<'a>(
     arena: &'a Bump,
     mut tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)>,
@@ -1623,10 +1635,12 @@ pub fn union_sorted_tags_help<'a>(
                 for var in arguments {
                     match Layout::from_var(&mut env, var) {
                         Ok(layout) => {
-                            // Drop any zero-sized arguments like {}
-                            if !layout.is_dropped_because_empty() {
-                                has_any_arguments = true;
+                            has_any_arguments = true;
 
+                            // make sure to not unroll recursive types!
+                            if opt_rec_var.is_some() && is_recursive_tag_union(&layout) {
+                                arg_layouts.push(Layout::RecursivePointer);
+                            } else {
                                 arg_layouts.push(layout);
                             }
                         }
