@@ -347,8 +347,9 @@ impl RecordField {
 
 pub fn expr2_to_string(node_id: NodeId<Expr2>, pool: &Pool) -> String {
     let mut full_string = String::new();
+    let expr2 = pool.get(node_id);
 
-    expr2_to_string_helper(node_id, 0, pool, &mut full_string);
+    expr2_to_string_helper(expr2, 0, pool, &mut full_string);
 
     full_string
 }
@@ -361,13 +362,11 @@ fn get_spacing(indent_level: usize) -> String {
 }
 
 fn expr2_to_string_helper(
-    node_id: NodeId<Expr2>,
+    expr2: &Expr2,
     indent_level: usize,
     pool: &Pool,
     out_string: &mut String,
 ) {
-    let expr2 = pool.get(node_id);
-
     out_string.push_str(&get_spacing(indent_level));
 
     match expr2 {
@@ -384,11 +383,7 @@ fn expr2_to_string_helper(
         Expr2::EmptyRecord => out_string.push_str("EmptyRecord"),
         Expr2::Record { record_var, fields } => {
             out_string.push_str("Record:\n");
-            out_string.push_str(&format!(
-                "{}Var({:?})\n",
-                get_spacing(indent_level + 1),
-                record_var
-            ));
+            out_string.push_str(&var_to_string(&record_var, indent_level + 1));
 
             out_string.push_str(&format!("{}fields: [\n", get_spacing(indent_level + 1)));
 
@@ -427,10 +422,30 @@ fn expr2_to_string_helper(
                             var,
                         ));
 
-                        expr2_to_string_helper(*val_node_id, indent_level + 3, pool, out_string);
+                        let val_expr2 = pool.get(*val_node_id);
+                        expr2_to_string_helper(val_expr2, indent_level + 3, pool, out_string);
                         out_string.push_str(&format!("{})\n", get_spacing(indent_level + 2)));
                     }
                 }
+            }
+
+            out_string.push_str(&format!("{}]\n", get_spacing(indent_level + 1)));
+        }
+        Expr2::List { elem_var, elems } => {
+            out_string.push_str("List:\n");
+            out_string.push_str(&var_to_string(elem_var, indent_level + 1));
+            out_string.push_str(&format!("{}elems: [\n", get_spacing(indent_level + 1)));
+
+            let mut first_elt = true;
+
+            for elem_expr2 in elems.iter(pool) {
+                if !first_elt {
+                    out_string.push_str(", ")
+                } else {
+                    first_elt = false;
+                }
+
+                expr2_to_string_helper(elem_expr2, indent_level + 2, pool, out_string)
             }
 
             out_string.push_str(&format!("{}]\n", get_spacing(indent_level + 1)));
@@ -445,6 +460,10 @@ fn expr2_to_string_helper(
     }
 
     out_string.push('\n');
+}
+
+fn var_to_string(some_var: &Variable, indent_level: usize) -> String {
+    format!("{}Var({:?})\n", get_spacing(indent_level + 1), some_var)
 }
 
 #[test]
