@@ -978,7 +978,15 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             ..
         } => {
             let reset = load_symbol(scope, symbol).into_pointer_value();
-            build_tag(env, scope, union_layout, *tag_id, arguments, Some(reset))
+            build_tag(
+                env,
+                scope,
+                union_layout,
+                *tag_id,
+                arguments,
+                Some(reset),
+                parent,
+            )
         }
 
         Tag {
@@ -986,21 +994,41 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             tag_layout: union_layout,
             tag_id,
             ..
-        } => build_tag(env, scope, union_layout, *tag_id, arguments, None),
+        } => build_tag(env, scope, union_layout, *tag_id, arguments, None, parent),
 
         Reset(symbol) => {
             // 1. fetch refcount
             // 2. if rc == 1, decrement fields, return pointer as opaque pointer
             // 3. otherwise, return NULL
-            let tag_ptr = load_symbol(scope, symbol);
+            let tag_ptr = load_symbol(scope, symbol).into_pointer_value();
+            let null_ptr = tag_ptr.get_type().const_null();
+            let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, tag_ptr);
+            let is_unique = refcount_ptr.is_1(env);
 
-            // return the pointer as an opaque pointer
-            //            env.builder.build_bitcast(
-            //                tag_ptr,
-            //                env.context.i8_type().ptr_type(AddressSpace::Generic),
-            //                "to_opaque",
-            //            )
-            tag_ptr
+            let ctx = env.context;
+            let then_block = ctx.append_basic_block(parent, "then");
+            let else_block = ctx.append_basic_block(parent, "else");
+            let cont_block = ctx.append_basic_block(parent, "cont");
+
+            env.builder
+                .build_conditional_branch(is_unique, then_block, else_block);
+
+            {
+                env.builder.position_at_end(then_block);
+                env.builder.build_unconditional_branch(cont_block);
+            }
+            {
+                env.builder.position_at_end(else_block);
+                env.builder.build_unconditional_branch(cont_block);
+            }
+            {
+                env.builder.position_at_end(cont_block);
+                let phi = env.builder.build_phi(tag_ptr.get_type(), "branch");
+
+                phi.add_incoming(&[(&tag_ptr, then_block), (&null_ptr, else_block)]);
+
+                phi.as_basic_value()
+            }
         }
 
         StructAtIndex {
@@ -1199,6 +1227,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
     tag_id: u8,
     arguments: &[Symbol],
     reuse_allocation: Option<PointerValue<'ctx>>,
+    parent: FunctionValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let tag_id_layout = union_layout.tag_id_layout();
 
@@ -1590,7 +1619,41 @@ pub fn build_tag<'a, 'ctx, 'env>(
 
             // Create the struct_type
             let data_ptr = match reuse_allocation {
-                Some(ptr) => ptr,
+                Some(ptr) => {
+                    // check if its a null pointer
+                    let is_null_ptr = env.builder.build_is_null(ptr, "is_null_ptr");
+                    let ctx = env.context;
+                    let then_block = ctx.append_basic_block(parent, "then");
+                    let else_block = ctx.append_basic_block(parent, "else");
+                    let cont_block = ctx.append_basic_block(parent, "cont");
+
+                    env.builder
+                        .build_conditional_branch(is_null_ptr, then_block, else_block);
+
+                    let raw_ptr = {
+                        env.builder.position_at_end(then_block);
+                        let raw_ptr = reserve_with_refcount_union_as_block_of_memory(
+                            env,
+                            *union_layout,
+                            &[other_fields],
+                        );
+                        env.builder.build_unconditional_branch(cont_block);
+                        raw_ptr
+                    };
+                    let reuse_ptr = {
+                        env.builder.position_at_end(else_block);
+                        env.builder.build_unconditional_branch(cont_block);
+                        ptr
+                    };
+                    {
+                        env.builder.position_at_end(cont_block);
+                        let phi = env.builder.build_phi(raw_ptr.get_type(), "branch");
+
+                        phi.add_incoming(&[(&raw_ptr, then_block), (&reuse_ptr, else_block)]);
+
+                        phi.as_basic_value().into_pointer_value()
+                    }
+                }
                 None => reserve_with_refcount_union_as_block_of_memory(
                     env,
                     *union_layout,
