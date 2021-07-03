@@ -974,20 +974,33 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             arguments,
             tag_layout: union_layout,
             tag_id,
+            symbol,
             ..
+        } => {
+            let reset = load_symbol(scope, symbol);
+            build_tag(env, scope, union_layout, *tag_id, arguments)
         }
-        | Tag {
+
+        Tag {
             arguments,
             tag_layout: union_layout,
             tag_id,
             ..
         } => build_tag(env, scope, union_layout, *tag_id, arguments),
 
-        Reset(_) => {
+        Reset(symbol) => {
             // 1. fetch refcount
-            // 2. if rc == 1, reset the value
-            // TODO
-            env.context.i64_type().const_zero().into()
+            // 2. if rc == 1, decrement fields, return pointer as opaque pointer
+            // 3. otherwise, return NULL
+            let tag_ptr = load_symbol(scope, symbol);
+
+            // return the pointer as an opaque pointer
+            //            env.builder.build_bitcast(
+            //                tag_ptr,
+            //                env.context.i8_type().ptr_type(AddressSpace::Generic),
+            //                "to_opaque",
+            //            )
+            tag_ptr
         }
 
         StructAtIndex {
