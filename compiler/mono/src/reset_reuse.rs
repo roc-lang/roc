@@ -278,7 +278,30 @@ fn function_d_main<'a, 'i>(
             pass,
             fail,
             exception_id,
-        } => todo!(),
+        } => {
+            if has_live_var(&env.jp_live_vars, stmt, x) {
+                let new_pass = {
+                    let temp = function_d_main(env, x, c, pass);
+                    function_d_finalize(env, x, c, temp)
+                };
+                let new_fail = {
+                    let temp = function_d_main(env, x, c, fail);
+                    function_d_finalize(env, x, c, temp)
+                };
+                let new_switch = Invoke {
+                    symbol: *symbol,
+                    call: call.clone(),
+                    layout: *layout,
+                    pass: new_pass,
+                    fail: new_fail,
+                    exception_id: *exception_id,
+                };
+
+                (arena.alloc(new_switch), true)
+            } else {
+                (stmt, false)
+            }
+        }
         Switch {
             cond_symbol,
             cond_layout,
@@ -586,7 +609,7 @@ fn has_live_var<'a>(jp_live_vars: &JPLiveVarMap, stmt: &'a Stmt<'a>, needle: Sym
 fn has_live_var_expr<'a>(expr: &'a Expr<'a>, needle: Symbol) -> bool {
     match expr {
         Expr::Literal(_) => false,
-        Expr::Call(_) => todo!(),
+        Expr::Call(call) => has_live_var_call(call, needle),
         Expr::Array { elems: fields, .. }
         | Expr::Tag {
             arguments: fields, ..
@@ -596,8 +619,10 @@ fn has_live_var_expr<'a>(expr: &'a Expr<'a>, needle: Symbol) -> bool {
         | Expr::GetTagId { structure, .. }
         | Expr::UnionAtIndex { structure, .. } => *structure == needle,
         Expr::EmptyArray => false,
-        Expr::Reuse { .. } => unreachable!("not introduced"),
-        Expr::Reset(_) => unreachable!("not introduced"),
+        Expr::Reuse {
+            symbol, arguments, ..
+        } => needle == *symbol || arguments.iter().any(|s| *s == needle),
+        Expr::Reset(symbol) => needle == *symbol,
         Expr::RuntimeErrorFunction(_) => false,
     }
 }
