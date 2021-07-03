@@ -219,9 +219,9 @@ pub enum Expr2 {
 #[derive(Debug)]
 pub enum ValueDef {
     WithAnnotation {
-        pattern_id: PatternId, // 4B
-        expr_id: ExprId,       // 4B
-        type_id: TypeId,
+        pattern_id: PatternId,    // 4B
+        expr_id: PoolVec<ExprId>, // 4B
+        type_id: PoolVec<TypeId>,
         rigids: NodeId<Rigids>,
         expr_var: Variable, // 4B
     },
@@ -241,14 +241,12 @@ impl ShallowClone for ValueDef {
                 type_id,
                 rigids,
                 expr_var,
-                padding,
             } => Self::WithAnnotation {
                 pattern_id: *pattern_id,
-                expr_id: *expr_id,
-                type_id: *type_id,
+                expr_id: expr_id.shallow_clone(),
+                type_id: type_id.shallow_clone(),
                 rigids: *rigids,
                 expr_var: *expr_var,
-                padding: *padding,
             },
             Self::NoAnnotation {
                 pattern_id,

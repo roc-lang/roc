@@ -629,11 +629,13 @@ fn canonicalize_pending_def<'a>(
 
                             let value_def = ValueDef::WithAnnotation {
                                 pattern_id: loc_can_pattern,
-                                expr_id: env.pool.add(loc_can_expr),
-                                type_id: annotation,
+                                expr_id: PoolVec::new(
+                                    vec![env.pool.add(loc_can_expr)].into_iter(),
+                                    env.pool,
+                                ),
+                                type_id: PoolVec::new(vec![annotation].into_iter(), env.pool),
                                 rigids: env.pool.add(rigids),
                                 expr_var: env.var_store.fresh(),
-                                padding: Default::default(),
                             };
 
                             let def = Def::Value(value_def);
