@@ -231,7 +231,10 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
                         }
                     }
 
-                    roc_run(cmd.current_dir(original_cwd))
+                    match outcome {
+                        BuildOutcome::Errors => Ok(2),
+                        _ => roc_run(cmd.current_dir(original_cwd)),
+                    }
                 }
             }
         }

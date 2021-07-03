@@ -204,11 +204,14 @@ pub fn build_file<'a>(
 
     let total_time = compilation_start.elapsed().unwrap();
 
+    // TODO change this to report whether there were errors or warnings!
+    let outcome = match &cmd_result {
+        Ok(exit_status) if exit_status.success() => BuildOutcome::NoProblems,
+        _ => BuildOutcome::Errors,
+    };
+
     // If the cmd errored out, return the Err.
     cmd_result?;
-
-    // TODO change this to report whether there were errors or warnings!
-    let outcome = BuildOutcome::NoProblems;
 
     Ok(BuiltFile {
         binary_path,
