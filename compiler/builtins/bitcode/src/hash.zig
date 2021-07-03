@@ -8,10 +8,9 @@ const str = @import("str.zig");
 const mem = std.mem;
 
 pub fn wyhash(seed: u64, bytes: ?[*]const u8, length: usize) callconv(.C) u64 {
-    const stdout = std.io.getStdOut().writer();
-
     if (bytes) |nonnull| {
-        return wyhash_hash(seed, nonnull[0..length]);
+        const slice = nonnull[0..length];
+        return wyhash_hash(seed, slice);
     } else {
         return 42;
     }
