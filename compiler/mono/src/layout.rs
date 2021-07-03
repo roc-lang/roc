@@ -196,6 +196,16 @@ impl<'a> UnionLayout<'a> {
             UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => false,
         }
     }
+
+    pub fn tag_is_null(&self, tag_id: u8) -> bool {
+        match self {
+            UnionLayout::NonRecursive(_)
+            | UnionLayout::NonNullableUnwrapped(_)
+            | UnionLayout::Recursive(_) => false,
+            UnionLayout::NullableWrapped { nullable_id, .. } => *nullable_id == tag_id as i64,
+            UnionLayout::NullableUnwrapped { nullable_id, .. } => *nullable_id == (tag_id != 0),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

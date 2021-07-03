@@ -36,21 +36,11 @@ fn may_reuse(tag_layout: UnionLayout, tag_id: u8, other: &CtorInfo) -> bool {
         return false;
     }
 
-    match tag_layout {
-        UnionLayout::NonRecursive(_)
-        | UnionLayout::Recursive(_)
-        | UnionLayout::NonNullableUnwrapped(_) => true,
-        UnionLayout::NullableWrapped { nullable_id, .. } => {
-            // if the source tag id is represented as NULL, there is no memory to re-use
-            // if the current tag id is represented as NULL, then we don't need to re-use the
-            // memory here and can use it somewhere else
-            other.id as i64 != nullable_id && tag_id as i64 != nullable_id
-        }
-        UnionLayout::NullableUnwrapped { nullable_id, .. } => {
-            // idem
-            (other.id != 0) != nullable_id && (tag_id != 0) != nullable_id
-        }
-    }
+    // we should not get here if the tag we matched on is represented as NULL
+    debug_assert!(!tag_layout.tag_is_null(other.id));
+
+    // furthermore, we can only use the memory if the tag we're creating is non-NULL
+    !tag_layout.tag_is_null(tag_id)
 }
 
 #[derive(Debug)]
@@ -421,7 +411,7 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
                         layout,
                         tag_id,
                     } => match layout {
-                        Layout::Union(union_layout) => {
+                        Layout::Union(union_layout) if !union_layout.tag_is_null(*tag_id) => {
                             let ctor_info = CtorInfo {
                                 layout: *union_layout,
                                 id: *tag_id,
@@ -446,7 +436,7 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
                         layout,
                         tag_id,
                     } => match layout {
-                        Layout::Union(union_layout) => {
+                        Layout::Union(union_layout) if !union_layout.tag_is_null(*tag_id) => {
                             let ctor_info = CtorInfo {
                                 layout: *union_layout,
                                 id: *tag_id,
