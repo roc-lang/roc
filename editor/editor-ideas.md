@@ -32,6 +32,8 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 * [Primitive](https://primitive.io/) code exploration in Virtual Reality
 * [Luna](https://www.luna-lang.org/) language for interactive data processing and visualization
 * [Hazel Livelits](https://hazel.org/papers/livelits-paper.pdf) interactive plugins, see GIF's [here](https://twitter.com/disconcision/status/1408155781120376833).
+* [Thorough review](https://drossbucket.com/2021/06/30/hacker-news-folk-wisdom-on-visual-programming/) of pros and cons of text versus visual programming.
+
 ### Debugging
 
 * [VS code debug visualization](https://marketplace.visualstudio.com/items?itemName=hediet.debug-visualizer)
@@ -44,6 +46,8 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 e.g. you have a test `calculate_sum_test` that only uses the function `add`, when the test fails you should be able to see a diff showing only what changed for the function `add`. It would also be great to have a diff of [expression values](https://homepages.cwi.nl/~storm/livelit/images/bret.png) Bret Victor style. An ambitious project would be to suggest or automatically try fixes based on these diffs.
 * I think it could be possible to create a minimal reproduction of a program / block of code / code used by a single test. So for a failing unit test I would expect it to extract imports, the platform, types and functions that are necessary to run only that unit test and put them in a standalone roc project. This would be useful for sharing bugs with library+application authors and colleagues, for profiling or debugging with all "clutter" removed.
 * Ability to share program state at a breakpoint with someone else.
+* For debugging we should aim for maximal useful observability. For example Rust's enum values can not be easily viewed in the CodeLLDB debugger, you actually need to call a print method that does pattern matching to be able to view useful information.
+* We previuously discussed recording full traces of programs so they do not have to be re-run multiple times in the debugging process. We should encourage roc developers to experiment with creating debugging representations of this AST+"execution trace", it could lead to some cool stuff.  
 
 ### Cool regular editors
 
@@ -71,6 +75,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * [Sourcetrail](https://www.sourcetrail.com/) nice tree-like source explorer.
 * [Unisonweb](https://www.unisonweb.org), definition based [editor](https://twitter.com/shojberg/status/1364666092598288385) as opposed to file based.
 * [Utopia](https://utopia.app/) integrated design and development environment for React. Design and code update each other, in real time.
+* [Paredit](https://calva.io/paredit/) structural clojure editing, navigation and selection. [Another overview](http://danmidwood.com/content/2014/11/21/animated-paredit.html)
 
 ### Voice Interaction Related
 
