@@ -46,13 +46,13 @@ impl Def {
 
         match self {
             Def::AnnotationOnly { .. } => todo!("lost pattern information here ... "),
-            Def::Value(
+            Def::Value(value_def) => match value_def {
                 ValueDef::WithAnnotation { pattern_id, .. }
-                | ValueDef::NoAnnotation { pattern_id, .. },
-            ) => {
-                let pattern2 = &pool[*pattern_id];
-                output.extend(symbols_from_pattern(pool, pattern2));
-            }
+                | ValueDef::NoAnnotation { pattern_id, .. } => {
+                    let pattern2 = &pool[*pattern_id];
+                    output.extend(symbols_from_pattern(pool, pattern2));
+                }
+            },
             Def::Function(function_def) => match function_def {
                 FunctionDef::NoAnnotation { name, .. }
                 | FunctionDef::WithAnnotation { name, .. } => {
