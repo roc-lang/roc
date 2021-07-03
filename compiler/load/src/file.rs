@@ -487,9 +487,7 @@ fn start_phase<'a>(
                 let exposed_symbols = state
                     .exposed_symbols_by_module
                     .remove(&module_id)
-                    .expect("Could not find listener ID in exposed_symbols_by_module")
-                    .into_iter()
-                    .collect::<Vec<Symbol>>();
+                    .expect("Could not find listener ID in exposed_symbols_by_module");
 
                 let mut aliases = MutMap::default();
 
@@ -974,7 +972,7 @@ enum BuildTask<'a> {
         parsed: ParsedModule<'a>,
         module_ids: ModuleIds,
         dep_idents: MutMap<ModuleId, IdentIds>,
-        exposed_symbols: Vec<Symbol>,
+        exposed_symbols: MutSet<Symbol>,
         aliases: MutMap<Symbol, Alias>,
     },
     Solve {
@@ -3503,8 +3501,8 @@ fn fabricate_effects_module<'a>(
 
     let mut declarations = Vec::new();
 
-    let exposed_symbols: Vec<Symbol> = {
-        let mut exposed_symbols = Vec::new();
+    let exposed_symbols: MutSet<Symbol> = {
+        let mut exposed_symbols = MutSet::default();
 
         {
             for (ident, ann) in effect_entries {
@@ -3536,8 +3534,7 @@ fn fabricate_effects_module<'a>(
                     &mut var_store,
                     annotation,
                 );
-
-                exposed_symbols.push(symbol);
+                exposed_symbols.insert(symbol);
 
                 declarations.push(Declaration::Declare(def));
             }
@@ -3651,7 +3648,7 @@ fn canonicalize_and_constrain<'a, F>(
     arena: &'a Bump,
     module_ids: &ModuleIds,
     dep_idents: MutMap<ModuleId, IdentIds>,
-    exposed_symbols: Vec<Symbol>,
+    exposed_symbols: MutSet<Symbol>,
     aliases: MutMap<Symbol, Alias>,
     parsed: ParsedModule<'a>,
     look_up_builtins: F,

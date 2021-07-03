@@ -163,9 +163,8 @@ fn render_main_content(
                     }
                 }
                 DocEntry::DetachedDoc(docs) => {
-                    buf.push_str(
-                        markdown_to_html(&mut module.scope, interns, docs.to_string()).as_str(),
-                    );
+                    let markdown = markdown_to_html(&mut module.scope, interns, docs.to_string());
+                    buf.push_str(markdown.as_str());
                 }
             };
         }
@@ -526,7 +525,7 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
     }
 }
 
-fn insert_doc_links(scope: &mut Scope, interns: &Interns, markdown: String) -> String {
+pub fn insert_doc_links(scope: &mut Scope, interns: &Interns, markdown: String) -> String {
     let buf = &markdown;
     let mut result = String::new();
 
@@ -572,7 +571,11 @@ fn insert_doc_links(scope: &mut Scope, interns: &Interns, markdown: String) -> S
         }
     }
 
-    result
+    if chomping_from == None {
+        markdown
+    } else {
+        result
+    }
 }
 
 fn make_doc_link(scope: &mut Scope, interns: &Interns, doc_item: &str) -> String {
@@ -619,62 +622,65 @@ fn markdown_to_html(scope: &mut Scope, interns: &Interns, markdown: String) -> S
     let mut docs_parser = vec![];
     let (_, _) = pulldown_cmark::Parser::new_ext(&markdown_with_links, markdown_options).fold(
         (0, 0),
-        |(start_quote_count, end_quote_count), event| match event {
-            // Replace this sequence (`>>>` syntax):
-            //     Start(BlockQuote)
-            //     Start(BlockQuote)
-            //     Start(BlockQuote)
-            //     Start(Paragraph)
-            // For `Start(CodeBlock(Fenced(Borrowed("roc"))))`
-            Event::Start(BlockQuote) => {
-                docs_parser.push(event);
-                (start_quote_count + 1, 0)
-            }
-            Event::Start(Paragraph) => {
-                if start_quote_count == 3 {
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.push(Event::Start(CodeBlock(CodeBlockKind::Fenced(
-                        CowStr::Borrowed("roc"),
-                    ))));
-                } else {
+        |(start_quote_count, end_quote_count), event| {
+            match event {
+                // Replace this sequence (`>>>` syntax):
+                //     Start(BlockQuote)
+                //     Start(BlockQuote)
+                //     Start(BlockQuote)
+                //     Start(Paragraph)
+                // For `Start(CodeBlock(Fenced(Borrowed("roc"))))`
+                Event::Start(BlockQuote) => {
                     docs_parser.push(event);
+                    (start_quote_count + 1, 0)
                 }
-                (0, 0)
-            }
-            // Replace this sequence (`>>>` syntax):
-            //     End(Paragraph)
-            //     End(BlockQuote)
-            //     End(BlockQuote)
-            //     End(BlockQuote)
-            // For `End(CodeBlock(Fenced(Borrowed("roc"))))`
-            Event::End(Paragraph) => {
-                docs_parser.push(event);
-                (0, 1)
-            }
-            Event::End(BlockQuote) => {
-                if end_quote_count == 3 {
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.push(Event::End(CodeBlock(CodeBlockKind::Fenced(
-                        CowStr::Borrowed("roc"),
-                    ))));
+                Event::Start(Paragraph) => {
+                    if start_quote_count == 3 {
+                        docs_parser.pop();
+                        docs_parser.pop();
+                        docs_parser.pop();
+                        docs_parser.push(Event::Start(CodeBlock(CodeBlockKind::Fenced(
+                            CowStr::Borrowed("roc"),
+                        ))));
+                    } else {
+                        docs_parser.push(event);
+                    }
                     (0, 0)
-                } else {
-                    docs_parser.push(event);
-                    (0, end_quote_count + 1)
                 }
-            }
-            _ => {
-                docs_parser.push(event);
-                (0, 0)
+                // Replace this sequence (`>>>` syntax):
+                //     End(Paragraph)
+                //     End(BlockQuote)
+                //     End(BlockQuote)
+                //     End(BlockQuote)
+                // For `End(CodeBlock(Fenced(Borrowed("roc"))))`
+                Event::End(Paragraph) => {
+                    docs_parser.push(event);
+                    (0, 1)
+                }
+                Event::End(BlockQuote) => {
+                    if end_quote_count == 3 {
+                        docs_parser.pop();
+                        docs_parser.pop();
+                        docs_parser.pop();
+                        docs_parser.push(Event::End(CodeBlock(CodeBlockKind::Fenced(
+                            CowStr::Borrowed("roc"),
+                        ))));
+                        (0, 0)
+                    } else {
+                        docs_parser.push(event);
+                        (0, end_quote_count + 1)
+                    }
+                }
+                _ => {
+                    docs_parser.push(event);
+                    (0, 0)
+                }
             }
         },
     );
 
     let mut docs_html = String::new();
+
     pulldown_cmark::html::push_html(&mut docs_html, docs_parser.into_iter());
 
     docs_html

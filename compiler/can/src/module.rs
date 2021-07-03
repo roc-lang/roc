@@ -20,7 +20,7 @@ use roc_types::types::Alias;
 pub struct Module {
     pub module_id: ModuleId,
     pub exposed_imports: MutMap<Symbol, Variable>,
-    pub exposed_symbols: Vec<Symbol>,
+    pub exposed_symbols: MutSet<Symbol>,
     pub references: MutSet<Symbol>,
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: MutMap<Variable, Lowercase>,
@@ -50,7 +50,7 @@ pub fn canonicalize_module_defs<'a, F>(
     dep_idents: MutMap<ModuleId, IdentIds>,
     aliases: MutMap<Symbol, Alias>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
-    exposed_symbols: &Vec<Symbol>,
+    exposed_symbols: &MutSet<Symbol>,
     var_store: &mut VarStore,
     look_up_builtin: F,
 ) -> Result<ModuleOutput, RuntimeError>
@@ -203,11 +203,7 @@ where
                                 // we can see if there were any
                                 // exposed symbols which did not have
                                 // corresponding defs.
-                                if let Some(index) =
-                                    exposed_but_not_defined.iter().position(|s| *s == *symbol)
-                                {
-                                    exposed_but_not_defined.remove(index);
-                                }
+                                exposed_but_not_defined.remove(symbol);
                             }
                         }
                     }
@@ -220,11 +216,7 @@ where
                                     // we can see if there were any
                                     // exposed symbols which did not have
                                     // corresponding defs.
-                                    if let Some(index) =
-                                        exposed_but_not_defined.iter().position(|s| *s == *symbol)
-                                    {
-                                        exposed_but_not_defined.remove(index);
-                                    }
+                                    exposed_but_not_defined.remove(symbol);
                                 }
                             }
                         }
@@ -252,9 +244,7 @@ where
                 // we can see if there were any
                 // exposed symbols which did not have
                 // corresponding defs.
-                if let Some(index) = exposed_but_not_defined.iter().position(|s| *s == symbol) {
-                    exposed_but_not_defined.remove(index);
-                }
+                exposed_but_not_defined.remove(&symbol);
 
                 aliases.insert(symbol, alias);
             }
