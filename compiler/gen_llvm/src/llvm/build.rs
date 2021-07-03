@@ -977,8 +977,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             symbol,
             ..
         } => {
-            let reset = load_symbol(scope, symbol);
-            build_tag(env, scope, union_layout, *tag_id, arguments)
+            let reset = load_symbol(scope, symbol).into_pointer_value();
+            build_tag(env, scope, union_layout, *tag_id, arguments, Some(reset))
         }
 
         Tag {
@@ -986,7 +986,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             tag_layout: union_layout,
             tag_id,
             ..
-        } => build_tag(env, scope, union_layout, *tag_id, arguments),
+        } => build_tag(env, scope, union_layout, *tag_id, arguments, None),
 
         Reset(symbol) => {
             // 1. fetch refcount
@@ -1198,6 +1198,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
     union_layout: &UnionLayout<'a>,
     tag_id: u8,
     arguments: &[Symbol],
+    reuse_allocation: Option<PointerValue<'ctx>>,
 ) -> BasicValueEnum<'ctx> {
     let tag_id_layout = union_layout.tag_id_layout();
 
@@ -1588,8 +1589,14 @@ pub fn build_tag<'a, 'ctx, 'env>(
             }
 
             // Create the struct_type
-            let data_ptr =
-                reserve_with_refcount_union_as_block_of_memory(env, *union_layout, &[other_fields]);
+            let data_ptr = match reuse_allocation {
+                Some(ptr) => ptr,
+                None => reserve_with_refcount_union_as_block_of_memory(
+                    env,
+                    *union_layout,
+                    &[other_fields],
+                ),
+            };
 
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
             let struct_ptr = env
