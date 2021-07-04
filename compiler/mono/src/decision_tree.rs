@@ -1443,16 +1443,10 @@ fn compile_tests<'a>(
     env: &mut Env<'a, '_>,
     ret_layout: Layout<'a>,
     tests: Tests<'a>,
-    opt_guard: Option<(Symbol, JoinPointId, Stmt<'a>)>,
     fail: &'a Stmt<'a>,
     mut cond: Stmt<'a>,
 ) -> Stmt<'a> {
     let arena = env.arena;
-
-    // the guard is the final thing that we check, so needs to be layered on first!
-    if let Some((_, id, stmt)) = opt_guard {
-        cond = compile_guard(env, ret_layout, id, arena.alloc(stmt), fail, cond);
-    }
 
     for (new_stores, lhs, rhs, _layout, opt_constructor_info) in tests.into_iter() {
         match opt_constructor_info {
@@ -1631,11 +1625,9 @@ fn decide_to_branching<'a>(
             let chain_branch_info =
                 ConstructorKnown::from_test_chain(cond_symbol, &cond_layout, &test_chain);
 
-            let (tests, guard) = stores_and_condition(env, cond_symbol, &cond_layout, test_chain);
+            let (tests, _) = stores_and_condition(env, cond_symbol, &cond_layout, test_chain);
 
-            debug_assert!(guard.is_none());
-
-            let number_of_tests = tests.len() as i64 + guard.is_some() as i64;
+            let number_of_tests = tests.len() as i64;
 
             debug_assert!(number_of_tests > 0);
 
@@ -1643,32 +1635,25 @@ fn decide_to_branching<'a>(
             if number_of_tests == 1 {
                 // if there is just one test, compile to a simple if-then-else
 
-                if guard.is_none() {
-                    // use knowledge about constructors for optimization
-                    debug_assert_eq!(tests.len(), 1);
+                let (new_stores, lhs, rhs, _layout, _cinfo) = tests.into_iter().next().unwrap();
 
-                    let (new_stores, lhs, rhs, _layout, _cinfo) = tests.into_iter().next().unwrap();
-
-                    compile_test_help(
-                        env,
-                        chain_branch_info,
-                        ret_layout,
-                        new_stores,
-                        lhs,
-                        rhs,
-                        fail,
-                        pass_expr,
-                    )
-                } else {
-                    compile_tests(env, ret_layout, tests, guard, fail, pass_expr)
-                }
+                compile_test_help(
+                    env,
+                    chain_branch_info,
+                    ret_layout,
+                    new_stores,
+                    lhs,
+                    rhs,
+                    fail,
+                    pass_expr,
+                )
             } else {
                 // otherwise, we use a join point so the code for the `else` case
                 // is only generated once.
                 let fail_jp_id = JoinPointId(env.unique_symbol());
                 let jump = arena.alloc(Stmt::Jump(fail_jp_id, &[]));
 
-                let test_stmt = compile_tests(env, ret_layout, tests, guard, jump, pass_expr);
+                let test_stmt = compile_tests(env, ret_layout, tests, jump, pass_expr);
 
                 Stmt::Join {
                     id: fail_jp_id,
