@@ -139,7 +139,7 @@ impl<'a> Hash for GuardedTest<'a> {
                 state.write_u8(0);
                 test.hash(state);
             }
-            GuardedTest::GuardedNoTest { id, stmt } => {
+            GuardedTest::GuardedNoTest { .. } => {
                 state.write_u8(1);
             }
             GuardedTest::TestNotGuarded { test } => {
@@ -209,13 +209,6 @@ fn guarded_tests_are_complete(tests: &[GuardedTest]) -> bool {
         GuardedTest::GuardedNoTest { .. } => false,
         GuardedTest::TestNotGuarded { test } => tests_are_complete_help(test, length),
     }
-}
-
-fn tests_are_complete(tests: &[Test]) -> bool {
-    let length = tests.len();
-    debug_assert!(length > 0);
-
-    tests_are_complete_help(tests.last().unwrap(), length)
 }
 
 fn tests_are_complete_help(last_test: &Test, number_of_tests: usize) -> bool {
@@ -481,7 +474,7 @@ fn test_at_path<'a>(
                 StrLiteral(v) => IsStr(v.clone()),
             };
 
-            let guarded_test = if let Guard::Guard { symbol, id, stmt } = guard {
+            let guarded_test = if let Guard::Guard { id, stmt, .. } = guard {
                 GuardedTest::TestGuarded {
                     test,
                     stmt: stmt.clone(),
@@ -1289,42 +1282,6 @@ fn stores_and_condition<'a>(
     tests
 }
 
-fn compile_guard<'a>(
-    env: &mut Env<'a, '_>,
-    ret_layout: Layout<'a>,
-    id: JoinPointId,
-    stmt: &'a Stmt<'a>,
-    fail: &'a Stmt<'a>,
-    mut cond: Stmt<'a>,
-) -> Stmt<'a> {
-    // the guard is the final thing that we check, so needs to be layered on first!
-    let test_symbol = env.unique_symbol();
-    let arena = env.arena;
-
-    cond = crate::ir::cond(
-        env,
-        test_symbol,
-        Layout::Builtin(Builtin::Int1),
-        cond,
-        fail.clone(),
-        ret_layout,
-    );
-
-    // calculate the guard value
-    let param = Param {
-        symbol: test_symbol,
-        layout: Layout::Builtin(Builtin::Int1),
-        borrow: false,
-    };
-
-    Stmt::Join {
-        id,
-        parameters: arena.alloc([param]),
-        remainder: stmt,
-        body: arena.alloc(cond),
-    }
-}
-
 fn compile_test<'a>(
     env: &mut Env<'a, '_>,
     ret_layout: Layout<'a>,
@@ -1445,8 +1402,6 @@ fn compile_tests<'a>(
     fail: &'a Stmt<'a>,
     mut cond: Stmt<'a>,
 ) -> Stmt<'a> {
-    let arena = env.arena;
-
     for (new_stores, lhs, rhs, _layout, opt_constructor_info) in tests.into_iter() {
         match opt_constructor_info {
             None => {
@@ -1819,14 +1774,6 @@ fn test_always_succeeds(test: &Test) -> bool {
     }
 }
 
-fn guarded_test_always_succeeds(test: &GuardedTest) -> bool {
-    match test {
-        GuardedTest::TestGuarded { test, id, stmt } => false,
-        GuardedTest::GuardedNoTest { id, stmt } => false,
-        GuardedTest::TestNotGuarded { test } => test_always_succeeds(test),
-    }
-}
-
 fn tree_to_decider(tree: DecisionTree) -> Decider<u64> {
     use Decider::*;
     use DecisionTree::*;
@@ -1909,7 +1856,7 @@ fn tree_to_decider(tree: DecisionTree) -> Decider<u64> {
 
                                     (test, guarded)
                                 }
-                                GuardedTest::GuardedNoTest { id, stmt } => {
+                                GuardedTest::GuardedNoTest { .. } => {
                                     unreachable!("this would not end up in a switch")
                                 }
                                 GuardedTest::TestNotGuarded { test } => (test, decider),
@@ -1990,7 +1937,7 @@ fn tree_to_decider(tree: DecisionTree) -> Decider<u64> {
 
                                     (test, guarded)
                                 }
-                                GuardedTest::GuardedNoTest { id, stmt } => {
+                                GuardedTest::GuardedNoTest { .. } => {
                                     unreachable!("this would not end up in a switch")
                                 }
                                 GuardedTest::TestNotGuarded { test } => (test, decider),
