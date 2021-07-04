@@ -59,7 +59,7 @@ enum DecisionTree<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum GuardedTest<'a> {
+enum GuardedTest<'a> {
     TestGuarded {
         test: Test<'a>,
 
@@ -79,7 +79,8 @@ pub enum GuardedTest<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Test<'a> {
+#[allow(clippy::enum_variant_names)]
+enum Test<'a> {
     IsCtor {
         tag_id: u8,
         tag_name: TagName,
@@ -1049,7 +1050,7 @@ pub fn optimize_when<'a>(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PathInstruction {
+struct PathInstruction {
     index: u64,
     tag_id: u8,
 }
