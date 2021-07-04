@@ -1353,10 +1353,16 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
                     value_ptr,
                     refcount_ptr,
                     do_recurse_block,
+                    DecOrReuse::Dec,
                 )
             }
         }
     }
+}
+
+enum DecOrReuse {
+    Dec,
+    Reuse,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1371,6 +1377,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
     value_ptr: PointerValue<'ctx>,
     refcount_ptr: PointerToRefcount<'ctx>,
     match_block: BasicBlock<'ctx>,
+    decrement_or_reuse: DecOrReuse,
 ) {
     let mode = Mode::Dec;
     let call_mode = mode_to_call_mode(decrement_fn, mode);
@@ -1486,7 +1493,12 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         // lists. To achieve it, we must first load all fields that we want to inc/dec (done above)
         // and store them on the stack, then modify (and potentially free) the current cell, then
         // actually inc/dec the fields.
-        refcount_ptr.modify(call_mode, &Layout::Union(union_layout), env);
+        match decrement_or_reuse {
+            DecOrReuse::Reuse => {}
+            DecOrReuse::Dec => {
+                refcount_ptr.modify(call_mode, &Layout::Union(union_layout), env);
+            }
+        }
 
         for (field, field_layout) in deferred_nonrec {
             modify_refcount_layout_help(
@@ -1540,6 +1552,220 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
 
         // this function returns void
         builder.build_return(None);
+    }
+}
+
+pub fn build_reset<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    union_layout: &UnionLayout<'a>,
+) -> Option<FunctionValue<'ctx>> {
+    use UnionLayout::*;
+
+    match union_layout {
+        NullableWrapped {
+            other_tags: tags, ..
+        } => {
+            let function = build_reuse_rec_union(
+                env,
+                layout_ids,
+                &WhenRecursive::Loop(*union_layout),
+                *union_layout,
+                tags,
+                true,
+            );
+
+            Some(function)
+        }
+
+        NullableUnwrapped { other_fields, .. } => {
+            let function = build_reuse_rec_union(
+                env,
+                layout_ids,
+                &WhenRecursive::Loop(*union_layout),
+                *union_layout,
+                env.arena.alloc([*other_fields]),
+                true,
+            );
+
+            Some(function)
+        }
+
+        NonNullableUnwrapped(fields) => {
+            let function = build_reuse_rec_union(
+                env,
+                layout_ids,
+                &WhenRecursive::Loop(*union_layout),
+                *union_layout,
+                &*env.arena.alloc([*fields]),
+                true,
+            );
+            Some(function)
+        }
+
+        Recursive(tags) => {
+            let function = build_reuse_rec_union(
+                env,
+                layout_ids,
+                &WhenRecursive::Loop(*union_layout),
+                *union_layout,
+                tags,
+                false,
+            );
+            Some(function)
+        }
+
+        NonRecursive(_) => {
+            unreachable!("non-recursive tags cannot be reused")
+        }
+    }
+}
+
+fn build_reuse_rec_union<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    when_recursive: &WhenRecursive<'a>,
+    union_layout: UnionLayout<'a>,
+    tags: &'a [&'a [Layout<'a>]],
+    is_nullable: bool,
+) -> FunctionValue<'ctx> {
+    let mode = Mode::Dec;
+
+    let layout_id = layout_ids.get(Symbol::DEC, &Layout::Union(union_layout));
+    let fn_name = layout_id.to_symbol_string(Symbol::DEC, &env.interns);
+    let fn_name = format!("{}_reset", fn_name);
+
+    let dec_function = build_rec_union(
+        env,
+        layout_ids,
+        Mode::Dec,
+        when_recursive,
+        union_layout,
+        tags,
+        is_nullable,
+    );
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let block = env.builder.get_insert_block().expect("to be in a function");
+            let di_location = env.builder.get_current_debug_location().unwrap();
+
+            let basic_type = basic_type_from_layout(env, &Layout::Union(union_layout));
+            let function_value = build_header(env, basic_type, mode, &fn_name);
+
+            build_reuse_rec_union_help(
+                env,
+                layout_ids,
+                when_recursive,
+                union_layout,
+                tags,
+                function_value,
+                dec_function,
+                is_nullable,
+            );
+
+            env.builder.position_at_end(block);
+            env.builder
+                .set_current_debug_location(env.context, di_location);
+
+            function_value
+        }
+    };
+
+    function
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_reuse_rec_union_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    when_recursive: &WhenRecursive<'a>,
+    union_layout: UnionLayout<'a>,
+    tags: &'a [&'a [roc_mono::layout::Layout<'a>]],
+    reset_function: FunctionValue<'ctx>,
+    dec_function: FunctionValue<'ctx>,
+    is_nullable: bool,
+) {
+    debug_assert!(!tags.is_empty());
+
+    let context = &env.context;
+    let builder = env.builder;
+
+    // Add a basic block for the entry point
+    let entry = context.append_basic_block(reset_function, "entry");
+
+    builder.position_at_end(entry);
+
+    debug_info_init!(env, reset_function);
+
+    // Add args to scope
+    let arg_symbol = Symbol::ARG_1;
+
+    let arg_val = reset_function.get_param_iter().next().unwrap();
+
+    arg_val.set_name(arg_symbol.ident_string(&env.interns));
+
+    let parent = reset_function;
+
+    debug_assert!(arg_val.is_pointer_value());
+    let value_ptr = arg_val.into_pointer_value();
+
+    // to increment/decrement the cons-cell itself
+    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
+    let call_mode = CallMode::Dec;
+
+    let should_recurse_block = env.context.append_basic_block(parent, "should_recurse");
+
+    let ctx = env.context;
+    if is_nullable {
+        let is_null = env.builder.build_is_null(value_ptr, "is_null");
+
+        let then_block = ctx.append_basic_block(parent, "then");
+
+        env.builder
+            .build_conditional_branch(is_null, then_block, should_recurse_block);
+
+        {
+            env.builder.position_at_end(then_block);
+            env.builder.build_return(None);
+        }
+    } else {
+        env.builder.build_unconditional_branch(should_recurse_block);
+    }
+
+    env.builder.position_at_end(should_recurse_block);
+
+    let layout = Layout::Union(union_layout);
+
+    let do_recurse_block = env.context.append_basic_block(parent, "do_recurse");
+    let no_recurse_block = env.context.append_basic_block(parent, "no_recurse");
+
+    builder.build_conditional_branch(refcount_ptr.is_1(env), do_recurse_block, no_recurse_block);
+
+    {
+        env.builder.position_at_end(no_recurse_block);
+
+        refcount_ptr.modify(call_mode, &layout, env);
+        env.builder.build_return(None);
+    }
+
+    {
+        env.builder.position_at_end(do_recurse_block);
+
+        build_rec_union_recursive_decrement(
+            env,
+            layout_ids,
+            when_recursive,
+            parent,
+            dec_function,
+            union_layout,
+            tags,
+            value_ptr,
+            refcount_ptr,
+            do_recurse_block,
+            DecOrReuse::Reuse,
+        )
     }
 }
 

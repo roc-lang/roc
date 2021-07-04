@@ -23,7 +23,7 @@ use crate::llvm::convert::{
     ptr_int,
 };
 use crate::llvm::refcounting::{
-    decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
+    build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -1000,7 +1000,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             // 1. fetch refcount
             // 2. if rc == 1, decrement fields, return pointer as opaque pointer
             // 3. otherwise, return NULL
-            let tag_ptr = load_symbol(scope, symbol).into_pointer_value();
+            let (tag_ptr, layout) = load_symbol_and_layout(scope, symbol);
+            let tag_ptr = tag_ptr.into_pointer_value();
             let null_ptr = tag_ptr.get_type().const_null();
             let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, tag_ptr);
             let is_unique = refcount_ptr.is_1(env);
@@ -1013,12 +1014,34 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             env.builder
                 .build_conditional_branch(is_unique, then_block, else_block);
 
+            let union_layout = match layout {
+                Layout::Union(ul) => ul,
+                _ => unreachable!(),
+            };
+
             {
                 env.builder.position_at_end(then_block);
+                match build_reset(env, layout_ids, union_layout) {
+                    Some(reset_function) => {
+                        let call =
+                            env.builder
+                                .build_call(reset_function, &[tag_ptr.into()], "call_reuse");
+
+                        call.set_call_convention(FAST_CALL_CONV);
+
+                        let result = call.try_as_basic_value();
+
+                        dbg!(result);
+                    }
+                    None => {
+                        panic!("")
+                    }
+                }
                 env.builder.build_unconditional_branch(cont_block);
             }
             {
                 env.builder.position_at_end(else_block);
+                refcount_ptr.decrement(env, layout);
                 env.builder.build_unconditional_branch(cont_block);
             }
             {
