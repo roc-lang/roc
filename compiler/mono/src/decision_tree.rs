@@ -1797,78 +1797,13 @@ fn tree_to_decider(tree: DecisionTree) -> Decider<u64> {
                     let (_, failure_tree) = edges.remove(1);
                     let (guarded_test, success_tree) = edges.remove(0);
 
-                    match guarded_test {
-                        GuardedTest::TestGuarded { test, id, stmt } => {
-                            let failure = Box::new(tree_to_decider(failure_tree));
-                            let success = Box::new(tree_to_decider(success_tree));
-
-                            let guarded = Decider::Guarded {
-                                id,
-                                stmt,
-                                success,
-                                failure: failure.clone(),
-                            };
-
-                            Chain {
-                                test_chain: vec![(path, test)],
-                                success: Box::new(guarded),
-                                failure,
-                            }
-                        }
-                        GuardedTest::GuardedNoTest { id, stmt } => {
-                            let failure = Box::new(tree_to_decider(failure_tree));
-                            let success = Box::new(tree_to_decider(success_tree));
-
-                            Decider::Guarded {
-                                id,
-                                stmt,
-                                success,
-                                failure: failure.clone(),
-                            }
-                        }
-                        GuardedTest::TestNotGuarded { test } => {
-                            if test_always_succeeds(&test) {
-                                tree_to_decider(success_tree)
-                            } else {
-                                to_chain(path, test, success_tree, failure_tree)
-                            }
-                        }
-                    }
+                    chain_decider(path, guarded_test, failure_tree, success_tree)
                 }
 
                 _ => {
-                    let fallback_tree = edges.remove(edges.len() - 1).1;
-                    let fallback_decider = tree_to_decider(fallback_tree);
+                    let fallback = edges.remove(edges.len() - 1).1;
 
-                    let necessary_tests = edges
-                        .into_iter()
-                        .map(|(guarded_test, dectree)| {
-                            let decider = tree_to_decider(dectree);
-
-                            match guarded_test {
-                                GuardedTest::TestGuarded { test, id, stmt } => {
-                                    let guarded = Decider::Guarded {
-                                        id,
-                                        stmt,
-                                        success: Box::new(decider),
-                                        failure: Box::new(fallback_decider.clone()),
-                                    };
-
-                                    (test, guarded)
-                                }
-                                GuardedTest::GuardedNoTest { .. } => {
-                                    unreachable!("this would not end up in a switch")
-                                }
-                                GuardedTest::TestNotGuarded { test } => (test, decider),
-                            }
-                        })
-                        .collect();
-
-                    FanOut {
-                        path,
-                        tests: necessary_tests,
-                        fallback: Box::new(fallback_decider),
-                    }
+                    fanout_decider(path, fallback, edges)
                 }
             },
 
@@ -1878,81 +1813,104 @@ fn tree_to_decider(tree: DecisionTree) -> Decider<u64> {
                     let failure_tree = *last;
                     let (guarded_test, success_tree) = edges.remove(0);
 
-                    match guarded_test {
-                        GuardedTest::TestGuarded { test, id, stmt } => {
-                            let failure = Box::new(tree_to_decider(failure_tree));
-                            let success = Box::new(tree_to_decider(success_tree));
-
-                            let guarded = Decider::Guarded {
-                                id,
-                                stmt,
-                                success,
-                                failure: failure.clone(),
-                            };
-
-                            Chain {
-                                test_chain: vec![(path, test)],
-                                success: Box::new(guarded),
-                                failure,
-                            }
-                        }
-                        GuardedTest::GuardedNoTest { id, stmt } => {
-                            let failure = Box::new(tree_to_decider(failure_tree));
-                            let success = Box::new(tree_to_decider(success_tree));
-
-                            Decider::Guarded {
-                                id,
-                                stmt,
-                                success,
-                                failure: failure.clone(),
-                            }
-                        }
-                        GuardedTest::TestNotGuarded { test } => {
-                            if test_always_succeeds(&test) {
-                                tree_to_decider(success_tree)
-                            } else {
-                                to_chain(path, test, success_tree, failure_tree)
-                            }
-                        }
-                    }
+                    chain_decider(path, guarded_test, failure_tree, success_tree)
                 }
 
                 _ => {
                     let fallback = *last;
-                    let fallback_decider = tree_to_decider(fallback);
 
-                    let necessary_tests = edges
-                        .into_iter()
-                        .map(|(guarded_test, dectree)| {
-                            let decider = tree_to_decider(dectree);
-
-                            match guarded_test {
-                                GuardedTest::TestGuarded { test, id, stmt } => {
-                                    let guarded = Decider::Guarded {
-                                        id,
-                                        stmt,
-                                        success: Box::new(decider),
-                                        failure: Box::new(fallback_decider.clone()),
-                                    };
-
-                                    (test, guarded)
-                                }
-                                GuardedTest::GuardedNoTest { .. } => {
-                                    unreachable!("this would not end up in a switch")
-                                }
-                                GuardedTest::TestNotGuarded { test } => (test, decider),
-                            }
-                        })
-                        .collect();
-
-                    FanOut {
-                        path,
-                        tests: necessary_tests,
-                        fallback: Box::new(fallback_decider),
-                    }
+                    fanout_decider(path, fallback, edges)
                 }
             },
         },
+    }
+}
+
+fn fanout_decider<'a>(
+    path: Vec<PathInstruction>,
+    fallback: DecisionTree<'a>,
+    edges: Vec<(GuardedTest<'a>, DecisionTree<'a>)>,
+) -> Decider<'a, u64> {
+    let fallback_decider = tree_to_decider(fallback);
+    let necessary_tests = edges
+        .into_iter()
+        .map(|(test, tree)| fanout_decider_help(tree, test, &fallback_decider))
+        .collect();
+
+    Decider::FanOut {
+        path,
+        tests: necessary_tests,
+        fallback: Box::new(fallback_decider),
+    }
+}
+
+fn fanout_decider_help<'a>(
+    dectree: DecisionTree<'a>,
+    guarded_test: GuardedTest<'a>,
+    fallback_decider: &Decider<'a, u64>,
+) -> (Test<'a>, Decider<'a, u64>) {
+    let decider = tree_to_decider(dectree);
+
+    match guarded_test {
+        GuardedTest::TestGuarded { test, id, stmt } => {
+            let guarded = Decider::Guarded {
+                id,
+                stmt,
+                success: Box::new(decider),
+                failure: Box::new(fallback_decider.clone()),
+            };
+
+            (test, guarded)
+        }
+        GuardedTest::GuardedNoTest { .. } => {
+            unreachable!("this would not end up in a switch")
+        }
+        GuardedTest::TestNotGuarded { test } => (test, decider),
+    }
+}
+
+fn chain_decider<'a>(
+    path: Vec<PathInstruction>,
+    guarded_test: GuardedTest<'a>,
+    failure_tree: DecisionTree<'a>,
+    success_tree: DecisionTree<'a>,
+) -> Decider<'a, u64> {
+    match guarded_test {
+        GuardedTest::TestGuarded { test, id, stmt } => {
+            let failure = Box::new(tree_to_decider(failure_tree));
+            let success = Box::new(tree_to_decider(success_tree));
+
+            let guarded = Decider::Guarded {
+                id,
+                stmt,
+                success,
+                failure: failure.clone(),
+            };
+
+            Decider::Chain {
+                test_chain: vec![(path, test)],
+                success: Box::new(guarded),
+                failure,
+            }
+        }
+        GuardedTest::GuardedNoTest { id, stmt } => {
+            let failure = Box::new(tree_to_decider(failure_tree));
+            let success = Box::new(tree_to_decider(success_tree));
+
+            Decider::Guarded {
+                id,
+                stmt,
+                success,
+                failure: failure.clone(),
+            }
+        }
+        GuardedTest::TestNotGuarded { test } => {
+            if test_always_succeeds(&test) {
+                tree_to_decider(success_tree)
+            } else {
+                to_chain(path, test, success_tree, failure_tree)
+            }
+        }
     }
 }
 
