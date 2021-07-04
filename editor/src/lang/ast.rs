@@ -346,7 +346,7 @@ impl Rigids {
         }
     }
 
-    pub fn named(&self, pool: &Pool) -> Vec<(PoolStr, Variable)> {
+    pub fn named(&self, pool: &mut Pool) -> PoolVec<(PoolStr, Variable)> {
         let named = self
             .names
             .iter(pool)
@@ -357,12 +357,12 @@ impl Rigids {
                     None
                 }
             })
-            .collect();
+            .collect::<Vec<(PoolStr, Variable)>>();
 
-        named
+        PoolVec::new(named.into_iter(), pool)
     }
 
-    pub fn unnamed(&self, pool: &Pool) -> Vec<Variable> {
+    pub fn unnamed(&self, pool: &mut Pool) -> PoolVec<Variable> {
         let unnamed = self
             .names
             .iter(pool)
@@ -373,9 +373,9 @@ impl Rigids {
                     None
                 }
             })
-            .collect();
+            .collect::<Vec<Variable>>();
 
-        unnamed
+        PoolVec::new(unnamed.into_iter(), pool)
     }
 }
 

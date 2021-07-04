@@ -343,9 +343,8 @@ fn from_pending_alias<'a>(
 
                     let annotation_id = env.add(rec_type_union, ann.region);
                     let named = rigids.named(env.pool);
-                    let named_pool_vec = PoolVec::new(named.into_iter(), env.pool);
 
-                    scope.add_alias(env.pool, symbol, named_pool_vec, annotation_id);
+                    scope.add_alias(env.pool, symbol, named, annotation_id);
                 } else {
                     env.problem(Problem::CyclicAlias(symbol, name.region, vec![]));
                     return output;
@@ -353,9 +352,8 @@ fn from_pending_alias<'a>(
             } else {
                 let annotation_id = env.add(annotation, ann.region);
                 let named = rigids.named(env.pool);
-                let named_pool_vec = PoolVec::new(named.into_iter(), env.pool);
 
-                scope.add_alias(env.pool, symbol, named_pool_vec, annotation_id);
+                scope.add_alias(env.pool, symbol, named, annotation_id);
             }
 
             output
