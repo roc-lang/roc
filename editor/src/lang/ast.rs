@@ -347,29 +347,33 @@ impl Rigids {
     }
 
     pub fn named(&self, pool: &Pool) -> Vec<(PoolStr, Variable)> {
-        let mut named = Vec::new();
-
-        for node_id in self.names.iter_node_ids() {
-            let (opt_pool_str, var) = pool.get(node_id);
-
-            if let Some(pool_str) = opt_pool_str {
-                named.push((*pool_str, *var));
-            }
-        }
+        let named = self
+            .names
+            .iter(pool)
+            .filter_map(|(opt_pool_str, var)| {
+                if let Some(pool_str) = opt_pool_str {
+                    Some((*pool_str, *var))
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         named
     }
 
     pub fn unnamed(&self, pool: &Pool) -> Vec<Variable> {
-        let mut unnamed = Vec::new();
-
-        for node_id in self.names.iter_node_ids() {
-            let (opt_pool_str, var) = pool.get(node_id);
-
-            if opt_pool_str.is_none() {
-                unnamed.push(*var);
-            }
-        }
+        let unnamed = self
+            .names
+            .iter(pool)
+            .filter_map(|(opt_pool_str, var)| {
+                if opt_pool_str.is_none() {
+                    Some(*var)
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         unnamed
     }
