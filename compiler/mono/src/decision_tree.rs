@@ -217,12 +217,7 @@ fn flatten<'a>(
             tag_id,
             tag_name,
             layout,
-        } if union.alternatives.len() == 1
-            && !matches!(
-                layout,
-                UnionLayout::NullableWrapped { .. } | UnionLayout::NullableUnwrapped { .. }
-            ) =>
-        {
+        } if union.alternatives.len() == 1 && !layout.is_nullable() => {
             // TODO ^ do we need to check that guard.is_none() here?
 
             let path = path_pattern.0;

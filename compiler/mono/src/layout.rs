@@ -186,6 +186,15 @@ impl<'a> UnionLayout<'a> {
             UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => false,
         }
     }
+
+    pub fn is_nullable(&self) -> bool {
+        match self {
+            UnionLayout::NonRecursive(_)
+            | UnionLayout::Recursive(_)
+            | UnionLayout::NonNullableUnwrapped { .. } => true,
+            UnionLayout::NullableWrapped { .. } | UnionLayout::NullableUnwrapped { .. } => true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
