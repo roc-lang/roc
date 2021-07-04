@@ -155,19 +155,25 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
                 .map(|(a, b)| (a, to_decision_tree(b)))
                 .collect();
 
-            match (decision_edges.split_last_mut(), fallback.split_last()) {
-                (Some(((_tag, decision_tree), rest)), None) if rest.is_empty() => {
-                    // TODO remove clone
-                    decision_tree.clone()
+            match (decision_edges.as_slice(), fallback.as_slice()) {
+                ([(_test, _decision_tree)], []) => {
+                    // only one test with no fallback: we will always enter this branch
+
+                    // get the `_decision_tree` without cloning
+                    decision_edges.pop().unwrap().1
                 }
-                (_, None) => DecisionTree::Decision {
-                    path: path.clone(),
+                (_, []) => DecisionTree::Decision {
+                    path,
                     edges: decision_edges,
                     default: None,
                 },
-                (None, Some(_)) => to_decision_tree(fallback),
-                _ => DecisionTree::Decision {
-                    path: path.clone(),
+                ([], _) => {
+                    // should be guaranteed by the patterns
+                    debug_assert!(!fallback.is_empty());
+                    to_decision_tree(fallback)
+                }
+                (_, _) => DecisionTree::Decision {
+                    path,
                     edges: decision_edges,
                     default: Some(Box::new(to_decision_tree(fallback))),
                 },
