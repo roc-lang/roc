@@ -318,23 +318,7 @@ fn from_pending_alias<'a>(
                 }
             }
 
-            let named = PoolVec::with_capacity(named_rigids.len() as u32, env.pool);
-            let unnamed = PoolVec::with_capacity(unnamed_rigids.len() as u32, env.pool);
-
-            for (node_id, (name, variable)) in named.iter_node_ids().zip(named_rigids) {
-                let poolstr = PoolStr::new(name, env.pool);
-
-                env.pool[node_id] = (poolstr, variable);
-            }
-
-            for (node_id, rigid) in unnamed.iter_node_ids().zip(unnamed_rigids) {
-                env.pool[node_id] = rigid;
-            }
-
-            let rigids = Rigids {
-                named: named.shallow_clone(),
-                unnamed,
-            };
+            let rigids = Rigids::new(named_rigids, unnamed_rigids, env.pool);
 
             let annotation = match signature {
                 Signature::Value { annotation } => annotation,
@@ -358,14 +342,20 @@ fn from_pending_alias<'a>(
                     rec_type_union.substitute_alias(env.pool, symbol, Type2::Variable(rec_var));
 
                     let annotation_id = env.add(rec_type_union, ann.region);
-                    scope.add_alias(env.pool, symbol, named, annotation_id);
+                    let named = rigids.named(env.pool);
+                    let named_pool_vec = PoolVec::new(named.into_iter(), env.pool);
+
+                    scope.add_alias(env.pool, symbol, named_pool_vec, annotation_id);
                 } else {
                     env.problem(Problem::CyclicAlias(symbol, name.region, vec![]));
                     return output;
                 }
             } else {
                 let annotation_id = env.add(annotation, ann.region);
-                scope.add_alias(env.pool, symbol, named, annotation_id);
+                let named = rigids.named(env.pool);
+                let named_pool_vec = PoolVec::new(named.into_iter(), env.pool);
+
+                scope.add_alias(env.pool, symbol, named_pool_vec, annotation_id);
             }
 
             output
@@ -410,21 +400,7 @@ fn canonicalize_pending_def<'a>(
                         output.references.referenced_aliases.insert(symbol);
                     }
 
-                    let rigids = {
-                        let named = PoolVec::with_capacity(named_rigids.len() as u32, env.pool);
-                        let unnamed = PoolVec::with_capacity(unnamed_rigids.len() as u32, env.pool);
-
-                        for (node_id, (name, variable)) in named.iter_node_ids().zip(named_rigids) {
-                            let poolstr = PoolStr::new(name, env.pool);
-                            env.pool[node_id] = (poolstr, variable);
-                        }
-
-                        for (node_id, rigid) in unnamed.iter_node_ids().zip(unnamed_rigids) {
-                            env.pool[node_id] = rigid;
-                        }
-
-                        Rigids { named, unnamed }
-                    };
+                    let rigids = Rigids::new(named_rigids, unnamed_rigids, env.pool);
 
                     let annotation = match signature {
                         Signature::Value { annotation } => annotation,
@@ -473,21 +449,7 @@ fn canonicalize_pending_def<'a>(
                         output.references.referenced_aliases.insert(symbol);
                     }
 
-                    let rigids = {
-                        let named = PoolVec::with_capacity(named_rigids.len() as u32, env.pool);
-                        let unnamed = PoolVec::with_capacity(unnamed_rigids.len() as u32, env.pool);
-
-                        for (node_id, (name, variable)) in named.iter_node_ids().zip(named_rigids) {
-                            let poolstr = PoolStr::new(name, env.pool);
-                            env.pool[node_id] = (poolstr, variable);
-                        }
-
-                        for (node_id, rigid) in unnamed.iter_node_ids().zip(unnamed_rigids) {
-                            env.pool[node_id] = rigid;
-                        }
-
-                        Rigids { named, unnamed }
-                    };
+                    let rigids = Rigids::new(named_rigids, unnamed_rigids, env.pool);
 
                     // bookkeeping for tail-call detection. If we're assigning to an
                     // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
@@ -629,12 +591,9 @@ fn canonicalize_pending_def<'a>(
 
                             let value_def = ValueDef::WithAnnotation {
                                 pattern_id: loc_can_pattern,
-                                expr_id: PoolVec::new(
-                                    vec![env.pool.add(loc_can_expr)].into_iter(),
-                                    env.pool,
-                                ),
-                                type_id: PoolVec::new(vec![annotation].into_iter(), env.pool),
-                                rigids: env.pool.add(rigids),
+                                expr_id: env.pool.add(loc_can_expr),
+                                type_id: annotation,
+                                rigids: rigids,
                                 expr_var: env.var_store.fresh(),
                             };
 

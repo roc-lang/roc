@@ -1,11 +1,15 @@
 #![allow(clippy::manual_map)]
 
+use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasherDefault;
+
 use crate::lang::pattern::{Pattern2, PatternId};
 use crate::lang::pool::Pool;
 use crate::lang::pool::{NodeId, PoolStr, PoolVec, ShallowClone};
 use crate::lang::types::{Type2, TypeId};
 use arraystring::{typenum::U30, ArrayString};
 use roc_can::expr::Recursive;
+use roc_collections::all::WyHash;
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
@@ -219,10 +223,10 @@ pub enum Expr2 {
 #[derive(Debug)]
 pub enum ValueDef {
     WithAnnotation {
-        pattern_id: PatternId,    // 4B
-        expr_id: PoolVec<ExprId>, // 4B
-        type_id: PoolVec<TypeId>,
-        rigids: NodeId<Rigids>,
+        pattern_id: PatternId, // 4B
+        expr_id: ExprId,       // 4B
+        type_id: TypeId,
+        rigids: Rigids,
         expr_var: Variable, // 4B
     },
     NoAnnotation {
@@ -243,9 +247,9 @@ impl ShallowClone for ValueDef {
                 expr_var,
             } => Self::WithAnnotation {
                 pattern_id: *pattern_id,
-                expr_id: expr_id.shallow_clone(),
-                type_id: type_id.shallow_clone(),
-                rigids: *rigids,
+                expr_id: *expr_id,
+                type_id: *type_id,
+                rigids: rigids.shallow_clone(),
                 expr_var: *expr_var,
             },
             Self::NoAnnotation {
@@ -312,8 +316,63 @@ impl ShallowClone for FunctionDef {
 
 #[derive(Debug)]
 pub struct Rigids {
-    pub named: PoolVec<(PoolStr, Variable)>, // 8B
-    pub unnamed: PoolVec<Variable>,          // 8B
+    pub names: PoolVec<(Option<PoolStr>, Variable)>, // 8B
+    padding: [u8; 1],
+}
+
+impl Rigids {
+    pub fn new(
+        named: HashMap<&str, Variable, BuildHasherDefault<WyHash>>,
+        unnamed: HashSet<Variable, BuildHasherDefault<WyHash>>,
+        pool: &mut Pool,
+    ) -> Self {
+        let names = PoolVec::with_capacity((named.len() + unnamed.len()) as u32, pool);
+
+        let mut temp_names = Vec::new();
+
+        temp_names.extend(named.iter().map(|(name, var)| (Some(*name), *var)));
+
+        temp_names.extend(unnamed.iter().map(|var| (None, *var)));
+
+        for (node_id, (opt_name, variable)) in names.iter_node_ids().zip(temp_names) {
+            let poolstr = opt_name.map(|name| PoolStr::new(name, pool));
+
+            pool[node_id] = (poolstr, variable);
+        }
+
+        Self {
+            names,
+            padding: Default::default(),
+        }
+    }
+
+    pub fn named(&self, pool: &Pool) -> Vec<(PoolStr, Variable)> {
+        let mut named = Vec::new();
+
+        for node_id in self.names.iter_node_ids() {
+            let (opt_pool_str, var) = pool.get(node_id);
+
+            if let Some(pool_str) = opt_pool_str {
+                named.push((*pool_str, *var));
+            }
+        }
+
+        named
+    }
+
+    pub fn unnamed(&self, pool: &Pool) -> Vec<Variable> {
+        let mut unnamed = Vec::new();
+
+        for node_id in self.names.iter_node_ids() {
+            let (opt_pool_str, var) = pool.get(node_id);
+
+            if opt_pool_str.is_none() {
+                unnamed.push(*var);
+            }
+        }
+
+        unnamed
+    }
 }
 
 /// This is overflow data from a Closure variant, which needs to store
@@ -499,8 +558,8 @@ fn size_of_expr() {
 impl ShallowClone for Rigids {
     fn shallow_clone(&self) -> Self {
         Self {
-            named: self.named.shallow_clone(),
-            unnamed: self.unnamed.shallow_clone(),
+            names: self.names.shallow_clone(),
+            padding: self.padding,
         }
     }
 }
