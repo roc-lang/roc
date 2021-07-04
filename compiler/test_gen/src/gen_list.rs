@@ -1939,3 +1939,23 @@ fn list_sort_with() {
         RocList<i64>
     );
 }
+
+#[test]
+#[should_panic(expected = r#"Roc failed with message: "invalid ret_layout""#)]
+fn lists_with_incompatible_type_param_in_if() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            list1 = [ {} ]
+
+            list2 = [ "" ]
+
+            x = if True then list1 else list2
+
+            ""
+            "#
+        ),
+        RocStr::empty(),
+        RocStr
+    );
+}
