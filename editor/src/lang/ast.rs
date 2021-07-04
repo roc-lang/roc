@@ -320,6 +320,7 @@ pub struct Rigids {
     padding: [u8; 1],
 }
 
+#[allow(clippy::needless_collect)]
 impl Rigids {
     pub fn new(
         named: HashMap<&str, Variable, BuildHasherDefault<WyHash>>,
