@@ -614,7 +614,6 @@ fn pool_vec_iter_test() {
 
     assert_eq!(current_vec, expected_vec);
 }
-
 /// Clones the outer node, but does not clone any nodeids
 pub trait ShallowClone {
     fn shallow_clone(&self) -> Self;

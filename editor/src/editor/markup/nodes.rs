@@ -179,12 +179,16 @@ pub fn expr2_to_markup<'a, 'b>(
         Expr2::SmallInt { text, .. }
         | Expr2::I128 { text, .. }
         | Expr2::U128 { text, .. }
-        | Expr2::Float { text, .. } => new_markup_node(
-            get_string(env, &text),
-            expr2_node_id,
-            HighlightStyle::Number,
-            markup_node_pool,
-        ),
+        | Expr2::Float { text, .. } => {
+            let num_str = get_string(env, &text);
+
+            new_markup_node(
+                num_str,
+                expr2_node_id,
+                HighlightStyle::Number,
+                markup_node_pool,
+            )
+        }
         Expr2::Str(text) => new_markup_node(
             "\"".to_owned() + text.as_str(env.pool) + "\"",
             expr2_node_id,
@@ -236,7 +240,7 @@ pub fn expr2_to_markup<'a, 'b>(
                 if idx + 1 < elems.len() {
                     children_ids.push(new_markup_node(
                         ", ".to_string(),
-                        *node_id,
+                        expr2_node_id,
                         HighlightStyle::Operator,
                         markup_node_pool,
                     ));

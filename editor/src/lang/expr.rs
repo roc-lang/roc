@@ -249,6 +249,7 @@ pub fn to_expr2<'a>(
     region: Region,
 ) -> (Expr2, self::Output) {
     use roc_parse::ast::Expr::*;
+
     match parse_expr {
         Float(string) => {
             match finish_parsing_float(string) {
@@ -336,20 +337,16 @@ pub fn to_expr2<'a>(
             let mut output = Output::default();
             let output_ref = &mut output;
 
-            let elems = PoolVec::with_capacity(items.len() as u32, env.pool);
+            let elems: PoolVec<NodeId<Expr2>> =
+                PoolVec::with_capacity(items.len() as u32, env.pool);
 
-            let node_id_item_tups: Vec<(ExprId, &Located<Expr>)> = elems
-                .iter(env.pool)
-                .map(|node_ref| *node_ref)
-                .zip(items.iter().map(|item_ref| *item_ref))
-                .collect();
-
-            for (node_id, item) in node_id_item_tups.iter() {
+            for (node_id, item) in elems.iter_node_ids().zip(items.iter()) {
                 let (expr, sub_output) = to_expr2(env, scope, &item.value, item.region);
 
                 output_ref.union(sub_output);
 
-                env.pool.set(*node_id, expr);
+                let expr_id = env.pool.add(expr);
+                env.pool[node_id] = expr_id;
             }
 
             let expr = Expr2::List {

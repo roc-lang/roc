@@ -159,8 +159,7 @@ impl<'a> EdModule<'a> {
                     let ast_root_id = env.pool.add(expr2);
 
                     // for debugging
-                    // let expr2_str = expr2_to_string(ast_root_id, env.pool);
-                    // println!("expr2_string: {}", expr2_str);
+                    // dbg!(expr2_to_string(ast_root_id, env.pool));
 
                     Ok(EdModule { env, ast_root_id })
                 }

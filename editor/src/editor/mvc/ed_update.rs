@@ -1584,7 +1584,7 @@ pub mod test_ed_update {
     }
 
     #[test]
-    fn test_ignore_list() -> Result<(), String> {
+    fn test_ignore_single_elt_list() -> Result<(), String> {
         assert_insert_seq_ignore(&["┃[  ]"], IGNORE_CHARS)?;
         assert_insert_seq_ignore(&["[  ]┃"], IGNORE_CHARS)?;
         assert_insert_seq_ignore(&["[┃  ]"], IGNORE_CHARS)?;
@@ -1627,6 +1627,51 @@ pub mod test_ed_update {
         assert_insert_seq_ignore(&["[ [  ]┃ ]"], IGNORE_CHARS)?;
         assert_insert_seq_ignore(&["[ [┃  ] ]"], IGNORE_CHARS)?;
         assert_insert_seq_ignore(&["[ [  ┃] ]"], IGNORE_CHARS)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ignore_multi_elt_list() -> Result<(), String> {
+        assert_insert_seq_ignore(&["┃[ 0, 1 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ 0, 1 ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[┃ 0, 1 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ 0, 1 ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ 0,┃ 1 ]"], IGNORE_CHARS)?;
+
+        assert_insert_seq_ignore(&["┃[ 123, 56, 7 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ 123, 56, 7 ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[┃ 123, 56, 7 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ 123, 56, 7 ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ 123,┃ 56, 7 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ 123, 56,┃ 7 ]"], IGNORE_CHARS)?;
+
+        assert_insert_seq_ignore(&["┃[ \"123\", \"56\", \"7\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ \"123\", \"56\", \"7\" ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[┃ \"123\", \"56\", \"7\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ \"123\", \"56\", \"7\" ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ \"123\",┃ \"56\", \"7\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ \"123\", \"56\",┃ \"7\" ]"], IGNORE_CHARS)?;
+
+        assert_insert_seq_ignore(&["┃[ { a: 0 }, { a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ { a: 0 }, { a: 1 } ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[┃ { a: 0 }, { a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ { a: 0 }, { a: 1 } ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ { a: 0 },┃ { a: 1 } ]"], IGNORE_CHARS)?;
+
+        assert_insert_seq_ignore(&["┃[ [ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [ 0 ], [ 1 ] ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[┃ [ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [ 0 ], [ 1 ] ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [ 0 ],┃ [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ ┃[ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [ 0 ]┃, [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [┃ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [ 0 ┃], [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [ 0 ], ┃[ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [ 0 ], [┃ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [ 0 ], [ 1 ]┃ ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [ 0 ], [ 1 ┃] ]"], IGNORE_CHARS)?;
 
         Ok(())
     }
