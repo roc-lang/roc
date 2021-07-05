@@ -468,6 +468,7 @@ fn nested_pattern_match() {
         i64
     );
 }
+
 #[test]
 fn if_guard_pattern_false() {
     assert_evals_to!(
@@ -476,6 +477,24 @@ fn if_guard_pattern_false() {
                 wrapper = \{} ->
                     when 2 is
                         2 if False -> 0
+                        _ -> 42
+
+                wrapper {}
+                "#
+        ),
+        42,
+        i64
+    );
+}
+
+#[test]
+fn if_guard_switch() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                wrapper = \{} ->
+                    when 2 is
+                        2 | 3 if False -> 0
                         _ -> 42
 
                 wrapper {}
