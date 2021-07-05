@@ -621,6 +621,7 @@ pub struct LoadedModule {
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
+    pub exposed_aliases: MutMap<Symbol, Alias>,
     pub exposed_values: Vec<Symbol>,
     pub header_sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
@@ -764,6 +765,7 @@ enum Msg<'a> {
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
         exposed_vars_by_symbol: MutMap<Symbol, Variable>,
+        exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
         exposed_values: Vec<Symbol>,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
     },
@@ -1512,6 +1514,7 @@ where
                     Msg::FinishedAllTypeChecking {
                         solved_subs,
                         exposed_vars_by_symbol,
+                        exposed_aliases_by_symbol,
                         exposed_values,
                         documentation,
                     } => {
@@ -1529,6 +1532,7 @@ where
                             state,
                             solved_subs,
                             exposed_values,
+                            exposed_aliases_by_symbol,
                             exposed_vars_by_symbol,
                             documentation,
                         )));
@@ -1944,6 +1948,7 @@ fn update<'a>(
                         solved_subs,
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
                         exposed_values: solved_module.exposed_symbols,
+                        exposed_aliases_by_symbol: solved_module.aliases,
                         documentation,
                     })
                     .map_err(|_| LoadingProblem::MsgChannelDied)?;
@@ -2269,6 +2274,7 @@ fn finish(
     state: State,
     solved: Solved<Subs>,
     exposed_values: Vec<Symbol>,
+    exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
     exposed_vars_by_symbol: MutMap<Symbol, Variable>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
 ) -> LoadedModule {
@@ -2303,6 +2309,7 @@ fn finish(
         can_problems: state.module_cache.can_problems,
         type_problems: state.module_cache.type_problems,
         declarations_by_id: state.declarations_by_id,
+        exposed_aliases: exposed_aliases_by_symbol,
         exposed_values,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
         header_sources,
