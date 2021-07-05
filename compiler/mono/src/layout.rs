@@ -191,7 +191,7 @@ impl<'a> UnionLayout<'a> {
         match self {
             UnionLayout::NonRecursive(_)
             | UnionLayout::Recursive(_)
-            | UnionLayout::NonNullableUnwrapped { .. } => true,
+            | UnionLayout::NonNullableUnwrapped { .. } => false,
             UnionLayout::NullableWrapped { .. } | UnionLayout::NullableUnwrapped { .. } => true,
         }
     }
