@@ -556,7 +556,7 @@ pub fn insert_doc_links(scope: &mut Scope, interns: &Interns, markdown: String) 
                         interns,
                         &buf.chars()
                             .skip(from + 1)
-                            .take(index - from)
+                            .take(index - from - 1)
                             .collect::<String>(),
                     );
 
@@ -582,10 +582,12 @@ fn make_doc_link(scope: &mut Scope, interns: &Interns, doc_item: &str) -> String
     match scope.lookup(&doc_item.into(), Region::zero()) {
         Ok(symbol) => {
             let module_str = symbol.module_string(interns);
+
             let ident_str = symbol.ident_string(interns);
 
             let mut link = String::new();
 
+            link.push('/');
             link.push_str(module_str);
             link.push('#');
             link.push_str(ident_str);
