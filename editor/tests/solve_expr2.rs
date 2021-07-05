@@ -117,7 +117,7 @@ fn infer_eq(actual: &str, expected_str: &str) {
             let content = subs.get(var).content;
 
             let interns = Interns {
-                module_ids,
+                module_ids: env.module_ids.clone(),
                 all_ident_ids: dep_idents,
             };
 
@@ -298,5 +298,33 @@ fn constrain_when() {
             "#
         ),
         "[ Blue, Purple ]*",
+    )
+}
+
+#[test]
+fn constrain_let_value() {
+    infer_eq(
+        indoc!(
+            r#"
+            person = { name: "roc" }
+
+            person
+            "#
+        ),
+        "{ name : Str }",
+    )
+}
+
+#[test]
+fn constrain_update() {
+    infer_eq(
+        indoc!(
+            r#"
+            person = { name: "roc" }
+
+            { person & name: "bird" } 
+            "#
+        ),
+        "{ name : Str }",
     )
 }
