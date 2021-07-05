@@ -152,6 +152,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     * search a local history of previously encountered errors and fixes
     * search through a database of our zullip questions
     * ...
+* smart insert: press a shortcut and enter a plain english description of a code snippet you need. Examples: "convert string to list of chars", "sort list of records by field foo descending", "plot this list with date on x-axis"...
 
 #### Autocomplete
 
