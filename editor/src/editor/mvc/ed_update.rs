@@ -689,7 +689,9 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
                                                     if prev_mark_node.get_content()? == nodes::LEFT_SQUARE_BR {
                                                         if curr_mark_node.get_content()? == nodes::RIGHT_SQUARE_BR {
-                                                            add_blank_child(ed_model)?; // insert a Blank first, this results in cleaner code
+                                                            // based on if, we are at the start of the list
+                                                            let new_child_index = 1;
+                                                            add_blank_child(new_child_index, ed_model)?; // insert a Blank first, this results in cleaner code
                                                             handle_new_char(received_char, ed_model)?
                                                         } else {
                                                             InputOutcome::Ignored
@@ -735,7 +737,11 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
                                         match parent_expr2 {
                                             Expr2::List { elem_var:_, elems:_} => {
-                                                add_blank_child(ed_model)?
+                                                // insert a Blank first, this results in cleaner code
+                                                add_blank_child(
+                                                    ed_model.get_curr_child_index()?,
+                                                    ed_model
+                                                )?
                                             }
                                             Expr2::Record { record_var:_, fields:_ } => {
                                                 todo!("multiple record fields")
@@ -752,7 +758,11 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
                                     if prev_mark_node.get_content()? == nodes::LEFT_SQUARE_BR {
                                         if curr_mark_node.get_content()? == nodes::RIGHT_SQUARE_BR {
-                                            add_blank_child(ed_model)?; // insert a Blank first, this results in cleaner code
+                                            // insert a Blank first, this results in cleaner code
+                                            add_blank_child(
+                                                ed_model.get_curr_child_index()?,
+                                                ed_model
+                                            )?;
                                             handle_new_char(received_char, ed_model)?
                                         } else {
                                             InputOutcome::Ignored
@@ -1949,7 +1959,11 @@ pub mod test_ed_update {
         let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
 
         for input_char in new_char_seq.chars() {
-            ed_res_to_res(handle_new_char(&input_char, &mut ed_model))?;
+            if input_char == '➔' {
+                ed_model.simple_move_carets_right(1);
+            } else {
+                ed_res_to_res(handle_new_char(&input_char, &mut ed_model))?;
+            }
         }
 
         for expected_tooltip in expected_tooltips.iter() {
@@ -2006,16 +2020,16 @@ pub mod test_ed_update {
         assert_type_tooltip_clean(&["{ ┃z: {  } }"], "{ z : {} }")?;
         assert_type_tooltip_clean(&["{ camelCase: ┃0 }"], "Num *")?;
 
-        assert_type_tooltips_seq(&["┃"], &vec!["*"], "")?;
-        assert_type_tooltips_seq(&["┃"], &vec!["*", "{ a : * }"], "{a:")?;
+        assert_type_tooltips_seq(&["┃"], &["*"], "")?;
+        assert_type_tooltips_seq(&["┃"], &["*", "{ a : * }"], "{a:")?;
 
         assert_type_tooltips_clean(
             &["{ camelCase: ┃0 }"],
-            &vec!["Num *", "{ camelCase : Num * }"],
+            &["Num *", "{ camelCase : Num * }"],
         )?;
         assert_type_tooltips_clean(
             &["{ a: { b: { c: \"hello┃, hello.0123456789ZXY{}[]-><-\" } } }"],
-            &vec![
+            &[
                 "Str",
                 "{ c : Str }",
                 "{ b : { c : Str } }",
@@ -2023,13 +2037,18 @@ pub mod test_ed_update {
             ],
         )?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_type_tooltip_list() -> Result<(), String> {
         assert_type_tooltip(&["┃"], "List *", '[')?;
-        assert_type_tooltips_seq(&["┃"], &vec!["List (Num *)"], "[0")?;
-        assert_type_tooltips_seq(&["┃"], &vec!["List (Num *)", "List (List (Num *))"], "[[0")?;
-        assert_type_tooltips_seq(&["┃"], &vec!["Str", "List Str"], "[\"a")?;
+        assert_type_tooltips_seq(&["┃"], &["List (Num *)"], "[0")?;
+        assert_type_tooltips_seq(&["┃"], &["List (Num *)", "List (List (Num *))"], "[[0")?;
+        assert_type_tooltips_seq(&["┃"], &["Str", "List Str"], "[\"a")?;
         assert_type_tooltips_seq(
             &["┃"],
-            &vec![
+            &[
                 "Str",
                 "List Str",
                 "List (List Str)",
@@ -2039,13 +2058,29 @@ pub mod test_ed_update {
         )?;
         assert_type_tooltips_seq(
             &["┃"],
-            &vec![
+            &[
                 "{ a : Num * }",
                 "List { a : Num * }",
                 "List (List { a : Num * })",
             ],
             "[[{a:1",
         )?;
+
+        // multi element lists
+        assert_type_tooltips_seq(&["┃"], &["List (Num *)"], "[1,2,3")?;
+        assert_type_tooltips_seq(&["┃"], &["Str", "List Str"], "[\"abc➔,\"de➔,\"f")?;
+        assert_type_tooltips_seq(&["┃"], &["{ a : Num * }", "List { a : Num * }"], "[{a:0➔➔,{a:12➔➔,{a:444")?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_type_tooltip_mismatch() -> Result<(), String> {
+        assert_type_tooltips_seq(&["┃"], &["Str", "List <type mismatch>"], "[1,\"abc")?;
+        assert_type_tooltips_seq(&["┃"], &["List <type mismatch>"], "[\"abc➔,50")?;
+
+        assert_type_tooltips_seq(&["┃"], &["Str", "{ a : Str }", "List <type mismatch>"], "[{a:0➔➔,{a:\"0")?;
+
+        assert_type_tooltips_seq(&["┃"], &["List (Num *)", "List (List <type mismatch>)"], "[[0,1,\"2➔➔➔,[3, 4, 5")?;
 
         Ok(())
     }

@@ -2,7 +2,7 @@ use super::attribute::Attributes;
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::ExpectedTextNode;
 use crate::editor::ed_error::GetContentOnNestedNode;
-use crate::editor::ed_error::NestedNodeRequired;
+use crate::editor::ed_error::{NestedNodeRequired, NestedNodeMissingChild};
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
@@ -70,6 +70,26 @@ impl MarkupNode {
             parent_node.get_children_ids()
         } else {
             vec![]
+        }
+    }
+
+    pub fn get_child_index(&self, child_id: MarkNodeId) -> EdResult<MarkNodeId> {
+        match self {
+            MarkupNode::Nested { children_ids, .. } => {
+                let position_opt = children_ids.iter().position(|&c_id| c_id == child_id);
+
+                if let Some(child_index) = position_opt {
+                    Ok(child_index)
+                } else {
+                    NestedNodeMissingChild {
+                        node_id: child_id,
+                        children_ids: children_ids.clone(),
+                    }.fail()
+                }
+            },
+            _ => NestedNodeRequired {
+                node_type: self.node_type_as_string(),
+            }.fail(),
         }
     }
 
