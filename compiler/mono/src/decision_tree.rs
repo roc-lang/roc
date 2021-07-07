@@ -351,7 +351,7 @@ fn tests_at_path<'a>(
     let mut all_tests = Vec::new();
 
     for branch in branches {
-        test_at_path(selected_path, branch, &mut all_tests);
+        all_tests.extend(test_at_path(selected_path, branch));
     }
 
     // The rust HashMap also uses equality, here we really want to use the custom hash function
@@ -382,8 +382,7 @@ fn tests_at_path<'a>(
 fn test_at_path<'a>(
     selected_path: &[PathInstruction],
     branch: &Branch<'a>,
-    guarded_tests: &mut Vec<GuardedTest<'a>>,
-) {
+) -> Option<GuardedTest<'a>> {
     use Pattern::*;
     use Test::*;
 
@@ -392,18 +391,18 @@ fn test_at_path<'a>(
         .iter()
         .find(|(path, _, _)| path == selected_path)
     {
-        None => {}
+        None => None,
         Some((_, guard, pattern)) => {
             let test = match pattern {
                 Identifier(_) | Underscore => {
                     if let Guard::Guard { id, stmt, .. } = guard {
-                        guarded_tests.push(GuardedTest::GuardedNoTest {
+                        return Some(GuardedTest::GuardedNoTest {
                             stmt: stmt.clone(),
                             id: *id,
                         });
+                    } else {
+                        return None;
                     }
-
-                    return;
                 }
 
                 RecordDestructure(destructs, _) => {
@@ -485,7 +484,7 @@ fn test_at_path<'a>(
                 GuardedTest::TestNotGuarded { test }
             };
 
-            guarded_tests.push(guarded_test);
+            Some(guarded_test)
         }
     }
 }
