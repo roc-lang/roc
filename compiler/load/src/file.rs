@@ -622,6 +622,7 @@ pub struct LoadedModule {
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
     pub exposed_aliases: MutMap<Symbol, Alias>,
+    pub exposed_values: Vec<Symbol>,
     pub header_sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
@@ -765,6 +766,7 @@ enum Msg<'a> {
         solved_subs: Solved<Subs>,
         exposed_vars_by_symbol: MutMap<Symbol, Variable>,
         exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
+        exposed_values: Vec<Symbol>,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
     },
     FoundSpecializations {
@@ -1513,6 +1515,7 @@ where
                         solved_subs,
                         exposed_vars_by_symbol,
                         exposed_aliases_by_symbol,
+                        exposed_values,
                         documentation,
                     } => {
                         // We're done! There should be no more messages pending.
@@ -1528,6 +1531,7 @@ where
                         return Ok(LoadResult::TypeChecked(finish(
                             state,
                             solved_subs,
+                            exposed_values,
                             exposed_aliases_by_symbol,
                             exposed_vars_by_symbol,
                             documentation,
@@ -1943,6 +1947,7 @@ fn update<'a>(
                     .send(Msg::FinishedAllTypeChecking {
                         solved_subs,
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
+                        exposed_values: solved_module.exposed_symbols,
                         exposed_aliases_by_symbol: solved_module.aliases,
                         documentation,
                     })
@@ -2268,6 +2273,7 @@ fn finish_specialization(
 fn finish(
     state: State,
     solved: Solved<Subs>,
+    exposed_values: Vec<Symbol>,
     exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
     exposed_vars_by_symbol: MutMap<Symbol, Variable>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
@@ -2303,8 +2309,9 @@ fn finish(
         can_problems: state.module_cache.can_problems,
         type_problems: state.module_cache.type_problems,
         declarations_by_id: state.declarations_by_id,
-        exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
         exposed_aliases: exposed_aliases_by_symbol,
+        exposed_values,
+        exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
         header_sources,
         sources,
         timings: state.timings,
@@ -3297,6 +3304,7 @@ fn run_solve<'a>(
 
     let solved_module = SolvedModule {
         exposed_vars_by_symbol,
+        exposed_symbols: exposed_symbols.into_iter().collect::<Vec<_>>(),
         solved_types,
         problems,
         aliases: solved_env.aliases,
@@ -3533,7 +3541,6 @@ fn fabricate_effects_module<'a>(
                     &mut var_store,
                     annotation,
                 );
-
                 exposed_symbols.insert(symbol);
 
                 declarations.push(Declaration::Declare(def));
