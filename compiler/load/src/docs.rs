@@ -1,12 +1,12 @@
-use crate::docs::DocEntry::DetatchedDoc;
+use crate::docs::DocEntry::DetachedDoc;
 use crate::docs::TypeAnnotation::{
     Apply, BoundVariable, Function, NoTypeAnn, ObscuredRecord, ObscuredTagUnion, Record, TagUnion,
 };
+use crate::file::LoadedModule;
 use inlinable_string::InlinableString;
 use roc_can::scope::Scope;
-use roc_collections::all::MutMap;
 use roc_module::ident::ModuleName;
-use roc_module::symbol::{IdentIds, Interns, ModuleId};
+use roc_module::symbol::IdentIds;
 use roc_parse::ast;
 use roc_parse::ast::CommentOrNewline;
 use roc_parse::ast::{AssignedField, Def};
@@ -19,7 +19,7 @@ pub struct Documentation {
     pub name: String,
     pub version: String,
     pub docs: String,
-    pub modules: Vec<(MutMap<ModuleId, ModuleDocumentation>, Interns)>,
+    pub modules: Vec<LoadedModule>,
 }
 
 #[derive(Debug)]
@@ -32,7 +32,7 @@ pub struct ModuleDocumentation {
 #[derive(Debug, Clone)]
 pub enum DocEntry {
     DocDef(DocDef),
-    DetatchedDoc(String),
+    DetachedDoc(String),
 }
 
 #[derive(Debug, Clone)]
@@ -108,10 +108,10 @@ pub fn generate_module_docs<'a>(
     }
 }
 
-fn detatched_docs_from_comments_and_new_lines<'a>(
+fn detached_docs_from_comments_and_new_lines<'a>(
     comments_or_new_lines: &'a [roc_parse::ast::CommentOrNewline<'a>],
 ) -> Vec<String> {
-    let mut detatched_docs: Vec<String> = Vec::new();
+    let mut detached_docs: Vec<String> = Vec::new();
 
     let mut docs = String::new();
 
@@ -123,13 +123,16 @@ fn detatched_docs_from_comments_and_new_lines<'a>(
             }
 
             CommentOrNewline::LineComment(_) | CommentOrNewline::Newline => {
-                detatched_docs.push(docs.clone());
+                if !docs.is_empty() {
+                    detached_docs.push(docs.clone());
+                }
+
                 docs = String::new();
             }
         }
     }
 
-    detatched_docs
+    detached_docs
 }
 
 fn generate_entry_doc<'a>(
@@ -147,8 +150,8 @@ fn generate_entry_doc<'a>(
         Def::SpaceBefore(sub_def, comments_or_new_lines) => {
             // Comments before a definition are attached to the current defition
 
-            for detatched_doc in detatched_docs_from_comments_and_new_lines(comments_or_new_lines) {
-                acc.push(DetatchedDoc(detatched_doc));
+            for detached_doc in detached_docs_from_comments_and_new_lines(comments_or_new_lines) {
+                acc.push(DetachedDoc(detached_doc));
             }
 
             generate_entry_doc(ident_ids, acc, Some(comments_or_new_lines), sub_def)

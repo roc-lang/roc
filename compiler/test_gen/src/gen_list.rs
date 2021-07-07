@@ -383,7 +383,7 @@ fn list_walk_with_str() {
 }
 
 #[test]
-fn list_walk_substraction() {
+fn list_walk_subtraction() {
     assert_evals_to!(r#"List.walk [ 1, 2 ] Num.sub 1"#, 2, i64);
 }
 
@@ -1937,5 +1937,25 @@ fn list_sort_with() {
         "List.sortWith [ 1,2,3,4] (\\a,b -> Num.compare b a)",
         RocList::from_slice(&[4, 3, 2, 1]),
         RocList<i64>
+    );
+}
+
+#[test]
+#[should_panic(expected = r#"Roc failed with message: "invalid ret_layout""#)]
+fn lists_with_incompatible_type_param_in_if() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            list1 = [ {} ]
+
+            list2 = [ "" ]
+
+            x = if True then list1 else list2
+
+            ""
+            "#
+        ),
+        RocStr::empty(),
+        RocStr
     );
 }

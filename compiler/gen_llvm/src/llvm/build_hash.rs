@@ -1,7 +1,7 @@
 use crate::debug_info_init;
 use crate::llvm::bitcode::call_bitcode_fn;
 use crate::llvm::build::Env;
-use crate::llvm::build::{cast_block_of_memory_to_tag, complex_bitcast, FAST_CALL_CONV};
+use crate::llvm::build::{cast_block_of_memory_to_tag, get_tag_id, FAST_CALL_CONV, TAG_DATA_INDEX};
 use crate::llvm::build_str;
 use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
@@ -88,7 +88,7 @@ fn build_hash_layout<'a, 'ctx, 'env>(
             }
         },
 
-        Layout::FunctionPointer(_, _) | Layout::Closure(_, _, _) => {
+        Layout::Closure(_, _, _) => {
             unreachable!("the type system will guarantee these are never hashed")
         }
     }
@@ -401,13 +401,15 @@ fn hash_tag<'a, 'ctx, 'env>(
     let merge_block = env.context.append_basic_block(parent, "merge_block");
     env.builder.position_at_end(merge_block);
 
-    let merge_phi = env.builder.build_phi(env.context.i64_type(), "merge_hash");
+    let tag_id_layout = union_layout.tag_id_layout();
+    let tag_id_basic_type = basic_type_from_layout(env, &tag_id_layout);
+
+    let merge_phi = env.builder.build_phi(seed.get_type(), "merge_hash");
 
     env.builder.position_at_end(entry_block);
     match union_layout {
         NonRecursive(tags) => {
-            // SAFETY we know that non-recursive tags cannot be NULL
-            let tag_id = nonrec_tag_id(env, tag.into_struct_value());
+            let current_tag_id = get_tag_id(env, parent, union_layout, tag);
 
             let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
@@ -415,7 +417,6 @@ fn hash_tag<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                // TODO drop tag id?
                 let struct_layout = Layout::Struct(field_layouts);
 
                 let wrapper_type = basic_type_from_layout(env, &struct_layout);
@@ -424,6 +425,24 @@ fn hash_tag<'a, 'ctx, 'env>(
                 let as_struct =
                     cast_block_of_memory_to_tag(env.builder, tag.into_struct_value(), wrapper_type);
 
+                // hash the tag id
+                let hash_bytes = store_and_use_as_u8_ptr(
+                    env,
+                    tag_id_basic_type
+                        .into_int_type()
+                        .const_int(tag_id as u64, false)
+                        .into(),
+                    &tag_id_layout,
+                );
+
+                let seed = hash_bitcode_fn(
+                    env,
+                    seed,
+                    hash_bytes,
+                    tag_id_layout.stack_size(env.ptr_bytes),
+                );
+
+                // hash the tag data
                 let answer = build_hash_struct(
                     env,
                     layout_ids,
@@ -437,7 +456,7 @@ fn hash_tag<'a, 'ctx, 'env>(
                 env.builder.build_unconditional_branch(merge_block);
 
                 cases.push((
-                    env.context.i64_type().const_int(tag_id as u64, false),
+                    current_tag_id.get_type().const_int(tag_id as u64, false),
                     block,
                 ));
             }
@@ -446,11 +465,10 @@ fn hash_tag<'a, 'ctx, 'env>(
 
             let default = cases.pop().unwrap().1;
 
-            env.builder.build_switch(tag_id, default, &cases);
+            env.builder.build_switch(current_tag_id, default, &cases);
         }
         Recursive(tags) => {
-            // SAFETY recursive tag unions are not NULL
-            let tag_id = unsafe { rec_tag_id_unsafe(env, tag.into_pointer_value()) };
+            let current_tag_id = get_tag_id(env, parent, union_layout, tag);
 
             let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
@@ -458,6 +476,23 @@ fn hash_tag<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
+                // hash the tag id
+                let hash_bytes = store_and_use_as_u8_ptr(
+                    env,
+                    tag_id_basic_type
+                        .into_int_type()
+                        .const_int(tag_id as u64, false)
+                        .into(),
+                    &tag_id_layout,
+                );
+                let seed = hash_bitcode_fn(
+                    env,
+                    seed,
+                    hash_bytes,
+                    tag_id_layout.stack_size(env.ptr_bytes),
+                );
+
+                // hash the tag data
                 let answer = hash_ptr_to_struct(
                     env,
                     layout_ids,
@@ -471,7 +506,7 @@ fn hash_tag<'a, 'ctx, 'env>(
                 env.builder.build_unconditional_branch(merge_block);
 
                 cases.push((
-                    env.context.i64_type().const_int(tag_id as u64, false),
+                    current_tag_id.get_type().const_int(tag_id as u64, false),
                     block,
                 ));
             }
@@ -480,11 +515,10 @@ fn hash_tag<'a, 'ctx, 'env>(
 
             let default = cases.pop().unwrap().1;
 
-            env.builder.build_switch(tag_id, default, &cases);
+            env.builder.build_switch(current_tag_id, default, &cases);
         }
         NullableUnwrapped { other_fields, .. } => {
             let tag = tag.into_pointer_value();
-            let other_fields = &other_fields[1..];
 
             let is_null = env.builder.build_is_null(tag, "is_null");
 
@@ -513,7 +547,10 @@ fn hash_tag<'a, 'ctx, 'env>(
                 env.builder.build_unconditional_branch(merge_block);
             }
         }
-        NullableWrapped { other_tags, .. } => {
+        NullableWrapped {
+            other_tags,
+            nullable_id,
+        } => {
             let tag = tag.into_pointer_value();
 
             let is_null = env.builder.build_is_null(tag, "is_null");
@@ -534,30 +571,56 @@ fn hash_tag<'a, 'ctx, 'env>(
             }
 
             {
-                env.builder.position_at_end(hash_other_block);
-
-                // SAFETY recursive tag unions are not NULL
-                let tag_id = unsafe { rec_tag_id_unsafe(env, tag) };
-
                 let mut cases = Vec::with_capacity_in(other_tags.len(), env.arena);
 
-                for (tag_id, field_layouts) in other_tags.iter().enumerate() {
+                for (mut tag_id, field_layouts) in other_tags.iter().enumerate() {
+                    if tag_id >= *nullable_id as usize {
+                        tag_id += 1;
+                    }
+
                     let block = env.context.append_basic_block(parent, "tag_id_modify");
                     env.builder.position_at_end(block);
 
-                    let answer =
-                        hash_ptr_to_struct(env, layout_ids, union_layout, field_layouts, seed, tag);
+                    // hash the tag id
+                    let hash_bytes = store_and_use_as_u8_ptr(
+                        env,
+                        tag_id_basic_type
+                            .into_int_type()
+                            .const_int(tag_id as u64, false)
+                            .into(),
+                        &tag_id_layout,
+                    );
+                    let seed1 = hash_bitcode_fn(
+                        env,
+                        seed,
+                        hash_bytes,
+                        tag_id_layout.stack_size(env.ptr_bytes),
+                    );
+
+                    // hash tag data
+                    let answer = hash_ptr_to_struct(
+                        env,
+                        layout_ids,
+                        union_layout,
+                        field_layouts,
+                        seed1,
+                        tag,
+                    );
 
                     merge_phi.add_incoming(&[(&answer, block)]);
                     env.builder.build_unconditional_branch(merge_block);
 
                     cases.push((
-                        env.context.i64_type().const_int(tag_id as u64, false),
+                        tag_id_basic_type
+                            .into_int_type()
+                            .const_int(tag_id as u64, false),
                         block,
                     ));
                 }
 
                 env.builder.position_at_end(hash_other_block);
+
+                let tag_id = get_tag_id(env, parent, union_layout, tag.into());
 
                 let default = cases.pop().unwrap().1;
 
@@ -765,18 +828,27 @@ fn hash_ptr_to_struct<'a, 'ctx, 'env>(
 ) -> IntValue<'ctx> {
     use inkwell::types::BasicType;
 
-    let struct_layout = Layout::Struct(field_layouts);
-
-    let wrapper_type = basic_type_from_layout(env, &struct_layout);
-    debug_assert!(wrapper_type.is_struct_type());
+    let wrapper_type = basic_type_from_layout(env, &Layout::Union(*union_layout));
 
     // cast the opaque pointer to a pointer of the correct shape
+    let wrapper_ptr = env
+        .builder
+        .build_bitcast(tag, wrapper_type, "opaque_to_correct")
+        .into_pointer_value();
+
+    let struct_ptr = env
+        .builder
+        .build_struct_gep(wrapper_ptr, TAG_DATA_INDEX, "get_tag_data")
+        .unwrap();
+
+    let struct_layout = Layout::Struct(field_layouts);
+    let struct_type = basic_type_from_layout(env, &struct_layout);
     let struct_ptr = env
         .builder
         .build_bitcast(
-            tag,
-            wrapper_type.ptr_type(inkwell::AddressSpace::Generic),
-            "opaque_to_correct",
+            struct_ptr,
+            struct_type.ptr_type(inkwell::AddressSpace::Generic),
+            "cast_tag_data",
         )
         .into_pointer_value();
 
@@ -804,14 +876,13 @@ fn store_and_use_as_u8_ptr<'a, 'ctx, 'env>(
     let alloc = env.builder.build_alloca(basic_type, "store");
     env.builder.build_store(alloc, value);
 
+    let u8_ptr = env
+        .context
+        .i8_type()
+        .ptr_type(inkwell::AddressSpace::Generic);
+
     env.builder
-        .build_bitcast(
-            alloc,
-            env.context
-                .i8_type()
-                .ptr_type(inkwell::AddressSpace::Generic),
-            "as_u8_ptr",
-        )
+        .build_bitcast(alloc, u8_ptr, "as_u8_ptr")
         .into_pointer_value()
 }
 
@@ -829,35 +900,4 @@ fn hash_bitcode_fn<'a, 'ctx, 'env>(
         &bitcode::DICT_HASH,
     )
     .into_int_value()
-}
-
-fn nonrec_tag_id<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    tag: StructValue<'ctx>,
-) -> IntValue<'ctx> {
-    complex_bitcast(
-        env.builder,
-        tag.into(),
-        env.context.i64_type().into(),
-        "load_tag_id",
-    )
-    .into_int_value()
-}
-
-unsafe fn rec_tag_id_unsafe<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    tag: PointerValue<'ctx>,
-) -> IntValue<'ctx> {
-    let ptr = env
-        .builder
-        .build_bitcast(
-            tag,
-            env.context
-                .i64_type()
-                .ptr_type(inkwell::AddressSpace::Generic),
-            "cast_for_tag_id",
-        )
-        .into_pointer_value();
-
-    env.builder.build_load(ptr, "load_tag_id").into_int_value()
 }

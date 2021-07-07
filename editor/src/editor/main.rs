@@ -26,6 +26,7 @@ use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
 use cgmath::Vector2;
 use pipelines::RectResources;
+use roc_module::symbol::Interns;
 use roc_module::symbol::{IdentIds, ModuleIds};
 use roc_types::subs::VarStore;
 use std::{error::Error, io, path::Path};
@@ -140,13 +141,18 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let mut module_ids = ModuleIds::default();
     let mod_id = module_ids.get_or_insert(&"ModId123".into());
 
+    let interns = Interns {
+        module_ids,
+        all_ident_ids: IdentIds::exposed_builtins(8),
+    };
+
     let env = Env::new(
         mod_id,
         &env_arena,
         &mut env_pool,
         &mut var_store,
         dep_idents,
-        &module_ids,
+        &interns.module_ids,
         exposed_ident_ids,
     );
 
@@ -172,7 +178,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     };
 
     let ed_model_opt = {
-        let ed_model_res = ed_model::init_model(&code_str, file_path, env, &code_arena);
+        let ed_model_res = ed_model::init_model(&code_str, file_path, env, &interns, &code_arena);
 
         match ed_model_res {
             Ok(mut ed_model) => {
@@ -324,6 +330,8 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
                         )
                     }
                 } else {
+                    begin_render_pass(&mut encoder, &frame.view, &ed_theme);
+
                     queue_no_file_text(
                         &size,
                         NOTHING_OPENED,

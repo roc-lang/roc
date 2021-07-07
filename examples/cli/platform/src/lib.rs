@@ -1,8 +1,12 @@
 #![allow(non_snake_case)]
 
+use core::alloc::Layout;
 use core::ffi::c_void;
-use roc_std::{alloca, RocCallResult, RocResult, RocStr};
-use std::alloc::Layout;
+use core::mem;
+use core::mem::MaybeUninit;
+use errno::{errno, Errno};
+use libc::{self, c_char, c_int};
+use roc_std::{alloca, RocCallResult, RocList, RocResult, RocStr};
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed"]
@@ -155,4 +159,98 @@ pub fn rust_main() -> isize {
 
     // Exit code
     0
+}
+
+/// A C file descriptor.
+pub struct Fd(c_int);
+
+#[no_mangle]
+pub unsafe fn roc_fx_open(roc_path: RocStr) -> RocResult<Fd, Errno> {
+    const BUF_BYTES: usize = 256;
+
+    let mut buf: MaybeUninit<[u8; BUF_BYTES]> = MaybeUninit::uninit();
+
+    // If the path fits in the stack-allocated buffer, we can avoid a heap
+    // allocation when translating our `RocStr` to a null-terminated `char*`.
+    let path_len = roc_path.len();
+    let path_fits_in_buf = path_len > BUF_BYTES;
+    let c_path: *mut c_char;
+
+    if path_fits_in_buf {
+        roc_path.write_c_str(buf.as_mut_ptr() as *mut u8);
+
+        // NOTE buf may be only partially filled, so we don't `assume_init`!
+        c_path = buf.as_mut_ptr() as *mut c_char;
+    } else {
+        c_path = roc_alloc(path_len, mem::align_of::<c_char>() as u32) as *mut c_char;
+
+        roc_path.write_c_str(c_path as *mut u8);
+    }
+
+    let fd = libc::open(c_path, libc::O_RDONLY);
+
+    // Now that the call to `open` is done, deallocate c_path if necessary>
+    if !path_fits_in_buf {
+        roc_dealloc(c_path as *mut c_void, mem::align_of_val(&c_path) as u32);
+    }
+
+    // if libc::open returned -1, that means there was an error
+    if fd != -1 {
+        RocResult::Ok(Fd(fd))
+    } else {
+        RocResult::Err(errno())
+    }
+}
+
+#[no_mangle]
+pub unsafe fn roc_fx_read(fd: Fd, bytes: usize) -> RocResult<RocList<u8>, Errno> {
+    const BUF_BYTES: usize = 1024;
+
+    let mut buf: MaybeUninit<[u8; BUF_BYTES]> = MaybeUninit::uninit();
+
+    // We'll use our own position and libc::pread rather than using libc::read
+    // repeatedly and letting the fd store its own position. This way we don't
+    // have to worry about concurrent modifications of the fd's position.
+    let mut list = RocList::empty();
+    let mut position: usize = 0;
+
+    loop {
+        // Make sure we never read more than the buffer size, and also that
+        // we never read past the originally-requested number of bytes.
+        let bytes_to_read = BUF_BYTES.min(bytes - position);
+        let bytes_read = libc::pread(
+            fd.0,
+            buf.as_mut_ptr() as *mut c_void,
+            bytes_to_read,
+            position as i64,
+        );
+
+        // NOTE buf may be only partially filled, so we don't `assume_init`!
+
+        if bytes_read == bytes_to_read as isize {
+            // The read was successful, and there may be more bytes to read.
+            // Append the bytes to the list and continue looping!
+            let slice = core::slice::from_raw_parts(buf.as_ptr() as *const u8, bytes_read as usize);
+
+            list.append_slice(slice);
+        } else if bytes_read >= 0 {
+            // The read was successful, and there are no more bytes
+            // to read (because bytes_read was less than the requested
+            // bytes_to_read, but it was also not negative - which would have
+            // indicated an error).
+            let slice = core::slice::from_raw_parts(buf.as_ptr() as *const u8, bytes_read as usize);
+
+            list.append_slice(slice);
+
+            // We're done!
+            return RocResult::Ok(list);
+        } else {
+            // bytes_read was negative, so we got a read error!
+            break;
+        }
+
+        position += bytes_read as usize;
+    }
+
+    RocResult::Err(errno())
 }

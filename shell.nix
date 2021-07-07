@@ -9,7 +9,7 @@ let
       # name = "nixpkgs-2021-04-23";
       url = "https://github.com/nixos/nixpkgs/";
       ref = "refs/heads/nixpkgs-unstable";
-      rev = "8d0340aee5caac3807c58ad7fa4ebdbbdd9134d6";
+      rev = "51bb9f3e9ab6161a3bf7746e20b955712cef618b";
     }
   ) {};
 
@@ -42,9 +42,8 @@ let
       xorg.libxcb
     ];
 
-  llvmPkgs = pkgs.llvmPackages_10;
+  llvmPkgs = pkgs.llvmPackages_12;
 
-  # zig = import ./nix/zig-unstable.nix { inherit pkgs; };
   zig = import ./nix/zig.nix { inherit pkgs; };
 
   inputs = with pkgs;[
@@ -56,7 +55,7 @@ let
     cmake
     git
     python3
-    llvmPkgs.llvm
+    llvmPkgs.llvm.dev
     llvmPkgs.clang
     pkg-config
     zig
@@ -80,7 +79,7 @@ pkgs.mkShell
     buildInputs = inputs ++ darwinInputs ++ linuxInputs;
 
     # Additional Env vars
-    LLVM_SYS_100_PREFIX = "${llvmPkgs.llvm}";
+    LLVM_SYS_120_PREFIX = "${llvmPkgs.llvm.dev}";
     LD_LIBRARY_PATH =
       with pkgs;
       lib.makeLibraryPath
@@ -97,11 +96,4 @@ pkgs.mkShell
           ]
           ++ linuxInputs
         );
-
-    # Non Nix llvm installs names the bin llvm-as-${version}, so we
-    # alias `llvm` to `llvm-as-${version}` here.
-    # This the name of the file in nix/bin will need to be updated whenever llvm is updated
-    shellHook = ''
-      export PATH="$PATH:$PWD/nix/bin"
-    '';
   }

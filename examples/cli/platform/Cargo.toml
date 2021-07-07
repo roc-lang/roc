@@ -11,5 +11,7 @@ crate-type = ["staticlib"]
 [dependencies]
 roc_std = { path = "../../../roc_std" }
 ureq = { version = "2.1" }
+libc = "0.2"
+errno = "0.2"
 
 [workspace]

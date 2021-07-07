@@ -71,44 +71,6 @@ pub const IntWidth = enum(u8) {
     Usize,
 };
 
-pub fn intWidth(width: IntWidth) anytype {
-    switch (width) {
-        IntWidth.U8 => {
-            return u8;
-        },
-        IntWidth.U16 => {
-            return u16;
-        },
-        IntWidth.U32 => {
-            return u32;
-        },
-        IntWidth.U64 => {
-            return u64;
-        },
-        IntWidth.U128 => {
-            return u128;
-        },
-        IntWidth.I8 => {
-            return i8;
-        },
-        IntWidth.I16 => {
-            return i16;
-        },
-        IntWidth.I32 => {
-            return i32;
-        },
-        IntWidth.I64 => {
-            return i64;
-        },
-        IntWidth.I128 => {
-            return i128;
-        },
-        IntWidth.Usize => {
-            return usize;
-        },
-    }
-}
-
 pub fn decref(
     bytes_or_null: ?[*]u8,
     data_bytes: usize,

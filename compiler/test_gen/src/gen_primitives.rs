@@ -1683,11 +1683,11 @@ fn binary_tree_double_pattern_match() {
             foo = \btree ->
                 when btree is
                     Node (Node (Leaf x) _) _ -> x
-                    _ -> 0
+                    _ -> 1
 
             main : I64
             main =
-                foo (Node (Node (Leaf 32) (Leaf 0)) (Leaf 0))
+                foo (Node (Node (Leaf 32) (Leaf 2)) (Leaf 3))
             "#
         ),
         32,
@@ -2486,5 +2486,46 @@ fn hit_unresolved_type_variable() {
         ),
         RocStr::from_slice(b"B"),
         RocStr
+    );
+}
+
+#[test]
+fn pattern_match_empty_record() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                main : I64
+                main =
+                    when {} is
+                        {} -> 0
+
+            "#
+        ),
+        0,
+        i64
+    );
+}
+
+#[test]
+fn pattern_match_unit_tag() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                unit : [ Unit ]
+                unit = Unit
+
+                main : I64
+                main =
+                    when unit is
+                        Unit -> 0
+
+            "#
+        ),
+        0,
+        i64
     );
 }

@@ -31,6 +31,8 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 * [Self](https://selflanguage.org/) programming language
 * [Primitive](https://primitive.io/) code exploration in Virtual Reality
 * [Luna](https://www.luna-lang.org/) language for interactive data processing and visualization
+* [Hazel Livelits](https://hazel.org/papers/livelits-paper.pdf) interactive plugins, see GIF's [here](https://twitter.com/disconcision/status/1408155781120376833).
+* [Thorough review](https://drossbucket.com/2021/06/30/hacker-news-folk-wisdom-on-visual-programming/) of pros and cons of text versus visual programming.
 
 ### Debugging
 
@@ -39,9 +41,13 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 * [godbolt.org Compiler Explorer](https://godbolt.org/)
 * [whitebox debug visualization](https://vimeo.com/483795097)
 * [Hest](https://ivanish.ca/hest-time-travel/) tool for making highly interactive simulations.
+* [replit](https://replit.com/) collaborative browser based IDE.
 * Say you have a failing test that used to work, it would be very valuable to see all code that was changed that was used only by that test.
 e.g. you have a test `calculate_sum_test` that only uses the function `add`, when the test fails you should be able to see a diff showing only what changed for the function `add`. It would also be great to have a diff of [expression values](https://homepages.cwi.nl/~storm/livelit/images/bret.png) Bret Victor style. An ambitious project would be to suggest or automatically try fixes based on these diffs.
 * I think it could be possible to create a minimal reproduction of a program / block of code / code used by a single test. So for a failing unit test I would expect it to extract imports, the platform, types and functions that are necessary to run only that unit test and put them in a standalone roc project. This would be useful for sharing bugs with library+application authors and colleagues, for profiling or debugging with all "clutter" removed.
+* Ability to share program state at a breakpoint with someone else.
+* For debugging we should aim for maximal useful observability. For example Rust's enum values can not be easily viewed in the CodeLLDB debugger, you actually need to call a print method that does pattern matching to be able to view useful information.
+* We previuously discussed recording full traces of programs so they do not have to be re-run multiple times in the debugging process. We should encourage roc developers to experiment with creating debugging representations of this AST+"execution trace", it could lead to some cool stuff.  
 
 ### Cool regular editors
 
@@ -68,6 +74,8 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * [Lamdu](http://www.lamdu.org/) live functional programming.
 * [Sourcetrail](https://www.sourcetrail.com/) nice tree-like source explorer.
 * [Unisonweb](https://www.unisonweb.org), definition based [editor](https://twitter.com/shojberg/status/1364666092598288385) as opposed to file based.
+* [Utopia](https://utopia.app/) integrated design and development environment for React. Design and code update each other, in real time.
+* [Paredit](https://calva.io/paredit/) structural clojure editing, navigation and selection. [Another overview](http://danmidwood.com/content/2014/11/21/animated-paredit.html)
 
 ### Voice Interaction Related
 
@@ -80,7 +88,27 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     * Show edit history for this function.
     * Adjusting settings: switch to light theme, increase font size...
 * Use (context specific) voice command state machine to assist Machine Learning voice recognition model.
-* Nice special use case: using voice to code while on treadmill desk. 
+* Nice special use case: using voice to code while on treadmill desk.
+* Use word embeddings to find most similar voice command to recorded input in vector space.
+
+#### Useful voice commands
+
+* clear all breakpoints
+* increase/decrease font size
+* switch to dark/light/high-contrast mode
+* open/go to file "Main"(fuzzy matching)
+* go to function "foo"
+* go to definition
+* show all references(uses) of this function/type/...
+* show history timeline of this function/file
+* show recent projects
+* generate unit test for this function
+* generate unit test for this function based on debug trace (input and output is recorded and used in test)
+* who wrote this line (git blame integration)
+* search documentation of library X for Foo
+* show example of how to use library function Foo
+* open google/github/duckduckgo search for error...
+* show editor plugins for library X
 
     
 #### Inspiration
@@ -102,7 +130,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * When refactoring; 
     - Cutting and pasting code to a new file should automatically add imports to the new file and delete them from the old file.
     - Ability to link e.g. variable name in comments to actual variable name. Comment is automatically updated when variable name is changed.
-    - When updating dependencies with breaking changes; show similar diffs from github projects that have succesfully updated that dependency.
+    - When updating dependencies with breaking changes; show similar diffs from github projects that have successfully updated that dependency.
     - AST backed renaming, changing variable/function/type name should change it all over the codebase.  
 * Automatically create all "arms" when pattern matching after entering `when var is` based on the type.
     - All `when ... is` should be updated if the type is changed, e.g. adding Indigo to the Color type should add an arm everywhere where `when color is` is used. 
@@ -124,6 +152,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     * search a local history of previously encountered errors and fixes
     * search through a database of our zullip questions
     * ...
+* smart insert: press a shortcut and enter a plain english description of a code snippet you need. Examples: "convert string to list of chars", "sort list of records by field foo descending", "plot this list with date on x-axis"...
 
 #### Autocomplete
 
@@ -133,13 +162,15 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - Webcam based eye tracking for quick selection.
 - Machine Learning:
    * GPT-3 can generate correct python functions based on a comment describing the functionality, video [here](https://www.youtube.com/watch?v=utuz7wBGjKM). It's possible that training a model using ast's may lead to better results than text based models.
-- Current autocomplete lacks flow, moving through suggestions with arrows is slow. Being able to code by weaving together autocomplete suggestions layed out in rows using eye tracking, that could flow.
+- Current autocomplete lacks flow, moving through suggestions with arrows is slow. Being able to code by weaving together autocomplete suggestions laid out in rows using eye tracking, that could flow.
+- It's possible that with strong static types, pure functions and a good search algorithm we can develop a more reliable autocomplete than one with machine learning. 
 
 #### Productivity Inspiration
 
 * [Kite](https://www.kite.com/) AI autocomplete and doc viewer.
 * [Tabnine](https://www.tabnine.com/) AI autocomplete.
 * [Codota](https://www.codota.com) AI autocomplete and example searching.
+* [Github copilot](https://copilot.github.com/) AI autocomplete.
 * [Aroma](https://ai.facebook.com/blog/aroma-ml-for-code-recommendation) showing examples similar to current code.
 * [MISM](https://arxiv.org/abs/2006.05265) neural network based code similarity scoring.
 * [Inquisitive code editor](https://web.eecs.utk.edu/~azh/blog/inquisitivecodeeditor.html) Interactive bug detection with doc+test generation.
@@ -166,7 +197,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
         * See [codata](https://www.codota.com/code/java/classes/okhttp3.OkHttpClient) for inspiration on a snippet/example finder.
 * Fuzzy natural language based setting adjustment in search bar or with voice input: increase font size, enable autosave, switch to light theme...
 * Detect deviation of best practices, example case: alert developer when they are defining a color inline (rgb(30,30,30)) while all colors have been previously imported from a single file. See also [Codota](https://www.codota.com).
-* It would be valuable to record the user's interactions with the editor when debugging as well as the AST. On enough data we could train a model to perform a bunch of debugging steps and show values of the most important variables in relation to the bug. Having assistance in finding the exact code that causes the problem could be super valuable. There could be sensitive data, so it should only be recorded and or shared for open source codebases with explicit user permission.
+* It would be valuable to record the user's interactions with the editor when debugging as well as the AST. On enough data we could train a model to perform a bunch of debugging steps and show values of the most important variables in relation to the bug. Having assistance in finding the exact code that causes the problem could be super valuable. There could be sensitive data, so it should only be recorded and or shared for open source codebases with permissive licenses and with explicit user permission.
 
 
 ## Testing
@@ -191,6 +222,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Ability to see module as it would be presented on a package website.
     * Modern editors may guide developers to the source code too easily.
     The API and documentation are meant to interface with humans.
+* [DocC](https://developer.apple.com/videos/play/wwdc2021/10166/) neat documentation approach for swift. 
 
 ## General Thoughts/Ideas
 
@@ -205,9 +237,9 @@ Thoughts and ideas possibly taken from above inspirations or separate.
       Or Total blindness where we need to trough sound to communicate to the user
       Screen readers read trees of labeled elements. Each platform has different apis, but I think they are horrible. Just close your eyes and imagine listening to screen reader all day while you are using this majectic machines called computers.
       But blind people walk with a tool and they can react much better to sound/space relations than full on visal majority does. They are acute to sound as a spatial hint. And a hand for most of them is a very sensitive tool that can make sounds in space.
-      Imagine if everytime for the user doesnt want to rely on shining rendered pixels on the screen for a feedback from machine, we make a accoustic room simulation, where with moving the "stick", either with mouse or with key arrows, we bump into one of the objects and that produces certain contextually appropriate sound (clean)*ding*
+      Imagine if everytime for the user doesnt want to rely on shining rendered pixels on the screen for a feedback from machine, we make a acoustic room simulation, where with moving the "stick", either with mouse or with key arrows, we bump into one of the objects and that produces certain contextually appropriate sound (clean)*ding*
       
-      On the each level of abstraction they can make sounds more deeper, so then when you type letters you feel like you are playing with the sand (soft)*shh*. We would need help from some sound engeneer about it, but imagine moving down, which can be voice trigered command for motion impaired, you hear (soft)*pup* and the name of the module, and then you have options and commands appropriate for the module, they could map to those  basic 4 buttons that we trained user on, and he would shortcut all the soft talk with click of a button. Think of the satisfaction when you can skip the dialog of the game and get straight into action. (X) Open functions! each function would make a sound and say its name, unless you press search and start searching for a specific function inside module, if you want one you select or move to next.
+      On the each level of abstraction they can make sounds more deeper, so then when you type letters you feel like you are playing with the sand (soft)*shh*. We would need help from some sound engineer about it, but imagine moving down, which can be voice trigered command for motion impaired, you hear (soft)*pup* and the name of the module, and then you have options and commands appropriate for the module, they could map to those  basic 4 buttons that we trained user on, and he would shortcut all the soft talk with click of a button. Think of the satisfaction when you can skip the dialog of the game and get straight into action. (X) Open functions! each function would make a sound and say its name, unless you press search and start searching for a specific function inside module, if you want one you select or move to next.
       
    * Motor impariments
       [rant]BACKS OF CODERS ARE NOT HEALTHY! We need to change that![/neverstop]

@@ -143,7 +143,13 @@ pub fn gen_from_mono_module(
         exposed_to_host: loaded.exposed_to_host.keys().copied().collect(),
     };
 
-    roc_gen_llvm::llvm::build::build_procedures(&env, opt_level, loaded.procedures);
+    roc_gen_llvm::llvm::build::build_procedures(
+        &env,
+        opt_level,
+        loaded.procedures,
+        loaded.entry_point,
+        Some(&app_ll_file),
+    );
 
     env.dibuilder.finalize();
 
@@ -158,8 +164,9 @@ pub fn gen_from_mono_module(
         env.module.print_to_file(&app_ll_file).unwrap();
 
         panic!(
-            "😱 LLVM errors when defining module; I wrote the full LLVM IR to {:?}\n\n {:?}",
-            app_ll_file, errors,
+            "😱 LLVM errors when defining module; I wrote the full LLVM IR to {:?}\n\n {}",
+            app_ll_file,
+            errors.to_string(),
         );
     }
 
@@ -188,7 +195,7 @@ pub fn gen_from_mono_module(
         // run the debugir https://github.com/vaivaswatha/debugir tool
         match Command::new("debugir")
             .env_clear()
-            .args(&[app_ll_file.to_str().unwrap()])
+            .args(&["-instnamer", app_ll_file.to_str().unwrap()])
             .output()
         {
             Ok(_) => {}
@@ -204,7 +211,7 @@ pub fn gen_from_mono_module(
         }
 
         // assemble the .ll into a .bc
-        let _ = Command::new("llvm-as-10")
+        let _ = Command::new("llvm-as")
             .env_clear()
             .args(&[
                 app_ll_dbg_file.to_str().unwrap(),
@@ -216,7 +223,7 @@ pub fn gen_from_mono_module(
 
         // write the .o file. Note that this builds the .o for the local machine,
         // and ignores the `target_machine` entirely.
-        let _ = Command::new("llc-10")
+        let _ = Command::new("llc-12")
             .env_clear()
             .args(&[
                 "-filetype=obj",

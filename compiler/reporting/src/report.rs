@@ -450,11 +450,11 @@ impl<'a> RocDocAllocator<'a> {
                 } else {
                     ERROR_UNDERLINE.repeat((sub_region2.end_col - sub_region2.start_col) as usize)
                 };
-                let inbetween = " "
+                let in_between = " "
                     .repeat((sub_region2.start_col.saturating_sub(sub_region1.end_col)) as usize);
 
                 self.text(highlight1)
-                    .append(self.text(inbetween))
+                    .append(self.text(in_between))
                     .append(self.text(highlight2))
             };
 

@@ -1,4 +1,4 @@
-use crate::ir::{Expr, JoinPointId, Param, Proc, Stmt, TopLevelFunctionLayout};
+use crate::ir::{Expr, JoinPointId, Param, Proc, ProcLayout, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -18,15 +18,14 @@ fn should_borrow_layout(layout: &Layout) -> bool {
 
 pub fn infer_borrow<'a>(
     arena: &'a Bump,
-    procs: &MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
+    procs: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> ParamMap<'a> {
     let mut param_map = ParamMap {
         items: MutMap::default(),
     };
 
-    for ((s, top_level), proc) in procs {
-        let key = (*s, arena.alloc(*top_level).full());
-        param_map.visit_proc(arena, proc, key);
+    for (key, proc) in procs {
+        param_map.visit_proc(arena, proc, *key);
     }
 
     let mut env = BorrowInfState {
@@ -40,7 +39,7 @@ pub fn infer_borrow<'a>(
 
     // This is a fixed-point analysis
     //
-    // all functions initiall own all their paramters
+    // all functions initiall own all their parameters
     // through a series of checks and heuristics, some arguments are set to borrowed
     // when that doesn't lead to conflicts the change is kept, otherwise it may be reverted
     //
@@ -51,8 +50,7 @@ pub fn infer_borrow<'a>(
         // mutually recursive functions (or just make all their arguments owned)
 
         for (key, proc) in procs {
-            let layout = arena.alloc(key.1).full();
-            env.collect_proc(proc, layout);
+            env.collect_proc(proc, key.1);
         }
 
         if !env.modified {
@@ -69,7 +67,7 @@ pub fn infer_borrow<'a>(
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Key<'a> {
-    Declaration(Symbol, Layout<'a>),
+    Declaration(Symbol, ProcLayout<'a>),
     JoinPoint(JoinPointId),
 }
 
@@ -98,7 +96,7 @@ impl<'a> IntoIterator for &'a ParamMap<'a> {
 }
 
 impl<'a> ParamMap<'a> {
-    pub fn get_symbol(&self, symbol: Symbol, layout: Layout<'a>) -> Option<&'a [Param<'a>]> {
+    pub fn get_symbol(&self, symbol: Symbol, layout: ProcLayout<'a>) -> Option<&'a [Param<'a>]> {
         let key = Key::Declaration(symbol, layout);
 
         self.items.get(&key).copied()
@@ -153,7 +151,7 @@ impl<'a> ParamMap<'a> {
         .into_bump_slice()
     }
 
-    fn visit_proc(&mut self, arena: &'a Bump, proc: &Proc<'a>, key: (Symbol, Layout<'a>)) {
+    fn visit_proc(&mut self, arena: &'a Bump, proc: &Proc<'a>, key: (Symbol, ProcLayout<'a>)) {
         if proc.must_own_arguments {
             self.visit_proc_always_owned(arena, proc, key);
             return;
@@ -171,7 +169,7 @@ impl<'a> ParamMap<'a> {
         &mut self,
         arena: &'a Bump,
         proc: &Proc<'a>,
-        key: (Symbol, Layout<'a>),
+        key: (Symbol, ProcLayout<'a>),
     ) {
         let already_in_there = self.items.insert(
             Key::Declaration(proc.name, key.1),
@@ -193,7 +191,7 @@ impl<'a> ParamMap<'a> {
                     id: j,
                     parameters: xs,
                     remainder: v,
-                    continuation: b,
+                    body: b,
                 } => {
                     let already_in_there = self
                         .items
@@ -348,7 +346,7 @@ impl<'a> BorrowInfState<'a> {
     /// let z = e in ...
     ///
     /// and determines whether z and which of the symbols used in e
-    /// must be taken as owned paramters
+    /// must be taken as owned parameters
     fn collect_call(&mut self, z: Symbol, e: &crate::ir::Call<'a>) {
         use crate::ir::CallType::*;
 
@@ -359,12 +357,17 @@ impl<'a> BorrowInfState<'a> {
 
         match call_type {
             ByName {
-                name, full_layout, ..
+                name,
+                ret_layout,
+                arg_layouts,
+                ..
             } => {
+                let top_level = ProcLayout::new(self.arena, arg_layouts, *ret_layout);
+
                 // get the borrow signature of the applied function
                 let ps = self
                     .param_map
-                    .get_symbol(*name, *full_layout)
+                    .get_symbol(*name, top_level)
                     .expect("function is defined");
 
                 // the return value will be owned
@@ -393,15 +396,23 @@ impl<'a> BorrowInfState<'a> {
             }
 
             HigherOrderLowLevel {
-                op, closure_layout, ..
+                op,
+                arg_layouts,
+                ret_layout,
+                ..
             } => {
                 use roc_module::low_level::LowLevel::*;
 
                 debug_assert!(op.is_higher_order());
 
+                let closure_layout = ProcLayout {
+                    arguments: arg_layouts,
+                    result: *ret_layout,
+                };
+
                 match op {
                     ListMap | ListKeepIf | ListKeepOks | ListKeepErrs => {
-                        match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                        match self.param_map.get_symbol(arguments[1], closure_layout) {
                             Some(function_ps) => {
                                 // own the list if the function wants to own the element
                                 if !function_ps[0].borrow {
@@ -417,7 +428,7 @@ impl<'a> BorrowInfState<'a> {
                         }
                     }
                     ListMapWithIndex => {
-                        match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                        match self.param_map.get_symbol(arguments[1], closure_layout) {
                             Some(function_ps) => {
                                 // own the list if the function wants to own the element
                                 if !function_ps[1].borrow {
@@ -432,7 +443,7 @@ impl<'a> BorrowInfState<'a> {
                             None => unreachable!(),
                         }
                     }
-                    ListMap2 => match self.param_map.get_symbol(arguments[2], *closure_layout) {
+                    ListMap2 => match self.param_map.get_symbol(arguments[2], closure_layout) {
                         Some(function_ps) => {
                             // own the lists if the function wants to own the element
                             if !function_ps[0].borrow {
@@ -450,7 +461,7 @@ impl<'a> BorrowInfState<'a> {
                         }
                         None => unreachable!(),
                     },
-                    ListMap3 => match self.param_map.get_symbol(arguments[3], *closure_layout) {
+                    ListMap3 => match self.param_map.get_symbol(arguments[3], closure_layout) {
                         Some(function_ps) => {
                             // own the lists if the function wants to own the element
                             if !function_ps[0].borrow {
@@ -471,7 +482,7 @@ impl<'a> BorrowInfState<'a> {
                         None => unreachable!(),
                     },
                     ListSortWith => {
-                        match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                        match self.param_map.get_symbol(arguments[1], closure_layout) {
                             Some(function_ps) => {
                                 // always own the input list
                                 self.own_var(arguments[0]);
@@ -485,7 +496,7 @@ impl<'a> BorrowInfState<'a> {
                         }
                     }
                     ListWalk | ListWalkUntil | ListWalkBackwards | DictWalk => {
-                        match self.param_map.get_symbol(arguments[2], *closure_layout) {
+                        match self.param_map.get_symbol(arguments[2], closure_layout) {
                             Some(function_ps) => {
                                 // own the data structure if the function wants to own the element
                                 if !function_ps[0].borrow {
@@ -554,7 +565,12 @@ impl<'a> BorrowInfState<'a> {
             EmptyArray => {
                 self.own_var(z);
             }
-            AccessAtIndex { structure: x, .. } => {
+
+            Call(call) => self.collect_call(z, call),
+
+            Literal(_) | RuntimeErrorFunction(_) => {}
+
+            StructAtIndex { structure: x, .. } => {
                 // if the structure (record/tag/array) is owned, the extracted value is
                 if self.is_owned(*x) {
                     self.own_var(z);
@@ -566,9 +582,29 @@ impl<'a> BorrowInfState<'a> {
                 }
             }
 
-            Call(call) => self.collect_call(z, call),
+            UnionAtIndex { structure: x, .. } => {
+                // if the structure (record/tag/array) is owned, the extracted value is
+                if self.is_owned(*x) {
+                    self.own_var(z);
+                }
 
-            Literal(_) | RuntimeErrorFunction(_) => {}
+                // if the extracted value is owned, the structure must be too
+                if self.is_owned(z) {
+                    self.own_var(*x);
+                }
+            }
+
+            GetTagId { structure: x, .. } => {
+                // if the structure (record/tag/array) is owned, the extracted value is
+                if self.is_owned(*x) {
+                    self.own_var(z);
+                }
+
+                // if the extracted value is owned, the structure must be too
+                if self.is_owned(z) {
+                    self.own_var(*x);
+                }
+            }
         }
     }
 
@@ -579,7 +615,8 @@ impl<'a> BorrowInfState<'a> {
                 call_type:
                     crate::ir::CallType::ByName {
                         name: g,
-                        full_layout,
+                        arg_layouts,
+                        ret_layout,
                         ..
                     },
                 arguments: ys,
@@ -588,10 +625,12 @@ impl<'a> BorrowInfState<'a> {
             Stmt::Ret(z),
         ) = (v, b)
         {
+            let top_level = ProcLayout::new(self.arena, arg_layouts, *ret_layout);
+
             if self.current_proc == *g && x == *z {
                 // anonymous functions (for which the ps may not be known)
                 // can never be tail-recursive, so this is fine
-                if let Some(ps) = self.param_map.get_symbol(*g, *full_layout) {
+                if let Some(ps) = self.param_map.get_symbol(*g, top_level) {
                     self.own_params_using_args(ys, ps)
                 }
             }
@@ -618,7 +657,7 @@ impl<'a> BorrowInfState<'a> {
                 id: j,
                 parameters: ys,
                 remainder: v,
-                continuation: b,
+                body: b,
             } => {
                 let old = self.param_set.clone();
                 self.update_param_set(ys);
@@ -679,7 +718,7 @@ impl<'a> BorrowInfState<'a> {
         }
     }
 
-    fn collect_proc(&mut self, proc: &Proc<'a>, layout: Layout<'a>) {
+    fn collect_proc(&mut self, proc: &Proc<'a>, layout: ProcLayout<'a>) {
         let old = self.param_set.clone();
 
         let ys = Vec::from_iter_in(proc.args.iter().map(|t| t.1), self.arena).into_bump_slice();
@@ -721,7 +760,6 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
     match op {
         ListLen | StrIsEmpty | StrCountGraphemes => arena.alloc_slice_copy(&[borrowed]),
         ListSet => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
-        ListSetInPlace => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         ListGetUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         ListConcat => arena.alloc_slice_copy(&[owned, owned]),
         StrConcat => arena.alloc_slice_copy(&[owned, borrowed]),

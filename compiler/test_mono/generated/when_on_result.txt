@@ -1,15 +1,14 @@
 procedure Test.1 (Test.5):
-    let Test.20 = 1i64;
     let Test.19 = 2i64;
-    let Test.2 = Ok Test.20 Test.19;
+    let Test.2 = Ok Test.19;
     joinpoint Test.9 Test.3:
         ret Test.3;
     in
     let Test.16 = 1i64;
-    let Test.17 = Index 0 Test.2;
+    let Test.17 = GetTagId Test.2;
     let Test.18 = lowlevel Eq Test.16 Test.17;
     if Test.18 then
-        let Test.13 = Index 1 Test.2;
+        let Test.13 = UnionAtIndex (Id 1) (Index 0) Test.2;
         let Test.14 = 3i64;
         let Test.15 = lowlevel Eq Test.14 Test.13;
         if Test.15 then

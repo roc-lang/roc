@@ -101,7 +101,8 @@ mod test_reporting {
                 ident_ids: &mut ident_ids,
                 ptr_bytes: 8,
                 update_mode_counter: 0,
-                call_specialization_counter: 0,
+                // call_specialization_counter=0 is reserved
+                call_specialization_counter: 1,
             };
             let _mono_expr = Stmt::new(
                 &mut mono_env,
@@ -4774,7 +4775,7 @@ mod test_reporting {
                 r#"
                 ── DOUBLE COMMA ────────────────────────────────────────────────────────────────
 
-                I just started parsing a function argument type, but I encounterd two
+                I just started parsing a function argument type, but I encountered two
                 commas in a row:
 
                 1│  f : I64,,I64 -> I64

@@ -12,6 +12,7 @@
 /// This is important for performance.
 use libc::{c_void, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 use roc_can::expected::Expected;
+use roc_can::expected::PExpected;
 use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::mem::size_of;
@@ -617,6 +618,17 @@ impl<T: ShallowClone> ShallowClone for Expected<T> {
             FromAnnotation(loc_pat, n, source, t) => {
                 FromAnnotation(loc_pat.clone(), *n, *source, t.shallow_clone())
             }
+        }
+    }
+}
+
+impl<T: ShallowClone> ShallowClone for PExpected<T> {
+    fn shallow_clone(&self) -> Self {
+        use PExpected::*;
+
+        match self {
+            NoExpectation(t) => NoExpectation(t.shallow_clone()),
+            ForReason(reason, t, region) => ForReason(reason.clone(), t.shallow_clone(), *region),
         }
     }
 }

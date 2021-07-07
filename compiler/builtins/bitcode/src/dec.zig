@@ -7,7 +7,10 @@ const RocStr = str.RocStr;
 pub const RocDec = struct {
     num: i128,
 
-    pub const decimal_places: comptime u32 = 18;
+    pub const decimal_places: comptime u5 = 18;
+    pub const whole_number_places: comptime u5 = 21;
+    const max_digits: comptime u6 = 39;
+    const leading_zeros: comptime [17]u8 = "00000000000000000".*;
 
     pub const min: comptime RocDec = .{ .num = math.minInt(i128) };
     pub const max: comptime RocDec = .{ .num = math.maxInt(i128) };
@@ -16,10 +19,10 @@ pub const RocDec = struct {
     pub const one_point_zero: comptime RocDec = .{ .num = one_point_zero_i128 };
 
     pub fn fromU64(num: u64) RocDec {
-        return .{ .num = @intCast(i128, num) * one_point_zero_i128 };
+        return .{ .num = num * one_point_zero_i128 };
     }
 
-    pub fn fromString(roc_str: RocStr) ?RocDec {
+    pub fn fromStr(roc_str: RocStr) ?RocDec {
         if (roc_str.isEmpty()) {
             return null;
         }
@@ -102,10 +105,89 @@ pub const RocDec = struct {
     }
 
     fn isDigit(c: u8) bool {
-        return switch (c) {
-            '0'...'9' => true,
-            else => false,
+        return (c -% 48) <= 9;
+    }
+
+    pub fn toStr(self: RocDec) ?RocStr {
+        // Special case
+        if (self.num == 0) {
+            return RocStr.init("0.0", 3);
+        }
+
+        // Check if this Dec is negative, and if so convert to positive
+        // We will handle adding the '-' later
+        const is_negative = self.num < 0;
+        const num = if (is_negative) std.math.negate(self.num) catch {
+            std.debug.panic("TODO runtime exception failing to negate", .{});
+        } else self.num;
+
+        // Format the backing i128 into an array of digits (u8s)
+        var digit_bytes: [max_digits + 1]u8 = undefined;
+        var num_digits = std.fmt.formatIntBuf(digit_bytes[0..], num, 10, false, .{});
+
+        // Get the slice for before the decimal point
+        var before_digits_slice: []const u8 = undefined;
+        var before_digits_offset: usize = 0;
+        var before_digits_adjust: u6 = 0;
+        if (num_digits > decimal_places) {
+            before_digits_offset = num_digits - decimal_places;
+            before_digits_slice = digit_bytes[0..before_digits_offset];
+        } else {
+            before_digits_adjust = @intCast(u6, math.absInt(@intCast(i7, num_digits) - decimal_places) catch {
+                std.debug.panic("TODO runtime exception for overflow when getting abs", .{});
+            });
+            before_digits_slice = "0";
+        }
+
+        // Figure out how many trailing zeros there are
+        // I tried to use https://ziglang.org/documentation/0.8.0/#ctz and it mostly worked,
+        // but was giving seemingly incorrect values for certain numbers. So instead we use
+        //  a while loop and figure it out that way.
+        //
+        // const trailing_zeros = @ctz(u6, num);
+        //
+        var trailing_zeros: u6 = 0;
+        var index = decimal_places - 1 - before_digits_adjust;
+        var is_consecutive_zero = true;
+        while (index != 0) {
+            var digit = digit_bytes[before_digits_offset + index];
+            if (digit == '0' and is_consecutive_zero) {
+                trailing_zeros += 1;
+            } else {
+                is_consecutive_zero = false;
+            }
+            index -= 1;
+        }
+
+        // Figure out if we need to prepend any zeros to the after decimal point
+        // For example, for the number 0.000123 we need to prepend 3 zeros after the decimal point
+        // This will only be needed for numbers less 0.01, otherwise after_digits_slice will handle this
+        const after_zeros_num = if (num_digits < decimal_places) decimal_places - num_digits else 0;
+        const after_zeros_slice: []const u8 = leading_zeros[0..after_zeros_num];
+
+        // Get the slice for after the decimal point
+        var after_digits_slice: []const u8 = undefined;
+        if ((num_digits - before_digits_offset) == trailing_zeros) {
+            after_digits_slice = "0";
+        } else {
+            after_digits_slice = digit_bytes[before_digits_offset .. num_digits - trailing_zeros];
+        }
+
+        // Get the slice for the sign
+        const sign_slice: []const u8 = if (is_negative) "-" else leading_zeros[0..0];
+
+        // Hardcode adding a `1` for the '.' character
+        const str_len: usize = sign_slice.len + before_digits_slice.len + 1 + after_zeros_slice.len + after_digits_slice.len;
+
+        // Join the slices together
+        // We do `max_digits + 2` here because we need to account for a possible sign ('-') and the dot ('.').
+        // Ideally, we'd use str_len here
+        var str_bytes: [max_digits + 2]u8 = undefined;
+        _ = std.fmt.bufPrint(str_bytes[0..str_len], "{s}{s}.{s}{s}", .{ sign_slice, before_digits_slice, after_zeros_slice, after_digits_slice }) catch {
+            std.debug.panic("TODO runtime exception failing to print slices", .{});
         };
+
+        return RocStr.init(&str_bytes, str_len);
     }
 
     pub fn negate(self: RocDec) ?RocDec {
@@ -116,6 +198,17 @@ pub const RocDec = struct {
     pub fn add(self: RocDec, other: RocDec) RocDec {
         var answer: i128 = undefined;
         const overflowed = @addWithOverflow(i128, self.num, other.num, &answer);
+
+        if (!overflowed) {
+            return RocDec{ .num = answer };
+        } else {
+            std.debug.panic("TODO runtime exception for overflow!", .{});
+        }
+    }
+
+    pub fn sub(self: RocDec, other: RocDec) RocDec {
+        var answer: i128 = undefined;
+        const overflowed = @subWithOverflow(i128, self.num, other.num, &answer);
 
         if (!overflowed) {
             return RocDec{ .num = answer };
@@ -159,6 +252,76 @@ pub const RocDec = struct {
             return .{ .num = unsigned_answer };
         }
     }
+
+    pub fn div(self: RocDec, other: RocDec) RocDec {
+        const numerator_i128 = self.num;
+        const denominator_i128 = other.num;
+
+        // (0 / n) is always 0
+        if (numerator_i128 == 0) {
+            return RocDec{ .num = 0 };
+        }
+
+        // (n / 0) is an error
+        if (denominator_i128 == 0) {
+            std.debug.panic("TODO runtime exception for divide by 0!", .{});
+        }
+
+        // If they're both negative, or if neither is negative, the final answer
+        // is positive or zero. If one is negative and the denominator isn't, the
+        // final answer is negative (or zero, in which case final sign won't matter).
+        //
+        // It's important that we do this in terms of negatives, because doing
+        // it in terms of positives can cause bugs when one is zero.
+        const is_answer_negative = (numerator_i128 < 0) != (denominator_i128 < 0);
+
+        // Break the two i128s into two { hi: u64, lo: u64 } tuples, discarding
+        // the sign for now.
+        //
+        // We'll multiply all 4 combinations of these (hi1 x lo1, hi2 x lo2,
+        // hi1 x lo2, hi2 x lo1) and add them as appropriate, then apply the
+        // appropriate sign at the very end.
+        //
+        // We do checked_abs because if we had -i128::MAX before, this will overflow.
+
+        const numerator_abs_i128 = math.absInt(numerator_i128) catch {
+            // Currently, if you try to do multiplication on i64::MIN, panic
+            // unless you're specifically multiplying by 0 or 1.
+            //
+            // Maybe we could support more cases in the future
+            if (denominator_i128 == one_point_zero_i128) {
+                return self;
+            } else {
+                std.debug.panic("TODO runtime exception for overflow when dividing!", .{});
+            }
+        };
+        const numerator_u128 = @intCast(u128, numerator_abs_i128);
+
+        const denominator_abs_i128 = math.absInt(denominator_i128) catch {
+            // Currently, if you try to do multiplication on i64::MIN, panic
+            // unless you're specifically multiplying by 0 or 1.
+            //
+            // Maybe we could support more cases in the future
+            if (numerator_i128 == one_point_zero_i128) {
+                return other;
+            } else {
+                std.debug.panic("TODO runtime exception for overflow when dividing!", .{});
+            }
+        };
+        const denominator_u128 = @intCast(u128, denominator_abs_i128);
+
+        const numerator_u256: U256 = mul_u128(numerator_u128, math.pow(u128, 10, decimal_places));
+        const answer = div_u256_by_u128(numerator_u256, denominator_u128);
+
+        var unsigned_answer: i128 = undefined;
+        if (answer.hi == 0 and answer.lo <= math.maxInt(i128)) {
+            unsigned_answer = @intCast(i128, answer.lo);
+        } else {
+            std.debug.panic("TODO runtime exception for overflow when dividing!", .{});
+        }
+
+        return RocDec{ .num = if (is_answer_negative) -unsigned_answer else unsigned_answer };
+    }
 };
 
 const U256 = struct {
@@ -176,7 +339,7 @@ fn mul_and_decimalize(a: u128, b: u128) i128 {
     // floor(2^315/10^18) is 66749594872528440074844428317798503581334516323645399060845050244444366430645
 
     // Add 1.
-    // This can't overflow because the intial numbers are only 127bit due to removing the sign bit.
+    // This can't overflow because the initial numbers are only 127bit due to removing the sign bit.
     var overflowed = @addWithOverflow(u128, lhs_lo, 1, &lhs_lo);
     lhs_hi = blk: {
         if (overflowed) {
@@ -317,146 +480,476 @@ fn mul_u128(a: u128, b: u128) U256 {
     return .{ .hi = hi, .lo = lo };
 }
 
+// Multiply two 128-bit ints and divide the result by 10^DECIMAL_PLACES
+//
+// Adapted from https://github.com/nlordell/ethnum-rs
+// Copyright (c) 2020 Nicholas Rodrigues Lordello
+// Licensed under the Apache License version 2.0
+//
+// When translating this to Zig, we often have to use math.shr/shl instead of >>/<<
+// This is because casting to the right types for Zig can be kind of tricky.
+// See https://github.com/ziglang/zig/issues/7605
+fn div_u256_by_u128(numer: U256, denom: u128) U256 {
+    const N_UDWORD_BITS: u8 = 128;
+    const N_UTWORD_BITS: u9 = 256;
+
+    var q: U256 = undefined;
+    var r: U256 = undefined;
+    var sr: u8 = undefined;
+
+    // special case
+    if (numer.hi == 0) {
+        // 0 X
+        // ---
+        // 0 X
+        return .{
+            .hi = 0,
+            .lo = numer.lo / denom,
+        };
+    }
+
+    // numer.hi != 0
+    if (denom == 0) {
+        // K X
+        // ---
+        // 0 0
+        return .{
+            .hi = 0,
+            .lo = numer.hi / denom,
+        };
+    } else {
+        // K X
+        // ---
+        // 0 K
+        // NOTE: Modified from `if (d.low() & (d.low() - 1)) == 0`.
+        if (math.isPowerOfTwo(denom)) {
+            // if d is a power of 2
+            if (denom == 1) {
+                return numer;
+            }
+
+            sr = @ctz(u128, denom);
+
+            return .{
+                .hi = math.shr(u128, numer.hi, sr),
+                .lo = math.shl(u128, numer.hi, N_UDWORD_BITS - sr) | math.shr(u128, numer.lo, sr),
+            };
+        }
+
+        // K X
+        // ---
+        // 0 K
+        var denom_leading_zeros = @clz(u128, denom);
+        var numer_hi_leading_zeros = @clz(u128, numer.hi);
+        sr = 1 + N_UDWORD_BITS + denom_leading_zeros - numer_hi_leading_zeros;
+        // 2 <= sr <= N_UTWORD_BITS - 1
+        // q.all = n.all << (N_UTWORD_BITS - sr);
+        // r.all = n.all >> sr;
+        // #[allow(clippy::comparison_chain)]
+        if (sr == N_UDWORD_BITS) {
+            q = .{
+                .hi = numer.lo,
+                .lo = 0,
+            };
+            r = .{
+                .hi = 0,
+                .lo = numer.hi,
+            };
+        } else if (sr < N_UDWORD_BITS) {
+            // 2 <= sr <= N_UDWORD_BITS - 1
+            q = .{
+                .hi = math.shl(u128, numer.lo, N_UDWORD_BITS - sr),
+                .lo = 0,
+            };
+            r = .{
+                .hi = math.shr(u128, numer.hi, sr),
+                .lo = math.shl(u128, numer.hi, N_UDWORD_BITS - sr) | math.shr(u128, numer.lo, sr),
+            };
+        } else {
+            // N_UDWORD_BITS + 1 <= sr <= N_UTWORD_BITS - 1
+            q = .{
+                .hi = math.shl(u128, numer.hi, N_UTWORD_BITS - sr) | math.shr(u128, numer.lo, sr - N_UDWORD_BITS),
+                .lo = math.shl(u128, numer.lo, N_UTWORD_BITS - sr),
+            };
+            r = .{
+                .hi = 0,
+                .lo = math.shr(u128, numer.hi, sr - N_UDWORD_BITS),
+            };
+        }
+    }
+
+    // Not a special case
+    // q and r are initialized with:
+    // q.all = n.all << (N_UTWORD_BITS - sr);
+    // r.all = n.all >> sr;
+    // 1 <= sr <= N_UTWORD_BITS - 1
+    var carry: u128 = 0;
+
+    while (sr > 0) {
+        // r:q = ((r:q)  << 1) | carry
+        r.hi = (r.hi << 1) | (r.lo >> (N_UDWORD_BITS - 1));
+        r.lo = (r.lo << 1) | (q.hi >> (N_UDWORD_BITS - 1));
+        q.hi = (q.hi << 1) | (q.lo >> (N_UDWORD_BITS - 1));
+        q.lo = (q.lo << 1) | carry;
+
+        // carry = 0;
+        // if (r.all >= d.all)
+        // {
+        //     r.all -= d.all;
+        //      carry = 1;
+        // }
+        // NOTE: Modified from `(d - r - 1) >> (N_UTWORD_BITS - 1)` to be an
+        // **arithmetic** shift.
+
+        var lo: u128 = undefined;
+        var lo_overflowed: bool = undefined;
+        var hi: u128 = undefined;
+
+        lo_overflowed = @subWithOverflow(u128, denom, r.lo, &lo);
+        hi = 0 -% @intCast(u128, @bitCast(u1, lo_overflowed)) -% r.hi;
+
+        lo_overflowed = @subWithOverflow(u128, lo, 1, &lo);
+        hi = hi -% @intCast(u128, @bitCast(u1, lo_overflowed));
+
+        // TODO this U256 was originally created by:
+        //
+        // ((hi as i128) >> 127).as_u256()
+        //
+        // ...however, I can't figure out where that function is defined.
+        // Maybe it's defined using a macro or something. Anyway, hopefully
+        // this is what it would do in this scenario.
+        var s = .{
+            .hi = 0,
+            .lo = math.shr(u128, hi, 127),
+        };
+
+        carry = s.lo & 1;
+
+        // var (lo, carry) = r.lo.overflowing_sub(denom & s.lo);
+        lo_overflowed = @subWithOverflow(u128, r.lo, (denom & s.lo), &lo);
+        hi = r.hi -% @intCast(u128, @bitCast(u1, lo_overflowed));
+
+        r = .{ .hi = hi, .lo = lo };
+
+        sr -= 1;
+    }
+
+    var hi = (q.hi << 1) | (q.lo >> (127));
+    var lo = (q.lo << 1) | carry;
+
+    return .{ .hi = hi, .lo = lo };
+}
+
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
+const expectError = testing.expectError;
+const expectEqualSlices = testing.expectEqualSlices;
+const expect = testing.expect;
 
 test "fromU64" {
     var dec = RocDec.fromU64(25);
 
-    expectEqual(RocDec{ .num = 25000000000000000000 }, dec);
+    try expectEqual(RocDec{ .num = 25000000000000000000 }, dec);
 }
 
-test "fromString: empty" {
+test "fromStr: empty" {
     var roc_str = RocStr.init("", 0);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
-    expectEqual(dec, null);
+    try expectEqual(dec, null);
 }
 
-test "fromString: 0" {
+test "fromStr: 0" {
     var roc_str = RocStr.init("0", 1);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
-    expectEqual(RocDec{ .num = 0 }, dec.?);
+    try expectEqual(RocDec{ .num = 0 }, dec.?);
 }
 
-test "fromString: 1" {
+test "fromStr: 1" {
     var roc_str = RocStr.init("1", 1);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
-    expectEqual(RocDec.one_point_zero, dec.?);
+    try expectEqual(RocDec.one_point_zero, dec.?);
 }
 
-test "fromString: 123.45" {
+test "fromStr: 123.45" {
     var roc_str = RocStr.init("123.45", 6);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
-    expectEqual(RocDec{ .num = 123450000000000000000 }, dec.?);
+    try expectEqual(RocDec{ .num = 123450000000000000000 }, dec.?);
 }
 
-test "fromString: .45" {
+test "fromStr: .45" {
     var roc_str = RocStr.init(".45", 3);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
-    expectEqual(RocDec{ .num = 450000000000000000 }, dec.?);
+    try expectEqual(RocDec{ .num = 450000000000000000 }, dec.?);
 }
 
-test "fromString: 0.45" {
+test "fromStr: 0.45" {
     var roc_str = RocStr.init("0.45", 4);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
-    expectEqual(RocDec{ .num = 450000000000000000 }, dec.?);
+    try expectEqual(RocDec{ .num = 450000000000000000 }, dec.?);
 }
 
-test "fromString: 123" {
+test "fromStr: 123" {
     var roc_str = RocStr.init("123", 3);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
-    expectEqual(RocDec{ .num = 123000000000000000000 }, dec.?);
+    try expectEqual(RocDec{ .num = 123000000000000000000 }, dec.?);
 }
 
-test "fromString: -.45" {
+test "fromStr: -.45" {
     var roc_str = RocStr.init("-.45", 4);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
-    expectEqual(RocDec{ .num = -450000000000000000 }, dec.?);
+    try expectEqual(RocDec{ .num = -450000000000000000 }, dec.?);
 }
 
-test "fromString: -0.45" {
+test "fromStr: -0.45" {
     var roc_str = RocStr.init("-0.45", 5);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
-    expectEqual(RocDec{ .num = -450000000000000000 }, dec.?);
+    try expectEqual(RocDec{ .num = -450000000000000000 }, dec.?);
 }
 
-test "fromString: -123" {
+test "fromStr: -123" {
     var roc_str = RocStr.init("-123", 4);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
-    expectEqual(RocDec{ .num = -123000000000000000000 }, dec.?);
+    try expectEqual(RocDec{ .num = -123000000000000000000 }, dec.?);
 }
 
-test "fromString: -123.45" {
+test "fromStr: -123.45" {
     var roc_str = RocStr.init("-123.45", 7);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
-    expectEqual(RocDec{ .num = -123450000000000000000 }, dec.?);
+    try expectEqual(RocDec{ .num = -123450000000000000000 }, dec.?);
 }
 
-test "fromString: abc" {
+test "fromStr: abc" {
     var roc_str = RocStr.init("abc", 3);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
-    expectEqual(dec, null);
+    try expectEqual(dec, null);
 }
 
-test "fromString: 123.abc" {
+test "fromStr: 123.abc" {
     var roc_str = RocStr.init("123.abc", 7);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
-    expectEqual(dec, null);
+    try expectEqual(dec, null);
 }
 
-test "fromString: abc.123" {
+test "fromStr: abc.123" {
     var roc_str = RocStr.init("abc.123", 7);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
-    expectEqual(dec, null);
+    try expectEqual(dec, null);
 }
 
-test "fromString: .123.1" {
+test "fromStr: .123.1" {
     var roc_str = RocStr.init(".123.1", 6);
-    var dec = RocDec.fromString(roc_str);
+    var dec = RocDec.fromStr(roc_str);
 
-    expectEqual(dec, null);
+    try expectEqual(dec, null);
+}
+
+test "toStr: 123.45" {
+    var dec: RocDec = .{ .num = 123450000000000000000 };
+    var res_roc_str = dec.toStr();
+
+    const res_slice: []const u8 = "123.45"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+}
+
+test "toStr: -123.45" {
+    var dec: RocDec = .{ .num = -123450000000000000000 };
+    var res_roc_str = dec.toStr();
+
+    const res_slice: []const u8 = "-123.45"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+}
+
+test "toStr: 123.0" {
+    var dec: RocDec = .{ .num = 123000000000000000000 };
+    var res_roc_str = dec.toStr();
+
+    const res_slice: []const u8 = "123.0"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+}
+
+test "toStr: -123.0" {
+    var dec: RocDec = .{ .num = -123000000000000000000 };
+    var res_roc_str = dec.toStr();
+
+    const res_slice: []const u8 = "-123.0"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+}
+
+test "toStr: 0.45" {
+    var dec: RocDec = .{ .num = 450000000000000000 };
+    var res_roc_str = dec.toStr();
+
+    const res_slice: []const u8 = "0.45"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+}
+
+test "toStr: -0.45" {
+    var dec: RocDec = .{ .num = -450000000000000000 };
+    var res_roc_str = dec.toStr();
+
+    const res_slice: []const u8 = "-0.45"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+}
+
+test "toStr: 0.00045" {
+    var dec: RocDec = .{ .num = 000450000000000000 };
+    var res_roc_str = dec.toStr();
+
+    const res_slice: []const u8 = "0.00045"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+}
+
+test "toStr: -0.00045" {
+    var dec: RocDec = .{ .num = -000450000000000000 };
+    var res_roc_str = dec.toStr();
+
+    const res_slice: []const u8 = "-0.00045"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+}
+
+test "toStr: -111.123456789" {
+    var dec: RocDec = .{ .num = -111123456789000000000 };
+    var res_roc_str = dec.toStr();
+
+    const res_slice: []const u8 = "-111.123456789"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+}
+
+test "toStr: 123.1111111" {
+    var dec: RocDec = .{ .num = 123111111100000000000 };
+    var res_roc_str = dec.toStr();
+
+    const res_slice: []const u8 = "123.1111111"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+}
+
+test "toStr: 123.1111111111111 (big str)" {
+    var dec: RocDec = .{ .num = 123111111111111000000 };
+    var res_roc_str = dec.toStr();
+    errdefer res_roc_str.?.deinit();
+    defer res_roc_str.?.deinit();
+
+    const res_slice: []const u8 = "123.111111111111"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+}
+
+test "toStr: 123.111111111111444444 (max number of decimal places)" {
+    var dec: RocDec = .{ .num = 123111111111111444444 };
+    var res_roc_str = dec.toStr();
+    errdefer res_roc_str.?.deinit();
+    defer res_roc_str.?.deinit();
+
+    const res_slice: []const u8 = "123.111111111111444444"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+}
+
+test "toStr: 12345678912345678912.111111111111111111 (max number of digits)" {
+    var dec: RocDec = .{ .num = 12345678912345678912111111111111111111 };
+    var res_roc_str = dec.toStr();
+    errdefer res_roc_str.?.deinit();
+    defer res_roc_str.?.deinit();
+
+    const res_slice: []const u8 = "12345678912345678912.111111111111111111"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+}
+
+test "toStr: 0" {
+    var dec: RocDec = .{ .num = 0 };
+    var res_roc_str = dec.toStr();
+
+    const res_slice: []const u8 = "0.0"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
 test "add: 0" {
     var dec: RocDec = .{ .num = 0 };
 
-    expectEqual(RocDec{ .num = 0 }, dec.add(.{ .num = 0 }));
+    try expectEqual(RocDec{ .num = 0 }, dec.add(.{ .num = 0 }));
 }
 
 test "add: 1" {
     var dec: RocDec = .{ .num = 0 };
 
-    expectEqual(RocDec{ .num = 1 }, dec.add(.{ .num = 1 }));
+    try expectEqual(RocDec{ .num = 1 }, dec.add(.{ .num = 1 }));
+}
+
+test "sub: 0" {
+    var dec: RocDec = .{ .num = 1 };
+
+    try expectEqual(RocDec{ .num = 1 }, dec.sub(.{ .num = 0 }));
+}
+
+test "sub: 1" {
+    var dec: RocDec = .{ .num = 1 };
+
+    try expectEqual(RocDec{ .num = 0 }, dec.sub(.{ .num = 1 }));
 }
 
 test "mul: by 0" {
     var dec: RocDec = .{ .num = 0 };
 
-    expectEqual(RocDec{ .num = 0 }, dec.mul(.{ .num = 0 }));
+    try expectEqual(RocDec{ .num = 0 }, dec.mul(.{ .num = 0 }));
 }
 
 test "mul: by 1" {
     var dec: RocDec = RocDec.fromU64(15);
 
-    expectEqual(RocDec.fromU64(15), dec.mul(RocDec.fromU64(1)));
+    try expectEqual(RocDec.fromU64(15), dec.mul(RocDec.fromU64(1)));
 }
 
 test "mul: by 2" {
     var dec: RocDec = RocDec.fromU64(15);
 
-    expectEqual(RocDec.fromU64(30), dec.mul(RocDec.fromU64(2)));
+    try expectEqual(RocDec.fromU64(30), dec.mul(RocDec.fromU64(2)));
+}
+
+test "div: 0 / 2" {
+    var dec: RocDec = RocDec.fromU64(0);
+
+    try expectEqual(RocDec.fromU64(0), dec.div(RocDec.fromU64(2)));
+}
+
+test "div: 2 / 2" {
+    var dec: RocDec = RocDec.fromU64(2);
+
+    try expectEqual(RocDec.fromU64(1), dec.div(RocDec.fromU64(2)));
+}
+
+test "div: 20 / 2" {
+    var dec: RocDec = RocDec.fromU64(20);
+
+    try expectEqual(RocDec.fromU64(10), dec.div(RocDec.fromU64(2)));
+}
+
+test "div: 8 / 5" {
+    var dec: RocDec = RocDec.fromU64(8);
+    var res: RocDec = RocDec.fromStr(RocStr.init("1.6", 3)).?;
+    try expectEqual(res, dec.div(RocDec.fromU64(5)));
+}
+
+test "div: 10 / 3" {
+    var numer: RocDec = RocDec.fromU64(10);
+    var denom: RocDec = RocDec.fromU64(3);
+
+    var roc_str = RocStr.init("3.333333333333333333", 20);
+    errdefer roc_str.deinit();
+    defer roc_str.deinit();
+
+    var res: RocDec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(res, numer.div(denom));
 }

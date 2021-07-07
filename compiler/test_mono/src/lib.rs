@@ -23,7 +23,7 @@ use roc_collections::all::MutMap;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::Proc;
 
-use roc_mono::ir::TopLevelFunctionLayout;
+use roc_mono::ir::ProcLayout;
 
 /// Without this, some tests pass in `cargo test --release` but fail without
 /// the --release flag because they run out of stack space. This increases
@@ -146,7 +146,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 #[cfg(debug_assertions)]
 fn verify_procedures(
     test_name: &str,
-    procedures: MutMap<(Symbol, TopLevelFunctionLayout<'_>), Proc<'_>>,
+    procedures: MutMap<(Symbol, ProcLayout<'_>), Proc<'_>>,
     main_fn_symbol: Symbol,
 ) {
     let index = procedures
@@ -205,7 +205,7 @@ fn verify_procedures(
 #[cfg(not(debug_assertions))]
 fn verify_procedures(
     _expected: &str,
-    _procedures: MutMap<(Symbol, TopLevelFunctionLayout<'_>), Proc<'_>>,
+    _procedures: MutMap<(Symbol, ProcLayout<'_>), Proc<'_>>,
     _main_fn_symbol: Symbol,
 ) {
     // Do nothing
@@ -1057,37 +1057,32 @@ fn specialize_closures() {
     )
 }
 
-// ignore doesn't seem to work with the new macro
-// #[ignore]
-// #[mono_test]
-// fn specialize_lowlevel() {
-//     indoc!(
-//         r#"
-//         app "test" provides [ main ] to "./platform"
+#[mono_test]
+fn specialize_lowlevel() {
+    indoc!(
+        r#"
+         app "test" provides [ main ] to "./platform"
 
-//         apply : (a -> a), a -> a
-//         apply = \f, x -> f x
+         apply : (a -> a), a -> a
+         apply = \f, x -> f x
 
-//         main =
-//             one : I64
-//             one = 1
+         main =
+             one : I64
+             one = 1
 
-//             two : I64
-//             two = 2
+             two : I64
+             two = 2
 
-//             increment : I64 -> I64
-//             increment = \x -> x + 1
+             increment : I64 -> I64
+             increment = \x -> x + one
 
-//             double : I64 -> I64
-//             double = \x -> x * two
+             double : I64 -> I64
+             double = \x -> x * two
 
-//             when 3 is
-//                 1 -> increment 0
-//                 2 -> double 0
-//                 _ -> List.map [] (if True then increment else double) |> List.len
-//         "#
-//     )
-// }
+             (if True then increment else double) 42
+         "#
+    )
+}
 
 // #[ignore]
 // #[mono_test]

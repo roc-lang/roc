@@ -116,7 +116,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn force_space_at_begining_of_comment() {
+    fn force_space_at_beginning_of_comment() {
         expr_formats_to(
             indoc!(
                 r#"

@@ -25,12 +25,13 @@ pub const CMD_DOCS: &str = "docs";
 
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_OPTIMIZE: &str = "optimize";
+pub const FLAG_LIB: &str = "lib";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
 pub fn build_app<'a>() -> App<'a> {
-    App::new("roc")
+    let app = App::new("roc")
         .version(crate_version!())
         .subcommand(App::new(CMD_BUILD)
             .about("Build a program")
@@ -43,6 +44,12 @@ pub fn build_app<'a>() -> App<'a> {
                 Arg::with_name(FLAG_OPTIMIZE)
                     .long(FLAG_OPTIMIZE)
                     .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+                    .required(false),
+            )
+            .arg(
+                Arg::with_name(FLAG_LIB)
+                    .long(FLAG_LIB)
+                    .help("Build a C library instead of an executable.")
                     .required(false),
             )
             .arg(
@@ -81,15 +88,6 @@ pub fn build_app<'a>() -> App<'a> {
         .subcommand(App::new(CMD_REPL)
             .about("Launch the interactive Read Eval Print Loop (REPL)")
         )
-        .subcommand(App::new(CMD_EDIT)
-            .about("Launch the Roc editor")
-            .arg(Arg::with_name(DIRECTORY_OR_FILES)
-                .index(1)
-                .multiple(true)
-                .required(false)
-                .help("(optional) The directory or files to open on launch.")
-            )
-        )
         .subcommand(
             App::new(CMD_DOCS)
                 .about("Generate documentation for Roc modules")
@@ -100,7 +98,21 @@ pub fn build_app<'a>() -> App<'a> {
                     .help("The directory or files to build documentation for")
 
                 )
+        );
+
+    if cfg!(feature = "editor") {
+        app.subcommand(
+            App::new(CMD_EDIT).about("Launch the Roc editor").arg(
+                Arg::with_name(DIRECTORY_OR_FILES)
+                    .index(1)
+                    .multiple(true)
+                    .required(false)
+                    .help("(optional) The directory or files to open on launch."),
+            ),
         )
+    } else {
+        app
+    }
 }
 
 pub fn docs(files: Vec<PathBuf>) {
@@ -111,6 +123,7 @@ pub fn docs(files: Vec<PathBuf>) {
     )
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum BuildConfig {
     BuildOnly,
     BuildAndRun { roc_file_arg_index: usize },
@@ -131,6 +144,12 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
         OptLevel::Normal
     };
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
+
+    let link_type = if matches.is_present(FLAG_LIB) {
+        LinkType::Dylib
+    } else {
+        LinkType::Executable
+    };
 
     let path = Path::new(filename).canonicalize().unwrap();
     let src_dir = path.parent().unwrap().canonicalize().unwrap();
@@ -161,7 +180,7 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
         path,
         opt_level,
         emit_debug_info,
-        LinkType::Executable,
+        link_type,
     );
 
     match res_binary_path {
@@ -177,13 +196,6 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
                         .strip_prefix(env::current_dir().unwrap())
                         .unwrap_or(&binary_path);
 
-                    // Return a nonzero exit code if there were problems
-                    let status_code = match outcome {
-                        BuildOutcome::NoProblems => 0,
-                        BuildOutcome::OnlyWarnings => 1,
-                        BuildOutcome::Errors => 2,
-                    };
-
                     // No need to waste time freeing this memory,
                     // since the process is about to exit anyway.
                     std::mem::forget(arena);
@@ -194,7 +206,8 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
                         total_time.as_millis()
                     );
 
-                    Ok(status_code)
+                    // Return a nonzero exit code if there were problems
+                    Ok(outcome.status_code())
                 }
                 BuildAndRun { roc_file_arg_index } => {
                     let mut cmd = Command::new(binary_path);
@@ -212,23 +225,9 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
                         }
                     }
 
-                    // Run the compiled app
-                    let exit_status = cmd
-                        .current_dir(original_cwd)
-                        .spawn()
-                        .unwrap_or_else(|err| panic!("Failed to run app after building it: {:?}", err))
-                        .wait()
-                        .expect("TODO gracefully handle block_on failing when roc run spawns a subprocess for the compiled app");
-
-                    // `roc run` exits with the same status code as the app it ran.
-                    //
-                    // If you want to know whether there were compilation problems
-                    // via status code, use either `roc build` or `roc check` instead!
-                    match exit_status.code() {
-                        Some(code) => Ok(code),
-                        None => {
-                            todo!("TODO gracefully handle the roc run subprocess terminating with a signal.");
-                        }
+                    match outcome {
+                        BuildOutcome::Errors => Ok(outcome.status_code()),
+                        _ => roc_run(cmd.current_dir(original_cwd)),
                     }
                 }
             }
@@ -240,6 +239,40 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
         }
         Err(other) => {
             panic!("build_file failed with error:\n{:?}", other);
+        }
+    }
+}
+
+#[cfg(target_family = "unix")]
+fn roc_run(cmd: &mut Command) -> io::Result<i32> {
+    use std::os::unix::process::CommandExt;
+
+    // This is much faster than spawning a subprocess if we're on a UNIX system!
+    let err = cmd.exec();
+
+    // If exec actually returned, it was definitely an error! (Otherwise,
+    // this process would have been replaced by the other one, and we'd
+    // never actually reach this line of code.)
+    Err(err)
+}
+
+#[cfg(not(target_family = "unix"))]
+fn roc_run(cmd: &mut Command) -> io::Result<i32> {
+    // Run the compiled app
+    let exit_status = cmd
+                        .spawn()
+                        .unwrap_or_else(|err| panic!("Failed to run app after building it: {:?}", err))
+                        .wait()
+                        .expect("TODO gracefully handle block_on failing when roc run spawns a subprocess for the compiled app");
+
+    // `roc run` exits with the same status code as the app it ran.
+    //
+    // If you want to know whether there were compilation problems
+    // via status code, use either `roc build` or `roc check` instead!
+    match exit_status.code() {
+        Some(code) => Ok(code),
+        None => {
+            todo!("TODO gracefully handle the roc run subprocess terminating with a signal.");
         }
     }
 }

@@ -17,7 +17,7 @@ const InPlace = packed enum(u8) {
 
 const SMALL_STR_MAX_LENGTH = small_string_size - 1;
 const small_string_size = 2 * @sizeOf(usize);
-const blank_small_string: [16]u8 = init_blank_small_string(small_string_size);
+const blank_small_string: [@sizeOf(RocStr)]u8 = init_blank_small_string(small_string_size);
 
 fn init_blank_small_string(comptime n: usize) [n]u8 {
     var prime_list: [n]u8 = undefined;
@@ -83,12 +83,6 @@ pub const RocStr = extern struct {
         if (!self.isSmallStr() and !self.isEmpty()) {
             utils.decref(self.str_bytes, self.str_len, RocStr.alignment);
         }
-    }
-
-    pub fn toSlice(self: RocStr) []u8 {
-        const str_bytes_ptr: [*]u8 = self.str_bytes orelse unreachable;
-        const str_bytes: []u8 = str_bytes_ptr[0..self.str_len];
-        return str_bytes;
     }
 
     // This takes ownership of the pointed-to bytes if they won't fit in a
@@ -203,8 +197,8 @@ pub const RocStr = extern struct {
         return result;
     }
 
+    // NOTE: returns false for empty string!
     pub fn isSmallStr(self: RocStr) bool {
-        // NOTE: returns False for empty string!
         return @bitCast(isize, self.str_len) < 0;
     }
 
@@ -221,6 +215,82 @@ pub const RocStr = extern struct {
 
     pub fn isEmpty(self: RocStr) bool {
         return self.len() == 0;
+    }
+
+    // If a string happens to be null-terminated already, then we can pass its
+    // bytes directly to functions (e.g. for opening files) that require
+    // null-terminated strings. Otherwise, we need to allocate and copy a new
+    // null-terminated string, which has a much higher performance cost!
+    fn isNullTerminated(self: RocStr) bool {
+        const len = self.len();
+        const longest_small_str = @sizeOf(RocStr) - 1;
+
+        // NOTE: We want to compare length here, *NOT* check for is_small_str!
+        // This is because we explicitly want the empty string to be handled in
+        // this branch, even though the empty string is not a small string.
+        //
+        // (The other branch dereferences the bytes pointer, which is not safe
+        // to do for the empty string.)
+        if (len <= longest_small_str) {
+            // If we're a small string, then usually the next byte after the
+            // end of the string will be zero. (Small strings set all their
+            // unused bytes to 0, so that comparison for equality can be fast.)
+            //
+            // However, empty strings are *not* null terminated, so if this is
+            // empty, it should return false.
+            //
+            // Also, if we are exactly a maximum-length small string,
+            // then the next byte is off the end of the struct;
+            // in that case, we are also not null-terminated!
+            return len != 0 and len != longest_small_str;
+        } else {
+            // This is a big string, and it's not empty, so we can safely
+            // dereference the pointer.
+            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.str_bytes));
+            const capacity_or_refcount: isize = (ptr - 1)[0];
+
+            // If capacity_or_refcount is positive, then it's a capacity value.
+            //
+            // If we have excess capacity, then we can safely read the next
+            // byte after the end of the string. Maybe it happens to be zero!
+            if (capacity_or_refcount > @intCast(isize, len)) {
+                return self.str_bytes[len] == 0;
+            } else {
+                // This string was refcounted or immortal; we can't safely read
+                // the next byte, so assume the string is not null-terminated.
+                return false;
+            }
+        }
+    }
+
+    // Returns (@sizeOf(RocStr) - 1) for small strings and the empty string.
+    // Returns 0 for refcounted stirngs and immortal strings.
+    // Returns the stored capacity value for all other strings.
+    pub fn capacity(self: RocStr) usize {
+        const len = self.len();
+        const longest_small_str = @sizeOf(RocStr) - 1;
+
+        if (len <= longest_small_str) {
+            // Note that although empty strings technically have the full
+            // capacity of a small string available, they aren't marked as small
+            // strings, so if you want to make use of that capacity, you need
+            // to first change its flag to mark it as a small string!
+            return longest_small_str;
+        } else {
+            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(8, self.str_bytes));
+            const capacity_or_refcount: isize = (ptr - 1)[0];
+
+            if (capacity_or_refcount > 0) {
+                // If capacity_or_refcount is positive, that means it's a
+                // capacity value.
+                return capacity_or_refcount;
+            } else {
+                // This is either a refcount or else this big string is stored
+                // in a readonly section; either way, it has no capacity,
+                // because we cannot mutate it in-place!
+                return 0;
+            }
+        }
     }
 
     pub fn isUnique(self: RocStr) bool {
@@ -240,15 +310,13 @@ pub const RocStr = extern struct {
     }
 
     pub fn asSlice(self: RocStr) []u8 {
-        // Since this conditional would be prone to branch misprediction,
-        // make sure it will compile to a cmov.
         return self.asU8ptr()[0..self.len()];
     }
 
     pub fn asU8ptr(self: RocStr) [*]u8 {
         // Since this conditional would be prone to branch misprediction,
         // make sure it will compile to a cmov.
-        return if (self.isSmallStr() or self.isEmpty()) (&@bitCast([16]u8, self)) else (@ptrCast([*]u8, self.str_bytes));
+        return if (self.isSmallStr() or self.isEmpty()) (&@bitCast([@sizeOf(RocStr)]u8, self)) else (@ptrCast([*]u8, self.str_bytes));
     }
 
     // Given a pointer to some bytes, write the first (len) bytes of this
@@ -273,7 +341,7 @@ pub const RocStr = extern struct {
         const str2_ptr: [*]u8 = &str2;
         var roc_str2 = RocStr.init(str2_ptr, str2_len);
 
-        expect(roc_str1.eq(roc_str2));
+        try expect(roc_str1.eq(roc_str2));
 
         roc_str1.deinit();
         roc_str2.deinit();
@@ -295,7 +363,7 @@ pub const RocStr = extern struct {
             roc_str2.deinit();
         }
 
-        expect(!roc_str1.eq(roc_str2));
+        try expect(!roc_str1.eq(roc_str2));
     }
 
     test "RocStr.eq: not equal same length" {
@@ -314,7 +382,7 @@ pub const RocStr = extern struct {
             roc_str2.deinit();
         }
 
-        expect(!roc_str1.eq(roc_str2));
+        try expect(!roc_str1.eq(roc_str2));
     }
 };
 
@@ -449,8 +517,8 @@ test "strSplitInPlace: no delimiter" {
         delimiter.deinit();
     }
 
-    expectEqual(array.len, expected.len);
-    expect(array[0].eq(expected[0]));
+    try expectEqual(array.len, expected.len);
+    try expect(array[0].eq(expected[0]));
 }
 
 test "strSplitInPlace: empty end" {
@@ -490,10 +558,10 @@ test "strSplitInPlace: empty end" {
         delimiter.deinit();
     }
 
-    expectEqual(array.len, expected.len);
-    expect(array[0].eq(expected[0]));
-    expect(array[1].eq(expected[1]));
-    expect(array[2].eq(expected[2]));
+    try expectEqual(array.len, expected.len);
+    try expect(array[0].eq(expected[0]));
+    try expect(array[1].eq(expected[1]));
+    try expect(array[2].eq(expected[2]));
 }
 
 test "strSplitInPlace: delimiter on sides" {
@@ -532,10 +600,10 @@ test "strSplitInPlace: delimiter on sides" {
         delimiter.deinit();
     }
 
-    expectEqual(array.len, expected.len);
-    expect(array[0].eq(expected[0]));
-    expect(array[1].eq(expected[1]));
-    expect(array[2].eq(expected[2]));
+    try expectEqual(array.len, expected.len);
+    try expect(array[0].eq(expected[0]));
+    try expect(array[1].eq(expected[1]));
+    try expect(array[2].eq(expected[2]));
 }
 
 test "strSplitInPlace: three pieces" {
@@ -573,10 +641,10 @@ test "strSplitInPlace: three pieces" {
         delimiter.deinit();
     }
 
-    expectEqual(expected_array.len, array.len);
-    expect(array[0].eq(expected_array[0]));
-    expect(array[1].eq(expected_array[1]));
-    expect(array[2].eq(expected_array[2]));
+    try expectEqual(expected_array.len, array.len);
+    try expect(array[0].eq(expected_array[0]));
+    try expect(array[1].eq(expected_array[1]));
+    try expect(array[2].eq(expected_array[2]));
 }
 
 // This is used for `Str.split : Str, Str -> Array Str
@@ -639,7 +707,7 @@ test "countSegments: long delimiter" {
     }
 
     const segments_count = countSegments(str, delimiter);
-    expectEqual(segments_count, 1);
+    try expectEqual(segments_count, 1);
 }
 
 test "countSegments: delimiter at start" {
@@ -658,7 +726,7 @@ test "countSegments: delimiter at start" {
 
     const segments_count = countSegments(str, delimiter);
 
-    expectEqual(segments_count, 2);
+    try expectEqual(segments_count, 2);
 }
 
 test "countSegments: delimiter interspered" {
@@ -677,7 +745,7 @@ test "countSegments: delimiter interspered" {
 
     const segments_count = countSegments(str, delimiter);
 
-    expectEqual(segments_count, 3);
+    try expectEqual(segments_count, 3);
 }
 
 // Str.countGraphemeClusters
@@ -721,7 +789,7 @@ fn rocStrFromLiteral(bytes_arr: *const []u8) RocStr {}
 
 test "countGraphemeClusters: empty string" {
     const count = countGraphemeClusters(RocStr.empty());
-    expectEqual(count, 0);
+    try expectEqual(count, 0);
 }
 
 test "countGraphemeClusters: ascii characters" {
@@ -731,7 +799,7 @@ test "countGraphemeClusters: ascii characters" {
     defer str.deinit();
 
     const count = countGraphemeClusters(str);
-    expectEqual(count, 4);
+    try expectEqual(count, 4);
 }
 
 test "countGraphemeClusters: utf8 characters" {
@@ -741,7 +809,7 @@ test "countGraphemeClusters: utf8 characters" {
     defer str.deinit();
 
     const count = countGraphemeClusters(str);
-    expectEqual(count, 3);
+    try expectEqual(count, 3);
 }
 
 test "countGraphemeClusters: emojis" {
@@ -751,7 +819,7 @@ test "countGraphemeClusters: emojis" {
     defer str.deinit();
 
     const count = countGraphemeClusters(str);
-    expectEqual(count, 3);
+    try expectEqual(count, 3);
 }
 
 test "countGraphemeClusters: emojis and ut8 characters" {
@@ -761,7 +829,7 @@ test "countGraphemeClusters: emojis and ut8 characters" {
     defer str.deinit();
 
     const count = countGraphemeClusters(str);
-    expectEqual(count, 6);
+    try expectEqual(count, 6);
 }
 
 test "countGraphemeClusters: emojis, ut8, and ascii characters" {
@@ -771,7 +839,7 @@ test "countGraphemeClusters: emojis, ut8, and ascii characters" {
     defer str.deinit();
 
     const count = countGraphemeClusters(str);
-    expectEqual(count, 10);
+    try expectEqual(count, 10);
 }
 
 // Str.startsWith
@@ -821,27 +889,27 @@ pub fn startsWithCodePoint(string: RocStr, prefix: u32) callconv(.C) bool {
 test "startsWithCodePoint: ascii char" {
     const whole = RocStr.init("foobar", 6);
     const prefix = 'f';
-    expect(startsWithCodePoint(whole, prefix));
+    try expect(startsWithCodePoint(whole, prefix));
 }
 
 test "startsWithCodePoint: emoji" {
     const yes = RocStr.init("💖foobar", 10);
     const no = RocStr.init("foobar", 6);
     const prefix = '💖';
-    expect(startsWithCodePoint(yes, prefix));
-    expect(!startsWithCodePoint(no, prefix));
+    try expect(startsWithCodePoint(yes, prefix));
+    try expect(!startsWithCodePoint(no, prefix));
 }
 
 test "startsWith: foo starts with fo" {
     const foo = RocStr.init("foo", 3);
     const fo = RocStr.init("fo", 2);
-    expect(startsWith(foo, fo));
+    try expect(startsWith(foo, fo));
 }
 
 test "startsWith: 123456789123456789 starts with 123456789123456789" {
     const str = RocStr.init("123456789123456789", 18);
     defer str.deinit();
-    expect(startsWith(str, str));
+    try expect(startsWith(str, str));
 }
 
 test "startsWith: 12345678912345678910 starts with 123456789123456789" {
@@ -850,7 +918,7 @@ test "startsWith: 12345678912345678910 starts with 123456789123456789" {
     const prefix = RocStr.init("123456789123456789", 18);
     defer prefix.deinit();
 
-    expect(startsWith(str, prefix));
+    try expect(startsWith(str, prefix));
 }
 
 // Str.endsWith
@@ -882,13 +950,13 @@ test "endsWith: foo ends with oo" {
     defer foo.deinit();
     defer oo.deinit();
 
-    expect(endsWith(foo, oo));
+    try expect(endsWith(foo, oo));
 }
 
 test "endsWith: 123456789123456789 ends with 123456789123456789" {
     const str = RocStr.init("123456789123456789", 18);
     defer str.deinit();
-    expect(endsWith(str, str));
+    try expect(endsWith(str, str));
 }
 
 test "endsWith: 12345678912345678910 ends with 345678912345678910" {
@@ -897,7 +965,7 @@ test "endsWith: 12345678912345678910 ends with 345678912345678910" {
     defer str.deinit();
     defer suffix.deinit();
 
-    expect(endsWith(str, suffix));
+    try expect(endsWith(str, suffix));
 }
 
 test "endsWith: hello world ends with world" {
@@ -906,17 +974,18 @@ test "endsWith: hello world ends with world" {
     defer str.deinit();
     defer suffix.deinit();
 
-    expect(endsWith(str, suffix));
+    try expect(endsWith(str, suffix));
 }
 
 // Str.concat
-pub fn strConcatC(result_in_place: InPlace, arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
-    return @call(.{ .modifier = always_inline }, strConcat, .{ result_in_place, arg1, arg2 });
+pub fn strConcatC(arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
+    return @call(.{ .modifier = always_inline }, strConcat, .{ arg1, arg2 });
 }
 
-fn strConcat(result_in_place: InPlace, arg1: RocStr, arg2: RocStr) RocStr {
+fn strConcat(arg1: RocStr, arg2: RocStr) RocStr {
     if (arg1.isEmpty()) {
         // the second argument is borrowed, so we must increment its refcount before returning
+        const result_in_place = InPlace.Clone;
         return RocStr.clone(result_in_place, arg2);
     } else if (arg2.isEmpty()) {
         // the first argument is owned, so we can return it without cloning
@@ -974,11 +1043,11 @@ test "RocStr.concat: small concat small" {
         roc_str3.deinit();
     }
 
-    const result = strConcat(InPlace.Clone, roc_str1, roc_str2);
+    const result = strConcat(roc_str1, roc_str2);
 
     defer result.deinit();
 
-    expect(roc_str3.eq(result));
+    try expect(roc_str3.eq(result));
 }
 
 pub const RocListStr = extern struct {
@@ -1057,7 +1126,7 @@ test "RocStr.joinWith: result is big" {
 
     defer result.deinit();
 
-    expect(roc_result.eq(result));
+    try expect(roc_result.eq(result));
 }
 
 // Str.toBytes
@@ -1191,8 +1260,8 @@ fn validateUtf8BytesX(str: RocList) FromUtf8Result {
     return fromUtf8(str);
 }
 
-fn expectOk(result: FromUtf8Result) void {
-    expectEqual(result.is_ok, true);
+fn expectOk(result: FromUtf8Result) !void {
+    try expectEqual(result.is_ok, true);
 }
 
 fn sliceHelp(bytes: [*]const u8, length: usize) RocList {
@@ -1217,7 +1286,7 @@ test "validateUtf8Bytes: ascii" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectOk(validateUtf8BytesX(list));
+    try expectOk(validateUtf8BytesX(list));
 }
 
 test "validateUtf8Bytes: unicode œ" {
@@ -1225,7 +1294,7 @@ test "validateUtf8Bytes: unicode œ" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectOk(validateUtf8BytesX(list));
+    try expectOk(validateUtf8BytesX(list));
 }
 
 test "validateUtf8Bytes: unicode ∆" {
@@ -1233,7 +1302,7 @@ test "validateUtf8Bytes: unicode ∆" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectOk(validateUtf8BytesX(list));
+    try expectOk(validateUtf8BytesX(list));
 }
 
 test "validateUtf8Bytes: emoji" {
@@ -1241,7 +1310,7 @@ test "validateUtf8Bytes: emoji" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectOk(validateUtf8BytesX(list));
+    try expectOk(validateUtf8BytesX(list));
 }
 
 test "validateUtf8Bytes: unicode ∆ in middle of array" {
@@ -1249,15 +1318,15 @@ test "validateUtf8Bytes: unicode ∆ in middle of array" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectOk(validateUtf8BytesX(list));
+    try expectOk(validateUtf8BytesX(list));
 }
 
-fn expectErr(list: RocList, index: usize, err: Utf8DecodeError, problem: Utf8ByteProblem) void {
+fn expectErr(list: RocList, index: usize, err: Utf8DecodeError, problem: Utf8ByteProblem) !void {
     const str_ptr = @ptrCast([*]u8, list.bytes);
     const str_len = list.length;
 
-    expectError(err, numberOfNextCodepointBytes(str_ptr, str_len, index));
-    expectEqual(toErrUtf8ByteResponse(index, problem), validateUtf8Bytes(str_ptr, str_len));
+    try expectError(err, numberOfNextCodepointBytes(str_ptr, str_len, index));
+    try expectEqual(toErrUtf8ByteResponse(index, problem), validateUtf8Bytes(str_ptr, str_len));
 }
 
 test "validateUtf8Bytes: invalid start byte" {
@@ -1266,7 +1335,7 @@ test "validateUtf8Bytes: invalid start byte" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectErr(list, 2, error.Utf8InvalidStartByte, Utf8ByteProblem.InvalidStartByte);
+    try expectErr(list, 2, error.Utf8InvalidStartByte, Utf8ByteProblem.InvalidStartByte);
 }
 
 test "validateUtf8Bytes: unexpected eof for 2 byte sequence" {
@@ -1275,7 +1344,7 @@ test "validateUtf8Bytes: unexpected eof for 2 byte sequence" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
+    try expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
 }
 
 test "validateUtf8Bytes: expected continuation for 2 byte sequence" {
@@ -1284,7 +1353,7 @@ test "validateUtf8Bytes: expected continuation for 2 byte sequence" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
+    try expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
 }
 
 test "validateUtf8Bytes: unexpected eof for 3 byte sequence" {
@@ -1293,7 +1362,7 @@ test "validateUtf8Bytes: unexpected eof for 3 byte sequence" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
+    try expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
 }
 
 test "validateUtf8Bytes: expected continuation for 3 byte sequence" {
@@ -1302,7 +1371,7 @@ test "validateUtf8Bytes: expected continuation for 3 byte sequence" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
+    try expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
 }
 
 test "validateUtf8Bytes: unexpected eof for 4 byte sequence" {
@@ -1311,7 +1380,7 @@ test "validateUtf8Bytes: unexpected eof for 4 byte sequence" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
+    try expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
 }
 
 test "validateUtf8Bytes: expected continuation for 4 byte sequence" {
@@ -1320,7 +1389,7 @@ test "validateUtf8Bytes: expected continuation for 4 byte sequence" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
+    try expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
 }
 
 test "validateUtf8Bytes: overlong" {
@@ -1329,7 +1398,7 @@ test "validateUtf8Bytes: overlong" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectErr(list, 3, error.Utf8OverlongEncoding, Utf8ByteProblem.OverlongEncoding);
+    try expectErr(list, 3, error.Utf8OverlongEncoding, Utf8ByteProblem.OverlongEncoding);
 }
 
 test "validateUtf8Bytes: codepoint out too large" {
@@ -1338,7 +1407,7 @@ test "validateUtf8Bytes: codepoint out too large" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectErr(list, 3, error.Utf8CodepointTooLarge, Utf8ByteProblem.CodepointTooLarge);
+    try expectErr(list, 3, error.Utf8CodepointTooLarge, Utf8ByteProblem.CodepointTooLarge);
 }
 
 test "validateUtf8Bytes: surrogate halves" {
@@ -1347,5 +1416,5 @@ test "validateUtf8Bytes: surrogate halves" {
     const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
     const list = sliceHelp(ptr, raw.len);
 
-    expectErr(list, 3, error.Utf8EncodesSurrogateHalf, Utf8ByteProblem.EncodesSurrogateHalf);
+    try expectErr(list, 3, error.Utf8EncodesSurrogateHalf, Utf8ByteProblem.EncodesSurrogateHalf);
 }

@@ -24,7 +24,7 @@ const mem = std.mem;
 const Allocator = mem.Allocator;
 
 extern fn roc__mainForHost_1_exposed([*]u8) void;
-extern fn roc__mainForHost_1_size() i64;
+extern fn roc__mainForHost_size() i64;
 extern fn roc__mainForHost_1_Fx_caller(*const u8, [*]u8, [*]u8) void;
 extern fn roc__mainForHost_1_Fx_size() i64;
 extern fn roc__mainForHost_1_Fx_result_size() i64;
@@ -51,7 +51,7 @@ pub export fn main() u8 {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
 
-    const size = @intCast(usize, roc__mainForHost_1_size());
+    const size = @intCast(usize, roc__mainForHost_size());
     const raw_output = std.heap.c_allocator.alloc(u8, size) catch unreachable;
     var output = @ptrCast([*]u8, raw_output);
 
@@ -163,7 +163,7 @@ pub export fn roc_fx_getInt() GetInt {
 }
 
 fn roc_fx_getInt_help() !i64 {
-    const stdin = std.io.getStdIn().inStream();
+    const stdin = std.io.getStdIn().reader();
     var buf: [40]u8 = undefined;
 
     const line: []u8 = (try stdin.readUntilDelimiterOrEof(&buf, '\n')) orelse "";

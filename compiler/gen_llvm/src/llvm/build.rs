@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::llvm::bitcode::call_bitcode_fn;
 use crate::llvm::build_dict::{
     dict_contains, dict_difference, dict_empty, dict_get, dict_insert, dict_intersection,
@@ -25,7 +27,6 @@ use crate::llvm::refcounting::{
 };
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use either::Either;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -38,22 +39,22 @@ use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{BasicType, BasicTypeEnum, FunctionType, IntType, StructType};
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
-    BasicValue, CallSiteValue, FloatValue, FunctionValue, InstructionOpcode, InstructionValue,
-    IntValue, PointerValue, StructValue,
+    BasicValue, CallSiteValue, CallableValue, FloatValue, FunctionValue, InstructionOpcode,
+    InstructionValue, IntValue, PointerValue, StructValue,
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
+use morphic_lib::{
+    CalleeSpecVar, FuncName, FuncSpec, FuncSpecSolutions, ModSolutions, UpdateMode, UpdateModeVar,
+};
 use roc_builtins::bitcode;
 use roc_collections::all::{ImMap, MutMap, MutSet};
-use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
-    BranchInfo, CallType, ExceptionId, JoinPointId, ModifyRc, OptLevel, TopLevelFunctionLayout,
-    Wrapped,
+    BranchInfo, CallType, EntryPoint, ExceptionId, JoinPointId, ModifyRc, OptLevel, ProcLayout,
 };
-use roc_mono::layout::{Builtin, InPlace, LambdaSet, Layout, LayoutIds, UnionLayout};
-use target_lexicon::CallingConvention;
+use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, UnionLayout};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
 /// output in debug builds, but we don't want it to print to stdout in release builds!
@@ -118,7 +119,7 @@ impl<'ctx> Iterator for FunctionIterator<'ctx> {
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Scope<'a, 'ctx> {
     symbols: ImMap<Symbol, (Layout<'a>, BasicValueEnum<'ctx>)>,
-    pub top_level_thunks: ImMap<Symbol, (Layout<'a>, FunctionValue<'ctx>)>,
+    pub top_level_thunks: ImMap<Symbol, (ProcLayout<'a>, FunctionValue<'ctx>)>,
     join_points: ImMap<JoinPointId, (BasicBlock<'ctx>, &'a [PointerValue<'ctx>])>,
 }
 
@@ -132,11 +133,11 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
     pub fn insert_top_level_thunk(
         &mut self,
         symbol: Symbol,
-        layout: &'a TopLevelFunctionLayout<'a>,
+        layout: &'a ProcLayout<'a>,
         function_value: FunctionValue<'ctx>,
     ) {
         self.top_level_thunks
-            .insert(symbol, (layout.full(), function_value));
+            .insert(symbol, (*layout, function_value));
     }
     fn remove(&mut self, symbol: &Symbol) {
         self.symbols.remove(symbol);
@@ -301,6 +302,8 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
             /* dwo_id */ 0,
             /* split_debug_inling */ false,
             /* debug_info_for_profiling */ false,
+            "",
+            "",
         )
     }
 
@@ -582,22 +585,37 @@ pub fn construct_optimization_passes<'a>(
     (mpm, fpm)
 }
 
-pub fn promote_to_main_function<'a, 'ctx, 'env>(
+fn promote_to_main_function<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
+    mod_solutions: &'a ModSolutions,
     symbol: Symbol,
-    layout: TopLevelFunctionLayout<'a>,
+    top_level: ProcLayout<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
-    let fn_name = layout_ids
-        .get(symbol, &(env.arena.alloc(layout).full()))
-        .to_symbol_string(symbol, &env.interns);
+    let it = top_level.arguments.iter().copied();
+    let bytes = roc_mono::alias_analysis::func_name_bytes_help(symbol, it, top_level.result);
+    let func_name = FuncName(&bytes);
+    let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
-    let roc_main_fn = env.module.get_function(&fn_name).unwrap();
+    let mut it = func_solutions.specs();
+    let func_spec = it.next().unwrap();
+    debug_assert!(
+        it.next().is_none(),
+        "we expect only one specialization of this symbol"
+    );
+
+    // NOTE fake layout; it is only used for debug prints
+    let roc_main_fn =
+        function_value_by_func_spec(env, *func_spec, symbol, &[], &Layout::Struct(&[]));
 
     let main_fn_name = "$Test.main";
 
     // Add main to the module.
-    let main_fn = expose_function_to_host_help(env, roc_main_fn, main_fn_name);
+    let main_fn = expose_function_to_host_help(
+        env,
+        &inlinable_string::InlinableString::from(main_fn_name),
+        roc_main_fn,
+        main_fn_name,
+    );
 
     (main_fn_name, main_fn)
 }
@@ -614,6 +632,7 @@ pub fn int_with_precision<'a, 'ctx, 'env>(
         Builtin::Int32 => env.context.i32_type().const_int(value as u64, false),
         Builtin::Int16 => env.context.i16_type().const_int(value as u64, false),
         Builtin::Int8 => env.context.i8_type().const_int(value as u64, false),
+        Builtin::Int1 => env.context.bool_type().const_int(value as u64, false),
         _ => panic!("Invalid layout for int literal = {:?}", precision),
     }
 }
@@ -771,6 +790,7 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
 pub fn build_exp_call<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
+    func_spec_solutions: &FuncSpecSolutions,
     scope: &mut Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     layout: &Layout<'a>,
@@ -783,7 +803,11 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
 
     match call_type {
         CallType::ByName {
-            name, full_layout, ..
+            name,
+            specialization_id,
+            arg_layouts,
+            ret_layout,
+            ..
         } => {
             let mut arg_tuples: Vec<BasicValueEnum> =
                 Vec::with_capacity_in(arguments.len(), env.arena);
@@ -792,34 +816,62 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
                 arg_tuples.push(load_symbol(scope, symbol));
             }
 
-            call_with_args(
+            let bytes = specialization_id.to_bytes();
+            let callee_var = CalleeSpecVar(&bytes);
+            let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
+
+            roc_call_with_args(
                 env,
-                layout_ids,
-                &full_layout,
+                arg_layouts,
+                ret_layout,
                 *name,
-                parent,
+                func_spec,
                 arg_tuples.into_bump_slice(),
             )
         }
 
-        CallType::LowLevel { op, update_mode: _ } => {
-            run_low_level(env, layout_ids, scope, parent, layout, *op, arguments)
+        CallType::LowLevel { op, update_mode } => {
+            let bytes = update_mode.to_bytes();
+            let update_var = UpdateModeVar(&bytes);
+            let update_mode = func_spec_solutions.update_mode(update_var).ok();
+
+            run_low_level(
+                env,
+                layout_ids,
+                scope,
+                parent,
+                layout,
+                *op,
+                arguments,
+                update_mode,
+            )
         }
 
         CallType::HigherOrderLowLevel {
             op,
-            closure_layout,
             function_owns_closure_data,
-        } => run_higher_order_low_level(
-            env,
-            layout_ids,
-            scope,
-            layout,
-            *op,
-            *closure_layout,
-            *function_owns_closure_data,
-            arguments,
-        ),
+            specialization_id,
+            arg_layouts,
+            ret_layout,
+            ..
+        } => {
+            let bytes = specialization_id.to_bytes();
+            let callee_var = CalleeSpecVar(&bytes);
+            let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
+
+            run_higher_order_low_level(
+                env,
+                layout_ids,
+                scope,
+                layout,
+                *op,
+                func_spec,
+                arg_layouts,
+                ret_layout,
+                *function_owns_closure_data,
+                arguments,
+            )
+        }
 
         CallType::Foreign {
             foreign_symbol,
@@ -830,6 +882,7 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
             build_foreign_symbol(
                 env,
                 layout_ids,
+                func_spec_solutions,
                 scope,
                 parent,
                 foreign_symbol,
@@ -841,9 +894,36 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
     }
 }
 
+pub const TAG_ID_INDEX: u32 = 1;
+pub const TAG_DATA_INDEX: u32 = 0;
+
+pub fn struct_from_fields<'a, 'ctx, 'env, I>(
+    env: &Env<'a, 'ctx, 'env>,
+    struct_type: StructType<'ctx>,
+    values: I,
+) -> StructValue<'ctx>
+where
+    I: Iterator<Item = (usize, BasicValueEnum<'ctx>)>,
+{
+    let mut struct_value = struct_type.const_zero().into();
+
+    // Insert field exprs into struct_val
+    for (index, field_val) in values {
+        let index: u32 = index as u32;
+
+        struct_value = env
+            .builder
+            .build_insert_value(struct_value, field_val, index, "insert_record_field")
+            .unwrap();
+    }
+
+    struct_value.into_struct_value()
+}
+
 pub fn build_exp_expr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
+    func_spec_solutions: &FuncSpecSolutions,
     scope: &mut Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     layout: &Layout<'a>,
@@ -854,11 +934,18 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
     match expr {
         Literal(literal) => build_exp_literal(env, layout, literal),
 
-        Call(call) => build_exp_call(env, layout_ids, scope, parent, layout, call),
+        Call(call) => build_exp_call(
+            env,
+            layout_ids,
+            func_spec_solutions,
+            scope,
+            parent,
+            layout,
+            call,
+        ),
 
         Struct(sorted_fields) => {
             let ctx = env.context;
-            let builder = env.builder;
 
             // Determine types
             let num_fields = sorted_fields.len();
@@ -878,522 +965,24 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             // Create the struct_type
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let mut struct_val = struct_type.const_zero().into();
 
             // Insert field exprs into struct_val
-            for (index, field_val) in field_vals.into_iter().enumerate() {
-                struct_val = builder
-                    .build_insert_value(struct_val, field_val, index as u32, "insert_record_field")
-                    .unwrap();
-            }
-
-            BasicValueEnum::StructValue(struct_val.into_struct_value())
-        }
-
-        Tag {
-            union_size,
-            arguments,
-            tag_layout,
-            ..
-        } if *union_size == 1 && matches!(tag_layout, UnionLayout::NonRecursive(_)) => {
-            let it = arguments.iter();
-
-            let ctx = env.context;
-            let builder = env.builder;
-
-            // Determine types
-            let num_fields = arguments.len() + 1;
-            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-            for field_symbol in it {
-                let (val, field_layout) = load_symbol_and_layout(scope, field_symbol);
-                if !field_layout.is_dropped_because_empty() {
-                    let field_type = basic_type_from_layout(env, &field_layout);
-
-                    field_types.push(field_type);
-                    field_vals.push(val);
-                }
-            }
-
-            // If the struct has only one field that isn't zero-sized,
-            // unwrap it. This is what the layout expects us to do.
-            if field_vals.len() == 1 {
-                field_vals.pop().unwrap()
-            } else {
-                // Create the struct_type
-                let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-                let mut struct_val = struct_type.const_zero().into();
-
-                // Insert field exprs into struct_val
-                for (index, field_val) in field_vals.into_iter().enumerate() {
-                    struct_val = builder
-                        .build_insert_value(
-                            struct_val,
-                            field_val,
-                            index as u32,
-                            "insert_single_tag_field",
-                        )
-                        .unwrap();
-                }
-
-                BasicValueEnum::StructValue(struct_val.into_struct_value())
-            }
+            struct_from_fields(env, struct_type, field_vals.into_iter().enumerate()).into()
         }
 
         Tag {
             arguments,
-            tag_layout: UnionLayout::NonRecursive(fields),
+            tag_layout: union_layout,
             union_size,
             tag_id,
             ..
-        } => {
-            let tag_layout = Layout::Union(UnionLayout::NonRecursive(fields));
-
-            debug_assert!(*union_size > 1);
-
-            let ctx = env.context;
-            let builder = env.builder;
-
-            // Determine types
-            let num_fields = arguments.len() + 1;
-            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-            let tag_field_layouts = &fields[*tag_id as usize];
-
-            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
-                let (val, _val_layout) = load_symbol_and_layout(scope, field_symbol);
-
-                // Zero-sized fields have no runtime representation.
-                // The layout of the struct expects them to be dropped!
-                if !tag_field_layout.is_dropped_because_empty() {
-                    let field_type = basic_type_from_layout(env, tag_field_layout);
-
-                    field_types.push(field_type);
-
-                    if let Layout::RecursivePointer = tag_field_layout {
-                        panic!(
-                            r"non-recursive tag unions cannot directly contain a recursive pointer"
-                        );
-                    } else {
-                        // this check fails for recursive tag unions, but can be helpful while debugging
-                        // debug_assert_eq!(tag_field_layout, val_layout);
-
-                        field_vals.push(val);
-                    }
-                }
-            }
-
-            // Create the struct_type
-            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let mut struct_val = struct_type.const_zero().into();
-
-            // Insert field exprs into struct_val
-            for (index, field_val) in field_vals.into_iter().enumerate() {
-                struct_val = builder
-                    .build_insert_value(
-                        struct_val,
-                        field_val,
-                        index as u32,
-                        "insert_multi_tag_field",
-                    )
-                    .unwrap();
-            }
-
-            // How we create tag values
-            //
-            // The memory layout of tags can be different. e.g. in
-            //
-            // [ Ok Int, Err Str ]
-            //
-            // the `Ok` tag stores a 64-bit integer, the `Err` tag stores a struct.
-            // All tags of a union must have the same length, for easy addressing (e.g. array lookups).
-            // So we need to ask for the maximum of all tag's sizes, even if most tags won't use
-            // all that memory, and certainly won't use it in the same way (the tags have fields of
-            // different types/sizes)
-            //
-            // In llvm, we must be explicit about the type of value we're creating: we can't just
-            // make a unspecified block of memory. So what we do is create a byte array of the
-            // desired size. Then when we know which tag we have (which is here, in this function),
-            // we need to cast that down to the array of bytes that llvm expects
-            //
-            // There is the bitcast instruction, but it doesn't work for arrays. So we need to jump
-            // through some hoops using store and load to get this to work: the array is put into a
-            // one-element struct, which can be cast to the desired type.
-            //
-            // This tricks comes from
-            // https://github.com/raviqqe/ssf/blob/bc32aae68940d5bddf5984128e85af75ca4f4686/ssf-llvm/src/expression_compiler.rs#L116
-
-            let internal_type = basic_type_from_layout(env, &tag_layout);
-
-            cast_tag_to_block_of_memory(builder, struct_val.into_struct_value(), internal_type)
-        }
-        Tag {
-            arguments,
-            tag_layout: UnionLayout::Recursive(fields),
-            union_size,
-            tag_id,
-            ..
-        } => {
-            let tag_layout = Layout::Union(UnionLayout::NonRecursive(fields));
-
-            debug_assert!(*union_size > 1);
-
-            let ctx = env.context;
-            let builder = env.builder;
-
-            // Determine types
-            let num_fields = arguments.len() + 1;
-            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-            let tag_field_layouts = &fields[*tag_id as usize];
-
-            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
-                let (val, _val_layout) = load_symbol_and_layout(scope, field_symbol);
-
-                // Zero-sized fields have no runtime representation.
-                // The layout of the struct expects them to be dropped!
-                if !tag_field_layout.is_dropped_because_empty() {
-                    let field_type = basic_type_from_layout(env, tag_field_layout);
-
-                    field_types.push(field_type);
-
-                    if let Layout::RecursivePointer = tag_field_layout {
-                        debug_assert!(val.is_pointer_value());
-
-                        // we store recursive pointers as `i64*`
-                        let ptr = env.builder.build_bitcast(
-                            val,
-                            ctx.i64_type().ptr_type(AddressSpace::Generic),
-                            "cast_recursive_pointer",
-                        );
-
-                        field_vals.push(ptr);
-                    } else {
-                        // this check fails for recursive tag unions, but can be helpful while debugging
-                        // debug_assert_eq!(tag_field_layout, val_layout);
-
-                        field_vals.push(val);
-                    }
-                }
-            }
-
-            // Create the struct_type
-            let data_ptr = reserve_with_refcount(env, &tag_layout);
-            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let struct_ptr = env
-                .builder
-                .build_bitcast(
-                    data_ptr,
-                    struct_type.ptr_type(AddressSpace::Generic),
-                    "block_of_memory_to_tag",
-                )
-                .into_pointer_value();
-
-            // Insert field exprs into struct_val
-            for (index, field_val) in field_vals.into_iter().enumerate() {
-                let field_ptr = builder
-                    .build_struct_gep(struct_ptr, index as u32, "struct_gep")
-                    .unwrap();
-
-                builder.build_store(field_ptr, field_val);
-            }
-
-            data_ptr.into()
-        }
-
-        Tag {
-            arguments,
-            tag_layout: UnionLayout::NonNullableUnwrapped(fields),
-            union_size,
-            tag_id,
-            ..
-        } => {
-            debug_assert_eq!(*union_size, 1);
-            debug_assert_eq!(*tag_id, 0);
-            debug_assert_eq!(arguments.len(), fields.len());
-
-            let struct_layout =
-                Layout::Union(UnionLayout::NonRecursive(env.arena.alloc([*fields])));
-
-            let ctx = env.context;
-            let builder = env.builder;
-
-            // Determine types
-            let num_fields = arguments.len() + 1;
-            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-            for (field_symbol, tag_field_layout) in arguments.iter().zip(fields.iter()) {
-                let val = load_symbol(scope, field_symbol);
-
-                // Zero-sized fields have no runtime representation.
-                // The layout of the struct expects them to be dropped!
-                if !tag_field_layout.is_dropped_because_empty() {
-                    let field_type = basic_type_from_layout(env, tag_field_layout);
-
-                    field_types.push(field_type);
-
-                    if let Layout::RecursivePointer = tag_field_layout {
-                        debug_assert!(val.is_pointer_value());
-
-                        // we store recursive pointers as `i64*`
-                        let ptr = env.builder.build_bitcast(
-                            val,
-                            ctx.i64_type().ptr_type(AddressSpace::Generic),
-                            "cast_recursive_pointer",
-                        );
-
-                        field_vals.push(ptr);
-                    } else {
-                        // this check fails for recursive tag unions, but can be helpful while debugging
-
-                        field_vals.push(val);
-                    }
-                }
-            }
-
-            // Create the struct_type
-            let data_ptr = reserve_with_refcount(env, &struct_layout);
-            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let struct_ptr = env
-                .builder
-                .build_bitcast(
-                    data_ptr,
-                    struct_type.ptr_type(AddressSpace::Generic),
-                    "block_of_memory_to_tag",
-                )
-                .into_pointer_value();
-
-            // Insert field exprs into struct_val
-            for (index, field_val) in field_vals.into_iter().enumerate() {
-                let field_ptr = builder
-                    .build_struct_gep(struct_ptr, index as u32, "struct_gep")
-                    .unwrap();
-
-                builder.build_store(field_ptr, field_val);
-            }
-
-            data_ptr.into()
-        }
-
-        Tag {
-            arguments,
-            tag_layout:
-                UnionLayout::NullableWrapped {
-                    nullable_id,
-                    other_tags: fields,
-                },
-            union_size,
-            tag_id,
-            ..
-        } => {
-            let tag_layout = Layout::Union(UnionLayout::NonRecursive(fields));
-            let tag_struct_type = basic_type_from_layout(env, &tag_layout);
-            if *tag_id == *nullable_id as u8 {
-                let output_type = tag_struct_type.ptr_type(AddressSpace::Generic);
-
-                return output_type.const_null().into();
-            }
-
-            debug_assert!(*union_size > 1);
-
-            let ctx = env.context;
-            let builder = env.builder;
-
-            // Determine types
-            let num_fields = arguments.len() + 1;
-            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-            let tag_field_layouts = {
-                use std::cmp::Ordering::*;
-                match tag_id.cmp(&(*nullable_id as u8)) {
-                    Equal => &[] as &[_],
-                    Less => &fields[*tag_id as usize],
-                    Greater => &fields[*tag_id as usize - 1],
-                }
-            };
-
-            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
-                let val = load_symbol(scope, field_symbol);
-
-                // Zero-sized fields have no runtime representation.
-                // The layout of the struct expects them to be dropped!
-                if !tag_field_layout.is_dropped_because_empty() {
-                    let field_type = basic_type_from_layout(env, tag_field_layout);
-
-                    field_types.push(field_type);
-
-                    if let Layout::RecursivePointer = tag_field_layout {
-                        debug_assert!(val.is_pointer_value());
-
-                        // we store recursive pointers as `i64*`
-                        let ptr = env.builder.build_bitcast(
-                            val,
-                            ctx.i64_type().ptr_type(AddressSpace::Generic),
-                            "cast_recursive_pointer",
-                        );
-
-                        field_vals.push(ptr);
-                    } else {
-                        // this check fails for recursive tag unions, but can be helpful while debugging
-                        // debug_assert_eq!(tag_field_layout, val_layout);
-
-                        field_vals.push(val);
-                    }
-                }
-            }
-
-            // Create the struct_type
-            let data_ptr = reserve_with_refcount(env, &tag_layout);
-            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let struct_ptr = env
-                .builder
-                .build_bitcast(
-                    data_ptr,
-                    struct_type.ptr_type(AddressSpace::Generic),
-                    "block_of_memory_to_tag",
-                )
-                .into_pointer_value();
-
-            // Insert field exprs into struct_val
-            for (index, field_val) in field_vals.into_iter().enumerate() {
-                let field_ptr = builder
-                    .build_struct_gep(struct_ptr, index as u32, "struct_gep")
-                    .unwrap();
-
-                builder.build_store(field_ptr, field_val);
-            }
-
-            data_ptr.into()
-        }
-
-        Tag {
-            arguments,
-            tag_layout:
-                UnionLayout::NullableUnwrapped {
-                    nullable_id,
-                    other_fields,
-                    ..
-                },
-            union_size,
-            tag_id,
-            tag_name,
-            ..
-        } => {
-            let other_fields = &other_fields[1..];
-
-            let tag_struct_type =
-                block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
-
-            if *tag_id == *nullable_id as u8 {
-                let output_type = tag_struct_type.ptr_type(AddressSpace::Generic);
-
-                return output_type.const_null().into();
-            }
-
-            // this tag id is not the nullable one. For the type to be recursive, the other
-            // constructor must have at least one argument!
-            debug_assert!(!arguments.is_empty());
-
-            debug_assert!(*union_size == 2);
-
-            let ctx = env.context;
-            let builder = env.builder;
-
-            // Determine types
-            let num_fields = arguments.len() + 1;
-            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-            debug_assert!(!matches!(tag_name, TagName::Closure(_)));
-
-            let tag_field_layouts = other_fields;
-            let arguments = &arguments[1..];
-
-            debug_assert_eq!(arguments.len(), tag_field_layouts.len());
-
-            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
-                let val = load_symbol(scope, field_symbol);
-
-                // Zero-sized fields have no runtime representation.
-                // The layout of the struct expects them to be dropped!
-                if !tag_field_layout.is_dropped_because_empty() {
-                    let field_type = basic_type_from_layout(env, tag_field_layout);
-
-                    field_types.push(field_type);
-
-                    if let Layout::RecursivePointer = tag_field_layout {
-                        debug_assert!(val.is_pointer_value());
-
-                        // we store recursive pointers as `i64*`
-                        let ptr = env.builder.build_bitcast(
-                            val,
-                            ctx.i64_type().ptr_type(AddressSpace::Generic),
-                            "cast_recursive_pointer",
-                        );
-
-                        field_vals.push(ptr);
-                    } else {
-                        // this check fails for recursive tag unions, but can be helpful while debugging
-                        // debug_assert_eq!(tag_field_layout, val_layout);
-
-                        field_vals.push(val);
-                    }
-                }
-            }
-
-            // Create the struct_type
-            let data_ptr = reserve_with_refcount(
-                env,
-                &Layout::Union(UnionLayout::NonRecursive(&[other_fields])),
-            );
-
-            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let struct_ptr = env
-                .builder
-                .build_bitcast(
-                    data_ptr,
-                    struct_type.ptr_type(AddressSpace::Generic),
-                    "block_of_memory_to_tag",
-                )
-                .into_pointer_value();
-
-            // Insert field exprs into struct_val
-            for (index, field_val) in field_vals.into_iter().enumerate() {
-                let field_ptr = builder
-                    .build_struct_gep(struct_ptr, index as u32, "struct_gep")
-                    .unwrap();
-
-                builder.build_store(field_ptr, field_val);
-            }
-
-            data_ptr.into()
-        }
+        } => build_tag(env, scope, union_layout, *union_size, *tag_id, arguments),
 
         Reset(_) => todo!(),
         Reuse { .. } => todo!(),
 
-        AccessAtIndex {
-            index,
-            structure,
-            wrapped: Wrapped::SingleElementRecord,
-            field_layouts,
-            ..
-        } => {
-            debug_assert_eq!(field_layouts.len(), 1);
-            debug_assert_eq!(*index, 0);
-            load_symbol(scope, structure)
-        }
-
-        AccessAtIndex {
-            index,
-            structure,
-            wrapped: Wrapped::RecordOrSingleTagUnion,
-            ..
+        StructAtIndex {
+            index, structure, ..
         } => {
             // extract field from a record
             match load_symbol_and_layout(scope, structure) {
@@ -1443,152 +1032,630 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     env.builder.build_load(ptr, "load_rosetree_like")
                 }
-                (other, layout) => unreachable!(
-                    "can only index into struct layout\nValue: {:?}\nLayout: {:?}\nIndex: {:?}",
-                    other, layout, index
-                ),
+                (other, layout) => {
+                    // potential cause: indexing into an unwrapped 1-element record/tag?
+                    unreachable!(
+                        "can only index into struct layout\nValue: {:?}\nLayout: {:?}\nIndex: {:?}",
+                        other, layout, index
+                    )
+                }
             }
         }
 
-        AccessAtIndex {
-            index,
-            structure,
-            field_layouts,
-            ..
-        } => {
-            use BasicValueEnum::*;
+        EmptyArray => empty_polymorphic_list(env),
+        Array { elem_layout, elems } => list_literal(env, scope, elem_layout, elems),
+        RuntimeErrorFunction(_) => todo!(),
 
+        UnionAtIndex {
+            tag_id,
+            structure,
+            index,
+            union_layout,
+        } => {
             let builder = env.builder;
 
-            // Determine types, assumes the descriminant is in the field layouts
-            let num_fields = field_layouts.len();
-            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-
-            for field_layout in field_layouts.iter() {
-                let field_type = basic_type_from_layout(env, &field_layout);
-                field_types.push(field_type);
-            }
-
             // cast the argument bytes into the desired shape for this tag
-            let (argument, structure_layout) = load_symbol_and_layout(scope, structure);
+            let (argument, _structure_layout) = load_symbol_and_layout(scope, structure);
 
-            match argument {
-                StructValue(value) => {
+            match union_layout {
+                UnionLayout::NonRecursive(tag_layouts) => {
+                    debug_assert!(argument.is_struct_value());
+                    let field_layouts = tag_layouts[*tag_id as usize];
                     let struct_layout = Layout::Struct(field_layouts);
-                    let struct_type = env
-                        .context
-                        .struct_type(field_types.into_bump_slice(), false);
 
-                    let struct_value = access_index_struct_value(builder, value, struct_type);
+                    let struct_type = basic_type_from_layout(env, &struct_layout);
+
+                    let struct_value = access_index_struct_value(
+                        builder,
+                        argument.into_struct_value(),
+                        struct_type.into_struct_type(),
+                    );
 
                     let result = builder
                         .build_extract_value(struct_value, *index as u32, "")
                         .expect("desired field did not decode");
 
-                    if let Some(Layout::RecursivePointer) = field_layouts.get(*index as usize) {
-                        let desired_type =
-                            block_of_memory(env.context, &struct_layout, env.ptr_bytes);
-
-                        // the value is a pointer to the actual value; load that value!
-                        let ptr = env.builder.build_bitcast(
-                            result,
-                            desired_type.ptr_type(AddressSpace::Generic),
-                            "cast_struct_value_pointer",
-                        );
-
-                        builder.build_load(ptr.into_pointer_value(), "load_recursive_field")
-                    } else {
-                        result
-                    }
+                    result
                 }
-                PointerValue(value) => match structure_layout {
-                    Layout::Union(UnionLayout::NullableWrapped { nullable_id, .. })
-                        if *index == 0 =>
-                    {
-                        let ptr = value;
-                        let is_null = env.builder.build_is_null(ptr, "is_null");
+                UnionLayout::Recursive(tag_layouts) => {
+                    debug_assert!(argument.is_pointer_value());
 
-                        let ctx = env.context;
-                        let then_block = ctx.append_basic_block(parent, "then");
-                        let else_block = ctx.append_basic_block(parent, "else");
-                        let cont_block = ctx.append_basic_block(parent, "cont");
+                    let field_layouts = tag_layouts[*tag_id as usize];
 
-                        let result = builder.build_alloca(ctx.i64_type(), "result");
+                    let tag_id_type =
+                        basic_type_from_layout(env, &union_layout.tag_id_layout()).into_int_type();
 
-                        env.builder
-                            .build_conditional_branch(is_null, then_block, else_block);
+                    lookup_at_index_ptr2(
+                        env,
+                        tag_id_type,
+                        field_layouts,
+                        *index as usize,
+                        argument.into_pointer_value(),
+                    )
+                }
+                UnionLayout::NonNullableUnwrapped(field_layouts) => {
+                    let struct_layout = Layout::Struct(&field_layouts);
 
-                        {
-                            env.builder.position_at_end(then_block);
-                            let tag_id = ctx.i64_type().const_int(*nullable_id as u64, false);
-                            env.builder.build_store(result, tag_id);
-                            env.builder.build_unconditional_branch(cont_block);
-                        }
+                    let struct_type = basic_type_from_layout(env, &struct_layout);
 
-                        {
-                            env.builder.position_at_end(else_block);
-                            let tag_id = extract_tag_discriminant_ptr(env, ptr);
-                            env.builder.build_store(result, tag_id);
-                            env.builder.build_unconditional_branch(cont_block);
-                        }
+                    lookup_at_index_ptr(
+                        env,
+                        field_layouts,
+                        *index as usize,
+                        argument.into_pointer_value(),
+                        struct_type.into_struct_type(),
+                        &struct_layout,
+                    )
+                }
+                UnionLayout::NullableWrapped {
+                    nullable_id,
+                    other_tags,
+                } => {
+                    debug_assert!(argument.is_pointer_value());
+                    debug_assert_ne!(*tag_id as i64, *nullable_id);
 
-                        env.builder.position_at_end(cont_block);
+                    let tag_index = if (*tag_id as i64) < *nullable_id {
+                        *tag_id
+                    } else {
+                        tag_id - 1
+                    };
 
-                        env.builder.build_load(result, "load_result")
-                    }
-                    Layout::Union(UnionLayout::NullableUnwrapped { nullable_id, .. }) => {
-                        if *index == 0 {
-                            let is_null = env.builder.build_is_null(value, "is_null");
+                    let field_layouts = other_tags[tag_index as usize];
 
-                            let ctx = env.context;
+                    let tag_id_type =
+                        basic_type_from_layout(env, &union_layout.tag_id_layout()).into_int_type();
 
-                            let then_value = ctx.i64_type().const_int(*nullable_id as u64, false);
-                            let else_value = ctx.i64_type().const_int(!*nullable_id as u64, false);
+                    lookup_at_index_ptr2(
+                        env,
+                        tag_id_type,
+                        field_layouts,
+                        *index as usize,
+                        argument.into_pointer_value(),
+                    )
+                }
+                UnionLayout::NullableUnwrapped {
+                    nullable_id,
+                    other_fields,
+                } => {
+                    debug_assert!(argument.is_pointer_value());
+                    debug_assert_ne!(*tag_id != 0, *nullable_id);
 
-                            env.builder.build_select(
-                                is_null,
-                                then_value,
-                                else_value,
-                                "select_tag_id",
-                            )
-                        } else {
-                            let struct_type = env
-                                .context
-                                .struct_type(&field_types.into_bump_slice()[1..], false);
+                    let field_layouts = other_fields;
+                    let struct_layout = Layout::Struct(field_layouts);
 
-                            lookup_at_index_ptr(
-                                env,
-                                &field_layouts[1..],
-                                *index as usize - 1,
-                                value,
-                                struct_type,
-                                structure_layout,
-                            )
-                        }
-                    }
-                    _ => {
-                        let struct_type = env
-                            .context
-                            .struct_type(field_types.into_bump_slice(), false);
+                    let struct_type = basic_type_from_layout(env, &struct_layout);
 
-                        lookup_at_index_ptr(
-                            env,
-                            field_layouts,
-                            *index as usize,
-                            value,
-                            struct_type,
-                            structure_layout,
-                        )
-                    }
-                },
-                _ => panic!("cannot look up index in {:?}", argument),
+                    lookup_at_index_ptr(
+                        env,
+                        field_layouts,
+                        // the tag id is not stored
+                        *index as usize,
+                        argument.into_pointer_value(),
+                        struct_type.into_struct_type(),
+                        &struct_layout,
+                    )
+                }
             }
         }
-        EmptyArray => empty_polymorphic_list(env),
-        Array { elem_layout, elems } => {
-            list_literal(env, layout.in_place(), scope, elem_layout, elems)
+
+        GetTagId {
+            structure,
+            union_layout,
+        } => {
+            // cast the argument bytes into the desired shape for this tag
+            let (argument, _structure_layout) = load_symbol_and_layout(scope, structure);
+
+            get_tag_id(env, parent, &union_layout, argument).into()
         }
-        RuntimeErrorFunction(_) => todo!(),
+    }
+}
+
+pub fn build_tag<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    union_layout: &UnionLayout<'a>,
+    union_size: u8,
+    tag_id: u8,
+    arguments: &[Symbol],
+) -> BasicValueEnum<'ctx> {
+    let tag_id_layout = union_layout.tag_id_layout();
+
+    match union_layout {
+        UnionLayout::NonRecursive(tags) => {
+            debug_assert!(union_size > 1);
+
+            let ctx = env.context;
+            let builder = env.builder;
+
+            // Determine types
+            let num_fields = arguments.len() + 1;
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+            let tag_field_layouts = &tags[tag_id as usize];
+
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
+                let (val, _val_layout) = load_symbol_and_layout(scope, field_symbol);
+
+                // Zero-sized fields have no runtime representation.
+                // The layout of the struct expects them to be dropped!
+                if !tag_field_layout.is_dropped_because_empty() {
+                    let field_type = basic_type_from_layout(env, tag_field_layout);
+
+                    field_types.push(field_type);
+
+                    if let Layout::RecursivePointer = tag_field_layout {
+                        panic!(
+                            r"non-recursive tag unions cannot directly contain a recursive pointer"
+                        );
+                    } else {
+                        // this check fails for recursive tag unions, but can be helpful while debugging
+                        // debug_assert_eq!(tag_field_layout, val_layout);
+
+                        field_vals.push(val);
+                    }
+                }
+            }
+
+            // Create the struct_type
+            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+
+            // Insert field exprs into struct_val
+            let struct_val =
+                struct_from_fields(env, struct_type, field_vals.into_iter().enumerate());
+
+            // How we create tag values
+            //
+            // The memory layout of tags can be different. e.g. in
+            //
+            // [ Ok Int, Err Str ]
+            //
+            // the `Ok` tag stores a 64-bit integer, the `Err` tag stores a struct.
+            // All tags of a union must have the same length, for easy addressing (e.g. array lookups).
+            // So we need to ask for the maximum of all tag's sizes, even if most tags won't use
+            // all that memory, and certainly won't use it in the same way (the tags have fields of
+            // different types/sizes)
+            //
+            // In llvm, we must be explicit about the type of value we're creating: we can't just
+            // make a unspecified block of memory. So what we do is create a byte array of the
+            // desired size. Then when we know which tag we have (which is here, in this function),
+            // we need to cast that down to the array of bytes that llvm expects
+            //
+            // There is the bitcast instruction, but it doesn't work for arrays. So we need to jump
+            // through some hoops using store and load to get this to work: the array is put into a
+            // one-element struct, which can be cast to the desired type.
+            //
+            // This tricks comes from
+            // https://github.com/raviqqe/ssf/blob/bc32aae68940d5bddf5984128e85af75ca4f4686/ssf-llvm/src/expression_compiler.rs#L116
+
+            let internal_type = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+
+            let data = cast_tag_to_block_of_memory(builder, struct_val, internal_type);
+            let tag_id_type = basic_type_from_layout(env, &tag_id_layout).into_int_type();
+            let wrapper_type = env
+                .context
+                .struct_type(&[data.get_type(), tag_id_type.into()], false);
+
+            let tag_id_intval = tag_id_type.const_int(tag_id as u64, false);
+
+            let field_vals = [
+                (TAG_DATA_INDEX as usize, data),
+                (TAG_ID_INDEX as usize, tag_id_intval.into()),
+            ];
+
+            struct_from_fields(env, wrapper_type, field_vals.iter().copied()).into()
+        }
+        UnionLayout::Recursive(tags) => {
+            debug_assert!(union_size > 1);
+
+            let ctx = env.context;
+            let builder = env.builder;
+
+            // Determine types
+            let num_fields = arguments.len() + 1;
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+            let tag_field_layouts = &tags[tag_id as usize];
+
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
+                let (val, _val_layout) = load_symbol_and_layout(scope, field_symbol);
+
+                let field_type = basic_type_from_layout(env, tag_field_layout);
+
+                field_types.push(field_type);
+
+                if let Layout::RecursivePointer = tag_field_layout {
+                    debug_assert!(val.is_pointer_value());
+
+                    // we store recursive pointers as `i64*`
+                    let ptr = env.builder.build_bitcast(
+                        val,
+                        ctx.i64_type().ptr_type(AddressSpace::Generic),
+                        "cast_recursive_pointer",
+                    );
+
+                    field_vals.push(ptr);
+                } else {
+                    // this check fails for recursive tag unions, but can be helpful while debugging
+                    // debug_assert_eq!(tag_field_layout, val_layout);
+
+                    field_vals.push(val);
+                }
+            }
+
+            // Create the struct_type
+            let raw_data_ptr =
+                reserve_with_refcount_union_as_block_of_memory(env, *union_layout, tags);
+
+            let tag_id_ptr = builder
+                .build_struct_gep(raw_data_ptr, TAG_ID_INDEX, "tag_id_index")
+                .unwrap();
+
+            let tag_id_type = basic_type_from_layout(env, &tag_id_layout).into_int_type();
+
+            env.builder
+                .build_store(tag_id_ptr, tag_id_type.const_int(tag_id as u64, false));
+
+            let opaque_struct_ptr = builder
+                .build_struct_gep(raw_data_ptr, TAG_DATA_INDEX, "tag_data_index")
+                .unwrap();
+
+            let struct_type = env.context.struct_type(&field_types, false);
+            let struct_ptr = env
+                .builder
+                .build_bitcast(
+                    opaque_struct_ptr,
+                    struct_type.ptr_type(AddressSpace::Generic),
+                    "struct_ptr",
+                )
+                .into_pointer_value();
+
+            // Insert field exprs into struct_val
+            for (index, field_val) in field_vals.into_iter().enumerate() {
+                let field_ptr = builder
+                    .build_struct_gep(struct_ptr, index as u32, "field_struct_gep")
+                    .unwrap();
+
+                builder.build_store(field_ptr, field_val);
+            }
+
+            raw_data_ptr.into()
+        }
+        UnionLayout::NonNullableUnwrapped(fields) => {
+            debug_assert_eq!(union_size, 1);
+            debug_assert_eq!(tag_id, 0);
+            debug_assert_eq!(arguments.len(), fields.len());
+
+            let ctx = env.context;
+            let builder = env.builder;
+
+            // Determine types
+            let num_fields = arguments.len() + 1;
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(fields.iter()) {
+                let val = load_symbol(scope, field_symbol);
+
+                let field_type = basic_type_from_layout(env, tag_field_layout);
+
+                field_types.push(field_type);
+
+                if let Layout::RecursivePointer = tag_field_layout {
+                    debug_assert!(val.is_pointer_value());
+
+                    // we store recursive pointers as `i64*`
+                    let ptr = env.builder.build_bitcast(
+                        val,
+                        ctx.i64_type().ptr_type(AddressSpace::Generic),
+                        "cast_recursive_pointer",
+                    );
+
+                    field_vals.push(ptr);
+                } else {
+                    // this check fails for recursive tag unions, but can be helpful while debugging
+
+                    field_vals.push(val);
+                }
+            }
+
+            // Create the struct_type
+            let data_ptr =
+                reserve_with_refcount_union_as_block_of_memory(env, *union_layout, &[fields]);
+
+            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+            let struct_ptr = env
+                .builder
+                .build_bitcast(
+                    data_ptr,
+                    struct_type.ptr_type(AddressSpace::Generic),
+                    "block_of_memory_to_tag",
+                )
+                .into_pointer_value();
+
+            // Insert field exprs into struct_val
+            for (index, field_val) in field_vals.into_iter().enumerate() {
+                let field_ptr = builder
+                    .build_struct_gep(struct_ptr, index as u32, "struct_gep")
+                    .unwrap();
+
+                builder.build_store(field_ptr, field_val);
+            }
+
+            data_ptr.into()
+        }
+        UnionLayout::NullableWrapped {
+            nullable_id,
+            other_tags: tags,
+        } => {
+            if tag_id == *nullable_id as u8 {
+                let layout = Layout::Union(*union_layout);
+
+                return basic_type_from_layout(env, &layout)
+                    .into_pointer_type()
+                    .const_null()
+                    .into();
+            }
+
+            debug_assert!(union_size > 1);
+
+            let ctx = env.context;
+            let builder = env.builder;
+
+            // Determine types
+            let num_fields = arguments.len() + 1;
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+            let tag_field_layouts = {
+                use std::cmp::Ordering::*;
+                match tag_id.cmp(&(*nullable_id as u8)) {
+                    Equal => unreachable!("early return above"),
+                    Less => &tags[tag_id as usize],
+                    Greater => &tags[tag_id as usize - 1],
+                }
+            };
+
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
+                let val = load_symbol(scope, field_symbol);
+
+                // Zero-sized fields have no runtime representation.
+                // The layout of the struct expects them to be dropped!
+                if !tag_field_layout.is_dropped_because_empty() {
+                    let field_type = basic_type_from_layout(env, tag_field_layout);
+
+                    field_types.push(field_type);
+
+                    if let Layout::RecursivePointer = tag_field_layout {
+                        debug_assert!(val.is_pointer_value());
+
+                        // we store recursive pointers as `i64*`
+                        let ptr = env.builder.build_bitcast(
+                            val,
+                            ctx.i64_type().ptr_type(AddressSpace::Generic),
+                            "cast_recursive_pointer",
+                        );
+
+                        field_vals.push(ptr);
+                    } else {
+                        // this check fails for recursive tag unions, but can be helpful while debugging
+                        // debug_assert_eq!(tag_field_layout, val_layout);
+
+                        field_vals.push(val);
+                    }
+                }
+            }
+
+            // Create the struct_type
+            let raw_data_ptr =
+                reserve_with_refcount_union_as_block_of_memory(env, *union_layout, tags);
+
+            let tag_id_ptr = builder
+                .build_struct_gep(raw_data_ptr, TAG_ID_INDEX, "tag_id_index")
+                .unwrap();
+
+            let tag_id_type = basic_type_from_layout(env, &tag_id_layout).into_int_type();
+
+            env.builder
+                .build_store(tag_id_ptr, tag_id_type.const_int(tag_id as u64, false));
+
+            let opaque_struct_ptr = builder
+                .build_struct_gep(raw_data_ptr, TAG_DATA_INDEX, "tag_data_index")
+                .unwrap();
+
+            let struct_type = env.context.struct_type(&field_types, false);
+            let struct_ptr = env
+                .builder
+                .build_bitcast(
+                    opaque_struct_ptr,
+                    struct_type.ptr_type(AddressSpace::Generic),
+                    "struct_ptr",
+                )
+                .into_pointer_value();
+
+            // Insert field exprs into struct_val
+            for (index, field_val) in field_vals.into_iter().enumerate() {
+                let field_ptr = builder
+                    .build_struct_gep(struct_ptr, index as u32, "field_struct_gep")
+                    .unwrap();
+
+                builder.build_store(field_ptr, field_val);
+            }
+
+            raw_data_ptr.into()
+        }
+        UnionLayout::NullableUnwrapped {
+            nullable_id,
+            other_fields,
+        } => {
+            let tag_struct_type =
+                block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
+
+            if tag_id == *nullable_id as u8 {
+                let output_type = tag_struct_type.ptr_type(AddressSpace::Generic);
+
+                return output_type.const_null().into();
+            }
+
+            // this tag id is not the nullable one. For the type to be recursive, the other
+            // constructor must have at least one argument!
+            debug_assert!(!arguments.is_empty());
+
+            debug_assert!(union_size == 2);
+
+            let ctx = env.context;
+            let builder = env.builder;
+
+            // Determine types
+            let num_fields = arguments.len() + 1;
+            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+            debug_assert_eq!(arguments.len(), other_fields.len());
+
+            for (field_symbol, tag_field_layout) in arguments.iter().zip(other_fields.iter()) {
+                let val = load_symbol(scope, field_symbol);
+
+                // Zero-sized fields have no runtime representation.
+                // The layout of the struct expects them to be dropped!
+                if !tag_field_layout.is_dropped_because_empty() {
+                    let field_type = basic_type_from_layout(env, tag_field_layout);
+
+                    field_types.push(field_type);
+
+                    if let Layout::RecursivePointer = tag_field_layout {
+                        debug_assert!(val.is_pointer_value());
+
+                        // we store recursive pointers as `i64*`
+                        let ptr = env.builder.build_bitcast(
+                            val,
+                            ctx.i64_type().ptr_type(AddressSpace::Generic),
+                            "cast_recursive_pointer",
+                        );
+
+                        field_vals.push(ptr);
+                    } else {
+                        // this check fails for recursive tag unions, but can be helpful while debugging
+                        // debug_assert_eq!(tag_field_layout, val_layout);
+
+                        field_vals.push(val);
+                    }
+                }
+            }
+
+            // Create the struct_type
+            let data_ptr =
+                reserve_with_refcount_union_as_block_of_memory(env, *union_layout, &[other_fields]);
+
+            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+            let struct_ptr = env
+                .builder
+                .build_bitcast(
+                    data_ptr,
+                    struct_type.ptr_type(AddressSpace::Generic),
+                    "block_of_memory_to_tag",
+                )
+                .into_pointer_value();
+
+            // Insert field exprs into struct_val
+            for (index, field_val) in field_vals.into_iter().enumerate() {
+                let field_ptr = builder
+                    .build_struct_gep(struct_ptr, index as u32, "struct_gep")
+                    .unwrap();
+
+                builder.build_store(field_ptr, field_val);
+            }
+
+            data_ptr.into()
+        }
+    }
+}
+
+pub fn get_tag_id<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    union_layout: &UnionLayout<'a>,
+    argument: BasicValueEnum<'ctx>,
+) -> IntValue<'ctx> {
+    let builder = env.builder;
+
+    let tag_id_layout = union_layout.tag_id_layout();
+    let tag_id_int_type = basic_type_from_layout(env, &tag_id_layout).into_int_type();
+
+    match union_layout {
+        UnionLayout::NonRecursive(_) => {
+            let tag = argument.into_struct_value();
+
+            get_tag_id_non_recursive(env, tag)
+        }
+        UnionLayout::Recursive(_) => get_tag_id_wrapped(env, argument.into_pointer_value()),
+        UnionLayout::NonNullableUnwrapped(_) => tag_id_int_type.const_zero(),
+        UnionLayout::NullableWrapped { nullable_id, .. } => {
+            let argument_ptr = argument.into_pointer_value();
+            let is_null = env.builder.build_is_null(argument_ptr, "is_null");
+
+            let ctx = env.context;
+            let then_block = ctx.append_basic_block(parent, "then");
+            let else_block = ctx.append_basic_block(parent, "else");
+            let cont_block = ctx.append_basic_block(parent, "cont");
+
+            let result = builder.build_alloca(tag_id_int_type, "result");
+
+            env.builder
+                .build_conditional_branch(is_null, then_block, else_block);
+
+            {
+                env.builder.position_at_end(then_block);
+                let tag_id = tag_id_int_type.const_int(*nullable_id as u64, false);
+                env.builder.build_store(result, tag_id);
+                env.builder.build_unconditional_branch(cont_block);
+            }
+
+            {
+                env.builder.position_at_end(else_block);
+                let tag_id = get_tag_id_wrapped(env, argument_ptr);
+                env.builder.build_store(result, tag_id);
+                env.builder.build_unconditional_branch(cont_block);
+            }
+
+            env.builder.position_at_end(cont_block);
+
+            env.builder
+                .build_load(result, "load_result")
+                .into_int_value()
+        }
+        UnionLayout::NullableUnwrapped { nullable_id, .. } => {
+            let argument_ptr = argument.into_pointer_value();
+            let is_null = env.builder.build_is_null(argument_ptr, "is_null");
+
+            let then_value = tag_id_int_type.const_int(*nullable_id as u64, false);
+            let else_value = tag_id_int_type.const_int(!*nullable_id as u64, false);
+
+            env.builder
+                .build_select(is_null, then_value, else_value, "select_tag_id")
+                .into_int_value()
+        }
     }
 }
 
@@ -1622,7 +1689,64 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
         // a pointer to the block of memory representation
         builder.build_bitcast(
             result,
-            basic_type_from_layout(env, structure_layout),
+            block_of_memory(env.context, structure_layout, env.ptr_bytes)
+                .ptr_type(AddressSpace::Generic),
+            "cast_rec_pointer_lookup_at_index_ptr",
+        )
+    } else {
+        result
+    }
+}
+
+fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    tag_id_type: IntType<'ctx>,
+    field_layouts: &[Layout<'_>],
+    index: usize,
+    value: PointerValue<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+
+    let struct_layout = Layout::Struct(field_layouts);
+    let struct_type = basic_type_from_layout(env, &struct_layout);
+
+    let wrapper_type = env
+        .context
+        .struct_type(&[struct_type, tag_id_type.into()], false);
+
+    let ptr = env
+        .builder
+        .build_bitcast(
+            value,
+            wrapper_type.ptr_type(AddressSpace::Generic),
+            "cast_lookup_at_index_ptr",
+        )
+        .into_pointer_value();
+
+    let data_ptr = builder
+        .build_struct_gep(ptr, TAG_DATA_INDEX, "at_index_struct_gep")
+        .unwrap();
+
+    let elem_ptr = builder
+        .build_struct_gep(data_ptr, index as u32, "at_index_struct_gep")
+        .unwrap();
+
+    let result = builder.build_load(elem_ptr, "load_at_index_ptr");
+
+    if let Some(Layout::RecursivePointer) = field_layouts.get(index as usize) {
+        // a recursive field is stored as a `i64*`, to use it we must cast it to
+        // a pointer to the block of memory representation
+
+        let tags = &[field_layouts];
+        let struct_type = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+
+        let opaque_wrapper_type = env
+            .context
+            .struct_type(&[struct_type, tag_id_type.into()], false);
+
+        builder.build_bitcast(
+            result,
+            opaque_wrapper_type.ptr_type(AddressSpace::Generic),
             "cast_rec_pointer_lookup_at_index_ptr",
         )
     } else {
@@ -1634,16 +1758,66 @@ pub fn reserve_with_refcount<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'a>,
 ) -> PointerValue<'ctx> {
+    let stack_size = layout.stack_size(env.ptr_bytes);
+    let alignment_bytes = layout.alignment_bytes(env.ptr_bytes);
+
+    let basic_type = basic_type_from_layout(env, layout);
+
+    reserve_with_refcount_help(env, basic_type, stack_size, alignment_bytes)
+}
+
+fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    union_layout: UnionLayout<'a>,
+    fields: &[&[Layout<'a>]],
+) -> PointerValue<'ctx> {
+    let block_type = block_of_memory_slices(env.context, fields, env.ptr_bytes);
+
+    let basic_type = if union_layout.stores_tag_id() {
+        let tag_id_type = basic_type_from_layout(env, &union_layout.tag_id_layout());
+
+        env.context
+            .struct_type(&[block_type, tag_id_type], false)
+            .into()
+    } else {
+        block_type
+    };
+
+    let mut stack_size = fields
+        .iter()
+        .map(|tag| tag.iter().map(|l| l.stack_size(env.ptr_bytes)).sum())
+        .max()
+        .unwrap_or_default();
+
+    if union_layout.stores_tag_id() {
+        stack_size += union_layout.tag_id_layout().stack_size(env.ptr_bytes);
+    }
+
+    let alignment_bytes = fields
+        .iter()
+        .map(|tag| tag.iter().map(|l| l.alignment_bytes(env.ptr_bytes)))
+        .flatten()
+        .max()
+        .unwrap_or(0);
+
+    reserve_with_refcount_help(env, basic_type, stack_size, alignment_bytes)
+}
+
+fn reserve_with_refcount_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    basic_type: impl BasicType<'ctx>,
+    stack_size: u32,
+    alignment_bytes: u32,
+) -> PointerValue<'ctx> {
     let ctx = env.context;
 
     let len_type = env.ptr_int();
 
-    let value_bytes = layout.stack_size(env.ptr_bytes);
-    let value_bytes_intvalue = len_type.const_int(value_bytes as u64, false);
+    let value_bytes_intvalue = len_type.const_int(stack_size as u64, false);
 
     let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes);
 
-    allocate_with_refcount_help(env, layout, value_bytes_intvalue, rc1)
+    allocate_with_refcount_help(env, basic_type, alignment_bytes, value_bytes_intvalue, rc1)
 }
 
 pub fn allocate_with_refcount<'a, 'ctx, 'env>(
@@ -1661,17 +1835,17 @@ pub fn allocate_with_refcount<'a, 'ctx, 'env>(
 
 pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout: &Layout<'a>,
+    value_type: impl BasicType<'ctx>,
+    alignment_bytes: u32,
     number_of_data_bytes: IntValue<'ctx>,
     initial_refcount: IntValue<'ctx>,
 ) -> PointerValue<'ctx> {
     let builder = env.builder;
     let ctx = env.context;
 
-    let value_type = basic_type_from_layout(env, layout);
     let len_type = env.ptr_int();
 
-    let extra_bytes = layout.alignment_bytes(env.ptr_bytes).max(env.ptr_bytes);
+    let extra_bytes = alignment_bytes.max(env.ptr_bytes);
 
     let ptr = {
         // number of bytes we will allocated
@@ -1681,7 +1855,7 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
             "add_extra_bytes",
         );
 
-        env.call_alloc(number_of_bytes, layout.alignment_bytes(env.ptr_bytes))
+        env.call_alloc(number_of_bytes, alignment_bytes)
     };
 
     // We must return a pointer to the first element:
@@ -1741,7 +1915,6 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
 
 fn list_literal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    inplace: InPlace,
     scope: &Scope<'a, 'ctx>,
     elem_layout: &Layout<'a>,
     elems: &&[Symbol],
@@ -1755,7 +1928,7 @@ fn list_literal<'a, 'ctx, 'env>(
         let len_type = env.ptr_int();
         let len = len_type.const_int(len_u64, false);
 
-        allocate_list(env, inplace, elem_layout, len)
+        allocate_list(env, elem_layout, len)
     };
 
     // Copy the elements from the list literal into the array
@@ -1801,11 +1974,12 @@ fn list_literal<'a, 'ctx, 'env>(
 fn invoke_roc_function<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
+    func_spec_solutions: &FuncSpecSolutions,
     scope: &mut Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     symbol: Symbol,
     layout: Layout<'a>,
-    function_value: Either<FunctionValue<'ctx>, PointerValue<'ctx>>,
+    function_value: FunctionValue<'ctx>,
     arguments: &[Symbol],
     closure_argument: Option<BasicValueEnum<'ctx>>,
     pass: &'a roc_mono::ir::Stmt<'a>,
@@ -1833,14 +2007,7 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
             "tmp",
         );
 
-        match function_value {
-            Either::Left(function) => {
-                call.set_call_convention(function.get_call_conventions());
-            }
-            Either::Right(_) => {
-                call.set_call_convention(FAST_CALL_CONV);
-            }
-        }
+        call.set_call_convention(function_value.get_call_conventions());
 
         call.try_as_basic_value()
             .left()
@@ -1852,7 +2019,7 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
 
         scope.insert(symbol, (layout, call_result));
 
-        build_exp_stmt(env, layout_ids, scope, parent, pass);
+        build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, pass);
 
         scope.remove(&symbol);
     }
@@ -1867,10 +2034,13 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
             context.struct_type(&[exception_ptr, selector_value], false)
         };
 
-        let exception_object = env.builder.build_cleanup_landing_pad(
-            &landing_pad_type,
-            &BasicValueEnum::IntValue(context.i8_type().const_zero()),
-            context.i8_type().ptr_type(AddressSpace::Generic),
+        let personality_function = get_gxx_personality_v0(env);
+
+        let exception_object = env.builder.build_landing_pad(
+            landing_pad_type,
+            personality_function,
+            &[],
+            true,
             "invoke_landing_pad",
         );
 
@@ -1879,7 +2049,7 @@ fn invoke_roc_function<'a, 'ctx, 'env>(
             (Layout::Struct(&[]), exception_object),
         );
 
-        build_exp_stmt(env, layout_ids, scope, parent, fail);
+        build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, fail);
     }
 
     call_result
@@ -1914,6 +2084,7 @@ fn decrement_with_size_check<'a, 'ctx, 'env>(
 pub fn build_exp_stmt<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
+    func_spec_solutions: &FuncSpecSolutions,
     scope: &mut Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     stmt: &roc_mono::ir::Stmt<'a>,
@@ -1938,7 +2109,15 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             for (symbol, expr, layout) in queue {
                 debug_assert!(layout != &Layout::RecursivePointer);
 
-                let val = build_exp_expr(env, layout_ids, scope, parent, layout, &expr);
+                let val = build_exp_expr(
+                    env,
+                    layout_ids,
+                    func_spec_solutions,
+                    scope,
+                    parent,
+                    layout,
+                    &expr,
+                );
 
                 // Make a new scope which includes the binding we just encountered.
                 // This should be done *after* compiling the bound expr, since any
@@ -1951,7 +2130,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 stack.push(*symbol);
             }
 
-            let result = build_exp_stmt(env, layout_ids, scope, parent, cont);
+            let result = build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont);
 
             for symbol in stack {
                 scope.remove(&symbol);
@@ -1982,7 +2161,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             // when the fail case is just Rethrow, there is no cleanup work to do
             // so we can just treat this invoke as a normal call
             let stmt = roc_mono::ir::Stmt::Let(*symbol, Expr::Call(call.clone()), *layout, pass);
-            build_exp_stmt(env, layout_ids, scope, parent, &stmt)
+            build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, &stmt)
         }
 
         Invoke {
@@ -1995,19 +2174,27 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
         } => match call.call_type {
             CallType::ByName {
                 name,
-                ref full_layout,
+                arg_layouts,
+                ref ret_layout,
+                specialization_id,
                 ..
             } => {
-                let function_value = function_value_by_name(env, layout_ids, *full_layout, name);
+                let bytes = specialization_id.to_bytes();
+                let callee_var = CalleeSpecVar(&bytes);
+                let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
+
+                let function_value =
+                    function_value_by_func_spec(env, func_spec, name, arg_layouts, ret_layout);
 
                 invoke_roc_function(
                     env,
                     layout_ids,
+                    func_spec_solutions,
                     scope,
                     parent,
                     *symbol,
                     *layout,
-                    function_value.into(),
+                    function_value,
                     call.arguments,
                     None,
                     pass,
@@ -2022,6 +2209,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             } => build_foreign_symbol(
                 env,
                 layout_ids,
+                func_spec_solutions,
                 scope,
                 parent,
                 foreign_symbol,
@@ -2046,7 +2234,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
         Resume(exception_id) => {
             let exception_object = scope.get(&exception_id.into_inner()).unwrap().1;
-            env.builder.build_resume(&exception_object);
+            env.builder.build_resume(exception_object);
 
             env.context.i64_type().const_zero().into()
         }
@@ -2068,13 +2256,20 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 ret_type,
             };
 
-            build_switch_ir(env, layout_ids, scope, parent, switch_args)
+            build_switch_ir(
+                env,
+                layout_ids,
+                func_spec_solutions,
+                scope,
+                parent,
+                switch_args,
+            )
         }
         Join {
             id,
             parameters,
             remainder,
-            continuation,
+            body: continuation,
         } => {
             let builder = env.builder;
             let context = env.context;
@@ -2099,7 +2294,14 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             scope.join_points.insert(*id, (cont_block, joinpoint_args));
 
             // construct the blocks that may jump to this join point
-            build_exp_stmt(env, layout_ids, scope, parent, remainder);
+            build_exp_stmt(
+                env,
+                layout_ids,
+                func_spec_solutions,
+                scope,
+                parent,
+                remainder,
+            );
 
             let phi_block = builder.get_insert_block().unwrap();
 
@@ -2112,7 +2314,14 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             }
 
             // put the continuation in
-            let result = build_exp_stmt(env, layout_ids, scope, parent, continuation);
+            let result = build_exp_stmt(
+                env,
+                layout_ids,
+                func_spec_solutions,
+                scope,
+                parent,
+                continuation,
+            );
 
             // remove this join point again
             scope.join_points.remove(&id);
@@ -2156,7 +2365,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         );
                     }
 
-                    build_exp_stmt(env, layout_ids, scope, parent, cont)
+                    build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont)
                 }
                 Dec(symbol) => {
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
@@ -2165,7 +2374,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         decrement_refcount_layout(env, parent, layout_ids, value, layout);
                     }
 
-                    build_exp_stmt(env, layout_ids, scope, parent, cont)
+                    build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont)
                 }
                 DecRef(symbol) => {
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
@@ -2217,7 +2426,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         }
                     }
 
-                    build_exp_stmt(env, layout_ids, scope, parent, cont)
+                    build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont)
                 }
             }
         }
@@ -2348,39 +2557,29 @@ pub fn complex_bitcast<'ctx>(
     }
 }
 
-fn extract_tag_discriminant_struct<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    from_value: StructValue<'ctx>,
-) -> IntValue<'ctx> {
-    let struct_type = env
-        .context
-        .struct_type(&[env.context.i64_type().into()], false);
-
-    let struct_value = complex_bitcast_struct_struct(
-        env.builder,
-        from_value,
-        struct_type,
-        "extract_tag_discriminant_struct",
-    );
-
-    env.builder
-        .build_extract_value(struct_value, 0, "")
-        .expect("desired field did not decode")
-        .into_int_value()
-}
-
-fn extract_tag_discriminant_ptr<'a, 'ctx, 'env>(
+/// get the tag id out of a pointer to a wrapped (i.e. stores the tag id at runtime) layout
+fn get_tag_id_wrapped<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     from_value: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
-    let tag_id_ptr_type = env.context.i64_type().ptr_type(AddressSpace::Generic);
-
-    let ptr = env
+    let tag_id_ptr = env
         .builder
-        .build_bitcast(from_value, tag_id_ptr_type, "extract_tag_discriminant_ptr")
-        .into_pointer_value();
+        .build_struct_gep(from_value, TAG_ID_INDEX, "tag_id_ptr")
+        .unwrap();
 
-    env.builder.build_load(ptr, "load_tag_id").into_int_value()
+    env.builder
+        .build_load(tag_id_ptr, "load_tag_id")
+        .into_int_value()
+}
+
+pub fn get_tag_id_non_recursive<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    tag: StructValue<'ctx>,
+) -> IntValue<'ctx> {
+    env.builder
+        .build_extract_value(tag, TAG_ID_INDEX, "get_tag_id")
+        .unwrap()
+        .into_int_value()
 }
 
 struct SwitchArgsIr<'a, 'ctx> {
@@ -2407,6 +2606,7 @@ fn const_i128<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, value: i128) -> IntValu
 fn build_switch_ir<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
+    func_spec_solutions: &FuncSpecSolutions,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     switch_args: SwitchArgsIr<'a, 'ctx>,
@@ -2459,57 +2659,9 @@ fn build_switch_ir<'a, 'ctx, 'env>(
                 .into_int_value()
         }
         Layout::Union(variant) => {
-            use UnionLayout::*;
+            cond_layout = Layout::Builtin(Builtin::Int64);
 
-            match variant {
-                NonRecursive(_) => {
-                    // we match on the discriminant, not the whole Tag
-                    cond_layout = Layout::Builtin(Builtin::Int64);
-                    let full_cond = cond_value.into_struct_value();
-
-                    extract_tag_discriminant_struct(env, full_cond)
-                }
-                Recursive(_) => {
-                    // we match on the discriminant, not the whole Tag
-                    cond_layout = Layout::Builtin(Builtin::Int64);
-
-                    debug_assert!(cond_value.is_pointer_value());
-                    extract_tag_discriminant_ptr(env, cond_value.into_pointer_value())
-                }
-                NonNullableUnwrapped(_) => unreachable!("there is no tag to switch on"),
-                NullableWrapped { nullable_id, .. } => {
-                    // we match on the discriminant, not the whole Tag
-                    cond_layout = Layout::Builtin(Builtin::Int64);
-                    let full_cond_ptr = cond_value.into_pointer_value();
-
-                    let comparison: IntValue =
-                        env.builder.build_is_null(full_cond_ptr, "is_null_cond");
-
-                    let when_null = || {
-                        env.context
-                            .i64_type()
-                            .const_int(nullable_id as u64, false)
-                            .into()
-                    };
-                    let when_not_null = || extract_tag_discriminant_ptr(env, full_cond_ptr).into();
-
-                    crate::llvm::build_list::build_basic_phi2(
-                        env,
-                        parent,
-                        comparison,
-                        when_null,
-                        when_not_null,
-                        BasicTypeEnum::IntType(env.context.i64_type()),
-                    )
-                    .into_int_value()
-                }
-                NullableUnwrapped { .. } => {
-                    // there are only two options, so we do a `tag_id == 0` check and branch on that
-                    unreachable!(
-                        "we never switch on the tag id directly for NullableUnwrapped unions"
-                    )
-                }
-            }
+            get_tag_id(env, parent, &variant, cond_value)
         }
         Layout::Builtin(_) => cond_value.into_int_value(),
         other => todo!("Build switch value from layout: {:?}", other),
@@ -2529,7 +2681,14 @@ fn build_switch_ir<'a, 'ctx, 'env>(
                 {
                     builder.position_at_end(then_block);
 
-                    let branch_val = build_exp_stmt(env, layout_ids, scope, parent, true_branch);
+                    let branch_val = build_exp_stmt(
+                        env,
+                        layout_ids,
+                        func_spec_solutions,
+                        scope,
+                        parent,
+                        true_branch,
+                    );
 
                     if then_block.get_terminator().is_none() {
                         builder.build_unconditional_branch(cont_block);
@@ -2540,7 +2699,14 @@ fn build_switch_ir<'a, 'ctx, 'env>(
                 {
                     builder.position_at_end(else_block);
 
-                    let branch_val = build_exp_stmt(env, layout_ids, scope, parent, false_branch);
+                    let branch_val = build_exp_stmt(
+                        env,
+                        layout_ids,
+                        func_spec_solutions,
+                        scope,
+                        parent,
+                        false_branch,
+                    );
 
                     if else_block.get_terminator().is_none() {
                         builder.build_unconditional_branch(cont_block);
@@ -2568,18 +2734,14 @@ fn build_switch_ir<'a, 'ctx, 'env>(
             //   ]
             //
             // they either need to all be i8, or i64
-            let int_val = match cond_layout {
-                Layout::Builtin(Builtin::Usize) => {
-                    ptr_int(env.context, env.ptr_bytes).const_int(*int as u64, false)
-                }
-                Layout::Builtin(Builtin::Int64) => context.i64_type().const_int(*int as u64, false),
-                Layout::Builtin(Builtin::Int128) => const_i128(env, *int as i128),
-                Layout::Builtin(Builtin::Int32) => context.i32_type().const_int(*int as u64, false),
-                Layout::Builtin(Builtin::Int16) => context.i16_type().const_int(*int as u64, false),
-                Layout::Builtin(Builtin::Int8) => context.i8_type().const_int(*int as u64, false),
-                Layout::Builtin(Builtin::Int1) => context.bool_type().const_int(*int as u64, false),
-                _ => panic!("Can't cast to cond_layout = {:?}", cond_layout),
+            let condition_int_type = cond.get_type();
+
+            let int_val = if condition_int_type == context.i128_type() {
+                const_i128(env, *int as i128)
+            } else {
+                condition_int_type.const_int(*int as u64, false)
             };
+
             let block = context.append_basic_block(parent, format!("branch{}", int).as_str());
 
             cases.push((int_val, block));
@@ -2590,7 +2752,14 @@ fn build_switch_ir<'a, 'ctx, 'env>(
         for ((_, _, branch_expr), (_, block)) in branches.iter().zip(cases) {
             builder.position_at_end(block);
 
-            let branch_val = build_exp_stmt(env, layout_ids, scope, parent, branch_expr);
+            let branch_val = build_exp_stmt(
+                env,
+                layout_ids,
+                func_spec_solutions,
+                scope,
+                parent,
+                branch_expr,
+            );
 
             if block.get_terminator().is_none() {
                 builder.build_unconditional_branch(cont_block);
@@ -2601,7 +2770,14 @@ fn build_switch_ir<'a, 'ctx, 'env>(
         // The block for the conditional's default branch.
         builder.position_at_end(default_block);
 
-        let default_val = build_exp_stmt(env, layout_ids, scope, parent, default_branch);
+        let default_val = build_exp_stmt(
+            env,
+            layout_ids,
+            func_spec_solutions,
+            scope,
+            parent,
+            default_branch,
+        );
 
         if default_block.get_terminator().is_none() {
             builder.build_unconditional_branch(cont_block);
@@ -2649,16 +2825,19 @@ pub fn create_entry_block_alloca<'a, 'ctx>(
 
 fn expose_function_to_host<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    symbol: Symbol,
     roc_function: FunctionValue<'ctx>,
 ) {
-    let c_function_name: String =
-        format!("roc_{}_exposed", roc_function.get_name().to_str().unwrap());
+    // Assumption: there is only one specialization of a host-exposed function
+    let ident_string = symbol.ident_string(&env.interns);
+    let c_function_name: String = format!("roc__{}_1_exposed", ident_string);
 
-    expose_function_to_host_help(env, roc_function, &c_function_name);
+    expose_function_to_host_help(env, ident_string, roc_function, &c_function_name);
 }
 
 fn expose_function_to_host_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    ident_string: &inlinable_string::InlinableString,
     roc_function: FunctionValue<'ctx>,
     c_function_name: &str,
 ) -> FunctionValue<'ctx> {
@@ -2719,8 +2898,7 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
 
     // STEP 3: build a {} -> u64 function that gives the size of the return type
     let size_function_type = env.context.i64_type().fn_type(&[], false);
-    let size_function_name: String =
-        format!("roc_{}_size", roc_function.get_name().to_str().unwrap());
+    let size_function_name: String = format!("roc__{}_size", ident_string);
 
     let size_function = add_func(
         env.module,
@@ -2749,17 +2927,16 @@ fn invoke_and_catch<'a, 'ctx, 'env, F, T>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     function: F,
+    calling_convention: u32,
     arguments: &[BasicValueEnum<'ctx>],
     return_type: T,
 ) -> BasicValueEnum<'ctx>
 where
-    F: Into<either::Either<FunctionValue<'ctx>, PointerValue<'ctx>>>,
     T: inkwell::types::BasicType<'ctx>,
+    F: Into<CallableValue<'ctx>>,
 {
     let context = env.context;
     let builder = env.builder;
-
-    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
 
     let call_result_type = context.struct_type(
         &[context.i64_type().into(), return_type.as_basic_type_enum()],
@@ -2781,7 +2958,7 @@ where
             catch_block,
             "call_roc_function",
         );
-        call.set_call_convention(FAST_CALL_CONV);
+        call.set_call_convention(calling_convention);
         call.try_as_basic_value().left().unwrap()
     };
 
@@ -2789,71 +2966,7 @@ where
     {
         builder.position_at_end(catch_block);
 
-        let landing_pad_type = {
-            let exception_ptr = context.i8_type().ptr_type(AddressSpace::Generic).into();
-            let selector_value = context.i32_type().into();
-
-            context.struct_type(&[exception_ptr, selector_value], false)
-        };
-
-        let info = builder
-            .build_catch_all_landing_pad(
-                &landing_pad_type,
-                &BasicValueEnum::IntValue(context.i8_type().const_zero()),
-                context.i8_type().ptr_type(AddressSpace::Generic),
-                "main_landing_pad",
-            )
-            .into_struct_value();
-
-        let exception_ptr = builder
-            .build_extract_value(info, 0, "exception_ptr")
-            .unwrap();
-
-        let thrown = cxa_begin_catch(env, exception_ptr);
-
-        let error_msg = {
-            let exception_type = u8_ptr;
-            let ptr = builder.build_bitcast(
-                thrown,
-                exception_type.ptr_type(AddressSpace::Generic),
-                "cast",
-            );
-
-            builder.build_load(ptr.into_pointer_value(), "error_msg")
-        };
-
-        let return_type = context.struct_type(&[context.i64_type().into(), u8_ptr.into()], false);
-
-        let return_value = {
-            let v1 = return_type.const_zero();
-
-            // flag is non-zero, indicating failure
-            let flag = context.i64_type().const_int(1, false);
-
-            let v2 = builder
-                .build_insert_value(v1, flag, 0, "set_error")
-                .unwrap();
-
-            let v3 = builder
-                .build_insert_value(v2, error_msg, 1, "set_exception")
-                .unwrap();
-
-            v3
-        };
-
-        // bitcast result alloca so we can store our concrete type { flag, error_msg } in there
-        let result_alloca_bitcast = builder
-            .build_bitcast(
-                result_alloca,
-                return_type.ptr_type(AddressSpace::Generic),
-                "result_alloca_bitcast",
-            )
-            .into_pointer_value();
-
-        // store our return value
-        builder.build_store(result_alloca_bitcast, return_value);
-
-        cxa_end_catch(env);
+        build_catch_all_landing_pad(env, result_alloca);
 
         builder.build_unconditional_branch(cont_block);
     }
@@ -2886,14 +2999,89 @@ where
 
     builder.position_at_end(cont_block);
 
-    let result = builder.build_load(result_alloca, "result");
+    builder.build_load(result_alloca, "result")
+}
 
-    // MUST set the personality at the very end;
-    // doing it earlier can cause the personality to be ignored
-    let personality_func = get_gxx_personality_v0(env);
-    parent.set_personality_function(personality_func);
+fn build_catch_all_landing_pad<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    result_alloca: PointerValue<'ctx>,
+) {
+    let context = env.context;
+    let builder = env.builder;
 
-    result
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+
+    let landing_pad_type = {
+        let exception_ptr = context.i8_type().ptr_type(AddressSpace::Generic).into();
+        let selector_value = context.i32_type().into();
+
+        context.struct_type(&[exception_ptr, selector_value], false)
+    };
+
+    // null pointer functions as a catch-all catch clause
+    let null = u8_ptr.const_zero();
+
+    let personality_function = get_gxx_personality_v0(env);
+
+    let info = builder
+        .build_landing_pad(
+            landing_pad_type,
+            personality_function,
+            &[null.into()],
+            false,
+            "main_landing_pad",
+        )
+        .into_struct_value();
+
+    let exception_ptr = builder
+        .build_extract_value(info, 0, "exception_ptr")
+        .unwrap();
+
+    let thrown = cxa_begin_catch(env, exception_ptr);
+
+    let error_msg = {
+        let exception_type = u8_ptr;
+        let ptr = builder.build_bitcast(
+            thrown,
+            exception_type.ptr_type(AddressSpace::Generic),
+            "cast",
+        );
+
+        builder.build_load(ptr.into_pointer_value(), "error_msg")
+    };
+
+    let return_type = context.struct_type(&[context.i64_type().into(), u8_ptr.into()], false);
+
+    let return_value = {
+        let v1 = return_type.const_zero();
+
+        // flag is non-zero, indicating failure
+        let flag = context.i64_type().const_int(1, false);
+
+        let v2 = builder
+            .build_insert_value(v1, flag, 0, "set_error")
+            .unwrap();
+
+        let v3 = builder
+            .build_insert_value(v2, error_msg, 1, "set_exception")
+            .unwrap();
+
+        v3
+    };
+
+    // bitcast result alloca so we can store our concrete type { flag, error_msg } in there
+    let result_alloca_bitcast = builder
+        .build_bitcast(
+            result_alloca,
+            return_type.ptr_type(AddressSpace::Generic),
+            "result_alloca_bitcast",
+        )
+        .into_pointer_value();
+
+    // store our return value
+    builder.build_store(result_alloca_bitcast, return_value);
+
+    cxa_end_catch(env);
 }
 
 fn make_exception_catcher<'a, 'ctx, 'env>(
@@ -2959,39 +3147,53 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
         env,
         wrapper_function,
         roc_function,
+        roc_function.get_call_conventions(),
         &arguments,
         roc_function_type.get_return_type().unwrap(),
     );
 
     builder.build_return(Some(&result));
 
-    // MUST set the personality at the very end;
-    // doing it earlier can cause the personality to be ignored
-    let personality_func = get_gxx_personality_v0(env);
-    wrapper_function.set_personality_function(personality_func);
-
     wrapper_function
 }
 
 pub fn build_proc_headers<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
+    mod_solutions: &'a ModSolutions,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     scope: &mut Scope<'a, 'ctx>,
     // alias_analysis_solutions: AliasAnalysisSolutions,
-) -> std::vec::Vec<(roc_mono::ir::Proc<'a>, FunctionValue<'ctx>)> {
+) -> Vec<
+    'a,
+    (
+        roc_mono::ir::Proc<'a>,
+        &'a [(&'a FuncSpecSolutions, FunctionValue<'ctx>)],
+    ),
+> {
     // Populate Procs further and get the low-level Expr from the canonical Expr
-    let mut headers = std::vec::Vec::with_capacity(procedures.len());
+    let mut headers = Vec::with_capacity_in(procedures.len(), env.arena);
     for ((symbol, layout), proc) in procedures {
-        let fn_val = build_proc_header(env, layout_ids, symbol, layout, &proc);
+        let name_bytes = roc_mono::alias_analysis::func_name_bytes(&proc);
+        let func_name = FuncName(&name_bytes);
 
-        if proc.args.is_empty() {
-            // this is a 0-argument thunk, i.e. a top-level constant definition
-            // it must be in-scope everywhere in the module!
-            scope.insert_top_level_thunk(symbol, env.arena.alloc(layout), fn_val);
+        let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
+
+        let it = func_solutions.specs();
+        let mut function_values = Vec::with_capacity_in(it.size_hint().0, env.arena);
+        for specialization in it {
+            let fn_val = build_proc_header(env, *specialization, symbol, &proc);
+
+            if proc.args.is_empty() {
+                // this is a 0-argument thunk, i.e. a top-level constant definition
+                // it must be in-scope everywhere in the module!
+                scope.insert_top_level_thunk(symbol, env.arena.alloc(layout), fn_val);
+            }
+
+            let func_spec_solutions = func_solutions.spec(specialization).unwrap();
+
+            function_values.push((func_spec_solutions, fn_val));
         }
-
-        headers.push((proc, fn_val));
+        headers.push((proc, function_values.into_bump_slice()));
     }
 
     headers
@@ -3000,126 +3202,142 @@ pub fn build_proc_headers<'a, 'ctx, 'env>(
 pub fn build_procedures<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
-    procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
-    // alias_analysis_solutions: AliasAnalysisSolutions,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
+    entry_point: EntryPoint<'a>,
+    debug_output_file: Option<&Path>,
 ) {
-    build_procedures_help(env, opt_level, procedures, None);
+    build_procedures_help(env, opt_level, procedures, entry_point, debug_output_file);
 }
 
 pub fn build_procedures_return_main<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
-    procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
-    // alias_analysis_solutions: AliasAnalysisSolutions,
-    main_fn_symbol: Symbol,
-    main_fn_layout: TopLevelFunctionLayout<'a>,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
+    entry_point: EntryPoint<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
-    build_procedures_help(
-        env,
-        opt_level,
-        procedures,
-        Some((main_fn_symbol, main_fn_layout)),
-    )
-    .unwrap()
-}
+    let mod_solutions = build_procedures_help(env, opt_level, procedures, entry_point, None);
 
-// Coming soon
-// pub enum AliasAnalysisSolutions {
-//     NotAvailable,
-//     Available(morphic_lib::Solutions),
-// }
-//
-// impl std::fmt::Debug for AliasAnalysisSolutions {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "AliasAnalysisSolutions {{}}")
-//     }
-// }
+    promote_to_main_function(env, mod_solutions, entry_point.symbol, entry_point.layout)
+}
 
 fn build_procedures_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
-    procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), roc_mono::ir::Proc<'a>>,
-    main_data: Option<(Symbol, TopLevelFunctionLayout<'a>)>,
-) -> Option<(&'static str, FunctionValue<'ctx>)> {
+    procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
+    entry_point: EntryPoint<'a>,
+    debug_output_file: Option<&Path>,
+) -> &'a ModSolutions {
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
     let mut scope = Scope::default();
 
-    // Coming Soon
-    //
-    //                if false {
-    //                    let it = state.procedures.iter().map(|x| x.1);
-    //
-    //                    match roc_mono::alias_analysis::spec_program(it) {
-    //                        Err(e) => panic!("Error in alias analysis: {:?}", e),
-    //                        Ok(solutions) => {
-    //                            state.alias_analysis_solutions =
-    //                                AliasAnalysisSolutions::Available(solutions)
-    //                        }
-    //                    }
-    //                }
+    let it = procedures.iter().map(|x| x.1);
+
+    let solutions = match roc_mono::alias_analysis::spec_program(entry_point, it) {
+        Err(e) => panic!("Error in alias analysis: {}", e),
+        Ok(solutions) => solutions,
+    };
+
+    let solutions = env.arena.alloc(solutions);
+
+    let mod_solutions = solutions
+        .mod_solutions(roc_mono::alias_analysis::MOD_APP)
+        .unwrap();
 
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
-    let headers = build_proc_headers(env, &mut layout_ids, procedures, &mut scope);
+    let headers = build_proc_headers(env, &mod_solutions, procedures, &mut scope);
 
     let (_, function_pass) = construct_optimization_passes(env.module, opt_level);
 
-    for (proc, fn_val) in headers {
-        let mut current_scope = scope.clone();
+    for (proc, fn_vals) in headers {
+        for (func_spec_solutions, fn_val) in fn_vals {
+            let mut current_scope = scope.clone();
 
-        // only have top-level thunks for this proc's module in scope
-        // this retain is not needed for correctness, but will cause less confusion when debugging
-        let home = proc.name.module_id();
-        current_scope.retain_top_level_thunks_for_module(home);
+            // only have top-level thunks for this proc's module in scope
+            // this retain is not needed for correctness, but will cause less confusion when debugging
+            let home = proc.name.module_id();
+            current_scope.retain_top_level_thunks_for_module(home);
 
-        build_proc(&env, &mut layout_ids, scope.clone(), proc, fn_val);
-
-        // call finalize() before any code generation/verification
-        env.dibuilder.finalize();
-
-        if fn_val.verify(true) {
-            function_pass.run_on(&fn_val);
-        } else {
-            let mode = "NON-OPTIMIZED";
-
-            eprintln!(
-                "\n\nFunction {:?} failed LLVM verification in {} build. Its content was:\n",
-                fn_val.get_name().to_str().unwrap(),
-                mode,
+            build_proc(
+                &env,
+                mod_solutions,
+                &mut layout_ids,
+                func_spec_solutions,
+                scope.clone(),
+                &proc,
+                *fn_val,
             );
 
-            fn_val.print_to_stderr();
-            // module.print_to_stderr();
+            // call finalize() before any code generation/verification
+            env.dibuilder.finalize();
 
-            panic!(
-                "The preceding code was from {:?}, which failed LLVM verification in {} build.",
-                fn_val.get_name().to_str().unwrap(),
-                mode,
-            );
+            if fn_val.verify(true) {
+                function_pass.run_on(&fn_val);
+            } else {
+                let mode = "NON-OPTIMIZED";
+
+                eprintln!(
+                    "\n\nFunction {:?} failed LLVM verification in {} build. Its content was:\n",
+                    fn_val.get_name().to_str().unwrap(),
+                    mode,
+                );
+
+                fn_val.print_to_stderr();
+
+                if let Some(app_ll_file) = debug_output_file {
+                    env.module.print_to_file(&app_ll_file).unwrap();
+
+                    panic!(
+                        r"😱 LLVM errors when defining function {:?}; I wrote the full LLVM IR to {:?}",
+                        fn_val.get_name().to_str().unwrap(),
+                        app_ll_file,
+                    );
+                } else {
+                    panic!(
+                    "The preceding code was from {:?}, which failed LLVM verification in {} build.",
+                     fn_val.get_name().to_str().unwrap(),
+                    mode,
+                    )
+                }
+            }
         }
     }
 
-    main_data.map(|(main_fn_symbol, main_fn_layout)| {
-        promote_to_main_function(env, &mut layout_ids, main_fn_symbol, main_fn_layout)
-    })
+    mod_solutions
+}
+
+fn func_spec_name<'a>(
+    arena: &'a Bump,
+    interns: &Interns,
+    symbol: Symbol,
+    func_spec: FuncSpec,
+) -> bumpalo::collections::String<'a> {
+    use std::fmt::Write;
+
+    let mut buf = bumpalo::collections::String::with_capacity_in(1, arena);
+
+    let ident_string = symbol.ident_string(interns);
+    let module_string = interns.module_ids.get_name(symbol.module_id()).unwrap();
+    write!(buf, "{}_{}_", module_string, ident_string).unwrap();
+
+    for byte in func_spec.0.iter() {
+        write!(buf, "{:x?}", byte).unwrap();
+    }
+
+    buf
 }
 
 fn build_proc_header<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
+    func_spec: FuncSpec,
     symbol: Symbol,
-    top_level: TopLevelFunctionLayout<'a>,
     proc: &roc_mono::ir::Proc<'a>,
 ) -> FunctionValue<'ctx> {
-    let layout = env.arena.alloc(top_level).full();
-
     let args = proc.args;
     let arena = env.arena;
 
-    let fn_name = layout_ids
-        .get(symbol, &layout)
-        .to_symbol_string(symbol, &env.interns);
+    let fn_name = func_spec_name(env.arena, &env.interns, symbol, func_spec);
 
     let ret_type = basic_type_from_layout(env, &proc.ret_layout);
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
@@ -3144,7 +3362,7 @@ fn build_proc_header<'a, 'ctx, 'env>(
     fn_val.set_subprogram(subprogram);
 
     if env.exposed_to_host.contains(&symbol) {
-        expose_function_to_host(env, fn_val);
+        expose_function_to_host(env, symbol, fn_val);
     }
 
     fn_val
@@ -3166,7 +3384,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
     // e.g. `roc__main_1_Fx_caller`
     let function_name = format!(
-        "roc_{}_{}_caller",
+        "roc__{}_{}_caller",
         def_name,
         alias_symbol.ident_string(&env.interns)
     );
@@ -3224,8 +3442,14 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
         *param = builder.build_load(param.into_pointer_value(), "load_param");
     }
 
-    let call_result =
-        invoke_and_catch(env, function_value, evaluator, &[closure_data], result_type);
+    let call_result = invoke_and_catch(
+        env,
+        function_value,
+        evaluator,
+        evaluator.get_call_conventions(),
+        &[closure_data],
+        result_type,
+    );
 
     builder.build_store(output, call_result);
 
@@ -3241,136 +3465,22 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     );
 
     // STEP 4: build a {} -> u64 function that gives the size of the closure
-    let layout = Layout::Closure(arguments, lambda_set, result);
-    build_host_exposed_alias_size(env, def_name, alias_symbol, &layout);
-}
-
-fn build_function_caller<'a, 'ctx, 'env>(
-    env: &'a Env<'a, 'ctx, 'env>,
-    def_name: &str,
-    alias_symbol: Symbol,
-    arguments: &[Layout<'a>],
-    result: &Layout<'a>,
-) {
-    let context = &env.context;
-    let builder = env.builder;
-
-    // STEP 1: build function header
-
-    // e.g. `roc__main_1_Fx_caller`
-    let function_name = format!(
-        "roc_{}_{}_caller",
-        def_name,
-        alias_symbol.ident_string(&env.interns)
-    );
-
-    let mut argument_types = Vec::with_capacity_in(arguments.len() + 3, env.arena);
-
-    for layout in arguments {
-        let arg_type = basic_type_from_layout(env, layout);
-        let arg_ptr_type = arg_type.ptr_type(AddressSpace::Generic);
-
-        argument_types.push(arg_ptr_type.into());
-    }
-
-    let function_pointer_type = {
-        let mut args = Vec::new_in(env.arena);
-        args.extend(arguments.iter().cloned());
-
-        // pretend the closure layout is empty
-        args.push(Layout::Struct(&[]));
-
-        let function_layout = Layout::FunctionPointer(&args, result);
-
-        // this is already a (function) pointer type
-        basic_type_from_layout(env, &function_layout)
-    };
-    argument_types.push(function_pointer_type);
-
-    let closure_argument_type = {
-        let basic_type = basic_type_from_layout(env, &Layout::Struct(&[]));
-
-        basic_type.ptr_type(AddressSpace::Generic)
-    };
-    argument_types.push(closure_argument_type.into());
-
-    let result_type = basic_type_from_layout(env, result);
-
-    let roc_call_result_type =
-        context.struct_type(&[context.i64_type().into(), result_type], false);
-
-    let output_type = { roc_call_result_type.ptr_type(AddressSpace::Generic) };
-    argument_types.push(output_type.into());
-
-    let function_type = context.void_type().fn_type(&argument_types, false);
-
-    let function_value = add_func(
-        env.module,
-        function_name.as_str(),
-        function_type,
-        Linkage::External,
-        C_CALL_CONV,
-    );
-
-    // STEP 2: build function body
-
-    let entry = context.append_basic_block(function_value, "entry");
-
-    builder.position_at_end(entry);
-
-    let mut parameters = function_value.get_params();
-    let output = parameters.pop().unwrap().into_pointer_value();
-    let _closure_data_ptr = parameters.pop().unwrap().into_pointer_value();
-    let function_ptr = parameters.pop().unwrap().into_pointer_value();
-
-    // let closure_data = context.struct_type(&[], false).const_zero().into();
-
-    let actual_function_type =
-        basic_type_from_layout(env, &Layout::FunctionPointer(arguments, result));
-
-    let function_ptr = builder
-        .build_bitcast(function_ptr, actual_function_type, "cast")
-        .into_pointer_value();
-
-    let mut parameters = parameters;
-
-    for param in parameters.iter_mut() {
-        debug_assert!(param.is_pointer_value());
-        *param = builder.build_load(param.into_pointer_value(), "load_param");
-    }
-
-    let call_result = invoke_and_catch(env, function_value, function_ptr, &parameters, result_type);
-
-    builder.build_store(output, call_result);
-
-    builder.build_return(None);
-
-    // STEP 3: build a {} -> u64 function that gives the size of the return type
-    build_host_exposed_alias_size_help(
-        env,
-        def_name,
-        alias_symbol,
-        Some("result"),
-        roc_call_result_type.into(),
-    );
-
-    // STEP 4: build a {} -> u64 function that gives the size of the function
-    let layout = Layout::FunctionPointer(arguments, result);
-    build_host_exposed_alias_size(env, def_name, alias_symbol, &layout);
+    let layout = lambda_set.runtime_representation();
+    build_host_exposed_alias_size(env, def_name, alias_symbol, layout);
 }
 
 fn build_host_exposed_alias_size<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
     def_name: &str,
     alias_symbol: Symbol,
-    layout: &Layout<'a>,
+    layout: Layout<'a>,
 ) {
     build_host_exposed_alias_size_help(
         env,
         def_name,
         alias_symbol,
         None,
-        basic_type_from_layout(env, layout),
+        basic_type_from_layout(env, &layout),
     )
 }
 
@@ -3387,14 +3497,14 @@ fn build_host_exposed_alias_size_help<'a, 'ctx, 'env>(
     let size_function_type = env.context.i64_type().fn_type(&[], false);
     let size_function_name: String = if let Some(label) = opt_label {
         format!(
-            "roc_{}_{}_{}_size",
+            "roc__{}_{}_{}_size",
             def_name,
             alias_symbol.ident_string(&env.interns),
             label
         )
     } else {
         format!(
-            "roc_{}_{}_size",
+            "roc__{}_{}_size",
             def_name,
             alias_symbol.ident_string(&env.interns)
         )
@@ -3418,53 +3528,62 @@ fn build_host_exposed_alias_size_help<'a, 'ctx, 'env>(
 
 pub fn build_proc<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
+    mod_solutions: &'a ModSolutions,
     layout_ids: &mut LayoutIds<'a>,
+    func_spec_solutions: &FuncSpecSolutions,
     mut scope: Scope<'a, 'ctx>,
-    proc: roc_mono::ir::Proc<'a>,
+    proc: &roc_mono::ir::Proc<'a>,
     fn_val: FunctionValue<'ctx>,
 ) {
     use roc_mono::ir::HostExposedLayouts;
+    use roc_mono::layout::RawFunctionLayout;
     let copy = proc.host_exposed_layouts.clone();
-    let fn_name = fn_val.get_name().to_string_lossy();
     match copy {
         HostExposedLayouts::NotHostExposed => {}
         HostExposedLayouts::HostExposed { rigids: _, aliases } => {
             for (name, (symbol, top_level, layout)) in aliases {
                 match layout {
-                    Layout::Closure(arguments, closure, result) => {
+                    RawFunctionLayout::Function(arguments, closure, result) => {
                         // define closure size and return value size, e.g.
                         //
                         // * roc__mainForHost_1_Update_size() -> i64
                         // * roc__mainForHost_1_Update_result_size() -> i64
 
-                        let evaluator_layout = env.arena.alloc(top_level).full();
-                        let evaluator_name = layout_ids
-                            .get(symbol, &evaluator_layout)
-                            .to_symbol_string(symbol, &env.interns);
-
-                        let evaluator = function_value_by_name_help(
-                            env,
-                            evaluator_layout,
+                        let it = top_level.arguments.iter().copied();
+                        let bytes = roc_mono::alias_analysis::func_name_bytes_help(
                             symbol,
-                            &evaluator_name,
+                            it,
+                            top_level.result,
                         );
+                        let func_name = FuncName(&bytes);
+                        let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
+
+                        let mut it = func_solutions.specs();
+                        let func_spec = it.next().unwrap();
+                        debug_assert!(
+                            it.next().is_none(),
+                            "we expect only one specialization of this symbol"
+                        );
+
+                        let evaluator = function_value_by_func_spec(
+                            env,
+                            *func_spec,
+                            symbol,
+                            top_level.arguments,
+                            &top_level.result,
+                        );
+
+                        let ident_string = proc.name.ident_string(&env.interns);
+                        let fn_name: String = format!("{}_1", ident_string);
 
                         build_closure_caller(
                             env, &fn_name, evaluator, name, arguments, closure, result,
                         )
                     }
-                    Layout::FunctionPointer(arguments, result) => {
-                        // define function size (equal to pointer size) and return value size, e.g.
-                        //
-                        // * roc__mainForHost_1_Update_size() -> i64
-                        // * roc__mainForHost_1_Update_result_size() -> i64
-                        build_function_caller(env, &fn_name, name, arguments, result)
-                    }
 
-                    Layout::Builtin(_) => {}
-                    Layout::Struct(_) => {}
-                    Layout::Union(_) => {}
-                    Layout::RecursivePointer => {}
+                    RawFunctionLayout::ZeroArgumentThunk(_) => {
+                        // do nothing
+                    }
                 }
             }
         }
@@ -3487,7 +3606,14 @@ pub fn build_proc<'a, 'ctx, 'env>(
         scope.insert(*arg_symbol, (*layout, arg_val));
     }
 
-    let body = build_exp_stmt(env, layout_ids, &mut scope, fn_val, &proc.body);
+    let body = build_exp_stmt(
+        env,
+        layout_ids,
+        func_spec_solutions,
+        &mut scope,
+        fn_val,
+        &proc.body,
+    );
 
     // only add a return if codegen did not already add one
     if let Some(block) = builder.get_insert_block() {
@@ -3507,23 +3633,23 @@ pub fn verify_fn(fn_val: FunctionValue<'_>) {
     }
 }
 
-fn function_value_by_name<'a, 'ctx, 'env>(
+fn function_value_by_func_spec<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    layout: Layout<'a>,
+    func_spec: FuncSpec,
     symbol: Symbol,
+    arguments: &[Layout<'a>],
+    result: &Layout<'a>,
 ) -> FunctionValue<'ctx> {
-    let fn_name = layout_ids
-        .get(symbol, &layout)
-        .to_symbol_string(symbol, &env.interns);
+    let fn_name = func_spec_name(env.arena, &env.interns, symbol, func_spec);
     let fn_name = fn_name.as_str();
 
-    function_value_by_name_help(env, layout, symbol, fn_name)
+    function_value_by_name_help(env, arguments, result, symbol, fn_name)
 }
 
 fn function_value_by_name_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout: Layout<'a>,
+    arguments: &[Layout<'a>],
+    result: &Layout<'a>,
     symbol: Symbol,
     fn_name: &str,
 ) -> FunctionValue<'ctx> {
@@ -3531,7 +3657,8 @@ fn function_value_by_name_help<'a, 'ctx, 'env>(
         if symbol.is_builtin() {
             eprintln!(
                 "Unrecognized builtin function: {:?}\nLayout: {:?}\n",
-                fn_name, layout
+                fn_name,
+                (arguments, result)
             );
             eprintln!("Is the function defined? If so, maybe there is a problem with the layout");
 
@@ -3543,7 +3670,9 @@ fn function_value_by_name_help<'a, 'ctx, 'env>(
             // Unrecognized non-builtin function:
             eprintln!(
                 "Unrecognized non-builtin function: {:?}\n\nSymbol: {:?}\nLayout: {:?}\n",
-                fn_name, symbol, layout
+                fn_name,
+                symbol,
+                (arguments, result)
             );
             eprintln!("Is the function defined? If so, maybe there is a problem with the layout");
 
@@ -3557,15 +3686,16 @@ fn function_value_by_name_help<'a, 'ctx, 'env>(
 
 // #[allow(clippy::cognitive_complexity)]
 #[inline(always)]
-fn call_with_args<'a, 'ctx, 'env>(
+fn roc_call_with_args<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    layout: &Layout<'a>,
+    argument_layouts: &[Layout<'a>],
+    result_layout: &Layout<'a>,
     symbol: Symbol,
-    _parent: FunctionValue<'ctx>,
+    func_spec: FuncSpec,
     args: &[BasicValueEnum<'ctx>],
 ) -> BasicValueEnum<'ctx> {
-    let fn_val = function_value_by_name(env, layout_ids, *layout, symbol);
+    let fn_val =
+        function_value_by_func_spec(env, func_spec, symbol, argument_layouts, result_layout);
 
     let call = env.builder.build_call(fn_val, args, "call");
 
@@ -3578,8 +3708,8 @@ fn call_with_args<'a, 'ctx, 'env>(
 
 /// Translates a target_lexicon::Triple to a LLVM calling convention u32
 /// as described in https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html
-pub fn get_call_conventions(cc: CallingConvention) -> u32 {
-    use CallingConvention::*;
+pub fn get_call_conventions(cc: target_lexicon::CallingConvention) -> u32 {
+    use target_lexicon::CallingConvention::*;
 
     // For now, we're returning 0 for the C calling convention on all of these.
     // Not sure if we should be picking something more specific!
@@ -3591,9 +3721,9 @@ pub fn get_call_conventions(cc: CallingConvention) -> u32 {
 }
 
 /// Source: https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html
-pub static C_CALL_CONV: u32 = 0;
-pub static FAST_CALL_CONV: u32 = 8;
-pub static COLD_CALL_CONV: u32 = 9;
+pub const C_CALL_CONV: u32 = 0;
+pub const FAST_CALL_CONV: u32 = 8;
+pub const COLD_CALL_CONV: u32 = 9;
 
 pub struct RocFunctionCall<'ctx> {
     pub caller: PointerValue<'ctx>,
@@ -3647,7 +3777,9 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
     scope: &Scope<'a, 'ctx>,
     return_layout: &Layout<'a>,
     op: LowLevel,
-    function_layout: Layout<'a>,
+    func_spec: FuncSpec,
+    argument_layouts: &[Layout<'a>],
+    result_layout: &Layout<'a>,
     function_owns_closure_data: bool,
     args: &[Symbol],
 ) -> BasicValueEnum<'ctx> {
@@ -3660,18 +3792,13 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
         ($index:expr) => {{
             let function_symbol = args[$index];
 
-            let fn_name = layout_ids
-                .get(function_symbol, &function_layout)
-                .to_symbol_string(function_symbol, &env.interns);
-
-            env.module
-                .get_function(fn_name.as_str())
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Could not get pointer to unknown function {:?} {:?}",
-                        fn_name, function_layout
-                    )
-                })
+            function_value_by_func_spec(
+                env,
+                func_spec,
+                function_symbol,
+                argument_layouts,
+                return_layout,
+            )
         }};
     }
 
@@ -3704,6 +3831,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         env,
                         layout_ids,
                         roc_function_call,
+                        result_layout,
                         list,
                         element_layout,
                         default,
@@ -3937,7 +4065,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         env,
                         layout_ids,
                         roc_function_call,
-                        &function_layout,
+                        result_layout,
                         list,
                         before_layout,
                         after_layout,
@@ -3981,7 +4109,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         env,
                         layout_ids,
                         roc_function_call,
-                        &function_layout,
+                        result_layout,
                         list,
                         before_layout,
                         after_layout,
@@ -4097,6 +4225,7 @@ fn run_low_level<'a, 'ctx, 'env>(
     layout: &Layout<'a>,
     op: LowLevel,
     args: &[Symbol],
+    update_mode: Option<UpdateMode>,
 ) -> BasicValueEnum<'ctx> {
     use LowLevel::*;
 
@@ -4107,13 +4236,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.concat : Str, Str -> Str
             debug_assert_eq!(args.len(), 2);
 
-            str_concat(env, layout.in_place(), scope, args[0], args[1])
+            str_concat(env, scope, args[0], args[1])
         }
         StrJoinWith => {
             // Str.joinWith : List Str, Str -> Str
             debug_assert_eq!(args.len(), 2);
 
-            str_join_with(env, layout.in_place(), scope, args[0], args[1])
+            str_join_with(env, scope, args[0], args[1])
         }
         StrStartsWith => {
             // Str.startsWith : Str, Str -> Bool
@@ -4167,7 +4296,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.split : Str, Str -> List Str
             debug_assert_eq!(args.len(), 2);
 
-            str_split(env, scope, layout.in_place(), args[0], args[1])
+            str_split(env, scope, args[0], args[1])
         }
         StrIsEmpty => {
             // Str.isEmpty : Str -> Str
@@ -4202,7 +4331,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (arg, arg_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            list_single(env, layout.in_place(), arg, arg_layout)
+            list_single(env, arg, arg_layout)
         }
         ListRepeat => {
             // List.repeat : Int, elem -> List elem
@@ -4219,7 +4348,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            list_reverse(env, layout.in_place(), list, list_layout)
+            list_reverse(env, list, list_layout)
         }
         ListConcat => {
             debug_assert_eq!(args.len(), 2);
@@ -4228,14 +4357,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let second_list = load_symbol(scope, &args[1]);
 
-            list_concat(
-                env,
-                layout.in_place(),
-                parent,
-                first_list,
-                second_list,
-                list_layout,
-            )
+            list_concat(env, parent, first_list, second_list, list_layout)
         }
         ListContains => {
             // List.contains : List elem, elem -> Bool
@@ -4268,7 +4390,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            list_append(env, layout.in_place(), original_wrapper, elem, elem_layout)
+            list_append(env, original_wrapper, elem, elem_layout)
         }
         ListSwap => {
             // List.swap : List elem, Nat, Nat -> List elem
@@ -4320,7 +4442,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            list_prepend(env, layout.in_place(), original_wrapper, elem, elem_layout)
+            list_prepend(env, original_wrapper, elem, elem_layout)
         }
         ListJoin => {
             // List.join : List (List elem) -> List elem
@@ -4328,7 +4450,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let (list, outer_list_layout) = load_symbol_and_layout(scope, &args[0]);
 
-            list_join(env, layout.in_place(), parent, list, outer_list_layout)
+            list_join(env, parent, list, outer_list_layout)
         }
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumLogUnchecked | NumSin | NumCos
         | NumCeiling | NumFloor | NumToFloat | NumIsFinite | NumAtan | NumAcos | NumAsin => {
@@ -4562,27 +4684,6 @@ fn run_low_level<'a, 'ctx, 'env>(
                 wrapper_struct,
             )
         }
-        ListSetInPlace => {
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (index, _) = load_symbol_and_layout(scope, &args[1]);
-            let (element, _) = load_symbol_and_layout(scope, &args[2]);
-
-            match list_layout {
-                Layout::Builtin(Builtin::EmptyList) => {
-                    // no elements, so nothing to remove
-                    empty_list(env)
-                }
-                Layout::Builtin(Builtin::List(element_layout)) => list_set(
-                    env,
-                    layout_ids,
-                    list,
-                    index.into_int_value(),
-                    element,
-                    element_layout,
-                ),
-                _ => unreachable!("invalid dict layout"),
-            }
-        }
         ListSet => {
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
             let (index, _) = load_symbol_and_layout(scope, &args[1]);
@@ -4600,6 +4701,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     index.into_int_value(),
                     element,
                     element_layout,
+                    update_mode.unwrap(),
                 ),
                 _ => unreachable!("invalid dict layout"),
             }
@@ -4876,6 +4978,7 @@ fn build_foreign_symbol_write_result_into_ptr<'a, 'ctx, 'env>(
 fn build_foreign_symbol<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
+    func_spec_solutions: &FuncSpecSolutions,
     scope: &mut Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
     foreign: &roc_module::ident::ForeignSymbol,
@@ -4939,7 +5042,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
 
                 scope.insert(symbol, (*ret_layout, call_result));
 
-                build_exp_stmt(env, layout_ids, scope, parent, pass);
+                build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, pass);
 
                 scope.remove(&symbol);
             }
@@ -4956,10 +5059,13 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                         .struct_type(&[exception_ptr, selector_value], false)
                 };
 
-                let exception_object = env.builder.build_cleanup_landing_pad(
-                    &landing_pad_type,
-                    &BasicValueEnum::IntValue(env.context.i8_type().const_zero()),
-                    env.context.i8_type().ptr_type(AddressSpace::Generic),
+                let personality_function = get_gxx_personality_v0(env);
+
+                let exception_object = env.builder.build_landing_pad(
+                    landing_pad_type,
+                    personality_function,
+                    &[],
+                    true,
                     "invoke_landing_pad",
                 );
 
@@ -4968,7 +5074,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                     (Layout::Struct(&[]), exception_object),
                 );
 
-                build_exp_stmt(env, layout_ids, scope, parent, fail);
+                build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, fail);
             }
 
             call_result
@@ -5135,7 +5241,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
             //        rem == 0
             //    }
             //
-            // NOTE we'd like the branches to be swapped for better branch prediciton,
+            // NOTE we'd like the branches to be swapped for better branch prediction,
             // but llvm normalizes to the above ordering in -O3
             let zero = rhs.get_type().const_zero();
             let neg_1 = rhs.get_type().const_int(-1i64 as u64, false);
@@ -5482,7 +5588,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
             int_abs_raise_on_overflow(env, arg, arg_layout)
         }
         NumToFloat => {
-            // TODO: Handle differnt sized numbers
+            // TODO: Handle different sized numbers
             // This is an Int, so we need to convert it.
             bd.build_cast(
                 InstructionOpcode::SIToFP,
@@ -5606,7 +5712,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
 
     let bd = env.builder;
 
-    // TODO: Handle differnt sized floats
+    // TODO: Handle different sized floats
     match op {
         NumNeg => bd.build_float_neg(arg, "negate_float").into(),
         NumAbs => env.call_intrinsic(LLVM_FABS_F64, &[arg.into()]),
@@ -5747,7 +5853,7 @@ fn throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, message: &str) {
     let builder = env.builder;
 
     let info = {
-        // we represend both void and char pointers with `u8*`
+        // we represented both void and char pointers with `u8*`
         let u8_ptr = context.i8_type().ptr_type(AddressSpace::Generic);
 
         // allocate an exception (that can hold a pointer to a string)

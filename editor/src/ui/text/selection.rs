@@ -98,8 +98,6 @@ pub fn create_selection_rects<'a>(
             height,
             color: theme.select_highlight,
         });
-
-        Ok(all_rects)
     } else {
         // first line
         let end_col = lines.line_len(start_pos.line)?;
@@ -148,7 +146,7 @@ pub fn create_selection_rects<'a>(
                 color: theme.select_highlight,
             });
         }
-
-        Ok(all_rects)
     }
+
+    Ok(all_rects)
 }

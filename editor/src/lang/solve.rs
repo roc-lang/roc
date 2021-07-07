@@ -363,45 +363,47 @@ fn solve<'a>(
 
             state
         }
-        //        Pattern(region, category, typ, expectation) => {
-        //            let actual = type_to_var(subs, rank, pools, cached_aliases, typ);
-        //            let expected = type_to_var(
-        //                subs,
-        //                rank,
-        //                pools,
-        //                cached_aliases,
-        //                expectation.get_type_ref(),
-        //            );
-        //
-        //            match unify(subs, actual, expected) {
-        //                Success(vars) => {
-        //                    introduce(subs, rank, pools, &vars);
-        //
-        //                    state
-        //                }
-        //                Failure(vars, actual_type, expected_type) => {
-        //                    introduce(subs, rank, pools, &vars);
-        //
-        //                    let problem = TypeError::BadPattern(
-        //                        *region,
-        //                        category.clone(),
-        //                        actual_type,
-        //                        expectation.clone().replace(expected_type),
-        //                    );
-        //
-        //                    problems.push(problem);
-        //
-        //                    state
-        //                }
-        //                BadType(vars, problem) => {
-        //                    introduce(subs, rank, pools, &vars);
-        //
-        //                    problems.push(TypeError::BadType(problem));
-        //
-        //                    state
-        //                }
-        //            }
-        //        }
+        Pattern(region, category, typ, expectation) => {
+            let actual = type_to_var(arena, mempool, subs, rank, pools, cached_aliases, typ);
+            let expected = type_to_var(
+                arena,
+                mempool,
+                subs,
+                rank,
+                pools,
+                cached_aliases,
+                expectation.get_type_ref(),
+            );
+
+            match unify(subs, actual, expected) {
+                Success(vars) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    state
+                }
+                Failure(vars, actual_type, expected_type) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    let problem = TypeError::BadPattern(
+                        *region,
+                        category.clone(),
+                        actual_type,
+                        expectation.shallow_clone().replace(expected_type),
+                    );
+
+                    problems.push(problem);
+
+                    state
+                }
+                BadType(vars, problem) => {
+                    introduce(subs, rank, pools, &vars);
+
+                    problems.push(TypeError::BadType(problem));
+
+                    state
+                }
+            }
+        }
         Let(let_con) => {
             match &let_con.ret_constraint {
                 True if let_con.rigid_vars.is_empty() => {
@@ -439,22 +441,16 @@ fn solve<'a>(
                     // Add a variable for each def to new_vars_by_env.
                     let mut local_def_vars = BumpMap::new_in(arena);
 
-                    for (symbol, loc_type) in let_con.def_types.iter() {
-                        let var = type_to_var(
-                            arena,
-                            mempool,
-                            subs,
-                            rank,
-                            pools,
-                            cached_aliases,
-                            &loc_type.value,
-                        );
+                    for (symbol, typ) in let_con.def_types.iter() {
+                        let var =
+                            type_to_var(arena, mempool, subs, rank, pools, cached_aliases, typ);
 
+                        // TODO: region should come from typ
                         local_def_vars.insert(
                             *symbol,
                             Located {
                                 value: var,
-                                region: loc_type.region,
+                                region: Region::zero(),
                             },
                         );
                     }
@@ -521,9 +517,7 @@ fn solve<'a>(
                     // Add a variable for each def to local_def_vars.
                     let mut local_def_vars = BumpMap::new_in(arena);
 
-                    for (symbol, loc_type) in let_con.def_types.iter() {
-                        let def_type = &loc_type.value;
-
+                    for (symbol, typ) in let_con.def_types.iter() {
                         let var = type_to_var(
                             arena,
                             mempool,
@@ -531,14 +525,15 @@ fn solve<'a>(
                             next_rank,
                             next_pools,
                             cached_aliases,
-                            def_type,
+                            typ,
                         );
 
+                        // TODO: region should come from type
                         local_def_vars.insert(
                             *symbol,
                             Located {
                                 value: var,
-                                region: loc_type.region,
+                                region: Region::zero(),
                             },
                         );
                     }
@@ -776,7 +771,7 @@ fn type_to_variable<'a>(
         Alias(symbol, args, alias_type_id) => {
             // TODO cache in uniqueness inference gives problems! all Int's get the same uniqueness var!
             // Cache aliases without type arguments. Commonly used aliases like `Int` would otherwise get O(n)
-            // different variables (once for each occurence). The recursion restriction is required
+            // different variables (once for each occurrence). The recursion restriction is required
             // for uniqueness types only: recursive aliases "introduce" an unbound uniqueness
             // attribute in the body, when
             //

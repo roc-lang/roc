@@ -19,8 +19,8 @@ use roc_module::symbol::{
     Symbol,
 };
 use roc_mono::ir::{
-    CapturedSymbols, ExternalSpecializations, PartialProc, PendingSpecialization, Proc, Procs,
-    TopLevelFunctionLayout,
+    CapturedSymbols, EntryPoint, ExternalSpecializations, PartialProc, PendingSpecialization, Proc,
+    ProcLayout, Procs,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, StrLiteral, TypeAnnotation};
@@ -621,6 +621,8 @@ pub struct LoadedModule {
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
+    pub exposed_aliases: MutMap<Symbol, Alias>,
+    pub exposed_values: Vec<Symbol>,
     pub header_sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
@@ -660,6 +662,8 @@ enum HeaderFor<'a> {
         config_shorthand: &'a str,
         /// the type scheme of the main function (required by the platform)
         platform_main_type: TypedIdent<'a>,
+        /// provided symbol to host (commonly `mainForHost`)
+        main_for_host: Symbol,
     },
     Interface,
 }
@@ -705,7 +709,8 @@ pub struct MonomorphizedModule<'a> {
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub mono_problems: MutMap<ModuleId, Vec<roc_mono::ir::MonoProblem>>,
-    pub procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
+    pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    pub entry_point: EntryPoint<'a>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
     pub header_sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
@@ -760,6 +765,8 @@ enum Msg<'a> {
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
         exposed_vars_by_symbol: MutMap<Symbol, Variable>,
+        exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
+        exposed_values: Vec<Symbol>,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
     },
     FoundSpecializations {
@@ -776,7 +783,7 @@ enum Msg<'a> {
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
         external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations<'a>>,
-        procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
+        procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
         problems: Vec<roc_mono::ir::MonoProblem>,
         module_timing: ModuleTiming,
         subs: Subs,
@@ -805,9 +812,15 @@ enum PlatformPath<'a> {
 }
 
 #[derive(Debug)]
+struct PlatformData {
+    module_id: ModuleId,
+    provides: Symbol,
+}
+
+#[derive(Debug)]
 struct State<'a> {
     pub root_id: ModuleId,
-    pub platform_id: Option<ModuleId>,
+    pub platform_data: Option<PlatformData>,
     pub goal_phase: Phase,
     pub stdlib: &'a StdLib,
     pub exposed_types: SubsByModule,
@@ -818,7 +831,7 @@ struct State<'a> {
 
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
-    pub procedures: MutMap<(Symbol, TopLevelFunctionLayout<'a>), Proc<'a>>,
+    pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
@@ -849,7 +862,7 @@ struct State<'a> {
     pub needs_specialization: MutSet<ModuleId>,
 
     pub all_pending_specializations:
-        MutMap<Symbol, MutMap<TopLevelFunctionLayout<'a>, PendingSpecialization<'a>>>,
+        MutMap<Symbol, MutMap<ProcLayout<'a>, PendingSpecialization<'a>>>,
 
     pub specializations_in_flight: u32,
 
@@ -1447,7 +1460,7 @@ where
 
             let mut state = State {
                 root_id,
-                platform_id: None,
+                platform_data: None,
                 goal_phase,
                 stdlib,
                 output_path: None,
@@ -1501,6 +1514,8 @@ where
                     Msg::FinishedAllTypeChecking {
                         solved_subs,
                         exposed_vars_by_symbol,
+                        exposed_aliases_by_symbol,
+                        exposed_values,
                         documentation,
                     } => {
                         // We're done! There should be no more messages pending.
@@ -1516,6 +1531,8 @@ where
                         return Ok(LoadResult::TypeChecked(finish(
                             state,
                             solved_subs,
+                            exposed_values,
+                            exposed_aliases_by_symbol,
                             exposed_vars_by_symbol,
                             documentation,
                         )));
@@ -1674,10 +1691,13 @@ fn update<'a>(
                     debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                     state.platform_path = PlatformPath::Valid(to_platform.clone());
                 }
-                PkgConfig { .. } => {
-                    debug_assert_eq!(state.platform_id, None);
+                PkgConfig { main_for_host, .. } => {
+                    debug_assert!(matches!(state.platform_data, None));
 
-                    state.platform_id = Some(header.module_id);
+                    state.platform_data = Some(PlatformData {
+                        module_id: header.module_id,
+                        provides: main_for_host,
+                    });
 
                     if header.is_root_module {
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
@@ -1896,9 +1916,9 @@ fn update<'a>(
 
             // if there is a platform, the Package-Config module provides host-exposed,
             // otherwise the App module exposes host-exposed
-            let is_host_exposed = match state.platform_id {
+            let is_host_exposed = match state.platform_data {
                 None => module_id == state.root_id,
-                Some(platform_id) => module_id == platform_id,
+                Some(ref platform_data) => module_id == platform_data.module_id,
             };
 
             if is_host_exposed {
@@ -1927,6 +1947,8 @@ fn update<'a>(
                     .send(Msg::FinishedAllTypeChecking {
                         solved_subs,
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
+                        exposed_values: solved_module.exposed_symbols,
+                        exposed_aliases_by_symbol: solved_module.aliases,
                         documentation,
                     })
                     .map_err(|_| LoadingProblem::MsgChannelDied)?;
@@ -2048,8 +2070,6 @@ fn update<'a>(
                 && state.dependencies.solved_all()
                 && state.goal_phase == Phase::MakeSpecializations
             {
-                Proc::insert_refcount_operations(arena, &mut state.procedures);
-
                 // display the mono IR of the module, for debug purposes
                 if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
                     let procs_string = state
@@ -2062,6 +2082,8 @@ fn update<'a>(
 
                     println!("{}", result);
                 }
+
+                Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 // This is not safe with the new non-recursive RC updates that we do for tag unions
                 //
@@ -2154,6 +2176,7 @@ fn finish_specialization(
         module_cache,
         output_path,
         platform_path,
+        platform_data,
         ..
     } = state;
 
@@ -2201,6 +2224,34 @@ fn finish_specialization(
 
     let platform_path = path_to_platform.into();
 
+    let entry_point = {
+        let symbol = match platform_data {
+            None => {
+                debug_assert_eq!(exposed_to_host.len(), 1);
+                *exposed_to_host.iter().next().unwrap().0
+            }
+            Some(PlatformData { provides, .. }) => provides,
+        };
+
+        match procedures.keys().find(|(s, _)| *s == symbol) {
+            Some((_, layout)) => EntryPoint {
+                layout: *layout,
+                symbol,
+            },
+            None => {
+                // the entry point is not specialized. This can happen if the repl output
+                // is a function value
+                EntryPoint {
+                    layout: roc_mono::ir::ProcLayout {
+                        arguments: &[],
+                        result: Layout::Struct(&[]),
+                    },
+                    symbol,
+                }
+            }
+        }
+    };
+
     Ok(MonomorphizedModule {
         can_problems,
         mono_problems,
@@ -2212,6 +2263,7 @@ fn finish_specialization(
         subs,
         interns,
         procedures,
+        entry_point,
         sources,
         header_sources,
         timings: state.timings,
@@ -2221,6 +2273,8 @@ fn finish_specialization(
 fn finish(
     state: State,
     solved: Solved<Subs>,
+    exposed_values: Vec<Symbol>,
+    exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
     exposed_vars_by_symbol: MutMap<Symbol, Variable>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
 ) -> LoadedModule {
@@ -2255,6 +2309,8 @@ fn finish(
         can_problems: state.module_cache.can_problems,
         type_problems: state.module_cache.type_problems,
         declarations_by_id: state.declarations_by_id,
+        exposed_aliases: exposed_aliases_by_symbol,
+        exposed_values,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
         header_sources,
         sources,
@@ -2985,7 +3041,7 @@ fn send_header_two<'a>(
         HashMap::with_capacity_and_hasher(scope_size, default_hasher());
     let home: ModuleId;
 
-    let ident_ids = {
+    let mut ident_ids = {
         // Lock just long enough to perform the minimal operations necessary.
         let mut module_ids = (*module_ids).lock();
         let mut ident_ids_by_module = (*ident_ids_by_module).lock();
@@ -3108,9 +3164,17 @@ fn send_header_two<'a>(
     // to decrement its "pending" count.
     let module_name = ModuleNameEnum::PkgConfig;
 
+    let main_for_host = {
+        let ident_str: InlinableString = provides[0].value.as_str().into();
+        let ident_id = ident_ids.get_or_insert(&ident_str);
+
+        Symbol::new(home, ident_id)
+    };
+
     let extra = HeaderFor::PkgConfig {
         config_shorthand: shorthand,
         platform_main_type: requires[0].value.clone(),
+        main_for_host,
     };
 
     let mut package_qualified_imported_modules = MutSet::default();
@@ -3240,6 +3304,7 @@ fn run_solve<'a>(
 
     let solved_module = SolvedModule {
         exposed_vars_by_symbol,
+        exposed_symbols: exposed_symbols.into_iter().collect::<Vec<_>>(),
         solved_types,
         problems,
         aliases: solved_env.aliases,
@@ -3476,7 +3541,6 @@ fn fabricate_effects_module<'a>(
                     &mut var_store,
                     annotation,
                 );
-
                 exposed_symbols.insert(symbol);
 
                 declarations.push(Declaration::Declare(def));
@@ -3815,7 +3879,8 @@ fn make_specializations<'a>(
         ident_ids: &mut ident_ids,
         ptr_bytes,
         update_mode_counter: 0,
-        call_specialization_counter: 0,
+        // call_specialization_counter=0 is reserved
+        call_specialization_counter: 1,
     };
 
     // TODO: for now this final specialization pass is sequential,
@@ -3878,7 +3943,8 @@ fn build_pending_specializations<'a>(
         ident_ids: &mut ident_ids,
         ptr_bytes,
         update_mode_counter: 0,
-        call_specialization_counter: 0,
+        // call_specialization_counter=0 is reserved
+        call_specialization_counter: 1,
     };
 
     // Add modules' decls to Procs
@@ -3997,7 +4063,7 @@ fn add_def_to_module<'a>(
 
                         procs.insert_exposed(
                             symbol,
-                            TopLevelFunctionLayout::from_layout(mono_env.arena, layout),
+                            ProcLayout::from_layout(mono_env.arena, layout),
                             mono_env.arena,
                             mono_env.subs,
                             def.annotation,
@@ -4028,14 +4094,14 @@ fn add_def_to_module<'a>(
                     if is_exposed {
                         let annotation = def.expr_var;
 
-                        let layout = match layout_cache.from_var(
+                        let top_level = match layout_cache.from_var(
                             mono_env.arena,
                             annotation,
                             mono_env.subs,
                         ) {
                             Ok(l) => {
                                 // remember, this is a 0-argument thunk
-                                Layout::FunctionPointer(&[], mono_env.arena.alloc(l))
+                                ProcLayout::new(mono_env.arena, &[], l)
                             }
                             Err(LayoutProblem::Erroneous) => {
                                 let message = "top level function has erroneous type";
@@ -4056,7 +4122,7 @@ fn add_def_to_module<'a>(
 
                         procs.insert_exposed(
                             symbol,
-                            TopLevelFunctionLayout::from_layout(mono_env.arena, layout),
+                            top_level,
                             mono_env.arena,
                             mono_env.subs,
                             def.annotation,

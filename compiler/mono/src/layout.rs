@@ -14,23 +14,23 @@ const GENERATE_NULLABLE: bool = true;
 
 /// If a (Num *) gets translated to a Layout, this is the numeric type it defaults to.
 const DEFAULT_NUM_BUILTIN: Builtin<'_> = Builtin::Int64;
-pub const TAG_SIZE: Builtin<'_> = Builtin::Int64;
-
-impl Layout<'_> {
-    pub const TAG_SIZE: Layout<'static> = Layout::Builtin(Builtin::Int64);
-}
-
-#[derive(Copy, Clone)]
-#[repr(u8)]
-pub enum InPlace {
-    InPlace,
-    Clone,
-}
 
 #[derive(Debug, Clone)]
 pub enum LayoutProblem {
     UnresolvedTypeVar(Variable),
     Erroneous,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RawFunctionLayout<'a> {
+    Function(&'a [Layout<'a>], LambdaSet<'a>, &'a Layout<'a>),
+    ZeroArgumentThunk(Layout<'a>),
+}
+
+impl RawFunctionLayout<'_> {
+    pub fn is_zero_argument_thunk(&self) -> bool {
+        matches!(self, RawFunctionLayout::ZeroArgumentThunk(_))
+    }
 }
 
 /// Types for code gen must be monomorphic. No type variables allowed!
@@ -43,22 +43,9 @@ pub enum Layout<'a> {
     Struct(&'a [Layout<'a>]),
     Union(UnionLayout<'a>),
     RecursivePointer,
-    /// A function. The types of its arguments, then the type of its return value.
-    FunctionPointer(&'a [Layout<'a>], &'a Layout<'a>),
-    Closure(&'a [Layout<'a>], LambdaSet<'a>, &'a Layout<'a>),
-}
 
-impl<'a> Layout<'a> {
-    pub fn in_place(&self) -> InPlace {
-        match self {
-            Layout::Builtin(Builtin::EmptyList) => InPlace::InPlace,
-            Layout::Builtin(Builtin::List(_)) => InPlace::Clone,
-            Layout::Builtin(Builtin::EmptyStr) => InPlace::InPlace,
-            Layout::Builtin(Builtin::Str) => InPlace::Clone,
-            Layout::Builtin(Builtin::Int1) => InPlace::Clone,
-            _ => unreachable!("Layout {:?} does not have an inplace", self),
-        }
-    }
+    /// A function. The types of its arguments, then the type of its return value.
+    Closure(&'a [Layout<'a>], LambdaSet<'a>, &'a Layout<'a>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -88,9 +75,9 @@ pub enum UnionLayout<'a> {
 }
 
 impl<'a> UnionLayout<'a> {
-    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, _parens: Parens) -> DocBuilder<'b, D, A>
+    pub fn to_doc<D, A>(self, alloc: &'a D, _parens: Parens) -> DocBuilder<'a, D, A>
     where
-        D: DocAllocator<'b, A>,
+        D: DocAllocator<'a, A>,
         D::Doc: Clone,
         A: Clone,
     {
@@ -113,6 +100,101 @@ impl<'a> UnionLayout<'a> {
             _ => alloc.text("TODO"),
         }
     }
+
+    pub fn layout_at(self, tag_id: u8, index: usize) -> Layout<'a> {
+        let result = match self {
+            UnionLayout::NonRecursive(tag_layouts) => {
+                let field_layouts = tag_layouts[tag_id as usize];
+
+                // this cannot be recursive; return immediately
+                return field_layouts[index];
+            }
+            UnionLayout::Recursive(tag_layouts) => {
+                let field_layouts = tag_layouts[tag_id as usize];
+
+                field_layouts[index]
+            }
+            UnionLayout::NonNullableUnwrapped(field_layouts) => field_layouts[index],
+            UnionLayout::NullableWrapped {
+                nullable_id,
+                other_tags,
+            } => {
+                debug_assert_ne!(nullable_id, tag_id as i64);
+
+                let tag_index = if (tag_id as i64) < nullable_id {
+                    tag_id
+                } else {
+                    tag_id - 1
+                };
+
+                let field_layouts = other_tags[tag_index as usize];
+                field_layouts[index]
+            }
+
+            UnionLayout::NullableUnwrapped {
+                nullable_id,
+                other_fields,
+            } => {
+                debug_assert_ne!(nullable_id, tag_id != 0);
+
+                other_fields[index as usize]
+            }
+        };
+
+        if let Layout::RecursivePointer = result {
+            Layout::Union(self)
+        } else {
+            result
+        }
+    }
+
+    fn tag_id_builtin_help(union_size: usize) -> Builtin<'a> {
+        if union_size <= u8::MAX as usize {
+            Builtin::Int8
+        } else if union_size <= u16::MAX as usize {
+            Builtin::Int16
+        } else {
+            panic!("tag union is too big")
+        }
+    }
+
+    pub fn tag_id_builtin(&self) -> Builtin<'a> {
+        match self {
+            UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => {
+                let union_size = tags.len();
+
+                Self::tag_id_builtin_help(union_size)
+            }
+
+            UnionLayout::NullableWrapped { other_tags, .. } => {
+                Self::tag_id_builtin_help(other_tags.len() + 1)
+            }
+            UnionLayout::NonNullableUnwrapped(_) => Builtin::Int1,
+            UnionLayout::NullableUnwrapped { .. } => Builtin::Int1,
+        }
+    }
+
+    pub fn tag_id_layout(&self) -> Layout<'a> {
+        Layout::Builtin(self.tag_id_builtin())
+    }
+
+    pub fn stores_tag_id(&self) -> bool {
+        match self {
+            UnionLayout::NonRecursive(_)
+            | UnionLayout::Recursive(_)
+            | UnionLayout::NullableWrapped { .. } => true,
+            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => false,
+        }
+    }
+
+    pub fn is_nullable(&self) -> bool {
+        match self {
+            UnionLayout::NonRecursive(_)
+            | UnionLayout::Recursive(_)
+            | UnionLayout::NonNullableUnwrapped { .. } => false,
+            UnionLayout::NullableWrapped { .. } | UnionLayout::NullableUnwrapped { .. } => true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -132,6 +214,7 @@ pub enum ClosureRepresentation<'a> {
         tag_name: TagName,
         tag_id: u8,
         union_size: u8,
+        union_layout: UnionLayout<'a>,
     },
     /// the representation is anything but a union
     Other(Layout<'a>),
@@ -140,6 +223,14 @@ pub enum ClosureRepresentation<'a> {
 impl<'a> LambdaSet<'a> {
     pub fn runtime_representation(&self) -> Layout<'a> {
         *self.representation
+    }
+
+    pub fn is_represented(&self) -> Option<Layout<'a>> {
+        if let Layout::Struct(&[]) = self.representation {
+            None
+        } else {
+            Some(*self.representation)
+        }
     }
 
     pub fn layout_for_member(&self, function_symbol: Symbol) -> ClosureRepresentation<'a> {
@@ -165,6 +256,7 @@ impl<'a> LambdaSet<'a> {
                             tag_id: index as u8,
                             tag_layout: tags[index],
                             tag_name: TagName::Closure(function_symbol),
+                            union_layout: *union,
                         }
                     }
                     UnionLayout::Recursive(_) => todo!("recursive closures"),
@@ -183,32 +275,31 @@ impl<'a> LambdaSet<'a> {
         }
     }
 
-    pub fn extend_function_layout(
+    pub fn extend_argument_list(
         &self,
         arena: &'a Bump,
         argument_layouts: &'a [Layout<'a>],
-        ret_layout: &'a Layout<'a>,
-    ) -> Layout<'a> {
+    ) -> &'a [Layout<'a>] {
         if let [] = self.set {
             // TERRIBLE HACK for builting functions
-            Layout::FunctionPointer(argument_layouts, ret_layout)
+            argument_layouts
         } else {
             match self.representation {
                 Layout::Struct(&[]) => {
                     // this function does not have anything in its closure, and the lambda set is a
                     // singleton, so we pass no extra argument
-                    Layout::FunctionPointer(argument_layouts, ret_layout)
+                    argument_layouts
                 }
                 Layout::Builtin(Builtin::Int1) | Layout::Builtin(Builtin::Int8) => {
                     // we don't pass this along either
-                    Layout::FunctionPointer(argument_layouts, ret_layout)
+                    argument_layouts
                 }
                 _ => {
                     let mut arguments = Vec::with_capacity_in(argument_layouts.len() + 1, arena);
                     arguments.extend(argument_layouts);
                     arguments.push(self.runtime_representation());
 
-                    Layout::FunctionPointer(arguments.into_bump_slice(), ret_layout)
+                    arguments.into_bump_slice()
                 }
             }
         }
@@ -280,7 +371,9 @@ impl<'a> LambdaSet<'a> {
             Unit | UnitWithArguments => Layout::Struct(&[]),
             BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
             ByteUnion(_) => Layout::Builtin(Builtin::Int8),
-            Unwrapped(_tag_name, layouts) => Layout::Struct(layouts.into_bump_slice()),
+            Newtype {
+                arguments: layouts, ..
+            } => Layout::Struct(layouts.into_bump_slice()),
             Wrapped(variant) => {
                 use WrappedVariant::*;
 
@@ -304,17 +397,6 @@ impl<'a> LambdaSet<'a> {
                     _ => panic!("handle recursive layouts"),
                 }
             }
-        }
-    }
-
-    pub fn get_wrapped(&self) -> crate::ir::Wrapped {
-        use crate::ir::Wrapped;
-
-        match self.representation {
-            Layout::Struct(fields) if fields.len() == 1 => Wrapped::SingleElementRecord,
-            Layout::Struct(_) => Wrapped::RecordOrSingleTagUnion,
-            Layout::Union(_) => Wrapped::MultiTagUnion,
-            _ => Wrapped::SingleElementRecord,
         }
     }
 
@@ -492,10 +574,6 @@ impl<'a> Layout<'a> {
                     }
                 }
             }
-            FunctionPointer(_, _) => {
-                // Function pointers are immutable and can always be safely copied
-                true
-            }
             Closure(_, closure_layout, _) => closure_layout.safe_to_memcpy(),
             RecursivePointer => {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
@@ -529,16 +607,20 @@ impl<'a> Layout<'a> {
                 use UnionLayout::*;
 
                 match variant {
-                    NonRecursive(fields) => fields
-                        .iter()
-                        .map(|tag_layout| {
-                            tag_layout
-                                .iter()
-                                .map(|field| field.stack_size(pointer_size))
-                                .sum()
-                        })
-                        .max()
-                        .unwrap_or_default(),
+                    NonRecursive(fields) => {
+                        fields
+                            .iter()
+                            .map(|tag_layout| {
+                                tag_layout
+                                    .iter()
+                                    .map(|field| field.stack_size(pointer_size))
+                                    .sum::<u32>()
+                            })
+                            .max()
+                            .unwrap_or_default()
+                            // the size of the tag_id
+                            + pointer_size
+                    }
 
                     Recursive(_)
                     | NullableWrapped { .. }
@@ -547,7 +629,6 @@ impl<'a> Layout<'a> {
                 }
             }
             Closure(_, lambda_set, _) => lambda_set.stack_size(pointer_size),
-            FunctionPointer(_, _) => pointer_size,
             RecursivePointer => pointer_size,
         }
     }
@@ -579,7 +660,6 @@ impl<'a> Layout<'a> {
             }
             Layout::Builtin(builtin) => builtin.alignment_bytes(pointer_size),
             Layout::RecursivePointer => pointer_size,
-            Layout::FunctionPointer(_, _) => pointer_size,
             Layout::Closure(_, captured, _) => {
                 pointer_size.max(captured.alignment_bytes(pointer_size))
             }
@@ -634,13 +714,12 @@ impl<'a> Layout<'a> {
             }
             RecursivePointer => true,
             Closure(_, closure_layout, _) => closure_layout.contains_refcounted(),
-            FunctionPointer(_, _) => false,
         }
     }
 
-    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, parens: Parens) -> DocBuilder<'b, D, A>
+    pub fn to_doc<D, A>(self, alloc: &'a D, parens: Parens) -> DocBuilder<'a, D, A>
     where
-        D: DocAllocator<'b, A>,
+        D: DocAllocator<'a, A>,
         D::Doc: Clone,
         A: Clone,
     {
@@ -658,14 +737,6 @@ impl<'a> Layout<'a> {
             }
             Union(union_layout) => union_layout.to_doc(alloc, parens),
             RecursivePointer => alloc.text("*self"),
-            FunctionPointer(args, result) => {
-                let args_doc = args.iter().map(|x| x.to_doc(alloc, Parens::InFunction));
-
-                alloc
-                    .intersperse(args_doc, ", ")
-                    .append(alloc.text(" -> "))
-                    .append(result.to_doc(alloc, Parens::InFunction))
-            }
             Closure(args, closure_layout, result) => {
                 let args_doc = args.iter().map(|x| x.to_doc(alloc, Parens::InFunction));
 
@@ -713,8 +784,6 @@ impl<'a> CachedVariable<'a> {
         CachedVariable(var, std::marker::PhantomData)
     }
 }
-
-// use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 
 impl<'a> ven_ena::unify::UnifyKey for CachedVariable<'a> {
     type Value = CachedLayout<'a>;
@@ -776,6 +845,37 @@ impl<'a> LayoutCache<'a> {
                 }
 
                 result
+            }
+        }
+    }
+
+    pub fn raw_from_var(
+        &mut self,
+        arena: &'a Bump,
+        var: Variable,
+        subs: &Subs,
+    ) -> Result<RawFunctionLayout<'a>, LayoutProblem> {
+        // Store things according to the root Variable, to avoid duplicate work.
+        let var = subs.get_root_key_without_compacting(var);
+
+        let cached_var = CachedVariable::new(var);
+
+        self.expand_to_fit(cached_var);
+
+        use CachedLayout::*;
+        match self.layouts.probe_value(cached_var) {
+            Problem(problem) => Err(problem),
+            Cached(_) | NotCached => {
+                let mut env = Env {
+                    arena,
+                    subs,
+                    seen: MutSet::default(),
+                };
+
+                Layout::from_var(&mut env, var).map(|l| match l {
+                    Layout::Closure(a, b, c) => RawFunctionLayout::Function(a, b, c),
+                    other => RawFunctionLayout::ZeroArgumentThunk(other),
+                })
             }
         }
     }
@@ -904,9 +1004,9 @@ impl<'a> Builtin<'a> {
         }
     }
 
-    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, _parens: Parens) -> DocBuilder<'b, D, A>
+    pub fn to_doc<D, A>(self, alloc: &'a D, _parens: Parens) -> DocBuilder<'a, D, A>
     where
-        D: DocAllocator<'b, A>,
+        D: DocAllocator<'a, A>,
         D::Doc: Clone,
         A: Clone,
     {
@@ -1133,14 +1233,11 @@ fn layout_from_flat_type<'a>(
             env.insert_seen(rec_var);
             for (index, (_name, variables)) in tags_vec.into_iter().enumerate() {
                 if matches!(nullable, Some(i) if i == index as i64) {
-                    // don't add the
+                    // don't add the nullable case
                     continue;
                 }
 
                 let mut tag_layout = Vec::with_capacity_in(variables.len() + 1, arena);
-
-                // store the discriminant
-                tag_layout.push(Layout::Builtin(TAG_SIZE));
 
                 for var in variables {
                     // TODO does this cause problems with mutually recursive unions?
@@ -1182,7 +1279,7 @@ fn layout_from_flat_type<'a>(
                 }
             } else if tag_layouts.len() == 1 {
                 // drop the tag id
-                UnionLayout::NonNullableUnwrapped(&tag_layouts.pop().unwrap()[1..])
+                UnionLayout::NonNullableUnwrapped(&tag_layouts.pop().unwrap())
             } else {
                 UnionLayout::Recursive(tag_layouts.into_bump_slice())
             };
@@ -1265,9 +1362,15 @@ pub enum UnionVariant<'a> {
     Never,
     Unit,
     UnitWithArguments,
-    BoolUnion { ttrue: TagName, ffalse: TagName },
+    BoolUnion {
+        ttrue: TagName,
+        ffalse: TagName,
+    },
     ByteUnion(Vec<'a, TagName>),
-    Unwrapped(TagName, Vec<'a, Layout<'a>>),
+    Newtype {
+        tag_name: TagName,
+        arguments: Vec<'a, Layout<'a>>,
+    },
     Wrapped(WrappedVariant<'a>),
 }
 
@@ -1485,7 +1588,10 @@ pub fn union_sorted_tags_help<'a>(
                     fields: layouts.into_bump_slice(),
                 })
             } else {
-                UnionVariant::Unwrapped(tag_name, layouts)
+                UnionVariant::Newtype {
+                    tag_name,
+                    arguments: layouts,
+                }
             }
         }
         num_tags => {
@@ -1514,9 +1620,6 @@ pub fn union_sorted_tags_help<'a>(
                 }
 
                 let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, arena);
-
-                // add the tag discriminant (size currently always hardcoded to i64)
-                arg_layouts.push(Layout::Builtin(TAG_SIZE));
 
                 for var in arguments {
                     match Layout::from_var(&mut env, var) {
@@ -1637,7 +1740,10 @@ pub fn layout_from_tag_union<'a>(
                 Unit | UnitWithArguments => Layout::Struct(&[]),
                 BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
                 ByteUnion(_) => Layout::Builtin(Builtin::Int8),
-                Unwrapped(_, mut field_layouts) => {
+                Newtype {
+                    arguments: mut field_layouts,
+                    ..
+                } => {
                     if field_layouts.len() == 1 {
                         field_layouts.pop().unwrap()
                     } else {
@@ -1886,6 +1992,7 @@ impl LayoutId {
 
 struct IdsByLayout<'a> {
     by_id: MutMap<Layout<'a>, u32>,
+    toplevels_by_id: MutMap<crate::ir::ProcLayout<'a>, u32>,
     next_id: u32,
 }
 
@@ -1902,6 +2009,7 @@ impl<'a> LayoutIds<'a> {
         // There's probably a nicer way to write it that still works.
         let ids = self.by_symbol.entry(symbol).or_insert_with(|| IdsByLayout {
             by_id: HashMap::with_capacity_and_hasher(1, default_hasher()),
+            toplevels_by_id: Default::default(),
             next_id: 1,
         });
 
@@ -1912,6 +2020,39 @@ impl<'a> LayoutIds<'a> {
         // store the ID we're going to return and increment next_id.
         if answer == ids.next_id {
             ids.by_id.insert(*layout, ids.next_id);
+
+            ids.next_id += 1;
+        }
+
+        LayoutId(answer)
+    }
+
+    /// Returns a LayoutId which is unique for the given symbol and layout.
+    /// If given the same symbol and same layout, returns the same LayoutId.
+    pub fn get_toplevel<'b>(
+        &mut self,
+        symbol: Symbol,
+        layout: &'b crate::ir::ProcLayout<'a>,
+    ) -> LayoutId {
+        // Note: this function does some weird stuff to satisfy the borrow checker.
+        // There's probably a nicer way to write it that still works.
+        let ids = self.by_symbol.entry(symbol).or_insert_with(|| IdsByLayout {
+            by_id: Default::default(),
+            toplevels_by_id: HashMap::with_capacity_and_hasher(1, default_hasher()),
+            next_id: 1,
+        });
+
+        // Get the id associated with this layout, or default to next_id.
+        let answer = ids
+            .toplevels_by_id
+            .get(&layout)
+            .copied()
+            .unwrap_or(ids.next_id);
+
+        // If we had to default to next_id, it must not have been found;
+        // store the ID we're going to return and increment next_id.
+        if answer == ids.next_id {
+            ids.toplevels_by_id.insert(*layout, ids.next_id);
 
             ids.next_id += 1;
         }

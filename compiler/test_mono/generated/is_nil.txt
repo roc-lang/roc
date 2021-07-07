@@ -1,6 +1,6 @@
 procedure Test.2 (Test.3):
     let Test.12 = 1i64;
-    let Test.13 = Index 0 Test.3;
+    let Test.13 = GetTagId Test.3;
     let Test.14 = lowlevel Eq Test.12 Test.13;
     if Test.14 then
         let Test.10 = true;
@@ -13,8 +13,8 @@ procedure Test.0 ():
     let Test.17 = 0i64;
     let Test.15 = 2i64;
     let Test.18 = 1i64;
-    let Test.16 = Nil Test.18;
-    let Test.9 = Cons Test.17 Test.15 Test.16;
+    let Test.16 = Nil ;
+    let Test.9 = Cons Test.15 Test.16;
     let Test.8 = CallByName Test.2 Test.9;
     dec Test.9;
     ret Test.8;
