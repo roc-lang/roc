@@ -4,7 +4,7 @@ use crate::editor::slow_pool::{MarkNodeId, SlowPool};
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::editor::{
     ed_error::EdError::ParseError,
-    ed_error::{EdResult, NoNodeAtCaretPosition, MissingParent},
+    ed_error::{EdResult, MissingParent, NoNodeAtCaretPosition},
     markup::attribute::Attributes,
     markup::nodes::{expr2_to_markup, set_parent_for_all, MarkupNode},
 };
@@ -135,22 +135,27 @@ impl<'a> EdModel<'a> {
         self.grid_node_map.node_exists_at_pos(self.get_caret())
     }
 
-    pub fn get_curr_child_index(&self) -> EdResult<usize> {
+    // return (index of child in list of children, index of child in list of children of ast node) of MarkupNode at current caret position
+    pub fn get_curr_child_indices(&self) -> EdResult<(usize, usize)> {
         if self.node_exists_at_caret() {
             let curr_mark_node_id = self.get_curr_mark_node_id()?;
             let curr_mark_node = self.markup_node_pool.get(curr_mark_node_id);
 
             if let Some(parent_id) = curr_mark_node.get_parent_id_opt() {
                 let parent = self.markup_node_pool.get(parent_id);
-                parent.get_child_index(curr_mark_node_id)
+                parent.get_child_indices(curr_mark_node_id, &self.markup_node_pool)
             } else {
-                MissingParent{ node_id: curr_mark_node_id }.fail()
+                MissingParent {
+                    node_id: curr_mark_node_id,
+                }
+                .fail()
             }
         } else {
-            NoNodeAtCaretPosition{ caret_pos: self.get_caret()}.fail()
+            NoNodeAtCaretPosition {
+                caret_pos: self.get_caret(),
+            }
+            .fail()
         }
-
-        
     }
 }
 

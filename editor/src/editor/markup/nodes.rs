@@ -2,10 +2,11 @@ use super::attribute::Attributes;
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::ExpectedTextNode;
 use crate::editor::ed_error::GetContentOnNestedNode;
-use crate::editor::ed_error::{NestedNodeRequired, NestedNodeMissingChild};
+use crate::editor::ed_error::{NestedNodeMissingChild, NestedNodeRequired};
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
+use crate::editor::util::index_of;
 use crate::lang::ast::ExprId;
 use crate::lang::ast::RecordField;
 use crate::lang::{
@@ -13,6 +14,7 @@ use crate::lang::{
     expr::Env,
     pool::{NodeId, PoolStr},
 };
+use crate::ui::util::slice_get;
 use bumpalo::Bump;
 use std::fmt;
 
@@ -73,23 +75,78 @@ impl MarkupNode {
         }
     }
 
-    pub fn get_child_index(&self, child_id: MarkNodeId) -> EdResult<MarkNodeId> {
+    // return (index of child in list of children, index of child in list of children of ast node)
+    pub fn get_child_indices(
+        &self,
+        child_id: MarkNodeId,
+        markup_node_pool: &SlowPool,
+    ) -> EdResult<(usize, usize)> {
         match self {
             MarkupNode::Nested { children_ids, .. } => {
-                let position_opt = children_ids.iter().position(|&c_id| c_id == child_id);
+                let mark_position_opt = children_ids.iter().position(|&c_id| c_id == child_id);
 
-                if let Some(child_index) = position_opt {
-                    Ok(child_index)
+                if let Some(child_index) = mark_position_opt {
+                    let self_ast_id = self.get_ast_node_id();
+
+                    let child_ids_with_ast = children_ids
+                        .iter()
+                        .filter(|c_id| {
+                            let child_mark_node = markup_node_pool.get(**c_id);
+                            // a node that points to the same ast_node as the parent is a ',', '[', ']'
+                            // those are not "real" ast children
+                            child_mark_node.get_ast_node_id() != self_ast_id
+                        })
+                        .copied()
+                        .collect::<Vec<MarkNodeId>>();
+
+                    if child_index == (children_ids.len() - 1) {
+                        let ast_child_index = child_ids_with_ast.len();
+
+                        Ok((child_index, ast_child_index))
+                    } else {
+                        // we want to find the index of the closest ast mark node to child_index
+                        let indices_in_mark_res: EdResult<Vec<usize>> = child_ids_with_ast
+                            .iter()
+                            .map(|c_id| index_of(*c_id, children_ids))
+                            .collect();
+
+                        let indices_in_mark = indices_in_mark_res?;
+
+                        let mut last_diff = usize::MAX;
+                        let mut best_index = 0;
+
+                        for index in indices_in_mark.iter() {
+                            let curr_diff =
+                                isize::abs((*index as isize) - (child_index as isize)) as usize;
+
+                            if curr_diff >= last_diff {
+                                break;
+                            } else {
+                                last_diff = curr_diff;
+                                best_index = *index;
+                            }
+                        }
+
+                        let closest_ast_child = slice_get(best_index, &children_ids)?;
+
+                        let closest_ast_child_index =
+                            index_of(*closest_ast_child, &child_ids_with_ast)?;
+
+                        // +1 because we want to insert after ast_child
+                        Ok((child_index, closest_ast_child_index + 1))
+                    }
                 } else {
                     NestedNodeMissingChild {
                         node_id: child_id,
                         children_ids: children_ids.clone(),
-                    }.fail()
+                    }
+                    .fail()
                 }
-            },
+            }
             _ => NestedNodeRequired {
                 node_type: self.node_type_as_string(),
-            }.fail(),
+            }
+            .fail(),
         }
     }
 
