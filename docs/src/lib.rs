@@ -63,22 +63,11 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
 
     // Write each package's module docs html file
     for loaded_module in package.modules.iter_mut() {
-        let mut exposed_values = loaded_module
-            .exposed_to_host
+        let exports = loaded_module
+            .exposed_values
             .iter()
-            .map(|(symbol, _)| symbol.ident_string(&loaded_module.interns).to_string())
+            .map(|symbol| symbol.ident_string(&loaded_module.interns).to_string())
             .collect::<Vec<String>>();
-
-        let mut exposed_aliases = loaded_module
-            .exposed_aliases
-            .iter()
-            .map(|(symbol, _)| symbol.ident_string(&loaded_module.interns).to_string())
-            .collect::<Vec<String>>();
-
-        let mut exports = Vec::new();
-
-        exports.append(&mut exposed_values);
-        exports.append(&mut exposed_aliases);
 
         for module in loaded_module.documentation.values_mut() {
             let module_dir = build_dir.join(module.name.replace(".", "/").as_str());
@@ -122,61 +111,63 @@ fn render_main_content(
     );
 
     for entry in &module.entries {
+        let mut should_render_entry = true;
+
         if let DocDef(def) = entry {
-            if !exposed_values.contains(&def.name) {
-                break;
-            }
+            // We dont want to render entries that arent exposed
+            should_render_entry = exposed_values.contains(&def.name);
         }
 
-        match entry {
-            DocEntry::DocDef(doc_def) => {
-                let mut href = String::new();
-                href.push('#');
-                href.push_str(doc_def.name.as_str());
+        if should_render_entry {
+            match entry {
+                DocEntry::DocDef(doc_def) => {
+                    let mut href = String::new();
+                    href.push('#');
+                    href.push_str(doc_def.name.as_str());
 
-                let name = doc_def.name.as_str();
+                    let name = doc_def.name.as_str();
 
-                let mut content = String::new();
+                    let mut content = String::new();
 
-                content.push_str(html_node("a", vec![("href", href.as_str())], name).as_str());
+                    content.push_str(html_node("a", vec![("href", href.as_str())], name).as_str());
 
-                for type_var in &doc_def.type_vars {
-                    content.push(' ');
-                    content.push_str(type_var.as_str());
-                }
+                    for type_var in &doc_def.type_vars {
+                        content.push(' ');
+                        content.push_str(type_var.as_str());
+                    }
 
-                let type_ann = &doc_def.type_annotation;
+                    let type_ann = &doc_def.type_annotation;
 
-                match type_ann {
-                    TypeAnnotation::NoTypeAnn => {}
-                    _ => {
-                        content.push_str(" : ");
+                    match type_ann {
+                        TypeAnnotation::NoTypeAnn => {}
+                        _ => {
+                            content.push_str(" : ");
+                        }
+                    }
+
+                    type_annotation_to_html(0, &mut content, &type_ann);
+
+                    buf.push_str(
+                        html_node(
+                            "h3",
+                            vec![("id", name), ("class", "entry-name")],
+                            content.as_str(),
+                        )
+                        .as_str(),
+                    );
+
+                    if let Some(docs) = &doc_def.docs {
+                        buf.push_str(
+                            markdown_to_html(&mut module.scope, interns, docs.to_string()).as_str(),
+                        );
                     }
                 }
-
-                type_annotation_to_html(0, &mut content, &type_ann);
-
-                buf.push_str(
-                    html_node(
-                        "h3",
-                        vec![("id", name), ("class", "entry-name")],
-                        content.as_str(),
-                    )
-                    .as_str(),
-                );
-
-                if let Some(docs) = &doc_def.docs {
-                    buf.push_str(
-                        markdown_to_html(&mut module.scope, interns, docs.to_string()).as_str(),
-                    );
+                DocEntry::DetachedDoc(docs) => {
+                    let markdown = markdown_to_html(&mut module.scope, interns, docs.to_string());
+                    buf.push_str(markdown.as_str());
                 }
-            }
-            DocEntry::DetachedDoc(docs) => {
-                buf.push_str(
-                    markdown_to_html(&mut module.scope, interns, docs.to_string()).as_str(),
-                );
-            }
-        };
+            };
+        }
     }
 
     buf
@@ -534,7 +525,7 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
     }
 }
 
-fn insert_doc_links(scope: &mut Scope, interns: &Interns, markdown: String) -> String {
+pub fn insert_doc_links(scope: &mut Scope, interns: &Interns, markdown: String) -> String {
     let buf = &markdown;
     let mut result = String::new();
 
@@ -565,7 +556,7 @@ fn insert_doc_links(scope: &mut Scope, interns: &Interns, markdown: String) -> S
                         interns,
                         &buf.chars()
                             .skip(from + 1)
-                            .take(index - from)
+                            .take(index - from - 1)
                             .collect::<String>(),
                     );
 
@@ -580,17 +571,23 @@ fn insert_doc_links(scope: &mut Scope, interns: &Interns, markdown: String) -> S
         }
     }
 
-    result
+    if chomping_from == None {
+        markdown
+    } else {
+        result
+    }
 }
 
 fn make_doc_link(scope: &mut Scope, interns: &Interns, doc_item: &str) -> String {
     match scope.lookup(&doc_item.into(), Region::zero()) {
         Ok(symbol) => {
             let module_str = symbol.module_string(interns);
+
             let ident_str = symbol.ident_string(interns);
 
             let mut link = String::new();
 
+            link.push('/');
             link.push_str(module_str);
             link.push('#');
             link.push_str(ident_str);
@@ -627,62 +624,65 @@ fn markdown_to_html(scope: &mut Scope, interns: &Interns, markdown: String) -> S
     let mut docs_parser = vec![];
     let (_, _) = pulldown_cmark::Parser::new_ext(&markdown_with_links, markdown_options).fold(
         (0, 0),
-        |(start_quote_count, end_quote_count), event| match event {
-            // Replace this sequence (`>>>` syntax):
-            //     Start(BlockQuote)
-            //     Start(BlockQuote)
-            //     Start(BlockQuote)
-            //     Start(Paragraph)
-            // For `Start(CodeBlock(Fenced(Borrowed("roc"))))`
-            Event::Start(BlockQuote) => {
-                docs_parser.push(event);
-                (start_quote_count + 1, 0)
-            }
-            Event::Start(Paragraph) => {
-                if start_quote_count == 3 {
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.push(Event::Start(CodeBlock(CodeBlockKind::Fenced(
-                        CowStr::Borrowed("roc"),
-                    ))));
-                } else {
+        |(start_quote_count, end_quote_count), event| {
+            match event {
+                // Replace this sequence (`>>>` syntax):
+                //     Start(BlockQuote)
+                //     Start(BlockQuote)
+                //     Start(BlockQuote)
+                //     Start(Paragraph)
+                // For `Start(CodeBlock(Fenced(Borrowed("roc"))))`
+                Event::Start(BlockQuote) => {
                     docs_parser.push(event);
+                    (start_quote_count + 1, 0)
                 }
-                (0, 0)
-            }
-            // Replace this sequence (`>>>` syntax):
-            //     End(Paragraph)
-            //     End(BlockQuote)
-            //     End(BlockQuote)
-            //     End(BlockQuote)
-            // For `End(CodeBlock(Fenced(Borrowed("roc"))))`
-            Event::End(Paragraph) => {
-                docs_parser.push(event);
-                (0, 1)
-            }
-            Event::End(BlockQuote) => {
-                if end_quote_count == 3 {
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.push(Event::End(CodeBlock(CodeBlockKind::Fenced(
-                        CowStr::Borrowed("roc"),
-                    ))));
+                Event::Start(Paragraph) => {
+                    if start_quote_count == 3 {
+                        docs_parser.pop();
+                        docs_parser.pop();
+                        docs_parser.pop();
+                        docs_parser.push(Event::Start(CodeBlock(CodeBlockKind::Fenced(
+                            CowStr::Borrowed("roc"),
+                        ))));
+                    } else {
+                        docs_parser.push(event);
+                    }
                     (0, 0)
-                } else {
-                    docs_parser.push(event);
-                    (0, end_quote_count + 1)
                 }
-            }
-            _ => {
-                docs_parser.push(event);
-                (0, 0)
+                // Replace this sequence (`>>>` syntax):
+                //     End(Paragraph)
+                //     End(BlockQuote)
+                //     End(BlockQuote)
+                //     End(BlockQuote)
+                // For `End(CodeBlock(Fenced(Borrowed("roc"))))`
+                Event::End(Paragraph) => {
+                    docs_parser.push(event);
+                    (0, 1)
+                }
+                Event::End(BlockQuote) => {
+                    if end_quote_count == 3 {
+                        docs_parser.pop();
+                        docs_parser.pop();
+                        docs_parser.pop();
+                        docs_parser.push(Event::End(CodeBlock(CodeBlockKind::Fenced(
+                            CowStr::Borrowed("roc"),
+                        ))));
+                        (0, 0)
+                    } else {
+                        docs_parser.push(event);
+                        (0, end_quote_count + 1)
+                    }
+                }
+                _ => {
+                    docs_parser.push(event);
+                    (0, 0)
+                }
             }
         },
     );
 
     let mut docs_html = String::new();
+
     pulldown_cmark::html::push_html(&mut docs_html, docs_parser.into_iter());
 
     docs_html
