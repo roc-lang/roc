@@ -470,6 +470,36 @@ fn nested_pattern_match() {
 }
 
 #[test]
+fn if_guard_vanilla() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when "fooz" is
+                    s if s == "foo" -> 0
+                    s -> List.len (Str.toBytes s)
+                "#
+        ),
+        4,
+        i64
+    );
+}
+
+#[test]
+fn if_guard_constructor() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Identity "foobar" is
+                    Identity s if s == "foo" -> 0
+                    Identity s -> List.len (Str.toBytes s)
+                "#
+        ),
+        6,
+        i64
+    );
+}
+
+#[test]
 fn if_guard_pattern_false() {
     assert_evals_to!(
         indoc!(
