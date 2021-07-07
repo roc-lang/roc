@@ -486,17 +486,45 @@ fn if_guard_vanilla() {
 
 #[test]
 fn if_guard_constructor() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                when Identity "foobar" is
-                    Identity s if s == "foo" -> 0
-                    Identity s -> List.len (Str.toBytes s)
+    if false {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Identity 0 is
+                    Identity 0 -> 0
+                    Identity s -> s 
                 "#
-        ),
-        6,
-        i64
-    );
+            ),
+            6,
+            i64
+        );
+    } else {
+        //        assert_evals_to!(
+        //            indoc!(
+        //                r#"
+        //                when Identity "foobar" is
+        //                    Identity s if s == "foo" -> 0
+        //                    Identity z -> List.len (Str.toBytes z)
+        //                "#
+        //            ),
+        //            6,
+        //            i64
+        //        );
+
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Identity 42 is
+                    Identity 41 -> 0
+                    Identity s if s == 3 -> 0
+                    # Identity 43 -> 0
+                    Identity z -> z 
+                "#
+            ),
+            42,
+            i64
+        );
+    }
 }
 
 #[test]
