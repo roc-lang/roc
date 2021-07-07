@@ -137,6 +137,10 @@ impl<'a> Hash for Test<'a> {
 }
 
 impl<'a> Hash for GuardedTest<'a> {
+    // when two GuardedTest's contain the same test, they are equal
+    //
+    // Because a `if ...` case always comes before an equivalent pattern without it,
+    // this is safe and the `if ...` case is kept
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
             GuardedTest::TestGuarded { test, .. } => {
@@ -147,7 +151,7 @@ impl<'a> Hash for GuardedTest<'a> {
                 state.write_u8(1);
             }
             GuardedTest::TestNotGuarded { test } => {
-                state.write_u8(2);
+                state.write_u8(0);
                 test.hash(state);
             }
         }
@@ -354,12 +358,10 @@ fn tests_at_path<'a>(
     let mut all_tests = Vec::new();
 
     for branch in branches {
-        test_at_path(selected_path, branch, &mut all_tests);
+        all_tests.extend(test_at_path(selected_path, branch));
     }
 
-    // The rust HashMap also uses equality, here we really want to use the custom hash function
-    // defined on Test to determine whether a test is unique. So we have to do the hashing
-    // explicitly
+    // de-duplicate tests
 
     use std::collections::hash_map::DefaultHasher;
 
@@ -385,8 +387,7 @@ fn tests_at_path<'a>(
 fn test_at_path<'a>(
     selected_path: &[PathInstruction],
     branch: &Branch<'a>,
-    guarded_tests: &mut Vec<GuardedTest<'a>>,
-) {
+) -> Option<GuardedTest<'a>> {
     use Pattern::*;
     use Test::*;
 
@@ -395,7 +396,7 @@ fn test_at_path<'a>(
         .iter()
         .find(|(path, _, _)| path == selected_path)
     {
-        None => {}
+        None => None,
         Some((_, guard, pattern)) => {
             let test = match pattern {
                 Identifier(_) | Underscore => {
@@ -403,14 +404,14 @@ fn test_at_path<'a>(
                         id, stmt, pattern, ..
                     } = guard
                     {
-                        guarded_tests.push(GuardedTest::GuardedNoTest {
+                        return Some(GuardedTest::GuardedNoTest {
                             stmt: stmt.clone(),
                             pattern: pattern.clone(),
                             id: *id,
                         });
+                    } else {
+                        return None;
                     }
-
-                    return;
                 }
 
                 RecordDestructure(destructs, _) => {
@@ -496,7 +497,7 @@ fn test_at_path<'a>(
                 GuardedTest::TestNotGuarded { test }
             };
 
-            guarded_tests.push(guarded_test);
+            Some(guarded_test)
         }
     }
 }
@@ -1019,10 +1020,12 @@ pub fn optimize_when<'a>(
     let indexed_branches: Vec<(u64, Pattern<'a>, Stmt<'a>)> = _indexed_branches;
 
     let decision_tree = compile(patterns);
+    dbg!(&decision_tree);
     let decider = tree_to_decider(decision_tree);
 
     let symbols = decide_to_pattern_symbols(env, cond_symbol, cond_layout, &decider);
     dbg!(&symbols);
+    dbg!(&decider);
 
     // for each target (branch body), count in how many ways it can be reached
     let mut target_counts = bumpalo::vec![in env.arena; 0; indexed_branches.len()];
