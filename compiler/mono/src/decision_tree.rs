@@ -1006,6 +1006,9 @@ pub fn optimize_when<'a>(
     let decision_tree = compile(patterns);
     let decider = tree_to_decider(decision_tree);
 
+    let symbols = decide_to_pattern_symbols(env, cond_symbol, cond_layout, &decider);
+    dbg!(&symbols);
+
     // for each target (branch body), count in how many ways it can be reached
     let mut target_counts = bumpalo::vec![in env.arena; 0; indexed_branches.len()];
     count_targets(&mut target_counts, &decider);
@@ -1055,12 +1058,328 @@ struct PathInstruction {
     tag_id: u8,
 }
 
+#[derive(Debug, Clone)]
+pub enum PatternSymbols {
+    Sequence(Symbol, MutMap<u8, Vec<PatternSymbols>>),
+    Named(Symbol),
+    Empty,
+}
+
+impl PatternSymbols {
+    fn from_pattern<'a, 'b>(&'b mut self, env: &mut Env<'a, '_>, pattern: &Pattern<'a>) {
+        match pattern {
+            Pattern::Identifier(symbol) => match self {
+                PatternSymbols::Sequence(existing, _) | PatternSymbols::Named(existing) => {
+                    debug_assert_eq!(symbol, existing);
+                }
+                PatternSymbols::Empty => {
+                    *self = PatternSymbols::Named(*symbol);
+                }
+            },
+            Pattern::Underscore => {
+                // underscore does not bind a symbol
+            }
+            Pattern::IntLiteral(_)
+            | Pattern::FloatLiteral(_)
+            | Pattern::BitLiteral { .. }
+            | Pattern::EnumLiteral { .. }
+            | Pattern::StrLiteral(_) => {
+                // literals don't contain any symbols
+            }
+            Pattern::RecordDestructure(_, _) => todo!(),
+            Pattern::NewtypeDestructure {
+                tag_name,
+                arguments,
+            } => todo!(),
+            Pattern::AppliedTag {
+                tag_name,
+                tag_id,
+                arguments,
+                layout,
+                union,
+            } => {
+                todo!()
+            }
+        }
+    }
+
+    fn from_path<'a>(
+        env: &mut Env<'a, '_>,
+        path: &[PathInstruction],
+        root: Symbol,
+        root_layout: Layout,
+    ) -> Self {
+        let mut result = Self::Named(root);
+
+        Self::from_path_help(&mut result, env, path, root, root_layout);
+
+        result
+    }
+
+    fn extend_by_path<'a>(
+        &mut self,
+        env: &mut Env<'a, '_>,
+        path: &[PathInstruction],
+        root: Symbol,
+        root_layout: Layout,
+    ) {
+        Self::from_path_help(self, env, path, root, root_layout);
+    }
+
+    fn from_path_help<'a, 'b>(
+        &mut self,
+        env: &mut Env<'a, '_>,
+        path: &[PathInstruction],
+        root: Symbol,
+        root_layout: Layout,
+    ) {
+        let mut symbol = root;
+        let mut layout = root_layout;
+
+        let mut symbols = self;
+
+        // let instructions = reverse_path(path);
+        let instructions = path;
+        let mut it = instructions.iter().peekable();
+
+        while let Some(PathInstruction { index, tag_id }) = it.next() {
+            let index = *index;
+
+            match &layout {
+                Layout::Union(union_layout) => {
+                    let inner_expr = Expr::UnionAtIndex {
+                        tag_id: *tag_id,
+                        structure: symbol,
+                        index,
+                        union_layout: *union_layout,
+                    };
+
+                    let inner_layout = union_layout.layout_at(*tag_id as u8, index as usize);
+
+                    let (new_symbol, new_symbols) = symbols.step(env, *tag_id, index as usize);
+
+                    symbol = new_symbol;
+                    symbols = new_symbols;
+
+                    layout = inner_layout;
+                }
+
+                Layout::Struct(field_layouts) => {
+                    debug_assert!(field_layouts.len() > 1);
+
+                    let inner_expr = Expr::StructAtIndex {
+                        index,
+                        field_layouts,
+                        structure: symbol,
+                    };
+
+                    let inner_layout = field_layouts[index as usize];
+
+                    let (new_symbol, new_symbols) = symbols.step(env, *tag_id, index as usize);
+
+                    symbol = new_symbol;
+                    symbols = new_symbols;
+
+                    layout = inner_layout;
+                }
+
+                _ => {
+                    // this MUST be an index into a single-element (hence unwrapped) record
+
+                    debug_assert_eq!(index, 0, "{:?}", &layout);
+                    debug_assert_eq!(*tag_id, 0);
+                    debug_assert!(it.peek().is_none());
+
+                    break;
+                }
+            }
+        }
+    }
+
+    fn step<'a, 'b>(
+        &'b mut self,
+        env: &mut Env<'a, '_>,
+        tag_id: u8,
+        index: usize,
+    ) -> (Symbol, &'b mut Self) {
+        use PatternSymbols::*;
+
+        match self {
+            Empty => {
+                unreachable!()
+            }
+            Named(symbol) => {
+                let new_symbol = env.unique_symbol();
+                let mut fields = vec![PatternSymbols::Empty; index];
+                fields.push(Named(new_symbol));
+                let mut children = MutMap::default();
+
+                children.insert(tag_id, fields);
+
+                *self = Sequence(*symbol, children);
+
+                match self {
+                    Sequence(_, children) => (
+                        new_symbol,
+                        children.get_mut(&tag_id).unwrap().get_mut(index).unwrap(),
+                    ),
+                    _ => unreachable!(),
+                }
+            }
+            Sequence(_, children) => {
+                if children.contains_key(&tag_id) {
+                    let fields = children.get_mut(&tag_id).unwrap();
+                    let length = fields.len();
+
+                    match fields.get(index) {
+                        Some(PatternSymbols::Empty) => {
+                            let new_symbol = env.unique_symbol();
+
+                            let ptr = fields.get_mut(index).unwrap();
+                            *ptr = PatternSymbols::Named(env.unique_symbol());
+
+                            (new_symbol, ptr)
+                        }
+                        Some(Named(symbol)) => {
+                            let symbol = *symbol;
+
+                            let ptr = fields.get_mut(index).unwrap();
+
+                            (symbol, ptr)
+                        }
+                        Some(Sequence(symbol, _)) => {
+                            let symbol = *symbol;
+
+                            let ptr = fields.get_mut(index).unwrap();
+
+                            (symbol, ptr)
+                        }
+                        None => {
+                            for _ in length..index {
+                                fields.push(PatternSymbols::Empty);
+                            }
+
+                            let new_symbol = env.unique_symbol();
+                            fields.push(PatternSymbols::Named(new_symbol));
+
+                            return (new_symbol, fields.get_mut(index).unwrap());
+                        }
+                    }
+                } else {
+                    let new_symbol = env.unique_symbol();
+                    let mut fields = vec![PatternSymbols::Empty; index];
+                    fields.push(Named(new_symbol));
+
+                    children.insert(tag_id, fields);
+
+                    (
+                        new_symbol,
+                        children.get_mut(&tag_id).unwrap().get_mut(index).unwrap(),
+                    )
+                }
+            }
+        }
+    }
+}
+
+fn path_to_expr_help_experiment<'a>(
+    env: &mut Env<'a, '_>,
+    root: Symbol,
+    path: &[PathInstruction],
+    mut layout: Layout<'a>,
+) -> (Symbol, StoresVec<'a>, Layout<'a>) {
+    let mut symbols = PatternSymbols::Named(root);
+
+    let result = path_to_expr_help_experiment_help(env, root, path, layout, &mut symbols);
+
+    result
+}
+
+fn path_to_expr_help_experiment_help<'a>(
+    env: &mut Env<'a, '_>,
+    root: Symbol,
+    path: &[PathInstruction],
+    mut layout: Layout<'a>,
+    mut symbols: &mut PatternSymbols,
+) -> (Symbol, StoresVec<'a>, Layout<'a>) {
+    let mut stores = bumpalo::collections::Vec::new_in(env.arena);
+
+    let mut symbol = root;
+
+    // let instructions = reverse_path(path);
+    let instructions = path;
+    let mut it = instructions.iter().peekable();
+
+    while let Some(PathInstruction { index, tag_id }) = it.next() {
+        let index = *index;
+
+        match &layout {
+            Layout::Union(union_layout) => {
+                let inner_expr = Expr::UnionAtIndex {
+                    tag_id: *tag_id,
+                    structure: symbol,
+                    index,
+                    union_layout: *union_layout,
+                };
+
+                let inner_layout = union_layout.layout_at(*tag_id as u8, index as usize);
+
+                let (new_symbol, new_symbols) = symbols.step(env, *tag_id, index as usize);
+
+                symbol = new_symbol;
+                symbols = new_symbols;
+
+                // symbol = env.unique_symbol();
+                stores.push((symbol, inner_layout, inner_expr));
+
+                layout = inner_layout;
+            }
+
+            Layout::Struct(field_layouts) => {
+                debug_assert!(field_layouts.len() > 1);
+
+                let inner_expr = Expr::StructAtIndex {
+                    index,
+                    field_layouts,
+                    structure: symbol,
+                };
+
+                let inner_layout = field_layouts[index as usize];
+
+                let (new_symbol, new_symbols) = symbols.step(env, *tag_id, index as usize);
+
+                symbol = new_symbol;
+                symbols = new_symbols;
+
+                // symbol = env.unique_symbol();
+                stores.push((symbol, inner_layout, inner_expr));
+
+                layout = inner_layout;
+            }
+
+            _ => {
+                // this MUST be an index into a single-element (hence unwrapped) record
+
+                debug_assert_eq!(index, 0, "{:?}", &layout);
+                debug_assert_eq!(*tag_id, 0);
+                debug_assert!(it.peek().is_none());
+
+                break;
+            }
+        }
+    }
+
+    (symbol, stores, layout)
+}
+
 fn path_to_expr_help<'a>(
     env: &mut Env<'a, '_>,
     mut symbol: Symbol,
     path: &[PathInstruction],
     mut layout: Layout<'a>,
 ) -> (Symbol, StoresVec<'a>, Layout<'a>) {
+    return path_to_expr_help_experiment(env, symbol, path, layout);
+
     let mut stores = bumpalo::collections::Vec::new_in(env.arena);
 
     // let instructions = reverse_path(path);
@@ -1462,6 +1781,53 @@ impl<'a> ConstructorKnown<'a> {
             _ => ConstructorKnown::Neither,
         }
     }
+}
+
+fn decide_to_pattern_symbols<'a, T>(
+    env: &mut Env<'a, '_>,
+    cond_symbol: Symbol,
+    cond_layout: Layout<'a>,
+    root_decider: &Decider<'a, T>,
+) -> PatternSymbols {
+    let mut pattern_symbols = PatternSymbols::Named(cond_symbol);
+    let mut stack = vec![root_decider];
+
+    while let Some(decider) = stack.pop() {
+        match decider {
+            Decider::Leaf(_) => {}
+            Decider::Guarded {
+                success, failure, ..
+            } => {
+                stack.push(&*success);
+                stack.push(&*failure);
+            }
+
+            Decider::Chain {
+                test_chain,
+                success,
+                failure,
+            } => {
+                for (path, _) in test_chain {
+                    pattern_symbols.extend_by_path(env, path, cond_symbol, cond_layout);
+                }
+
+                stack.push(&*success);
+                stack.push(&*failure);
+            }
+            Decider::FanOut {
+                path,
+                tests,
+                fallback,
+            } => {
+                pattern_symbols.extend_by_path(env, path, cond_symbol, cond_layout);
+
+                stack.extend(tests.iter().map(|t| &t.1));
+                stack.push(&*fallback);
+            }
+        }
+    }
+
+    pattern_symbols
 }
 
 // TODO procs and layout are currently unused, but potentially required
