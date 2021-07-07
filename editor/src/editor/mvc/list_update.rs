@@ -164,7 +164,7 @@ pub fn add_blank_child(
         .fail(),
     }?;
 
-    let new_mark_children = make_mark_children(
+    let new_mark_children = update_mark_children(
         new_child_index,
         blank_elt_id,
         list_ast_node_id,
@@ -182,7 +182,8 @@ pub fn add_blank_child(
     Ok(InputOutcome::Accepted)
 }
 
-pub fn make_mark_children(
+// add a Blank child to the Nested mark node and update the caret
+pub fn update_mark_children(
     new_child_index: usize,
     blank_elt_id: ExprId,
     list_ast_node_id: ExprId,

@@ -135,7 +135,7 @@ impl<'a> EdModel<'a> {
         self.grid_node_map.node_exists_at_pos(self.get_caret())
     }
 
-    // return (index of child in list of children, index of child in list of children of ast node) of MarkupNode at current caret position
+    // return (index of child in list of children, closest ast index of child corresponding to ast node) of MarkupNode at current caret position
     pub fn get_curr_child_indices(&self) -> EdResult<(usize, usize)> {
         if self.node_exists_at_caret() {
             let curr_mark_node_id = self.get_curr_mark_node_id()?;

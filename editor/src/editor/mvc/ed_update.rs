@@ -696,16 +696,13 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                 Expr2::List{ elem_var: _, elems: _} => {
                                                     let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
 
-                                                    if prev_mark_node.get_content()? == nodes::LEFT_SQUARE_BR {
-                                                        if curr_mark_node.get_content()? == nodes::RIGHT_SQUARE_BR {
-                                                            // based on if, we are at the start of the list
-                                                            let new_child_index = 1;
-                                                            let new_ast_child_index = 0;
-                                                            add_blank_child(new_child_index, new_ast_child_index, ed_model)?; // insert a Blank first, this results in cleaner code
-                                                            handle_new_char(received_char, ed_model)?
-                                                        } else {
-                                                            InputOutcome::Ignored
-                                                        }
+                                                    if prev_mark_node.get_content()? == nodes::LEFT_SQUARE_BR && curr_mark_node.get_content()? == nodes::RIGHT_SQUARE_BR {
+                                                        // based on if, we are at the start of the list
+                                                        let new_child_index = 1;
+                                                        let new_ast_child_index = 0;
+                                                        // insert a Blank first, this results in cleaner code
+                                                        add_blank_child(new_child_index, new_ast_child_index, ed_model)?;
+                                                        handle_new_char(received_char, ed_model)?
                                                     } else {
                                                         InputOutcome::Ignored
                                                     }
@@ -773,22 +770,19 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                 } else if "\"{[".contains(*ch) {
                                     let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
 
-                                    if prev_mark_node.get_content()? == nodes::LEFT_SQUARE_BR {
-                                        if curr_mark_node.get_content()? == nodes::RIGHT_SQUARE_BR {
-                                            let (new_child_index, new_ast_child_index) = ed_model.get_curr_child_indices()?;
-                                            // insert a Blank first, this results in cleaner code
-                                            add_blank_child(
-                                                new_child_index,
-                                                new_ast_child_index,
-                                                ed_model
-                                            )?;
-                                            handle_new_char(received_char, ed_model)?
-                                        } else {
-                                            InputOutcome::Ignored
-                                        }
+                                    if prev_mark_node.get_content()? == nodes::LEFT_SQUARE_BR && curr_mark_node.get_content()? == nodes::RIGHT_SQUARE_BR {
+                                        let (new_child_index, new_ast_child_index) = ed_model.get_curr_child_indices()?;
+                                        // insert a Blank first, this results in cleaner code
+                                        add_blank_child(
+                                            new_child_index,
+                                            new_ast_child_index,
+                                            ed_model
+                                        )?;
+                                        handle_new_char(received_char, ed_model)?
                                     } else {
                                         InputOutcome::Ignored
                                     }
+
                                 } else {
                                     InputOutcome::Ignored
                                 }

@@ -166,9 +166,9 @@ where
         p.build()?
     };
 
-    /*if DEBUG {
+    if DEBUG {
         eprintln!("{}", program.to_source_string());
-    }*/
+    }
 
     morphic_lib::solve(program)
 }

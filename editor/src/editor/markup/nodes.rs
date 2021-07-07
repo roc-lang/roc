@@ -75,7 +75,7 @@ impl MarkupNode {
         }
     }
 
-    // return (index of child in list of children, index of child in list of children of ast node)
+    // return (index of child in list of children, closest ast index of child corresponding to ast node)
     pub fn get_child_indices(
         &self,
         child_id: MarkNodeId,
