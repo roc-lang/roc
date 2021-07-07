@@ -19,7 +19,7 @@ use roc_types::subs::{Content, FlatType, Subs, Variable};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
-pub const PRETTY_PRINT_IR_SYMBOLS: bool = true;
+pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
 
 macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr) => {
@@ -5096,20 +5096,21 @@ fn from_can_when<'a>(
                     jump,
                 );
 
-                let new_guard_stmt =
-                    store_pattern(env, procs, layout_cache, &pattern, cond_symbol, guard_stmt);
+                // let new_guard_stmt = store_pattern(env, procs, layout_cache, &pattern, cond_symbol, guard_stmt);
+                let new_guard_stmt = guard_stmt;
                 (
-                    pattern,
+                    pattern.clone(),
                     Guard::Guard {
                         id,
                         symbol,
                         stmt: new_guard_stmt,
+                        pattern,
                     },
                     branch_stmt,
                 )
             } else {
-                let new_branch_stmt =
-                    store_pattern(env, procs, layout_cache, &pattern, cond_symbol, branch_stmt);
+                // let new_branch_stmt = store_pattern(env, procs, layout_cache, &pattern, cond_symbol, branch_stmt);
+                let new_branch_stmt = branch_stmt;
                 (pattern, Guard::NoGuard, new_branch_stmt)
             }
         });
@@ -5510,7 +5511,7 @@ fn substitute_in_expr<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn store_pattern<'a>(
+pub fn store_pattern<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,

@@ -39,6 +39,7 @@ pub enum Guard<'a> {
         /// after assigning to symbol, the stmt jumps to this label
         id: JoinPointId,
         stmt: Stmt<'a>,
+        pattern: Pattern<'a>,
     },
 }
 
@@ -64,12 +65,14 @@ enum GuardedTest<'a> {
         test: Test<'a>,
 
         /// after assigning to symbol, the stmt jumps to this label
+        pattern: Pattern<'a>,
         id: JoinPointId,
         stmt: Stmt<'a>,
     },
     // e.g. `_ if True -> ...`
     GuardedNoTest {
         /// after assigning to symbol, the stmt jumps to this label
+        pattern: Pattern<'a>,
         id: JoinPointId,
         stmt: Stmt<'a>,
     },
@@ -396,9 +399,13 @@ fn test_at_path<'a>(
         Some((_, guard, pattern)) => {
             let test = match pattern {
                 Identifier(_) | Underscore => {
-                    if let Guard::Guard { id, stmt, .. } = guard {
+                    if let Guard::Guard {
+                        id, stmt, pattern, ..
+                    } = guard
+                    {
                         guarded_tests.push(GuardedTest::GuardedNoTest {
                             stmt: stmt.clone(),
+                            pattern: pattern.clone(),
                             id: *id,
                         });
                     }
@@ -475,9 +482,13 @@ fn test_at_path<'a>(
                 StrLiteral(v) => IsStr(v.clone()),
             };
 
-            let guarded_test = if let Guard::Guard { id, stmt, .. } = guard {
+            let guarded_test = if let Guard::Guard {
+                id, stmt, pattern, ..
+            } = guard
+            {
                 GuardedTest::TestGuarded {
                     test,
+                    pattern: pattern.clone(),
                     stmt: stmt.clone(),
                     id: *id,
                 }
@@ -958,6 +969,7 @@ enum Decider<'a, T> {
     Leaf(T),
     Guarded {
         /// after assigning to symbol, the stmt jumps to this label
+        pattern: Pattern<'a>,
         id: JoinPointId,
         stmt: Stmt<'a>,
 
@@ -997,11 +1009,14 @@ pub fn optimize_when<'a>(
         .into_iter()
         .enumerate()
         .map(|(index, (pattern, guard, branch))| {
-            ((guard, pattern, index as u64), (index as u64, branch))
+            (
+                (guard, pattern.clone(), index as u64),
+                (index as u64, pattern, branch),
+            )
         })
         .unzip();
 
-    let indexed_branches: Vec<(u64, Stmt<'a>)> = _indexed_branches;
+    let indexed_branches: Vec<(u64, Pattern<'a>, Stmt<'a>)> = _indexed_branches;
 
     let decision_tree = compile(patterns);
     let decider = tree_to_decider(decision_tree);
@@ -1016,8 +1031,12 @@ pub fn optimize_when<'a>(
     let mut choices = MutMap::default();
     let mut jumps = Vec::new();
 
-    for (index, branch) in indexed_branches.into_iter() {
-        let ((branch_index, choice), opt_jump) = create_choices(&target_counts, index, branch);
+    for (index, pattern, branch) in indexed_branches.into_iter() {
+        // destructure the pattern into Let's
+        let stmt =
+            crate::ir::store_pattern(env, procs, layout_cache, &pattern, cond_symbol, branch);
+
+        let ((branch_index, choice), opt_jump) = create_choices(&target_counts, index, stmt);
 
         if let Some((index, body)) = opt_jump {
             let id = JoinPointId(env.unique_symbol());
@@ -1861,6 +1880,7 @@ fn decide_to_branching<'a>(
         Guarded {
             id,
             stmt,
+            pattern,
             success,
             failure,
         } => {
@@ -1905,6 +1925,10 @@ fn decide_to_branching<'a>(
                 layout: Layout::Builtin(Builtin::Int1),
                 borrow: false,
             };
+
+            // assign variables bound in the pattern
+            let stmt =
+                crate::ir::store_pattern(env, procs, layout_cache, &pattern, cond_symbol, stmt);
 
             Stmt::Join {
                 id,
@@ -2219,10 +2243,16 @@ fn fanout_decider_help<'a>(
     let decider = tree_to_decider(dectree);
 
     match guarded_test {
-        GuardedTest::TestGuarded { test, id, stmt } => {
+        GuardedTest::TestGuarded {
+            test,
+            id,
+            stmt,
+            pattern,
+        } => {
             let guarded = Decider::Guarded {
                 id,
                 stmt,
+                pattern,
                 success: Box::new(decider),
                 failure: Box::new(fallback_decider.clone()),
             };
@@ -2243,13 +2273,19 @@ fn chain_decider<'a>(
     success_tree: DecisionTree<'a>,
 ) -> Decider<'a, u64> {
     match guarded_test {
-        GuardedTest::TestGuarded { test, id, stmt } => {
+        GuardedTest::TestGuarded {
+            test,
+            id,
+            stmt,
+            pattern,
+        } => {
             let failure = Box::new(tree_to_decider(failure_tree));
             let success = Box::new(tree_to_decider(success_tree));
 
             let guarded = Decider::Guarded {
                 id,
                 stmt,
+                pattern,
                 success,
                 failure: failure.clone(),
             };
@@ -2260,13 +2296,14 @@ fn chain_decider<'a>(
                 failure,
             }
         }
-        GuardedTest::GuardedNoTest { id, stmt } => {
+        GuardedTest::GuardedNoTest { id, stmt, pattern } => {
             let failure = Box::new(tree_to_decider(failure_tree));
             let success = Box::new(tree_to_decider(success_tree));
 
             Decider::Guarded {
                 id,
                 stmt,
+                pattern,
                 success,
                 failure: failure.clone(),
             }
@@ -2388,11 +2425,13 @@ fn insert_choices<'a>(
         Guarded {
             id,
             stmt,
+            pattern,
             success,
             failure,
         } => Guarded {
             id,
             stmt,
+            pattern,
             success: Box::new(insert_choices(choice_dict, *success)),
             failure: Box::new(insert_choices(choice_dict, *failure)),
         },
