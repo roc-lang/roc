@@ -435,6 +435,12 @@ pub fn expr2_to_markup<'a, 'b>(
             syn_high_style: HighlightStyle::Blank,
             parent_id_opt: None,
         }),
+        Expr2::RuntimeError() => new_markup_node(
+            "RunTimeError".to_string(),
+            expr2_node_id,
+            HighlightStyle::Blank,
+            markup_node_pool,
+        ),
         rest => todo!("implement expr2_to_markup for {:?}", rest),
     }
 }

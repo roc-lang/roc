@@ -1,7 +1,7 @@
 use crate::debug_info_init;
 use crate::llvm::build::{
-    add_func, cast_basic_basic, cast_block_of_memory_to_tag, get_tag_id, Env, FAST_CALL_CONV,
-    LLVM_SADD_WITH_OVERFLOW_I64, TAG_DATA_INDEX, TAG_ID_INDEX,
+    add_func, cast_basic_basic, cast_block_of_memory_to_tag, get_tag_id, get_tag_id_non_recursive,
+    Env, FAST_CALL_CONV, LLVM_SADD_WITH_OVERFLOW_I64, TAG_DATA_INDEX,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
 use crate::llvm::convert::{
@@ -1394,6 +1394,9 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
     // next, make a jump table for all possible values of the tag_id
     let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
+    let tag_id_int_type =
+        basic_type_from_layout(env, &union_layout.tag_id_layout()).into_int_type();
+
     for (tag_id, field_layouts) in tags.iter().enumerate() {
         // if none of the fields are or contain anything refcounted, just move on
         if !field_layouts
@@ -1439,11 +1442,16 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
                 debug_assert!(ptr_as_i64_ptr.is_pointer_value());
 
                 // therefore we must cast it to our desired type
-
                 let union_type = match union_layout {
                     UnionLayout::NonRecursive(_) => unreachable!(),
                     UnionLayout::Recursive(_) | UnionLayout::NullableWrapped { .. } => {
-                        union_data_block_of_memory(env.context, tags, env.ptr_bytes).into()
+                        union_data_block_of_memory(
+                            env.context,
+                            tag_id_int_type,
+                            tags,
+                            env.ptr_bytes,
+                        )
+                        .into()
                     }
                     UnionLayout::NonNullableUnwrapped { .. }
                     | UnionLayout::NullableUnwrapped { .. } => {
@@ -1501,10 +1509,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         // this function returns void
         builder.build_return(None);
 
-        cases.push((
-            env.context.i64_type().const_int(tag_id as u64, false),
-            block,
-        ));
+        cases.push((tag_id_int_type.const_int(tag_id as u64, false), block));
     }
 
     env.builder.position_at_end(match_block);
@@ -1520,8 +1525,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         env.builder.build_unconditional_branch(only_branch);
     } else {
         // read the tag_id
-        let current_tag_id =
-            get_tag_id(env, parent, &union_layout, value_ptr.into()).into_int_value();
+        let current_tag_id = get_tag_id(env, parent, &union_layout, value_ptr.into());
 
         let merge_block = env.context.append_basic_block(parent, "decrement_merge");
 
@@ -1639,11 +1643,7 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
     let wrapper_struct = arg_val.into_struct_value();
 
     // read the tag_id
-    let tag_id = env
-        .builder
-        .build_extract_value(wrapper_struct, TAG_ID_INDEX, "read_tag_id")
-        .unwrap()
-        .into_int_value();
+    let tag_id = get_tag_id_non_recursive(env, wrapper_struct);
 
     let tag_id_u8 = env
         .builder

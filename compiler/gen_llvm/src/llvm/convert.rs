@@ -33,6 +33,9 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
         Struct(sorted_fields) => basic_type_from_record(env, sorted_fields),
         Union(variant) => {
             use UnionLayout::*;
+
+            let tag_id_type = basic_type_from_layout(env, &variant.tag_id_layout());
+
             match variant {
                 NullableWrapped {
                     other_tags: tags, ..
@@ -40,7 +43,7 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
                     let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
 
                     env.context
-                        .struct_type(&[data, env.context.i64_type().into()], false)
+                        .struct_type(&[data, tag_id_type], false)
                         .ptr_type(AddressSpace::Generic)
                         .into()
                 }
@@ -57,16 +60,14 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
                     let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
 
                     env.context
-                        .struct_type(&[data, env.context.i64_type().into()], false)
+                        .struct_type(&[data, tag_id_type], false)
                         .ptr_type(AddressSpace::Generic)
                         .into()
                 }
                 NonRecursive(tags) => {
                     let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
 
-                    env.context
-                        .struct_type(&[data, env.context.i64_type().into()], false)
-                        .into()
+                    env.context.struct_type(&[data, tag_id_type], false).into()
                 }
             }
         }
@@ -146,12 +147,12 @@ pub fn union_data_is_struct_type<'ctx>(
 
 pub fn union_data_block_of_memory<'ctx>(
     context: &'ctx Context,
+    tag_id_int_type: IntType<'ctx>,
     layouts: &[&[Layout<'_>]],
     ptr_bytes: u32,
 ) -> StructType<'ctx> {
-    let tag_id_type = context.i64_type();
     let data_type = block_of_memory_slices(context, layouts, ptr_bytes);
-    context.struct_type(&[data_type, tag_id_type.into()], false)
+    context.struct_type(&[data_type, tag_id_int_type.into()], false)
 }
 
 pub fn block_of_memory<'ctx>(

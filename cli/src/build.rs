@@ -26,6 +26,16 @@ pub enum BuildOutcome {
     Errors,
 }
 
+impl BuildOutcome {
+    pub fn status_code(&self) -> i32 {
+        match self {
+            Self::NoProblems => 0,
+            Self::OnlyWarnings => 1,
+            Self::Errors => 2,
+        }
+    }
+}
+
 pub struct BuiltFile {
     pub binary_path: PathBuf,
     pub outcome: BuildOutcome,
@@ -205,10 +215,14 @@ pub fn build_file<'a>(
     let total_time = compilation_start.elapsed().unwrap();
 
     // If the cmd errored out, return the Err.
-    cmd_result?;
+    let exit_status = cmd_result?;
 
     // TODO change this to report whether there were errors or warnings!
-    let outcome = BuildOutcome::NoProblems;
+    let outcome = if exit_status.success() {
+        BuildOutcome::NoProblems
+    } else {
+        BuildOutcome::Errors
+    };
 
     Ok(BuiltFile {
         binary_path,

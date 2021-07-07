@@ -632,6 +632,7 @@ pub fn int_with_precision<'a, 'ctx, 'env>(
         Builtin::Int32 => env.context.i32_type().const_int(value as u64, false),
         Builtin::Int16 => env.context.i16_type().const_int(value as u64, false),
         Builtin::Int8 => env.context.i8_type().const_int(value as u64, false),
+        Builtin::Int1 => env.context.bool_type().const_int(value as u64, false),
         _ => panic!("Invalid layout for int literal = {:?}", precision),
     }
 }
@@ -1081,8 +1082,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     let field_layouts = tag_layouts[*tag_id as usize];
 
+                    let tag_id_type =
+                        basic_type_from_layout(env, &union_layout.tag_id_layout()).into_int_type();
+
                     lookup_at_index_ptr2(
                         env,
+                        tag_id_type,
                         field_layouts,
                         *index as usize,
                         argument.into_pointer_value(),
@@ -1117,8 +1122,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     let field_layouts = other_tags[tag_index as usize];
 
+                    let tag_id_type =
+                        basic_type_from_layout(env, &union_layout.tag_id_layout()).into_int_type();
+
                     lookup_at_index_ptr2(
                         env,
+                        tag_id_type,
                         field_layouts,
                         *index as usize,
                         argument.into_pointer_value(),
@@ -1156,7 +1165,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             // cast the argument bytes into the desired shape for this tag
             let (argument, _structure_layout) = load_symbol_and_layout(scope, structure);
 
-            get_tag_id(env, parent, union_layout, argument)
+            get_tag_id(env, parent, &union_layout, argument).into()
         }
     }
 }
@@ -1169,8 +1178,10 @@ pub fn build_tag<'a, 'ctx, 'env>(
     tag_id: u8,
     arguments: &[Symbol],
 ) -> BasicValueEnum<'ctx> {
+    let tag_id_layout = union_layout.tag_id_layout();
+
     match union_layout {
-        UnionLayout::NonRecursive(fields) => {
+        UnionLayout::NonRecursive(tags) => {
             debug_assert!(union_size > 1);
 
             let ctx = env.context;
@@ -1181,7 +1192,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
             let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
             let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
 
-            let tag_field_layouts = &fields[tag_id as usize];
+            let tag_field_layouts = &tags[tag_id as usize];
 
             for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
                 let (val, _val_layout) = load_symbol_and_layout(scope, field_symbol);
@@ -1237,10 +1248,10 @@ pub fn build_tag<'a, 'ctx, 'env>(
             // This tricks comes from
             // https://github.com/raviqqe/ssf/blob/bc32aae68940d5bddf5984128e85af75ca4f4686/ssf-llvm/src/expression_compiler.rs#L116
 
-            let internal_type = block_of_memory_slices(env.context, fields, env.ptr_bytes);
+            let internal_type = block_of_memory_slices(env.context, tags, env.ptr_bytes);
 
             let data = cast_tag_to_block_of_memory(builder, struct_val, internal_type);
-            let tag_id_type = env.context.i64_type();
+            let tag_id_type = basic_type_from_layout(env, &tag_id_layout).into_int_type();
             let wrapper_type = env
                 .context
                 .struct_type(&[data.get_type(), tag_id_type.into()], false);
@@ -1248,8 +1259,8 @@ pub fn build_tag<'a, 'ctx, 'env>(
             let tag_id_intval = tag_id_type.const_int(tag_id as u64, false);
 
             let field_vals = [
-                (TAG_ID_INDEX as usize, tag_id_intval.into()),
                 (TAG_DATA_INDEX as usize, data),
+                (TAG_ID_INDEX as usize, tag_id_intval.into()),
             ];
 
             struct_from_fields(env, wrapper_type, field_vals.iter().copied()).into()
@@ -1301,7 +1312,8 @@ pub fn build_tag<'a, 'ctx, 'env>(
                 .build_struct_gep(raw_data_ptr, TAG_ID_INDEX, "tag_id_index")
                 .unwrap();
 
-            let tag_id_type = env.context.i64_type();
+            let tag_id_type = basic_type_from_layout(env, &tag_id_layout).into_int_type();
+
             env.builder
                 .build_store(tag_id_ptr, tag_id_type.const_int(tag_id as u64, false));
 
@@ -1463,7 +1475,8 @@ pub fn build_tag<'a, 'ctx, 'env>(
                 .build_struct_gep(raw_data_ptr, TAG_ID_INDEX, "tag_id_index")
                 .unwrap();
 
-            let tag_id_type = env.context.i64_type();
+            let tag_id_type = basic_type_from_layout(env, &tag_id_layout).into_int_type();
+
             env.builder
                 .build_store(tag_id_ptr, tag_id_type.const_int(tag_id as u64, false));
 
@@ -1584,20 +1597,20 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     union_layout: &UnionLayout<'a>,
     argument: BasicValueEnum<'ctx>,
-) -> BasicValueEnum<'ctx> {
+) -> IntValue<'ctx> {
     let builder = env.builder;
+
+    let tag_id_layout = union_layout.tag_id_layout();
+    let tag_id_int_type = basic_type_from_layout(env, &tag_id_layout).into_int_type();
+
     match union_layout {
         UnionLayout::NonRecursive(_) => {
             let tag = argument.into_struct_value();
 
-            builder
-                .build_extract_value(tag, TAG_ID_INDEX, "get_tag_id")
-                .unwrap()
+            get_tag_id_non_recursive(env, tag)
         }
-        UnionLayout::Recursive(_) => {
-            extract_tag_discriminant_ptr2(env, argument.into_pointer_value()).into()
-        }
-        UnionLayout::NonNullableUnwrapped(_) => env.context.i64_type().const_zero().into(),
+        UnionLayout::Recursive(_) => get_tag_id_wrapped(env, argument.into_pointer_value()),
+        UnionLayout::NonNullableUnwrapped(_) => tag_id_int_type.const_zero(),
         UnionLayout::NullableWrapped { nullable_id, .. } => {
             let argument_ptr = argument.into_pointer_value();
             let is_null = env.builder.build_is_null(argument_ptr, "is_null");
@@ -1607,40 +1620,41 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
             let else_block = ctx.append_basic_block(parent, "else");
             let cont_block = ctx.append_basic_block(parent, "cont");
 
-            let result = builder.build_alloca(ctx.i64_type(), "result");
+            let result = builder.build_alloca(tag_id_int_type, "result");
 
             env.builder
                 .build_conditional_branch(is_null, then_block, else_block);
 
             {
                 env.builder.position_at_end(then_block);
-                let tag_id = ctx.i64_type().const_int(*nullable_id as u64, false);
+                let tag_id = tag_id_int_type.const_int(*nullable_id as u64, false);
                 env.builder.build_store(result, tag_id);
                 env.builder.build_unconditional_branch(cont_block);
             }
 
             {
                 env.builder.position_at_end(else_block);
-                let tag_id = extract_tag_discriminant_ptr2(env, argument_ptr);
+                let tag_id = get_tag_id_wrapped(env, argument_ptr);
                 env.builder.build_store(result, tag_id);
                 env.builder.build_unconditional_branch(cont_block);
             }
 
             env.builder.position_at_end(cont_block);
 
-            env.builder.build_load(result, "load_result")
+            env.builder
+                .build_load(result, "load_result")
+                .into_int_value()
         }
         UnionLayout::NullableUnwrapped { nullable_id, .. } => {
             let argument_ptr = argument.into_pointer_value();
             let is_null = env.builder.build_is_null(argument_ptr, "is_null");
 
-            let ctx = env.context;
-
-            let then_value = ctx.i64_type().const_int(*nullable_id as u64, false);
-            let else_value = ctx.i64_type().const_int(!*nullable_id as u64, false);
+            let then_value = tag_id_int_type.const_int(*nullable_id as u64, false);
+            let else_value = tag_id_int_type.const_int(!*nullable_id as u64, false);
 
             env.builder
                 .build_select(is_null, then_value, else_value, "select_tag_id")
+                .into_int_value()
         }
     }
 }
@@ -1686,6 +1700,7 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
 
 fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    tag_id_type: IntType<'ctx>,
     field_layouts: &[Layout<'_>],
     index: usize,
     value: PointerValue<'ctx>,
@@ -1695,7 +1710,6 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
     let struct_layout = Layout::Struct(field_layouts);
     let struct_type = basic_type_from_layout(env, &struct_layout);
 
-    let tag_id_type = env.context.i64_type();
     let wrapper_type = env
         .context
         .struct_type(&[struct_type, tag_id_type.into()], false);
@@ -1723,8 +1737,8 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
         // a recursive field is stored as a `i64*`, to use it we must cast it to
         // a pointer to the block of memory representation
 
-        let struct_type = block_of_memory_slices(env.context, &[field_layouts], env.ptr_bytes);
-        let tag_id_type = env.context.i64_type();
+        let tags = &[field_layouts];
+        let struct_type = block_of_memory_slices(env.context, tags, env.ptr_bytes);
 
         let opaque_wrapper_type = env
             .context
@@ -1759,15 +1773,11 @@ fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx, 'env>(
 ) -> PointerValue<'ctx> {
     let block_type = block_of_memory_slices(env.context, fields, env.ptr_bytes);
 
-    let tag_id_stack_size = union_layout
-        .tag_id_layout()
-        .map(|l| l.stack_size(env.ptr_bytes));
-
-    let basic_type = if tag_id_stack_size.is_some() {
-        let tag_id_type = env.context.i64_type();
+    let basic_type = if union_layout.stores_tag_id() {
+        let tag_id_type = basic_type_from_layout(env, &union_layout.tag_id_layout());
 
         env.context
-            .struct_type(&[block_type, tag_id_type.into()], false)
+            .struct_type(&[block_type, tag_id_type], false)
             .into()
     } else {
         block_type
@@ -1779,7 +1789,9 @@ fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx, 'env>(
         .max()
         .unwrap_or_default();
 
-    stack_size += tag_id_stack_size.unwrap_or_default();
+    if union_layout.stores_tag_id() {
+        stack_size += union_layout.tag_id_layout().stack_size(env.ptr_bytes);
+    }
 
     let alignment_bytes = fields
         .iter()
@@ -2545,16 +2557,8 @@ pub fn complex_bitcast<'ctx>(
     }
 }
 
-pub fn extract_tag_discriminant<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    union_layout: UnionLayout<'a>,
-    cond_value: BasicValueEnum<'ctx>,
-) -> IntValue<'ctx> {
-    get_tag_id(env, parent, &union_layout, cond_value).into_int_value()
-}
-
-fn extract_tag_discriminant_ptr2<'a, 'ctx, 'env>(
+/// get the tag id out of a pointer to a wrapped (i.e. stores the tag id at runtime) layout
+fn get_tag_id_wrapped<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     from_value: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
@@ -2565,6 +2569,16 @@ fn extract_tag_discriminant_ptr2<'a, 'ctx, 'env>(
 
     env.builder
         .build_load(tag_id_ptr, "load_tag_id")
+        .into_int_value()
+}
+
+pub fn get_tag_id_non_recursive<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    tag: StructValue<'ctx>,
+) -> IntValue<'ctx> {
+    env.builder
+        .build_extract_value(tag, TAG_ID_INDEX, "get_tag_id")
+        .unwrap()
         .into_int_value()
 }
 
@@ -2647,7 +2661,7 @@ fn build_switch_ir<'a, 'ctx, 'env>(
         Layout::Union(variant) => {
             cond_layout = Layout::Builtin(Builtin::Int64);
 
-            extract_tag_discriminant(env, parent, variant, cond_value)
+            get_tag_id(env, parent, &variant, cond_value)
         }
         Layout::Builtin(_) => cond_value.into_int_value(),
         other => todo!("Build switch value from layout: {:?}", other),
@@ -2720,18 +2734,14 @@ fn build_switch_ir<'a, 'ctx, 'env>(
             //   ]
             //
             // they either need to all be i8, or i64
-            let int_val = match cond_layout {
-                Layout::Builtin(Builtin::Usize) => {
-                    ptr_int(env.context, env.ptr_bytes).const_int(*int as u64, false)
-                }
-                Layout::Builtin(Builtin::Int64) => context.i64_type().const_int(*int as u64, false),
-                Layout::Builtin(Builtin::Int128) => const_i128(env, *int as i128),
-                Layout::Builtin(Builtin::Int32) => context.i32_type().const_int(*int as u64, false),
-                Layout::Builtin(Builtin::Int16) => context.i16_type().const_int(*int as u64, false),
-                Layout::Builtin(Builtin::Int8) => context.i8_type().const_int(*int as u64, false),
-                Layout::Builtin(Builtin::Int1) => context.bool_type().const_int(*int as u64, false),
-                _ => panic!("Can't cast to cond_layout = {:?}", cond_layout),
+            let condition_int_type = cond.get_type();
+
+            let int_val = if condition_int_type == context.i128_type() {
+                const_i128(env, *int as i128)
+            } else {
+                condition_int_type.const_int(*int as u64, false)
             };
+
             let block = context.append_basic_block(parent, format!("branch{}", int).as_str());
 
             cases.push((int_val, block));
@@ -4190,7 +4200,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
                     dict_walk(
                         env,
-                        layout_ids,
                         roc_function_call,
                         dict,
                         default,
