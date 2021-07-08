@@ -1,6 +1,6 @@
 use crate::llvm::bitcode::call_bitcode_fn;
 use crate::llvm::build::Env;
-use crate::llvm::build::{cast_block_of_memory_to_tag, complex_bitcast, FAST_CALL_CONV};
+use crate::llvm::build::{cast_block_of_memory_to_tag, get_tag_id, FAST_CALL_CONV};
 use crate::llvm::build_list::{list_len, load_list_ptr};
 use crate::llvm::build_str::str_equal;
 use crate::llvm::convert::basic_type_from_layout;
@@ -850,9 +850,8 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
     match union_layout {
         NonRecursive(tags) => {
-            // SAFETY we know that non-recursive tags cannot be NULL
-            let id1 = nonrec_tag_id(env, tag1.into_struct_value());
-            let id2 = nonrec_tag_id(env, tag2.into_struct_value());
+            let id1 = get_tag_id(env, parent, union_layout, tag1);
+            let id2 = get_tag_id(env, parent, union_layout, tag2);
 
             let compare_tag_fields = ctx.append_basic_block(parent, "compare_tag_fields");
 
@@ -901,10 +900,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
                 env.builder.build_return(Some(&answer));
 
-                cases.push((
-                    env.context.i64_type().const_int(tag_id as u64, false),
-                    block,
-                ));
+                cases.push((id1.get_type().const_int(tag_id as u64, false), block));
             }
 
             env.builder.position_at_end(compare_tag_fields);
@@ -930,9 +926,8 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             env.builder.position_at_end(compare_tag_ids);
 
-            // SAFETY we know that non-recursive tags cannot be NULL
-            let id1 = unsafe { rec_tag_id_unsafe(env, tag1.into_pointer_value()) };
-            let id2 = unsafe { rec_tag_id_unsafe(env, tag2.into_pointer_value()) };
+            let id1 = get_tag_id(env, parent, union_layout, tag1);
+            let id2 = get_tag_id(env, parent, union_layout, tag2);
 
             let compare_tag_fields = ctx.append_basic_block(parent, "compare_tag_fields");
 
@@ -964,10 +959,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
                 env.builder.build_return(Some(&answer));
 
-                cases.push((
-                    env.context.i64_type().const_int(tag_id as u64, false),
-                    block,
-                ));
+                cases.push((id1.get_type().const_int(tag_id as u64, false), block));
             }
 
             env.builder.position_at_end(compare_tag_fields);
@@ -977,9 +969,6 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
             env.builder.build_switch(id1, default, &cases);
         }
         NullableUnwrapped { other_fields, .. } => {
-            // drop the tag id; it is not stored
-            let other_fields = &other_fields[1..];
-
             let ptr_equal = env.builder.build_int_compare(
                 IntPredicate::EQ,
                 env.builder
@@ -1085,9 +1074,8 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             env.builder.position_at_end(compare_other);
 
-            // SAFETY we know at this point that tag1/tag2 are not NULL
-            let id1 = unsafe { rec_tag_id_unsafe(env, tag1.into_pointer_value()) };
-            let id2 = unsafe { rec_tag_id_unsafe(env, tag2.into_pointer_value()) };
+            let id1 = get_tag_id(env, parent, union_layout, tag1);
+            let id2 = get_tag_id(env, parent, union_layout, tag2);
 
             let compare_tag_fields = ctx.append_basic_block(parent, "compare_tag_fields");
 
@@ -1120,10 +1108,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
                 env.builder.build_return(Some(&answer));
 
-                cases.push((
-                    env.context.i64_type().const_int(tag_id as u64, false),
-                    block,
-                ));
+                cases.push((id1.get_type().const_int(tag_id as u64, false), block));
             }
 
             env.builder.position_at_end(compare_tag_fields);
@@ -1214,33 +1199,4 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
         struct2,
     )
     .into_int_value()
-}
-
-fn nonrec_tag_id<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    tag: StructValue<'ctx>,
-) -> IntValue<'ctx> {
-    complex_bitcast(
-        env.builder,
-        tag.into(),
-        env.context.i64_type().into(),
-        "load_tag_id",
-    )
-    .into_int_value()
-}
-
-unsafe fn rec_tag_id_unsafe<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    tag: PointerValue<'ctx>,
-) -> IntValue<'ctx> {
-    let ptr = env
-        .builder
-        .build_bitcast(
-            tag,
-            env.context.i64_type().ptr_type(AddressSpace::Generic),
-            "cast_for_tag_id",
-        )
-        .into_pointer_value();
-
-    env.builder.build_load(ptr, "load_tag_id").into_int_value()
 }

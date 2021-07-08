@@ -46,10 +46,13 @@ impl Def {
 
         match self {
             Def::AnnotationOnly { .. } => todo!("lost pattern information here ... "),
-            Def::Value(ValueDef { pattern, .. }) => {
-                let pattern2 = &pool[*pattern];
-                output.extend(symbols_from_pattern(pool, pattern2));
-            }
+            Def::Value(value_def) => match value_def {
+                ValueDef::WithAnnotation { pattern_id, .. }
+                | ValueDef::NoAnnotation { pattern_id, .. } => {
+                    let pattern2 = &pool[*pattern_id];
+                    output.extend(symbols_from_pattern(pool, pattern2));
+                }
+            },
             Def::Function(function_def) => match function_def {
                 FunctionDef::NoAnnotation { name, .. }
                 | FunctionDef::WithAnnotation { name, .. } => {
@@ -79,7 +82,7 @@ impl ShallowClone for Def {
 /// but no Expr canonicalization has happened yet. Also, it has had spaces
 /// and nesting resolved, and knows whether annotations are standalone or not.
 #[derive(Debug)]
-enum PendingDef<'a> {
+pub enum PendingDef<'a> {
     /// A standalone annotation with no body
     AnnotationOnly(
         &'a Located<ast::Pattern<'a>>,
@@ -315,23 +318,7 @@ fn from_pending_alias<'a>(
                 }
             }
 
-            let named = PoolVec::with_capacity(named_rigids.len() as u32, env.pool);
-            let unnamed = PoolVec::with_capacity(unnamed_rigids.len() as u32, env.pool);
-
-            for (node_id, (name, variable)) in named.iter_node_ids().zip(named_rigids) {
-                let poolstr = PoolStr::new(name, env.pool);
-
-                env.pool[node_id] = (poolstr, variable);
-            }
-
-            for (node_id, rigid) in unnamed.iter_node_ids().zip(unnamed_rigids) {
-                env.pool[node_id] = rigid;
-            }
-
-            let rigids = Rigids {
-                named: named.shallow_clone(),
-                unnamed,
-            };
+            let rigids = Rigids::new(named_rigids, unnamed_rigids, env.pool);
 
             let annotation = match signature {
                 Signature::Value { annotation } => annotation,
@@ -355,6 +342,8 @@ fn from_pending_alias<'a>(
                     rec_type_union.substitute_alias(env.pool, symbol, Type2::Variable(rec_var));
 
                     let annotation_id = env.add(rec_type_union, ann.region);
+                    let named = rigids.named(env.pool);
+
                     scope.add_alias(env.pool, symbol, named, annotation_id);
                 } else {
                     env.problem(Problem::CyclicAlias(symbol, name.region, vec![]));
@@ -362,6 +351,8 @@ fn from_pending_alias<'a>(
                 }
             } else {
                 let annotation_id = env.add(annotation, ann.region);
+                let named = rigids.named(env.pool);
+
                 scope.add_alias(env.pool, symbol, named, annotation_id);
             }
 
@@ -407,21 +398,7 @@ fn canonicalize_pending_def<'a>(
                         output.references.referenced_aliases.insert(symbol);
                     }
 
-                    let rigids = {
-                        let named = PoolVec::with_capacity(named_rigids.len() as u32, env.pool);
-                        let unnamed = PoolVec::with_capacity(unnamed_rigids.len() as u32, env.pool);
-
-                        for (node_id, (name, variable)) in named.iter_node_ids().zip(named_rigids) {
-                            let poolstr = PoolStr::new(name, env.pool);
-                            env.pool[node_id] = (poolstr, variable);
-                        }
-
-                        for (node_id, rigid) in unnamed.iter_node_ids().zip(unnamed_rigids) {
-                            env.pool[node_id] = rigid;
-                        }
-
-                        Rigids { named, unnamed }
-                    };
+                    let rigids = Rigids::new(named_rigids, unnamed_rigids, env.pool);
 
                     let annotation = match signature {
                         Signature::Value { annotation } => annotation,
@@ -470,21 +447,7 @@ fn canonicalize_pending_def<'a>(
                         output.references.referenced_aliases.insert(symbol);
                     }
 
-                    let rigids = {
-                        let named = PoolVec::with_capacity(named_rigids.len() as u32, env.pool);
-                        let unnamed = PoolVec::with_capacity(unnamed_rigids.len() as u32, env.pool);
-
-                        for (node_id, (name, variable)) in named.iter_node_ids().zip(named_rigids) {
-                            let poolstr = PoolStr::new(name, env.pool);
-                            env.pool[node_id] = (poolstr, variable);
-                        }
-
-                        for (node_id, rigid) in unnamed.iter_node_ids().zip(unnamed_rigids) {
-                            env.pool[node_id] = rigid;
-                        }
-
-                        Rigids { named, unnamed }
-                    };
+                    let rigids = Rigids::new(named_rigids, unnamed_rigids, env.pool);
 
                     // bookkeeping for tail-call detection. If we're assigning to an
                     // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
@@ -624,9 +587,11 @@ fn canonicalize_pending_def<'a>(
                             };
                             let annotation = env.add(annotation, loc_ann.region);
 
-                            let value_def = ValueDef {
-                                pattern: loc_can_pattern,
-                                expr_type: Some((annotation, rigids)),
+                            let value_def = ValueDef::WithAnnotation {
+                                pattern_id: loc_can_pattern,
+                                expr_id: env.pool.add(loc_can_expr),
+                                type_id: annotation,
+                                rigids: rigids,
                                 expr_var: env.var_store.fresh(),
                             };
 
@@ -745,9 +710,9 @@ fn canonicalize_pending_def<'a>(
                 }
 
                 _ => {
-                    let value_def = ValueDef {
-                        pattern: loc_can_pattern,
-                        expr_type: None,
+                    let value_def = ValueDef::NoAnnotation {
+                        pattern_id: loc_can_pattern,
+                        expr_id: env.pool.add(loc_can_expr),
                         expr_var: env.var_store.fresh(),
                     };
 

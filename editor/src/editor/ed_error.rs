@@ -112,6 +112,26 @@ pub enum EdError {
     },
 
     #[snafu(display(
+        "UnexpectedASTNode: required a {} at this position, node was a {}.",
+        required_node_type,
+        encountered_node_type
+    ))]
+    UnexpectedASTNode {
+        required_node_type: String,
+        encountered_node_type: String,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display(
+        "UnexpectedEmptyPoolVec: expected PoolVec {} to have at least one element.",
+        descriptive_vec_name
+    ))]
+    UnexpectedEmptyPoolVec {
+        descriptive_vec_name: String,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display(
         "OutOfBounds: index {} was out of bounds for {} with length {}.",
         index,
         collection_name,
@@ -127,7 +147,7 @@ pub enum EdError {
     #[snafu(display("ParseError: Failed to parse AST: SyntaxError: {}.", syntax_err))]
     ParseError { syntax_err: String },
 
-    #[snafu(display("RecordWithoutFields: expected record to have at least one field because it is not an EmpyRecord."))]
+    #[snafu(display("RecordWithoutFields: expected record to have at least one field because it is not an EmptyRecord."))]
     RecordWithoutFields { backtrace: Backtrace },
 
     #[snafu(display("StringParseError: {}", msg))]

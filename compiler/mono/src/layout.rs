@@ -14,11 +14,6 @@ const GENERATE_NULLABLE: bool = true;
 
 /// If a (Num *) gets translated to a Layout, this is the numeric type it defaults to.
 const DEFAULT_NUM_BUILTIN: Builtin<'_> = Builtin::Int64;
-pub const TAG_SIZE: Builtin<'_> = Builtin::Int64;
-
-impl Layout<'_> {
-    pub const TAG_SIZE: Layout<'static> = Layout::Builtin(Builtin::Int64);
-}
 
 #[derive(Debug, Clone)]
 pub enum LayoutProblem {
@@ -150,6 +145,54 @@ impl<'a> UnionLayout<'a> {
             Layout::Union(self)
         } else {
             result
+        }
+    }
+
+    fn tag_id_builtin_help(union_size: usize) -> Builtin<'a> {
+        if union_size <= u8::MAX as usize {
+            Builtin::Int8
+        } else if union_size <= u16::MAX as usize {
+            Builtin::Int16
+        } else {
+            panic!("tag union is too big")
+        }
+    }
+
+    pub fn tag_id_builtin(&self) -> Builtin<'a> {
+        match self {
+            UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => {
+                let union_size = tags.len();
+
+                Self::tag_id_builtin_help(union_size)
+            }
+
+            UnionLayout::NullableWrapped { other_tags, .. } => {
+                Self::tag_id_builtin_help(other_tags.len() + 1)
+            }
+            UnionLayout::NonNullableUnwrapped(_) => Builtin::Int1,
+            UnionLayout::NullableUnwrapped { .. } => Builtin::Int1,
+        }
+    }
+
+    pub fn tag_id_layout(&self) -> Layout<'a> {
+        Layout::Builtin(self.tag_id_builtin())
+    }
+
+    pub fn stores_tag_id(&self) -> bool {
+        match self {
+            UnionLayout::NonRecursive(_)
+            | UnionLayout::Recursive(_)
+            | UnionLayout::NullableWrapped { .. } => true,
+            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => false,
+        }
+    }
+
+    pub fn is_nullable(&self) -> bool {
+        match self {
+            UnionLayout::NonRecursive(_)
+            | UnionLayout::Recursive(_)
+            | UnionLayout::NonNullableUnwrapped { .. } => false,
+            UnionLayout::NullableWrapped { .. } | UnionLayout::NullableUnwrapped { .. } => true,
         }
     }
 }
@@ -565,16 +608,20 @@ impl<'a> Layout<'a> {
                 use UnionLayout::*;
 
                 match variant {
-                    NonRecursive(fields) => fields
-                        .iter()
-                        .map(|tag_layout| {
-                            tag_layout
-                                .iter()
-                                .map(|field| field.stack_size(pointer_size))
-                                .sum()
-                        })
-                        .max()
-                        .unwrap_or_default(),
+                    NonRecursive(fields) => {
+                        fields
+                            .iter()
+                            .map(|tag_layout| {
+                                tag_layout
+                                    .iter()
+                                    .map(|field| field.stack_size(pointer_size))
+                                    .sum::<u32>()
+                            })
+                            .max()
+                            .unwrap_or_default()
+                            // the size of the tag_id
+                            + pointer_size
+                    }
 
                     Recursive(_)
                     | NullableWrapped { .. }
@@ -1195,14 +1242,11 @@ fn layout_from_flat_type<'a>(
             env.insert_seen(rec_var);
             for (index, (_name, variables)) in tags_vec.into_iter().enumerate() {
                 if matches!(nullable, Some(i) if i == index as i64) {
-                    // don't add the
+                    // don't add the nullable case
                     continue;
                 }
 
                 let mut tag_layout = Vec::with_capacity_in(variables.len() + 1, arena);
-
-                // store the discriminant
-                tag_layout.push(Layout::Builtin(TAG_SIZE));
 
                 for var in variables {
                     // TODO does this cause problems with mutually recursive unions?
@@ -1244,7 +1288,7 @@ fn layout_from_flat_type<'a>(
                 }
             } else if tag_layouts.len() == 1 {
                 // drop the tag id
-                UnionLayout::NonNullableUnwrapped(&tag_layouts.pop().unwrap()[1..])
+                UnionLayout::NonNullableUnwrapped(&tag_layouts.pop().unwrap())
             } else {
                 UnionLayout::Recursive(tag_layouts.into_bump_slice())
             };
@@ -1585,9 +1629,6 @@ pub fn union_sorted_tags_help<'a>(
                 }
 
                 let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, arena);
-
-                // add the tag discriminant (size currently always hardcoded to i64)
-                arg_layouts.push(Layout::Builtin(TAG_SIZE));
 
                 for var in arguments {
                     match Layout::from_var(&mut env, var) {

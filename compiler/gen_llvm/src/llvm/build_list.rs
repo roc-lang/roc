@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 use crate::llvm::bitcode::{
-    build_dec_wrapper, build_eq_wrapper, build_inc_n_wrapper, build_inc_wrapper, call_bitcode_fn,
-    call_void_bitcode_fn,
+    build_dec_wrapper, build_eq_wrapper, build_has_tag_id, build_inc_n_wrapper, build_inc_wrapper,
+    call_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
     allocate_with_refcount_help, cast_basic_basic, complex_bitcast, Env, RocFunctionCall,
@@ -13,6 +13,7 @@ use inkwell::context::Context;
 use inkwell::types::{BasicType, BasicTypeEnum, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
+use morphic_lib::UpdateMode;
 use roc_builtins::bitcode;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
@@ -350,6 +351,7 @@ pub fn list_set<'a, 'ctx, 'env>(
     index: IntValue<'ctx>,
     element: BasicValueEnum<'ctx>,
     element_layout: &'a Layout<'a>,
+    update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
     let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
 
@@ -359,19 +361,32 @@ pub fn list_set<'a, 'ctx, 'env>(
         env.context.i8_type().ptr_type(AddressSpace::Generic),
     );
 
-    let new_bytes = call_bitcode_fn(
-        env,
-        &[
-            bytes.into(),
-            length.into(),
-            env.alignment_intvalue(&element_layout),
-            index.into(),
-            pass_element_as_opaque(env, element),
-            layout_width(env, element_layout),
-            dec_element_fn.as_global_value().as_pointer_value().into(),
-        ],
-        &bitcode::LIST_SET,
-    );
+    let new_bytes = match update_mode {
+        UpdateMode::InPlace => call_bitcode_fn(
+            env,
+            &[
+                bytes.into(),
+                index.into(),
+                pass_element_as_opaque(env, element),
+                layout_width(env, element_layout),
+                dec_element_fn.as_global_value().as_pointer_value().into(),
+            ],
+            bitcode::LIST_SET_IN_PLACE,
+        ),
+        UpdateMode::Immutable => call_bitcode_fn(
+            env,
+            &[
+                bytes.into(),
+                length.into(),
+                env.alignment_intvalue(&element_layout),
+                index.into(),
+                pass_element_as_opaque(env, element),
+                layout_width(env, element_layout),
+                dec_element_fn.as_global_value().as_pointer_value().into(),
+            ],
+            bitcode::LIST_SET,
+        ),
+    };
 
     store_list(env, new_bytes.into_pointer_value(), length)
 }
@@ -410,6 +425,7 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     roc_function_call: RocFunctionCall<'ctx>,
+    function_call_return_layout: &Layout<'a>,
     list: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
     default: BasicValueEnum<'ctx>,
@@ -450,6 +466,18 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
             );
         }
         ListWalk::WalkUntil | ListWalk::WalkBackwardsUntil => {
+            let function = env
+                .builder
+                .get_insert_block()
+                .unwrap()
+                .get_parent()
+                .unwrap();
+
+            let has_tag_id = match function_call_return_layout {
+                Layout::Union(union_layout) => build_has_tag_id(env, function, *union_layout),
+                _ => unreachable!(),
+            };
+
             let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
             call_void_bitcode_fn(
                 env,
@@ -462,7 +490,9 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
                     pass_as_opaque(env, default_ptr),
                     env.alignment_intvalue(&element_layout),
                     layout_width(env, element_layout),
+                    layout_width(env, function_call_return_layout),
                     layout_width(env, default_layout),
+                    has_tag_id.as_global_value().as_pointer_value().into(),
                     dec_element_fn.as_global_value().as_pointer_value().into(),
                     pass_as_opaque(env, result_ptr),
                 ],
@@ -604,6 +634,18 @@ pub fn list_keep_oks<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let dec_result_fn = build_dec_wrapper(env, layout_ids, result_layout);
 
+    let function = env
+        .builder
+        .get_insert_block()
+        .unwrap()
+        .get_parent()
+        .unwrap();
+
+    let has_tag_id = match result_layout {
+        Layout::Union(union_layout) => build_has_tag_id(env, function, *union_layout),
+        _ => unreachable!(),
+    };
+
     call_bitcode_fn(
         env,
         &[
@@ -616,6 +658,7 @@ pub fn list_keep_oks<'a, 'ctx, 'env>(
             layout_width(env, before_layout),
             layout_width(env, result_layout),
             layout_width(env, after_layout),
+            has_tag_id.as_global_value().as_pointer_value().into(),
             dec_result_fn.as_global_value().as_pointer_value().into(),
         ],
         bitcode::LIST_KEEP_OKS,
@@ -635,6 +678,18 @@ pub fn list_keep_errs<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let dec_result_fn = build_dec_wrapper(env, layout_ids, result_layout);
 
+    let function = env
+        .builder
+        .get_insert_block()
+        .unwrap()
+        .get_parent()
+        .unwrap();
+
+    let has_tag_id = match result_layout {
+        Layout::Union(union_layout) => build_has_tag_id(env, function, *union_layout),
+        _ => unreachable!(),
+    };
+
     call_bitcode_fn(
         env,
         &[
@@ -647,6 +702,7 @@ pub fn list_keep_errs<'a, 'ctx, 'env>(
             layout_width(env, before_layout),
             layout_width(env, result_layout),
             layout_width(env, after_layout),
+            has_tag_id.as_global_value().as_pointer_value().into(),
             dec_result_fn.as_global_value().as_pointer_value().into(),
         ],
         bitcode::LIST_KEEP_ERRS,
@@ -1080,7 +1136,9 @@ pub fn allocate_list<'a, 'ctx, 'env>(
     // we assume that the list is indeed used (dead variables are eliminated)
     let rc1 = crate::llvm::refcounting::refcount_1(ctx, env.ptr_bytes);
 
-    allocate_with_refcount_help(env, elem_layout, number_of_data_bytes, rc1)
+    let basic_type = basic_type_from_layout(env, elem_layout);
+    let alignment_bytes = elem_layout.alignment_bytes(env.ptr_bytes);
+    allocate_with_refcount_help(env, basic_type, alignment_bytes, number_of_data_bytes, rc1)
 }
 
 pub fn store_list<'a, 'ctx, 'env>(

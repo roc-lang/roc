@@ -8,16 +8,16 @@ const RocStr = str.RocStr;
 pub const RocDec = extern struct {
     num: i128,
 
-    pub const decimal_places: comptime u5 = 18;
-    pub const whole_number_places: comptime u5 = 21;
-    const max_digits: comptime u6 = 39;
-    const leading_zeros: comptime [17]u8 = "00000000000000000".*;
+    pub const decimal_places: u5 = 18;
+    pub const whole_number_places: u5 = 21;
+    const max_digits: u6 = 39;
+    const leading_zeros: [17]u8 = "00000000000000000".*;
 
-    pub const min: comptime RocDec = .{ .num = math.minInt(i128) };
-    pub const max: comptime RocDec = .{ .num = math.maxInt(i128) };
+    pub const min: RocDec = .{ .num = math.minInt(i128) };
+    pub const max: RocDec = .{ .num = math.maxInt(i128) };
 
-    pub const one_point_zero_i128: comptime i128 = comptime math.pow(i128, 10, RocDec.decimal_places);
-    pub const one_point_zero: comptime RocDec = .{ .num = one_point_zero_i128 };
+    pub const one_point_zero_i128: i128 = math.pow(i128, 10, RocDec.decimal_places);
+    pub const one_point_zero: RocDec = .{ .num = one_point_zero_i128 };
 
     pub fn fromU64(num: u64) RocDec {
         return .{ .num = num * one_point_zero_i128 };
@@ -388,7 +388,7 @@ fn mul_and_decimalize(a: u128, b: u128) i128 {
     const lk = mul_u128(lhs_hi, rhs_hi);
 
     const e = ea.hi;
-    const _a = ea.lo;
+    // const _a = ea.lo;
 
     const g = gf.hi;
     const f = gf.lo;

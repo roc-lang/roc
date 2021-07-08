@@ -1,22 +1,20 @@
 procedure List.3 (#Attr.2, #Attr.3):
-    let Test.15 = lowlevel ListLen #Attr.2;
-    let Test.11 = lowlevel NumLt #Attr.3 Test.15;
-    if Test.11 then
-        let Test.14 = 1i64;
-        let Test.13 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-        let Test.12 = Ok Test.14 Test.13;
-        ret Test.12;
+    let Test.13 = lowlevel ListLen #Attr.2;
+    let Test.10 = lowlevel NumLt #Attr.3 Test.13;
+    if Test.10 then
+        let Test.12 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+        let Test.11 = Ok Test.12;
+        ret Test.11;
     else
-        let Test.10 = 0i64;
         let Test.9 = Struct {};
-        let Test.8 = Err Test.10 Test.9;
+        let Test.8 = Err Test.9;
         ret Test.8;
 
 procedure Test.1 (Test.2):
-    let Test.16 = 1i64;
-    let Test.17 = 2i64;
-    let Test.18 = 3i64;
-    let Test.6 = Array [Test.16, Test.17, Test.18];
+    let Test.14 = 1i64;
+    let Test.15 = 2i64;
+    let Test.16 = 3i64;
+    let Test.6 = Array [Test.14, Test.15, Test.16];
     let Test.7 = 0i64;
     let Test.5 = CallByName List.3 Test.6 Test.7;
     dec Test.6;

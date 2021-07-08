@@ -121,7 +121,7 @@ mod cli_run {
             &example_file("hello-world", "Hello.roc"),
             "hello-world",
             &[],
-            "Hello, World!!!!!!!!!!!!!\n",
+            "Hello, World!\n",
             true,
         );
     }
@@ -133,7 +133,7 @@ mod cli_run {
             &example_file("hello-world", "Hello.roc"),
             "hello-world",
             &[],
-            "Hello, World!!!!!!!!!!!!!\n",
+            "Hello, World!\n",
             true,
         );
     }

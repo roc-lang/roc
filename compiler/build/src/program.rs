@@ -148,6 +148,7 @@ pub fn gen_from_mono_module(
         opt_level,
         loaded.procedures,
         loaded.entry_point,
+        Some(&app_ll_file),
     );
 
     env.dibuilder.finalize();
@@ -163,8 +164,9 @@ pub fn gen_from_mono_module(
         env.module.print_to_file(&app_ll_file).unwrap();
 
         panic!(
-            "😱 LLVM errors when defining module; I wrote the full LLVM IR to {:?}\n\n {:?}",
-            app_ll_file, errors,
+            "😱 LLVM errors when defining module; I wrote the full LLVM IR to {:?}\n\n {}",
+            app_ll_file,
+            errors.to_string(),
         );
     }
 
@@ -193,7 +195,7 @@ pub fn gen_from_mono_module(
         // run the debugir https://github.com/vaivaswatha/debugir tool
         match Command::new("debugir")
             .env_clear()
-            .args(&[app_ll_file.to_str().unwrap()])
+            .args(&["-instnamer", app_ll_file.to_str().unwrap()])
             .output()
         {
             Ok(_) => {}

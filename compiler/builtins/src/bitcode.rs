@@ -74,3 +74,5 @@ pub const DEC_ADD: &str = "roc_builtins.dec.add";
 pub const DEC_SUB: &str = "roc_builtins.dec.sub";
 pub const DEC_MUL: &str = "roc_builtins.dec.mul";
 pub const DEC_DIV: &str = "roc_builtins.dec.div";
+
+pub const LIST_SET_IN_PLACE: &str = "roc_builtins.list.set_in_place";

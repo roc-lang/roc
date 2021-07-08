@@ -33,24 +33,42 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
         Struct(sorted_fields) => basic_type_from_record(env, sorted_fields),
         Union(variant) => {
             use UnionLayout::*;
+
+            let tag_id_type = basic_type_from_layout(env, &variant.tag_id_layout());
+
             match variant {
-                Recursive(tags)
-                | NullableWrapped {
+                NullableWrapped {
                     other_tags: tags, ..
                 } => {
-                    let block = block_of_memory_slices(env.context, tags, env.ptr_bytes);
-                    block.ptr_type(AddressSpace::Generic).into()
+                    let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+
+                    env.context
+                        .struct_type(&[data, tag_id_type], false)
+                        .ptr_type(AddressSpace::Generic)
+                        .into()
                 }
                 NullableUnwrapped { other_fields, .. } => {
                     let block =
-                        block_of_memory_slices(env.context, &[&other_fields[1..]], env.ptr_bytes);
+                        block_of_memory_slices(env.context, &[&other_fields], env.ptr_bytes);
                     block.ptr_type(AddressSpace::Generic).into()
                 }
                 NonNullableUnwrapped(fields) => {
                     let block = block_of_memory_slices(env.context, &[fields], env.ptr_bytes);
                     block.ptr_type(AddressSpace::Generic).into()
                 }
-                NonRecursive(_) => block_of_memory(env.context, layout, env.ptr_bytes),
+                Recursive(tags) => {
+                    let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+
+                    env.context
+                        .struct_type(&[data, tag_id_type], false)
+                        .ptr_type(AddressSpace::Generic)
+                        .into()
+                }
+                NonRecursive(tags) => {
+                    let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+
+                    env.context.struct_type(&[data, tag_id_type], false).into()
+                }
             }
         }
         RecursivePointer => {
@@ -112,13 +130,43 @@ pub fn block_of_memory_slices<'ctx>(
     block_of_memory_help(context, union_size)
 }
 
+pub fn union_data_is_struct<'a, 'ctx, 'env>(
+    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
+    layouts: &[Layout<'_>],
+) -> StructType<'ctx> {
+    let data_type = basic_type_from_record(env, layouts);
+    union_data_is_struct_type(env.context, data_type.into_struct_type())
+}
+
+pub fn union_data_is_struct_type<'ctx>(
+    context: &'ctx Context,
+    struct_type: StructType<'ctx>,
+) -> StructType<'ctx> {
+    let tag_id_type = context.i64_type();
+    context.struct_type(&[struct_type.into(), tag_id_type.into()], false)
+}
+
+pub fn union_data_block_of_memory<'ctx>(
+    context: &'ctx Context,
+    tag_id_int_type: IntType<'ctx>,
+    layouts: &[&[Layout<'_>]],
+    ptr_bytes: u32,
+) -> StructType<'ctx> {
+    let data_type = block_of_memory_slices(context, layouts, ptr_bytes);
+    context.struct_type(&[data_type, tag_id_int_type.into()], false)
+}
+
 pub fn block_of_memory<'ctx>(
     context: &'ctx Context,
     layout: &Layout<'_>,
     ptr_bytes: u32,
 ) -> BasicTypeEnum<'ctx> {
     // TODO make this dynamic
-    let union_size = layout.stack_size(ptr_bytes as u32);
+    let mut union_size = layout.stack_size(ptr_bytes as u32);
+
+    if let Layout::Union(UnionLayout::NonRecursive { .. }) = layout {
+        union_size -= ptr_bytes;
+    }
 
     block_of_memory_help(context, union_size)
 }
@@ -182,8 +230,8 @@ pub fn zig_str_type<'a, 'ctx, 'env>(
     env.module.get_struct_type("str.RocStr").unwrap()
 }
 
-// pub fn zig_dec_type<'a, 'ctx, 'env>(
-//     env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
-// ) -> StructType<'ctx> {
-//     env.module.get_struct_type("dec.RocDec").unwrap()
-// }
+pub fn zig_has_tag_id_type<'a, 'ctx, 'env>(
+    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
+) -> StructType<'ctx> {
+    env.module.get_struct_type("list.HasTagId").unwrap()
+}
