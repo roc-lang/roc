@@ -32,6 +32,8 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 * [Primitive](https://primitive.io/) code exploration in Virtual Reality
 * [Luna](https://www.luna-lang.org/) language for interactive data processing and visualization
 * [Hazel Livelits](https://hazel.org/papers/livelits-paper.pdf) interactive plugins, see GIF's [here](https://twitter.com/disconcision/status/1408155781120376833).
+* [Thorough review](https://drossbucket.com/2021/06/30/hacker-news-folk-wisdom-on-visual-programming/) of pros and cons of text versus visual programming.
+
 ### Debugging
 
 * [VS code debug visualization](https://marketplace.visualstudio.com/items?itemName=hediet.debug-visualizer)
@@ -44,6 +46,8 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 e.g. you have a test `calculate_sum_test` that only uses the function `add`, when the test fails you should be able to see a diff showing only what changed for the function `add`. It would also be great to have a diff of [expression values](https://homepages.cwi.nl/~storm/livelit/images/bret.png) Bret Victor style. An ambitious project would be to suggest or automatically try fixes based on these diffs.
 * I think it could be possible to create a minimal reproduction of a program / block of code / code used by a single test. So for a failing unit test I would expect it to extract imports, the platform, types and functions that are necessary to run only that unit test and put them in a standalone roc project. This would be useful for sharing bugs with library+application authors and colleagues, for profiling or debugging with all "clutter" removed.
 * Ability to share program state at a breakpoint with someone else.
+* For debugging we should aim for maximal useful observability. For example Rust's enum values can not be easily viewed in the CodeLLDB debugger, you actually need to call a print method that does pattern matching to be able to view useful information.
+* We previuously discussed recording full traces of programs so they do not have to be re-run multiple times in the debugging process. We should encourage roc developers to experiment with creating debugging representations of this AST+"execution trace", it could lead to some cool stuff.  
 
 ### Cool regular editors
 
@@ -71,6 +75,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * [Sourcetrail](https://www.sourcetrail.com/) nice tree-like source explorer.
 * [Unisonweb](https://www.unisonweb.org), definition based [editor](https://twitter.com/shojberg/status/1364666092598288385) as opposed to file based.
 * [Utopia](https://utopia.app/) integrated design and development environment for React. Design and code update each other, in real time.
+* [Paredit](https://calva.io/paredit/) structural clojure editing, navigation and selection. [Another overview](http://danmidwood.com/content/2014/11/21/animated-paredit.html)
 
 ### Voice Interaction Related
 
@@ -83,7 +88,27 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     * Show edit history for this function.
     * Adjusting settings: switch to light theme, increase font size...
 * Use (context specific) voice command state machine to assist Machine Learning voice recognition model.
-* Nice special use case: using voice to code while on treadmill desk. 
+* Nice special use case: using voice to code while on treadmill desk.
+* Use word embeddings to find most similar voice command to recorded input in vector space.
+
+#### Useful voice commands
+
+* clear all breakpoints
+* increase/decrease font size
+* switch to dark/light/high-contrast mode
+* open/go to file "Main"(fuzzy matching)
+* go to function "foo"
+* go to definition
+* show all references(uses) of this function/type/...
+* show history timeline of this function/file
+* show recent projects
+* generate unit test for this function
+* generate unit test for this function based on debug trace (input and output is recorded and used in test)
+* who wrote this line (git blame integration)
+* search documentation of library X for Foo
+* show example of how to use library function Foo
+* open google/github/duckduckgo search for error...
+* show editor plugins for library X
 
     
 #### Inspiration
@@ -127,6 +152,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     * search a local history of previously encountered errors and fixes
     * search through a database of our zullip questions
     * ...
+* smart insert: press a shortcut and enter a plain english description of a code snippet you need. Examples: "convert string to list of chars", "sort list of records by field foo descending", "plot this list with date on x-axis"...
 
 #### Autocomplete
 
@@ -137,12 +163,14 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - Machine Learning:
    * GPT-3 can generate correct python functions based on a comment describing the functionality, video [here](https://www.youtube.com/watch?v=utuz7wBGjKM). It's possible that training a model using ast's may lead to better results than text based models.
 - Current autocomplete lacks flow, moving through suggestions with arrows is slow. Being able to code by weaving together autocomplete suggestions laid out in rows using eye tracking, that could flow.
+- It's possible that with strong static types, pure functions and a good search algorithm we can develop a more reliable autocomplete than one with machine learning. 
 
 #### Productivity Inspiration
 
 * [Kite](https://www.kite.com/) AI autocomplete and doc viewer.
 * [Tabnine](https://www.tabnine.com/) AI autocomplete.
 * [Codota](https://www.codota.com) AI autocomplete and example searching.
+* [Github copilot](https://copilot.github.com/) AI autocomplete.
 * [Aroma](https://ai.facebook.com/blog/aroma-ml-for-code-recommendation) showing examples similar to current code.
 * [MISM](https://arxiv.org/abs/2006.05265) neural network based code similarity scoring.
 * [Inquisitive code editor](https://web.eecs.utk.edu/~azh/blog/inquisitivecodeeditor.html) Interactive bug detection with doc+test generation.
@@ -169,7 +197,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
         * See [codata](https://www.codota.com/code/java/classes/okhttp3.OkHttpClient) for inspiration on a snippet/example finder.
 * Fuzzy natural language based setting adjustment in search bar or with voice input: increase font size, enable autosave, switch to light theme...
 * Detect deviation of best practices, example case: alert developer when they are defining a color inline (rgb(30,30,30)) while all colors have been previously imported from a single file. See also [Codota](https://www.codota.com).
-* It would be valuable to record the user's interactions with the editor when debugging as well as the AST. On enough data we could train a model to perform a bunch of debugging steps and show values of the most important variables in relation to the bug. Having assistance in finding the exact code that causes the problem could be super valuable. There could be sensitive data, so it should only be recorded and or shared for open source codebases with explicit user permission.
+* It would be valuable to record the user's interactions with the editor when debugging as well as the AST. On enough data we could train a model to perform a bunch of debugging steps and show values of the most important variables in relation to the bug. Having assistance in finding the exact code that causes the problem could be super valuable. There could be sensitive data, so it should only be recorded and or shared for open source codebases with permissive licenses and with explicit user permission.
 
 
 ## Testing
@@ -194,6 +222,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Ability to see module as it would be presented on a package website.
     * Modern editors may guide developers to the source code too easily.
     The API and documentation are meant to interface with humans.
+* [DocC](https://developer.apple.com/videos/play/wwdc2021/10166/) neat documentation approach for swift. 
 
 ## General Thoughts/Ideas
 

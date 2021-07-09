@@ -123,7 +123,10 @@ fn detached_docs_from_comments_and_new_lines<'a>(
             }
 
             CommentOrNewline::LineComment(_) | CommentOrNewline::Newline => {
-                detached_docs.push(docs.clone());
+                if !docs.is_empty() {
+                    detached_docs.push(docs.clone());
+                }
+
                 docs = String::new();
             }
         }

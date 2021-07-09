@@ -468,6 +468,7 @@ fn nested_pattern_match() {
         i64
     );
 }
+
 #[test]
 fn if_guard_pattern_false() {
     assert_evals_to!(
@@ -476,6 +477,24 @@ fn if_guard_pattern_false() {
                 wrapper = \{} ->
                     when 2 is
                         2 if False -> 0
+                        _ -> 42
+
+                wrapper {}
+                "#
+        ),
+        42,
+        i64
+    );
+}
+
+#[test]
+fn if_guard_switch() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                wrapper = \{} ->
+                    when 2 is
+                        2 | 3 if False -> 0
                         _ -> 42
 
                 wrapper {}
@@ -634,7 +653,7 @@ fn nested_tag_union() {
                 "#
         ),
         ((41, 0), 0),
-        ((i64, i64), i64)
+        ((i64, u8), u8)
     );
 }
 #[test]
@@ -799,14 +818,14 @@ fn alignment_in_multi_tag_construction() {
         indoc!(
             r"#
                 x : [ Three Bool I64, Empty ]
-                x = Three (1 == 1) 32
+                x = Three (1 == 1) 32 
 
                 x
 
                 #"
         ),
-        (32i64, true, 1),
-        (i64, bool, i64)
+        ((32i64, true), 1),
+        ((i64, bool), u8)
     );
 
     assert_evals_to!(
@@ -818,8 +837,8 @@ fn alignment_in_multi_tag_construction() {
                 x
                 #"
         ),
-        (32i64, true, 2u8, 1),
-        (i64, bool, u8, i64)
+        ((32i64, true, 2u8), 1),
+        ((i64, bool, u8), u8)
     );
 }
 
@@ -948,8 +967,8 @@ fn nested_recursive_literal() {
                 #"
         ),
         0,
-        &(i64, i64, i64),
-        |x: &(i64, i64, i64)| x.2
+        &(i64, i64, u8),
+        |x: &(i64, i64, u8)| x.2
     );
 }
 
@@ -1027,6 +1046,23 @@ fn applied_tag_function_linked_list() {
             when List.first x is
                 Ok (Cons "a" Nil) -> 1
                 _ -> 0
+            "#
+        ),
+        1,
+        i64
+    );
+}
+
+#[test]
+#[should_panic(expected = "")]
+fn tag_must_be_its_own_type() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            z : [ A, B, C ]
+            z = Z
+
+            z
             "#
         ),
         1,
