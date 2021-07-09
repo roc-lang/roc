@@ -77,9 +77,9 @@ fn bench_cmd<T: Measurement>(
 pub fn bench_nqueens<T: Measurement>(bench_group_opt: Option<&mut BenchmarkGroup<T>>) {
     exec_bench_w_input(
         &example_file("benchmarks", "NQueens.roc"),
-        "12",
+        "11",
         "nqueens",
-        "14200\n",
+        "2680\n",
         bench_group_opt,
     );
 }
