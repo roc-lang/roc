@@ -2719,7 +2719,7 @@ pub fn with_hole<'a>(
                 ),
                 IntOrFloat::DecimalFloatType => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Float(num as f64)), // TODO: ?
+                    Expr::Literal(Literal::Float(num as f64)),
                     Layout::Builtin(Builtin::Decimal),
                     hole,
                 ),
@@ -2755,7 +2755,7 @@ pub fn with_hole<'a>(
             ),
             IntOrFloat::DecimalFloatType => Stmt::Let(
                 assigned,
-                Expr::Literal(Literal::Float(num as f64)), // TODO: ?
+                Expr::Literal(Literal::Float(num as f64)),
                 Layout::Builtin(Builtin::Decimal),
                 hole,
             ),
@@ -6904,7 +6904,7 @@ fn from_can_pattern_help<'a>(
                 IntOrFloat::SignedIntType(_) => Ok(Pattern::IntLiteral(*num as i128)),
                 IntOrFloat::UnsignedIntType(_) => Ok(Pattern::IntLiteral(*num as i128)),
                 IntOrFloat::BinaryFloatType(_) => Ok(Pattern::FloatLiteral(*num as u64)),
-                IntOrFloat::DecimalFloatType => Ok(Pattern::FloatLiteral(*num as u64)), // TODO: ?
+                IntOrFloat::DecimalFloatType => Ok(Pattern::FloatLiteral(*num as u64)),
             }
         }
 

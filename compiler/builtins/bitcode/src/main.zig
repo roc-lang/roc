@@ -120,7 +120,7 @@ fn exportDecFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "dec." ++ func_name);
 }
 
-// Cusotm panic function, as builtin Zig version errors during LLVM verification
+// Custom panic function, as builtin Zig version errors during LLVM verification
 pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace) noreturn {
     std.debug.print("{s}: {?}", .{ message, stacktrace });
     unreachable;

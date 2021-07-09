@@ -707,27 +707,28 @@ impl RocDec {
 
     pub const ONE_POINT_ZERO: i128 = 10i128.pow(Self::DECIMAL_PLACES);
 
-    pub fn from_str(value: &str) -> Result<Self, ()> {
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(value: &str) -> Option<Self> {
         // Split the string into the parts before and after the "."
-        let mut parts = value.split(".");
+        let mut parts = value.split('.');
 
         let before_point = match parts.next() {
             Some(answer) => answer,
             None => {
-                return Err(());
+                return None;
             }
         };
 
         let after_point = match parts.next() {
             Some(answer) if answer.len() <= Self::DECIMAL_PLACES as usize => answer,
             _ => {
-                return Err(());
+                return None;
             }
         };
 
         // There should have only been one "." in the string!
         if parts.next().is_some() {
-            return Err(());
+            return None;
         }
 
         // Calculate the low digits - the ones after the decimal point.
@@ -738,27 +739,24 @@ impl RocDec {
                 let trailing_zeroes = Self::DECIMAL_PLACES as usize - after_point.len();
                 let lo = answer * 10i128.pow(trailing_zeroes as u32);
 
-                if !before_point.starts_with("-") {
+                if !before_point.starts_with('-') {
                     lo
                 } else {
                     -lo
                 }
             }
             Err(_) => {
-                return Err(());
+                return None;
             }
         };
 
         // Calculate the high digits - the ones before the decimal point.
         match before_point.parse::<i128>() {
             Ok(answer) => match answer.checked_mul(10i128.pow(Self::DECIMAL_PLACES)) {
-                Some(hi) => match hi.checked_add(lo) {
-                    Some(num) => Ok(RocDec(num)),
-                    None => Err(()),
-                },
-                None => Err(()),
+                Some(hi) => hi.checked_add(lo).map(RocDec),
+                None => None,
             },
-            Err(_) => Err(()),
+            Err(_) => None,
         }
     }
 
