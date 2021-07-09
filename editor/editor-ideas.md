@@ -88,7 +88,27 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     * Show edit history for this function.
     * Adjusting settings: switch to light theme, increase font size...
 * Use (context specific) voice command state machine to assist Machine Learning voice recognition model.
-* Nice special use case: using voice to code while on treadmill desk. 
+* Nice special use case: using voice to code while on treadmill desk.
+* Use word embeddings to find most similar voice command to recorded input in vector space.
+
+#### Useful voice commands
+
+* clear all breakpoints
+* increase/decrease font size
+* switch to dark/light/high-contrast mode
+* open/go to file "Main"(fuzzy matching)
+* go to function "foo"
+* go to definition
+* show all references(uses) of this function/type/...
+* show history timeline of this function/file
+* show recent projects
+* generate unit test for this function
+* generate unit test for this function based on debug trace (input and output is recorded and used in test)
+* who wrote this line (git blame integration)
+* search documentation of library X for Foo
+* show example of how to use library function Foo
+* open google/github/duckduckgo search for error...
+* show editor plugins for library X
 
     
 #### Inspiration
@@ -132,6 +152,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     * search a local history of previously encountered errors and fixes
     * search through a database of our zullip questions
     * ...
+* smart insert: press a shortcut and enter a plain english description of a code snippet you need. Examples: "convert string to list of chars", "sort list of records by field foo descending", "plot this list with date on x-axis"...
 
 #### Autocomplete
 

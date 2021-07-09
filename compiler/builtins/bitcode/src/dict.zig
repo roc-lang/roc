@@ -568,14 +568,6 @@ pub fn dictKeys(dict: RocDict, alignment: Alignment, key_width: usize, value_wid
     const data_bytes = length * key_width;
     var ptr = allocateWithRefcount(data_bytes, alignment);
 
-    var offset = blk: {
-        if (alignment.keyFirst()) {
-            break :blk 0;
-        } else {
-            break :blk (dict.capacity() * value_width);
-        }
-    };
-
     i = 0;
     var copied: usize = 0;
     while (i < size) : (i += 1) {
@@ -617,14 +609,6 @@ pub fn dictValues(dict: RocDict, alignment: Alignment, key_width: usize, value_w
     const data_bytes = length * value_width;
     var ptr = allocateWithRefcount(data_bytes, alignment);
 
-    var offset = blk: {
-        if (alignment.keyFirst()) {
-            break :blk (dict.capacity() * key_width);
-        } else {
-            break :blk 0;
-        }
-    };
-
     i = 0;
     var copied: usize = 0;
     while (i < size) : (i += 1) {
@@ -644,7 +628,7 @@ pub fn dictValues(dict: RocDict, alignment: Alignment, key_width: usize, value_w
     output.* = RocList{ .bytes = ptr, .length = length };
 }
 
-fn doNothing(ptr: Opaque) callconv(.C) void {
+fn doNothing(_: Opaque) callconv(.C) void {
     return;
 }
 
@@ -764,8 +748,6 @@ pub fn dictWalk(
     key_width: usize,
     value_width: usize,
     accum_width: usize,
-    inc_key: Inc,
-    inc_value: Inc,
     output: Opaque,
 ) callconv(.C) void {
     const alignment_u32 = alignment.toU32();

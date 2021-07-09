@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 #![allow(unused_variables)]
-use crate::lang::ast::{FunctionDef, ValueDef};
+use crate::lang::ast::{Expr2, FunctionDef, ValueDef};
 use crate::lang::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
 use crate::lang::expr::Env;
 use crate::lang::expr::Output;
@@ -249,10 +249,11 @@ pub fn canonicalize_module_defs<'a>(
                 let runtime_error = RuntimeError::ExposedButNotDefined(symbol);
 
                 let value_def = {
-                    let pattern = env.pool.add(Pattern2::Identifier(symbol));
-                    ValueDef {
-                        pattern,
-                        expr_type: None,
+                    let pattern_id = env.pool.add(Pattern2::Identifier(symbol));
+                    let expr_id = env.pool.add(Expr2::RuntimeError());
+                    ValueDef::NoAnnotation {
+                        pattern_id,
+                        expr_id,
                         expr_var: env.var_store.fresh(),
                     }
                 };
