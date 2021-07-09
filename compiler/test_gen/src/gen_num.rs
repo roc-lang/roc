@@ -3,7 +3,7 @@ mod gen_num {
     use crate::assert_evals_to;
     use crate::assert_llvm_evals_to;
     use indoc::indoc;
-    use roc_std::RocOrder;
+    use roc_std::{RocDec, RocOrder};
 
     #[test]
     fn nat_alias() {
@@ -339,7 +339,7 @@ mod gen_num {
                     x
                 "#
             ),
-            2100000000000000000,
+            RocDec::from_str_to_i128_unsafe(&"2.1"),
             i128
         );
     }
@@ -576,7 +576,7 @@ mod gen_num {
                     z
                 "#
             ),
-            5200000000000000000,
+            RocDec::from_str_to_i128_unsafe(&"5.2"),
             i128
         );
     }
@@ -639,7 +639,7 @@ mod gen_num {
                         Err _ -> -1
                 "#
             ),
-            3333333333333333333,
+            RocDec::from_str_to_i128_unsafe(&"3.333333333333333333"),
             i128
         );
     }
@@ -755,7 +755,7 @@ mod gen_num {
                     x - y - z
                 "#
             ),
-            -3900000000000000000,
+            RocDec::from_str_to_i128_unsafe(&"-3.9"),
             i128
         );
     }
@@ -803,7 +803,7 @@ mod gen_num {
                     x * y * z
                 "#
             ),
-            48000000000000000000,
+            RocDec::from_str_to_i128_unsafe(&"48.0"),
             i128
         );
     }

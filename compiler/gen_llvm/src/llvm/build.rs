@@ -443,13 +443,7 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         ctx.struct_type(&fields, false)
             .fn_type(&[i64_type.into(), i64_type.into()], false)
     });
-
-    // TODO: This is now exported by zig. Not sure what to do here?
-    // add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I128, {
-    //     let fields = [i128_type.into(), i1_type.into()];
-    //     ctx.struct_type(&fields, false)
-    //         .fn_type(&[i128_type.into(), i128_type.into()], false)
-    // });
+    // LLVM_SADD_WITH_OVERFLOW_I128 is expoerted in bitcode
 
     // sub with overflow
 
@@ -476,13 +470,7 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         ctx.struct_type(&fields, false)
             .fn_type(&[i64_type.into(), i64_type.into()], false)
     });
-
-    // TODO: This is now exported by zig. Not sure what to do here?
-    // add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I128, {
-    //     let fields = [i128_type.into(), i1_type.into()];
-    //     ctx.struct_type(&fields, false)
-    //         .fn_type(&[i128_type.into(), i128_type.into()], false)
-    // });
+    // LLVM_SSUB_WITH_OVERFLOW_I128 is expoerted in bitcode
 }
 
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
