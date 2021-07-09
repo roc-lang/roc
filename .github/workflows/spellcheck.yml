@@ -1,0 +1,24 @@
+on: [pull_request]
+
+name: SpellCheck
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  spell-check:
+    name: spell check
+    runs-on: [self-hosted]
+    timeout-minutes: 20
+    env:
+      FORCE_COLOR: 1
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          clean: "true"
+
+      - name: Earthly version
+        run: earthly --version
+
+      - name: install spell checker, do spell check
+        run: ./ci/safe-earthly.sh +check-typos

@@ -101,7 +101,7 @@ check-rustfmt:
     RUN cargo fmt --all -- --check
 
 check-typos:
-    RUN cargo install typos-cli --version 1.0.4 # use latest version on resolution of issue crate-ci/typos#277
+    RUN cargo install typos-cli
     COPY --dir .github ci cli compiler docs editor examples nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix ./
     RUN typos
 
