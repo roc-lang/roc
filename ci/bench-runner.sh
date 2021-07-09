@@ -23,7 +23,13 @@ script -efq $LOG_FILE -c "$FULL_CMD"
 EXIT_CODE=$?
     
 if grep -q "regressed" "$LOG_FILE"; then
+    echo ""
+    echo ""
+    echo "------<<<<<<>>>>>>------"
     echo "Benchmark detected regression. Running benchmark again to confirm..."
+    echo "------<<<<<<>>>>>>------"
+    echo ""
+    echo ""
 
     # delete criterion folder to compare to trunk only
     rm -rf ./target/criterion
@@ -37,13 +43,25 @@ if grep -q "regressed" "$LOG_FILE"; then
     EXIT_CODE=$?
 
     if grep -q "regressed" "$LOG_FILE"; then
+        echo ""
+        echo ""
+        echo "------<<<<<<!!!!!!>>>>>>------"
         echo "Benchmarks were run twice and a regression was detected both times."
+        echo "------<<<<<<!!!!!!>>>>>>------"
+        echo ""
+        echo ""
         exit 1
     else
         echo "Benchmarks were run twice and a regression was detected on one run. We assume this was a fluke."
         exit 0
     fi
 else
-    echo "Benchmark execution failed with exit code: $EXIT_CODE"
+    echo ""
+    echo ""
+    echo "------<<<<<<!!!!!!>>>>>>------"
+    echo "Benchmark execution failed with exit code: $EXIT_CODE."
+    echo "------<<<<<<!!!!!!>>>>>>------"
+    echo ""
+    echo ""
     exit $EXIT_CODE
 fi
