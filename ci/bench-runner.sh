@@ -21,8 +21,6 @@ echo $FULL_CMD
 
 script -efq $LOG_FILE -c "$FULL_CMD"
 EXIT_CODE=$?
-
-if [ $EXIT_CODE -ne 0 ]; then
     
 if grep -q "regressed" "$LOG_FILE"; then
     echo "Benchmark detected regression. Running benchmark again to confirm..."
