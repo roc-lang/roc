@@ -44,12 +44,28 @@ impl fmt::Display for SlowPool {
         write!(f, "\n\n(mark_node_pool)\n")?;
 
         for (index, node) in self.nodes.iter().enumerate() {
+            let ast_node_id_str = format!("{:?}", node.get_ast_node_id());
+            let ast_node_id: String = ast_node_id_str
+                .chars()
+                .filter(|c| c.is_ascii_digit())
+                .collect();
+
+            let mut child_str = String::new();
+
+            let node_children = node.get_children_ids();
+
+            if !node_children.is_empty() {
+                child_str = format!("children: {:?}", node_children);
+            }
+
             writeln!(
                 f,
-                "{}: {} ({})",
+                "{}: {} ({}) ast_id {:?} {}",
                 index,
                 node.node_type_as_string(),
                 node.get_content().unwrap_or_else(|_| "".to_string()),
+                ast_node_id.parse::<usize>().unwrap(),
+                child_str
             )?;
         }
 
