@@ -164,11 +164,52 @@ struct Branch<'a> {
 fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
     let branches: Vec<_> = raw_branches.into_iter().map(flatten_patterns).collect();
 
+    debug_assert!(!branches.is_empty());
+
     match check_for_match(&branches) {
-        Some(goal) => DecisionTree::Match(goal),
-        None => {
+        Match::Exact(goal) => DecisionTree::Match(goal),
+
+        Match::GuardOnly => {
+            // the guard test does not have a path
+            let path = vec![];
+
+            let mut branches = branches;
+            let first = branches.remove(0);
+
+            let guarded_test = {
+                // we expect none of the patterns need tests, those decisions should have been made already
+                debug_assert!(first
+                    .patterns
+                    .iter()
+                    .all(|(_, pattern)| !needs_tests(pattern)));
+
+                match first.guard {
+                    Guard::NoGuard => unreachable!("first test must have a guard"),
+                    Guard::Guard {
+                        symbol: _,
+                        id,
+                        stmt,
+                    } => GuardedTest::GuardedNoTest { id, stmt },
+                }
+            };
+
+            let rest = if branches.is_empty() {
+                None
+            } else {
+                Some(Box::new(to_decision_tree(branches)))
+            };
+
+            DecisionTree::Decision {
+                path,
+                edges: vec![(guarded_test, DecisionTree::Match(first.goal))],
+                default: rest,
+            }
+        }
+
+        Match::None => {
             // must clone here to release the borrow on `branches`
             let path = pick_path(&branches).clone();
+
             let (edges, fallback) = gather_edges(branches, &path);
 
             let mut decision_edges: Vec<_> = edges
@@ -292,16 +333,27 @@ fn flatten<'a>(
 /// path. If that is the case we give the resulting label and a mapping from free
 /// variables to "how to get their value". So a pattern like (Just (x,_)) will give
 /// us something like ("x" => value.0.0)
-fn check_for_match(branches: &[Branch]) -> Option<Label> {
+
+enum Match {
+    Exact(Label),
+    GuardOnly,
+    None,
+}
+
+fn check_for_match(branches: &[Branch]) -> Match {
     match branches.get(0) {
         Some(Branch {
             goal,
             guard,
             patterns,
-        }) if guard.is_none() && patterns.iter().all(|(_, pattern)| !needs_tests(pattern)) => {
-            Some(*goal)
+        }) if patterns.iter().all(|(_, pattern)| !needs_tests(pattern)) => {
+            if guard.is_none() {
+                Match::Exact(*goal)
+            } else {
+                Match::GuardOnly
+            }
         }
-        _ => None,
+        _ => Match::None,
     }
 }
 
