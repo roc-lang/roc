@@ -224,6 +224,12 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     The API and documentation are meant to interface with humans.
 * [DocC](https://developer.apple.com/videos/play/wwdc2021/10166/) neat documentation approach for swift. 
 
+## General Plugin Ideas
+
+### Inspiration
+
+- [Boop](https://github.com/IvanMathy/Boop) scriptable scratchpad for developers. Contains collection of useful conversions: json formatting, url encoding, encode to base64...
+
 ## General Thoughts/Ideas
 
 Thoughts and ideas possibly taken from above inspirations or separate.
