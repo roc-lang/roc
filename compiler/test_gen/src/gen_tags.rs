@@ -502,7 +502,42 @@ fn when_on_single_value_tag() {
 }
 
 #[test]
+#[ignore]
+fn if_guard_multiple() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            f = \n ->
+                when Identity n 0 is
+                        Identity x _ if x == 0 -> x + 0
+                        Identity x _ if x == 1 -> x + 0
+                        Identity x _ if x == 2 -> x + 0
+                        Identity x _ -> x - x
+
+            { a: f 0, b: f 1, c: f 2, d: f 4 }
+                "#
+        ),
+        (0, 1, 2, 0),
+        (i64, i64, i64, i64)
+    );
+}
+
+#[test]
 fn if_guard_constructor_switch() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Identity 32 0 is
+                    Identity 41 _ -> 0
+                    Identity s 0 if s == 32 -> 3
+                    # Identity s 0 -> s
+                    Identity z _ -> z
+                "#
+        ),
+        3,
+        i64
+    );
+
     assert_evals_to!(
         indoc!(
             r#"
@@ -531,13 +566,13 @@ fn if_guard_constructor_switch() {
 }
 
 #[test]
-#[ignore]
 fn if_guard_constructor_chain() {
     assert_evals_to!(
         indoc!(
             r#"
-            when Identity 43 "" is
-                    Identity 42 _ if 3 == 3 -> 1
+            when Identity 43 0 is
+                    Identity 42 _ if 3 == 3 -> 43
+                    # Identity 42 _ -> 1
                     Identity z _ -> z
                 "#
         ),
@@ -895,7 +930,7 @@ fn alignment_in_multi_tag_construction() {
         indoc!(
             r"#
                 x : [ Three Bool I64, Empty ]
-                x = Three (1 == 1) 32 
+                x = Three (1 == 1) 32
 
                 x
 
