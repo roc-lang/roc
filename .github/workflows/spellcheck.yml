@@ -9,7 +9,7 @@ jobs:
   spell-check:
     name: spell check
     runs-on: [self-hosted]
-    timeout-minutes: 20
+    timeout-minutes: 10
     env:
       FORCE_COLOR: 1
     steps:
