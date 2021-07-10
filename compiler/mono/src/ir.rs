@@ -5096,8 +5096,6 @@ fn from_can_when<'a>(
                     jump,
                 );
 
-                // let new_guard_stmt = store_pattern(env, procs, layout_cache, &pattern, cond_symbol, guard_stmt);
-
                 (
                     pattern.clone(),
                     Guard::Guard {
@@ -5108,9 +5106,7 @@ fn from_can_when<'a>(
                     branch_stmt,
                 )
             } else {
-                let new_branch_stmt =
-                    store_pattern(env, procs, layout_cache, &pattern, cond_symbol, branch_stmt);
-                (pattern, Guard::NoGuard, new_branch_stmt)
+                (pattern, Guard::NoGuard, branch_stmt)
             }
         });
     let mono_branches = Vec::from_iter_in(it, arena);

@@ -1078,11 +1078,15 @@ pub fn optimize_when<'a>(
         .into_iter()
         .enumerate()
         .map(|(index, (pattern, guard, branch))| {
-            ((guard, pattern, index as u64), (index as u64, branch))
+            let has_guard = !guard.is_none();
+            (
+                (guard, pattern.clone(), index as u64),
+                (index as u64, branch, pattern, has_guard),
+            )
         })
         .unzip();
 
-    let indexed_branches: Vec<(u64, Stmt<'a>)> = _indexed_branches;
+    let indexed_branches: Vec<_> = _indexed_branches;
 
     let decision_tree = compile(patterns);
     let decider = tree_to_decider(decision_tree);
@@ -1094,7 +1098,14 @@ pub fn optimize_when<'a>(
     let mut choices = MutMap::default();
     let mut jumps = Vec::new();
 
-    for (index, branch) in indexed_branches.into_iter() {
+    for (index, mut branch, pattern, has_guard) in indexed_branches.into_iter() {
+        // bind the fields referenced in the pattern. For guards this happens separately, so
+        // the pattern variables are defined when evaluating the guard.
+        if !has_guard {
+            branch =
+                crate::ir::store_pattern(env, procs, layout_cache, &pattern, cond_symbol, branch);
+        }
+
         let ((branch_index, choice), opt_jump) = create_choices(&target_counts, index, branch);
 
         if let Some((index, body)) = opt_jump {
