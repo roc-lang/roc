@@ -34,9 +34,8 @@ fn compile<'a>(raw_branches: Vec<(Guard<'a>, Pattern<'a>, u64)>) -> DecisionTree
 pub enum Guard<'a> {
     NoGuard,
     Guard {
-        /// Symbol that stores a boolean
-        /// when true this branch is picked, otherwise skipped
-        symbol: Symbol,
+        /// pattern
+        pattern: Pattern<'a>,
         /// after assigning to symbol, the stmt jumps to this label
         id: JoinPointId,
         stmt: Stmt<'a>,
@@ -63,8 +62,11 @@ enum DecisionTree<'a> {
 enum GuardedTest<'a> {
     // e.g. `_ if True -> ...`
     GuardedNoTest {
+        /// pattern
+        pattern: Pattern<'a>,
         /// after assigning to symbol, the stmt jumps to this label
         id: JoinPointId,
+        /// body
         stmt: Stmt<'a>,
     },
     TestNotGuarded {
@@ -172,12 +174,8 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
             match first.guard {
                 Guard::NoGuard => unreachable!(),
 
-                Guard::Guard {
-                    symbol: _,
-                    id,
-                    stmt,
-                } => {
-                    let guarded_test = GuardedTest::GuardedNoTest { id, stmt };
+                Guard::Guard { id, stmt, pattern } => {
+                    let guarded_test = GuardedTest::GuardedNoTest { id, stmt, pattern };
 
                     // the guard test does not have a path
                     let path = vec![];
@@ -1042,6 +1040,7 @@ enum Decider<'a, T> {
         /// after assigning to symbol, the stmt jumps to this label
         id: JoinPointId,
         stmt: Stmt<'a>,
+        pattern: Pattern<'a>,
 
         success: Box<Decider<'a, T>>,
         failure: Box<Decider<'a, T>>,
@@ -1577,6 +1576,7 @@ fn decide_to_branching<'a>(
         Guarded {
             id,
             stmt,
+            pattern,
             success,
             failure,
         } => {
@@ -1622,12 +1622,14 @@ fn decide_to_branching<'a>(
                 borrow: false,
             };
 
-            Stmt::Join {
+            let join = Stmt::Join {
                 id,
                 parameters: arena.alloc([param]),
                 remainder: arena.alloc(stmt),
                 body: arena.alloc(decide),
-            }
+            };
+
+            crate::ir::store_pattern(env, procs, layout_cache, &pattern, cond_symbol, join)
         }
         Chain {
             test_chain,
@@ -1949,13 +1951,14 @@ fn chain_decider<'a>(
     success_tree: DecisionTree<'a>,
 ) -> Decider<'a, u64> {
     match guarded_test {
-        GuardedTest::GuardedNoTest { id, stmt } => {
+        GuardedTest::GuardedNoTest { id, stmt, pattern } => {
             let failure = Box::new(tree_to_decider(failure_tree));
             let success = Box::new(tree_to_decider(success_tree));
 
             Decider::Guarded {
                 id,
                 stmt,
+                pattern,
                 success,
                 failure: failure.clone(),
             }
@@ -2082,11 +2085,13 @@ fn insert_choices<'a>(
         Guarded {
             id,
             stmt,
+            pattern,
             success,
             failure,
         } => Guarded {
             id,
             stmt,
+            pattern,
             success: Box::new(insert_choices(choice_dict, *success)),
             failure: Box::new(insert_choices(choice_dict, *failure)),
         },

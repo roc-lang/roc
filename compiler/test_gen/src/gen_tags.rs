@@ -510,8 +510,8 @@ fn if_guard_multiple() {
             f = \n ->
                 when Identity n 0 is
                         Identity x _ if x == 0 -> x + 0
-                        # Identity x _ if x == 1 -> x + 0
-                        # Identity x _ if x == 2 -> x + 0
+                        Identity x _ if x == 1 -> x + 0
+                        Identity x _ if x == 2 -> x + 0
                         Identity x _ -> x - x
 
             { a: f 0, b: f 1, c: f 2, d: f 4 }

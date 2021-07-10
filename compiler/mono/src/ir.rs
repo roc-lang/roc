@@ -5096,16 +5096,14 @@ fn from_can_when<'a>(
                     jump,
                 );
 
-                let new_guard_stmt =
-                    store_pattern(env, procs, layout_cache, &pattern, cond_symbol, guard_stmt);
+                // let new_guard_stmt = store_pattern(env, procs, layout_cache, &pattern, cond_symbol, guard_stmt);
 
-                dbg!(symbol);
                 (
-                    pattern,
+                    pattern.clone(),
                     Guard::Guard {
                         id,
-                        symbol,
-                        stmt: new_guard_stmt,
+                        pattern,
+                        stmt: guard_stmt,
                     },
                     branch_stmt,
                 )
@@ -5512,7 +5510,7 @@ fn substitute_in_expr<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn store_pattern<'a>(
+pub fn store_pattern<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
