@@ -514,11 +514,11 @@ fn if_guard_constructor() {
         assert_evals_to!(
             indoc!(
                 r#"
-                when Identity 42 is
-                    Identity 41 -> 0
-                    Identity s if s == 3 -> 0
-                    # Identity 43 -> 0
-                    Identity z -> z 
+                when Identity 42 "" is
+                    Identity 41 _ -> 0
+                    Identity 42 _ if 3 == 3 -> 0
+                    # Identity 43 _ -> 0
+                    Identity z _ -> z 
                 "#
             ),
             42,

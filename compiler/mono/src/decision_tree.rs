@@ -61,13 +61,6 @@ enum DecisionTree<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 enum GuardedTest<'a> {
-    TestGuarded {
-        test: Test<'a>,
-
-        /// after assigning to symbol, the stmt jumps to this label
-        id: JoinPointId,
-        stmt: Stmt<'a>,
-    },
     // e.g. `_ if True -> ...`
     GuardedNoTest {
         /// after assigning to symbol, the stmt jumps to this label
@@ -137,10 +130,6 @@ impl<'a> Hash for Test<'a> {
 impl<'a> Hash for GuardedTest<'a> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
-            GuardedTest::TestGuarded { test, .. } => {
-                state.write_u8(0);
-                test.hash(state);
-            }
             GuardedTest::GuardedNoTest { .. } => {
                 state.write_u8(1);
             }
@@ -249,7 +238,6 @@ fn guarded_tests_are_complete(tests: &[GuardedTest]) -> bool {
     debug_assert!(length > 0);
 
     match tests.last().unwrap() {
-        GuardedTest::TestGuarded { .. } => false,
         GuardedTest::GuardedNoTest { .. } => false,
         GuardedTest::TestNotGuarded { test } => tests_are_complete_help(test, length),
     }
@@ -519,15 +507,7 @@ fn test_at_path<'a>(
                 StrLiteral(v) => IsStr(v.clone()),
             };
 
-            let guarded_test = if let Guard::Guard { id, stmt, .. } = &branch.guard {
-                GuardedTest::TestGuarded {
-                    test,
-                    stmt: stmt.clone(),
-                    id: *id,
-                }
-            } else {
-                GuardedTest::TestNotGuarded { test }
-            };
+            let guarded_test = GuardedTest::TestNotGuarded { test };
 
             Some(guarded_test)
         }
@@ -565,30 +545,18 @@ fn to_relevant_branch<'a>(
             start,
             found_pattern: pattern,
             end,
-        } => {
-            let actual_test = match guarded_test {
-                GuardedTest::TestGuarded { test, .. } => test,
-                GuardedTest::GuardedNoTest { .. } => {
-                    let mut new_branch = branch.clone();
-
-                    new_branches.push(new_branch);
-                    return;
-                }
-                GuardedTest::TestNotGuarded { test } => test,
-            };
-
-            if let Some(mut new_branch) = to_relevant_branch_help(
-                actual_test,
-                path,
-                start,
-                end,
-                branch,
-                branch.guard.clone(),
-                pattern,
-            ) {
-                new_branches.push(new_branch);
+        } => match guarded_test {
+            GuardedTest::GuardedNoTest { .. } => {
+                new_branches.push(branch.clone());
             }
-        }
+            GuardedTest::TestNotGuarded { test } => {
+                if let Some(new_branch) =
+                    to_relevant_branch_help(test, path, start, end, branch, pattern)
+                {
+                    new_branches.push(new_branch);
+                }
+            }
+        },
     }
 }
 
@@ -598,7 +566,6 @@ fn to_relevant_branch_help<'a>(
     mut start: Vec<(Vec<PathInstruction>, Pattern<'a>)>,
     end: Vec<(Vec<PathInstruction>, Pattern<'a>)>,
     branch: &Branch<'a>,
-    guard: Guard<'a>,
     pattern: Pattern<'a>,
 ) -> Option<Branch<'a>> {
     use Pattern::*;
@@ -1879,7 +1846,7 @@ fn fanout_decider<'a>(
     let fallback_decider = tree_to_decider(fallback);
     let necessary_tests = edges
         .into_iter()
-        .map(|(test, tree)| fanout_decider_help(tree, test, &fallback_decider))
+        .map(|(test, tree)| fanout_decider_help(tree, test))
         .collect();
 
     Decider::FanOut {
@@ -1892,25 +1859,15 @@ fn fanout_decider<'a>(
 fn fanout_decider_help<'a>(
     dectree: DecisionTree<'a>,
     guarded_test: GuardedTest<'a>,
-    fallback_decider: &Decider<'a, u64>,
 ) -> (Test<'a>, Decider<'a, u64>) {
-    let decider = tree_to_decider(dectree);
-
     match guarded_test {
-        GuardedTest::TestGuarded { test, id, stmt } => {
-            let guarded = Decider::Guarded {
-                id,
-                stmt,
-                success: Box::new(decider),
-                failure: Box::new(fallback_decider.clone()),
-            };
-
-            (test, guarded)
-        }
         GuardedTest::GuardedNoTest { .. } => {
             unreachable!("this would not end up in a switch")
         }
-        GuardedTest::TestNotGuarded { test } => (test, decider),
+        GuardedTest::TestNotGuarded { test } => {
+            let decider = tree_to_decider(dectree);
+            (test, decider)
+        }
     }
 }
 
@@ -1921,23 +1878,6 @@ fn chain_decider<'a>(
     success_tree: DecisionTree<'a>,
 ) -> Decider<'a, u64> {
     match guarded_test {
-        GuardedTest::TestGuarded { test, id, stmt } => {
-            let failure = Box::new(tree_to_decider(failure_tree));
-            let success = Box::new(tree_to_decider(success_tree));
-
-            let guarded = Decider::Guarded {
-                id,
-                stmt,
-                success,
-                failure: failure.clone(),
-            };
-
-            Decider::Chain {
-                test_chain: vec![(path, test)],
-                success: Box::new(guarded),
-                failure,
-            }
-        }
         GuardedTest::GuardedNoTest { id, stmt } => {
             let failure = Box::new(tree_to_decider(failure_tree));
             let success = Box::new(tree_to_decider(success_tree));
