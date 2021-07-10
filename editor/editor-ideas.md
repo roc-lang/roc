@@ -153,6 +153,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     * search through a database of our zullip questions
     * ...
 * smart insert: press a shortcut and enter a plain english description of a code snippet you need. Examples: "convert string to list of chars", "sort list of records by field foo descending", "plot this list with date on x-axis"...
+* After the user has refactored code to be simpler, try finding other places in the code base where the same simplification can be made.
 
 #### Autocomplete
 
