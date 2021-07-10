@@ -17,7 +17,7 @@ const RECORD_TAG_NAME: &str = "#Record";
 /// some normal branches and gives out a decision tree that has "labels" at all
 /// the leafs and a dictionary that maps these "labels" to the code that should
 /// run.
-pub fn compile<'a>(raw_branches: Vec<(Guard<'a>, Pattern<'a>, u64)>) -> DecisionTree<'a> {
+fn compile<'a>(raw_branches: Vec<(Guard<'a>, Pattern<'a>, u64)>) -> DecisionTree<'a> {
     let formatted = raw_branches
         .into_iter()
         .map(|(guard, pattern, index)| Branch {
@@ -49,17 +49,38 @@ impl<'a> Guard<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum DecisionTree<'a> {
+enum DecisionTree<'a> {
     Match(Label),
     Decision {
         path: Vec<PathInstruction>,
-        edges: Vec<(Test<'a>, DecisionTree<'a>)>,
+        edges: Vec<(GuardedTest<'a>, DecisionTree<'a>)>,
         default: Option<Box<DecisionTree<'a>>>,
     },
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Test<'a> {
+enum GuardedTest<'a> {
+    TestGuarded {
+        test: Test<'a>,
+
+        /// after assigning to symbol, the stmt jumps to this label
+        id: JoinPointId,
+        stmt: Stmt<'a>,
+    },
+    // e.g. `_ if True -> ...`
+    GuardedNoTest {
+        /// after assigning to symbol, the stmt jumps to this label
+        id: JoinPointId,
+        stmt: Stmt<'a>,
+    },
+    TestNotGuarded {
+        test: Test<'a>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::enum_variant_names)]
+enum Test<'a> {
     IsCtor {
         tag_id: u8,
         tag_name: TagName,
@@ -74,16 +95,6 @@ pub enum Test<'a> {
     IsByte {
         tag_id: u8,
         num_alts: usize,
-    },
-    // A pattern that always succeeds (like `_`) can still have a guard
-    Guarded {
-        opt_test: Option<Box<Test<'a>>>,
-        /// Symbol that stores a boolean
-        /// when true this branch is picked, otherwise skipped
-        symbol: Symbol,
-        /// after assigning to symbol, the stmt jumps to this label
-        id: JoinPointId,
-        stmt: Stmt<'a>,
     },
 }
 use std::hash::{Hash, Hasher};
@@ -118,15 +129,23 @@ impl<'a> Hash for Test<'a> {
                 tag_id.hash(state);
                 num_alts.hash(state);
             }
-            Guarded { opt_test: None, .. } => {
-                state.write_u8(6);
+        }
+    }
+}
+
+impl<'a> Hash for GuardedTest<'a> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            GuardedTest::TestGuarded { test, .. } => {
+                state.write_u8(0);
+                test.hash(state);
             }
-            Guarded {
-                opt_test: Some(nested),
-                ..
-            } => {
-                state.write_u8(7);
-                nested.hash(state);
+            GuardedTest::GuardedNoTest { .. } => {
+                state.write_u8(1);
+            }
+            GuardedTest::TestNotGuarded { test } => {
+                state.write_u8(2);
+                test.hash(state);
             }
         }
     }
@@ -155,19 +174,25 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
                 .map(|(a, b)| (a, to_decision_tree(b)))
                 .collect();
 
-            match (decision_edges.split_last_mut(), fallback.split_last()) {
-                (Some(((_tag, decision_tree), rest)), None) if rest.is_empty() => {
-                    // TODO remove clone
-                    decision_tree.clone()
+            match (decision_edges.as_slice(), fallback.as_slice()) {
+                ([(_test, _decision_tree)], []) => {
+                    // only one test with no fallback: we will always enter this branch
+
+                    // get the `_decision_tree` without cloning
+                    decision_edges.pop().unwrap().1
                 }
-                (_, None) => DecisionTree::Decision {
-                    path: path.clone(),
+                (_, []) => DecisionTree::Decision {
+                    path,
                     edges: decision_edges,
                     default: None,
                 },
-                (None, Some(_)) => to_decision_tree(fallback),
-                _ => DecisionTree::Decision {
-                    path: path.clone(),
+                ([], _) => {
+                    // should be guaranteed by the patterns
+                    debug_assert!(!fallback.is_empty());
+                    to_decision_tree(fallback)
+                }
+                (_, _) => DecisionTree::Decision {
+                    path,
                     edges: decision_edges,
                     default: Some(Box::new(to_decision_tree(fallback))),
                 },
@@ -176,20 +201,25 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
     }
 }
 
-fn is_complete(tests: &[Test]) -> bool {
+fn guarded_tests_are_complete(tests: &[GuardedTest]) -> bool {
     let length = tests.len();
     debug_assert!(length > 0);
-    match tests.last() {
-        None => unreachable!("should never happen"),
-        Some(v) => match v {
-            Test::IsCtor { union, .. } => length == union.alternatives.len(),
-            Test::IsByte { num_alts, .. } => length == *num_alts,
-            Test::IsBit(_) => length == 2,
-            Test::IsInt(_) => false,
-            Test::IsFloat(_) => false,
-            Test::IsStr(_) => false,
-            Test::Guarded { .. } => false,
-        },
+
+    match tests.last().unwrap() {
+        GuardedTest::TestGuarded { .. } => false,
+        GuardedTest::GuardedNoTest { .. } => false,
+        GuardedTest::TestNotGuarded { test } => tests_are_complete_help(test, length),
+    }
+}
+
+fn tests_are_complete_help(last_test: &Test, number_of_tests: usize) -> bool {
+    match last_test {
+        Test::IsCtor { union, .. } => number_of_tests == union.alternatives.len(),
+        Test::IsByte { num_alts, .. } => number_of_tests == *num_alts,
+        Test::IsBit(_) => number_of_tests == 2,
+        Test::IsInt(_) => false,
+        Test::IsFloat(_) => false,
+        Test::IsStr(_) => false,
     }
 }
 
@@ -217,12 +247,7 @@ fn flatten<'a>(
             tag_id,
             tag_name,
             layout,
-        } if union.alternatives.len() == 1
-            && !matches!(
-                layout,
-                UnionLayout::NullableWrapped { .. } | UnionLayout::NullableUnwrapped { .. }
-            ) =>
-        {
+        } if union.alternatives.len() == 1 && !layout.is_nullable() => {
             // TODO ^ do we need to check that guard.is_none() here?
 
             let path = path_pattern.0;
@@ -292,10 +317,10 @@ fn check_for_match(branches: &[Branch]) -> Option<Label> {
 fn gather_edges<'a>(
     branches: Vec<Branch<'a>>,
     path: &[PathInstruction],
-) -> (Vec<(Test<'a>, Vec<Branch<'a>>)>, Vec<Branch<'a>>) {
+) -> (Vec<(GuardedTest<'a>, Vec<Branch<'a>>)>, Vec<Branch<'a>>) {
     let relevant_tests = tests_at_path(path, &branches);
 
-    let check = is_complete(&relevant_tests);
+    let check = guarded_tests_are_complete(&relevant_tests);
 
     // TODO remove clone
     let all_edges = relevant_tests
@@ -317,7 +342,10 @@ fn gather_edges<'a>(
 
 /// FIND RELEVANT TESTS
 
-fn tests_at_path<'a>(selected_path: &[PathInstruction], branches: &[Branch<'a>]) -> Vec<Test<'a>> {
+fn tests_at_path<'a>(
+    selected_path: &[PathInstruction],
+    branches: &[Branch<'a>],
+) -> Vec<GuardedTest<'a>> {
     // NOTE the ordering of the result is important!
 
     let mut all_tests = Vec::new();
@@ -354,7 +382,7 @@ fn tests_at_path<'a>(selected_path: &[PathInstruction], branches: &[Branch<'a>])
 fn test_at_path<'a>(
     selected_path: &[PathInstruction],
     branch: &Branch<'a>,
-    all_tests: &mut Vec<Test<'a>>,
+    guarded_tests: &mut Vec<GuardedTest<'a>>,
 ) {
     use Pattern::*;
     use Test::*;
@@ -366,30 +394,16 @@ fn test_at_path<'a>(
     {
         None => {}
         Some((_, guard, pattern)) => {
-            let guarded = |test| {
-                if let Guard::Guard { symbol, id, stmt } = guard {
-                    Guarded {
-                        opt_test: Some(Box::new(test)),
-                        stmt: stmt.clone(),
-                        symbol: *symbol,
-                        id: *id,
-                    }
-                } else {
-                    test
-                }
-            };
-
-            match pattern {
-                // TODO use guard!
+            let test = match pattern {
                 Identifier(_) | Underscore => {
-                    if let Guard::Guard { symbol, id, stmt } = guard {
-                        all_tests.push(Guarded {
-                            opt_test: None,
+                    if let Guard::Guard { id, stmt, .. } = guard {
+                        guarded_tests.push(GuardedTest::GuardedNoTest {
                             stmt: stmt.clone(),
-                            symbol: *symbol,
                             id: *id,
                         });
                     }
+
+                    return;
                 }
 
                 RecordDestructure(destructs, _) => {
@@ -416,12 +430,12 @@ fn test_at_path<'a>(
                         }
                     }
 
-                    all_tests.push(IsCtor {
+                    IsCtor {
                         tag_id: 0,
                         tag_name: TagName::Global(RECORD_TAG_NAME.into()),
                         union,
                         arguments,
-                    });
+                    }
                 }
 
                 NewtypeDestructure {
@@ -431,12 +445,12 @@ fn test_at_path<'a>(
                     let tag_id = 0;
                     let union = Union::newtype_wrapper(tag_name.clone(), arguments.len());
 
-                    all_tests.push(IsCtor {
+                    IsCtor {
                         tag_id,
                         tag_name: tag_name.clone(),
                         union,
                         arguments: arguments.to_vec(),
-                    });
+                    }
                 }
 
                 AppliedTag {
@@ -445,33 +459,33 @@ fn test_at_path<'a>(
                     arguments,
                     union,
                     ..
-                } => {
-                    all_tests.push(IsCtor {
-                        tag_id: *tag_id,
-                        tag_name: tag_name.clone(),
-                        union: union.clone(),
-                        arguments: arguments.to_vec(),
-                    });
-                }
-                BitLiteral { value, .. } => {
-                    all_tests.push(IsBit(*value));
-                }
-                EnumLiteral { tag_id, union, .. } => {
-                    all_tests.push(IsByte {
-                        tag_id: *tag_id,
-                        num_alts: union.alternatives.len(),
-                    });
-                }
-                IntLiteral(v) => {
-                    all_tests.push(guarded(IsInt(*v)));
-                }
-                FloatLiteral(v) => {
-                    all_tests.push(IsFloat(*v));
-                }
-                StrLiteral(v) => {
-                    all_tests.push(IsStr(v.clone()));
-                }
+                } => IsCtor {
+                    tag_id: *tag_id,
+                    tag_name: tag_name.clone(),
+                    union: union.clone(),
+                    arguments: arguments.to_vec(),
+                },
+                BitLiteral { value, .. } => IsBit(*value),
+                EnumLiteral { tag_id, union, .. } => IsByte {
+                    tag_id: *tag_id,
+                    num_alts: union.alternatives.len(),
+                },
+                IntLiteral(v) => IsInt(*v),
+                FloatLiteral(v) => IsFloat(*v),
+                StrLiteral(v) => IsStr(v.clone()),
             };
+
+            let guarded_test = if let Guard::Guard { id, stmt, .. } = guard {
+                GuardedTest::TestGuarded {
+                    test,
+                    stmt: stmt.clone(),
+                    id: *id,
+                }
+            } else {
+                GuardedTest::TestNotGuarded { test }
+            };
+
+            guarded_tests.push(guarded_test);
         }
     }
 }
@@ -481,8 +495,8 @@ fn test_at_path<'a>(
 fn edges_for<'a>(
     path: &[PathInstruction],
     branches: Vec<Branch<'a>>,
-    test: Test<'a>,
-) -> (Test<'a>, Vec<Branch<'a>>) {
+    test: GuardedTest<'a>,
+) -> (GuardedTest<'a>, Vec<Branch<'a>>) {
     let mut new_branches = Vec::new();
 
     for branch in branches.iter() {
@@ -493,7 +507,7 @@ fn edges_for<'a>(
 }
 
 fn to_relevant_branch<'a>(
-    test: &Test<'a>,
+    guarded_test: &GuardedTest<'a>,
     path: &[PathInstruction],
     branch: &Branch<'a>,
     new_branches: &mut Vec<Branch<'a>>,
@@ -508,12 +522,22 @@ fn to_relevant_branch<'a>(
             found_pattern: (guard, pattern),
             end,
         } => {
-            let actual_test = match test {
-                Test::Guarded {
-                    opt_test: Some(box_test),
-                    ..
-                } => box_test,
-                _ => test,
+            let actual_test = match guarded_test {
+                GuardedTest::TestGuarded { test, .. } => test,
+                GuardedTest::GuardedNoTest { .. } => {
+                    let mut new_branch = branch.clone();
+
+                    // guards can/should only occur at the top level. When we recurse on these
+                    // branches, the guard is not relevant any more. Not setthing the guard to None
+                    // leads to infinite recursion.
+                    new_branch.patterns.iter_mut().for_each(|(_, guard, _)| {
+                        *guard = Guard::NoGuard;
+                    });
+
+                    new_branches.push(new_branch);
+                    return;
+                }
+                GuardedTest::TestNotGuarded { test } => test,
             };
 
             if let Some(mut new_branch) =
@@ -932,6 +956,14 @@ fn small_branching_factor(branches: &[Branch], path: &[PathInstruction]) -> usiz
 #[derive(Clone, Debug, PartialEq)]
 enum Decider<'a, T> {
     Leaf(T),
+    Guarded {
+        /// after assigning to symbol, the stmt jumps to this label
+        id: JoinPointId,
+        stmt: Stmt<'a>,
+
+        success: Box<Decider<'a, T>>,
+        failure: Box<Decider<'a, T>>,
+    },
     Chain {
         test_chain: Vec<(Vec<PathInstruction>, Test<'a>)>,
         success: Box<Decider<'a, T>>,
@@ -1018,7 +1050,7 @@ pub fn optimize_when<'a>(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PathInstruction {
+struct PathInstruction {
     index: u64,
     tag_id: u8,
 }
@@ -1122,8 +1154,10 @@ fn test_to_equality<'a>(
                     let lhs_symbol = env.unique_symbol();
                     let rhs_symbol = env.unique_symbol();
 
-                    stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
-                    stores.push((rhs_symbol, Layout::Builtin(Builtin::Int64), rhs));
+                    let tag_id_layout = union_layout.tag_id_layout();
+
+                    stores.push((lhs_symbol, tag_id_layout, lhs));
+                    stores.push((rhs_symbol, tag_id_layout, rhs));
 
                     (
                         stores,
@@ -1216,8 +1250,6 @@ fn test_to_equality<'a>(
                 None,
             )
         }
-
-        Test::Guarded { .. } => unreachable!("should be handled elsewhere"),
     }
 }
 
@@ -1234,82 +1266,21 @@ fn stores_and_condition<'a>(
     cond_symbol: Symbol,
     cond_layout: &Layout<'a>,
     test_chain: Vec<(Vec<PathInstruction>, Test<'a>)>,
-) -> (Tests<'a>, Option<(Symbol, JoinPointId, Stmt<'a>)>) {
+) -> Tests<'a> {
     let mut tests: Tests = Vec::with_capacity(test_chain.len());
-
-    let mut guard = None;
 
     // Assumption: there is at most 1 guard, and it is the outer layer.
     for (path, test) in test_chain {
-        match test {
-            Test::Guarded {
-                opt_test,
-                id,
-                symbol,
-                stmt,
-            } => {
-                if let Some(nested) = opt_test {
-                    tests.push(test_to_equality(
-                        env,
-                        cond_symbol,
-                        &cond_layout,
-                        &path,
-                        *nested,
-                    ));
-                }
-
-                // let (stores, rhs_symbol) = path_to_expr(env, cond_symbol, &path, &cond_layout);
-
-                guard = Some((symbol, id, stmt));
-            }
-
-            _ => tests.push(test_to_equality(
-                env,
-                cond_symbol,
-                &cond_layout,
-                &path,
-                test,
-            )),
-        }
+        tests.push(test_to_equality(
+            env,
+            cond_symbol,
+            &cond_layout,
+            &path,
+            test,
+        ))
     }
 
-    (tests, guard)
-}
-
-fn compile_guard<'a>(
-    env: &mut Env<'a, '_>,
-    ret_layout: Layout<'a>,
-    id: JoinPointId,
-    stmt: &'a Stmt<'a>,
-    fail: &'a Stmt<'a>,
-    mut cond: Stmt<'a>,
-) -> Stmt<'a> {
-    // the guard is the final thing that we check, so needs to be layered on first!
-    let test_symbol = env.unique_symbol();
-    let arena = env.arena;
-
-    cond = crate::ir::cond(
-        env,
-        test_symbol,
-        Layout::Builtin(Builtin::Int1),
-        cond,
-        fail.clone(),
-        ret_layout,
-    );
-
-    // calculate the guard value
-    let param = Param {
-        symbol: test_symbol,
-        layout: Layout::Builtin(Builtin::Int1),
-        borrow: false,
-    };
-
-    Stmt::Join {
-        id,
-        parameters: arena.alloc([param]),
-        remainder: stmt,
-        body: arena.alloc(cond),
-    }
+    tests
 }
 
 fn compile_test<'a>(
@@ -1429,17 +1400,9 @@ fn compile_tests<'a>(
     env: &mut Env<'a, '_>,
     ret_layout: Layout<'a>,
     tests: Tests<'a>,
-    opt_guard: Option<(Symbol, JoinPointId, Stmt<'a>)>,
     fail: &'a Stmt<'a>,
     mut cond: Stmt<'a>,
 ) -> Stmt<'a> {
-    let arena = env.arena;
-
-    // the guard is the final thing that we check, so needs to be layered on first!
-    if let Some((_, id, stmt)) = opt_guard {
-        cond = compile_guard(env, ret_layout, id, arena.alloc(stmt), fail, cond);
-    }
-
     for (new_stores, lhs, rhs, _layout, opt_constructor_info) in tests.into_iter() {
         match opt_constructor_info {
             None => {
@@ -1529,6 +1492,61 @@ fn decide_to_branching<'a>(
             Stmt::Jump(jumps[index].1, &[])
         }
         Leaf(Inline(expr)) => expr,
+        Guarded {
+            id,
+            stmt,
+            success,
+            failure,
+        } => {
+            // the guard is the final thing that we check, so needs to be layered on first!
+            let test_symbol = env.unique_symbol();
+            let arena = env.arena;
+
+            let pass_expr = decide_to_branching(
+                env,
+                procs,
+                layout_cache,
+                cond_symbol,
+                cond_layout,
+                ret_layout,
+                *success,
+                jumps,
+            );
+
+            let fail_expr = decide_to_branching(
+                env,
+                procs,
+                layout_cache,
+                cond_symbol,
+                cond_layout,
+                ret_layout,
+                *failure,
+                jumps,
+            );
+
+            let decide = crate::ir::cond(
+                env,
+                test_symbol,
+                Layout::Builtin(Builtin::Int1),
+                pass_expr,
+                fail_expr,
+                ret_layout,
+            );
+
+            // calculate the guard value
+            let param = Param {
+                symbol: test_symbol,
+                layout: Layout::Builtin(Builtin::Int1),
+                borrow: false,
+            };
+
+            Stmt::Join {
+                id,
+                parameters: arena.alloc([param]),
+                remainder: arena.alloc(stmt),
+                body: arena.alloc(decide),
+            }
+        }
         Chain {
             test_chain,
             success,
@@ -1561,9 +1579,9 @@ fn decide_to_branching<'a>(
             let chain_branch_info =
                 ConstructorKnown::from_test_chain(cond_symbol, &cond_layout, &test_chain);
 
-            let (tests, guard) = stores_and_condition(env, cond_symbol, &cond_layout, test_chain);
+            let tests = stores_and_condition(env, cond_symbol, &cond_layout, test_chain);
 
-            let number_of_tests = tests.len() as i64 + guard.is_some() as i64;
+            let number_of_tests = tests.len() as i64;
 
             debug_assert!(number_of_tests > 0);
 
@@ -1571,32 +1589,25 @@ fn decide_to_branching<'a>(
             if number_of_tests == 1 {
                 // if there is just one test, compile to a simple if-then-else
 
-                if guard.is_none() {
-                    // use knowledge about constructors for optimization
-                    debug_assert_eq!(tests.len(), 1);
+                let (new_stores, lhs, rhs, _layout, _cinfo) = tests.into_iter().next().unwrap();
 
-                    let (new_stores, lhs, rhs, _layout, _cinfo) = tests.into_iter().next().unwrap();
-
-                    compile_test_help(
-                        env,
-                        chain_branch_info,
-                        ret_layout,
-                        new_stores,
-                        lhs,
-                        rhs,
-                        fail,
-                        pass_expr,
-                    )
-                } else {
-                    compile_tests(env, ret_layout, tests, guard, fail, pass_expr)
-                }
+                compile_test_help(
+                    env,
+                    chain_branch_info,
+                    ret_layout,
+                    new_stores,
+                    lhs,
+                    rhs,
+                    fail,
+                    pass_expr,
+                )
             } else {
                 // otherwise, we use a join point so the code for the `else` case
                 // is only generated once.
                 let fail_jp_id = JoinPointId(env.unique_symbol());
                 let jump = arena.alloc(Stmt::Jump(fail_jp_id, &[]));
 
-                let test_stmt = compile_tests(env, ret_layout, tests, guard, jump, pass_expr);
+                let test_stmt = compile_tests(env, ret_layout, tests, jump, pass_expr);
 
                 Stmt::Join {
                     id: fail_jp_id,
@@ -1689,7 +1700,7 @@ fn decide_to_branching<'a>(
                 let tag_id_symbol = env.unique_symbol();
 
                 let temp = Stmt::Switch {
-                    cond_layout: Layout::TAG_SIZE,
+                    cond_layout: union_layout.tag_id_layout(),
                     cond_symbol: tag_id_symbol,
                     branches: branches.into_bump_slice(),
                     default_branch: (default_branch_info, env.arena.alloc(default_branch)),
@@ -1701,7 +1712,12 @@ fn decide_to_branching<'a>(
                     union_layout,
                 };
 
-                Stmt::Let(tag_id_symbol, expr, Layout::TAG_SIZE, env.arena.alloc(temp))
+                Stmt::Let(
+                    tag_id_symbol,
+                    expr,
+                    union_layout.tag_id_layout(),
+                    env.arena.alloc(temp),
+                )
             } else {
                 Stmt::Switch {
                     cond_layout: inner_cond_layout,
@@ -1780,28 +1796,15 @@ fn tree_to_decider(tree: DecisionTree) -> Decider<u64> {
                 }
                 2 => {
                     let (_, failure_tree) = edges.remove(1);
-                    let (test, success_tree) = edges.remove(0);
+                    let (guarded_test, success_tree) = edges.remove(0);
 
-                    if test_always_succeeds(&test) {
-                        tree_to_decider(success_tree)
-                    } else {
-                        to_chain(path, test, success_tree, failure_tree)
-                    }
+                    chain_decider(path, guarded_test, failure_tree, success_tree)
                 }
 
                 _ => {
                     let fallback = edges.remove(edges.len() - 1).1;
 
-                    let necessary_tests = edges
-                        .into_iter()
-                        .map(|(test, decider)| (test, tree_to_decider(decider)))
-                        .collect();
-
-                    FanOut {
-                        path,
-                        tests: necessary_tests,
-                        fallback: Box::new(tree_to_decider(fallback)),
-                    }
+                    fanout_decider(path, fallback, edges)
                 }
             },
 
@@ -1809,31 +1812,106 @@ fn tree_to_decider(tree: DecisionTree) -> Decider<u64> {
                 0 => tree_to_decider(*last),
                 1 => {
                     let failure_tree = *last;
-                    let (test, success_tree) = edges.remove(0);
+                    let (guarded_test, success_tree) = edges.remove(0);
 
-                    if test_always_succeeds(&test) {
-                        tree_to_decider(success_tree)
-                    } else {
-                        to_chain(path, test, success_tree, failure_tree)
-                    }
+                    chain_decider(path, guarded_test, failure_tree, success_tree)
                 }
 
                 _ => {
                     let fallback = *last;
 
-                    let necessary_tests = edges
-                        .into_iter()
-                        .map(|(test, decider)| (test, tree_to_decider(decider)))
-                        .collect();
-
-                    FanOut {
-                        path,
-                        tests: necessary_tests,
-                        fallback: Box::new(tree_to_decider(fallback)),
-                    }
+                    fanout_decider(path, fallback, edges)
                 }
             },
         },
+    }
+}
+
+fn fanout_decider<'a>(
+    path: Vec<PathInstruction>,
+    fallback: DecisionTree<'a>,
+    edges: Vec<(GuardedTest<'a>, DecisionTree<'a>)>,
+) -> Decider<'a, u64> {
+    let fallback_decider = tree_to_decider(fallback);
+    let necessary_tests = edges
+        .into_iter()
+        .map(|(test, tree)| fanout_decider_help(tree, test, &fallback_decider))
+        .collect();
+
+    Decider::FanOut {
+        path,
+        tests: necessary_tests,
+        fallback: Box::new(fallback_decider),
+    }
+}
+
+fn fanout_decider_help<'a>(
+    dectree: DecisionTree<'a>,
+    guarded_test: GuardedTest<'a>,
+    fallback_decider: &Decider<'a, u64>,
+) -> (Test<'a>, Decider<'a, u64>) {
+    let decider = tree_to_decider(dectree);
+
+    match guarded_test {
+        GuardedTest::TestGuarded { test, id, stmt } => {
+            let guarded = Decider::Guarded {
+                id,
+                stmt,
+                success: Box::new(decider),
+                failure: Box::new(fallback_decider.clone()),
+            };
+
+            (test, guarded)
+        }
+        GuardedTest::GuardedNoTest { .. } => {
+            unreachable!("this would not end up in a switch")
+        }
+        GuardedTest::TestNotGuarded { test } => (test, decider),
+    }
+}
+
+fn chain_decider<'a>(
+    path: Vec<PathInstruction>,
+    guarded_test: GuardedTest<'a>,
+    failure_tree: DecisionTree<'a>,
+    success_tree: DecisionTree<'a>,
+) -> Decider<'a, u64> {
+    match guarded_test {
+        GuardedTest::TestGuarded { test, id, stmt } => {
+            let failure = Box::new(tree_to_decider(failure_tree));
+            let success = Box::new(tree_to_decider(success_tree));
+
+            let guarded = Decider::Guarded {
+                id,
+                stmt,
+                success,
+                failure: failure.clone(),
+            };
+
+            Decider::Chain {
+                test_chain: vec![(path, test)],
+                success: Box::new(guarded),
+                failure,
+            }
+        }
+        GuardedTest::GuardedNoTest { id, stmt } => {
+            let failure = Box::new(tree_to_decider(failure_tree));
+            let success = Box::new(tree_to_decider(success_tree));
+
+            Decider::Guarded {
+                id,
+                stmt,
+                success,
+                failure: failure.clone(),
+            }
+        }
+        GuardedTest::TestNotGuarded { test } => {
+            if test_always_succeeds(&test) {
+                tree_to_decider(success_tree)
+            } else {
+                to_chain(path, test, success_tree, failure_tree)
+            }
+        }
     }
 }
 
@@ -1886,6 +1964,13 @@ fn count_targets(targets: &mut bumpalo::collections::Vec<u64>, initial: &Decider
                 targets[*target as usize] += 1;
             }
 
+            Guarded {
+                success, failure, ..
+            } => {
+                stack.push(success);
+                stack.push(failure);
+            }
+
             Chain {
                 success, failure, ..
             } => {
@@ -1933,6 +2018,18 @@ fn insert_choices<'a>(
             // Only targes that appear once are Inline, so it's safe to remove them from the dict.
             Leaf(choice_dict[&target].clone())
         }
+
+        Guarded {
+            id,
+            stmt,
+            success,
+            failure,
+        } => Guarded {
+            id,
+            stmt,
+            success: Box::new(insert_choices(choice_dict, *success)),
+            failure: Box::new(insert_choices(choice_dict, *failure)),
+        },
 
         Chain {
             test_chain,
