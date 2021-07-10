@@ -5098,6 +5098,8 @@ fn from_can_when<'a>(
 
                 let new_guard_stmt =
                     store_pattern(env, procs, layout_cache, &pattern, cond_symbol, guard_stmt);
+
+                dbg!(symbol);
                 (
                     pattern,
                     Guard::Guard {

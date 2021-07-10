@@ -228,13 +228,13 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
                     // get the `_decision_tree` without cloning
                     decision_edges.pop().unwrap().1
                 }
-                (_, []) => helper(path, decision_edges, None),
+                (_, []) => break_out_guard(path, decision_edges, None),
                 ([], _) => {
                     // should be guaranteed by the patterns
                     debug_assert!(!fallback.is_empty());
                     to_decision_tree(fallback)
                 }
-                (_, _) => helper(
+                (_, _) => break_out_guard(
                     path,
                     decision_edges,
                     Some(Box::new(to_decision_tree(fallback))),
@@ -244,7 +244,8 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
     }
 }
 
-fn helper<'a>(
+/// Give a guard it's own Decision
+fn break_out_guard<'a>(
     path: Vec<PathInstruction>,
     mut edges: Vec<(GuardedTest<'a>, DecisionTree<'a>)>,
     default: Option<Box<DecisionTree<'a>>>,
@@ -261,7 +262,7 @@ fn helper<'a>(
         Some(index) => {
             let (a, b) = edges.split_at_mut(index + 1);
 
-            let new_default = helper(path.clone(), b.to_vec(), default);
+            let new_default = break_out_guard(path.clone(), b.to_vec(), default);
 
             let mut left = a.to_vec();
             let guard = left.pop().unwrap();
