@@ -145,7 +145,7 @@ impl<'a> Hash for GuardedTest<'a> {
                 state.write_u8(1);
             }
             GuardedTest::TestNotGuarded { test } => {
-                state.write_u8(2);
+                state.write_u8(0);
                 test.hash(state);
             }
         }
