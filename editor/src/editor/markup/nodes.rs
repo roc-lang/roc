@@ -83,22 +83,24 @@ impl MarkupNode {
     ) -> EdResult<(usize, usize)> {
         match self {
             MarkupNode::Nested { children_ids, .. } => {
-                let mark_position_opt = children_ids.iter().position(|&c_id| c_id == child_id);
+                let mut mark_child_index_opt: Option<usize> = None;
+                let mut child_ids_with_ast: Vec<MarkNodeId> = Vec::new();
+                let self_ast_id = self.get_ast_node_id();
 
-                if let Some(child_index) = mark_position_opt {
-                    let self_ast_id = self.get_ast_node_id();
+                for (indx, &mark_child_id) in children_ids.iter().enumerate() {
+                    if mark_child_id == child_id {
+                        mark_child_index_opt = Some(indx);
+                    }
 
-                    let child_ids_with_ast = children_ids
-                        .iter()
-                        .filter(|c_id| {
-                            let child_mark_node = markup_node_pool.get(**c_id);
-                            // a node that points to the same ast_node as the parent is a ',', '[', ']'
-                            // those are not "real" ast children
-                            child_mark_node.get_ast_node_id() != self_ast_id
-                        })
-                        .copied()
-                        .collect::<Vec<MarkNodeId>>();
+                    let child_mark_node = markup_node_pool.get(mark_child_id);
+                    // a node that points to the same ast_node as the parent is a ',', '[', ']'
+                    // those are not "real" ast children
+                    if child_mark_node.get_ast_node_id() != self_ast_id {
+                        child_ids_with_ast.push(mark_child_id)
+                    }
+                }
 
+                if let Some(child_index) = mark_child_index_opt {
                     if child_index == (children_ids.len() - 1) {
                         let ast_child_index = child_ids_with_ast.len();
 
