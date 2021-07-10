@@ -247,6 +247,7 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
 
         let href = {
             let mut href_buf = String::new();
+            href_buf.push('/');
             href_buf.push_str(name);
             href_buf
         };
