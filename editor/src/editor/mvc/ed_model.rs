@@ -1,12 +1,11 @@
 use crate::editor::code_lines::CodeLines;
 use crate::editor::grid_node_map::GridNodeMap;
+use crate::editor::markup::common_nodes::new_blank_mn;
 use crate::editor::slow_pool::{MarkNodeId, SlowPool};
-use crate::editor::syntax_highlight::HighlightStyle;
 use crate::editor::{
     ed_error::EdError::ParseError,
     ed_error::{EdResult, MissingParent, NoNodeAtCaretPosition},
-    markup::attribute::Attributes,
-    markup::nodes::{expr2_to_markup, set_parent_for_all, MarkupNode},
+    markup::nodes::{expr2_to_markup, set_parent_for_all},
 };
 use crate::graphics::primitives::rect::Rect;
 use crate::lang::ast::Expr2;
@@ -65,14 +64,7 @@ pub fn init_model<'a>(
     let mut markup_node_pool = SlowPool::new();
 
     let markup_root_id = if code_str.is_empty() {
-        let blank_root = MarkupNode::Blank {
-            ast_node_id: ast_root_id,
-            attributes: Attributes::new(),
-            syn_high_style: HighlightStyle::Blank,
-            parent_id_opt: None,
-        };
-
-        markup_node_pool.add(blank_root)
+        new_blank_mn(ast_root_id, None, &mut markup_node_pool)
     } else {
         let ast_root = &module.env.pool.get(ast_root_id);
 

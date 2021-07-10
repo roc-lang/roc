@@ -1,6 +1,7 @@
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::{MissingParent, UnexpectedASTNode};
 use crate::editor::markup::attribute::Attributes;
+use crate::editor::markup::common_nodes::{new_blank_mn, new_comma_mn};
 use crate::editor::markup::nodes;
 use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::app_update::InputOutcome;
@@ -191,27 +192,16 @@ pub fn update_mark_children(
     parent_id_opt: Option<MarkNodeId>,
     ed_model: &mut EdModel,
 ) -> EdResult<Vec<MarkNodeId>> {
-    let blank_mark_node = MarkupNode::Blank {
-        ast_node_id: blank_elt_id,
-        syn_high_style: HighlightStyle::Blank,
-        attributes: Attributes::new(),
-        parent_id_opt,
-    };
 
-    let blank_mark_node_id = ed_model.markup_node_pool.add(blank_mark_node);
+    let blank_mark_node_id =
+        new_blank_mn(blank_elt_id, parent_id_opt, &mut ed_model.markup_node_pool);
 
     let mut children: Vec<MarkNodeId> = vec![];
 
     if new_child_index > 1 {
-        let comma_mark_node = MarkupNode::Text {
-            content: nodes::COMMA.to_owned(),
-            ast_node_id: list_ast_node_id,
-            syn_high_style: HighlightStyle::Blank,
-            attributes: Attributes::new(),
-            parent_id_opt,
-        };
 
-        let comma_mark_node_id = ed_model.markup_node_pool.add(comma_mark_node);
+        let comma_mark_node_id =
+            new_comma_mn(list_ast_node_id, parent_id_opt, &mut ed_model.markup_node_pool);
 
         ed_model.simple_move_carets_right(nodes::COMMA.len());
 

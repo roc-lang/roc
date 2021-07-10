@@ -1,7 +1,6 @@
 use super::attribute::Attributes;
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::ExpectedTextNode;
-use crate::editor::ed_error::GetContentOnNestedNode;
 use crate::editor::ed_error::{NestedNodeMissingChild, NestedNodeRequired};
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
@@ -151,11 +150,23 @@ impl MarkupNode {
     }
 
     // can't be &str, this creates borrowing issues
-    pub fn get_content(&self) -> EdResult<String> {
+    pub fn get_content(&self, markup_node_pool: &SlowPool) -> String {
         match self {
-            MarkupNode::Nested { .. } => GetContentOnNestedNode {}.fail(),
-            MarkupNode::Text { content, .. } => Ok(content.clone()),
-            MarkupNode::Blank { .. } => Ok(BLANK_PLACEHOLDER.to_owned()),
+            MarkupNode::Nested { children_ids, .. } => {
+                let mut full_str = String::new();
+
+                for child_id in children_ids.iter() {
+                    let child_node = markup_node_pool.get(*child_id);
+
+                    full_str.push_str(
+                        &child_node.get_content(markup_node_pool)
+                    );
+                }
+
+                full_str
+            },
+            MarkupNode::Text { content, .. } => content.clone(),
+            MarkupNode::Blank { .. } => BLANK_PLACEHOLDER.to_owned(),
         }
     }
 
@@ -175,11 +186,11 @@ impl MarkupNode {
         }
     }
 
-    pub fn is_all_alphanumeric(&self) -> EdResult<bool> {
-        Ok(self
-            .get_content()?
+    pub fn is_all_alphanumeric(&self, markup_node_pool: &SlowPool) -> bool {
+        self
+            .get_content(markup_node_pool)
             .chars()
-            .all(|chr| chr.is_ascii_alphanumeric()))
+            .all(|chr| chr.is_ascii_alphanumeric())
     }
 
     pub fn add_child_at_index(&mut self, index: usize, child_id: MarkNodeId) -> EdResult<()> {
@@ -226,6 +237,7 @@ pub const RIGHT_SQUARE_BR: &str = " ]";
 pub const COLON: &str = ": ";
 pub const COMMA: &str = ", ";
 pub const STRING_QUOTES: &str = "\"\"";
+pub const EQUALS: &str = " = ";
 
 fn new_markup_node(
     text: String,

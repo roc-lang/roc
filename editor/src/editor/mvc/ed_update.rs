@@ -582,6 +582,9 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
                             if let Expr2::Blank {..} = ast_node_ref {
                                 match ch {
+                                    /*'a'..='z' => {
+                                        start_new_let_value(ed_model, ch)?
+                                    }*/
                                     '"' => {
                                         start_new_string(ed_model)?
                                     },

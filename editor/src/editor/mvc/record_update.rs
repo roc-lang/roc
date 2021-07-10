@@ -2,6 +2,7 @@ use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::MissingParent;
 use crate::editor::ed_error::RecordWithoutFields;
 use crate::editor::markup::attribute::Attributes;
+use crate::editor::markup::common_nodes::new_blank_mn;
 use crate::editor::markup::nodes;
 use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::app_update::InputOutcome;
@@ -249,15 +250,9 @@ pub fn update_record_colon(
                                     .get_mut(parent_id)
                                     .add_child_at_index(new_child_index, record_colon_node_id)?;
 
-                                let record_blank_node = MarkupNode::Blank {
-                                    ast_node_id: new_field_val_id,
-                                    syn_high_style: HighlightStyle::Blank,
-                                    attributes: Attributes::new(),
-                                    parent_id_opt: Some(parent_id),
-                                };
-
                                 let record_blank_node_id =
-                                    ed_model.markup_node_pool.add(record_blank_node);
+                                    new_blank_mn(new_field_val_id, Some(parent_id), &mut ed_model.markup_node_pool);
+                                
                                 ed_model
                                     .markup_node_pool
                                     .get_mut(parent_id)

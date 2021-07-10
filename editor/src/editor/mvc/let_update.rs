@@ -1,6 +1,8 @@
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::StringParseError;
 use crate::editor::markup::attribute::Attributes;
+use crate::editor::markup::common_nodes::new_blank_mn;
+use crate::editor::markup::common_nodes::new_equals_mn;
 use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
@@ -8,14 +10,16 @@ use crate::editor::mvc::ed_update::get_node_context;
 use crate::editor::mvc::ed_update::NodeContext;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::syntax_highlight::HighlightStyle;
+use crate::lang::ast::ArrString;
+use crate::lang::ast::{Expr2, ValueDef};
 use crate::lang::ast::Expr2::SmallInt;
 use crate::lang::ast::IntVal;
 use crate::lang::ast::{IntStyle, IntVal::*};
 use crate::lang::pool::PoolStr;
 use crate::ui::text::lines::SelectableLines;
 
-// digit_char should be verified to be a digit before calling this function
-pub fn start_new_int(ed_model: &mut EdModel, digit_char: &char) -> EdResult<InputOutcome> {
+
+pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<InputOutcome> {
     let NodeContext {
         old_caret_pos,
         curr_mark_node_id,
@@ -26,31 +30,58 @@ pub fn start_new_int(ed_model: &mut EdModel, digit_char: &char) -> EdResult<Inpu
 
     let is_blank_node = curr_mark_node.is_blank();
 
-    let int_var = ed_model.module.env.var_store.fresh();
+    let val_name_string = new_char.to_string();
+    // safe unwrap because our ArrString has a 30B capacity
+    let mut val_name_string_container = ArrString::try_from_str(val_name_string).unwrap();
+    let val_name_expr2_node = 
+        Expr2::SmallStr(
+            val_name_string_container
+        );
+    let val_name_expr_id = ed_model.module.env.pool.add(val_name_expr2_node);
 
-    let digit_string = digit_char.to_string();
+    let body_placeholder = Expr2::Blank;
+    let body_id = ed_model.module.env.pool.add(body_placeholder);
 
-    let expr2_node = SmallInt {
-        number: IntVal::U64(*digit_char as u64), // TODO determine if u64 on wordlength of current arch, perhaps introduce Unknown(i64)
-        var: int_var,
-        style: IntStyle::Decimal,
-        text: PoolStr::new(&digit_string, &mut ed_model.module.env.pool),
+    let value_def =
+        ValueDef::NoAnnotation {
+            pattern_id: Pattern2::Identifier(val_name_string),
+            expr_id: val_name_expr_id,
+            expr_var: ed_model.module.env.var_store.fresh()
+        };
+    let def_id = ed_model.module.env.pool.add(value_def);
+
+    let expr2_node = Expr2::LetValue {
+        def_id,
+        body_id,
+        body_var: ed_model.module.env.var_store.fresh(),
     };
 
     ed_model.module.env.pool.set(ast_node_id, expr2_node);
 
-    let int_node = MarkupNode::Text {
-        content: digit_string,
+    let val_name_mark_node = MarkupNode::Text {
+        content: val_name_string,
         ast_node_id,
-        syn_high_style: HighlightStyle::Number,
+        syn_high_style: HighlightStyle::Variable,
         attributes: Attributes::new(),
+        parent_id_opt: Some(curr_mark_node_id),
+    };
+
+    let val_name_mn_id = ed_model.markup_node_pool.add(val_name_mark_node);
+
+    let equals_mn_id = new_equals_mn(ast_node_id, Some(curr_mark_node_id), &mut ed_model.markup_node_pool);
+
+    let val_mn_id = new_blank_mn(ast_node_id, Some(curr_mark_node_id), &mut ed_model.markup_node_pool);
+
+    let val_mark_node = MarkupNode::Nested {
+        ast_node_id,
+        children_ids: vec![val_name_mn_id, equals_mn_id, val_mn_id],
         parent_id_opt,
     };
 
     if is_blank_node {
         ed_model
             .markup_node_pool
-            .replace_node(curr_mark_node_id, int_node);
+            .replace_node(curr_mark_node_id, val_mark_node);
 
         // remove data corresponding to Blank node
         ed_model.del_at_line(old_caret_pos.line, old_caret_pos.column)?;
@@ -98,7 +129,7 @@ pub fn update_int(
         } else {
             content_str_mut.insert(node_caret_offset, *ch);
 
-            let content_str = int_mark_node.get_content(&ed_model.markup_node_pool);
+            let content_str = int_mark_node.get_content()?;
 
             // update GridNodeMap and CodeLines
             ed_model.insert_between_line(
