@@ -485,46 +485,65 @@ fn if_guard_vanilla() {
 }
 
 #[test]
-fn if_guard_constructor() {
-    if false {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                when Identity 0 is
-                    Identity 0 -> 0
-                    Identity s -> s 
-                "#
-            ),
-            6,
-            i64
-        );
-    } else {
-        //        assert_evals_to!(
-        //            indoc!(
-        //                r#"
-        //                when Identity "foobar" is
-        //                    Identity s if s == "foo" -> 0
-        //                    Identity z -> List.len (Str.toBytes z)
-        //                "#
-        //            ),
-        //            6,
-        //            i64
-        //        );
+#[ignore]
+fn when_on_single_value_tag() {
+    // this fails because the switched-on symbol is not defined
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Identity 0 is
+                Identity 0 -> 0
+                Identity s -> s
+            "#
+        ),
+        6,
+        i64
+    );
+}
 
-        assert_evals_to!(
-            indoc!(
-                r#"
-                when Identity 42 "" is
+#[test]
+fn if_guard_constructor_switch() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Identity 42 "" is
                     Identity 41 _ -> 0
-                    Identity 42 _ if 3 == 3 -> 0
-                    # Identity 43 _ -> 0
-                    Identity z _ -> z 
+                    Identity 42 _ if 3 == 3 -> 1
+                    Identity z _ -> z
                 "#
-            ),
-            42,
-            i64
-        );
-    }
+        ),
+        1,
+        i64
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Identity 42 "" is
+                    Identity 41 _ -> 0
+                    Identity 42 _ if 3 != 3 -> 1
+                    Identity z _ -> z
+                "#
+        ),
+        42,
+        i64
+    );
+}
+
+#[test]
+#[ignore]
+fn if_guard_constructor_chain() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Identity 43 "" is
+                    Identity 42 _ if 3 == 3 -> 1
+                    Identity z _ -> z
+                "#
+        ),
+        43,
+        i64
+    );
 }
 
 #[test]
