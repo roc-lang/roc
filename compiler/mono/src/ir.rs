@@ -1,6 +1,7 @@
 #![allow(clippy::manual_map)]
 
 use self::InProgressProc::*;
+use crate::decision_tree::PatternSymbols;
 use crate::exhaustive::{Ctor, Guard, RenderAs, TagId};
 use crate::layout::{
     Builtin, ClosureRepresentation, LambdaSet, Layout, LayoutCache, LayoutProblem,
@@ -5514,7 +5515,18 @@ pub fn store_pattern<'a>(
     outer_symbol: Symbol,
     stmt: Stmt<'a>,
 ) -> Stmt<'a> {
-    match store_pattern_help(env, procs, layout_cache, can_pat, outer_symbol, stmt) {
+    // TODO should be Named(outer_symbol);
+    let symbols = PatternSymbols::Empty;
+
+    match store_pattern_help(
+        env,
+        procs,
+        layout_cache,
+        can_pat,
+        outer_symbol,
+        &symbols,
+        stmt,
+    ) {
         StorePattern::Productive(new) => new,
         StorePattern::NotProductive(new) => new,
     }
@@ -5535,6 +5547,7 @@ fn store_pattern_help<'a>(
     layout_cache: &mut LayoutCache<'a>,
     can_pat: &Pattern<'a>,
     outer_symbol: Symbol,
+    symbols: &PatternSymbols,
     mut stmt: Stmt<'a>,
 ) -> StorePattern<'a> {
     use Pattern::*;
@@ -5556,7 +5569,15 @@ fn store_pattern_help<'a>(
         }
         NewtypeDestructure { arguments, .. } => match arguments.as_slice() {
             [single] => {
-                return store_pattern_help(env, procs, layout_cache, &single.0, outer_symbol, stmt);
+                return store_pattern_help(
+                    env,
+                    procs,
+                    layout_cache,
+                    &single.0,
+                    outer_symbol,
+                    symbols,
+                    stmt,
+                );
             }
             _ => {
                 let mut fields = Vec::with_capacity_in(arguments.len(), env.arena);
@@ -5571,6 +5592,7 @@ fn store_pattern_help<'a>(
                     outer_symbol,
                     &layout,
                     &arguments,
+                    symbols,
                     stmt,
                 );
             }
@@ -5589,6 +5611,7 @@ fn store_pattern_help<'a>(
                 *layout,
                 &arguments,
                 *tag_id,
+                symbols,
                 stmt,
             );
         }
@@ -5605,6 +5628,7 @@ fn store_pattern_help<'a>(
                             layout_cache,
                             guard_pattern,
                             outer_symbol,
+                            symbols,
                             stmt,
                         );
                     }
@@ -5622,6 +5646,7 @@ fn store_pattern_help<'a>(
                     index as u64,
                     outer_symbol,
                     sorted_fields,
+                    symbols,
                     stmt,
                 ) {
                     StorePattern::Productive(new) => {
@@ -5652,6 +5677,7 @@ fn store_tag_pattern<'a>(
     union_layout: UnionLayout<'a>,
     arguments: &[(Pattern<'a>, Layout<'a>)],
     tag_id: u8,
+    symbols: &PatternSymbols,
     mut stmt: Stmt<'a>,
 ) -> StorePattern<'a> {
     use Pattern::*;
@@ -5686,12 +5712,13 @@ fn store_tag_pattern<'a>(
             | EnumLiteral { .. }
             | BitLiteral { .. }
             | StrLiteral(_) => {}
-            _ => {
+            NewtypeDestructure { .. } | AppliedTag { .. } | RecordDestructure { .. } => {
                 // store the field in a symbol, and continue matching on it
                 let symbol = env.unique_symbol();
 
                 // first recurse, continuing to unpack symbol
-                match store_pattern_help(env, procs, layout_cache, argument, symbol, stmt) {
+                match store_pattern_help(env, procs, layout_cache, argument, symbol, symbols, stmt)
+                {
                     StorePattern::Productive(new) => {
                         is_productive = true;
                         stmt = new;
@@ -5723,6 +5750,7 @@ fn store_newtype_pattern<'a>(
     structure: Symbol,
     layout: &Layout<'a>,
     arguments: &[(Pattern<'a>, Layout<'a>)],
+    symbols: &PatternSymbols,
     mut stmt: Stmt<'a>,
 ) -> StorePattern<'a> {
     use Pattern::*;
@@ -5761,12 +5789,13 @@ fn store_newtype_pattern<'a>(
             | EnumLiteral { .. }
             | BitLiteral { .. }
             | StrLiteral(_) => {}
-            _ => {
+            NewtypeDestructure { .. } | AppliedTag { .. } | RecordDestructure { .. } => {
                 // store the field in a symbol, and continue matching on it
                 let symbol = env.unique_symbol();
 
                 // first recurse, continuing to unpack symbol
-                match store_pattern_help(env, procs, layout_cache, argument, symbol, stmt) {
+                match store_pattern_help(env, procs, layout_cache, argument, symbol, symbols, stmt)
+                {
                     StorePattern::Productive(new) => {
                         is_productive = true;
                         stmt = new;
@@ -5799,6 +5828,7 @@ fn store_record_destruct<'a>(
     index: u64,
     outer_symbol: Symbol,
     sorted_fields: &'a [Layout<'a>],
+    symbols: &PatternSymbols,
     mut stmt: Stmt<'a>,
 ) -> StorePattern<'a> {
     use Pattern::*;
@@ -5839,10 +5869,18 @@ fn store_record_destruct<'a>(
                 return StorePattern::NotProductive(stmt);
             }
 
-            _ => {
+            NewtypeDestructure { .. } | AppliedTag { .. } | RecordDestructure { .. } => {
                 let symbol = env.unique_symbol();
 
-                match store_pattern_help(env, procs, layout_cache, guard_pattern, symbol, stmt) {
+                match store_pattern_help(
+                    env,
+                    procs,
+                    layout_cache,
+                    guard_pattern,
+                    symbol,
+                    symbols,
+                    stmt,
+                ) {
                     StorePattern::Productive(new) => {
                         stmt = new;
                         stmt = Stmt::Let(symbol, load, destruct.layout, env.arena.alloc(stmt));
