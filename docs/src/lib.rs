@@ -515,7 +515,7 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
             let mut next_indent_level = indent_level;
 
             if should_be_multiline(output) {
-                next_indent_level = next_indent_level + 1;
+                next_indent_level += 1;
             }
 
             type_annotation_to_html(next_indent_level, buf, output);
