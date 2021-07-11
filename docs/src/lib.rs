@@ -427,10 +427,9 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
             let more_than_one_field = fields_len > 1;
 
             let record_indent = indent_level + 1;
-            if more_than_one_field {
-                new_line(buf);
 
-                indent(buf, record_indent);
+            if more_than_one_field {
+                indent(buf, indent_level);
             }
 
             buf.push('{');
