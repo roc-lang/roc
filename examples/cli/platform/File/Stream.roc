@@ -44,54 +44,122 @@ interface File.Stream
 # * O_NOFOLLOW - same as Linux
 # * O_SHLOCK, O_EXLOCK - unsupported because they're BSD-only and atomicity for "open and lock" doesn't seem crucial
 # * O_SYMLINK - unsupported because it's BSD-only and doesn't seem critical
+#
+# Error handling notes
+#
+# We're not going to include error tags for EINTR (interrupted by signal)
+# because the CLI platform doesn't specify a way to recover from a signal and
+# continue running the Roc code anyway, so any code that would pattern match on
+# an EINTR tag would never get successfully executed anyway.
 
 
 ## On UNIX systems, this refers to a file descriptor.
 ## On Windows, it refers to a file handle.
 Stream a : Internal.Stream a
 
-Mode :
+Permissions :
     {
-        # TODO file modes like read-only, executable, etc.
+        read : Bool,
+        write : Bool,
+        execute : Bool,
     }
 
 ## An error that can occur when opening a file stream.
 OpenErr :
     [
-        # TODO list all the errors that can happen when opening a file
+        # TODO ENOENT
+    ]OpenPathErr
+
+## An error that can occur when opening a file stream for writing.
+OpenWriteErr :
+    [
+        # TODO EISDIR - can we cause this to happen when opening for reading too?
+        # TODO EROFS
+        # TODO ETXTBSY
+    ]OpenErr
+
+## An error that can occur when creating a file.
+CreateErr :
+    [
+        # TODO EDQUOT
+        # TODO EEXIST
+        # TODO EIO
+        # TODO ENOSPC
+    ]OpenPathErr
+
+## An error that can occur when opening a file path, for example during an
+## *open*, *create*, or *trunc* operation.
+OpenPathErr :
+    [
+        ## The operating system's per-process limit on how many file descriptors
+        ## or handles has been reached, so no more file streams can be created
+        ## until at least one other is closed (or the OS limit is increased).
+        ##
+        ## This corresponds to the `EMFILE` error on UNIX systems.
+        TooManyStreams,
+
+        # TODO EACCES
+        # TODO EFAULT
+        # TODO ELOOP
+        # TODO ENAMETOOLONG
+        # TODO ENFILE
+        # TODO ENOTDIR ("A component of the path prefix is not a directory")
+        # TODO ENXIO
+        # TODO EPERM
 
         ## The filesystem gave an unknown error with this description string.
-        Unknown Str
+        Unknown Str,
     ]
 
 ## An error that can occur when closing a file stream.
 CloseErr :
     [
-        # TODO list all the errors that can happen when closing a file
+        ## The stream was closed or otherwise somehow invalid.
+        ##
+        ## This corresponds to the `EBADF` error on UNIX systems.
+        StreamWasClosed,
+
+        # TODO EIO
+        # TODO ENOSPC, EDQUOT
 
         ## The filesystem gave an unknown error with this description string.
         Unknown Str,
     ]
+
+TempErr :
+    [
+        # TODO EOPNOTSUPP
+    ]OpenPathErr
 
 ## An error that can occur when reading from a file stream.
 ReadErr :
     [
-        StreamWasClosed,
-        # TODO list all the other errors that can happen when reading from a file
-
-        ## The filesystem gave an unknown error with this description string.
-        Unknown Str,
-    ]
+    ]StreamErr
 
 ## An error that can occur when writing to a stream.
 WriteErr :
     [
+    ]StreamErr
+
+## An error that can occur when using any stream.
+StreamErr :
+    [
+        ## The stream was closed or otherwise somehow invalid.
+        ##
+        ## This corresponds to the `EBADF` error on UNIX systems.
         StreamWasClosed,
-        # TODO list all the other errors that can happen when writing to a file
+
+        ## The operating system's per-process limit on how many file descriptors
+        ## or handles has been reached, so no more file streams can be created
+        ## until at least one other is closed (or the OS limit is increased).
+        ##
+        ## This corresponds to the `EMFILE` error on UNIX systems.
+        TooManyStreams,
 
         ## The filesystem gave an unknown error with this description string.
         Unknown Str,
     ]
+
 
 # Creating Streams
 
@@ -122,23 +190,23 @@ openReadClose = \path, config ->
     Effect.openRead
         |> makeOpenCloseTask path config
 
-openWrite : Str, (Stream [ Write ] -> Task ok []err) -> Task ok [ OpenFailed OpenErr Str ]err
+openWrite : Str, (Stream [ Write ] -> Task ok []err) -> Task ok [ OpenFailed OpenWriteErr Str ]err
 
-openWriteClose : Str -> Task (Stream [ Write, Close ]) [ OpenFailed OpenErr Str ]*
+openWriteClose : Str -> Task (Stream [ Write, Close ]) [ OpenFailed OpenWriteErr Str ]*
 openWriteClose = \path, config ->
     Effect.openWrite
         |> makeOpenCloseTask path config
 
-openAppend : Str, (Stream [ Append ] -> Task ok []err) -> Task ok [ OpenFailed OpenErr Str ]err
+openAppend : Str, (Stream [ Append ] -> Task ok []err) -> Task ok [ OpenFailed OpenWriteErr Str ]err
 
-openAppendClose : Str -> Task (Stream [ Append, Close ]) [ OpenFailed OpenErr Str ]*
+openAppendClose : Str -> Task (Stream [ Append, Close ]) [ OpenFailed OpenWriteErr Str ]*
 openAppendClose = \path, config ->
     Effect.openAppend
         |> makeOpenCloseTask path config
 
-openReadAppend : Str, (Stream [ Read, Append ] -> Task ok []err) -> Task ok [ OpenFailed OpenErr Str ]err
+openReadAppend : Str, (Stream [ Read, Append ] -> Task ok []err) -> Task ok [ OpenFailed OpenWriteErr Str ]err
 
-openReadAppendClose : Str -> Task (Stream [ Read, Append, Close ]) [ OpenFailed OpenErr Str ]*
+openReadAppendClose : Str -> Task (Stream [ Read, Append, Close ]) [ OpenFailed OpenWriteErr Str ]*
 openReadAppendClose = \path, config ->
     Effect.openReadAppend
         |> makeOpenCloseTask path config
@@ -149,7 +217,7 @@ openReadAppendClose = \path, config ->
 ## >>> writeSmileyIfEmpty :
 ## >>>     Task {}
 ## >>>         [
-## >>>             OpenFailed OpenErr Str,
+## >>>             OpenFailed OpenWriteErr Str,
 ## >>>             ReadFailed ReadErr Str,
 ## >>>             WriteFailed WriteErr Str,
 ## >>>         ]
@@ -162,9 +230,9 @@ openReadAppendClose = \path, config ->
 ## >>>         write stream 0 (Str.toUtf8 ":)")
 ## >>>     else
 ## >>>         Task.succeed {}
-openReadWrite : Str, (Stream [ Read, Write ] -> Task ok []err) -> Task ok [ OpenFailed OpenErr Str ]err
+openReadWrite : Str, (Stream [ Read, Write ] -> Task ok []err) -> Task ok [ OpenFailed OpenWriteErr Str ]err
 
-openReadWriteClose : Str -> Task (Stream [ Read, Write, Close ]) [ OpenFailed OpenErr Str ]*
+openReadWriteClose : Str -> Task (Stream [ Read, Write, Close ]) [ OpenFailed OpenWriteErr Str ]*
 openReadWriteClose = \path, config ->
     Effect.openReadWrite
         |> makeOpenCloseTask path config
@@ -174,33 +242,16 @@ openReadWriteClose = \path, config ->
 ## Create a file at the given path, and open it as a stream with write permissions only.
 ##
 ## Fails if there is already a file with that name.
-createWrite : Str, Mode, (Stream [ Write ] -> Task ok []err) -> Task ok [ CreateFailed OpenErr Str ]err
+createWrite : Str, Mode, (Stream [ Write ] -> Task ok []err) -> Task ok [ CreateFailed OpenWriteErr Str ]err
 
 # On Windows, use CreateFileA with the CREATE_NEW flag to create files and error if they exist already:
 # https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea
 
-createWriteClose : Str, Mode -> Task (Stream [ Write, Close ]) [ CreateFailed OpenErr Str ]*
+createWriteClose : Str, Mode -> Task (Stream [ Write, Close ]) [ CreateFailed OpenWriteErr Str ]*
 
-createReadWrite : Str, Mode, (Stream [ Read, Write ] -> Task ok []err) -> Task ok [ CreateFailed OpenErr Str ]err
+createReadWrite : Str, Mode, (Stream [ Read, Write ] -> Task ok []err) -> Task ok [ CreateFailed OpenWriteErr Str ]err
 
-createReadWriteClose : Str, Mode -> Task (Stream [ Read, Write, Close ]) [ CreateFailed OpenErr Str ]*
-
-# Truncation - open an existing file and immediately truncate it to 0 bytes
-
-# NOTE: to do this on Windows, use CreateFileA with the TRUNCATE_EXISTING flag
-# https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea
-
-truncWrite : Str, (Stream [ Write ] -> Task ok []err) -> Task ok [ TruncFailed OpenErr Str ]err
-
-truncWriteClose : Str -> Task (Stream [ Write, Close ]) [ TruncFailed OpenErr Str ]*
-
-truncReadWrite : Str, (Stream [ Read, Write ] -> Task ok []err) -> Task ok [ TruncFailed OpenErr Str ]err
-
-truncReadWriteClose : Str -> Task (Stream [ Read, Write, Close ]) [ TruncFailed OpenErr Str ]*
-
-truncAppend : Str, (Stream [ Append ] -> Task ok []err) -> Task ok [ TruncFailed OpenErr Str ]err
-
-truncAppendClose : Str -> Task (Stream [ Append, Close ]) [ TruncFailed OpenErr Str ]*
+createReadWriteClose : Str, Mode -> Task (Stream [ Read, Write, Close ]) [ CreateFailed OpenWriteErr Str ]*
 
 # Temporary files
 #
@@ -244,9 +295,26 @@ truncAppendClose : Str -> Task (Stream [ Append, Close ]) [ TruncFailed OpenErr 
 ## > unlikely event that this happens, the file will be guaranteed to be empty;
 ## > nothing will ever have been written to it. This situation cannot happen on
 ## > Windows or Linux, but it can happen on other operating systems.
-openTemp : (Stream [ Read, Write ] -> Task ok []err) -> Task ok [ OpenTempFailed OpenErr ]err
+createTemp : (Stream [ Read, Write ] -> Task ok []err) -> Task ok [ CreateTempFailed OpenWriteErr ]err
 
-openTempClose : Task (Stream [ Read, Write, Close ]) [ OpenTempFailed OpenErr ]*
+createTempClose : Task (Stream [ Read, Write, Close ]) [ CreateTempFailed OpenWriteErr ]*
+
+# Truncation - open an existing file and immediately truncate it to 0 bytes
+
+# NOTE: to do this on Windows, use CreateFileA with the TRUNCATE_EXISTING flag
+# https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea
+
+truncWrite : Str, (Stream [ Write ] -> Task ok []err) -> Task ok [ TruncFailed OpenWriteErr Str ]err
+
+truncWriteClose : Str -> Task (Stream [ Write, Close ]) [ TruncFailed OpenWriteErr Str ]*
+
+truncReadWrite : Str, (Stream [ Read, Write ] -> Task ok []err) -> Task ok [ TruncFailed OpenWriteErr Str ]err
+
+truncReadWriteClose : Str -> Task (Stream [ Read, Write, Close ]) [ TruncFailed OpenWriteErr Str ]*
+
+truncAppend : Str, (Stream [ Append ] -> Task ok []err) -> Task ok [ TruncFailed OpenWriteErr Str ]err
+
+truncAppendClose : Str -> Task (Stream [ Append, Close ]) [ TruncFailed OpenWriteErr Str ]*
 
 ## Close a file stream. Any future tasks run on this stream will fail.
 close : Stream [ Close ]* -> Task {} [ CloseFailed CloseErr Str ]*
@@ -256,7 +324,57 @@ close = \stream ->
     Effect.close fd
         |> Task.mapFail \err -> CloseFailed err path
 
+## Read the file metadata for the file this stream is opened on.
+metadata : Stream * -> Task {} [ MetaFailed MetaErr Str ]*
 
+## Set the size of a file to be the given number of bytes.
+##
+## If the new size is smaller than the file's current size, the extra bytes
+## will be lost. If the new size is larger, the additional bytes will be zeroes.
+setSize : Stream [ Write ]*, Nat -> Task {} [ MetaFailed MetaErr Str ]*
+
+## Set whether the file is read-only.
+setReadonly : Stream [ Write ]*, Bool -> Task {} [ PermFailed PermErr Str ]*
+
+## On Windows, this always fails with the `SetExeUnsupported` error.
+setExecutable : Stream [ Write ]*, Bool -> Task {} [ SetExeFailed [ SetExeUnsupported ]PermErr Str ]*
+
+## Duplicate a stream with the `Close` permission.
+##
+## This allows calling [close] on either the old stream or the new stream,
+## while still having the file remain open on the filesystem (with the other
+## stream).
+duplicate : Stream [ Close ]a -> Task (Stream [ Close ]a) [ DupFailed DupErr Str ]*
+
+## Instruct the filesystem to flush any buffered data for this file to the
+## underlying disk.
+##
+## Filesystems typically buffer some file data in memory before periodically
+## writing that data to the actual underlying disk. This sends a request to the
+## filesystem that it should immediately flush (synchronize) that data to the
+## disk. This task succeeds after the filesystem has reported that the flush
+## completed successfully.
+##
+## This can reduce performance compared to letting the filesystem flush its
+## buffers according to its own preferred schedule, but it can be useful when
+## you explicitly do not want to proceed until you are confident your data has
+## been flushed to disk already.
+##
+## Note that although this flushes both contents and metadata for the file
+## this stream has opened, it doesn't guarantee that the file's directory entry
+## in its parent directory will also be flushed to disk. (Directories can be
+## be flushed separately to persist their entries to disk.)
+flush : Stream [ Write ]* -> Task {} [ SyncFailed SyncErr Str ]*
+# fsync on UNIX, FlushFileBuffers on windows
+# https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers
+
+## Instruct the filesystem to flush any buffered data for this file to the
+## underlying disk, without also flushing metadata.
+##
+## On UNIX, this works as intended. On Windows, flushing data but not metadata
+## is unsupported, so calling this on Windows is equivalent to calling [flush].
+flushDataOnly : Stream [ Write ]* -> Task {} [ SyncFailed SyncErr Str ]*
+# `fdatasync` on UNIX
 
 ## Read from a stream starting at the given byte index, reading either until
 ## the end of the file (`Eof`) or at most the given number of bytes (`AtMost`).
