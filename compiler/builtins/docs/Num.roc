@@ -982,19 +982,24 @@ shrWrap : Int a, Int a -> Int a
 ## [Endianness](https://en.wikipedia.org/wiki/Endianness)
 Endi : [ Big, Little ]
 
-## The [Endi] argument does not matter for [U8] and [I8], since they have
+## The [Endi] argument doesn't matter for [U8] and [I8], since they have
 ## only one byte.
 toBytes : Num *, Endi -> List U8
 
-## when Num.parseBytes bytes Big is
-##     Ok { val: f64, rest } -> ...
-##     Err (ExpectedNum (Float Binary64)) -> ...
-parseBytes : List U8, Endi -> Result { val : Num *, rest : List U8 } [ InvalidNum ]*
-
-## when Num.fromBytes bytes Big is
+## when Num.fromBytes bytes { at: 0, bytes: 8 } Big is
 ##     Ok f64 -> ...
-##     Err (ExpectedNum (Float Binary64)) -> ...
-fromBytes : List U8, Endi -> Result (Num *) [ InvalidNum ]*
+##     Err InvalidNum -> ...
+fromBytes :
+    List U8,
+    { at : Nat, bytes : Nat },
+    Endi
+    -> Result (Num *) [ InvalidNum ]*
+
+## Convert bytes to a list of numbers. Returns an `Err` if there are any
+## leftover bytes after converting the final full number (for example, if
+## there are 3 bytes left in the list after converting the final [U32], which
+## is not enough left to store a full four-byte [U32]).
+convertList : List U8, Endi -> Result (List (Num *)) [ LeftoverBytes ]*
 
 ## Comparison
 
@@ -1108,3 +1113,26 @@ isInfinite : Frac * -> Bool
 ## a [Dict]. The result is entries that can never be removed from those
 ## collections! See the documentation for [Set.add] and [Dict.insert] for details.
 isNaN : Frac * -> Bool
+
+Vec2 a : Num (Vector2 a)
+Vec3 a : Num (Vector3 a)
+Vec4 a : Num (Vector4 a)
+
+vec2 : Num a, Num a -> Vec2 a
+vec3 : Num a, Num a, Num a -> Vec3 a
+vec4 : Num a, Num a, Num a, Num a -> Vec4 a
+
+parseVec2 : List U8, Nat -> Result (Vec2 a) [ NotEnoughBytes ]*
+parseVec3 : List U8, Nat -> Result (Vec3 a) [ NotEnoughBytes ]*
+parseVec4 : List U8, Nat -> Result (Vec4 a) [ NotEnoughBytes ]*
+
+fromVec2 : Vec a -> { a : Num a, b : Num a }
+fromVec3 : Vec a -> { a : Num a, b : Num a, c : Num a }
+fromVec4 : Vec a -> { a : Num a, b : Num a, c : Num a, d : Num a }
+
+writeVec2 : Vec2 *, List U8, Nat -> List U8
+writeVec3 : Vec3 *, List U8, Nat -> List U8
+writeVec4 : Vec4 *, List U8, Nat -> List U8
+
+supportsAvx2 : Bool
+supportsAvx4 : Bool

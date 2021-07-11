@@ -354,17 +354,36 @@ trim : Str -> Str
 ## If the given [U32] is a valid [Unicode Scalar Value](http://www.unicode.org/glossary/#unicode_scalar_value),
 ## return a [Str] containing only that scalar.
 fromScalar : U32 -> Result Str [ BadScalar U32 ]*
-fromUtf8 : List U8 -> Result Str [ BadUtf8 Nat ]*
-fromUtf16 : List U16 -> Result Str [ BadUtf16 Nat ]*
-fromUtf32 : List U32 -> Result Str [ BadUtf32 Nat ]*
+
+## Convert bytes encoded as UTF-8 to a [Str].
+##
+## Basic example:
+##
+##     Str.fromUtf8 [ 1, 2, 3 ] {}
+##
+## Advanced example:
+##
+,#     Str.fromUtf8 [ 1, 2, 3, 4, 5 ] { from: 2, count: 3 }
+##
+## By default, this uses all the bytes in the list. The configuration record
+## lets you use a subset of the bytes:
+## * `index` lets you read bytes starting from a certain index within the list. Defaults to 0.
+## * `quantity` lets you read only a certain count of bytes. Defaults to [List.len] of the list, minus `index`.
+fromUtf8 : List U8, { index ? Nat, quantity ? Nat } -> Result Str [ BadUtf8 Nat ]*
+fromUtf16 : List U16, { index ? Nat, quantity ? Nat } -> Result Str [ BadUtf16 Nat ]*
+fromUtf32 : List U32, { index ? Nat, quantity ? Nat } -> Result Str [ BadUtf32 Nat ]*
 
 ## Convert from UTF-8, substituting the replacement character ("�") for any
-## invalid sequences encountered.
-fromUtf8Sub : List U8 -> Str
+## invalid sequences or code points encountered.
+fromUtf8Sub : List U8, { index ? Nat, quantity ? Nat } -> Str
 
 ## Convert from UTF-16, substituting the replacement character ("�") for any
-## invalid sequences encountered.
-fromUtf16Sub : List U16 -> Str
+## invalid sequences or code points encountered.
+fromUtf16Sub : List U16, { index ? Nat, quantity ? Nat } -> Str
+
+## Convert from UTF-16, substituting the replacement character ("�") for any
+## invalid sequences or code points encountered.
+fromUtf32Sub : List U32, { index ? Nat, quantity ? Nat } -> Str
 
 ## Return a #List of the string's #U8 UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a #List of smaller #Str values instead of #U8 values,
@@ -386,29 +405,7 @@ toUtf16 : Str -> List U16
 ## UTF-32 is the same as a list of [Unicode code points](http://www.unicode.org/glossary/#code_point).
 toUtf32 : Str -> List U32
 
-# Parsing
-
-## If the string begins with a valid [extended grapheme cluster](http://www.unicode.org/glossary/#extended_grapheme_cluster),
-## return it along with the rest of the string after that grapheme.
-##
-## If the string does not begin with a full grapheme, for example because it was
-## empty, return `Err`.
-parseGrapheme : Str -> Result { val : Str, rest : Str } [ Expected [ Grapheme ]* Str ]*
-
-## If the string begins with a valid [Unicode code point](http://www.unicode.org/glossary/#code_point),
-## return it along with the rest of the string after that code point.
-##
-## If the string does not begin with a valid code point, for example because it was
-## empty, return `Err`.
-parseCodePoint : Str -> Result { val : U32, rest : Str } [ Expected [ CodePoint ]* Str ]*
-
-## If the first string begins with the second, return whatever comes
-## after the second.
-chomp : Str, Str -> Result Str [ Expected [ ExactStr Str ]* Str ]*
-
-## If the string begins with a [Unicode code point](http://www.unicode.org/glossary/#code_point)
-## equal to the given [U32], return whatever comes after that code point.
-chompCodePoint : Str, U32 -> Result Str [ Expected [ ExactCodePoint U32 ]* Str ]*
+# Conversion
 
 ## If the string represents a valid #U8 number, return that number.
 ##
@@ -433,38 +430,19 @@ toDec : Str -> Result Dec [ InvalidDec ]*
 ## example where the `Err` branch matches `Integer Signed64`, which causes this to
 ## parse an [I64] because [I64] is defined as `I64 : Num [ Integer [ Signed64 ] ]`.
 ##
-## >>> when Str.toNum "12345" is
+## >>> when Str.toNum "12345" {} is
 ## >>>     Ok i64 -> "The I64 was: \(i64)"
 ## >>>     Err (ExpectedNum (Integer Signed64)) -> "Not a valid I64!"
 ##
 ## If the string is exactly `"NaN"`, `"∞"`, or `"-∞"`, they will be accepted
 ## only when converting to [F64] or [F32] numbers, and will be translated accordingly.
 ##
-## This never accepts numbers with underscores or commas in them. For more
-## advanced options, see [parseNum].
-toNum : Str -> Result (Num *) [ InvalidNum ]*
-
-## If the string begins with an [Int] or a [finite](Num.isFinite) [Frac], return
-## that number along with the rest of the string after it.
-##
-## The exact number type to look for will be inferred from usage. Here's an
-## example where the `Err` branch matches `Float Binary64`, which causes this to
-## parse an [F64] because [F64] is defined as `F64 : Num [ Fraction [ Float64 ] ]`.
-##
-## >>> when Str.parseNum input {} is
-## >>>     Ok { val: f64, rest } -> "The F64 was: \(f64)"
-## >>>     Err (ExpectedNum (Fraction Float64)) -> "Not a valid F64!"
-##
-## If the string begins with `"NaN"`, `"∞"`, and `"-∞"` (which do not represent
-## [finite](Num.isFinite) numbers), they will be accepted only when parsing
-## [F64] or [F32] numbers, and translated accordingly.
-parseNum : Str, NumParseConfig -> Result { val : Num *, rest : Str } [ InvalidNum ]*
-
 ## Notes:
 ## * You can allow a decimal mark for integers; they'll only parse if the numbers after it are all 0.
 ## * For `wholeSep`, `Required` has a payload for how many digits (e.g. "required every 3 digits")
 ## * For `wholeSep`, `Allowed` allows the separator to appear anywhere.
-NumParseConfig :
+toNum :
+    Str,
     {
         base ? [ Decimal, Hexadecimal, Octal, Binary ],
         notation ? [ Standard, Scientific, Any ],
@@ -475,3 +453,4 @@ NumParseConfig :
         trailingZeroes ? [ Allowed, Disallowed ],
         wholeSep ? { mark : Str, policy : [ Allowed, Required U64 ] }
     }
+    -> Result (Num *) [ InvalidNum ]*
