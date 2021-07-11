@@ -161,15 +161,14 @@ pub fn rust_main() -> isize {
     0
 }
 
-<<<<<<< HEAD
 /// A C file descriptor.
 pub struct Fd(c_int);
 
-#[no_mangle]
-pub unsafe fn roc_fx_open(roc_path: RocStr) -> RocResult<Fd, Errno> {
-    const BUF_BYTES: usize = 256;
-=======
-pub struct Fd(c_int);
+impl Into<c_int> for Fd {
+    fn into(&self) -> c_int {
+        self.0;
+    }
+}
 
 #[no_mangle]
 pub unsafe fn roc_fx_readAll(roc_path: RocStr) -> RocResult<RocList<u8>, Errno> {
@@ -252,7 +251,6 @@ pub unsafe fn roc_fx_readAll(roc_path: RocStr) -> RocResult<RocList<u8>, Errno> 
 #[no_mangle]
 pub unsafe fn roc_fx_open(roc_path: RocStr) -> RocResult<Fd, Errno> {
     const BUF_BYTES: usize = 1024;
->>>>>>> 4835d4d65... Implement some file I/O stuff in cli host
 
     let mut buf: MaybeUninit<[u8; BUF_BYTES]> = MaybeUninit::uninit();
 
@@ -288,27 +286,123 @@ pub unsafe fn roc_fx_open(roc_path: RocStr) -> RocResult<Fd, Errno> {
     }
 }
 
+/// Negative panic_code values are reserved for the roc compiler and builtins.
+/// Non-negative panic codes can be used for custom panic codes in the host.
+#[cold]
 #[no_mangle]
-pub unsafe fn roc_fx_read(fd: Fd, bytes: usize) -> RocResult<RocList<u8>, Errno> {
-    const BUF_BYTES: usize = 1024;
+pub unsafe fn roc_panic(panic_code: i32, panic_data: *const c_void) -> ! {
+    todo!(
+        "Use libunwind to unwind the stack. Verify that refcounts get decremented along the way!"
+    );
+}
 
+/// If the given list is unique and has enough capacity to read the requested
+/// number of bytes, then the bytes are written in-place. If it's shared, or
+/// if there is not enough capacity to read the requested number of bytes, then
+/// an new list will be automatically allocated (and returned).
+///
+/// This writes bytes until any of the following happens:
+/// * The end of the file is reached
+/// * The end of the list is reached
+/// * The total number of bytes read has reached the `bytes` argument
+///
+/// This may result in zero bytes being read if (for example) `list` is empty,
+/// or if `index` is greater than or equal to the length of the list.
+#[no_mangle]
+pub unsafe fn roc_fx_read(
+    fd: Fd,
+    index: usize,
+    bytes: usize,
+    mut list: RocList<u8>,
+) -> RocResult<(usize, RocList<u8>), ReadErr> {
+    // This is the minimum required capacity we need.
+    let mut capacity = index.saturating_add(bytes).min(isize::MAX as usize);
+
+    let alloc_fresh_list = || {
+        // Safety: We know capacity is no more than isize::MAX, due to
+        // the .min() call above, so it's safe to use
+        // with_capacity_unchecked here.
+        let list = RocList::with_capacity_unchecked(capacity);
+
+        if true {
+            // We'll only be writing into this uninitialized memory from
+            // `index` onward, so we need to zero out the bytes before `index`.
+            // Otherwise, someone could read the previously-set data that was
+            // in there, which would be a vulnerability!
+            todo!("fill the list from index 0 to `index` with zeroes");
+        }
+
+        list
+    };
+
+    // We're going to write into the list directly, so we need a unique copy
+    // with at least enough capacity to hold all the bytes we're going to read.
+    match list.storage() {
+        Storage::Refcounted(_) | Storage::ReadOnly => {
+            // This list is shared, so we need to allocate a fresh one that's
+            // safe to write into.
+            list = alloc_fresh_list();
+        }
+        Storage::Capacity(list_capacity) => {
+            if list_capacity >= capacity {
+                capacity = list_capacity;
+            } else {
+                // The list's capacity is less than the minimum capacity we
+                // need, so we need to allocate a new list.
+                list = alloc_fresh_list();
+            }
+        }
+    }
+
+    // Never read past the end of the list.
+    //
+    // Do saturating_sub here so that if index >= capacity (which would
+    // mean we'd attempt write to memory outside the list) we will instead
+    // read 0 bytes. This saturating_sub is crucial for memory safety!
+    let bytes_to_read = capacity.saturating_sub(index).min(bytes);
+
+    let bytes_read = libc::pread(
+        fd.into(),
+        list.as_mut_ptr() as *mut c_void,
+        bytes_to_read,
+        index as i64,
+    );
+
+    if bytes_read >= 0 {
+        RocResult::Ok((bytes_read as usize, list))
+    } else {
+        RocResult::Err(todo!("Convert errno {} into a ReadErr", errno()))
+    }
+}
+
+/// We use our own position and libc::pread rather than calling libc::read
+/// repeatedly and letting the fd store its own position. This way we don't
+/// have to worry about concurrent modifications of the fd's position.
+#[no_mangle]
+pub unsafe fn roc_fx_read_all(fd: Fd, mut list: RocList) -> RocResult<RocList<u8>, Errno> {
+    let bytes_in_file = libc::meta(fd.into()).size;
+
+    // Storing the buffer on the stack is fine when every Task is run
+    // synchronously, but we'd need something more persistent in (for example)
+    // an async environment using an event loop.
+    const BUF_BYTES: usize = 4096;
     let mut buf: MaybeUninit<[u8; BUF_BYTES]> = MaybeUninit::uninit();
-
-    // We'll use our own position and libc::pread rather than using libc::read
-    // repeatedly and letting the fd store its own position. This way we don't
-    // have to worry about concurrent modifications of the fd's position.
     let mut list = RocList::empty();
-    let mut position: usize = 0;
 
     loop {
         // Make sure we never read more than the buffer size, and also that
         // we never read past the originally-requested number of bytes.
-        let bytes_to_read = BUF_BYTES.min(bytes - position);
+        //
+        // Do saturating_sub on this so that if index >= capacity (which would
+        // mean we'd attempt write to memory outside the list!) we will instead
+        // read 0 bytes. Very important for memory safety!
+        let bytes_to_read = BUF_BYTES.min(capacity.saturating_sub(index));
+
         let bytes_read = libc::pread(
-            fd.0,
+            fd.into(),
             buf.as_mut_ptr() as *mut c_void,
             bytes_to_read,
-            position as i64,
+            index as i64,
         );
 
         // NOTE buf may be only partially filled, so we don't `assume_init`!
