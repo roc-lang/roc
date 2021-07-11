@@ -196,7 +196,11 @@ impl<'a> ParamMap<'a> {
                     let already_in_there = self
                         .items
                         .insert(Key::JoinPoint(*j), Self::init_borrow_params(arena, xs));
-                    debug_assert!(already_in_there.is_none());
+                    debug_assert!(
+                        already_in_there.is_none(),
+                        "join point {:?} is already defined!",
+                        j
+                    );
 
                     stack.push(v);
                     stack.push(b);
