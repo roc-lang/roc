@@ -350,15 +350,14 @@ fn new_line(buf: &mut String) {
 }
 
 fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &TypeAnnotation) {
+    let is_multiline = should_be_multiline(type_ann);
     match type_ann {
         TypeAnnotation::TagUnion { tags, extension } => {
             let tags_len = tags.len();
 
-            let more_than_one_tag = tags_len > 1;
-
             let tag_union_indent = indent_level + 1;
 
-            if more_than_one_tag {
+            if is_multiline {
                 new_line(buf);
 
                 indent(buf, tag_union_indent);
@@ -366,14 +365,14 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
 
             buf.push('[');
 
-            if more_than_one_tag {
+            if is_multiline {
                 new_line(buf);
             }
 
             let next_indent_level = tag_union_indent + 1;
 
             for (index, tag) in tags.iter().enumerate() {
-                if more_than_one_tag {
+                if is_multiline {
                     indent(buf, next_indent_level);
                 } else {
                     buf.push(' ');
@@ -386,7 +385,7 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                     type_annotation_to_html(next_indent_level, buf, type_value);
                 }
 
-                if more_than_one_tag {
+                if is_multiline {
                     if index < (tags_len - 1) {
                         buf.push(',');
                     }
@@ -395,7 +394,7 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                 }
             }
 
-            if more_than_one_tag {
+            if is_multiline {
                 indent(buf, tag_union_indent);
             } else {
                 buf.push(' ');
@@ -424,24 +423,23 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
         TypeAnnotation::Record { fields, extension } => {
             let fields_len = fields.len();
 
-            let more_than_one_field = fields_len > 1;
-
             let record_indent = indent_level + 1;
 
-            if more_than_one_field {
-                indent(buf, indent_level);
+            if is_multiline {
+                new_line(buf);
+                indent(buf, record_indent);
             }
 
             buf.push('{');
 
-            if more_than_one_field {
+            if is_multiline {
                 new_line(buf);
             }
 
             let next_indent_level = record_indent + 1;
 
             for (index, field) in fields.iter().enumerate() {
-                if more_than_one_field {
+                if is_multiline {
                     indent(buf, next_indent_level);
                 } else {
                     buf.push(' ');
@@ -471,7 +469,7 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                     RecordField::LabelOnly { .. } => {}
                 }
 
-                if more_than_one_field {
+                if is_multiline {
                     if index < (fields_len - 1) {
                         buf.push(',');
                     }
@@ -480,7 +478,7 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                 }
             }
 
-            if more_than_one_field {
+            if is_multiline {
                 indent(buf, record_indent);
             } else {
                 buf.push(' ');
@@ -491,11 +489,12 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
             type_annotation_to_html(indent_level, buf, extension);
         }
         TypeAnnotation::Function { args, output } => {
-            let more_than_one_arg = args.len() > 1;
             let mut peekable_args = args.iter().peekable();
             while let Some(arg) = peekable_args.next() {
-                if more_than_one_arg {
-                    new_line(buf);
+                if is_multiline {
+                    if !should_be_multiline(arg) {
+                        new_line(buf);
+                    }
                     indent(buf, indent_level + 1);
                 }
 
@@ -506,13 +505,20 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                 }
             }
 
-            if more_than_one_arg {
+            if is_multiline {
                 new_line(buf);
                 indent(buf, indent_level + 1);
             }
 
             buf.push_str(" -> ");
-            type_annotation_to_html(indent_level, buf, output);
+
+            let mut next_indent_level = indent_level;
+
+            if should_be_multiline(output) {
+                next_indent_level = next_indent_level + 1;
+            }
+
+            type_annotation_to_html(next_indent_level, buf, output);
         }
         TypeAnnotation::ObscuredTagUnion => {
             buf.push_str("[ @.. ]");
@@ -522,6 +528,76 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
         }
         TypeAnnotation::NoTypeAnn => {}
         TypeAnnotation::Wildcard => buf.push('*'),
+    }
+}
+
+fn should_be_multiline(type_ann: &TypeAnnotation) -> bool {
+    match type_ann {
+        TypeAnnotation::TagUnion { tags, extension } => {
+            let mut is_multiline = should_be_multiline(extension) || tags.len() > 1;
+
+            for tag in tags {
+                for value in &tag.values {
+                    if is_multiline {
+                        break;
+                    }
+                    is_multiline = should_be_multiline(&value);
+                }
+            }
+
+            is_multiline
+        }
+        TypeAnnotation::Function { args, output } => {
+            let mut is_multiline = should_be_multiline(output) || args.len() > 1;
+
+            for arg in args {
+                if is_multiline {
+                    break;
+                }
+
+                is_multiline = should_be_multiline(arg);
+            }
+
+            is_multiline
+        }
+        TypeAnnotation::ObscuredTagUnion => false,
+        TypeAnnotation::ObscuredRecord => false,
+        TypeAnnotation::BoundVariable(_) => false,
+        TypeAnnotation::Apply { parts, .. } => {
+            let mut is_multiline = false;
+
+            for part in parts {
+                is_multiline = should_be_multiline(part);
+
+                if is_multiline {
+                    break;
+                }
+            }
+
+            is_multiline
+        }
+        TypeAnnotation::Record { fields, extension } => {
+            let mut is_multiline = should_be_multiline(extension) || fields.len() > 1;
+
+            for field in fields {
+                if is_multiline {
+                    break;
+                }
+                match field {
+                    RecordField::RecordField {
+                        type_annotation, ..
+                    } => is_multiline = should_be_multiline(type_annotation),
+                    RecordField::OptionalField {
+                        type_annotation, ..
+                    } => is_multiline = should_be_multiline(type_annotation),
+                    RecordField::LabelOnly { .. } => {}
+                }
+            }
+
+            is_multiline
+        }
+        TypeAnnotation::Wildcard => false,
+        TypeAnnotation::NoTypeAnn => false,
     }
 }
 
