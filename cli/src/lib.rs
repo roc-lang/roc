@@ -94,7 +94,7 @@ pub fn build_app<'a>() -> App<'a> {
                 .arg(Arg::with_name(DIRECTORY_OR_FILES)
                     .index(1)
                     .multiple(true)
-                    .required(true)
+                    .required(false)
                     .help("The directory or files to build documentation for")
 
                 )
