@@ -97,7 +97,8 @@ fn applied_tag_just_enum() {
                 "#
         ),
         (2, 0),
-        (u8, i64)
+        (u8, [u8; 7], u8),
+        |(orange, _, tag_id)| (orange, tag_id)
     );
 }
 
@@ -470,6 +471,118 @@ fn nested_pattern_match() {
 }
 
 #[test]
+fn if_guard_vanilla() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when "fooz" is
+                    s if s == "foo" -> 0
+                    s -> List.len (Str.toBytes s)
+                "#
+        ),
+        4,
+        i64
+    );
+}
+
+#[test]
+#[ignore]
+fn when_on_single_value_tag() {
+    // this fails because the switched-on symbol is not defined
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Identity 0 is
+                Identity 0 -> 0
+                Identity s -> s
+            "#
+        ),
+        6,
+        i64
+    );
+}
+
+#[test]
+#[ignore]
+fn if_guard_multiple() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            f = \n ->
+                when Identity n 0 is
+                        Identity x _ if x == 0 -> x + 0
+                        Identity x _ if x == 1 -> x + 0
+                        Identity x _ if x == 2 -> x + 0
+                        Identity x _ -> x - x
+
+            { a: f 0, b: f 1, c: f 2, d: f 4 }
+                "#
+        ),
+        (0, 1, 2, 0),
+        (i64, i64, i64, i64)
+    );
+}
+
+#[test]
+fn if_guard_constructor_switch() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Identity 32 0 is
+                    Identity 41 _ -> 0
+                    Identity s 0 if s == 32 -> 3
+                    # Identity s 0 -> s
+                    Identity z _ -> z
+                "#
+        ),
+        3,
+        i64
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Identity 42 "" is
+                    Identity 41 _ -> 0
+                    Identity 42 _ if 3 == 3 -> 1
+                    Identity z _ -> z
+                "#
+        ),
+        1,
+        i64
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Identity 42 "" is
+                    Identity 41 _ -> 0
+                    Identity 42 _ if 3 != 3 -> 1
+                    Identity z _ -> z
+                "#
+        ),
+        42,
+        i64
+    );
+}
+
+#[test]
+fn if_guard_constructor_chain() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Identity 43 0 is
+                    Identity 42 _ if 3 == 3 -> 43
+                    # Identity 42 _ -> 1
+                    Identity z _ -> z
+                "#
+        ),
+        43,
+        i64
+    );
+}
+
+#[test]
 fn if_guard_pattern_false() {
     assert_evals_to!(
         indoc!(
@@ -818,7 +931,7 @@ fn alignment_in_multi_tag_construction() {
         indoc!(
             r"#
                 x : [ Three Bool I64, Empty ]
-                x = Three (1 == 1) 32 
+                x = Three (1 == 1) 32
 
                 x
 

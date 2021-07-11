@@ -1,14 +1,14 @@
 procedure List.3 (#Attr.2, #Attr.3):
-    let Test.39 = lowlevel ListLen #Attr.2;
-    let Test.36 = lowlevel NumLt #Attr.3 Test.39;
-    if Test.36 then
-        let Test.38 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-        let Test.37 = Ok Test.38;
-        ret Test.37;
+    let Test.41 = lowlevel ListLen #Attr.2;
+    let Test.38 = lowlevel NumLt #Attr.3 Test.41;
+    if Test.38 then
+        let Test.40 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+        let Test.39 = Ok Test.40;
+        ret Test.39;
     else
-        let Test.35 = Struct {};
-        let Test.34 = Err Test.35;
-        ret Test.34;
+        let Test.37 = Struct {};
+        let Test.36 = Err Test.37;
+        ret Test.36;
 
 procedure List.4 (#Attr.2, #Attr.3, #Attr.4):
     let Test.19 = lowlevel ListLen #Attr.2;
@@ -20,41 +20,41 @@ procedure List.4 (#Attr.2, #Attr.3, #Attr.4):
         ret #Attr.2;
 
 procedure Test.1 (Test.2, Test.3, Test.4):
-    let Test.33 = CallByName List.3 Test.4 Test.3;
-    let Test.32 = CallByName List.3 Test.4 Test.2;
-    let Test.13 = Struct {Test.32, Test.33};
-    joinpoint Test.29:
-        let Test.22 = Array [];
-        ret Test.22;
+    let Test.35 = CallByName List.3 Test.4 Test.3;
+    let Test.34 = CallByName List.3 Test.4 Test.2;
+    let Test.13 = Struct {Test.34, Test.35};
+    joinpoint Test.31:
+        let Test.20 = Array [];
+        ret Test.20;
     in
-    let Test.26 = StructAtIndex 1 Test.13;
-    let Test.27 = 1i64;
-    let Test.28 = GetTagId Test.26;
-    let Test.31 = lowlevel Eq Test.27 Test.28;
-    if Test.31 then
-        let Test.23 = StructAtIndex 0 Test.13;
-        let Test.24 = 1i64;
-        let Test.25 = GetTagId Test.23;
-        let Test.30 = lowlevel Eq Test.24 Test.25;
-        if Test.30 then
-            let Test.21 = StructAtIndex 0 Test.13;
-            let Test.6 = UnionAtIndex (Id 1) (Index 0) Test.21;
-            let Test.20 = StructAtIndex 1 Test.13;
-            let Test.7 = UnionAtIndex (Id 1) (Index 0) Test.20;
+    let Test.28 = StructAtIndex 1 Test.13;
+    let Test.29 = 1i64;
+    let Test.30 = GetTagId Test.28;
+    let Test.33 = lowlevel Eq Test.29 Test.30;
+    if Test.33 then
+        let Test.25 = StructAtIndex 0 Test.13;
+        let Test.26 = 1i64;
+        let Test.27 = GetTagId Test.25;
+        let Test.32 = lowlevel Eq Test.26 Test.27;
+        if Test.32 then
+            let Test.24 = StructAtIndex 0 Test.13;
+            let Test.6 = UnionAtIndex (Id 1) (Index 0) Test.24;
+            let Test.23 = StructAtIndex 1 Test.13;
+            let Test.7 = UnionAtIndex (Id 1) (Index 0) Test.23;
             let Test.15 = CallByName List.4 Test.4 Test.2 Test.7;
             let Test.14 = CallByName List.4 Test.15 Test.3 Test.6;
             ret Test.14;
         else
             dec Test.4;
-            jump Test.29;
+            jump Test.31;
     else
         dec Test.4;
-        jump Test.29;
+        jump Test.31;
 
 procedure Test.0 ():
     let Test.10 = 0i64;
     let Test.11 = 0i64;
-    let Test.40 = 1i64;
-    let Test.12 = Array [Test.40];
+    let Test.42 = 1i64;
+    let Test.12 = Array [Test.42];
     let Test.9 = CallByName Test.1 Test.10 Test.11 Test.12;
     ret Test.9;

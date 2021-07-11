@@ -1,17 +1,17 @@
 procedure Test.3 (Test.4):
     joinpoint Test.13 Test.4:
-        let Test.23 = 1i64;
-        let Test.24 = GetTagId Test.4;
-        let Test.25 = lowlevel Eq Test.23 Test.24;
-        if Test.25 then
+        let Test.24 = 1i64;
+        let Test.25 = GetTagId Test.4;
+        let Test.26 = lowlevel Eq Test.24 Test.25;
+        if Test.26 then
             let Test.14 = false;
             ret Test.14;
         else
-            let Test.19 = UnionAtIndex (Id 0) (Index 0) Test.4;
-            let Test.20 = 1i64;
-            let Test.21 = GetTagId Test.19;
-            let Test.22 = lowlevel Eq Test.20 Test.21;
-            if Test.22 then
+            let Test.20 = UnionAtIndex (Id 0) (Index 0) Test.4;
+            let Test.21 = 1i64;
+            let Test.22 = GetTagId Test.20;
+            let Test.23 = lowlevel Eq Test.21 Test.22;
+            if Test.23 then
                 let Test.15 = true;
                 ret Test.15;
             else
@@ -21,12 +21,12 @@ procedure Test.3 (Test.4):
     jump Test.13 Test.4;
 
 procedure Test.0 ():
-    let Test.28 = 0i64;
-    let Test.30 = 3i64;
-    let Test.26 = Just Test.30;
-    let Test.29 = 1i64;
-    let Test.27 = Nil ;
-    let Test.12 = Cons Test.26 Test.27;
+    let Test.29 = 0i64;
+    let Test.31 = 3i64;
+    let Test.27 = Just Test.31;
+    let Test.30 = 1i64;
+    let Test.28 = Nil ;
+    let Test.12 = Cons Test.27 Test.28;
     let Test.11 = CallByName Test.3 Test.12;
     dec Test.12;
     ret Test.11;
