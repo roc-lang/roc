@@ -63,7 +63,7 @@ pub const NODE_BYTES: usize = 32;
 
 #[derive(Debug, Eq)]
 pub struct NodeId<T> {
-    index: u32,
+    pub index: u32, // pub for pretty printing only
     _phantom: PhantomData<T>,
 }
 

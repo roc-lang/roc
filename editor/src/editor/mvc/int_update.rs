@@ -98,7 +98,7 @@ pub fn update_int(
         } else {
             content_str_mut.insert(node_caret_offset, *ch);
 
-            let content_str = int_mark_node.get_content(&ed_model.markup_node_pool);
+            let content_str = int_mark_node.get_content();
 
             // update GridNodeMap and CodeLines
             ed_model.insert_between_line(

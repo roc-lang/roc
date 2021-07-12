@@ -63,7 +63,7 @@ impl fmt::Display for SlowPool {
                 "{}: {} ({}) ast_id {:?} {}",
                 index,
                 node.node_type_as_string(),
-                node.get_content().unwrap_or_else(|_| "".to_string()),
+                node.get_content(),
                 ast_node_id.parse::<usize>().unwrap(),
                 child_str
             )?;

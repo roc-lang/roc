@@ -1,8 +1,11 @@
-use crate::editor::ed_error::EdResult;
-use crate::editor::ed_error::StringParseError;
+use inlinable_string::InlinableString;
+use roc_module::symbol::Symbol;
+
+use crate::editor::ed_error::{EdResult};
 use crate::editor::markup::attribute::Attributes;
 use crate::editor::markup::common_nodes::new_blank_mn;
 use crate::editor::markup::common_nodes::new_equals_mn;
+use crate::editor::markup::nodes;
 use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
@@ -11,12 +14,10 @@ use crate::editor::mvc::ed_update::NodeContext;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::lang::ast::ArrString;
-use crate::lang::ast::{Expr2, ValueDef};
-use crate::lang::ast::Expr2::SmallInt;
-use crate::lang::ast::IntVal;
-use crate::lang::ast::{IntStyle, IntVal::*};
-use crate::lang::pool::PoolStr;
+use crate::lang::ast::{Expr2, ValueDef, update_str_expr};
+use crate::lang::pattern::Pattern2;
 use crate::ui::text::lines::SelectableLines;
+use std::iter::FromIterator;
 
 
 pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<InputOutcome> {
@@ -32,7 +33,7 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
 
     let val_name_string = new_char.to_string();
     // safe unwrap because our ArrString has a 30B capacity
-    let mut val_name_string_container = ArrString::try_from_str(val_name_string).unwrap();
+    let val_name_string_container = ArrString::try_from_str(val_name_string.clone()).unwrap();
     let val_name_expr2_node = 
         Expr2::SmallStr(
             val_name_string_container
@@ -42,9 +43,15 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     let body_placeholder = Expr2::Blank;
     let body_id = ed_model.module.env.pool.add(body_placeholder);
 
+    let ident_string = InlinableString::from_iter(val_name_string.chars());
+    let ident_id = ed_model.module.env.ident_ids.add(ident_string);
+
+    let pattern = Pattern2::Identifier(Symbol::new(ed_model.module.env.home, ident_id));
+    let pattern_id = ed_model.module.env.pool.add(pattern);
+
     let value_def =
         ValueDef::NoAnnotation {
-            pattern_id: Pattern2::Identifier(val_name_string),
+            pattern_id,
             expr_id: val_name_expr_id,
             expr_var: ed_model.module.env.var_store.fresh()
         };
@@ -70,13 +77,15 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
 
     let equals_mn_id = new_equals_mn(ast_node_id, Some(curr_mark_node_id), &mut ed_model.markup_node_pool);
 
-    let val_mn_id = new_blank_mn(ast_node_id, Some(curr_mark_node_id), &mut ed_model.markup_node_pool);
+    let body_mn_id = new_blank_mn(body_id, Some(curr_mark_node_id), &mut ed_model.markup_node_pool);
 
     let val_mark_node = MarkupNode::Nested {
         ast_node_id,
-        children_ids: vec![val_name_mn_id, equals_mn_id, val_mn_id],
+        children_ids: vec![val_name_mn_id, equals_mn_id, body_mn_id],
         parent_id_opt,
     };
+
+    let child_nodes_content = val_mark_node.get_nested_content(&ed_model.markup_node_pool);
 
     if is_blank_node {
         ed_model
@@ -93,8 +102,16 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
         ed_model.insert_between_line(
             old_caret_pos.line,
             old_caret_pos.column,
-            &digit_char.to_string(),
+            &child_nodes_content,
             curr_mark_node_id,
+        )?;
+
+        // for Blank node in body
+        ed_model.insert_between_line(
+            old_caret_pos.line,
+            old_caret_pos.column + child_nodes_content.len(),
+            nodes::BLANK_PLACEHOLDER,
+            body_mn_id,
         )?;
 
         Ok(InputOutcome::Accepted)
@@ -103,85 +120,41 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     }
 }
 
-// TODO check if new int needs more than e.g. 64 bits
-pub fn update_int(
-    ed_model: &mut EdModel,
-    int_mark_node_id: MarkNodeId,
-    ch: &char,
-) -> EdResult<InputOutcome> {
-    if ch.is_ascii_digit() {
+pub fn update_let_value(val_name_mn_id: MarkNodeId, ed_model: &mut EdModel, new_char: &char) -> EdResult<InputOutcome> {
+    if new_char.is_ascii_alphanumeric() {
         let old_caret_pos = ed_model.get_caret();
 
+        // update markup
+        let val_name_mn_mut = ed_model.markup_node_pool.get_mut(val_name_mn_id);
+        let content_str_mut = val_name_mn_mut.get_content_mut()?;
         let node_caret_offset = ed_model
             .grid_node_map
-            .get_offset_to_node_id(old_caret_pos, int_mark_node_id)?;
+            .get_offset_to_node_id(old_caret_pos, val_name_mn_id)?;
 
-        let int_mark_node = ed_model.markup_node_pool.get_mut(int_mark_node_id);
-        let int_ast_node_id = int_mark_node.get_ast_node_id();
-
-        let content_str_mut = int_mark_node.get_content_mut()?;
-
-        // 00, 01 are not valid ints
-        if (content_str_mut == "0" && (node_caret_offset == 1 || *ch == '0'))
-            || (*ch == '0' && node_caret_offset == 0)
-        {
-            Ok(InputOutcome::Ignored)
-        } else {
-            content_str_mut.insert(node_caret_offset, *ch);
-
-            let content_str = int_mark_node.get_content()?;
+        if node_caret_offset != 0 && node_caret_offset < content_str_mut.len() {
+            content_str_mut.insert(node_caret_offset, *new_char);
 
             // update GridNodeMap and CodeLines
             ed_model.insert_between_line(
                 old_caret_pos.line,
                 old_caret_pos.column,
-                &ch.to_string(),
-                int_mark_node_id,
+                &new_char.to_string(),
+                val_name_mn_id,
             )?;
-
-            // update ast
-            let new_pool_str = PoolStr::new(&content_str, ed_model.module.env.pool);
-            let int_ast_node = ed_model.module.env.pool.get_mut(int_ast_node_id);
-            match int_ast_node {
-                SmallInt { number, text, .. } => {
-                    update_small_int_num(number, &content_str)?;
-
-                    *text = new_pool_str;
-                }
-                _ => unimplemented!("TODO implement updating this type of Number"),
-            }
 
             // update caret
             ed_model.simple_move_carets_right(1);
 
+            // update ast
+            let let_value_ast_node_id = ed_model.markup_node_pool.get(val_name_mn_id).get_ast_node_id();
+            update_str_expr(let_value_ast_node_id, *new_char, node_caret_offset, ed_model.module.env.pool)?;
+
             Ok(InputOutcome::Accepted)
+        } else {
+            Ok(InputOutcome::Ignored)
         }
+
     } else {
         Ok(InputOutcome::Ignored)
-    }
-}
-
-fn update_small_int_num(number: &mut IntVal, updated_str: &str) -> EdResult<()> {
-    *number = match number {
-        I64(_) => I64(check_parse_res(updated_str.parse::<i64>())?),
-        U64(_) => U64(check_parse_res(updated_str.parse::<u64>())?),
-        I32(_) => I32(check_parse_res(updated_str.parse::<i32>())?),
-        U32(_) => U32(check_parse_res(updated_str.parse::<u32>())?),
-        I16(_) => I16(check_parse_res(updated_str.parse::<i16>())?),
-        U16(_) => U16(check_parse_res(updated_str.parse::<u16>())?),
-        I8(_) => I8(check_parse_res(updated_str.parse::<i8>())?),
-        U8(_) => U8(check_parse_res(updated_str.parse::<u8>())?),
-    };
-
-    Ok(())
-}
-
-fn check_parse_res<T, E: std::fmt::Debug>(parse_res: Result<T, E>) -> EdResult<T> {
-    match parse_res {
-        Ok(some_type) => Ok(some_type),
-        Err(parse_err) => StringParseError {
-            msg: format!("{:?}", parse_err),
-        }
-        .fail(),
     }
 }

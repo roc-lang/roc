@@ -3,7 +3,7 @@ pub mod constrain;
 mod def;
 pub mod expr;
 mod module;
-mod pattern;
+pub mod pattern;
 pub mod pool;
 pub mod roc_file;
 pub mod scope;

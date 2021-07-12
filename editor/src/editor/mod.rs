@@ -1,6 +1,6 @@
 mod code_lines;
 mod config;
-mod ed_error;
+pub mod ed_error;
 mod grid_node_map;
 mod keyboard_input;
 pub mod main;

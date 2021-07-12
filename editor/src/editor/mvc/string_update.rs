@@ -9,6 +9,7 @@ use crate::editor::mvc::ed_update::NodeContext;
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::lang::ast::ArrString;
 use crate::lang::ast::Expr2;
+use crate::lang::ast::update_str_expr;
 use crate::lang::pool::PoolStr;
 
 pub fn update_small_string(
@@ -74,8 +75,7 @@ pub fn update_small_string(
 }
 
 pub fn update_string(
-    new_input: &str,
-    old_pool_str: &PoolStr,
+    new_char: char,
     ed_model: &mut EdModel,
 ) -> EdResult<InputOutcome> {
     let NodeContext {
@@ -94,24 +94,18 @@ pub fn update_string(
         .get_offset_to_node_id(old_caret_pos, curr_mark_node_id)?;
 
     if node_caret_offset != 0 && node_caret_offset < content_str_mut.len() {
-        content_str_mut.insert_str(node_caret_offset, new_input);
+        content_str_mut.insert(node_caret_offset, new_char);
 
         // update GridNodeMap and CodeLines
         ed_model.insert_between_line(
             old_caret_pos.line,
             old_caret_pos.column,
-            new_input,
+            &new_char.to_string(),
             curr_mark_node_id,
         )?;
 
         // update ast
-        let mut new_string = old_pool_str.as_str(ed_model.module.env.pool).to_owned();
-        new_string.push_str(new_input);
-
-        let new_pool_str = PoolStr::new(&new_string, &mut ed_model.module.env.pool);
-        let new_ast_node = Expr2::Str(new_pool_str);
-
-        ed_model.module.env.pool.set(ast_node_id, new_ast_node);
+        update_str_expr(ast_node_id, new_char, node_caret_offset, &mut ed_model.module.env.pool)?;
 
         // update caret
         ed_model.simple_move_carets_right(1);

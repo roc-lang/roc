@@ -7,6 +7,7 @@ use crate::lang::pattern::{Pattern2, PatternId};
 use crate::lang::pool::Pool;
 use crate::lang::pool::{NodeId, PoolStr, PoolVec, ShallowClone};
 use crate::lang::types::{Type2, TypeId};
+use crate::editor::ed_error::{EdResult, UnexpectedASTNode};
 use arraystring::{typenum::U30, ArrayString};
 use roc_can::expr::Recursive;
 use roc_collections::all::WyHash;
@@ -547,6 +548,9 @@ fn expr2_to_string_helper(
         Expr2::SmallInt { text, .. } => {
             out_string.push_str(&format!("SmallInt({})", text.as_str(pool)));
         }
+        Expr2::LetValue {def_id, body_id, .. } => {
+            out_string.push_str(&format!("LetValue(def_id: {}, body_id: {})", def_id.index, body_id.index));
+        }
         other => todo!("Implement for {:?}", other),
     }
 
@@ -555,6 +559,61 @@ fn expr2_to_string_helper(
 
 fn var_to_string(some_var: &Variable, indent_level: usize) -> String {
     format!("{}Var({:?})\n", get_spacing(indent_level + 1), some_var)
+}
+
+pub fn update_str_expr(node_id: ExprId, new_char: char, insert_index: usize, pool: &mut Pool) -> EdResult<()> {
+    let str_expr = pool.get_mut(node_id);
+
+    enum Either {
+        MyString(String),
+        MyPoolStr(PoolStr),
+        Done,
+    }
+
+    let insert_either = match str_expr {
+        Expr2::SmallStr(arr_string) => {
+            let insert_res =
+                arr_string.try_insert(insert_index as u8, new_char);
+
+            match insert_res {
+                Ok(_) => Either::Done,
+                _ => {
+                    let mut new_string = arr_string.as_str().to_string();
+                    new_string.insert(insert_index, new_char);
+
+                    Either::MyString(new_string)
+                }
+            }
+        },
+        Expr2::Str(old_pool_str) => {
+            Either::MyPoolStr(*old_pool_str)
+        },
+        other => {
+            UnexpectedASTNode{
+                required_node_type: "SmallStr or Str",
+                encountered_node_type: format!("{:?}", other)
+            }.fail()?
+        }
+    };
+
+    match insert_either {
+        Either::MyString(new_string) => {
+            let new_pool_str = PoolStr::new(&new_string, pool);
+
+            pool.set(node_id, Expr2::Str(new_pool_str))
+        },
+        Either::MyPoolStr(old_pool_str) => {
+            let mut new_string = old_pool_str.as_str(pool).to_owned();
+            new_string.insert(insert_index, new_char);
+
+            let new_pool_str = PoolStr::new(&new_string, pool);
+
+            pool.set(node_id, Expr2::Str(new_pool_str))
+        },
+        Either::Done => (),
+    }
+
+    Ok(())
 }
 
 #[test]

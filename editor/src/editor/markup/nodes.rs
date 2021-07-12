@@ -149,8 +149,16 @@ impl MarkupNode {
         }
     }
 
-    // can't be &str, this creates borrowing issues
-    pub fn get_content(&self, markup_node_pool: &SlowPool) -> String {
+    pub fn get_content(&self) -> String {
+        match self {
+            MarkupNode::Nested { .. } => "".to_owned(),
+            MarkupNode::Text { content, .. } => content.clone(),
+            MarkupNode::Blank { .. } => BLANK_PLACEHOLDER.to_owned(),
+        }
+    }
+
+    // get string content of all children of nested node, while skipping blanks
+    pub fn get_nested_content(&self, markup_node_pool: &SlowPool) -> String {
         match self {
             MarkupNode::Nested { children_ids, .. } => {
                 let mut full_str = String::new();
@@ -159,14 +167,14 @@ impl MarkupNode {
                     let child_node = markup_node_pool.get(*child_id);
 
                     full_str.push_str(
-                        &child_node.get_content(markup_node_pool)
+                        &child_node.get_nested_content(markup_node_pool)
                     );
                 }
 
                 full_str
             },
-            MarkupNode::Text { content, .. } => content.clone(),
-            MarkupNode::Blank { .. } => BLANK_PLACEHOLDER.to_owned(),
+            MarkupNode::Text { .. } => self.get_content(),
+            MarkupNode::Blank { .. } => String::new(),
         }
     }
 
@@ -186,9 +194,9 @@ impl MarkupNode {
         }
     }
 
-    pub fn is_all_alphanumeric(&self, markup_node_pool: &SlowPool) -> bool {
+    pub fn is_all_alphanumeric(&self) -> bool {
         self
-            .get_content(markup_node_pool)
+            .get_content()
             .chars()
             .all(|chr| chr.is_ascii_alphanumeric())
     }
@@ -508,7 +516,7 @@ impl fmt::Display for MarkupNode {
             f,
             "{} ({})",
             self.node_type_as_string(),
-            self.get_content().unwrap_or_else(|_| "".to_string())
+            self.get_content()
         )
     }
 }

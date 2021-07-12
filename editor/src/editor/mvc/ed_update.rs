@@ -54,6 +54,9 @@ use snafu::OptionExt;
 use winit::event::VirtualKeyCode;
 use VirtualKeyCode::*;
 
+use super::let_update::start_new_let_value;
+use super::let_update::update_let_value;
+
 impl<'a> EdModel<'a> {
     pub fn move_caret(
         &mut self,
@@ -112,7 +115,7 @@ impl<'a> EdModel<'a> {
                 EdModel::build_grid_node_map(child_id, grid_node_map, markup_node_pool)?;
             }
         } else {
-            let node_content_str = node.get_content()?;
+            let node_content_str = node.get_content();
 
             grid_node_map.add_to_line(0, node_content_str.len(), node_id)?;
         }
@@ -145,7 +148,7 @@ impl<'a> EdModel<'a> {
                 EdModel::build_markup_string(child_id, all_code_string, markup_node_pool)?;
             }
         } else {
-            let node_content_str = node.get_content()?;
+            let node_content_str = node.get_content();
 
             all_code_string.push_str(&node_content_str);
         }
@@ -582,9 +585,9 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 
                             if let Expr2::Blank {..} = ast_node_ref {
                                 match ch {
-                                    /*'a'..='z' => {
+                                    'a'..='z' => {
                                         start_new_let_value(ed_model, ch)?
-                                    }*/
+                                    }
                                     '"' => {
                                         start_new_string(ed_model)?
                                     },
@@ -611,10 +614,8 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                 &ch, old_arr_str, ed_model
                                             )?
                                         }
-                                        Expr2::Str(old_pool_str) => {
-                                            update_string(
-                                                &ch.to_string(), old_pool_str, ed_model
-                                            )?
+                                        Expr2::Str(..) => {
+                                            update_string(*ch, ed_model)?
                                         }
                                         Expr2::InvalidLookup(old_pool_str) => {
                                             update_invalid_lookup(
@@ -630,7 +631,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                             InputOutcome::Ignored
                                         }
                                         Expr2::Record{ record_var:_, fields } => {
-                                            if curr_mark_node.get_content()?.chars().all(|chr| chr.is_ascii_alphanumeric()){
+                                            if curr_mark_node.get_content().chars().all(|chr| chr.is_ascii_alphanumeric()){
                                                 update_record_field(
                                                     &ch.to_string(),
                                                     ed_model.get_caret(),
@@ -675,8 +676,8 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                 Expr2::Record{ record_var:_, fields } => {
                                                     let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
 
-                                                    if (curr_mark_node.get_content()? == nodes::RIGHT_ACCOLADE || curr_mark_node.get_content()? == nodes::COLON) &&
-                                                        prev_mark_node.is_all_alphanumeric()? {
+                                                    if (curr_mark_node.get_content() == nodes::RIGHT_ACCOLADE || curr_mark_node.get_content() == nodes::COLON) &&
+                                                        prev_mark_node.is_all_alphanumeric() {
                                                         update_record_field(
                                                             &ch.to_string(),
                                                             ed_model.get_caret(),
@@ -684,7 +685,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                             fields,
                                                             ed_model,
                                                         )?
-                                                    } else if prev_mark_node.get_content()? == nodes::LEFT_ACCOLADE && curr_mark_node.is_all_alphanumeric()? {
+                                                    } else if prev_mark_node.get_content() == nodes::LEFT_ACCOLADE && curr_mark_node.is_all_alphanumeric() {
                                                         update_record_field(
                                                             &ch.to_string(),
                                                             ed_model.get_caret(),
@@ -699,7 +700,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                 Expr2::List{ elem_var: _, elems: _} => {
                                                     let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
 
-                                                    if prev_mark_node.get_content()? == nodes::LEFT_SQUARE_BR && curr_mark_node.get_content()? == nodes::RIGHT_SQUARE_BR {
+                                                    if prev_mark_node.get_content() == nodes::LEFT_SQUARE_BR && curr_mark_node.get_content() == nodes::RIGHT_SQUARE_BR {
                                                         // based on if, we are at the start of the list
                                                         let new_child_index = 1;
                                                         let new_ast_child_index = 0;
@@ -709,6 +710,9 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                     } else {
                                                         InputOutcome::Ignored
                                                     }
+                                                }
+                                                Expr2::LetValue{ .. } => {
+                                                    update_let_value(prev_mark_node_id, ed_model, ch)?
                                                 }
                                                 _ => {
                                                     match ast_node_ref {
@@ -739,7 +743,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                         InputOutcome::Ignored
                                     }
                                 } else if *ch == ',' {
-                                    if curr_mark_node.get_content()? == nodes::LEFT_SQUARE_BR {
+                                    if curr_mark_node.get_content() == nodes::LEFT_SQUARE_BR {
                                         InputOutcome::Ignored
                                     } else {
                                         let mark_parent_id_opt = curr_mark_node.get_parent_id_opt();
@@ -773,7 +777,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                 } else if "\"{[".contains(*ch) {
                                     let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
 
-                                    if prev_mark_node.get_content()? == nodes::LEFT_SQUARE_BR && curr_mark_node.get_content()? == nodes::RIGHT_SQUARE_BR {
+                                    if prev_mark_node.get_content() == nodes::LEFT_SQUARE_BR && curr_mark_node.get_content() == nodes::RIGHT_SQUARE_BR {
                                         let (new_child_index, new_ast_child_index) = ed_model.get_curr_child_indices()?;
                                         // insert a Blank first, this results in cleaner code
                                         add_blank_child(

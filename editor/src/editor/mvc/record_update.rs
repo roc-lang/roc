@@ -112,8 +112,8 @@ pub fn update_empty_record(
             ast_node_id,
         } = get_node_context(&ed_model)?;
 
-        if prev_mark_node.get_content()? == nodes::LEFT_ACCOLADE
-            && curr_mark_node.get_content()? == nodes::RIGHT_ACCOLADE
+        if prev_mark_node.get_content() == nodes::LEFT_ACCOLADE
+            && curr_mark_node.get_content() == nodes::RIGHT_ACCOLADE
         {
             // update AST
             let record_var = ed_model.module.env.var_store.fresh();
@@ -216,7 +216,7 @@ pub fn update_record_colon(
                             let next_mark_node_id =
                                 ed_model.grid_node_map.get_id_at_row_col(old_caret_pos)?;
                             let next_mark_node = ed_model.markup_node_pool.get(next_mark_node_id);
-                            if next_mark_node.get_content()? == nodes::RIGHT_ACCOLADE {
+                            if next_mark_node.get_content() == nodes::RIGHT_ACCOLADE {
                                 // update AST node
                                 let new_field_val = Expr2::Blank;
                                 let new_field_val_id = ed_model.module.env.pool.add(new_field_val);
