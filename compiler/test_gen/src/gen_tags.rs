@@ -502,7 +502,6 @@ fn when_on_single_value_tag() {
 }
 
 #[test]
-#[ignore]
 fn if_guard_multiple() {
     assert_evals_to!(
         indoc!(
