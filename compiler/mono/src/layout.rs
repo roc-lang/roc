@@ -208,6 +208,15 @@ impl<'a> UnionLayout<'a> {
             UnionLayout::NullableUnwrapped { nullable_id, .. } => *nullable_id == (tag_id != 0),
         }
     }
+
+    pub fn is_nullable(&self) -> bool {
+        match self {
+            UnionLayout::NonRecursive(_)
+            | UnionLayout::Recursive(_)
+            | UnionLayout::NonNullableUnwrapped { .. } => false,
+            UnionLayout::NullableWrapped { .. } | UnionLayout::NullableUnwrapped { .. } => true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

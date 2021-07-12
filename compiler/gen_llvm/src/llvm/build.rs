@@ -4344,7 +4344,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
                     dict_walk(
                         env,
-                        layout_ids,
                         roc_function_call,
                         dict,
                         default,

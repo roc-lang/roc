@@ -94,7 +94,7 @@ pub fn build_app<'a>() -> App<'a> {
                 .arg(Arg::with_name(DIRECTORY_OR_FILES)
                     .index(1)
                     .multiple(true)
-                    .required(true)
+                    .required(false)
                     .help("The directory or files to build documentation for")
 
                 )
@@ -196,13 +196,6 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
                         .strip_prefix(env::current_dir().unwrap())
                         .unwrap_or(&binary_path);
 
-                    // Return a nonzero exit code if there were problems
-                    let status_code = match outcome {
-                        BuildOutcome::NoProblems => 0,
-                        BuildOutcome::OnlyWarnings => 1,
-                        BuildOutcome::Errors => 2,
-                    };
-
                     // No need to waste time freeing this memory,
                     // since the process is about to exit anyway.
                     std::mem::forget(arena);
@@ -213,7 +206,8 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
                         total_time.as_millis()
                     );
 
-                    Ok(status_code)
+                    // Return a nonzero exit code if there were problems
+                    Ok(outcome.status_code())
                 }
                 BuildAndRun { roc_file_arg_index } => {
                     let mut cmd = Command::new(binary_path);
@@ -231,7 +225,10 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
                         }
                     }
 
-                    roc_run(cmd.current_dir(original_cwd))
+                    match outcome {
+                        BuildOutcome::Errors => Ok(outcome.status_code()),
+                        _ => roc_run(cmd.current_dir(original_cwd)),
+                    }
                 }
             }
         }

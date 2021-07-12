@@ -32,6 +32,8 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 * [Primitive](https://primitive.io/) code exploration in Virtual Reality
 * [Luna](https://www.luna-lang.org/) language for interactive data processing and visualization
 * [Hazel Livelits](https://hazel.org/papers/livelits-paper.pdf) interactive plugins, see GIF's [here](https://twitter.com/disconcision/status/1408155781120376833).
+* [Thorough review](https://drossbucket.com/2021/06/30/hacker-news-folk-wisdom-on-visual-programming/) of pros and cons of text versus visual programming.
+
 ### Debugging
 
 * [VS code debug visualization](https://marketplace.visualstudio.com/items?itemName=hediet.debug-visualizer)
@@ -44,6 +46,8 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 e.g. you have a test `calculate_sum_test` that only uses the function `add`, when the test fails you should be able to see a diff showing only what changed for the function `add`. It would also be great to have a diff of [expression values](https://homepages.cwi.nl/~storm/livelit/images/bret.png) Bret Victor style. An ambitious project would be to suggest or automatically try fixes based on these diffs.
 * I think it could be possible to create a minimal reproduction of a program / block of code / code used by a single test. So for a failing unit test I would expect it to extract imports, the platform, types and functions that are necessary to run only that unit test and put them in a standalone roc project. This would be useful for sharing bugs with library+application authors and colleagues, for profiling or debugging with all "clutter" removed.
 * Ability to share program state at a breakpoint with someone else.
+* For debugging we should aim for maximal useful observability. For example Rust's enum values can not be easily viewed in the CodeLLDB debugger, you actually need to call a print method that does pattern matching to be able to view useful information.
+* We previuously discussed recording full traces of programs so they do not have to be re-run multiple times in the debugging process. We should encourage roc developers to experiment with creating debugging representations of this AST+"execution trace", it could lead to some cool stuff.  
 
 ### Cool regular editors
 
@@ -71,6 +75,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * [Sourcetrail](https://www.sourcetrail.com/) nice tree-like source explorer.
 * [Unisonweb](https://www.unisonweb.org), definition based [editor](https://twitter.com/shojberg/status/1364666092598288385) as opposed to file based.
 * [Utopia](https://utopia.app/) integrated design and development environment for React. Design and code update each other, in real time.
+* [Paredit](https://calva.io/paredit/) structural clojure editing, navigation and selection. [Another overview](http://danmidwood.com/content/2014/11/21/animated-paredit.html)
 
 ### Voice Interaction Related
 
@@ -83,7 +88,27 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     * Show edit history for this function.
     * Adjusting settings: switch to light theme, increase font size...
 * Use (context specific) voice command state machine to assist Machine Learning voice recognition model.
-* Nice special use case: using voice to code while on treadmill desk. 
+* Nice special use case: using voice to code while on treadmill desk.
+* Use word embeddings to find most similar voice command to recorded input in vector space.
+
+#### Useful voice commands
+
+* clear all breakpoints
+* increase/decrease font size
+* switch to dark/light/high-contrast mode
+* open/go to file "Main"(fuzzy matching)
+* go to function "foo"
+* go to definition
+* show all references(uses) of this function/type/...
+* show history timeline of this function/file
+* show recent projects
+* generate unit test for this function
+* generate unit test for this function based on debug trace (input and output is recorded and used in test)
+* who wrote this line (git blame integration)
+* search documentation of library X for Foo
+* show example of how to use library function Foo
+* open google/github/duckduckgo search for error...
+* show editor plugins for library X
 
     
 #### Inspiration
@@ -116,7 +141,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Show productivity/feature tips on startup. Show link to page with all tips. Allow not seeing tips next time.
 * Search friendly editor docs inside the editor. Offer to send search string to Roc maintainers when no results, or if no results were clicked.
 * File history timeline view. Show timeline with commits that changed this file, the number of lines added and deleted as well as which user made the changes. Arrow navigation should allow you to quickly view different versions of the file.
-* Suggested quick fixes should be directly visible and clickable. Not like in vs code where you put the caret on an error until a lightbulb appears in the margin which you have to click for the fixes to apppear, after which you click to apply the fix you want :( .
+* Suggested quick fixes should be directly visible and clickable. Not like in vs code where you put the caret on an error until a lightbulb appears in the margin which you have to click for the fixes to apppear, after which you click to apply the fix you want :( . You should be able to apply suggestions in rapid succession. e.g. if you copy some roc code from the internet you should be able to apply 5 import suggestions quickly. 
 * Regex-like find and substitution based on plain english description and example (replacement). i.e. replace all `[` between double quotes with `{`. [Inspiration](https://alexmoltzau.medium.com/english-to-regex-thanks-to-gpt-3-13f03b68236e).
 * Show productivity tips based on behavior. i.e. if the user is scrolling through the error bar and clicking on the next error several times, show a tip with "go to next error" shortcut.
 * Command to "benchmark this function" or "benchmark this test" with flamegraph and execution time per line.
@@ -127,6 +152,8 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     * search a local history of previously encountered errors and fixes
     * search through a database of our zullip questions
     * ...
+* smart insert: press a shortcut and enter a plain english description of a code snippet you need. Examples: "convert string to list of chars", "sort list of records by field foo descending", "plot this list with date on x-axis"...
+* After the user has refactored code to be simpler, try finding other places in the code base where the same simplification can be made.
 
 #### Autocomplete
 
@@ -197,6 +224,12 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     * Modern editors may guide developers to the source code too easily.
     The API and documentation are meant to interface with humans.
 * [DocC](https://developer.apple.com/videos/play/wwdc2021/10166/) neat documentation approach for swift. 
+
+## General Plugin Ideas
+
+### Inspiration
+
+- [Boop](https://github.com/IvanMathy/Boop) scriptable scratchpad for developers. Contains collection of useful conversions: json formatting, url encoding, encode to base64...
 
 ## General Thoughts/Ideas
 

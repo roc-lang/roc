@@ -19,7 +19,7 @@ pub fn build_debug_graphics(
     let area_bounds = (size.width as f32, size.height as f32);
     let layout = wgpu_glyph::Layout::default().h_align(wgpu_glyph::HorizontalAlign::Left);
 
-    let debug_txt_coords: Vector2<f32> = (txt_coords.x, txt_coords.y * 6.0).into();
+    let debug_txt_coords: Vector2<f32> = (txt_coords.x, txt_coords.y * 3.0).into();
 
     let grid_node_map_text = glyph_brush::OwnedText::new(format!("{}", ed_model.grid_node_map))
         .with_color(colors::to_slice(from_hsb(20, 41, 100)))

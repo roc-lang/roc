@@ -1,5 +1,5 @@
-use crate::editor::slow_pool::MarkNodeId;
 use crate::ui::ui_error::UIResult;
+use crate::{editor::slow_pool::MarkNodeId, ui::text::text_pos::TextPos};
 use colored::*;
 use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
 
@@ -108,6 +108,15 @@ pub enum EdError {
     ))]
     NodeIdNotInGridNodeMap {
         node_id: MarkNodeId,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display(
+        "NoNodeAtCaretPosition: there was no node at the current caret position {:?}.",
+        caret_pos,
+    ))]
+    NoNodeAtCaretPosition {
+        caret_pos: TextPos,
         backtrace: Backtrace,
     },
 
