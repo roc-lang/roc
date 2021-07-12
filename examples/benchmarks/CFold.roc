@@ -8,42 +8,15 @@ app "cfold"
 main : Task.Task {} []
 main =
     Task.after Task.getInt \n ->
-        e : Expr
-        e = (Add (Add ( Val 3) ( Val 1)) (Add ( Val 1) ( Var 1)))
-        # e = mkExpr n 1 # original koka n = 20 (set `ulimit -s unlimited` to avoid stack overflow for n = 20)
+        e = mkExpr n 1 # original koka n = 20 (set `ulimit -s unlimited` to avoid stack overflow for n = 20)
+        unoptimized = eval e
+        optimized = eval (constFolding (reassoc e))
 
-        # unoptimized = eval e
-        # optimized = eval (constFolding (reassoc e))
-
-        Task.putLine (show e)
-
-#         unoptimized
-#             |> Str.fromInt
-#             |> Str.concat " & "
-#             |> Str.concat (Str.fromInt optimized)
-#             |> Task.putLine
-
-show : Expr -> Str
-show = \expr ->
-    when expr is
-        Var v -> 
-            "( Var " 
-                |> Str.concat (Str.fromInt v)
-                |> Str.concat ")"
-        Val v -> 
-            "( Val " 
-                |> Str.concat (Str.fromInt v)
-                |> Str.concat ")"
-        Add l r -> "(Add "
-            |> Str.concat (show l)
-            |> Str.concat " "
-            |> Str.concat (show r)
-            |> Str.concat ")"
-        Mul l r -> "(Mul "
-            |> Str.concat (show l)
-            |> Str.concat " "
-            |> Str.concat (show r)
-            |> Str.concat ")"
+        unoptimized
+            |> Str.fromInt
+            |> Str.concat " & "
+            |> Str.concat (Str.fromInt optimized)
+            |> Task.putLine
 
 Expr : [
     Add Expr Expr,
@@ -124,4 +97,3 @@ constFolding = \e ->
                 Pair y1 y2                   -> Add y1 y2
 
         _ -> e
-
