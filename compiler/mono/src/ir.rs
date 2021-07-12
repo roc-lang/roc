@@ -20,7 +20,7 @@ use roc_types::subs::{Content, FlatType, Subs, Variable};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
-pub const PRETTY_PRINT_IR_SYMBOLS: bool = false;
+pub const PRETTY_PRINT_IR_SYMBOLS: bool = true;
 
 macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr) => {
@@ -5507,7 +5507,7 @@ fn substitute_in_expr<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn store_pattern<'a>(
+fn store_pattern<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
@@ -5515,8 +5515,20 @@ pub fn store_pattern<'a>(
     outer_symbol: Symbol,
     stmt: Stmt<'a>,
 ) -> Stmt<'a> {
-    // TODO should be Named(outer_symbol);
-    let symbols = PatternSymbols::Empty;
+    let symbols = PatternSymbols::Named(outer_symbol);
+
+    store_pattern_dealias(env, procs, layout_cache, can_pat, &symbols, stmt)
+}
+#[allow(clippy::too_many_arguments)]
+pub fn store_pattern_dealias<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    can_pat: &Pattern<'a>,
+    assignments: &PatternSymbols,
+    stmt: Stmt<'a>,
+) -> Stmt<'a> {
+    let outer_symbol = assignments.top_level_symbol_or_fresh(env);
 
     match store_pattern_help(
         env,
@@ -5524,7 +5536,7 @@ pub fn store_pattern<'a>(
         layout_cache,
         can_pat,
         outer_symbol,
-        &symbols,
+        &assignments,
         stmt,
     ) {
         StorePattern::Productive(new) => new,
@@ -5714,17 +5726,24 @@ fn store_tag_pattern<'a>(
             | StrLiteral(_) => {}
             NewtypeDestructure { .. } | AppliedTag { .. } | RecordDestructure { .. } => {
                 // store the field in a symbol, and continue matching on it
-                let symbol = env.unique_symbol();
+
+                let symbols = symbols.pattern_symbols_at_index(tag_id, index);
+                let symbol = symbols.top_level_symbol_or_fresh(env);
 
                 // first recurse, continuing to unpack symbol
                 match store_pattern_help(env, procs, layout_cache, argument, symbol, symbols, stmt)
                 {
                     StorePattern::Productive(new) => {
                         is_productive = true;
+
                         stmt = new;
-                        // only if we bind one of its (sub)fields to a used name should we
-                        // extract the field
-                        stmt = Stmt::Let(symbol, load, arg_layout, env.arena.alloc(stmt));
+                        if symbols.top_level_symbol().is_some() {
+                            // skip the assignment
+                        } else {
+                            // only if we bind one of its (sub)fields to a used name should we
+                            // extract the field
+                            stmt = Stmt::Let(symbol, load, arg_layout, env.arena.alloc(stmt));
+                        }
                     }
                     StorePattern::NotProductive(new) => {
                         // do nothing
@@ -5791,17 +5810,26 @@ fn store_newtype_pattern<'a>(
             | StrLiteral(_) => {}
             NewtypeDestructure { .. } | AppliedTag { .. } | RecordDestructure { .. } => {
                 // store the field in a symbol, and continue matching on it
-                let symbol = env.unique_symbol();
+
+                let tag_id = 0;
+                let symbols = symbols.pattern_symbols_at_index(tag_id, index);
+
+                let symbol = symbols.top_level_symbol_or_fresh(env);
 
                 // first recurse, continuing to unpack symbol
                 match store_pattern_help(env, procs, layout_cache, argument, symbol, symbols, stmt)
                 {
                     StorePattern::Productive(new) => {
                         is_productive = true;
+
                         stmt = new;
-                        // only if we bind one of its (sub)fields to a used name should we
-                        // extract the field
-                        stmt = Stmt::Let(symbol, load, arg_layout, env.arena.alloc(stmt));
+                        if symbols.top_level_symbol().is_some() {
+                            // skip the assignment
+                        } else {
+                            // only if we bind one of its (sub)fields to a used name should we
+                            // extract the field
+                            stmt = Stmt::Let(symbol, load, arg_layout, env.arena.alloc(stmt));
+                        }
                     }
                     StorePattern::NotProductive(new) => {
                         // do nothing
@@ -5870,7 +5898,10 @@ fn store_record_destruct<'a>(
             }
 
             NewtypeDestructure { .. } | AppliedTag { .. } | RecordDestructure { .. } => {
-                let symbol = env.unique_symbol();
+                let tag_id = 0;
+                let symbols = symbols.pattern_symbols_at_index(tag_id, index as usize);
+
+                let symbol = symbols.top_level_symbol_or_fresh(env);
 
                 match store_pattern_help(
                     env,
@@ -5883,7 +5914,11 @@ fn store_record_destruct<'a>(
                 ) {
                     StorePattern::Productive(new) => {
                         stmt = new;
-                        stmt = Stmt::Let(symbol, load, destruct.layout, env.arena.alloc(stmt));
+                        if symbols.top_level_symbol().is_some() {
+                            // skip the assignment
+                        } else {
+                            stmt = Stmt::Let(symbol, load, destruct.layout, env.arena.alloc(stmt));
+                        }
                     }
                     StorePattern::NotProductive(stmt) => return StorePattern::NotProductive(stmt),
                 }

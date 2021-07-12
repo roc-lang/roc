@@ -1089,33 +1089,38 @@ pub fn optimize_when<'a>(
     let indexed_branches: Vec<_> = _indexed_branches;
 
     let decision_tree = compile(patterns);
-    // dbg!(&decision_tree);
     let decider = tree_to_decider(decision_tree);
 
     let symbols = decide_to_pattern_symbols(env, cond_symbol, cond_layout, &decider);
-    // dbg!(&symbols);
-    // dbg!(&decider);
 
     // for each target (branch body), count in how many ways it can be reached
     let mut target_counts = bumpalo::vec![in env.arena; 0; indexed_branches.len()];
     count_targets(&mut target_counts, &decider);
 
     let mut choices = MutMap::default();
-    let mut jumps = Vec::new();
+    let mut jumps = MutMap::default();
+    let mut jump_target_to_id = Vec::new();
 
     for (index, mut branch, pattern, has_guard) in indexed_branches.into_iter() {
         // bind the fields referenced in the pattern. For guards this happens separately, so
         // the pattern variables are defined when evaluating the guard.
         if !has_guard {
-            branch =
-                crate::ir::store_pattern(env, procs, layout_cache, &pattern, cond_symbol, branch);
+            branch = crate::ir::store_pattern_dealias(
+                env,
+                procs,
+                layout_cache,
+                &pattern,
+                &symbols,
+                branch,
+            );
         }
 
         let ((branch_index, choice), opt_jump) = create_choices(&target_counts, index, branch);
 
         if let Some((index, body)) = opt_jump {
             let id = JoinPointId(env.unique_symbol());
-            jumps.push((index, id, body));
+            jumps.insert(index, (id, body));
+            jump_target_to_id.push((index, id));
         }
 
         choices.insert(branch_index, choice);
@@ -1123,18 +1128,28 @@ pub fn optimize_when<'a>(
 
     let choice_decider = insert_choices(&choices, decider);
 
+    let assigned_set = MutSet::default();
+    let mut assignments = PatternAssignments {
+        symbols: env.arena.alloc(symbols),
+        assigned: env.arena.alloc(assigned_set),
+    };
+
+    dbg!("branching");
+
     let mut stmt = decide_to_branching(
         env,
         procs,
         layout_cache,
+        &mut assignments,
         cond_symbol,
         cond_layout,
         ret_layout,
         choice_decider,
-        &jumps,
+        &jump_target_to_id,
+        &mut jumps,
     );
 
-    for (_, id, body) in jumps.into_iter() {
+    for (_, (id, body)) in jumps.into_iter() {
         stmt = Stmt::Join {
             id,
             parameters: &[],
@@ -1152,6 +1167,12 @@ struct PathInstruction {
     tag_id: u8,
 }
 
+#[derive(Debug)]
+pub struct PatternAssignments<'a> {
+    symbols: &'a PatternSymbols,
+    assigned: &'a mut MutSet<Symbol>,
+}
+
 #[derive(Debug, Clone)]
 pub enum PatternSymbols {
     Sequence(Symbol, MutMap<u8, Vec<PatternSymbols>>),
@@ -1160,55 +1181,56 @@ pub enum PatternSymbols {
 }
 
 impl PatternSymbols {
-    fn from_pattern<'a, 'b>(&'b mut self, env: &mut Env<'a, '_>, pattern: &Pattern<'a>) {
-        match pattern {
-            Pattern::Identifier(symbol) => match self {
-                PatternSymbols::Sequence(existing, _) | PatternSymbols::Named(existing) => {
-                    debug_assert_eq!(symbol, existing);
-                }
-                PatternSymbols::Empty => {
-                    *self = PatternSymbols::Named(*symbol);
-                }
-            },
-            Pattern::Underscore => {
-                // underscore does not bind a symbol
-            }
-            Pattern::IntLiteral(_)
-            | Pattern::FloatLiteral(_)
-            | Pattern::BitLiteral { .. }
-            | Pattern::EnumLiteral { .. }
-            | Pattern::StrLiteral(_) => {
-                // literals don't contain any symbols
-            }
-            Pattern::RecordDestructure(_, _) => todo!(),
-            Pattern::NewtypeDestructure {
-                tag_name,
-                arguments,
-            } => todo!(),
-            Pattern::AppliedTag {
-                tag_name,
-                tag_id,
-                arguments,
-                layout,
-                union,
-            } => {
-                todo!()
-            }
+    pub fn top_level_symbol_or_fresh<'a>(&self, env: &mut Env<'a, '_>) -> Symbol {
+        match self {
+            PatternSymbols::Sequence(symbol, _) => *symbol,
+            PatternSymbols::Named(symbol) => *symbol,
+            PatternSymbols::Empty => env.unique_symbol(),
         }
     }
 
-    fn from_path<'a>(
-        env: &mut Env<'a, '_>,
-        path: &[PathInstruction],
-        root: Symbol,
-        root_layout: Layout,
-    ) -> Self {
-        let mut result = Self::Named(root);
-
-        Self::from_path_help(&mut result, env, path, root, root_layout);
-
-        result
+    pub fn top_level_symbol(&self) -> Option<Symbol> {
+        match self {
+            PatternSymbols::Sequence(symbol, _) => Some(*symbol),
+            PatternSymbols::Named(symbol) => Some(*symbol),
+            PatternSymbols::Empty => None,
+        }
     }
+
+    const EMPTY: PatternSymbols = PatternSymbols::Empty;
+
+    pub fn pattern_symbols_at_index(&self, tag_id: u8, index: usize) -> &Self {
+        match self {
+            PatternSymbols::Sequence(_, tags) => {
+                match tags.get(&tag_id).and_then(|map| map.get(index)) {
+                    Some(symbols) => symbols,
+                    None => &Self::EMPTY,
+                }
+            }
+
+            PatternSymbols::Named(_) => &Self::EMPTY,
+            PatternSymbols::Empty => &Self::EMPTY,
+        }
+    }
+
+    pub fn symbol_at_index<'a>(&self, env: &mut Env<'a, '_>, tag_id: u8, index: usize) -> Symbol {
+        let symbols = self.pattern_symbols_at_index(tag_id, index);
+
+        symbols.top_level_symbol_or_fresh(env)
+    }
+
+    //    fn from_path<'a>(
+    //        env: &mut Env<'a, '_>,
+    //        path: &[PathInstruction],
+    //        root: Symbol,
+    //        root_layout: Layout,
+    //    ) -> Self {
+    //        let mut result = Self::Named(root);
+    //
+    //        Self::from_path_help(&mut result, env, path, root, root_layout);
+    //
+    //        result
+    //    }
 
     fn extend_by_path<'a>(
         &mut self,
@@ -1220,7 +1242,7 @@ impl PatternSymbols {
         Self::from_path_help(self, env, path, root, root_layout);
     }
 
-    fn from_path_help<'a, 'b>(
+    fn from_path_help<'a>(
         &mut self,
         env: &mut Env<'a, '_>,
         path: &[PathInstruction],
@@ -1241,18 +1263,10 @@ impl PatternSymbols {
 
             match &layout {
                 Layout::Union(union_layout) => {
-                    let inner_expr = Expr::UnionAtIndex {
-                        tag_id: *tag_id,
-                        structure: symbol,
-                        index,
-                        union_layout: *union_layout,
-                    };
-
                     let inner_layout = union_layout.layout_at(*tag_id as u8, index as usize);
 
-                    let (new_symbol, new_symbols) = symbols.step(env, *tag_id, index as usize);
+                    let (_, new_symbols) = symbols.step(env, *tag_id, index as usize);
 
-                    symbol = new_symbol;
                     symbols = new_symbols;
 
                     layout = inner_layout;
@@ -1261,17 +1275,10 @@ impl PatternSymbols {
                 Layout::Struct(field_layouts) => {
                     debug_assert!(field_layouts.len() > 1);
 
-                    let inner_expr = Expr::StructAtIndex {
-                        index,
-                        field_layouts,
-                        structure: symbol,
-                    };
-
                     let inner_layout = field_layouts[index as usize];
 
-                    let (new_symbol, new_symbols) = symbols.step(env, *tag_id, index as usize);
+                    let (_, new_symbols) = symbols.step(env, *tag_id, index as usize);
 
-                    symbol = new_symbol;
                     symbols = new_symbols;
 
                     layout = inner_layout;
@@ -1376,27 +1383,19 @@ impl PatternSymbols {
     }
 }
 
-fn path_to_expr_help_experiment<'a>(
+fn path_to_expr_help<'a>(
     env: &mut Env<'a, '_>,
     root: Symbol,
     path: &[PathInstruction],
     mut layout: Layout<'a>,
-) -> (Symbol, StoresVec<'a>, Layout<'a>) {
-    let mut symbols = PatternSymbols::Named(root);
-
-    let result = path_to_expr_help_experiment_help(env, root, path, layout, &mut symbols);
-
-    result
-}
-
-fn path_to_expr_help_experiment_help<'a>(
-    env: &mut Env<'a, '_>,
-    root: Symbol,
-    path: &[PathInstruction],
-    mut layout: Layout<'a>,
-    mut symbols: &mut PatternSymbols,
+    assignments: &mut PatternAssignments<'a>,
 ) -> (Symbol, StoresVec<'a>, Layout<'a>) {
     let mut stores = bumpalo::collections::Vec::new_in(env.arena);
+
+    let PatternAssignments {
+        assigned,
+        mut symbols,
+    } = assignments;
 
     let mut symbol = root;
 
@@ -1409,22 +1408,28 @@ fn path_to_expr_help_experiment_help<'a>(
 
         match &layout {
             Layout::Union(union_layout) => {
+                let structure = symbol;
                 let inner_expr = Expr::UnionAtIndex {
                     tag_id: *tag_id,
-                    structure: symbol,
+                    structure,
                     index,
                     union_layout: *union_layout,
                 };
 
                 let inner_layout = union_layout.layout_at(*tag_id as u8, index as usize);
 
-                let (new_symbol, new_symbols) = symbols.step(env, *tag_id, index as usize);
+                symbols = symbols.pattern_symbols_at_index(*tag_id, index as usize);
+                symbol = symbols.top_level_symbol_or_fresh(env);
 
-                symbol = new_symbol;
-                symbols = new_symbols;
-
-                // symbol = env.unique_symbol();
-                stores.push((symbol, inner_layout, inner_expr));
+                match assigned.get(&symbol) {
+                    Some(_) => {
+                        // skip, already assigned
+                    }
+                    None => {
+                        stores.push((symbol, inner_layout, inner_expr));
+                        assigned.insert(symbol);
+                    }
+                }
 
                 layout = inner_layout;
             }
@@ -1440,79 +1445,18 @@ fn path_to_expr_help_experiment_help<'a>(
 
                 let inner_layout = field_layouts[index as usize];
 
-                let (new_symbol, new_symbols) = symbols.step(env, *tag_id, index as usize);
+                symbols = symbols.pattern_symbols_at_index(*tag_id, index as usize);
+                symbol = symbols.top_level_symbol_or_fresh(env);
 
-                symbol = new_symbol;
-                symbols = new_symbols;
-
-                // symbol = env.unique_symbol();
-                stores.push((symbol, inner_layout, inner_expr));
-
-                layout = inner_layout;
-            }
-
-            _ => {
-                // this MUST be an index into a single-element (hence unwrapped) record
-
-                debug_assert_eq!(index, 0, "{:?}", &layout);
-                debug_assert_eq!(*tag_id, 0);
-                debug_assert!(it.peek().is_none());
-
-                break;
-            }
-        }
-    }
-
-    (symbol, stores, layout)
-}
-
-fn path_to_expr_help<'a>(
-    env: &mut Env<'a, '_>,
-    mut symbol: Symbol,
-    path: &[PathInstruction],
-    mut layout: Layout<'a>,
-) -> (Symbol, StoresVec<'a>, Layout<'a>) {
-    return path_to_expr_help_experiment(env, symbol, path, layout);
-
-    let mut stores = bumpalo::collections::Vec::new_in(env.arena);
-
-    // let instructions = reverse_path(path);
-    let instructions = path;
-    let mut it = instructions.iter().peekable();
-
-    while let Some(PathInstruction { index, tag_id }) = it.next() {
-        let index = *index;
-
-        match &layout {
-            Layout::Union(union_layout) => {
-                let inner_expr = Expr::UnionAtIndex {
-                    tag_id: *tag_id,
-                    structure: symbol,
-                    index,
-                    union_layout: *union_layout,
-                };
-
-                let inner_layout = union_layout.layout_at(*tag_id as u8, index as usize);
-
-                symbol = env.unique_symbol();
-                stores.push((symbol, inner_layout, inner_expr));
-
-                layout = inner_layout;
-            }
-
-            Layout::Struct(field_layouts) => {
-                debug_assert!(field_layouts.len() > 1);
-
-                let inner_expr = Expr::StructAtIndex {
-                    index,
-                    field_layouts,
-                    structure: symbol,
-                };
-
-                let inner_layout = field_layouts[index as usize];
-
-                symbol = env.unique_symbol();
-                stores.push((symbol, inner_layout, inner_expr));
+                match assigned.get(&symbol) {
+                    Some(_) => {
+                        // skip, already assigned
+                    }
+                    None => {
+                        stores.push((symbol, inner_layout, inner_expr));
+                        assigned.insert(symbol);
+                    }
+                }
 
                 layout = inner_layout;
             }
@@ -1534,6 +1478,7 @@ fn path_to_expr_help<'a>(
 
 fn test_to_equality<'a>(
     env: &mut Env<'a, '_>,
+    assigned: &mut PatternAssignments<'a>,
     cond_symbol: Symbol,
     cond_layout: &Layout<'a>,
     path: &[PathInstruction],
@@ -1546,7 +1491,7 @@ fn test_to_equality<'a>(
     Option<ConstructorKnown<'a>>,
 ) {
     let (rhs_symbol, mut stores, test_layout) =
-        path_to_expr_help(env, cond_symbol, &path, *cond_layout);
+        path_to_expr_help(env, cond_symbol, &path, *cond_layout, assigned);
 
     match test {
         Test::IsCtor { tag_id, union, .. } => {
@@ -1676,6 +1621,7 @@ type Tests<'a> = std::vec::Vec<(
 
 fn stores_and_condition<'a>(
     env: &mut Env<'a, '_>,
+    assigned: &mut PatternAssignments<'a>,
     cond_symbol: Symbol,
     cond_layout: &Layout<'a>,
     test_chain: Vec<(Vec<PathInstruction>, Test<'a>)>,
@@ -1686,6 +1632,7 @@ fn stores_and_condition<'a>(
     for (path, test) in test_chain {
         tests.push(test_to_equality(
             env,
+            assigned,
             cond_symbol,
             &cond_layout,
             &path,
@@ -1877,6 +1824,85 @@ impl<'a> ConstructorKnown<'a> {
     }
 }
 
+/// what jump targets must the current node define?
+fn must_define_jumps<'a>(input: &Decider<'a, Choice<'a>>) -> Vec<u64> {
+    use Choice::*;
+
+    match input {
+        Decider::Leaf(Jump(target)) => vec![*target],
+        Decider::Leaf(Inline(_)) => vec![],
+        Decider::Guarded {
+            success, failure, ..
+        }
+        | Decider::Chain {
+            success, failure, ..
+        } => {
+            let pass = jumps_used(success);
+            let fail = jumps_used(failure);
+
+            pass.intersection(&fail).copied().collect()
+        }
+        Decider::FanOut {
+            tests, fallback, ..
+        } => {
+            let mut result = MutSet::default();
+            let mut seen = jumps_used(fallback);
+
+            for (_, rest) in tests {
+                let temp = jumps_used(rest);
+
+                let it = seen.intersection(&temp).copied().collect::<Vec<_>>();
+
+                for used_twice in it {
+                    result.insert(used_twice);
+                    seen.insert(used_twice);
+                }
+            }
+
+            result.into_iter().collect()
+        }
+    }
+}
+
+fn jumps_used<'a>(input: &Decider<'a, Choice<'a>>) -> MutSet<u64> {
+    use Choice::*;
+
+    let mut result = MutSet::default();
+    let mut stack = vec![input];
+
+    while let Some(decider) = stack.pop() {
+        match decider {
+            Decider::Leaf(Jump(target)) => {
+                result.insert(*target);
+            }
+            Decider::Leaf(Inline(_)) => {}
+            Decider::Guarded {
+                success, failure, ..
+            } => {
+                stack.push(&success);
+                stack.push(&failure);
+            }
+            Decider::Chain {
+                success, failure, ..
+            } => {
+                stack.push(&success);
+                stack.push(&failure);
+            }
+            Decider::FanOut {
+                tests, fallback, ..
+            } => {
+                for (_, rest) in tests {
+                    stack.push(rest);
+                }
+
+                stack.push(&fallback);
+            }
+        }
+    }
+
+    result
+}
+
 fn decide_to_pattern_symbols<'a, T>(
     env: &mut Env<'a, '_>,
     cond_symbol: Symbol,
@@ -1932,274 +1958,323 @@ fn decide_to_branching<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
+    assignments: &mut PatternAssignments<'a>,
     cond_symbol: Symbol,
     cond_layout: Layout<'a>,
     ret_layout: Layout<'a>,
     decider: Decider<'a, Choice<'a>>,
-    jumps: &[(u64, JoinPointId, Stmt<'a>)],
+    jump_target_to_id: &[(u64, JoinPointId)],
+    jumps: &mut MutMap<u64, (JoinPointId, Stmt<'a>)>,
 ) -> Stmt<'a> {
     use Choice::*;
     use Decider::*;
 
     let arena = env.arena;
 
-    match decider {
-        Leaf(Jump(label)) => {
-            let index = jumps
-                .binary_search_by_key(&label, |ref r| r.0)
-                .expect("jump not in list of jumps");
+    let mut new_jumps = must_define_jumps(&decider);
+    new_jumps.sort_unstable();
 
-            Stmt::Jump(jumps[index].1, &[])
-        }
-        Leaf(Inline(expr)) => expr,
-        Guarded {
-            id,
-            stmt,
-            pattern,
-            success,
-            failure,
-        } => {
-            // the guard is the final thing that we check, so needs to be layered on first!
-            let test_symbol = env.unique_symbol();
-            let arena = env.arena;
+    dbg!(&new_jumps);
 
-            let pass_expr = decide_to_branching(
-                env,
-                procs,
-                layout_cache,
-                cond_symbol,
-                cond_layout,
-                ret_layout,
-                *success,
-                jumps,
-            );
+    let mut foo = Vec::new();
 
-            let fail_expr = decide_to_branching(
-                env,
-                procs,
-                layout_cache,
-                cond_symbol,
-                cond_layout,
-                ret_layout,
-                *failure,
-                jumps,
-            );
+    for jump_target in new_jumps.iter().rev() {
+        foo.extend(jumps.remove(jump_target));
+    }
 
-            let decide = crate::ir::cond(
-                env,
-                test_symbol,
-                Layout::Builtin(Builtin::Int1),
-                pass_expr,
-                fail_expr,
-                ret_layout,
-            );
+    let decider_as_stmt = {
+        match decider {
+            Leaf(Jump(label)) => {
+                let index = jump_target_to_id
+                    .binary_search_by_key(&label, |ref r| r.0)
+                    .expect("jump not in list of jumps");
 
-            // calculate the guard value
-            let param = Param {
-                symbol: test_symbol,
-                layout: Layout::Builtin(Builtin::Int1),
-                borrow: false,
-            };
-
-            let join = Stmt::Join {
-                id,
-                parameters: arena.alloc([param]),
-                remainder: arena.alloc(stmt),
-                body: arena.alloc(decide),
-            };
-
-            // assign variables bound in the pattern before defining the join point
-            crate::ir::store_pattern(env, procs, layout_cache, &pattern, cond_symbol, join)
-        }
-        Chain {
-            test_chain,
-            success,
-            failure,
-        } => {
-            // generate a (nested) if-then-else
-
-            let pass_expr = decide_to_branching(
-                env,
-                procs,
-                layout_cache,
-                cond_symbol,
-                cond_layout,
-                ret_layout,
-                *success,
-                jumps,
-            );
-
-            let fail_expr = decide_to_branching(
-                env,
-                procs,
-                layout_cache,
-                cond_symbol,
-                cond_layout,
-                ret_layout,
-                *failure,
-                jumps,
-            );
-
-            let chain_branch_info =
-                ConstructorKnown::from_test_chain(cond_symbol, &cond_layout, &test_chain);
-
-            let tests = stores_and_condition(env, cond_symbol, &cond_layout, test_chain);
-
-            let number_of_tests = tests.len() as i64;
-
-            debug_assert!(number_of_tests > 0);
-
-            let fail = env.arena.alloc(fail_expr);
-            if number_of_tests == 1 {
-                // if there is just one test, compile to a simple if-then-else
-
-                let (new_stores, lhs, rhs, _layout, _cinfo) = tests.into_iter().next().unwrap();
-
-                compile_test_help(
-                    env,
-                    chain_branch_info,
-                    ret_layout,
-                    new_stores,
-                    lhs,
-                    rhs,
-                    fail,
-                    pass_expr,
-                )
-            } else {
-                // otherwise, we use a join point so the code for the `else` case
-                // is only generated once.
-                let fail_jp_id = JoinPointId(env.unique_symbol());
-                let jump = arena.alloc(Stmt::Jump(fail_jp_id, &[]));
-
-                let test_stmt = compile_tests(env, ret_layout, tests, jump, pass_expr);
-
-                Stmt::Join {
-                    id: fail_jp_id,
-                    parameters: &[],
-                    body: fail,
-                    remainder: arena.alloc(test_stmt),
-                }
+                Stmt::Jump(jump_target_to_id[index].1, &[])
             }
-        }
-        FanOut {
-            path,
-            tests,
-            fallback,
-        } => {
-            // the cond_layout can change in the process. E.g. if the cond is a Tag, we actually
-            // switch on the tag discriminant (currently an i64 value)
-            // NOTE the tag discriminant is not actually loaded, `cond` can point to a tag
-            let (inner_cond_symbol, cond_stores_vec, inner_cond_layout) =
-                path_to_expr_help(env, cond_symbol, &path, cond_layout);
+            Leaf(Inline(expr)) => expr,
+            Guarded {
+                id,
+                stmt,
+                pattern,
+                success,
+                failure,
+            } => {
+                // the guard is the final thing that we check, so needs to be layered on first!
+                let test_symbol = env.unique_symbol();
+                let arena = env.arena;
 
-            let default_branch = decide_to_branching(
-                env,
-                procs,
-                layout_cache,
-                cond_symbol,
-                cond_layout,
-                ret_layout,
-                *fallback,
-                jumps,
-            );
-
-            let mut branches = bumpalo::collections::Vec::with_capacity_in(tests.len(), env.arena);
-
-            let mut tag_id_sum: i64 = (0..tests.len() as i64 + 1).sum();
-            let mut union_size: i64 = -1;
-
-            for (test, decider) in tests {
-                let branch = decide_to_branching(
+                let pass_expr = decide_to_branching(
                     env,
                     procs,
                     layout_cache,
+                    assignments,
                     cond_symbol,
                     cond_layout,
                     ret_layout,
-                    decider,
+                    *success,
+                    jump_target_to_id,
                     jumps,
                 );
 
-                let tag = match test {
-                    Test::IsInt(v) => v as u64,
-                    Test::IsFloat(v) => v as u64,
-                    Test::IsBit(v) => v as u64,
-                    Test::IsByte { tag_id, .. } => tag_id as u64,
-                    Test::IsCtor { tag_id, .. } => tag_id as u64,
-                    other => todo!("other {:?}", other),
+                let fail_expr = decide_to_branching(
+                    env,
+                    procs,
+                    layout_cache,
+                    assignments,
+                    cond_symbol,
+                    cond_layout,
+                    ret_layout,
+                    *failure,
+                    jump_target_to_id,
+                    jumps,
+                );
+
+                let decide = crate::ir::cond(
+                    env,
+                    test_symbol,
+                    Layout::Builtin(Builtin::Int1),
+                    pass_expr,
+                    fail_expr,
+                    ret_layout,
+                );
+
+                // calculate the guard value
+                let param = Param {
+                    symbol: test_symbol,
+                    layout: Layout::Builtin(Builtin::Int1),
+                    borrow: false,
                 };
 
-                // branch info is only useful for refcounted values
-                let branch_info = if let Test::IsCtor { tag_id, union, .. } = test {
-                    tag_id_sum -= tag_id as i64;
-                    union_size = union.alternatives.len() as i64;
+                let join = Stmt::Join {
+                    id,
+                    parameters: arena.alloc([param]),
+                    remainder: arena.alloc(stmt),
+                    body: arena.alloc(decide),
+                };
 
+                // assign variables bound in the pattern before defining the join point
+                crate::ir::store_pattern_dealias(
+                    env,
+                    procs,
+                    layout_cache,
+                    &pattern,
+                    assignments.symbols,
+                    join,
+                )
+            }
+            Chain {
+                test_chain,
+                success,
+                failure,
+            } => {
+                // generate a (nested) if-then-else
+
+                let pass_expr = decide_to_branching(
+                    env,
+                    procs,
+                    layout_cache,
+                    assignments,
+                    cond_symbol,
+                    cond_layout,
+                    ret_layout,
+                    *success,
+                    jump_target_to_id,
+                    jumps,
+                );
+
+                let fail_expr = decide_to_branching(
+                    env,
+                    procs,
+                    layout_cache,
+                    assignments,
+                    cond_symbol,
+                    cond_layout,
+                    ret_layout,
+                    *failure,
+                    jump_target_to_id,
+                    jumps,
+                );
+
+                let chain_branch_info =
+                    ConstructorKnown::from_test_chain(cond_symbol, &cond_layout, &test_chain);
+
+                let tests =
+                    stores_and_condition(env, assignments, cond_symbol, &cond_layout, test_chain);
+
+                let number_of_tests = tests.len() as i64;
+
+                debug_assert!(number_of_tests > 0);
+
+                let fail = env.arena.alloc(fail_expr);
+                if number_of_tests == 1 {
+                    // if there is just one test, compile to a simple if-then-else
+
+                    let (new_stores, lhs, rhs, _layout, _cinfo) = tests.into_iter().next().unwrap();
+
+                    compile_test_help(
+                        env,
+                        chain_branch_info,
+                        ret_layout,
+                        new_stores,
+                        lhs,
+                        rhs,
+                        fail,
+                        pass_expr,
+                    )
+                } else {
+                    // otherwise, we use a join point so the code for the `else` case
+                    // is only generated once.
+                    let fail_jp_id = JoinPointId(env.unique_symbol());
+                    let jump = arena.alloc(Stmt::Jump(fail_jp_id, &[]));
+
+                    let test_stmt = compile_tests(env, ret_layout, tests, jump, pass_expr);
+
+                    Stmt::Join {
+                        id: fail_jp_id,
+                        parameters: &[],
+                        body: fail,
+                        remainder: arena.alloc(test_stmt),
+                    }
+                }
+            }
+            FanOut {
+                path,
+                tests,
+                fallback,
+            } => {
+                // the cond_layout can change in the process. E.g. if the cond is a Tag, we actually
+                // switch on the tag discriminant (currently an i64 value)
+                // NOTE the tag discriminant is not actually loaded, `cond` can point to a tag
+                let (inner_cond_symbol, cond_stores_vec, inner_cond_layout) =
+                    path_to_expr_help(env, cond_symbol, &path, cond_layout, assignments);
+
+                let default_branch = decide_to_branching(
+                    env,
+                    procs,
+                    layout_cache,
+                    assignments,
+                    cond_symbol,
+                    cond_layout,
+                    ret_layout,
+                    *fallback,
+                    jump_target_to_id,
+                    jumps,
+                );
+
+                let mut branches =
+                    bumpalo::collections::Vec::with_capacity_in(tests.len(), env.arena);
+
+                let mut tag_id_sum: i64 = (0..tests.len() as i64 + 1).sum();
+                let mut union_size: i64 = -1;
+
+                for (test, decider) in tests {
+                    let branch = decide_to_branching(
+                        env,
+                        procs,
+                        layout_cache,
+                        assignments,
+                        cond_symbol,
+                        cond_layout,
+                        ret_layout,
+                        decider,
+                        jump_target_to_id,
+                        jumps,
+                    );
+
+                    let tag = match test {
+                        Test::IsInt(v) => v as u64,
+                        Test::IsFloat(v) => v as u64,
+                        Test::IsBit(v) => v as u64,
+                        Test::IsByte { tag_id, .. } => tag_id as u64,
+                        Test::IsCtor { tag_id, .. } => tag_id as u64,
+                        other => todo!("other {:?}", other),
+                    };
+
+                    // branch info is only useful for refcounted values
+                    let branch_info = if let Test::IsCtor { tag_id, union, .. } = test {
+                        tag_id_sum -= tag_id as i64;
+                        union_size = union.alternatives.len() as i64;
+
+                        BranchInfo::Constructor {
+                            scrutinee: inner_cond_symbol,
+                            layout: inner_cond_layout,
+                            tag_id,
+                        }
+                    } else {
+                        tag_id_sum = -1;
+                        BranchInfo::None
+                    };
+
+                    branches.push((tag, branch_info, branch));
+                }
+
+                // determine if the switch is exhaustive
+                let default_branch_info = if tag_id_sum > 0 && union_size > 0 {
                     BranchInfo::Constructor {
                         scrutinee: inner_cond_symbol,
                         layout: inner_cond_layout,
-                        tag_id,
+                        tag_id: tag_id_sum as u8,
                     }
                 } else {
-                    tag_id_sum = -1;
                     BranchInfo::None
                 };
 
-                branches.push((tag, branch_info, branch));
-            }
+                // We have learned more about the exact layout of the cond (based on the path)
+                // but tests are still relative to the original cond symbol
+                let mut switch = if let Layout::Union(union_layout) = inner_cond_layout {
+                    let tag_id_symbol = env.unique_symbol();
 
-            // determine if the switch is exhaustive
-            let default_branch_info = if tag_id_sum > 0 && union_size > 0 {
-                BranchInfo::Constructor {
-                    scrutinee: inner_cond_symbol,
-                    layout: inner_cond_layout,
-                    tag_id: tag_id_sum as u8,
-                }
-            } else {
-                BranchInfo::None
-            };
+                    let temp = Stmt::Switch {
+                        cond_layout: union_layout.tag_id_layout(),
+                        cond_symbol: tag_id_symbol,
+                        branches: branches.into_bump_slice(),
+                        default_branch: (default_branch_info, env.arena.alloc(default_branch)),
+                        ret_layout,
+                    };
 
-            // We have learned more about the exact layout of the cond (based on the path)
-            // but tests are still relative to the original cond symbol
-            let mut switch = if let Layout::Union(union_layout) = inner_cond_layout {
-                let tag_id_symbol = env.unique_symbol();
+                    let expr = Expr::GetTagId {
+                        structure: inner_cond_symbol,
+                        union_layout,
+                    };
 
-                let temp = Stmt::Switch {
-                    cond_layout: union_layout.tag_id_layout(),
-                    cond_symbol: tag_id_symbol,
-                    branches: branches.into_bump_slice(),
-                    default_branch: (default_branch_info, env.arena.alloc(default_branch)),
-                    ret_layout,
+                    Stmt::Let(
+                        tag_id_symbol,
+                        expr,
+                        union_layout.tag_id_layout(),
+                        env.arena.alloc(temp),
+                    )
+                } else {
+                    Stmt::Switch {
+                        cond_layout: inner_cond_layout,
+                        cond_symbol: inner_cond_symbol,
+                        branches: branches.into_bump_slice(),
+                        default_branch: (default_branch_info, env.arena.alloc(default_branch)),
+                        ret_layout,
+                    }
                 };
 
-                let expr = Expr::GetTagId {
-                    structure: inner_cond_symbol,
-                    union_layout,
-                };
-
-                Stmt::Let(
-                    tag_id_symbol,
-                    expr,
-                    union_layout.tag_id_layout(),
-                    env.arena.alloc(temp),
-                )
-            } else {
-                Stmt::Switch {
-                    cond_layout: inner_cond_layout,
-                    cond_symbol: inner_cond_symbol,
-                    branches: branches.into_bump_slice(),
-                    default_branch: (default_branch_info, env.arena.alloc(default_branch)),
-                    ret_layout,
+                for (symbol, layout, expr) in cond_stores_vec.into_iter().rev() {
+                    switch = Stmt::Let(symbol, expr, layout, env.arena.alloc(switch));
                 }
-            };
 
-            for (symbol, layout, expr) in cond_stores_vec.into_iter().rev() {
-                switch = Stmt::Let(symbol, expr, layout, env.arena.alloc(switch));
+                // make a jump table based on the tests
+                switch
             }
-
-            // make a jump table based on the tests
-            switch
         }
+    };
+
+    let mut stmt = decider_as_stmt;
+
+    for (id, body) in foo.into_iter() {
+        stmt = Stmt::Join {
+            id,
+            parameters: &[],
+            body: env.arena.alloc(body),
+            remainder: env.arena.alloc(stmt),
+        };
     }
+
+    stmt
 }
 
 /*
