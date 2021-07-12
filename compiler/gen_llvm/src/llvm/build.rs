@@ -997,29 +997,29 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
         } => build_tag(env, scope, union_layout, *tag_id, arguments, None, parent),
 
         Reset(symbol) => {
-            // 1. fetch refcount
-            // 2. if rc == 1, decrement fields, return pointer as opaque pointer
-            // 3. otherwise, return NULL
             let (tag_ptr, layout) = load_symbol_and_layout(scope, symbol);
             let tag_ptr = tag_ptr.into_pointer_value();
-            let null_ptr = tag_ptr.get_type().const_null();
-            let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, tag_ptr);
-            let is_unique = refcount_ptr.is_1(env);
+
+            // reset is only generated for union values
+            let union_layout = match layout {
+                Layout::Union(ul) => ul,
+                _ => unreachable!(),
+            };
 
             let ctx = env.context;
             let then_block = ctx.append_basic_block(parent, "then");
             let else_block = ctx.append_basic_block(parent, "else");
             let cont_block = ctx.append_basic_block(parent, "cont");
 
+            let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, tag_ptr);
+            let is_unique = refcount_ptr.is_1(env);
+
             env.builder
                 .build_conditional_branch(is_unique, then_block, else_block);
 
-            let union_layout = match layout {
-                Layout::Union(ul) => ul,
-                _ => unreachable!(),
-            };
-
             {
+                // reset, when used on a unique reference, eagerly decrements the components of the
+                // referenced value, and returns the location of the now-invalid cell
                 env.builder.position_at_end(then_block);
                 match build_reset(env, layout_ids, union_layout) {
                     Some(reset_function) => {
@@ -1040,6 +1040,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 env.builder.build_unconditional_branch(cont_block);
             }
             {
+                // If reset is used on a shared, non-reusable reference, it behaves
+                // like dec and returns , which instructs reuse to behave like ctor
                 env.builder.position_at_end(else_block);
                 refcount_ptr.decrement(env, layout);
                 env.builder.build_unconditional_branch(cont_block);
@@ -1048,6 +1050,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 env.builder.position_at_end(cont_block);
                 let phi = env.builder.build_phi(tag_ptr.get_type(), "branch");
 
+                let null_ptr = tag_ptr.get_type().const_null();
                 phi.add_incoming(&[(&tag_ptr, then_block), (&null_ptr, else_block)]);
 
                 phi.as_basic_value()

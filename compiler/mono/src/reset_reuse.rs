@@ -212,10 +212,49 @@ fn try_function_s<'a, 'i>(
     if std::ptr::eq(stmt, new_stmt) || stmt == new_stmt {
         stmt
     } else {
-        let f00 = Stmt::Let(w, Expr::Reset(x), Layout::Union(c.layout), new_stmt);
-
-        env.arena.alloc(f00)
+        insert_reset(env, w, x, Layout::Union(c.layout), new_stmt)
     }
+}
+
+fn insert_reset<'a>(
+    env: &mut Env<'a, '_>,
+    w: Symbol,
+    x: Symbol,
+    layout: Layout<'a>,
+    mut stmt: &'a Stmt<'a>,
+) -> &'a Stmt<'a> {
+    use crate::ir::Expr::*;
+
+    let mut stack = vec![];
+
+    while let Stmt::Let(symbol, expr, expr_layout, rest) = stmt {
+        match &expr {
+            StructAtIndex { .. } | GetTagId { .. } | UnionAtIndex { .. } => {
+                stack.push((symbol, expr, expr_layout));
+                stmt = rest;
+            }
+            Literal(_)
+            | Call(_)
+            | Tag { .. }
+            | Struct(_)
+            | Array { .. }
+            | EmptyArray
+            | Reuse { .. }
+            | Reset(_)
+            | RuntimeErrorFunction(_) => break,
+        }
+    }
+
+    let reset_expr = Expr::Reset(x);
+    stmt = env.arena.alloc(Stmt::Let(w, reset_expr, layout, stmt));
+
+    for (symbol, expr, expr_layout) in stack.into_iter().rev() {
+        stmt = env
+            .arena
+            .alloc(Stmt::Let(*symbol, expr.clone(), *expr_layout, stmt));
+    }
+
+    stmt
 }
 
 fn function_d_finalize<'a, 'i>(
