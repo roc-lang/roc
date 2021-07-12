@@ -353,7 +353,7 @@ fn to_nonredundant_rows(
             vec![simplify(&loc_pat.value)]
         };
 
-        if any_has_guard || is_useful(checked_rows.clone(), next_row.clone()) {
+        if matches!(guard, Guard::HasGuard) || is_useful(checked_rows.clone(), next_row.clone()) {
             checked_rows.push(next_row);
         } else {
             return Err(Error::Redundant {
