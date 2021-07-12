@@ -79,6 +79,14 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
                 .as_basic_type_enum()
         }
 
+        Boxed(_) => {
+            // TODO make this dynamic
+            env.context
+                .i64_type()
+                .ptr_type(AddressSpace::Generic)
+                .as_basic_type_enum()
+        }
+
         Builtin(builtin) => basic_type_from_builtin(env, builtin),
     }
 }

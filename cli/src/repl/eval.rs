@@ -73,6 +73,7 @@ fn jit_to_ast_help<'a>(
     content: &Content,
 ) -> Result<Expr<'a>, ToAstProblem> {
     match layout {
+        Layout::Boxed(_) => todo!(),
         Layout::Builtin(Builtin::Int1) => Ok(run_jit_function!(lib, main_fn_name, bool, |num| {
             bool_to_ast(env, num, content)
         })),

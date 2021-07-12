@@ -972,6 +972,7 @@ fn layout_spec(builder: &mut FuncDefBuilder, layout: &Layout) -> Result<TypeId> 
             } => worst_case_type(builder),
         },
         RecursivePointer => worst_case_type(builder),
+        Boxed(_) => worst_case_type(builder),
         Closure(_, lambda_set, _) => layout_spec(builder, &lambda_set.runtime_representation()),
     }
 }

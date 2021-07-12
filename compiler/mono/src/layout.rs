@@ -44,6 +44,8 @@ pub enum Layout<'a> {
     Union(UnionLayout<'a>),
     RecursivePointer,
 
+    Boxed(&'a Layout<'a>),
+
     /// A function. The types of its arguments, then the type of its return value.
     Closure(&'a [Layout<'a>], LambdaSet<'a>, &'a Layout<'a>),
 }
@@ -588,6 +590,7 @@ impl<'a> Layout<'a> {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
             }
+            Boxed(_) => false,
         }
     }
 
@@ -639,6 +642,7 @@ impl<'a> Layout<'a> {
             }
             Closure(_, lambda_set, _) => lambda_set.stack_size(pointer_size),
             RecursivePointer => pointer_size,
+            Boxed(_) => pointer_size,
         }
     }
 
@@ -669,6 +673,7 @@ impl<'a> Layout<'a> {
             }
             Layout::Builtin(builtin) => builtin.alignment_bytes(pointer_size),
             Layout::RecursivePointer => pointer_size,
+            Layout::Boxed(_) => pointer_size,
             Layout::Closure(_, captured, _) => {
                 pointer_size.max(captured.alignment_bytes(pointer_size))
             }
@@ -690,6 +695,7 @@ impl<'a> Layout<'a> {
             }
 
             RecursivePointer => true,
+            Boxed(_) => true,
 
             Builtin(List(_)) | Builtin(Str) => true,
 
@@ -722,6 +728,7 @@ impl<'a> Layout<'a> {
                 }
             }
             RecursivePointer => true,
+            Boxed(inner) => inner.contains_refcounted(),
             Closure(_, closure_layout, _) => closure_layout.contains_refcounted(),
         }
     }
@@ -746,6 +753,7 @@ impl<'a> Layout<'a> {
             }
             Union(union_layout) => union_layout.to_doc(alloc, parens),
             RecursivePointer => alloc.text("*self"),
+            Boxed(_) => alloc.text("unbox"),
             Closure(args, closure_layout, result) => {
                 let args_doc = args.iter().map(|x| x.to_doc(alloc, Parens::InFunction));
 

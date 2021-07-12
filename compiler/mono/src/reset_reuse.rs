@@ -246,7 +246,12 @@ fn insert_reset<'a>(
     }
 
     let reset_expr = Expr::Reset(x);
-    stmt = env.arena.alloc(Stmt::Let(w, reset_expr, layout, stmt));
+
+    const I64: Layout<'static> = Layout::Builtin(crate::layout::Builtin::Int64);
+
+    stmt = env
+        .arena
+        .alloc(Stmt::Let(w, reset_expr, Layout::Boxed(&I64), stmt));
 
     for (symbol, expr, expr_layout) in stack.into_iter().rev() {
         stmt = env
