@@ -1384,8 +1384,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
             }
 
             // Create the struct_type
-            let raw_data_ptr =
-                reserve_with_refcount_union_as_block_of_memory(env, *union_layout, tags);
+            let raw_data_ptr = allocate_tag(env, parent, reuse_allocation, union_layout, tags);
 
             let tag_id_ptr = builder
                 .build_struct_gep(raw_data_ptr, TAG_ID_INDEX, "tag_id_index")
@@ -1547,8 +1546,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
             }
 
             // Create the struct_type
-            let raw_data_ptr =
-                reserve_with_refcount_union_as_block_of_memory(env, *union_layout, tags);
+            let raw_data_ptr = allocate_tag(env, parent, reuse_allocation, union_layout, tags);
 
             let tag_id_ptr = builder
                 .build_struct_gep(raw_data_ptr, TAG_ID_INDEX, "tag_id_index")
@@ -1644,48 +1642,8 @@ pub fn build_tag<'a, 'ctx, 'env>(
             }
 
             // Create the struct_type
-            let data_ptr = match reuse_allocation {
-                Some(ptr) => {
-                    // check if its a null pointer
-                    let is_null_ptr = env.builder.build_is_null(ptr, "is_null_ptr");
-                    let ctx = env.context;
-                    let then_block = ctx.append_basic_block(parent, "then");
-                    let else_block = ctx.append_basic_block(parent, "else");
-                    let cont_block = ctx.append_basic_block(parent, "cont");
-
-                    env.builder
-                        .build_conditional_branch(is_null_ptr, then_block, else_block);
-
-                    let raw_ptr = {
-                        env.builder.position_at_end(then_block);
-                        let raw_ptr = reserve_with_refcount_union_as_block_of_memory(
-                            env,
-                            *union_layout,
-                            &[other_fields],
-                        );
-                        env.builder.build_unconditional_branch(cont_block);
-                        raw_ptr
-                    };
-                    let reuse_ptr = {
-                        env.builder.position_at_end(else_block);
-                        env.builder.build_unconditional_branch(cont_block);
-                        ptr
-                    };
-                    {
-                        env.builder.position_at_end(cont_block);
-                        let phi = env.builder.build_phi(raw_ptr.get_type(), "branch");
-
-                        phi.add_incoming(&[(&raw_ptr, then_block), (&reuse_ptr, else_block)]);
-
-                        phi.as_basic_value().into_pointer_value()
-                    }
-                }
-                None => reserve_with_refcount_union_as_block_of_memory(
-                    env,
-                    *union_layout,
-                    &[other_fields],
-                ),
-            };
+            let data_ptr =
+                allocate_tag(env, parent, reuse_allocation, union_layout, &[other_fields]);
 
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
             let struct_ptr = env
@@ -1708,6 +1666,50 @@ pub fn build_tag<'a, 'ctx, 'env>(
 
             data_ptr.into()
         }
+    }
+}
+
+fn allocate_tag<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    reuse_allocation: Option<PointerValue<'ctx>>,
+    union_layout: &UnionLayout<'a>,
+    tags: &[&[Layout<'a>]],
+) -> PointerValue<'ctx> {
+    match reuse_allocation {
+        Some(ptr) => {
+            // check if its a null pointer
+            let is_null_ptr = env.builder.build_is_null(ptr, "is_null_ptr");
+            let ctx = env.context;
+            let then_block = ctx.append_basic_block(parent, "then_allocate_fresh");
+            let else_block = ctx.append_basic_block(parent, "else_reuse");
+            let cont_block = ctx.append_basic_block(parent, "cont");
+
+            env.builder
+                .build_conditional_branch(is_null_ptr, then_block, else_block);
+
+            let raw_ptr = {
+                env.builder.position_at_end(then_block);
+                let raw_ptr =
+                    reserve_with_refcount_union_as_block_of_memory(env, *union_layout, tags);
+                env.builder.build_unconditional_branch(cont_block);
+                raw_ptr
+            };
+            let reuse_ptr = {
+                env.builder.position_at_end(else_block);
+                env.builder.build_unconditional_branch(cont_block);
+                ptr
+            };
+            {
+                env.builder.position_at_end(cont_block);
+                let phi = env.builder.build_phi(raw_ptr.get_type(), "branch");
+
+                phi.add_incoming(&[(&raw_ptr, then_block), (&reuse_ptr, else_block)]);
+
+                phi.as_basic_value().into_pointer_value()
+            }
+        }
+        None => reserve_with_refcount_union_as_block_of_memory(env, *union_layout, tags),
     }
 }
 
