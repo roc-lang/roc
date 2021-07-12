@@ -728,7 +728,7 @@ impl<'a> Layout<'a> {
                 }
             }
             RecursivePointer => true,
-            Boxed(inner) => inner.contains_refcounted(),
+            Boxed(inner) => true,
             Closure(_, closure_layout, _) => closure_layout.contains_refcounted(),
         }
     }

@@ -2489,7 +2489,32 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 Dec(symbol) => {
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
 
-                    if layout.contains_refcounted() {
+                    if let Layout::Boxed(_) = layout {
+                        if value.is_pointer_value() {
+                            let value_ptr = value.into_pointer_value();
+
+                            let then_block = env.context.append_basic_block(parent, "then");
+                            let done_block = env.context.append_basic_block(parent, "done");
+
+                            let condition =
+                                env.builder.build_is_not_null(value_ptr, "box_is_not_null");
+                            env.builder
+                                .build_conditional_branch(condition, then_block, done_block);
+
+                            {
+                                env.builder.position_at_end(then_block);
+                                let refcount_ptr =
+                                    PointerToRefcount::from_ptr_to_data(env, value_ptr);
+                                refcount_ptr.decrement(env, layout);
+
+                                env.builder.build_unconditional_branch(done_block);
+                            }
+
+                            env.builder.position_at_end(done_block);
+                        } else {
+                            eprint!("we're likely leaking memory; see issue #985 for details");
+                        }
+                    } else if layout.contains_refcounted() {
                         decrement_refcount_layout(env, parent, layout_ids, value, layout);
                     }
 
