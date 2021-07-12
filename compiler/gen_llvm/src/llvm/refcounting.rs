@@ -1552,7 +1552,9 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         env.builder.position_at_end(merge_block);
 
         // increment/decrement the cons-cell itself
-        refcount_ptr.modify(call_mode, &Layout::Union(union_layout), env);
+        if let DecOrReuse::Dec = decrement_or_reuse {
+            refcount_ptr.modify(call_mode, &Layout::Union(union_layout), env);
+        }
 
         // this function returns void
         builder.build_return(None);
