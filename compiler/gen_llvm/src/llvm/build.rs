@@ -1029,9 +1029,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                         call.set_call_convention(FAST_CALL_CONV);
 
-                        let result = call.try_as_basic_value();
-
-                        dbg!(result);
+                        let _ = call.try_as_basic_value();
                     }
                     None => {
                         panic!("")
@@ -1868,7 +1866,7 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
         builder.build_bitcast(
             result,
             opaque_wrapper_type.ptr_type(AddressSpace::Generic),
-            "cast_rec_pointer_lookup_at_index_ptr",
+            "cast_rec_pointer_lookup_at_index_ptr_new",
         )
     } else {
         result

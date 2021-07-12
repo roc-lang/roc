@@ -753,12 +753,6 @@ impl<'a> Context<'a> {
                 arguments,
             }) => self.visit_call(z, call_type, arguments, l, b, b_live_vars),
 
-            EmptyArray | Literal(_) | Reset(_) | RuntimeErrorFunction(_) => {
-                // EmptyArray is always stack-allocated
-                // function pointers are persistent
-                self.arena.alloc(Stmt::Let(z, v, l, b))
-            }
-
             StructAtIndex { structure: x, .. } => {
                 let b = self.add_dec_if_needed(x, b, b_live_vars);
                 let info_x = self.get_var_info(x);
@@ -792,6 +786,12 @@ impl<'a> Context<'a> {
                     b
                 };
 
+                self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
+
+            EmptyArray | Literal(_) | Reset(_) | RuntimeErrorFunction(_) => {
+                // EmptyArray is always stack-allocated
+                // function pointers are persistent
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
         };
