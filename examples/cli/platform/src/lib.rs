@@ -296,6 +296,18 @@ pub unsafe fn roc_panic(panic_code: i32, panic_data: *const c_void) -> ! {
     );
 }
 
+pub enum ReadErr {
+    /// The file's contents grew between when the read function checked its
+    /// size from its metadata and when the actual read of its contents occurred.
+    FileGrewDuringRead,
+}
+
+impl ReadErr {
+    pub fn from_errno(errno: c_int) -> Self {
+        todo!("convert errno to ReadErr");
+    }
+}
+
 /// If the given list is unique and has enough capacity to read the requested
 /// number of bytes, then the bytes are written in-place. If it's shared, or
 /// if there is not enough capacity to read the requested number of bytes, then
@@ -371,66 +383,88 @@ pub unsafe fn roc_fx_read(
     if bytes_read >= 0 {
         RocResult::Ok((bytes_read as usize, list))
     } else {
-        RocResult::Err(todo!("Convert errno {} into a ReadErr", errno()))
+        RocResult::Err(ReadErr::from_errno(errno()))
     }
 }
 
 /// We use our own position and libc::pread rather than calling libc::read
 /// repeatedly and letting the fd store its own position. This way we don't
 /// have to worry about concurrent modifications of the fd's position.
+///
+/// Note that it's possible for a write to happen while a read is in progress,
+/// and there's no way to prevent this other than locking the file - but
+/// locking files in Linux is buggy, rarely used, and now essentially deprecated - https://man7.org/linux/man-pages/man2/fcntl.2.html
+///
+/// https://stackoverflow.com/questions/35595685/write2-read2-atomicity-between-processes-in-linux
+///
+/// As such, all we can really say here is "beware - this could happen" - and
+/// that you can do advisory locking to prevent it from happening in processes
+/// that opt into cooperating with the advisory lock (i.e. multiple running
+/// instances of this program).
 #[no_mangle]
-pub unsafe fn roc_fx_read_all(fd: Fd, mut list: RocList) -> RocResult<RocList<u8>, Errno> {
-    let bytes_in_file = libc::meta(fd.into()).size;
-
-    // Storing the buffer on the stack is fine when every Task is run
-    // synchronously, but we'd need something more persistent in (for example)
-    // an async environment using an event loop.
-    const BUF_BYTES: usize = 4096;
-    let mut buf: MaybeUninit<[u8; BUF_BYTES]> = MaybeUninit::uninit();
-    let mut list = RocList::empty();
-
-    loop {
-        // Make sure we never read more than the buffer size, and also that
-        // we never read past the originally-requested number of bytes.
-        //
-        // Do saturating_sub on this so that if index >= capacity (which would
-        // mean we'd attempt write to memory outside the list!) we will instead
-        // read 0 bytes. Very important for memory safety!
-        let bytes_to_read = BUF_BYTES.min(capacity.saturating_sub(index));
-
-        let bytes_read = libc::pread(
-            fd.into(),
-            buf.as_mut_ptr() as *mut c_void,
-            bytes_to_read,
-            index as i64,
-        );
-
-        // NOTE buf may be only partially filled, so we don't `assume_init`!
-
-        if bytes_read == bytes_to_read as isize {
-            // The read was successful, and there may be more bytes to read.
-            // Append the bytes to the list and continue looping!
-            let slice = core::slice::from_raw_parts(buf.as_ptr() as *const u8, bytes_read as usize);
-
-            list.append_slice(slice);
-        } else if bytes_read >= 0 {
-            // The read was successful, and there are no more bytes
-            // to read (because bytes_read was less than the requested
-            // bytes_to_read, but it was also not negative - which would have
-            // indicated an error).
-            let slice = core::slice::from_raw_parts(buf.as_ptr() as *const u8, bytes_read as usize);
-
-            list.append_slice(slice);
-
-            // We're done!
-            return RocResult::Ok(list);
-        } else {
-            // bytes_read was negative, so we got a read error!
-            break;
-        }
-
-        position += bytes_read as usize;
+pub unsafe fn roc_fx_read_all(fd: Fd, mut list: RocList) -> RocResult<RocList<u8>, ReadErr> {
+    if true {
+        todo!("Can we lock the file for writing, so that this becomes atomic and we no longer need FileGrewDuringWrite?");
     }
 
-    RocResult::Err(errno())
+    // Find out how many bytes the file has on disk, and make a list with
+    // that many elements.
+    let bytes_in_file = libc::meta(fd.into()).size;
+    let mut list = RocList::with_capacity(bytes_in_file);
+
+    // Attempt to read 1 more byte than necessary. This way, if we actually
+    // successfully read that extra byte, we know the file grew between when
+    // we looked at its size metadata attribute and when we read its contents.
+    let bytes_to_read = bytes_in_file.saturating_add(1);
+
+    let bytes_read = libc::pread(
+        fd.into(),
+        list.as_mut_ptr() as *mut c_void,
+        bytes_to_read,
+        0,
+    );
+
+    if bytes_read == bytes_in_file as isize {
+        // The read was successful, and we read exactly as many bytes as we
+        // expected to.
+        RocResult::Ok(list)
+    } else if bytes_read < 0 {
+        // bytes_read was negative, so we got a read error!
+        RocResult::Err(ReadErr::from_errno(errno()))
+    } else if bytes_read < bytes_to_read {
+        // The read did not error out (because this was non-negative), but the
+        // number of bytes read was less than expected. This is possible because
+        // the file could shrink between when we got the size from its metadata
+        // and when we actually read it.
+        //
+        // Adjust length accordingly and call it a day; leave the extra capacity
+        // for later use.
+        list.len = bytes_read as usize;
+
+        RocResult::Ok(list)
+    } else {
+        // The read did not error out (because this was non-negative), but the
+        // number of bytes read was more than expected. This is possible because
+        // the file could grow between when we got the size from its metadata
+        // and when we actually read it.
+        //
+        // Unfortunately, there's no reliable way to recoevr from this scenario.
+        // * If we try to read additional bytes until we run out, we may end
+        //   up with the wrong bytes in the list if the earlier bytes (that
+        //   we've already read into the list) changed. That would leave us
+        //   with a list of bytes containing stale bytes from the first read
+        //   followed by up-to-date bytes from the second read.
+        // * If we try to redo the entire read, we may end up in the same
+        //   situation as before; the race condition could happen again. It's
+        //   less likely, of course, but it could happen especially if something
+        //   were repeatedly appending to the file. Theoretically this function
+        //   could get stuck in a retry loop if we did this.
+        //
+        // Instead of potentially giving invalid data or getting stuck in a
+        // retry loop, we give an error and let the application author decide
+        // how to handle it. (For example, trying to lock the file before
+        // reading it, or copying it somewhere else and then reading the copy.)
+
+        RocResult::Err(ReadErr::FileGrewDuringRead)
+    }
 }

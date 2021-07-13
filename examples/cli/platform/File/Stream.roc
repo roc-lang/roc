@@ -448,6 +448,14 @@ append = \stream, contents ->
     Effect.writeCur fd contents
         |> Task.mapFail \err -> AppendFailed err path
 
+lockShared : Stream [ Write ]* ->
+lockShared = \stream ->
+    # NOTE: This requires a Write stream because Linux requires it for locking
+    # files over NFS.
+    #
+    # https://www.man7.org/linux/man-pages//man2/flock.2.html
+    todo
+
 ## Helper for translating raw effect outputs into appropriate tasks (not exposed)
 makeOpenCloseTask : Str, (Str -> Task Fd err) -> Task (Stream *) [ OpenFailed err Str ]*
 makeOpenCloseTask = \path, config, toEffect ->
