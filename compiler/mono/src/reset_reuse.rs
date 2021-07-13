@@ -298,11 +298,16 @@ fn function_d_main<'a, 'i>(
                 _ => {
                     let (b, found) = function_d_main(env, x, c, continuation);
 
+                    // NOTE the &b != continuation is not found in the Lean source, but is required
+                    // otherwise we observe the same symbol being reset twice
                     let mut result = MutSet::default();
-                    if found || {
-                        occurring_variables_expr(expr, &mut result);
-                        !result.contains(&x)
-                    } {
+                    if found
+                        || {
+                            occurring_variables_expr(expr, &mut result);
+                            !result.contains(&x)
+                        }
+                        || &b != continuation
+                    {
                         let let_stmt = Let(*symbol, expr.clone(), *layout, b);
 
                         (arena.alloc(let_stmt), found)
@@ -478,6 +483,7 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
                         layout,
                         tag_id,
                     } => match layout {
+                        Layout::Union(UnionLayout::NonRecursive(_)) => temp,
                         Layout::Union(union_layout) if !union_layout.tag_is_null(*tag_id) => {
                             let ctor_info = CtorInfo {
                                 layout: *union_layout,
@@ -503,6 +509,7 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
                         layout,
                         tag_id,
                     } => match layout {
+                        Layout::Union(UnionLayout::NonRecursive(_)) => temp,
                         Layout::Union(union_layout) if !union_layout.tag_is_null(*tag_id) => {
                             let ctor_info = CtorInfo {
                                 layout: *union_layout,
