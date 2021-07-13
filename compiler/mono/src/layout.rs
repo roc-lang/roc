@@ -1665,7 +1665,12 @@ pub fn union_sorted_tags_help<'a>(
                             has_any_arguments = true;
 
                             // make sure to not unroll recursive types!
-                            if opt_rec_var.is_some() && is_recursive_tag_union(&layout) {
+                            let self_recursion = opt_rec_var.is_some()
+                                && subs.get_root_key_without_compacting(var)
+                                    == subs.get_root_key_without_compacting(opt_rec_var.unwrap())
+                                && is_recursive_tag_union(&layout);
+
+                            if self_recursion {
                                 arg_layouts.push(Layout::RecursivePointer);
                             } else {
                                 arg_layouts.push(layout);
