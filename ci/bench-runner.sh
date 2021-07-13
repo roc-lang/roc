@@ -21,8 +21,12 @@ echo $FULL_CMD
 
 script -efq $LOG_FILE -c "$FULL_CMD"
 EXIT_CODE=$?
+
+REGRESSION_CHECK_CMD="grep -q \"regressed\" \"$LOG_FILE\""
+EXTRACT_BENCH_NAMES_CMD="grep -B3 \"regressed\" \"$LOG_FILE\" | grep -o \".*\""
     
-if grep -q "regressed" "$LOG_FILE"; then
+if $REGRESSION_CHECK_CMD; then
+    SLOW_BENCH_NAMES_1=$EXTRACT_BENCH_NAMES_CMD
     echo ""
     echo ""
     echo "------<<<<<<>>>>>>------"
@@ -31,9 +35,15 @@ if grep -q "regressed" "$LOG_FILE"; then
     echo ""
     echo ""
 
-    # delete criterion folder to compare to trunk only
+    # delete criterion folder to remove old benchmark data
     rm -rf ./target/criterion
-    # copy benchmark data from trunk again
+
+    # benchmark trunk again
+    cd ../bench-folder-trunk
+    rm -rf target/criterion
+    ./target/release/deps/time_bench --bench
+
+    cd ../bench-folder-branch
     cp -r ../bench-folder-trunk/target/criterion ./target
 
     rm $LOG_FILE
@@ -42,15 +52,25 @@ if grep -q "regressed" "$LOG_FILE"; then
     script -efq $LOG_FILE -c "$FULL_CMD"
     EXIT_CODE=$?
 
-    if grep -q "regressed" "$LOG_FILE"; then
-        echo ""
-        echo ""
-        echo "------<<<<<<!!!!!!>>>>>>------"
-        echo "Benchmarks were run twice and a regression was detected both times."
-        echo "------<<<<<<!!!!!!>>>>>>------"
-        echo ""
-        echo ""
-        exit 1
+    if $REGRESSION_CHECK_CMD; then
+        SLOW_BENCH_NAMES_2=$EXTRACT_BENCH_NAMES_CMD
+        ALL_SLOW_BENCH_NAMES="$SLOW_BENCH_NAMES_1\n$SLOW_BENCH_NAMES_2"
+        FAILED_TWICE=echo $ALL_SLOW_BENCH_NAMES | sort | uniq -d
+
+        if [[ $(echo $FAILED_TWICE | wc -l) -gt 0 ]]; then
+            echo ""
+            echo ""
+            echo "------<<<<<<!!!!!!>>>>>>------"
+            echo "Benchmarks were run twice and a regression was detected both times for the following benchmarks:"
+            echo "$FAILED_TWICE"
+            echo "------<<<<<<!!!!!!>>>>>>------"
+            echo ""
+            echo ""
+            exit 1
+        else
+            echo "Benchmarks were run twice and a regression was detected on one run. We assume this was a fluke."
+            exit 0
+        fi
     else
         echo "Benchmarks were run twice and a regression was detected on one run. We assume this was a fluke."
         exit 0
