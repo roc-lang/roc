@@ -22,11 +22,11 @@ echo $FULL_CMD
 script -efq $LOG_FILE -c "$FULL_CMD"
 EXIT_CODE=$?
 
-REGRESSION_CHECK_CMD="grep -q \"regressed\" \"$LOG_FILE\""
-EXTRACT_BENCH_NAMES_CMD="grep -B3 \"regressed\" \"$LOG_FILE\" | grep -o \".*\""
-    
-if $REGRESSION_CHECK_CMD; then
-    SLOW_BENCH_NAMES_1=$EXTRACT_BENCH_NAMES_CMD
+if cat $LOG_FILE | grep -q "regressed"; then
+
+    grep -B3 "regressed" $LOG_FILE | sed 's/\x1B\[[0-9;]\{1,\}[A-Za-z]//g' | grep -o "\".*\"" | rev | cut -d' ' -f1 | rev > slow_benches_1.txt
+    echo "regression(s) detected in:"
+    cat slow_benches_1.txt
     echo ""
     echo ""
     echo "------<<<<<<>>>>>>------"
@@ -52,17 +52,18 @@ if $REGRESSION_CHECK_CMD; then
     script -efq $LOG_FILE -c "$FULL_CMD"
     EXIT_CODE=$?
 
-    if $REGRESSION_CHECK_CMD; then
-        SLOW_BENCH_NAMES_2=$EXTRACT_BENCH_NAMES_CMD
-        ALL_SLOW_BENCH_NAMES="$SLOW_BENCH_NAMES_1\n$SLOW_BENCH_NAMES_2"
-        FAILED_TWICE=echo $ALL_SLOW_BENCH_NAMES | sort | uniq -d
+    if cat $LOG_FILE | grep -q "regressed"; then
 
-        if [[ $(echo $FAILED_TWICE | wc -l) -gt 0 ]]; then
+        grep -B3 "regressed" $LOG_FILE | sed 's/\x1B\[[0-9;]\{1,\}[A-Za-z]//g' | grep -o "\".*\"" | rev | cut -d' ' -f1 | rev > slow_benches_2.txt
+        echo "regression(s) detected in:"
+        cat slow_benches_2.txt
+
+        if [[ $(grep -Fxf slow_benches_1.txt slow_benches_2.txt | wc -l) -gt 0 ]]; then
             echo ""
             echo ""
             echo "------<<<<<<!!!!!!>>>>>>------"
             echo "Benchmarks were run twice and a regression was detected both times for the following benchmarks:"
-            echo "$FAILED_TWICE"
+            grep -Fxf slow_benches_1.txt slow_benches_2.txt
             echo "------<<<<<<!!!!!!>>>>>>------"
             echo ""
             echo ""
@@ -77,11 +78,7 @@ if $REGRESSION_CHECK_CMD; then
     fi
 else
     echo ""
-    echo ""
-    echo "------<<<<<<!!!!!!>>>>>>------"
-    echo "Benchmark execution failed with exit code: $EXIT_CODE."
-    echo "------<<<<<<!!!!!!>>>>>>------"
-    echo ""
+    echo "Benchmark execution finished with exit code: $EXIT_CODE."
     echo ""
     exit $EXIT_CODE
 fi
