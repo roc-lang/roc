@@ -233,7 +233,7 @@ impl<'a> Proc<'a> {
         ident_ids: &'i mut IdentIds,
         procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     ) {
-        for (key, proc) in procs.iter_mut() {
+        for (_, proc) in procs.iter_mut() {
             let new_proc =
                 crate::reset_reuse::insert_reset_reuse(arena, home, ident_ids, proc.clone());
             *proc = new_proc;

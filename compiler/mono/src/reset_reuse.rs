@@ -212,7 +212,7 @@ fn try_function_s<'a, 'i>(
     if std::ptr::eq(stmt, new_stmt) || stmt == new_stmt {
         stmt
     } else {
-        insert_reset(env, w, x, Layout::Union(c.layout), new_stmt)
+        insert_reset(env, w, x, new_stmt)
     }
 }
 
@@ -220,7 +220,6 @@ fn insert_reset<'a>(
     env: &mut Env<'a, '_>,
     w: Symbol,
     x: Symbol,
-    layout: Layout<'a>,
     mut stmt: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
     use crate::ir::Expr::*;
@@ -467,12 +466,6 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
         } => {
             let mut new_branches = Vec::with_capacity_in(branches.len(), arena);
 
-            // TODO for non-recursive unions there is no benefit
-            let benefits_from_reuse = match cond_layout {
-                Layout::Union(union_layout) => Some(union_layout),
-                _ => None,
-            };
-
             for (tag, info, body) in branches.iter() {
                 let temp = function_r(env, body);
 
@@ -569,12 +562,12 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
             arena.alloc(Let(*symbol, expr.clone(), *layout, b))
         }
         Invoke {
-            symbol,
-            call,
-            layout,
-            pass,
-            fail,
-            exception_id,
+            symbol: _,
+            call: _,
+            layout: _,
+            pass: _,
+            fail: _,
+            exception_id: _,
         } => {
             // TODO implement this
             stmt

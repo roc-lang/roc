@@ -19,8 +19,7 @@ use crate::llvm::build_str::{
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
-    basic_type_from_builtin, basic_type_from_layout, block_of_memory, block_of_memory_slices,
-    ptr_int,
+    basic_type_from_builtin, basic_type_from_layout, block_of_memory_slices, ptr_int,
 };
 use crate::llvm::refcounting::{
     build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,

@@ -737,7 +737,12 @@ impl<'a> Layout<'a> {
                 }
             }
             RecursivePointer => true,
-            Boxed(inner) => true,
+
+            Boxed(_) => {
+                // technically we should look at layout of the box's content
+                // but refcount insertion needs this to return true
+                true
+            }
             Closure(_, closure_layout, _) => closure_layout.contains_refcounted(),
         }
     }
@@ -1536,15 +1541,15 @@ fn get_recursion_var(subs: &Subs, var: Variable) -> Option<Variable> {
 }
 
 fn is_recursive_tag_union(layout: &Layout) -> bool {
-    match layout {
+    matches!(
+        layout,
         Layout::Union(
             UnionLayout::NullableUnwrapped { .. }
-            | UnionLayout::Recursive(_)
-            | UnionLayout::NullableWrapped { .. }
-            | UnionLayout::NonNullableUnwrapped { .. },
-        ) => true,
-        _ => false,
-    }
+                | UnionLayout::Recursive(_)
+                | UnionLayout::NullableWrapped { .. }
+                | UnionLayout::NonNullableUnwrapped { .. },
+        )
+    )
 }
 
 pub fn union_sorted_tags_help<'a>(
