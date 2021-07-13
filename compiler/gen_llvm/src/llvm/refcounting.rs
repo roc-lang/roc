@@ -1497,6 +1497,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         // lists. To achieve it, we must first load all fields that we want to inc/dec (done above)
         // and store them on the stack, then modify (and potentially free) the current cell, then
         // actually inc/dec the fields.
+
         match decrement_or_reuse {
             DecOrReuse::Reuse => {}
             DecOrReuse::Dec => {
@@ -1543,17 +1544,19 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         // read the tag_id
         let current_tag_id = get_tag_id(env, parent, &union_layout, value_ptr.into());
 
-        let merge_block = env.context.append_basic_block(parent, "decrement_merge");
+        let default_block = env.context.append_basic_block(parent, "switch_default");
 
         // switch on it
         env.builder
-            .build_switch(current_tag_id, merge_block, &cases);
+            .build_switch(current_tag_id, default_block, &cases);
 
-        env.builder.position_at_end(merge_block);
+        {
+            env.builder.position_at_end(default_block);
 
-        // increment/decrement the cons-cell itself
-        if let DecOrReuse::Dec = decrement_or_reuse {
-            refcount_ptr.modify(call_mode, &Layout::Union(union_layout), env);
+            // increment/decrement the cons-cell itself
+            if let DecOrReuse::Dec = decrement_or_reuse {
+                refcount_ptr.modify(call_mode, &Layout::Union(union_layout), env);
+            }
         }
 
         // this function returns void
