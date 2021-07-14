@@ -1021,20 +1021,14 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // referenced value, and returns the location of the now-invalid cell
                 env.builder.position_at_end(then_block);
 
-                match build_reset(env, layout_ids, union_layout) {
-                    Some(reset_function) => {
-                        let call =
-                            env.builder
-                                .build_call(reset_function, &[tag_ptr.into()], "call_reuse");
+                let reset_function = build_reset(env, layout_ids, union_layout);
+                let call = env
+                    .builder
+                    .build_call(reset_function, &[tag_ptr.into()], "call_reuse");
 
-                        call.set_call_convention(FAST_CALL_CONV);
+                call.set_call_convention(FAST_CALL_CONV);
 
-                        let _ = call.try_as_basic_value();
-                    }
-                    None => {
-                        panic!("")
-                    }
-                }
+                let _ = call.try_as_basic_value();
 
                 env.builder.build_unconditional_branch(cont_block);
             }

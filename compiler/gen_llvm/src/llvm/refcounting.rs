@@ -1564,61 +1564,47 @@ pub fn build_reset<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     union_layout: &UnionLayout<'a>,
-) -> Option<FunctionValue<'ctx>> {
+) -> FunctionValue<'ctx> {
     use UnionLayout::*;
 
     match union_layout {
         NullableWrapped {
             other_tags: tags, ..
-        } => {
-            let function = build_reuse_rec_union(
-                env,
-                layout_ids,
-                &WhenRecursive::Loop(*union_layout),
-                *union_layout,
-                tags,
-                true,
-            );
+        } => build_reuse_rec_union(
+            env,
+            layout_ids,
+            &WhenRecursive::Loop(*union_layout),
+            *union_layout,
+            tags,
+            true,
+        ),
 
-            Some(function)
-        }
+        NullableUnwrapped { other_fields, .. } => build_reuse_rec_union(
+            env,
+            layout_ids,
+            &WhenRecursive::Loop(*union_layout),
+            *union_layout,
+            env.arena.alloc([*other_fields]),
+            true,
+        ),
 
-        NullableUnwrapped { other_fields, .. } => {
-            let function = build_reuse_rec_union(
-                env,
-                layout_ids,
-                &WhenRecursive::Loop(*union_layout),
-                *union_layout,
-                env.arena.alloc([*other_fields]),
-                true,
-            );
+        NonNullableUnwrapped(fields) => build_reuse_rec_union(
+            env,
+            layout_ids,
+            &WhenRecursive::Loop(*union_layout),
+            *union_layout,
+            &*env.arena.alloc([*fields]),
+            true,
+        ),
 
-            Some(function)
-        }
-
-        NonNullableUnwrapped(fields) => {
-            let function = build_reuse_rec_union(
-                env,
-                layout_ids,
-                &WhenRecursive::Loop(*union_layout),
-                *union_layout,
-                &*env.arena.alloc([*fields]),
-                true,
-            );
-            Some(function)
-        }
-
-        Recursive(tags) => {
-            let function = build_reuse_rec_union(
-                env,
-                layout_ids,
-                &WhenRecursive::Loop(*union_layout),
-                *union_layout,
-                tags,
-                false,
-            );
-            Some(function)
-        }
+        Recursive(tags) => build_reuse_rec_union(
+            env,
+            layout_ids,
+            &WhenRecursive::Loop(*union_layout),
+            *union_layout,
+            tags,
+            false,
+        ),
 
         NonRecursive(_) => {
             unreachable!("non-recursive tags cannot be reused")
