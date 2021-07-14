@@ -4,7 +4,7 @@ use morphic_lib::{
     FuncDef, FuncDefBuilder, FuncName, ModDefBuilder, ModName, ProgramBuilder, Result, TypeId,
     UpdateModeVar, ValueId,
 };
-use roc_collections::all::MutMap;
+use roc_collections::all::{MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use std::convert::TryFrom;
@@ -25,6 +25,20 @@ pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
 
 const DEBUG: bool = false;
 const SIZE: usize = if DEBUG { 50 } else { 16 };
+
+#[derive(Debug, Clone, Copy, Hash)]
+struct TagUnionId(u64);
+
+fn recursive_tag_union_name_bytes(union_layout: &UnionLayout) -> TagUnionId {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::Hash;
+    use std::hash::Hasher;
+
+    let mut hasher = DefaultHasher::new();
+    union_layout.hash(&mut hasher);
+
+    TagUnionId(hasher.finish())
+}
 
 pub fn func_name_bytes_help<'a, I>(
     symbol: Symbol,
@@ -225,6 +239,7 @@ fn proc_spec(proc: &Proc) -> Result<FuncDef> {
 struct Env {
     symbols: MutMap<Symbol, ValueId>,
     join_points: MutMap<crate::ir::JoinPointId, morphic_lib::ContinuationId>,
+    tag_unions: MutSet<TagUnionId>,
 }
 
 fn stmt_spec(
@@ -792,24 +807,52 @@ fn build_variant_types(
 ) -> Result<Vec<TypeId>> {
     use UnionLayout::*;
 
-    let mut result = Vec::new();
+    let mut result;
 
     match union_layout {
-        NonRecursive(tags) => {
+        NonRecursive(tags) | Recursive(tags) => {
+            result = Vec::with_capacity(tags.len());
+
             for tag in tags.iter() {
                 result.push(build_tuple_type(builder, tag)?);
             }
         }
-        Recursive(_) => unreachable!(),
-        NonNullableUnwrapped(_) => unreachable!(),
+        NonNullableUnwrapped(fields) => {
+            result = vec![build_tuple_type(builder, fields)?];
+        }
         NullableWrapped {
-            nullable_id: _,
-            other_tags: _,
-        } => unreachable!(),
+            nullable_id,
+            other_tags: tags,
+        } => {
+            result = Vec::with_capacity(tags.len() + 1);
+
+            let cutoff = *nullable_id as usize;
+
+            for tag in tags[..cutoff].iter() {
+                result.push(build_tuple_type(builder, tag)?);
+            }
+
+            let unit = builder.add_tuple_type(&[])?;
+            result.push(unit);
+
+            for tag in tags[cutoff..].iter() {
+                result.push(build_tuple_type(builder, tag)?);
+            }
+        }
         NullableUnwrapped {
-            nullable_id: _,
-            other_fields: _,
-        } => unreachable!(),
+            nullable_id,
+            other_fields: fields,
+        } => {
+            let unit = builder.add_tuple_type(&[])?;
+            let other_type = build_tuple_type(builder, fields)?;
+
+            if *nullable_id {
+                // nullable_id == 1
+                result = vec![other_type, unit];
+            } else {
+                result = vec![unit, other_type];
+            }
+        }
     }
 
     Ok(result)
@@ -838,21 +881,24 @@ fn expr_spec(
             tag_id,
             union_size: _,
             arguments,
-        } => match tag_layout {
-            UnionLayout::NonRecursive(_) => {
-                let value_id = build_tuple_value(builder, env, block, arguments)?;
-                let variant_types = build_variant_types(builder, tag_layout)?;
-                builder.add_make_union(block, &variant_types, *tag_id as u32, value_id)
+        } => {
+            let variant_types = build_variant_types(builder, tag_layout)?;
+
+            match tag_layout {
+                UnionLayout::NonRecursive(_) => {
+                    let value_id = build_tuple_value(builder, env, block, arguments)?;
+                    builder.add_make_union(block, &variant_types, *tag_id as u32, value_id)
+                }
+                UnionLayout::Recursive(_)
+                | UnionLayout::NonNullableUnwrapped(_)
+                | UnionLayout::NullableWrapped { .. }
+                | UnionLayout::NullableUnwrapped { .. } => {
+                    let result_type = worst_case_type(builder)?;
+                    let value_id = build_tuple_value(builder, env, block, arguments)?;
+                    builder.add_unknown_with(block, &[value_id], result_type)
+                }
             }
-            UnionLayout::Recursive(_)
-            | UnionLayout::NonNullableUnwrapped(_)
-            | UnionLayout::NullableWrapped { .. }
-            | UnionLayout::NullableUnwrapped { .. } => {
-                let result_type = worst_case_type(builder)?;
-                let value_id = build_tuple_value(builder, env, block, arguments)?;
-                builder.add_unknown_with(block, &[value_id], result_type)
-            }
-        },
+        }
         Struct(fields) => build_tuple_value(builder, env, block, fields),
         UnionAtIndex {
             index,
