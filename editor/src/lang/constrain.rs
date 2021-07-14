@@ -1,7 +1,7 @@
 use bumpalo::{collections::Vec as BumpVec, Bump};
 
 use crate::lang::{
-    ast::{Expr2, RecordField, ValueDef, WhenBranch},
+    ast::{Expr2, ExprId, RecordField, ValueDef, WhenBranch},
     expr::Env,
     pattern::{DestructType, Pattern2, PatternState2, RecordDestruct},
     pool::{Pool, PoolStr, PoolVec, ShallowClone},
@@ -134,7 +134,10 @@ pub fn constrain_expr<'a>(
 
                 let list_elem_type = Type2::Variable(*elem_var);
 
-                for (index, elem_node_id) in elems.iter_node_ids().enumerate() {
+                let indexed_node_ids: Vec<(usize, ExprId)> =
+                    elems.iter(env.pool).copied().enumerate().collect();
+
+                for (index, elem_node_id) in indexed_node_ids {
                     let elem_expr = env.pool.get(elem_node_id);
 
                     let elem_expected = Expected::ForReason(

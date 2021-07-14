@@ -118,8 +118,8 @@ pub enum Expr2 {
     InvalidLookup(PoolStr), // 8B
 
     List {
-        elem_var: Variable,    // 4B
-        elems: PoolVec<Expr2>, // 8B
+        elem_var: Variable,     // 4B
+        elems: PoolVec<ExprId>, // 8B
     },
     If {
         cond_var: Variable,                                // 4B
@@ -527,12 +527,14 @@ fn expr2_to_string_helper(
 
             let mut first_elt = true;
 
-            for elem_expr2 in elems.iter(pool) {
+            for elem_expr2_id in elems.iter(pool) {
                 if !first_elt {
                     out_string.push_str(", ")
                 } else {
                     first_elt = false;
                 }
+
+                let elem_expr2 = pool.get(*elem_expr2_id);
 
                 expr2_to_string_helper(elem_expr2, indent_level + 2, pool, out_string)
             }
