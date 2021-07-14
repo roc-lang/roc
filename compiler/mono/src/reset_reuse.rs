@@ -553,15 +553,27 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
             arena.alloc(Let(*symbol, expr.clone(), *layout, b))
         }
         Invoke {
-            symbol: _,
-            call: _,
-            layout: _,
-            pass: _,
-            fail: _,
-            exception_id: _,
+            symbol,
+            call,
+            layout,
+            pass,
+            fail,
+            exception_id,
         } => {
-            // TODO implement this
-            stmt
+            let branch_info = BranchInfo::None;
+            let new_pass = function_r_branch_body(env, &branch_info, pass);
+            let new_fail = function_r_branch_body(env, &branch_info, fail);
+
+            let invoke = Invoke {
+                symbol: *symbol,
+                call: call.clone(),
+                layout: *layout,
+                pass: new_pass,
+                fail: new_fail,
+                exception_id: *exception_id,
+            };
+
+            arena.alloc(invoke)
         }
         Refcounting(modify_rc, continuation) => {
             let b = function_r(env, continuation);
