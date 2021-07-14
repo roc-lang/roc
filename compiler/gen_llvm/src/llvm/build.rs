@@ -1006,8 +1006,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             };
 
             let ctx = env.context;
-            let then_block = ctx.append_basic_block(parent, "then");
-            let else_block = ctx.append_basic_block(parent, "else");
+            let then_block = ctx.append_basic_block(parent, "then_reset");
+            let else_block = ctx.append_basic_block(parent, "else_decref");
             let cont_block = ctx.append_basic_block(parent, "cont");
 
             let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, tag_ptr);
@@ -1024,7 +1024,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 let reset_function = build_reset(env, layout_ids, union_layout);
                 let call = env
                     .builder
-                    .build_call(reset_function, &[tag_ptr.into()], "call_reuse");
+                    .build_call(reset_function, &[tag_ptr.into()], "call_reset");
 
                 call.set_call_convention(FAST_CALL_CONV);
 
