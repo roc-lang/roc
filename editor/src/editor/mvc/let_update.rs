@@ -13,9 +13,10 @@ use crate::editor::mvc::ed_update::get_node_context;
 use crate::editor::mvc::ed_update::NodeContext;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::syntax_highlight::HighlightStyle;
-use crate::lang::ast::ArrString;
+use crate::lang::ast::{ArrString};
 use crate::lang::ast::{Expr2, ValueDef, update_str_expr};
 use crate::lang::pattern::Pattern2;
+use crate::lang::pool::NodeId;
 use crate::ui::text::lines::SelectableLines;
 use std::iter::FromIterator;
 
@@ -99,11 +100,10 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
         ed_model.simple_move_carets_right(char_len);
 
         // update GridNodeMap and CodeLines
-        ed_model.insert_between_line(
+        ed_model.insert_all_between_line(
             old_caret_pos.line,
             old_caret_pos.column,
-            &child_nodes_content,
-            curr_mark_node_id,
+            &vec![val_name_mn_id, equals_mn_id, body_mn_id],
         )?;
 
         // for Blank node in body
@@ -120,7 +120,7 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     }
 }
 
-pub fn update_let_value(val_name_mn_id: MarkNodeId, ed_model: &mut EdModel, new_char: &char) -> EdResult<InputOutcome> {
+pub fn update_let_value(val_name_mn_id: MarkNodeId, def_id: NodeId<ValueDef>, ed_model: &mut EdModel, new_char: &char) -> EdResult<InputOutcome> {
     if new_char.is_ascii_alphanumeric() {
         let old_caret_pos = ed_model.get_caret();
 
@@ -131,7 +131,7 @@ pub fn update_let_value(val_name_mn_id: MarkNodeId, ed_model: &mut EdModel, new_
             .grid_node_map
             .get_offset_to_node_id(old_caret_pos, val_name_mn_id)?;
 
-        if node_caret_offset != 0 && node_caret_offset < content_str_mut.len() {
+        if node_caret_offset != 0 && node_caret_offset <= content_str_mut.len() {
             content_str_mut.insert(node_caret_offset, *new_char);
 
             // update GridNodeMap and CodeLines
@@ -146,8 +146,10 @@ pub fn update_let_value(val_name_mn_id: MarkNodeId, ed_model: &mut EdModel, new_
             ed_model.simple_move_carets_right(1);
 
             // update ast
-            let let_value_ast_node_id = ed_model.markup_node_pool.get(val_name_mn_id).get_ast_node_id();
-            update_str_expr(let_value_ast_node_id, *new_char, node_caret_offset, ed_model.module.env.pool)?;
+            let value_def = ed_model.module.env.pool.get(def_id);
+            let value_name_expr_id = value_def.get_expr_id();
+            
+            update_str_expr(value_name_expr_id, *new_char, node_caret_offset, ed_model.module.env.pool)?;
 
             Ok(InputOutcome::Accepted)
         } else {

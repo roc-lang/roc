@@ -169,6 +169,29 @@ impl<'a> EdModel<'a> {
         self.code_lines.insert_between_line(line_nr, index, new_str)
     }
 
+    pub fn insert_all_between_line(
+        &mut self,
+        line_nr: usize,
+        index: usize,
+        node_ids: &[MarkNodeId],
+    ) -> UIResult<()> {
+
+        let mut col_nr = index;
+
+        for &node_id in node_ids {
+            let node_content_str = self.markup_node_pool.get(node_id).get_content();
+
+            self.grid_node_map
+            .insert_between_line(line_nr, col_nr, node_content_str.len(), node_id)?;
+
+            self.code_lines.insert_between_line(line_nr, col_nr, &node_content_str)?;
+
+            col_nr += node_content_str.len();
+        }
+
+        Ok(())
+    }
+
     // updates grid_node_map and code_lines but nothing else.
     pub fn del_at_line(&mut self, line_nr: usize, index: usize) -> UIResult<()> {
         self.grid_node_map.del_at_line(line_nr, index)?;
@@ -711,8 +734,8 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                         InputOutcome::Ignored
                                                     }
                                                 }
-                                                Expr2::LetValue{ .. } => {
-                                                    update_let_value(prev_mark_node_id, ed_model, ch)?
+                                                Expr2::LetValue{ def_id, .. } => {
+                                                    update_let_value(prev_mark_node_id, *def_id, ed_model, ch)?
                                                 }
                                                 _ => {
                                                     match ast_node_ref {

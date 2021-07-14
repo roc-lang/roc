@@ -266,6 +266,15 @@ impl ShallowClone for ValueDef {
     }
 }
 
+impl ValueDef {
+    pub fn get_expr_id(&self) -> ExprId {
+        match self {
+            ValueDef::WithAnnotation { expr_id, ..} => *expr_id,
+            ValueDef::NoAnnotation {expr_id, ..} => *expr_id,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum FunctionDef {
     WithAnnotation {

@@ -512,7 +512,7 @@ pub fn set_parent_for_all_helper(
 
 impl fmt::Display for MarkupNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(
+        write!(
             f,
             "{} ({})",
             self.node_type_as_string(),
@@ -526,7 +526,7 @@ pub fn tree_as_string(root_node_id: MarkNodeId, mark_node_pool: &SlowPool) -> St
 
     let node = mark_node_pool.get(root_node_id);
 
-    full_string.push_str(&format!("{}", node));
+    full_string.push_str(&format!("{} mn_id {}\n", node, root_node_id));
 
     tree_as_string_helper(node, 1, &mut full_string, mark_node_pool);
 
@@ -548,7 +548,7 @@ fn tree_as_string_helper(
 
         let child = mark_node_pool.get(child_id);
 
-        full_str.push_str(&format!("{}", child));
+        full_str.push_str(&format!("{} mn_id {}\n", child, child_id));
 
         tree_string.push_str(&full_str);
 
