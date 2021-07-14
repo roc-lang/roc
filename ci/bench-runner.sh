@@ -21,8 +21,12 @@ echo $FULL_CMD
 
 script -efq $LOG_FILE -c "$FULL_CMD"
 EXIT_CODE=$?
-    
-if grep -q "regressed" "$LOG_FILE"; then
+
+if cat $LOG_FILE | grep -q "regressed"; then
+
+    grep -B3 "regressed" $LOG_FILE | sed 's/\x1B\[[0-9;]\{1,\}[A-Za-z]//g' | grep -o "\".*\"" | rev | cut -d' ' -f1 | rev > slow_benches_1.txt
+    echo "regression(s) detected in:"
+    cat slow_benches_1.txt
     echo ""
     echo ""
     echo "------<<<<<<>>>>>>------"
@@ -31,9 +35,15 @@ if grep -q "regressed" "$LOG_FILE"; then
     echo ""
     echo ""
 
-    # delete criterion folder to compare to trunk only
+    # delete criterion folder to remove old benchmark data
     rm -rf ./target/criterion
-    # copy benchmark data from trunk again
+
+    # benchmark trunk again
+    cd ../bench-folder-trunk
+    rm -rf target/criterion
+    ./target/release/deps/time_bench --bench
+
+    cd ../bench-folder-branch
     cp -r ../bench-folder-trunk/target/criterion ./target
 
     rm $LOG_FILE
@@ -42,26 +52,33 @@ if grep -q "regressed" "$LOG_FILE"; then
     script -efq $LOG_FILE -c "$FULL_CMD"
     EXIT_CODE=$?
 
-    if grep -q "regressed" "$LOG_FILE"; then
-        echo ""
-        echo ""
-        echo "------<<<<<<!!!!!!>>>>>>------"
-        echo "Benchmarks were run twice and a regression was detected both times."
-        echo "------<<<<<<!!!!!!>>>>>>------"
-        echo ""
-        echo ""
-        exit 1
+    if cat $LOG_FILE | grep -q "regressed"; then
+
+        grep -B3 "regressed" $LOG_FILE | sed 's/\x1B\[[0-9;]\{1,\}[A-Za-z]//g' | grep -o "\".*\"" | rev | cut -d' ' -f1 | rev > slow_benches_2.txt
+        echo "regression(s) detected in:"
+        cat slow_benches_2.txt
+
+        if [[ $(grep -Fxf slow_benches_1.txt slow_benches_2.txt | wc -l) -gt 0 ]]; then
+            echo ""
+            echo ""
+            echo "------<<<<<<!!!!!!>>>>>>------"
+            echo "Benchmarks were run twice and a regression was detected both times for the following benchmarks:"
+            grep -Fxf slow_benches_1.txt slow_benches_2.txt
+            echo "------<<<<<<!!!!!!>>>>>>------"
+            echo ""
+            echo ""
+            exit 1
+        else
+            echo "Benchmarks were run twice and a regression was detected on one run. We assume this was a fluke."
+            exit 0
+        fi
     else
         echo "Benchmarks were run twice and a regression was detected on one run. We assume this was a fluke."
         exit 0
     fi
 else
     echo ""
-    echo ""
-    echo "------<<<<<<!!!!!!>>>>>>------"
-    echo "Benchmark execution failed with exit code: $EXIT_CODE."
-    echo "------<<<<<<!!!!!!>>>>>>------"
-    echo ""
+    echo "Benchmark execution finished with exit code: $EXIT_CODE."
     echo ""
     exit $EXIT_CODE
 fi
