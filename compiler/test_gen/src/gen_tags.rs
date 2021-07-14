@@ -97,7 +97,7 @@ fn applied_tag_just_enum() {
                 "#
         ),
         (2, 0),
-        (u8, i64)
+        (u8, u8)
     );
 }
 
