@@ -644,70 +644,21 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
         Union(variant) => {
             use UnionLayout::*;
 
-            match variant {
-                NullableWrapped {
-                    other_tags: tags, ..
-                } => {
-                    let function = build_rec_union(
-                        env,
-                        layout_ids,
-                        mode,
-                        &WhenRecursive::Loop(*variant),
-                        *variant,
-                        tags,
-                        true,
-                    );
+            if let NonRecursive(tags) = variant {
+                let function = modify_refcount_union(env, layout_ids, mode, when_recursive, tags);
 
-                    Some(function)
-                }
-
-                NullableUnwrapped { other_fields, .. } => {
-                    let function = build_rec_union(
-                        env,
-                        layout_ids,
-                        mode,
-                        &WhenRecursive::Loop(*variant),
-                        *variant,
-                        env.arena.alloc([*other_fields]),
-                        true,
-                    );
-
-                    Some(function)
-                }
-
-                NonNullableUnwrapped(fields) => {
-                    let function = build_rec_union(
-                        env,
-                        layout_ids,
-                        mode,
-                        &WhenRecursive::Loop(*variant),
-                        *variant,
-                        &*env.arena.alloc([*fields]),
-                        true,
-                    );
-                    Some(function)
-                }
-
-                Recursive(tags) => {
-                    let function = build_rec_union(
-                        env,
-                        layout_ids,
-                        mode,
-                        &WhenRecursive::Loop(*variant),
-                        *variant,
-                        tags,
-                        false,
-                    );
-                    Some(function)
-                }
-
-                NonRecursive(tags) => {
-                    let function =
-                        modify_refcount_union(env, layout_ids, mode, when_recursive, tags);
-
-                    Some(function)
-                }
+                return Some(function);
             }
+
+            let function = build_rec_union(
+                env,
+                layout_ids,
+                mode,
+                &WhenRecursive::Loop(*variant),
+                *variant,
+            );
+
+            Some(function)
         }
 
         Closure(_, lambda_set, _) => {
@@ -1208,10 +1159,8 @@ fn build_rec_union<'a, 'ctx, 'env>(
     mode: Mode,
     when_recursive: &WhenRecursive<'a>,
     union_layout: UnionLayout<'a>,
-    tags: &'a [&'a [Layout<'a>]],
-    is_nullable: bool,
 ) -> FunctionValue<'ctx> {
-    let layout = Layout::Union(UnionLayout::Recursive(tags));
+    let layout = Layout::Union(union_layout);
 
     let (_, fn_name) = function_name_from_mode(
         layout_ids,
@@ -1228,7 +1177,7 @@ fn build_rec_union<'a, 'ctx, 'env>(
             let block = env.builder.get_insert_block().expect("to be in a function");
             let di_location = env.builder.get_current_debug_location().unwrap();
 
-            let basic_type = basic_type_from_layout(env, &Layout::Union(union_layout));
+            let basic_type = basic_type_from_layout(env, &layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             build_rec_union_help(
@@ -1237,9 +1186,7 @@ fn build_rec_union<'a, 'ctx, 'env>(
                 mode,
                 when_recursive,
                 union_layout,
-                tags,
                 function_value,
-                is_nullable,
             );
 
             env.builder.position_at_end(block);
@@ -1260,10 +1207,10 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
     mode: Mode,
     when_recursive: &WhenRecursive<'a>,
     union_layout: UnionLayout<'a>,
-    tags: &'a [&'a [roc_mono::layout::Layout<'a>]],
     fn_val: FunctionValue<'ctx>,
-    is_nullable: bool,
 ) {
+    let tags = union_layout_tags(env.arena, &union_layout);
+    let is_nullable = union_layout.is_nullable();
     debug_assert!(!tags.is_empty());
 
     let context = &env.context;
@@ -1560,65 +1507,27 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
     }
 }
 
-pub fn build_reset<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
+fn union_layout_tags<'a>(
+    arena: &'a bumpalo::Bump,
     union_layout: &UnionLayout<'a>,
-) -> FunctionValue<'ctx> {
+) -> &'a [&'a [Layout<'a>]] {
     use UnionLayout::*;
 
     match union_layout {
         NullableWrapped {
             other_tags: tags, ..
-        } => build_reuse_rec_union(
-            env,
-            layout_ids,
-            &WhenRecursive::Loop(*union_layout),
-            *union_layout,
-            tags,
-            true,
-        ),
-
-        NullableUnwrapped { other_fields, .. } => build_reuse_rec_union(
-            env,
-            layout_ids,
-            &WhenRecursive::Loop(*union_layout),
-            *union_layout,
-            env.arena.alloc([*other_fields]),
-            true,
-        ),
-
-        NonNullableUnwrapped(fields) => build_reuse_rec_union(
-            env,
-            layout_ids,
-            &WhenRecursive::Loop(*union_layout),
-            *union_layout,
-            &*env.arena.alloc([*fields]),
-            true,
-        ),
-
-        Recursive(tags) => build_reuse_rec_union(
-            env,
-            layout_ids,
-            &WhenRecursive::Loop(*union_layout),
-            *union_layout,
-            tags,
-            false,
-        ),
-
-        NonRecursive(_) => {
-            unreachable!("non-recursive tags cannot be reused")
-        }
+        } => *tags,
+        NullableUnwrapped { other_fields, .. } => arena.alloc([*other_fields]),
+        NonNullableUnwrapped(fields) => arena.alloc([*fields]),
+        Recursive(tags) => tags,
+        NonRecursive(tags) => tags,
     }
 }
 
-fn build_reuse_rec_union<'a, 'ctx, 'env>(
+pub fn build_reset<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
-    when_recursive: &WhenRecursive<'a>,
     union_layout: UnionLayout<'a>,
-    tags: &'a [&'a [Layout<'a>]],
-    is_nullable: bool,
 ) -> FunctionValue<'ctx> {
     let mode = Mode::Dec;
 
@@ -1626,15 +1535,8 @@ fn build_reuse_rec_union<'a, 'ctx, 'env>(
     let fn_name = layout_id.to_symbol_string(Symbol::DEC, &env.interns);
     let fn_name = format!("{}_reset", fn_name);
 
-    let dec_function = build_rec_union(
-        env,
-        layout_ids,
-        Mode::Dec,
-        when_recursive,
-        union_layout,
-        tags,
-        is_nullable,
-    );
+    let when_recursive = WhenRecursive::Loop(union_layout);
+    let dec_function = build_rec_union(env, layout_ids, Mode::Dec, &when_recursive, union_layout);
 
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
@@ -1648,12 +1550,10 @@ fn build_reuse_rec_union<'a, 'ctx, 'env>(
             build_reuse_rec_union_help(
                 env,
                 layout_ids,
-                when_recursive,
+                &when_recursive,
                 union_layout,
-                tags,
                 function_value,
                 dec_function,
-                is_nullable,
             );
 
             env.builder.position_at_end(block);
@@ -1673,11 +1573,12 @@ fn build_reuse_rec_union_help<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     when_recursive: &WhenRecursive<'a>,
     union_layout: UnionLayout<'a>,
-    tags: &'a [&'a [roc_mono::layout::Layout<'a>]],
     reset_function: FunctionValue<'ctx>,
     dec_function: FunctionValue<'ctx>,
-    is_nullable: bool,
 ) {
+    let tags = union_layout_tags(env.arena, &union_layout);
+    let is_nullable = union_layout.is_nullable();
+
     debug_assert!(!tags.is_empty());
 
     let context = &env.context;

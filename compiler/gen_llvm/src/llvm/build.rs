@@ -1021,7 +1021,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // referenced value, and returns the location of the now-invalid cell
                 env.builder.position_at_end(then_block);
 
-                let reset_function = build_reset(env, layout_ids, union_layout);
+                let reset_function = build_reset(env, layout_ids, *union_layout);
                 let call = env
                     .builder
                     .build_call(reset_function, &[tag_ptr.into()], "call_reset");
@@ -1034,7 +1034,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             }
             {
                 // If reset is used on a shared, non-reusable reference, it behaves
-                // like dec and returns , which instructs reuse to behave like ctor
+                // like dec and returns NULL, which instructs reuse to behave like ctor
                 env.builder.position_at_end(else_block);
                 refcount_ptr.decrement(env, layout);
                 env.builder.build_unconditional_branch(cont_block);
