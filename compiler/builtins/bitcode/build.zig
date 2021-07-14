@@ -40,6 +40,7 @@ pub fn build(b: *Builder) void {
     obj.linkSystemLibrary("c");
     obj.setOutputDir(".");
     obj.strip = true;
+    obj.bundle_compiler_rt = true;
     const obj_step = b.step("object", "Build object file for linking");
     obj_step.dependOn(&obj.step);
 
