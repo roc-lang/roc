@@ -212,7 +212,7 @@ fn try_function_s<'a, 'i>(
     if std::ptr::eq(stmt, new_stmt) || stmt == new_stmt {
         stmt
     } else {
-        insert_reset(env, w, x, new_stmt)
+        insert_reset(env, w, x, c.layout, new_stmt)
     }
 }
 
@@ -220,6 +220,7 @@ fn insert_reset<'a>(
     env: &mut Env<'a, '_>,
     w: Symbol,
     x: Symbol,
+    union_layout: UnionLayout<'a>,
     mut stmt: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
     use crate::ir::Expr::*;
@@ -246,11 +247,11 @@ fn insert_reset<'a>(
 
     let reset_expr = Expr::Reset(x);
 
-    const I64: Layout<'static> = Layout::Builtin(crate::layout::Builtin::Int64);
+    // const I64: Layout<'static> = Layout::Builtin(crate::layout::Builtin::Int64);
 
-    stmt = env
-        .arena
-        .alloc(Stmt::Let(w, reset_expr, Layout::Boxed(&I64), stmt));
+    let layout = Layout::Union(union_layout);
+
+    stmt = env.arena.alloc(Stmt::Let(w, reset_expr, layout, stmt));
 
     for (symbol, expr, expr_layout) in stack.into_iter().rev() {
         stmt = env

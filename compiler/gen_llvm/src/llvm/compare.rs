@@ -139,7 +139,6 @@ fn build_eq<'a, 'ctx, 'env>(
     }
 
     match lhs_layout {
-        Layout::Boxed(_) => todo!(),
         Layout::Builtin(builtin) => {
             build_eq_builtin(env, layout_ids, lhs_val, rhs_val, builtin, when_recursive)
         }
@@ -297,7 +296,6 @@ fn build_neq<'a, 'ctx, 'env>(
     }
 
     match lhs_layout {
-        Layout::Boxed(_) => todo!(),
         Layout::Builtin(builtin) => {
             build_neq_builtin(env, layout_ids, lhs_val, rhs_val, builtin, when_recursive)
         }

@@ -154,6 +154,7 @@ struct VarInfo {
     reference: bool,  // true if the variable may be a reference (aka pointer) at runtime
     persistent: bool, // true if the variable is statically known to be marked a Persistent at runtime
     consume: bool,    // true if the variable RC must be "consumed"
+    reset: bool,      // true if the variable is the result of a Reset operation
 }
 
 type VarMap = MutMap<Symbol, VarInfo>;
@@ -254,6 +255,7 @@ impl<'a> Context<'a> {
                         reference: false, // assume function symbols are global constants
                         persistent: true, // assume function symbols are global constants
                         consume: false,   // no need to consume this variable
+                        reset: false,     // reset symbols cannot be passed as function arguments
                     },
                 );
             }
@@ -310,7 +312,12 @@ impl<'a> Context<'a> {
             return stmt;
         }
 
-        let modify = ModifyRc::Dec(symbol);
+        let modify = if info.reset {
+            ModifyRc::DecRef(symbol)
+        } else {
+            ModifyRc::Dec(symbol)
+        };
+
         self.arena.alloc(Stmt::Refcounting(modify, stmt))
     }
 
@@ -812,7 +819,7 @@ impl<'a> Context<'a> {
         // must this value be consumed?
         let consume = consume_call(&self.vars, call);
 
-        self.update_var_info_help(symbol, layout, persistent, consume)
+        self.update_var_info_help(symbol, layout, persistent, consume, false)
     }
 
     fn update_var_info(&self, symbol: Symbol, layout: &Layout<'a>, expr: &Expr<'a>) -> Self {
@@ -823,7 +830,9 @@ impl<'a> Context<'a> {
         // must this value be consumed?
         let consume = consume_expr(&self.vars, expr);
 
-        self.update_var_info_help(symbol, layout, persistent, consume)
+        let reset = matches!(expr, Expr::Reset(_));
+
+        self.update_var_info_help(symbol, layout, persistent, consume, reset)
     }
 
     fn update_var_info_help(
@@ -832,6 +841,7 @@ impl<'a> Context<'a> {
         layout: &Layout<'a>,
         persistent: bool,
         consume: bool,
+        reset: bool,
     ) -> Self {
         // should we perform incs and decs on this value?
         let reference = layout.contains_refcounted();
@@ -840,6 +850,7 @@ impl<'a> Context<'a> {
             reference,
             persistent,
             consume,
+            reset,
         };
 
         let mut ctx = self.clone();
@@ -857,6 +868,7 @@ impl<'a> Context<'a> {
                 reference: p.layout.contains_refcounted(),
                 consume: !p.borrow,
                 persistent: false,
+                reset: false,
             };
             ctx.vars.insert(p.symbol, info);
         }

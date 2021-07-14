@@ -45,7 +45,6 @@ fn build_hash_layout<'a, 'ctx, 'env>(
     when_recursive: WhenRecursive<'a>,
 ) -> IntValue<'ctx> {
     match layout {
-        Layout::Boxed(_) => todo!(),
         Layout::Builtin(builtin) => {
             hash_builtin(env, layout_ids, seed, val, layout, builtin, when_recursive)
         }

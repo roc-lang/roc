@@ -752,10 +752,6 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
                 Some(function)
             }
         },
-        Layout::Boxed(_) => {
-            // TODO
-            todo!()
-        }
     }
 }
 
