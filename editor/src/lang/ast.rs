@@ -273,6 +273,13 @@ impl ValueDef {
             ValueDef::NoAnnotation {expr_id, ..} => *expr_id,
         }
     }
+
+    pub fn get_pattern_id(&self) -> NodeId<Pattern2> {
+        match self {
+            ValueDef::WithAnnotation { pattern_id, ..} => *pattern_id,
+            ValueDef::NoAnnotation {pattern_id, ..} => *pattern_id,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -568,6 +575,28 @@ fn expr2_to_string_helper(
 
 fn var_to_string(some_var: &Variable, indent_level: usize) -> String {
     format!("{}Var({:?})\n", get_spacing(indent_level + 1), some_var)
+}
+
+// get string from SmallStr or Str
+pub fn get_string_from_expr2(node_id: ExprId, pool: &Pool) -> EdResult<String> {
+    match pool.get(node_id) {
+        Expr2::SmallStr(arr_string) => {
+            Ok(
+                arr_string.as_str().to_string()
+            )
+        },
+        Expr2::Str(pool_str) => {
+            Ok(
+                pool_str.as_str(pool).to_owned()
+            )
+        }
+        other => {
+            UnexpectedASTNode{
+                required_node_type: "SmallStr or Str",
+                encountered_node_type: format!("{:?}", other)
+            }.fail()?
+        }
+    }
 }
 
 pub fn update_str_expr(node_id: ExprId, new_char: char, insert_index: usize, pool: &mut Pool) -> EdResult<()> {

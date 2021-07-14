@@ -3,6 +3,8 @@ use crate::editor::ed_error::MissingParent;
 use crate::editor::ed_error::RecordWithoutFields;
 use crate::editor::markup::attribute::Attributes;
 use crate::editor::markup::common_nodes::new_blank_mn;
+use crate::editor::markup::common_nodes::new_left_accolade_mn;
+use crate::editor::markup::common_nodes::new_right_accolade_mn;
 use crate::editor::markup::nodes;
 use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::app_update::InputOutcome;
@@ -32,29 +34,17 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     let ast_pool = &mut ed_model.module.env.pool;
     let expr2_node = Expr2::EmptyRecord;
 
-    let mark_node_pool = &mut ed_model.markup_node_pool;
-
     ast_pool.set(ast_node_id, expr2_node);
 
-    let left_bracket_node = MarkupNode::Text {
-        content: nodes::LEFT_ACCOLADE.to_owned(),
-        ast_node_id,
-        syn_high_style: HighlightStyle::Bracket,
-        attributes: Attributes::new(),
-        parent_id_opt: Some(curr_mark_node_id), // current node will be replaced with nested one
-    };
+    let left_bracket_node_id = 
+        ed_model.add_mark_node(
+            new_left_accolade_mn(ast_node_id, Some(curr_mark_node_id))
+        );
 
-    let left_bracket_node_id = mark_node_pool.add(left_bracket_node);
-
-    let right_bracket_node = MarkupNode::Text {
-        content: nodes::RIGHT_ACCOLADE.to_owned(),
-        ast_node_id,
-        syn_high_style: HighlightStyle::Bracket,
-        attributes: Attributes::new(),
-        parent_id_opt: Some(curr_mark_node_id), // current node will be replaced with nested one
-    };
-
-    let right_bracket_node_id = mark_node_pool.add(right_bracket_node);
+    let right_bracket_node_id = 
+        ed_model.add_mark_node(
+            new_right_accolade_mn(ast_node_id, Some(curr_mark_node_id))
+        );
 
     let nested_node = MarkupNode::Nested {
         ast_node_id,
@@ -63,7 +53,7 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     };
 
     if is_blank_node {
-        mark_node_pool.replace_node(curr_mark_node_id, nested_node);
+        ed_model.markup_node_pool.replace_node(curr_mark_node_id, nested_node);
 
         // remove data corresponding to Blank node
         ed_model.del_at_line(old_caret_pos.line, old_caret_pos.column)?;
@@ -71,18 +61,10 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
         ed_model.simple_move_carets_right(nodes::LEFT_ACCOLADE.len());
 
         // update GridNodeMap and CodeLines
-        ed_model.insert_between_line(
+        ed_model.insert_all_between_line(
             old_caret_pos.line,
             old_caret_pos.column,
-            nodes::LEFT_ACCOLADE,
-            left_bracket_node_id,
-        )?;
-
-        ed_model.insert_between_line(
-            old_caret_pos.line,
-            old_caret_pos.column + nodes::LEFT_ACCOLADE.len(),
-            nodes::RIGHT_ACCOLADE,
-            right_bracket_node_id,
+            &vec![left_bracket_node_id, right_bracket_node_id]
         )?;
 
         Ok(InputOutcome::Accepted)
@@ -138,7 +120,7 @@ pub fn update_empty_record(
                 parent_id_opt,
             };
 
-            let record_field_node_id = ed_model.markup_node_pool.add(record_field_node);
+            let record_field_node_id = ed_model.add_mark_node(record_field_node);
 
             if let Some(parent_id) = parent_id_opt {
                 let parent = ed_model.markup_node_pool.get_mut(parent_id);
@@ -244,14 +226,17 @@ pub fn update_record_colon(
                                 };
 
                                 let record_colon_node_id =
-                                    ed_model.markup_node_pool.add(record_colon_node);
+                                    ed_model.add_mark_node(record_colon_node);
                                 ed_model
                                     .markup_node_pool
                                     .get_mut(parent_id)
                                     .add_child_at_index(new_child_index, record_colon_node_id)?;
 
                                 let record_blank_node_id =
-                                    new_blank_mn(new_field_val_id, Some(parent_id), &mut ed_model.markup_node_pool);
+                                    ed_model
+                                        .add_mark_node(
+                                            new_blank_mn(new_field_val_id, Some(parent_id))
+                                        );
                                 
                                 ed_model
                                     .markup_node_pool
@@ -265,18 +250,10 @@ pub fn update_record_colon(
                                 ed_model.simple_move_carets_right(record_colon.len());
 
                                 // update GridNodeMap and CodeLines
-                                ed_model.insert_between_line(
+                                ed_model.insert_all_between_line(
                                     old_caret_pos.line,
                                     old_caret_pos.column,
-                                    nodes::COLON,
-                                    record_colon_node_id,
-                                )?;
-
-                                ed_model.insert_between_line(
-                                    old_caret_pos.line,
-                                    old_caret_pos.column + nodes::COLON.len(),
-                                    nodes::BLANK_PLACEHOLDER,
-                                    record_blank_node_id,
+                                    &vec![record_colon_node_id, record_blank_node_id],
                                 )?;
 
                                 Ok(InputOutcome::Accepted)

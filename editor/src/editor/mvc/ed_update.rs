@@ -103,6 +103,10 @@ impl<'a> EdModel<'a> {
         Ok(grid_node_map)
     }
 
+    pub fn add_mark_node(&mut self, node: MarkupNode) -> MarkNodeId {
+        self.markup_node_pool.add(node)
+    }
+
     fn build_grid_node_map(
         node_id: MarkNodeId,
         grid_node_map: &mut GridNodeMap,
@@ -916,7 +920,7 @@ pub mod test_ed_update {
         new_char_seq: &str,
     ) -> Result<(), String> {
         let test_arena = Bump::new();
-        let code_str = BumpString::from_str_in(&pre_lines.join("").replace("┃", ""), &test_arena);
+        let code_str = BumpString::from_str_in(&pre_lines.join("\n").replace("┃", ""), &test_arena);
 
         let mut model_refs = init_model_refs();
 
@@ -1639,47 +1643,6 @@ pub mod test_ed_update {
     }
 
     #[test]
-    fn test_multi_elt_list() -> Result<(), String> {
-        assert_insert_seq(&["┃"], &["[ 0, 1┃ ]"], "[0,1")?;
-        assert_insert_seq(&["┃"], &["[ 987, 6543, 210┃ ]"], "[987,6543,210")?;
-
-        assert_insert_seq(
-            &["┃"],
-            &["[ \"a\", \"bcd\", \"EFGH┃\" ]"],
-            "[\"a🡲,\"bcd🡲,\"EFGH",
-        )?;
-
-        assert_insert_seq(
-            &["┃"],
-            &["[ { a: 1 }, { b: 23 }, { c: 456┃ } ]"],
-            "[{a:1🡲🡲,{b:23🡲🡲,{c:456",
-        )?;
-
-        assert_insert_seq(&["┃"], &["[ [ 1 ], [ 23 ], [ 456┃ ] ]"], "[[1🡲🡲,[23🡲🡲,[456")?;
-
-        // insert element in between
-        assert_insert_seq(&["┃"], &["[ 0, 2┃, 1 ]"], "[0,1🡰🡰🡰,2")?;
-        assert_insert_seq(&["┃"], &["[ 0, 2, 3┃, 1 ]"], "[0,1🡰🡰🡰,2,3")?;
-        assert_insert_seq(&["┃"], &["[ 0, 3┃, 2, 1 ]"], "[0,1🡰🡰🡰,2🡰🡰🡰,3")?;
-
-        assert_insert_seq(
-            &["┃"],
-            &["[ \"abc\", \"f┃\", \"de\" ]"],
-            "[\"abc🡲,\"de🡰🡰🡰🡰🡰,\"f",
-        )?;
-
-        assert_insert_seq(&["┃"], &["[ [ 0 ], [ 2┃ ], [ 1 ] ]"], "[[0🡲🡲,[1🡰🡰🡰🡰🡰,[2")?;
-
-        assert_insert_seq(
-            &["┃"],
-            &["[ { a: 0 }, { a: 2┃ }, { a: 1 } ]"],
-            "[{a:0🡲🡲,{a:1🡰🡰🡰🡰🡰🡰🡰🡰,{a:2",
-        )?;
-
-        Ok(())
-    }
-
-    #[test]
     fn test_ignore_single_elt_list() -> Result<(), String> {
         assert_insert_seq_ignore(&["┃[  ]"], IGNORE_CHARS)?;
         assert_insert_seq_ignore(&["[  ]┃"], IGNORE_CHARS)?;
@@ -1728,6 +1691,47 @@ pub mod test_ed_update {
     }
 
     #[test]
+    fn test_multi_elt_list() -> Result<(), String> {
+        assert_insert_seq(&["┃"], &["[ 0, 1┃ ]"], "[0,1")?;
+        assert_insert_seq(&["┃"], &["[ 987, 6543, 210┃ ]"], "[987,6543,210")?;
+
+        assert_insert_seq(
+            &["┃"],
+            &["[ \"a\", \"bcd\", \"EFGH┃\" ]"],
+            "[\"a🡲,\"bcd🡲,\"EFGH",
+        )?;
+
+        assert_insert_seq(
+            &["┃"],
+            &["[ { a: 1 }, { b: 23 }, { c: 456┃ } ]"],
+            "[{a:1🡲🡲,{b:23🡲🡲,{c:456",
+        )?;
+
+        assert_insert_seq(&["┃"], &["[ [ 1 ], [ 23 ], [ 456┃ ] ]"], "[[1🡲🡲,[23🡲🡲,[456")?;
+
+        // insert element in between
+        assert_insert_seq(&["┃"], &["[ 0, 2┃, 1 ]"], "[0,1🡰🡰🡰,2")?;
+        assert_insert_seq(&["┃"], &["[ 0, 2, 3┃, 1 ]"], "[0,1🡰🡰🡰,2,3")?;
+        assert_insert_seq(&["┃"], &["[ 0, 3┃, 2, 1 ]"], "[0,1🡰🡰🡰,2🡰🡰🡰,3")?;
+
+        assert_insert_seq(
+            &["┃"],
+            &["[ \"abc\", \"f┃\", \"de\" ]"],
+            "[\"abc🡲,\"de🡰🡰🡰🡰🡰,\"f",
+        )?;
+
+        assert_insert_seq(&["┃"], &["[ [ 0 ], [ 2┃ ], [ 1 ] ]"], "[[0🡲🡲,[1🡰🡰🡰🡰🡰,[2")?;
+
+        assert_insert_seq(
+            &["┃"],
+            &["[ { a: 0 }, { a: 2┃ }, { a: 1 } ]"],
+            "[{a:0🡲🡲,{a:1🡰🡰🡰🡰🡰🡰🡰🡰,{a:2",
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
     fn test_ignore_multi_elt_list() -> Result<(), String> {
         assert_insert_seq_ignore(&["┃[ 0, 1 ]"], IGNORE_CHARS)?;
         assert_insert_seq_ignore(&["[ 0, 1 ]┃"], IGNORE_CHARS)?;
@@ -1768,6 +1772,31 @@ pub mod test_ed_update {
         assert_insert_seq_ignore(&["[ [ 0 ], [┃ 1 ] ]"], IGNORE_CHARS)?;
         assert_insert_seq_ignore(&["[ [ 0 ], [ 1 ]┃ ]"], IGNORE_CHARS)?;
         assert_insert_seq_ignore(&["[ [ 0 ], [ 1 ┃] ]"], IGNORE_CHARS)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_let_value() -> Result<(), String> {
+        assert_insert(&["┃"], &["a┃ =  "], 'a')?;
+        assert_insert(&["┃"], &["m┃ =  "], 'm')?;
+        assert_insert(&["┃"], &["z┃ =  "], 'z')?;
+
+        assert_insert_seq(&["┃"], &["ab┃ =  "], "ab")?;
+        assert_insert_seq(&["┃"], &["mainVal┃ =  "], "mainVal")?;
+        assert_insert_seq(&["┃"], &["camelCase123┃ =  "], "camelCase123")?;
+        assert_insert_seq(&["┃"], &["c137┃ =  "], "c137")?;
+        assert_insert_seq(&["┃"], &["c137Bb┃ =  "], "c137Bb")?;
+        assert_insert_seq(&["┃"], &["bBbb┃ =  "], "bBbb")?;
+        assert_insert_seq(&["┃"], &["cC0Z┃ =  "], "cC0Z")?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ignore_let_value() -> Result<(), String> {
+        assert_insert_seq_ignore(&["a ┃= 0","a"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["a =┃ 0", "a"], IGNORE_CHARS)?;
 
         Ok(())
     }

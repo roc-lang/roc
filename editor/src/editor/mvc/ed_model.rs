@@ -64,7 +64,10 @@ pub fn init_model<'a>(
     let mut markup_node_pool = SlowPool::new();
 
     let markup_root_id = if code_str.is_empty() {
-        new_blank_mn(ast_root_id, None, &mut markup_node_pool)
+        markup_node_pool
+            .add(
+                new_blank_mn(ast_root_id, None)
+            )
     } else {
         let ast_root = &module.env.pool.get(ast_root_id);
 
@@ -74,7 +77,8 @@ pub fn init_model<'a>(
             ast_root,
             ast_root_id,
             &mut markup_node_pool,
-        );
+            interns
+        )?;
         set_parent_for_all(temp_markup_root_id, &mut markup_node_pool);
 
         temp_markup_root_id

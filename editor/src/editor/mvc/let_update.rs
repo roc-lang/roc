@@ -5,7 +5,6 @@ use crate::editor::ed_error::{EdResult};
 use crate::editor::markup::attribute::Attributes;
 use crate::editor::markup::common_nodes::new_blank_mn;
 use crate::editor::markup::common_nodes::new_equals_mn;
-use crate::editor::markup::nodes;
 use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
@@ -74,19 +73,17 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
         parent_id_opt: Some(curr_mark_node_id),
     };
 
-    let val_name_mn_id = ed_model.markup_node_pool.add(val_name_mark_node);
+    let val_name_mn_id = ed_model.add_mark_node(val_name_mark_node);
 
-    let equals_mn_id = new_equals_mn(ast_node_id, Some(curr_mark_node_id), &mut ed_model.markup_node_pool);
+    let equals_mn_id = ed_model.add_mark_node(new_equals_mn(ast_node_id, Some(curr_mark_node_id)));
 
-    let body_mn_id = new_blank_mn(body_id, Some(curr_mark_node_id), &mut ed_model.markup_node_pool);
+    let body_mn_id = ed_model.add_mark_node(new_blank_mn(body_id, Some(curr_mark_node_id)));
 
     let val_mark_node = MarkupNode::Nested {
         ast_node_id,
         children_ids: vec![val_name_mn_id, equals_mn_id, body_mn_id],
         parent_id_opt,
     };
-
-    let child_nodes_content = val_mark_node.get_nested_content(&ed_model.markup_node_pool);
 
     if is_blank_node {
         ed_model
@@ -104,14 +101,6 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
             old_caret_pos.line,
             old_caret_pos.column,
             &vec![val_name_mn_id, equals_mn_id, body_mn_id],
-        )?;
-
-        // for Blank node in body
-        ed_model.insert_between_line(
-            old_caret_pos.line,
-            old_caret_pos.column + child_nodes_content.len(),
-            nodes::BLANK_PLACEHOLDER,
-            body_mn_id,
         )?;
 
         Ok(InputOutcome::Accepted)

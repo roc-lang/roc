@@ -132,6 +132,17 @@ pub enum EdError {
     },
 
     #[snafu(display(
+        "UnexpectedPattern2Variant: required a {} at this position, Pattern2 was a {}.",
+        required_pattern2,
+        encountered_pattern2,
+    ))]
+    UnexpectedPattern2Variant {
+        required_pattern2: String,
+        encountered_pattern2: String,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display(
         "UnexpectedEmptyPoolVec: expected PoolVec {} to have at least one element.",
         descriptive_vec_name
     ))]
