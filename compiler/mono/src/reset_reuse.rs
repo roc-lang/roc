@@ -452,6 +452,33 @@ fn function_d<'a, 'i>(
     function_d_finalize(env, x, c, temp)
 }
 
+fn function_r_branch_body<'a, 'i>(
+    env: &mut Env<'a, 'i>,
+    info: &BranchInfo<'a>,
+    body: &'a Stmt<'a>,
+) -> &'a Stmt<'a> {
+    let temp = function_r(env, body);
+
+    match info {
+        BranchInfo::None => temp,
+        BranchInfo::Constructor {
+            scrutinee,
+            layout,
+            tag_id,
+        } => match layout {
+            Layout::Union(UnionLayout::NonRecursive(_)) => temp,
+            Layout::Union(union_layout) if !union_layout.tag_is_null(*tag_id) => {
+                let ctor_info = CtorInfo {
+                    layout: *union_layout,
+                    id: *tag_id,
+                };
+                function_d(env, *scrutinee, &ctor_info, temp)
+            }
+            _ => temp,
+        },
+    }
+}
+
 fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
     use Stmt::*;
 
@@ -468,52 +495,15 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
             let mut new_branches = Vec::with_capacity_in(branches.len(), arena);
 
             for (tag, info, body) in branches.iter() {
-                let temp = function_r(env, body);
-
-                let new_body = match info {
-                    BranchInfo::None => temp,
-                    BranchInfo::Constructor {
-                        scrutinee,
-                        layout,
-                        tag_id,
-                    } => match layout {
-                        Layout::Union(UnionLayout::NonRecursive(_)) => temp,
-                        Layout::Union(union_layout) if !union_layout.tag_is_null(*tag_id) => {
-                            let ctor_info = CtorInfo {
-                                layout: *union_layout,
-                                id: *tag_id,
-                            };
-                            function_d(env, *scrutinee, &ctor_info, temp)
-                        }
-                        _ => temp,
-                    },
-                };
+                let new_body = function_r_branch_body(env, info, body);
 
                 new_branches.push((*tag, info.clone(), new_body.clone()));
             }
 
             let new_default = {
                 let (info, body) = default_branch;
-                let temp = function_r(env, body);
 
-                let new_body = match info {
-                    BranchInfo::None => temp,
-                    BranchInfo::Constructor {
-                        scrutinee,
-                        layout,
-                        tag_id,
-                    } => match layout {
-                        Layout::Union(UnionLayout::NonRecursive(_)) => temp,
-                        Layout::Union(union_layout) if !union_layout.tag_is_null(*tag_id) => {
-                            let ctor_info = CtorInfo {
-                                layout: *union_layout,
-                                id: *tag_id,
-                            };
-                            function_d(env, *scrutinee, &ctor_info, temp)
-                        }
-                        _ => temp,
-                    },
-                };
+                let new_body = function_r_branch_body(env, info, body);
 
                 (info.clone(), new_body)
             };
