@@ -10,7 +10,7 @@ env:
 
 jobs:
   prep-dependency-container:
-    name: cd cli; cargo criterion
+    name: benchmark roc programs
     runs-on: [self-hosted, i7-6700K]
     timeout-minutes: 60
     env:
