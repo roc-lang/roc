@@ -1664,6 +1664,62 @@ pub fn build_tag<'a, 'ctx, 'env>(
     }
 }
 
+fn tag_pointer_set_tag_id<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    tag_id: u8,
+    pointer: PointerValue<'ctx>,
+) -> PointerValue<'ctx> {
+    // we only have 3 bits, so can encode only 0..7
+    debug_assert!(tag_id < 8);
+
+    let ptr_int = env.ptr_int();
+
+    let as_int = env.builder.build_ptr_to_int(pointer, ptr_int, "to_int");
+
+    let tag_id_intval = ptr_int.const_int(tag_id as u64, false);
+    let combined = env.builder.build_or(as_int, tag_id_intval, "store_tag_id");
+
+    env.builder
+        .build_int_to_ptr(combined, pointer.get_type(), "to_ptr")
+}
+
+fn tag_pointer_read_tag_id<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    pointer: PointerValue<'ctx>,
+) -> IntValue<'ctx> {
+    let mask: u64 = 0b0000_0111;
+
+    let ptr_int = env.ptr_int();
+
+    let as_int = env.builder.build_ptr_to_int(pointer, ptr_int, "to_int");
+    let mask_intval = env.ptr_int().const_int(mask, false);
+
+    let masked = env.builder.build_and(as_int, mask_intval, "mask");
+
+    env.builder
+        .build_int_cast(masked, env.context.i8_type(), "to_u8")
+}
+
+fn tag_pointer_clear_tag_id<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    pointer: PointerValue<'ctx>,
+) -> PointerValue<'ctx> {
+    let ptr_int = env.ptr_int();
+
+    let as_int = env.builder.build_ptr_to_int(pointer, ptr_int, "to_int");
+
+    let mask = {
+        let a = env.ptr_int().const_all_ones();
+        let tag_id_bits = env.ptr_int().const_int(3, false);
+        env.builder.build_left_shift(a, tag_id_bits, "make_mask")
+    };
+
+    let masked = env.builder.build_and(as_int, mask, "masked");
+
+    env.builder
+        .build_int_to_ptr(masked, pointer.get_type(), "to_ptr")
+}
+
 fn allocate_tag<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
