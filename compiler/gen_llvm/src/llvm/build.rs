@@ -1154,13 +1154,15 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     let tag_id_type =
                         basic_type_from_layout(env, &union_layout.tag_id_layout()).into_int_type();
 
+                    let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
+
                     lookup_at_index_ptr2(
                         env,
                         tag_id_type,
                         union_layout,
                         field_layouts,
                         *index as usize,
-                        argument.into_pointer_value(),
+                        ptr,
                     )
                 }
                 UnionLayout::NonNullableUnwrapped(field_layouts) => {
@@ -1413,7 +1415,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
                 builder.build_store(field_ptr, field_val);
             }
 
-            raw_data_ptr.into()
+            tag_pointer_set_tag_id(env, tag_id, raw_data_ptr).into()
         }
         UnionLayout::NonNullableUnwrapped(fields) => {
             debug_assert_eq!(union_size, 1);
@@ -1683,7 +1685,7 @@ fn tag_pointer_set_tag_id<'a, 'ctx, 'env>(
         .build_int_to_ptr(combined, pointer.get_type(), "to_ptr")
 }
 
-fn tag_pointer_read_tag_id<'a, 'ctx, 'env>(
+pub fn tag_pointer_read_tag_id<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     pointer: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
@@ -1700,7 +1702,7 @@ fn tag_pointer_read_tag_id<'a, 'ctx, 'env>(
         .build_int_cast(masked, env.context.i8_type(), "to_u8")
 }
 
-fn tag_pointer_clear_tag_id<'a, 'ctx, 'env>(
+pub fn tag_pointer_clear_tag_id<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     pointer: PointerValue<'ctx>,
 ) -> PointerValue<'ctx> {
@@ -1785,7 +1787,11 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
 
             get_tag_id_non_recursive(env, tag)
         }
-        UnionLayout::Recursive(_) => get_tag_id_wrapped(env, argument.into_pointer_value()),
+        UnionLayout::Recursive(_) => {
+            // TODO check that all tag ids fit into 2/3 bits
+            // get_tag_id_wrapped( env, tag_pointer_clear_tag_id(env, argument.into_pointer_value()),)
+            tag_pointer_read_tag_id(env, argument.into_pointer_value())
+        }
         UnionLayout::NonNullableUnwrapped(_) => tag_id_int_type.const_zero(),
         UnionLayout::NullableWrapped { nullable_id, .. } => {
             let argument_ptr = argument.into_pointer_value();
