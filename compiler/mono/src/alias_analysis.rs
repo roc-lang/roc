@@ -23,7 +23,7 @@ pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
     func_name_bytes_help(proc.name, proc.args.iter().map(|x| x.0), proc.ret_layout)
 }
 
-const DEBUG: bool = true;
+const DEBUG: bool = false;
 const SIZE: usize = if DEBUG { 50 } else { 16 };
 
 #[derive(Debug, Clone, Copy, Hash)]
