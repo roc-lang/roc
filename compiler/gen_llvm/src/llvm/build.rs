@@ -1156,6 +1156,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     lookup_at_index_ptr2(
                         env,
+                        union_layout,
                         tag_id_type,
                         union_layout,
                         field_layouts,
@@ -1197,6 +1198,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     lookup_at_index_ptr2(
                         env,
+                        union_layout,
                         tag_id_type,
                         union_layout,
                         field_layouts,
@@ -1822,6 +1824,7 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
 
 fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    union_layout: &UnionLayout<'a>,
     tag_id_type: IntType<'ctx>,
     union_layout: &UnionLayout<'a>,
     field_layouts: &[Layout<'_>],
