@@ -4201,8 +4201,18 @@ fn convert_tag_union<'a>(
                         layouts.push(arg_layouts);
                     }
 
+                    // we must derive the union layout from the whole_var, building it up
+                    // from `layouts` would unroll recursive tag unions, and that leads to
+                    // problems down the line because we hash layouts and an unrolled
+                    // version is not the same as the minimal version.
                     debug_assert!(layouts.len() > 1);
-                    let union_layout = UnionLayout::Recursive(layouts.into_bump_slice());
+                    let union_layout = match return_on_layout_error!(
+                        env,
+                        layout_cache.from_var(env.arena, variant_var, env.subs)
+                    ) {
+                        Layout::Union(ul) => ul,
+                        _ => unreachable!(),
+                    };
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
@@ -7095,6 +7105,7 @@ fn from_can_pattern_help<'a>(
                                 temp
                             };
 
+                            debug_assert!(layouts.len() > 1);
                             let layout = UnionLayout::NonRecursive(layouts.into_bump_slice());
 
                             Pattern::AppliedTag {
@@ -7152,8 +7163,16 @@ fn from_can_pattern_help<'a>(
                                 temp
                             };
 
+                            // we must derive the union layout from the whole_var, building it up
+                            // from `layouts` would unroll recursive tag unions, and that leads to
+                            // problems down the line because we hash layouts and an unrolled
+                            // version is not the same as the minimal version.
                             debug_assert!(layouts.len() > 1);
-                            let layout = UnionLayout::Recursive(layouts.into_bump_slice());
+                            let layout =
+                                match layout_cache.from_var(env.arena, *whole_var, env.subs) {
+                                    Ok(Layout::Union(ul)) => ul,
+                                    _ => unreachable!(),
+                                };
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
