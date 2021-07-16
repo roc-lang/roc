@@ -23,7 +23,7 @@ pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
     func_name_bytes_help(proc.name, proc.args.iter().map(|x| x.0), proc.ret_layout)
 }
 
-const DEBUG: bool = false;
+const DEBUG: bool = true;
 const SIZE: usize = if DEBUG { 50 } else { 16 };
 
 #[derive(Debug, Clone, Copy, Hash)]
@@ -184,7 +184,12 @@ where
             let mut builder = TypeDefBuilder::new();
 
             let variant_types = build_variant_types(&mut builder, &union_layout)?;
-            let root_type = builder.add_union_type(&variant_types)?;
+            let root_type = if let UnionLayout::NonNullableUnwrapped(_) = union_layout {
+                debug_assert_eq!(variant_types.len(), 1);
+                variant_types[0]
+            } else {
+                builder.add_union_type(&variant_types)?
+            };
 
             let type_def = builder.build(root_type)?;
 
@@ -922,6 +927,7 @@ fn build_variant_types(
     Ok(result)
 }
 
+#[allow(dead_code)]
 fn worst_case_type(context: &mut impl TypeContext) -> Result<TypeId> {
     let cell = context.add_heap_cell_type();
     context.add_bag_type(cell)
@@ -970,9 +976,17 @@ fn expr_spec<'a>(
                     builder.add_make_named(block, MOD_APP, type_name, union_id)
                 }
                 UnionLayout::NonNullableUnwrapped(_) => {
-                    let result_type = worst_case_type(builder)?;
-                    let value_id = build_tuple_value(builder, env, block, arguments)?;
-                    builder.add_unknown_with(block, &[value_id], result_type)
+                    let data_id = build_tuple_value(builder, env, block, arguments)?;
+                    let cell_id = builder.add_new_heap_cell(block)?;
+
+                    let value_id = builder.add_make_tuple(block, &[cell_id, data_id])?;
+
+                    let type_name_bytes = recursive_tag_union_name_bytes(tag_layout).as_bytes();
+                    let type_name = TypeName(&type_name_bytes);
+
+                    env.type_names.insert(*tag_layout);
+
+                    builder.add_make_named(block, MOD_APP, type_name, value_id)
                 }
                 UnionLayout::NullableWrapped { nullable_id, .. } => {
                     let union_id = if *tag_id == *nullable_id as u8 {
@@ -1051,12 +1065,25 @@ fn expr_spec<'a>(
 
                 builder.add_get_tuple_field(block, tuple_value_id, index)
             }
-            _ => {
-                // for the moment recursive tag unions don't quite work
-                let value_id = env.symbols[structure];
-                let result_type =
-                    layout_spec_help(builder, layout, &WhenRecursive::Loop(*union_layout))?;
-                builder.add_unknown_with(block, &[value_id], result_type)
+            UnionLayout::NonNullableUnwrapped { .. } => {
+                let index = (*index) as u32;
+                debug_assert!(*tag_id == 0);
+
+                let tag_value_id = env.symbols[structure];
+
+                let type_name_bytes = recursive_tag_union_name_bytes(&union_layout).as_bytes();
+                let type_name = TypeName(&type_name_bytes);
+
+                let variant_id =
+                    builder.add_unwrap_named(block, MOD_APP, type_name, tag_value_id)?;
+
+                // we're reading from this value, so touch the heap cell
+                let heap_cell = builder.add_get_tuple_field(block, variant_id, 0)?;
+                builder.add_touch(block, heap_cell)?;
+
+                let tuple_value_id = builder.add_get_tuple_field(block, variant_id, 1)?;
+
+                builder.add_get_tuple_field(block, tuple_value_id, index)
             }
         },
         StructAtIndex {
@@ -1144,32 +1171,30 @@ fn layout_spec_help(
                 UnionLayout::NonRecursive(_) => builder.add_union_type(&variant_types),
                 UnionLayout::Recursive(_)
                 | UnionLayout::NullableUnwrapped { .. }
-                | UnionLayout::NullableWrapped { .. } => {
+                | UnionLayout::NullableWrapped { .. }
+                | UnionLayout::NonNullableUnwrapped(_) => {
                     let type_name_bytes = recursive_tag_union_name_bytes(&union_layout).as_bytes();
                     let type_name = TypeName(&type_name_bytes);
 
                     Ok(builder.add_named_type(MOD_APP, type_name))
                 }
-                UnionLayout::NonNullableUnwrapped(_) => worst_case_type(builder),
             }
         }
         RecursivePointer => match when_recursive {
             WhenRecursive::Unreachable => {
-                // TODO should be unreachable
-                // unreachable!(),
-                worst_case_type(builder)
+                unreachable!()
             }
             WhenRecursive::Loop(union_layout) => match union_layout {
                 UnionLayout::NonRecursive(_) => unreachable!(),
                 UnionLayout::Recursive(_)
                 | UnionLayout::NullableUnwrapped { .. }
-                | UnionLayout::NullableWrapped { .. } => {
+                | UnionLayout::NullableWrapped { .. }
+                | UnionLayout::NonNullableUnwrapped(_) => {
                     let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();
                     let type_name = TypeName(&type_name_bytes);
 
                     Ok(builder.add_named_type(MOD_APP, type_name))
                 }
-                UnionLayout::NonNullableUnwrapped(_) => worst_case_type(builder),
             },
         },
         Closure(_, lambda_set, _) => layout_spec_help(
