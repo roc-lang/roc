@@ -954,31 +954,15 @@ fn expr_spec<'a>(
         } => {
             let variant_types = build_variant_types(builder, tag_layout)?;
 
-            match tag_layout {
+            let data_id = build_tuple_value(builder, env, block, arguments)?;
+            let cell_id = builder.add_new_heap_cell(block)?;
+
+            let value_id = match tag_layout {
                 UnionLayout::NonRecursive(_) => {
                     let value_id = build_tuple_value(builder, env, block, arguments)?;
-                    builder.add_make_union(block, &variant_types, *tag_id as u32, value_id)
-                }
-                UnionLayout::Recursive(_) => {
-                    let data_id = build_tuple_value(builder, env, block, arguments)?;
-                    let cell_id = builder.add_new_heap_cell(block)?;
-
-                    let value_id = builder.add_make_tuple(block, &[cell_id, data_id])?;
-
-                    let union_id =
-                        builder.add_make_union(block, &variant_types, *tag_id as u32, value_id)?;
-
-                    let type_name_bytes = recursive_tag_union_name_bytes(tag_layout).as_bytes();
-                    let type_name = TypeName(&type_name_bytes);
-
-                    env.type_names.insert(*tag_layout);
-
-                    builder.add_make_named(block, MOD_APP, type_name, union_id)
+                    return builder.add_make_union(block, &variant_types, *tag_id as u32, value_id);
                 }
                 UnionLayout::NonNullableUnwrapped(_) => {
-                    let data_id = build_tuple_value(builder, env, block, arguments)?;
-                    let cell_id = builder.add_new_heap_cell(block)?;
-
                     let value_id = builder.add_make_tuple(block, &[cell_id, data_id])?;
 
                     let type_name_bytes = recursive_tag_union_name_bytes(tag_layout).as_bytes();
@@ -986,49 +970,34 @@ fn expr_spec<'a>(
 
                     env.type_names.insert(*tag_layout);
 
-                    builder.add_make_named(block, MOD_APP, type_name, value_id)
+                    return builder.add_make_named(block, MOD_APP, type_name, value_id);
                 }
+                UnionLayout::Recursive(_) => builder.add_make_tuple(block, &[cell_id, data_id])?,
                 UnionLayout::NullableWrapped { nullable_id, .. } => {
-                    let union_id = if *tag_id == *nullable_id as u8 {
-                        let value_id = builder.add_make_tuple(block, &[])?;
-                        builder.add_make_union(block, &variant_types, *tag_id as u32, value_id)?
+                    if *tag_id == *nullable_id as u8 {
+                        data_id
                     } else {
-                        let data_id = build_tuple_value(builder, env, block, arguments)?;
-                        let cell_id = builder.add_new_heap_cell(block)?;
-
-                        let value_id = builder.add_make_tuple(block, &[cell_id, data_id])?;
-
-                        builder.add_make_union(block, &variant_types, *tag_id as u32, value_id)?
-                    };
-
-                    let type_name_bytes = recursive_tag_union_name_bytes(tag_layout).as_bytes();
-                    let type_name = TypeName(&type_name_bytes);
-
-                    env.type_names.insert(*tag_layout);
-
-                    builder.add_make_named(block, MOD_APP, type_name, union_id)
+                        builder.add_make_tuple(block, &[cell_id, data_id])?
+                    }
                 }
                 UnionLayout::NullableUnwrapped { nullable_id, .. } => {
-                    let union_id = if *tag_id == *nullable_id as u8 {
-                        let value_id = builder.add_make_tuple(block, &[])?;
-                        builder.add_make_union(block, &variant_types, *tag_id as u32, value_id)?
+                    if *tag_id == *nullable_id as u8 {
+                        data_id
                     } else {
-                        let data_id = build_tuple_value(builder, env, block, arguments)?;
-                        let cell_id = builder.add_new_heap_cell(block)?;
-
-                        let value_id = builder.add_make_tuple(block, &[cell_id, data_id])?;
-
-                        builder.add_make_union(block, &variant_types, *tag_id as u32, value_id)?
-                    };
-
-                    let type_name_bytes = recursive_tag_union_name_bytes(tag_layout).as_bytes();
-                    let type_name = TypeName(&type_name_bytes);
-
-                    env.type_names.insert(*tag_layout);
-
-                    builder.add_make_named(block, MOD_APP, type_name, union_id)
+                        builder.add_make_tuple(block, &[cell_id, data_id])?
+                    }
                 }
-            }
+            };
+
+            let union_id =
+                builder.add_make_union(block, &variant_types, *tag_id as u32, value_id)?;
+
+            let type_name_bytes = recursive_tag_union_name_bytes(tag_layout).as_bytes();
+            let type_name = TypeName(&type_name_bytes);
+
+            env.type_names.insert(*tag_layout);
+
+            builder.add_make_named(block, MOD_APP, type_name, union_id)
         }
         Struct(fields) => build_tuple_value(builder, env, block, fields),
         UnionAtIndex {
