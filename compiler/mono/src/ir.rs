@@ -4178,7 +4178,6 @@ fn convert_tag_union<'a>(
             let field_symbols_temp = sorted_field_symbols(env, procs, layout_cache, args);
 
             let field_symbols;
-            let opt_tag_id_symbol;
 
             // we must derive the union layout from the whole_var, building it up
             // from `layouts` would unroll recursive tag unions, and that leads to
@@ -4196,7 +4195,6 @@ fn convert_tag_union<'a>(
             let (tag, union_layout) = match variant {
                 Recursive { sorted_tag_layouts } => {
                     debug_assert!(sorted_tag_layouts.len() > 1);
-                    opt_tag_id_symbol = None;
 
                     field_symbols = {
                         let mut temp = Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
@@ -4229,8 +4227,6 @@ fn convert_tag_union<'a>(
                 } => {
                     debug_assert_eq!(tag_name, wrapped_tag_name);
 
-                    opt_tag_id_symbol = None;
-
                     field_symbols = {
                         let mut temp = Vec::with_capacity_in(field_symbols_temp.len(), arena);
 
@@ -4250,8 +4246,6 @@ fn convert_tag_union<'a>(
                     (tag, union_layout)
                 }
                 NonRecursive { sorted_tag_layouts } => {
-                    opt_tag_id_symbol = None;
-
                     field_symbols = {
                         let mut temp = Vec::with_capacity_in(field_symbols_temp.len(), arena);
 
@@ -4280,8 +4274,6 @@ fn convert_tag_union<'a>(
                 NullableWrapped {
                     sorted_tag_layouts, ..
                 } => {
-                    opt_tag_id_symbol = None;
-
                     field_symbols = {
                         let mut temp = Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
 
@@ -4308,10 +4300,6 @@ fn convert_tag_union<'a>(
                     (tag, union_layout)
                 }
                 NullableUnwrapped { .. } => {
-                    // FIXME drop tag
-                    let tag_id_symbol = env.unique_symbol();
-                    opt_tag_id_symbol = Some(tag_id_symbol);
-
                     field_symbols = {
                         let mut temp = Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
 
@@ -4332,26 +4320,14 @@ fn convert_tag_union<'a>(
                 }
             };
 
-            let mut stmt = Stmt::Let(assigned, tag, Layout::Union(union_layout), hole);
+            let stmt = Stmt::Let(assigned, tag, Layout::Union(union_layout), hole);
             let iter = field_symbols_temp
                 .into_iter()
                 .map(|x| x.2 .0)
                 .rev()
                 .zip(field_symbols.iter().rev());
 
-            stmt = assign_to_symbols(env, procs, layout_cache, iter, stmt);
-
-            if let Some(tag_id_symbol) = opt_tag_id_symbol {
-                // define the tag id
-                stmt = Stmt::Let(
-                    tag_id_symbol,
-                    Expr::Literal(Literal::Int(tag_id as i128)),
-                    union_layout.tag_id_layout(),
-                    arena.alloc(stmt),
-                );
-            }
-
-            stmt
+            assign_to_symbols(env, procs, layout_cache, iter, stmt)
         }
     }
 }
