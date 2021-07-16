@@ -7005,6 +7005,15 @@ fn from_can_pattern_help<'a>(
                         temp
                     };
 
+                    // we must derive the union layout from the whole_var, building it up
+                    // from `layouts` would unroll recursive tag unions, and that leads to
+                    // problems down the line because we hash layouts and an unrolled
+                    // version is not the same as the minimal version.
+                    let layout = match layout_cache.from_var(env.arena, *whole_var, env.subs) {
+                        Ok(Layout::Union(ul)) => ul,
+                        _ => unreachable!(),
+                    };
+
                     use WrappedVariant::*;
                     match variant {
                         NonRecursive {
@@ -7048,19 +7057,6 @@ fn from_can_pattern_help<'a>(
                                     *layout,
                                 ));
                             }
-
-                            let layouts: Vec<&'a [Layout<'a>]> = {
-                                let mut temp = Vec::with_capacity_in(tags.len(), env.arena);
-
-                                for (_, arg_layouts) in tags.into_iter() {
-                                    temp.push(*arg_layouts);
-                                }
-
-                                temp
-                            };
-
-                            debug_assert!(layouts.len() > 1);
-                            let layout = UnionLayout::NonRecursive(layouts.into_bump_slice());
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
@@ -7107,27 +7103,6 @@ fn from_can_pattern_help<'a>(
                                 ));
                             }
 
-                            let layouts: Vec<&'a [Layout<'a>]> = {
-                                let mut temp = Vec::with_capacity_in(tags.len(), env.arena);
-
-                                for (_, arg_layouts) in tags.into_iter() {
-                                    temp.push(*arg_layouts);
-                                }
-
-                                temp
-                            };
-
-                            // we must derive the union layout from the whole_var, building it up
-                            // from `layouts` would unroll recursive tag unions, and that leads to
-                            // problems down the line because we hash layouts and an unrolled
-                            // version is not the same as the minimal version.
-                            debug_assert!(layouts.len() > 1);
-                            let layout =
-                                match layout_cache.from_var(env.arena, *whole_var, env.subs) {
-                                    Ok(Layout::Union(ul)) => ul,
-                                    _ => unreachable!(),
-                                };
-
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
                                 tag_id: tag_id as u8,
@@ -7170,8 +7145,6 @@ fn from_can_pattern_help<'a>(
                                     *layout,
                                 ));
                             }
-
-                            let layout = UnionLayout::NonNullableUnwrapped(fields);
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
@@ -7246,21 +7219,6 @@ fn from_can_pattern_help<'a>(
                                 ));
                             }
 
-                            let layouts: Vec<&'a [Layout<'a>]> = {
-                                let mut temp = Vec::with_capacity_in(tags.len(), env.arena);
-
-                                for (_, arg_layouts) in tags.into_iter() {
-                                    temp.push(*arg_layouts);
-                                }
-
-                                temp
-                            };
-
-                            let layout = UnionLayout::NullableWrapped {
-                                nullable_id,
-                                other_tags: layouts.into_bump_slice(),
-                            };
-
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
                                 tag_id: tag_id as u8,
@@ -7316,11 +7274,6 @@ fn from_can_pattern_help<'a>(
                                     *layout,
                                 ));
                             }
-
-                            let layout = UnionLayout::NullableUnwrapped {
-                                nullable_id,
-                                other_fields,
-                            };
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),

@@ -21,8 +21,8 @@ procedure Test.3 (Test.4):
     jump Test.13 Test.4;
 
 procedure Test.0 ():
-    let Test.30 = 3i64;
-    let Test.26 = Just Test.30;
+    let Test.28 = 3i64;
+    let Test.26 = Just Test.28;
     let Test.27 = Nil ;
     let Test.12 = Cons Test.26 Test.27;
     let Test.11 = CallByName Test.3 Test.12;
