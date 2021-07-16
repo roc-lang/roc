@@ -4180,6 +4180,18 @@ fn convert_tag_union<'a>(
             let field_symbols;
             let opt_tag_id_symbol;
 
+            // we must derive the union layout from the whole_var, building it up
+            // from `layouts` would unroll recursive tag unions, and that leads to
+            // problems down the line because we hash layouts and an unrolled
+            // version is not the same as the minimal version.
+            let union_layout = match return_on_layout_error!(
+                env,
+                layout_cache.from_var(env.arena, variant_var, env.subs)
+            ) {
+                Layout::Union(ul) => ul,
+                _ => unreachable!(),
+            };
+
             use WrappedVariant::*;
             let (tag, union_layout) = match variant {
                 Recursive { sorted_tag_layouts } => {
@@ -4201,19 +4213,6 @@ fn convert_tag_union<'a>(
                         layouts.push(arg_layouts);
                     }
 
-                    // we must derive the union layout from the whole_var, building it up
-                    // from `layouts` would unroll recursive tag unions, and that leads to
-                    // problems down the line because we hash layouts and an unrolled
-                    // version is not the same as the minimal version.
-                    debug_assert!(layouts.len() > 1);
-                    let union_layout = match return_on_layout_error!(
-                        env,
-                        layout_cache.from_var(env.arena, variant_var, env.subs)
-                    ) {
-                        Layout::Union(ul) => ul,
-                        _ => unreachable!(),
-                    };
-
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
                         tag_name,
@@ -4225,8 +4224,8 @@ fn convert_tag_union<'a>(
                     (tag, union_layout)
                 }
                 NonNullableUnwrapped {
-                    fields,
                     tag_name: wrapped_tag_name,
+                    ..
                 } => {
                     debug_assert_eq!(tag_name, wrapped_tag_name);
 
@@ -4239,8 +4238,6 @@ fn convert_tag_union<'a>(
 
                         temp.into_bump_slice()
                     };
-
-                    let union_layout = UnionLayout::NonNullableUnwrapped(fields);
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
@@ -4270,8 +4267,6 @@ fn convert_tag_union<'a>(
                         layouts.push(arg_layouts);
                     }
 
-                    let union_layout = UnionLayout::NonRecursive(layouts.into_bump_slice());
-
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
                         tag_name,
@@ -4283,9 +4278,7 @@ fn convert_tag_union<'a>(
                     (tag, union_layout)
                 }
                 NullableWrapped {
-                    nullable_id,
-                    nullable_name: _,
-                    sorted_tag_layouts,
+                    sorted_tag_layouts, ..
                 } => {
                     opt_tag_id_symbol = None;
 
@@ -4304,11 +4297,6 @@ fn convert_tag_union<'a>(
                         layouts.push(arg_layouts);
                     }
 
-                    let union_layout = UnionLayout::NullableWrapped {
-                        nullable_id,
-                        other_tags: layouts.into_bump_slice(),
-                    };
-
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
                         tag_name,
@@ -4319,12 +4307,7 @@ fn convert_tag_union<'a>(
 
                     (tag, union_layout)
                 }
-                NullableUnwrapped {
-                    nullable_id,
-                    nullable_name: _,
-                    other_name: _,
-                    other_fields,
-                } => {
+                NullableUnwrapped { .. } => {
                     // FIXME drop tag
                     let tag_id_symbol = env.unique_symbol();
                     opt_tag_id_symbol = Some(tag_id_symbol);
@@ -4335,11 +4318,6 @@ fn convert_tag_union<'a>(
                         temp.extend(field_symbols_temp.iter().map(|r| r.1));
 
                         temp.into_bump_slice()
-                    };
-
-                    let union_layout = UnionLayout::NullableUnwrapped {
-                        nullable_id,
-                        other_fields,
                     };
 
                     let tag = Expr::Tag {
