@@ -2077,7 +2077,7 @@ fn update<'a>(
                     &mut state.procedures,
                 );
 
-                Proc::insert_refcount_operations(arena, &mut state.procedures);
+                // Proc::insert_refcount_operations(arena, &mut state.procedures);
 
                 // display the mono IR of the module, for debug purposes
                 if roc_mono::ir::PRETTY_PRINT_IR_SYMBOLS {
