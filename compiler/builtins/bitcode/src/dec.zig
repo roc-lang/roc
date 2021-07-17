@@ -201,9 +201,31 @@ pub const RocDec = extern struct {
         // We do `max_digits + 2` here because we need to account for a possible sign ('-') and the dot ('.').
         // Ideally, we'd use str_len here
         var str_bytes: [max_digits + 2]u8 = undefined;
-        _ = std.fmt.bufPrint(str_bytes[0..str_len], "{s}{s}.{s}{s}", .{ sign_slice, before_digits_slice, after_zeros_slice, after_digits_slice }) catch {
-            @panic("TODO runtime exception failing to print slices");
-        };
+
+        var i: usize = 0;
+
+        for (sign_slice) |c| {
+            str_bytes[i] = c;
+            i += 1;
+        }
+
+        for (before_digits_slice) |c| {
+            str_bytes[i] = c;
+            i += 1;
+        }
+
+        str_bytes[i] = '.';
+        i += 1;
+
+        for (after_zeros_slice) |c| {
+            str_bytes[i] = c;
+            i += 1;
+        }
+
+        for (after_digits_slice) |c| {
+            str_bytes[i] = c;
+            i += 1;
+        }
 
         return RocStr.init(&str_bytes, str_len);
     }
