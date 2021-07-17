@@ -1010,7 +1010,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             let else_block = ctx.append_basic_block(parent, "else_decref");
             let cont_block = ctx.append_basic_block(parent, "cont");
 
-            let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, tag_ptr);
+            let refcount_ptr =
+                PointerToRefcount::from_ptr_to_data(env, tag_pointer_clear_tag_id(env, tag_ptr));
             let is_unique = refcount_ptr.is_1(env);
 
             env.builder
@@ -1752,9 +1753,11 @@ fn allocate_tag<'a, 'ctx, 'env>(
             let reuse_ptr = {
                 env.builder.position_at_end(else_block);
 
+                let cleared = tag_pointer_clear_tag_id(env, ptr);
+
                 env.builder.build_unconditional_branch(cont_block);
 
-                ptr
+                cleared
             };
 
             {
