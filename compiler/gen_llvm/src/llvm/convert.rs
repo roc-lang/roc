@@ -19,9 +19,6 @@ fn basic_type_from_record<'a, 'ctx, 'env>(
         .as_basic_type_enum()
 }
 
-//pub const fn store_tag_id_in_pointer<'a, 'ctx, 'env>(
-//    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
-
 pub fn basic_type_from_layout<'a, 'ctx, 'env>(
     env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
     layout: &Layout<'_>,

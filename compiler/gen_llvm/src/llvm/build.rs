@@ -1198,13 +1198,14 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     let tag_id_type =
                         basic_type_from_layout(env, &union_layout.tag_id_layout()).into_int_type();
 
+                    let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
                     lookup_at_index_ptr2(
                         env,
                         tag_id_type,
                         union_layout,
                         field_layouts,
                         *index as usize,
-                        argument.into_pointer_value(),
+                        ptr,
                     )
                 }
                 UnionLayout::NullableUnwrapped {
