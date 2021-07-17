@@ -919,6 +919,34 @@ where
     struct_value.into_struct_value()
 }
 
+fn struct_pointer_from_fields<'a, 'ctx, 'env, I>(
+    env: &Env<'a, 'ctx, 'env>,
+    struct_type: StructType<'ctx>,
+    input_pointer: PointerValue<'ctx>,
+    values: I,
+) where
+    I: Iterator<Item = (usize, BasicValueEnum<'ctx>)>,
+{
+    let struct_ptr = env
+        .builder
+        .build_bitcast(
+            input_pointer,
+            struct_type.ptr_type(AddressSpace::Generic),
+            "struct_ptr",
+        )
+        .into_pointer_value();
+
+    // Insert field exprs into struct_val
+    for (index, field_val) in values {
+        let field_ptr = env
+            .builder
+            .build_struct_gep(struct_ptr, index as u32, "field_struct_gep")
+            .unwrap();
+
+        env.builder.build_store(field_ptr, field_val);
+    }
+}
+
 pub fn build_exp_expr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
@@ -1295,6 +1323,7 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
 
     // Create the struct_type
     let raw_data_ptr = allocate_tag(env, parent, reuse_allocation, union_layout, tags);
+    let struct_type = env.context.struct_type(&field_types, false);
 
     if union_layout.stores_tag_id_as_data(env.ptr_bytes) {
         let tag_id_ptr = builder
@@ -1310,45 +1339,21 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
             .build_struct_gep(raw_data_ptr, TAG_DATA_INDEX, "tag_data_index")
             .unwrap();
 
-        let struct_type = env.context.struct_type(&field_types, false);
-        let struct_ptr = env
-            .builder
-            .build_bitcast(
-                opaque_struct_ptr,
-                struct_type.ptr_type(AddressSpace::Generic),
-                "struct_ptr",
-            )
-            .into_pointer_value();
-
-        // Insert field exprs into struct_val
-        for (index, field_val) in field_vals.into_iter().enumerate() {
-            let field_ptr = builder
-                .build_struct_gep(struct_ptr, index as u32, "field_struct_gep")
-                .unwrap();
-
-            builder.build_store(field_ptr, field_val);
-        }
+        struct_pointer_from_fields(
+            env,
+            struct_type,
+            opaque_struct_ptr,
+            field_vals.into_iter().enumerate(),
+        );
 
         raw_data_ptr.into()
     } else {
-        let struct_type = env.context.struct_type(&field_types, false);
-        let struct_ptr = env
-            .builder
-            .build_bitcast(
-                raw_data_ptr,
-                struct_type.ptr_type(AddressSpace::Generic),
-                "struct_ptr",
-            )
-            .into_pointer_value();
-
-        // Insert field exprs into struct_val
-        for (index, field_val) in field_vals.into_iter().enumerate() {
-            let field_ptr = builder
-                .build_struct_gep(struct_ptr, index as u32, "field_struct_gep")
-                .unwrap();
-
-            builder.build_store(field_ptr, field_val);
-        }
+        struct_pointer_from_fields(
+            env,
+            struct_type,
+            raw_data_ptr,
+            field_vals.into_iter().enumerate(),
+        );
 
         tag_pointer_set_tag_id(env, tag_id, raw_data_ptr).into()
     }
@@ -1506,7 +1511,6 @@ pub fn build_tag<'a, 'ctx, 'env>(
             debug_assert_eq!(arguments.len(), fields.len());
 
             let ctx = env.context;
-            let builder = env.builder;
 
             // Determine types
             let num_fields = arguments.len() + 1;
@@ -1543,23 +1547,13 @@ pub fn build_tag<'a, 'ctx, 'env>(
                 reserve_with_refcount_union_as_block_of_memory(env, *union_layout, &[fields]);
 
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let struct_ptr = env
-                .builder
-                .build_bitcast(
-                    data_ptr,
-                    struct_type.ptr_type(AddressSpace::Generic),
-                    "block_of_memory_to_tag",
-                )
-                .into_pointer_value();
 
-            // Insert field exprs into struct_val
-            for (index, field_val) in field_vals.into_iter().enumerate() {
-                let field_ptr = builder
-                    .build_struct_gep(struct_ptr, index as u32, "struct_gep")
-                    .unwrap();
-
-                builder.build_store(field_ptr, field_val);
-            }
+            struct_pointer_from_fields(
+                env,
+                struct_type,
+                data_ptr,
+                field_vals.into_iter().enumerate(),
+            );
 
             data_ptr.into()
         }
@@ -1583,7 +1577,6 @@ pub fn build_tag<'a, 'ctx, 'env>(
             debug_assert!(union_size == 2);
 
             let ctx = env.context;
-            let builder = env.builder;
 
             // Determine types
             let num_fields = arguments.len() + 1;
@@ -1627,23 +1620,13 @@ pub fn build_tag<'a, 'ctx, 'env>(
                 allocate_tag(env, parent, reuse_allocation, union_layout, &[other_fields]);
 
             let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-            let struct_ptr = env
-                .builder
-                .build_bitcast(
-                    data_ptr,
-                    struct_type.ptr_type(AddressSpace::Generic),
-                    "block_of_memory_to_tag",
-                )
-                .into_pointer_value();
 
-            // Insert field exprs into struct_val
-            for (index, field_val) in field_vals.into_iter().enumerate() {
-                let field_ptr = builder
-                    .build_struct_gep(struct_ptr, index as u32, "struct_gep")
-                    .unwrap();
-
-                builder.build_store(field_ptr, field_val);
-            }
+            struct_pointer_from_fields(
+                env,
+                struct_type,
+                data_ptr,
+                field_vals.into_iter().enumerate(),
+            );
 
             data_ptr.into()
         }
