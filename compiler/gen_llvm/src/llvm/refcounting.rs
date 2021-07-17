@@ -1,12 +1,10 @@
 use crate::debug_info_init;
 use crate::llvm::build::{
     add_func, cast_basic_basic, cast_block_of_memory_to_tag, get_tag_id, get_tag_id_non_recursive,
-    Env, FAST_CALL_CONV, LLVM_SADD_WITH_OVERFLOW_I64, TAG_DATA_INDEX,
+    tag_pointer_clear_tag_id, Env, FAST_CALL_CONV, LLVM_SADD_WITH_OVERFLOW_I64, TAG_DATA_INDEX,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
-use crate::llvm::convert::{
-    basic_type_from_layout, block_of_memory_slices, ptr_int, union_data_block_of_memory,
-};
+use crate::llvm::convert::{basic_type_from_layout, ptr_int};
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::context::Context;
@@ -1233,7 +1231,8 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
     let parent = fn_val;
 
     debug_assert!(arg_val.is_pointer_value());
-    let value_ptr = arg_val.into_pointer_value();
+    let current_tag_id = get_tag_id(env, fn_val, &union_layout, arg_val);
+    let value_ptr = tag_pointer_clear_tag_id(env, arg_val.into_pointer_value());
 
     // to increment/decrement the cons-cell itself
     let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
@@ -1298,6 +1297,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
                     union_layout,
                     tags,
                     value_ptr,
+                    current_tag_id,
                     refcount_ptr,
                     do_recurse_block,
                     DecOrReuse::Dec,
@@ -1322,6 +1322,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
     union_layout: UnionLayout<'a>,
     tags: &[&[Layout<'a>]],
     value_ptr: PointerValue<'ctx>,
+    current_tag_id: IntValue<'ctx>,
     refcount_ptr: PointerToRefcount<'ctx>,
     match_block: BasicBlock<'ctx>,
     decrement_or_reuse: DecOrReuse,
@@ -1396,28 +1397,8 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
                 debug_assert!(ptr_as_i64_ptr.is_pointer_value());
 
                 // therefore we must cast it to our desired type
-                let union_type = match union_layout {
-                    UnionLayout::NonRecursive(_) => unreachable!(),
-                    UnionLayout::Recursive(_) | UnionLayout::NullableWrapped { .. } => {
-                        union_data_block_of_memory(
-                            env.context,
-                            tag_id_int_type,
-                            tags,
-                            env.ptr_bytes,
-                        )
-                        .into()
-                    }
-                    UnionLayout::NonNullableUnwrapped { .. }
-                    | UnionLayout::NullableUnwrapped { .. } => {
-                        block_of_memory_slices(env.context, tags, env.ptr_bytes)
-                    }
-                };
-
-                let recursive_field_ptr = cast_basic_basic(
-                    env.builder,
-                    ptr_as_i64_ptr,
-                    union_type.ptr_type(AddressSpace::Generic).into(),
-                );
+                let union_type = basic_type_from_layout(env, &Layout::Union(union_layout));
+                let recursive_field_ptr = cast_basic_basic(env.builder, ptr_as_i64_ptr, union_type);
 
                 deferred_rec.push(recursive_field_ptr);
             } else if field_layout.contains_refcounted() {
@@ -1484,9 +1465,6 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         let (_, only_branch) = cases.pop().unwrap();
         env.builder.build_unconditional_branch(only_branch);
     } else {
-        // read the tag_id
-        let current_tag_id = get_tag_id(env, parent, &union_layout, value_ptr.into());
-
         let default_block = env.context.append_basic_block(parent, "switch_default");
 
         // switch on it
@@ -1601,7 +1579,8 @@ fn build_reuse_rec_union_help<'a, 'ctx, 'env>(
     let parent = reset_function;
 
     debug_assert!(arg_val.is_pointer_value());
-    let value_ptr = arg_val.into_pointer_value();
+    let current_tag_id = get_tag_id(env, reset_function, &union_layout, arg_val);
+    let value_ptr = tag_pointer_clear_tag_id(env, arg_val.into_pointer_value());
 
     // to increment/decrement the cons-cell itself
     let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
@@ -1654,6 +1633,7 @@ fn build_reuse_rec_union_help<'a, 'ctx, 'env>(
             union_layout,
             tags,
             value_ptr,
+            current_tag_id,
             refcount_ptr,
             do_recurse_block,
             DecOrReuse::Reuse,

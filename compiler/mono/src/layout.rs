@@ -188,11 +188,29 @@ impl<'a> UnionLayout<'a> {
         Layout::Builtin(self.tag_id_builtin())
     }
 
-    pub fn stores_tag_id(&self) -> bool {
+    fn stores_tag_id_in_pointer_bits(tags: &[&[Layout<'a>]], ptr_bytes: u32) -> bool {
+        tags.len() <= ptr_bytes as usize
+    }
+
+    // i.e. it is not implicit and not stored in the pointer bits
+    pub fn stores_tag_id_as_data(&self, ptr_bytes: u32) -> bool {
         match self {
-            UnionLayout::NonRecursive(_)
-            | UnionLayout::Recursive(_)
-            | UnionLayout::NullableWrapped { .. } => true,
+            UnionLayout::NonRecursive(_) => true,
+            UnionLayout::Recursive(tags)
+            | UnionLayout::NullableWrapped {
+                other_tags: tags, ..
+            } => !Self::stores_tag_id_in_pointer_bits(tags, ptr_bytes),
+            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => false,
+        }
+    }
+
+    pub fn stores_tag_id_in_pointer(&self, ptr_bytes: u32) -> bool {
+        match self {
+            UnionLayout::NonRecursive(_) => false,
+            UnionLayout::Recursive(tags)
+            | UnionLayout::NullableWrapped {
+                other_tags: tags, ..
+            } => Self::stores_tag_id_in_pointer_bits(tags, ptr_bytes),
             UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => false,
         }
     }
