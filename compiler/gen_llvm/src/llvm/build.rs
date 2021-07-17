@@ -170,6 +170,15 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         self.ptr_bytes * 2
     }
 
+    pub fn tag_id_bits(&self) -> u32 {
+        match self.ptr_bytes {
+            4 => 2,
+            8 => 3,
+            16 => 4,
+            _ => 0,
+        }
+    }
+
     pub fn build_intrinsic_call(
         &self,
         intrinsic_name: &'static str,
