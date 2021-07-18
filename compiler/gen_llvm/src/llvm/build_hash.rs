@@ -1,5 +1,6 @@
 use crate::debug_info_init;
 use crate::llvm::bitcode::call_bitcode_fn;
+use crate::llvm::build::tag_pointer_clear_tag_id;
 use crate::llvm::build::Env;
 use crate::llvm::build::{cast_block_of_memory_to_tag, get_tag_id, FAST_CALL_CONV, TAG_DATA_INDEX};
 use crate::llvm::build_str;
@@ -494,14 +495,9 @@ fn hash_tag<'a, 'ctx, 'env>(
                 );
 
                 // hash the tag data
-                let answer = hash_ptr_to_struct(
-                    env,
-                    layout_ids,
-                    union_layout,
-                    field_layouts,
-                    seed,
-                    tag.into_pointer_value(),
-                );
+                let tag = tag_pointer_clear_tag_id(env, tag.into_pointer_value());
+                let answer =
+                    hash_ptr_to_struct(env, layout_ids, union_layout, field_layouts, seed, tag);
 
                 merge_phi.add_incoming(&[(&answer, block)]);
                 env.builder.build_unconditional_branch(merge_block);
@@ -599,6 +595,7 @@ fn hash_tag<'a, 'ctx, 'env>(
                     );
 
                     // hash tag data
+                    let tag = tag_pointer_clear_tag_id(env, tag);
                     let answer = hash_ptr_to_struct(
                         env,
                         layout_ids,

@@ -900,11 +900,17 @@ fn expr_spec(
     match expr {
         Literal(literal) => literal_spec(builder, block, literal),
         Call(call) => call_spec(builder, env, block, layout, call),
-        Tag {
+        Reuse {
             tag_layout,
             tag_name: _,
             tag_id,
-            union_size: _,
+            arguments,
+            ..
+        }
+        | Tag {
+            tag_layout,
+            tag_name: _,
+            tag_id,
             arguments,
         } => match tag_layout {
             UnionLayout::NonRecursive(_) => {
@@ -983,8 +989,12 @@ fn expr_spec(
                 Err(()) => unreachable!("empty array does not have a list layout"),
             }
         }
-        Reuse { .. } => todo!("currently unused"),
-        Reset(_) => todo!("currently unused"),
+        Reset(symbol) => {
+            let type_id = layout_spec(builder, layout)?;
+            let value_id = env.symbols[symbol];
+
+            builder.add_unknown_with(block, &[value_id], type_id)
+        }
         RuntimeErrorFunction(_) => {
             let type_id = layout_spec(builder, layout)?;
 

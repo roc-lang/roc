@@ -148,6 +148,16 @@ impl<'a> UnionLayout<'a> {
         }
     }
 
+    pub fn number_of_tags(&'a self) -> usize {
+        match self {
+            UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => tags.len(),
+
+            UnionLayout::NullableWrapped { other_tags, .. } => other_tags.len() + 1,
+            UnionLayout::NonNullableUnwrapped(_) => 1,
+            UnionLayout::NullableUnwrapped { .. } => 2,
+        }
+    }
+
     fn tag_id_builtin_help(union_size: usize) -> Builtin<'a> {
         if union_size <= u8::MAX as usize {
             Builtin::Int8
@@ -178,12 +188,40 @@ impl<'a> UnionLayout<'a> {
         Layout::Builtin(self.tag_id_builtin())
     }
 
-    pub fn stores_tag_id(&self) -> bool {
+    fn stores_tag_id_in_pointer_bits(tags: &[&[Layout<'a>]], ptr_bytes: u32) -> bool {
+        tags.len() <= ptr_bytes as usize
+    }
+
+    // i.e. it is not implicit and not stored in the pointer bits
+    pub fn stores_tag_id_as_data(&self, ptr_bytes: u32) -> bool {
+        match self {
+            UnionLayout::NonRecursive(_) => true,
+            UnionLayout::Recursive(tags)
+            | UnionLayout::NullableWrapped {
+                other_tags: tags, ..
+            } => !Self::stores_tag_id_in_pointer_bits(tags, ptr_bytes),
+            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => false,
+        }
+    }
+
+    pub fn stores_tag_id_in_pointer(&self, ptr_bytes: u32) -> bool {
+        match self {
+            UnionLayout::NonRecursive(_) => false,
+            UnionLayout::Recursive(tags)
+            | UnionLayout::NullableWrapped {
+                other_tags: tags, ..
+            } => Self::stores_tag_id_in_pointer_bits(tags, ptr_bytes),
+            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => false,
+        }
+    }
+
+    pub fn tag_is_null(&self, tag_id: u8) -> bool {
         match self {
             UnionLayout::NonRecursive(_)
-            | UnionLayout::Recursive(_)
-            | UnionLayout::NullableWrapped { .. } => true,
-            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => false,
+            | UnionLayout::NonNullableUnwrapped(_)
+            | UnionLayout::Recursive(_) => false,
+            UnionLayout::NullableWrapped { nullable_id, .. } => *nullable_id == tag_id as i64,
+            UnionLayout::NullableUnwrapped { nullable_id, .. } => *nullable_id == (tag_id != 0),
         }
     }
 
@@ -213,7 +251,6 @@ pub enum ClosureRepresentation<'a> {
         tag_layout: &'a [Layout<'a>],
         tag_name: TagName,
         tag_id: u8,
-        union_size: u8,
         union_layout: UnionLayout<'a>,
     },
     /// the representation is anything but a union
@@ -252,7 +289,6 @@ impl<'a> LambdaSet<'a> {
                             .unwrap();
 
                         ClosureRepresentation::Union {
-                            union_size: self.set.len() as u8,
                             tag_id: index as u8,
                             tag_layout: tags[index],
                             tag_name: TagName::Closure(function_symbol),
@@ -714,6 +750,7 @@ impl<'a> Layout<'a> {
                 }
             }
             RecursivePointer => true,
+
             Closure(_, closure_layout, _) => closure_layout.contains_refcounted(),
         }
     }
@@ -1518,6 +1555,18 @@ fn get_recursion_var(subs: &Subs, var: Variable) -> Option<Variable> {
     }
 }
 
+fn is_recursive_tag_union(layout: &Layout) -> bool {
+    matches!(
+        layout,
+        Layout::Union(
+            UnionLayout::NullableUnwrapped { .. }
+                | UnionLayout::Recursive(_)
+                | UnionLayout::NullableWrapped { .. }
+                | UnionLayout::NonNullableUnwrapped { .. },
+        )
+    )
+}
+
 pub fn union_sorted_tags_help<'a>(
     arena: &'a Bump,
     mut tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)>,
@@ -1633,10 +1682,17 @@ pub fn union_sorted_tags_help<'a>(
                 for var in arguments {
                     match Layout::from_var(&mut env, var) {
                         Ok(layout) => {
-                            // Drop any zero-sized arguments like {}
-                            if !layout.is_dropped_because_empty() {
-                                has_any_arguments = true;
+                            has_any_arguments = true;
 
+                            // make sure to not unroll recursive types!
+                            let self_recursion = opt_rec_var.is_some()
+                                && subs.get_root_key_without_compacting(var)
+                                    == subs.get_root_key_without_compacting(opt_rec_var.unwrap())
+                                && is_recursive_tag_union(&layout);
+
+                            if self_recursion {
+                                arg_layouts.push(Layout::RecursivePointer);
+                            } else {
                                 arg_layouts.push(layout);
                             }
                         }

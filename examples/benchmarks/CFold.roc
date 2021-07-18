@@ -97,4 +97,3 @@ constFolding = \e ->
                 Pair y1 y2                   -> Add y1 y2
 
         _ -> e
-
