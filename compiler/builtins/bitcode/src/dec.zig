@@ -1,9 +1,11 @@
 const std = @import("std");
 const str = @import("str.zig");
+const utils = @import("utils.zig");
 
 const math = std.math;
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 const RocStr = str.RocStr;
+const WithOverflow = utils.WithOverflow;
 
 pub const RocDec = extern struct {
     num: i128,
@@ -218,29 +220,41 @@ pub const RocDec = extern struct {
         return if (negated) |n| .{ .num = n } else null;
     }
 
-    pub fn add(self: RocDec, other: RocDec) RocDec {
+    pub fn addWithOverflow(self: RocDec, other: RocDec) WithOverflow(RocDec) {
         var answer: i128 = undefined;
         const overflowed = @addWithOverflow(i128, self.num, other.num, &answer);
 
-        if (!overflowed) {
-            return RocDec{ .num = answer };
-        } else {
+        return .{ .value = RocDec{ .num = answer }, .has_overflowed = overflowed };
+    }
+
+    pub fn add(self: RocDec, other: RocDec) RocDec {
+        const answer = RocDec.addWithOverflow(self, other);
+
+        if (answer.has_overflowed) {
             @panic("TODO runtime exception for overflow!");
+        } else {
+            return answer.value;
         }
     }
 
-    pub fn sub(self: RocDec, other: RocDec) RocDec {
+    pub fn subWithOverflow(self: RocDec, other: RocDec) WithOverflow(RocDec) {
         var answer: i128 = undefined;
         const overflowed = @subWithOverflow(i128, self.num, other.num, &answer);
 
-        if (!overflowed) {
-            return RocDec{ .num = answer };
-        } else {
+        return .{ .value = RocDec{ .num = answer }, .has_overflowed = overflowed };
+    }
+
+    pub fn sub(self: RocDec, other: RocDec) RocDec {
+        const answer = RocDec.subWithOverflow(self, other);
+
+        if (answer.has_overflowed) {
             @panic("TODO runtime exception for overflow!");
+        } else {
+            return answer.value;
         }
     }
 
-    pub fn mul(self: RocDec, other: RocDec) RocDec {
+    pub fn mulWithOverflow(self: RocDec, other: RocDec) WithOverflow(RocDec) {
         const self_i128 = self.num;
         const other_i128 = other.num;
         // const answer = 0; //self_i256 * other_i256;
@@ -249,30 +263,40 @@ pub const RocDec = extern struct {
 
         const self_u128 = @intCast(u128, math.absInt(self_i128) catch {
             if (other_i128 == 0) {
-                return .{ .num = 0 };
+                return .{ .value = RocDec{ .num = 0 }, .has_overflowed = false };
             } else if (other_i128 == RocDec.one_point_zero.num) {
-                return self;
+                return .{ .value = self, .has_overflowed = false };
             } else {
-                @panic("TODO runtime exception for overflow!");
+                return .{ .value = undefined, .has_overflowed = true };
             }
         });
 
         const other_u128 = @intCast(u128, math.absInt(other_i128) catch {
             if (self_i128 == 0) {
-                return .{ .num = 0 };
+                return .{ .value = RocDec{ .num = 0 }, .has_overflowed = false };
             } else if (self_i128 == RocDec.one_point_zero.num) {
-                return other;
+                return .{ .value = other, .has_overflowed = false };
             } else {
-                @panic("TODO runtime exception for overflow!");
+                return .{ .value = undefined, .has_overflowed = true };
             }
         });
 
         const unsigned_answer: i128 = mul_and_decimalize(self_u128, other_u128);
 
         if (is_answer_negative) {
-            return .{ .num = -unsigned_answer };
+            return .{ .value = RocDec{ .num = -unsigned_answer }, .has_overflowed = false };
         } else {
-            return .{ .num = unsigned_answer };
+            return .{ .value = RocDec{ .num = unsigned_answer }, .has_overflowed = false };
+        }
+    }
+
+    pub fn mul(self: RocDec, other: RocDec) RocDec {
+        const answer = RocDec.mulWithOverflow(self, other);
+
+        if (answer.has_overflowed) {
+            @panic("TODO runtime exception for overflow!");
+        } else {
+            return answer.value;
         }
     }
 
@@ -287,7 +311,9 @@ pub const RocDec = extern struct {
 
         // (n / 0) is an error
         if (denominator_i128 == 0) {
-            @panic("TODO runtime exception for divide by 0!");
+            // The compiler frontend does the `denominator == 0` check for us,
+            // therefore this case is unreachable from roc user code
+            unreachable;
         }
 
         // If they're both negative, or if neither is negative, the final answer
@@ -1042,16 +1068,16 @@ pub fn negateC(arg: RocDec) callconv(.C) i128 {
     return if (@call(.{ .modifier = always_inline }, RocDec.negate, .{arg})) |dec| dec.num else @panic("TODO overflow for negating RocDec");
 }
 
-pub fn addC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
-    return @call(.{ .modifier = always_inline }, RocDec.add, .{ arg1, arg2 }).num;
+pub fn addC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
+    return @call(.{ .modifier = always_inline }, RocDec.addWithOverflow, .{ arg1, arg2 });
 }
 
-pub fn subC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
-    return @call(.{ .modifier = always_inline }, RocDec.sub, .{ arg1, arg2 }).num;
+pub fn subC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
+    return @call(.{ .modifier = always_inline }, RocDec.subWithOverflow, .{ arg1, arg2 });
 }
 
-pub fn mulC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
-    return @call(.{ .modifier = always_inline }, RocDec.mul, .{ arg1, arg2 }).num;
+pub fn mulC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
+    return @call(.{ .modifier = always_inline }, RocDec.mulWithOverflow, .{ arg1, arg2 });
 }
 
 pub fn divC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
