@@ -222,3 +222,11 @@ pub fn zig_has_tag_id_type<'a, 'ctx, 'env>(
 ) -> StructType<'ctx> {
     env.module.get_struct_type("list.HasTagId").unwrap()
 }
+
+pub fn zig_with_overflow_roc_dec<'a, 'ctx, 'env>(
+    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
+) -> StructType<'ctx> {
+    env.module
+        .get_struct_type("utils.WithOverflow(dec.RocDec)")
+        .unwrap()
+}

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::llvm::bitcode::call_bitcode_fn;
+use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
 use crate::llvm::build_dict::{
     dict_contains, dict_difference, dict_empty, dict_get, dict_insert, dict_intersection,
     dict_keys, dict_len, dict_remove, dict_union, dict_values, dict_walk, set_from_list,
@@ -362,12 +362,8 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     // List of all supported LLVM intrinsics:
     //
     // https://releases.llvm.org/10.0.0/docs/LangRef.html#standard-c-library-intrinsics
-    let i1_type = ctx.bool_type();
     let f64_type = ctx.f64_type();
     let i64_type = ctx.i64_type();
-    let i32_type = ctx.i32_type();
-    let i16_type = ctx.i16_type();
-    let i8_type = ctx.i8_type();
 
     add_intrinsic(
         module,
@@ -416,60 +412,6 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         LLVM_FLOOR_F64,
         f64_type.fn_type(&[f64_type.into()], false),
     );
-
-    // add with overflow
-
-    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I8, {
-        let fields = [i8_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i8_type.into(), i8_type.into()], false)
-    });
-
-    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I16, {
-        let fields = [i16_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i16_type.into(), i16_type.into()], false)
-    });
-
-    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I32, {
-        let fields = [i32_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i32_type.into(), i32_type.into()], false)
-    });
-
-    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I64, {
-        let fields = [i64_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i64_type.into(), i64_type.into()], false)
-    });
-    // LLVM_SADD_WITH_OVERFLOW_I128 is exported in bitcode
-
-    // sub with overflow
-
-    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I8, {
-        let fields = [i8_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i8_type.into(), i8_type.into()], false)
-    });
-
-    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I16, {
-        let fields = [i16_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i16_type.into(), i16_type.into()], false)
-    });
-
-    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I32, {
-        let fields = [i32_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i32_type.into(), i32_type.into()], false)
-    });
-
-    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I64, {
-        let fields = [i64_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i64_type.into(), i64_type.into()], false)
-    });
-    // LLVM_SSUB_WITH_OVERFLOW_I128 is exported in bitcode
 }
 
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
@@ -5251,6 +5193,39 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
     }
 }
 
+fn throw_on_overflow<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    result: StructValue<'ctx>, // of the form { value: T, has_overflowed: bool }
+    message: &str,
+) -> BasicValueEnum<'ctx> {
+    let bd = env.builder;
+    let context = env.context;
+
+    let has_overflowed = bd.build_extract_value(result, 1, "has_overflowed").unwrap();
+
+    let condition = bd.build_int_compare(
+        IntPredicate::EQ,
+        has_overflowed.into_int_value(),
+        context.bool_type().const_zero(),
+        "has_not_overflowed",
+    );
+
+    let then_block = context.append_basic_block(parent, "then_block");
+    let throw_block = context.append_basic_block(parent, "throw_block");
+
+    bd.build_conditional_branch(condition, then_block, throw_block);
+
+    bd.position_at_end(throw_block);
+
+    throw_exception(env, message);
+
+    bd.position_at_end(then_block);
+
+    bd.build_extract_value(result, 0, "operation_result")
+        .unwrap()
+}
+
 fn build_int_binop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
@@ -5267,8 +5242,6 @@ fn build_int_binop<'a, 'ctx, 'env>(
 
     match op {
         NumAdd => {
-            let context = env.context;
-
             let intrinsic = match lhs_layout {
                 Layout::Builtin(Builtin::Int8) => LLVM_SADD_WITH_OVERFLOW_I8,
                 Layout::Builtin(Builtin::Int16) => LLVM_SADD_WITH_OVERFLOW_I16,
@@ -5287,34 +5260,11 @@ fn build_int_binop<'a, 'ctx, 'env>(
                 .call_intrinsic(intrinsic, &[lhs.into(), rhs.into()])
                 .into_struct_value();
 
-            let add_result = bd.build_extract_value(result, 0, "add_result").unwrap();
-            let has_overflowed = bd.build_extract_value(result, 1, "has_overflowed").unwrap();
-
-            let condition = bd.build_int_compare(
-                IntPredicate::EQ,
-                has_overflowed.into_int_value(),
-                context.bool_type().const_zero(),
-                "has_not_overflowed",
-            );
-
-            let then_block = context.append_basic_block(parent, "then_block");
-            let throw_block = context.append_basic_block(parent, "throw_block");
-
-            bd.build_conditional_branch(condition, then_block, throw_block);
-
-            bd.position_at_end(throw_block);
-
-            throw_exception(env, "integer addition overflowed!");
-
-            bd.position_at_end(then_block);
-
-            add_result
+            throw_on_overflow(env, parent, result, "integer addition overflowed!")
         }
         NumAddWrap => bd.build_int_add(lhs, rhs, "add_int_wrap").into(),
         NumAddChecked => env.call_intrinsic(LLVM_SADD_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()]),
         NumSub => {
-            let context = env.context;
-
             let intrinsic = match lhs_layout {
                 Layout::Builtin(Builtin::Int8) => LLVM_SSUB_WITH_OVERFLOW_I8,
                 Layout::Builtin(Builtin::Int16) => LLVM_SSUB_WITH_OVERFLOW_I16,
@@ -5333,59 +5283,16 @@ fn build_int_binop<'a, 'ctx, 'env>(
                 .call_intrinsic(intrinsic, &[lhs.into(), rhs.into()])
                 .into_struct_value();
 
-            let sub_result = bd.build_extract_value(result, 0, "sub_result").unwrap();
-            let has_overflowed = bd.build_extract_value(result, 1, "has_overflowed").unwrap();
-
-            let condition = bd.build_int_compare(
-                IntPredicate::EQ,
-                has_overflowed.into_int_value(),
-                context.bool_type().const_zero(),
-                "has_not_overflowed",
-            );
-
-            let then_block = context.append_basic_block(parent, "then_block");
-            let throw_block = context.append_basic_block(parent, "throw_block");
-
-            bd.build_conditional_branch(condition, then_block, throw_block);
-
-            bd.position_at_end(throw_block);
-
-            throw_exception(env, "integer subtraction overflowed!");
-
-            bd.position_at_end(then_block);
-
-            sub_result
+            throw_on_overflow(env, parent, result, "integer subtraction overflowed!")
         }
         NumSubWrap => bd.build_int_sub(lhs, rhs, "sub_int").into(),
         NumSubChecked => env.call_intrinsic(LLVM_SSUB_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()]),
         NumMul => {
-            let context = env.context;
             let result = env
                 .call_intrinsic(LLVM_SMUL_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()])
                 .into_struct_value();
 
-            let mul_result = bd.build_extract_value(result, 0, "mul_result").unwrap();
-            let has_overflowed = bd.build_extract_value(result, 1, "has_overflowed").unwrap();
-
-            let condition = bd.build_int_compare(
-                IntPredicate::EQ,
-                has_overflowed.into_int_value(),
-                context.bool_type().const_zero(),
-                "has_not_overflowed",
-            );
-
-            let then_block = context.append_basic_block(parent, "then_block");
-            let throw_block = context.append_basic_block(parent, "throw_block");
-
-            bd.build_conditional_branch(condition, then_block, throw_block);
-
-            bd.position_at_end(throw_block);
-
-            throw_exception(env, "integer multiplication overflowed!");
-
-            bd.position_at_end(then_block);
-
-            mul_result
+            throw_on_overflow(env, parent, result, "integer multiplication overflowed!")
         }
         NumMulWrap => bd.build_int_mul(lhs, rhs, "mul_int").into(),
         NumMulChecked => env.call_intrinsic(LLVM_SMUL_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()]),
@@ -5715,7 +5622,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
 
 fn build_dec_binop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    _parent: FunctionValue<'ctx>,
+    parent: FunctionValue<'ctx>,
     lhs: BasicValueEnum<'ctx>,
     _lhs_layout: &Layout<'a>,
     rhs: BasicValueEnum<'ctx>,
@@ -5725,14 +5632,61 @@ fn build_dec_binop<'a, 'ctx, 'env>(
     use roc_module::low_level::LowLevel::*;
 
     match op {
-        NumAdd => call_bitcode_fn(env, &[lhs, rhs], &bitcode::DEC_ADD),
-        NumSub => call_bitcode_fn(env, &[lhs, rhs], &bitcode::DEC_SUB),
-        NumMul => call_bitcode_fn(env, &[lhs, rhs], &bitcode::DEC_MUL),
+        NumAddChecked => call_bitcode_fn(env, &[lhs, rhs], &bitcode::DEC_ADD_WITH_OVERFLOW),
+        NumSubChecked => call_bitcode_fn(env, &[lhs, rhs], &bitcode::DEC_SUB_WITH_OVERFLOW),
+        NumMulChecked => call_bitcode_fn(env, &[lhs, rhs], &bitcode::DEC_MUL_WITH_OVERFLOW),
+        NumAdd => build_dec_binop_throw_on_overflow(
+            env,
+            parent,
+            bitcode::DEC_ADD_WITH_OVERFLOW,
+            lhs,
+            rhs,
+            "decimal addition overflowed",
+        ),
+        NumSub => build_dec_binop_throw_on_overflow(
+            env,
+            parent,
+            bitcode::DEC_SUB_WITH_OVERFLOW,
+            lhs,
+            rhs,
+            "decimal subtraction overflowed",
+        ),
+        NumMul => build_dec_binop_throw_on_overflow(
+            env,
+            parent,
+            bitcode::DEC_MUL_WITH_OVERFLOW,
+            lhs,
+            rhs,
+            "decimal multiplication overflowed",
+        ),
         NumDivUnchecked => call_bitcode_fn(env, &[lhs, rhs], &bitcode::DEC_DIV),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
     }
+}
+
+fn build_dec_binop_throw_on_overflow<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    operation: &str,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+    message: &str,
+) -> BasicValueEnum<'ctx> {
+    let overflow_type = crate::llvm::convert::zig_with_overflow_roc_dec(env);
+
+    let result_ptr = env.builder.build_alloca(overflow_type, "result_ptr");
+    call_void_bitcode_fn(env, &[result_ptr.into(), lhs, rhs], operation);
+
+    let result = env
+        .builder
+        .build_load(result_ptr, "load_overflow")
+        .into_struct_value();
+
+    let value = throw_on_overflow(env, parent, result, message).into_struct_value();
+
+    env.builder.build_extract_value(value, 0, "num").unwrap()
 }
 
 fn int_type_signed_min(int_type: IntType) -> IntValue {

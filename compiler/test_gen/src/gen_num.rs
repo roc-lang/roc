@@ -752,7 +752,7 @@ mod gen_num {
                     z : Dec
                     z = 3
 
-                    x - y - z
+                    (x - y) - z
                 "#
             ),
             RocDec::from_str_to_i128_unsafe(&"-3.9"),

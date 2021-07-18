@@ -10,9 +10,9 @@ comptime {
     exportDecFn(dec.eqC, "eq");
     exportDecFn(dec.neqC, "neq");
     exportDecFn(dec.negateC, "negate");
-    exportDecFn(dec.addC, "add");
-    exportDecFn(dec.subC, "sub");
-    exportDecFn(dec.mulC, "mul");
+    exportDecFn(dec.addC, "add_with_overflow");
+    exportDecFn(dec.subC, "sub_with_overflow");
+    exportDecFn(dec.mulC, "mul_with_overflow");
     exportDecFn(dec.divC, "div");
 }
 

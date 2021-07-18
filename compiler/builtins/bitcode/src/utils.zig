@@ -1,6 +1,10 @@
 const std = @import("std");
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 
+pub fn WithOverflow(comptime T: type) type {
+    return extern struct { value: T, has_overflowed: bool };
+}
+
 // If allocation fails, this must cxa_throw - it must not return a null pointer!
 extern fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void;
 
