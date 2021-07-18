@@ -803,15 +803,20 @@ fn lowlevel_spec(
 
             builder.add_sub_block(block, sub_block)
         }
+        NumToFloat => {
+            // just dream up a unit value
+            builder.add_make_tuple(block, &[])
+        }
         Eq | NotEq => {
             // just dream up a unit value
             builder.add_make_tuple(block, &[])
         }
-        NumLte | NumLt | NumGt | NumGte => {
+        NumLte | NumLt | NumGt | NumGte | NumCompare => {
             // just dream up a unit value
             builder.add_make_tuple(block, &[])
         }
-        ListLen => {
+        ListLen | DictSize => {
+            // TODO should this touch the heap cell?
             // just dream up a unit value
             builder.add_make_tuple(block, &[])
         }
@@ -839,7 +844,70 @@ fn lowlevel_spec(
 
             Ok(list)
         }
+        ListAppend => {
+            let list = env.symbols[&arguments[0]];
+            let to_insert = env.symbols[&arguments[1]];
+
+            let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+            let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+
+            let _unit = builder.add_update(block, update_mode_var, cell)?;
+
+            builder.add_bag_insert(block, bag, to_insert)?;
+
+            Ok(list)
+        }
+        DictEmpty => {
+            match layout {
+                Layout::Builtin(Builtin::EmptyDict) => {
+                    // just make up an element type
+                    let type_id = builder.add_tuple_type(&[])?;
+                    new_dict(builder, block, type_id, type_id)
+                }
+                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
+                    let key_id = layout_spec(builder, key_layout)?;
+                    let value_id = layout_spec(builder, value_layout)?;
+                    new_dict(builder, block, key_id, value_id)
+                }
+                _ => unreachable!("empty array does not have a list layout"),
+            }
+        }
+        DictGetUnsafe => {
+            // NOTE DictGetUnsafe returns a { flag: Bool, value: v }
+            // when the flag is True, the value is found and defined;
+            // otherwise it is not and `Dict.get` should return `Err ...`
+
+            let dict = env.symbols[&arguments[0]];
+            let key = env.symbols[&arguments[1]];
+
+            // indicate that we use the key
+            builder.add_recursive_touch(block, key)?;
+
+            let bag = builder.add_get_tuple_field(block, dict, DICT_BAG_INDEX)?;
+            let cell = builder.add_get_tuple_field(block, dict, DICT_CELL_INDEX)?;
+
+            let _unit = builder.add_touch(block, cell)?;
+
+            builder.add_bag_get(block, bag)
+        }
+        DictInsert => {
+            let dict = env.symbols[&arguments[0]];
+            let key = env.symbols[&arguments[1]];
+            let value = env.symbols[&arguments[2]];
+
+            let key_value = builder.add_make_tuple(block, &[key, value])?;
+
+            let bag = builder.add_get_tuple_field(block, dict, DICT_BAG_INDEX)?;
+            let cell = builder.add_get_tuple_field(block, dict, DICT_CELL_INDEX)?;
+
+            let _unit = builder.add_update(block, update_mode_var, cell)?;
+
+            builder.add_bag_insert(block, bag, key_value)?;
+
+            Ok(dict)
+        }
         _other => {
+            // println!("missing {:?}", _other);
             // TODO overly pessimstic
             let arguments: Vec<_> = arguments.iter().map(|symbol| env.symbols[symbol]).collect();
 
@@ -945,11 +1013,17 @@ fn expr_spec<'a>(
     match expr {
         Literal(literal) => literal_spec(builder, block, literal),
         Call(call) => call_spec(builder, env, block, layout, call),
-        Tag {
+        Reuse {
             tag_layout,
             tag_name: _,
             tag_id,
-            union_size: _,
+            arguments,
+            ..
+        }
+        | Tag {
+            tag_layout,
+            tag_name: _,
+            tag_id,
             arguments,
         } => {
             let variant_types = build_variant_types(builder, tag_layout)?;
@@ -1095,8 +1169,12 @@ fn expr_spec<'a>(
                 Err(()) => unreachable!("empty array does not have a list layout"),
             }
         }
-        Reuse { .. } => todo!("currently unused"),
-        Reset(_) => todo!("currently unused"),
+        Reset(symbol) => {
+            let type_id = layout_spec(builder, layout)?;
+            let value_id = env.symbols[symbol];
+
+            builder.add_unknown_with(block, &[value_id], type_id)
+        }
         RuntimeErrorFunction(_) => {
             let type_id = layout_spec(builder, layout)?;
 
@@ -1249,6 +1327,18 @@ const DICT_BAG_INDEX: u32 = LIST_BAG_INDEX;
 
 fn new_list(builder: &mut FuncDefBuilder, block: BlockId, element_type: TypeId) -> Result<ValueId> {
     let cell = builder.add_new_heap_cell(block)?;
+    let bag = builder.add_empty_bag(block, element_type)?;
+    builder.add_make_tuple(block, &[cell, bag])
+}
+
+fn new_dict(
+    builder: &mut FuncDefBuilder,
+    block: BlockId,
+    key_type: TypeId,
+    value_type: TypeId,
+) -> Result<ValueId> {
+    let cell = builder.add_new_heap_cell(block)?;
+    let element_type = builder.add_tuple_type(&[key_type, value_type])?;
     let bag = builder.add_empty_bag(block, element_type)?;
     builder.add_make_tuple(block, &[cell, bag])
 }
