@@ -12,7 +12,6 @@ pub const RocDec = extern struct {
     pub const whole_number_places: u5 = 21;
     const max_digits: u6 = 39;
     const max_str_length: u6 = max_digits + 2; // + 2 here to account for the sign & decimal dot
-    const leading_zeros: [17]u8 = "00000000000000000".*;
 
     pub const min: RocDec = .{ .num = math.minInt(i128) };
     pub const max: RocDec = .{ .num = math.maxInt(i128) };
@@ -130,101 +129,76 @@ pub const RocDec = extern struct {
             return RocStr.init("0.0", 3);
         }
 
-        // Check if this Dec is negative, and if so convert to positive
-        // We will handle adding the '-' later
-        const is_negative = self.num < 0;
-        const num = if (is_negative) std.math.negate(self.num) catch {
-            @panic("TODO runtime exception failing to negate");
-        } else self.num;
+        const num = self.num;
+        const is_negative = num < 0;
 
-        // Format the backing i128 into an array of digits (u8s)
-        var digit_bytes: [max_digits + 1]u8 = undefined;
-        var num_digits = std.fmt.formatIntBuf(digit_bytes[0..], num, 10, false, .{});
+        // Format the backing i128 into an array of digit (ascii) characters (u8s)
+        var digit_bytes_storage: [max_digits + 1]u8 = undefined;
+        var num_digits = std.fmt.formatIntBuf(digit_bytes_storage[0..], num, 10, false, .{});
+        var digit_bytes: [*]u8 = digit_bytes_storage[0..];
+
+        // space where we assemble all the characters that make up the final string
+        var str_bytes: [max_str_length]u8 = undefined;
+        var position: usize = 0;
+
+        // if negative, the first character is a negating minus
+        if (is_negative) {
+            str_bytes[position] = '-';
+            position += 1;
+
+            // but also, we have one fewer digit than we have characters
+            num_digits -= 1;
+
+            // and we drop the minus to make later arithmetic correct
+            digit_bytes += 1;
+        }
 
         // Get the slice for before the decimal point
-        var before_digits_slice: []const u8 = undefined;
         var before_digits_offset: usize = 0;
-        var before_digits_adjust: u6 = 0;
         if (num_digits > decimal_places) {
+            // we have more digits than fit after the decimal point,
+            // so we must have digits before the decimal point
             before_digits_offset = num_digits - decimal_places;
-            before_digits_slice = digit_bytes[0..before_digits_offset];
-        } else {
-            before_digits_adjust = @intCast(u6, math.absInt(@intCast(i7, num_digits) - decimal_places) catch {
-                @panic("TODO runtime exception for overflow when getting abs");
-            });
-            before_digits_slice = "0";
-        }
 
-        // Figure out how many trailing zeros there are
-        // I tried to use https://ziglang.org/documentation/0.8.0/#ctz and it mostly worked,
-        // but was giving seemingly incorrect values for certain numbers. So instead we use
-        //  a while loop and figure it out that way.
-        //
-        // const trailing_zeros = @ctz(u6, num);
-        //
-        var trailing_zeros: u6 = 0;
-        var index = decimal_places - 1 - before_digits_adjust;
-        var is_consecutive_zero = true;
-        while (index != 0) {
-            var digit = digit_bytes[before_digits_offset + index];
-            if (digit == '0' and is_consecutive_zero) {
-                trailing_zeros += 1;
-            } else {
-                is_consecutive_zero = false;
+            for (digit_bytes[0..before_digits_offset]) |c| {
+                str_bytes[position] = c;
+                position += 1;
             }
-            index -= 1;
-        }
-
-        // Figure out if we need to prepend any zeros to the after decimal point
-        // For example, for the number 0.000123 we need to prepend 3 zeros after the decimal point
-        // This will only be needed for numbers less 0.01, otherwise after_digits_slice will handle this
-        const after_zeros_num = if (num_digits < decimal_places) decimal_places - num_digits else 0;
-        const after_zeros_slice: []const u8 = leading_zeros[0..after_zeros_num];
-
-        // Get the slice for after the decimal point
-        var after_digits_slice: []const u8 = undefined;
-        if ((num_digits - before_digits_offset) == trailing_zeros) {
-            after_digits_slice = "0";
         } else {
-            after_digits_slice = digit_bytes[before_digits_offset .. num_digits - trailing_zeros];
+            // otherwise there are no actual digits before the decimal point
+            // but we format it with a '0'
+            str_bytes[position] = '0';
+            position += 1;
         }
 
-        // Get the slice for the sign
-        const sign_slice: []const u8 = if (is_negative) "-" else leading_zeros[0..0];
+        // we've done everything before the decimal point, so now we can put the decimal point in
+        str_bytes[position] = '.';
+        position += 1;
 
-        // Hardcode adding a `1` for the '.' character
-        const str_len: usize = sign_slice.len + before_digits_slice.len + 1 + after_zeros_slice.len + after_digits_slice.len;
+        const trailing_zeros: u6 = count_trailing_zeros_base10(num);
+        if (trailing_zeros == decimal_places) {
+            // add just a single zero if all decimal digits are zero
+            str_bytes[position] = '0';
+            position += 1;
+        } else {
+            // Figure out if we need to prepend any zeros to the after decimal point
+            // For example, for the number 0.000123 we need to prepend 3 zeros after the decimal point
+            const after_zeros_num = if (num_digits < decimal_places) decimal_places - num_digits else 0;
 
-        // Join the slices together
-        // Ideally, we'd use str_len here, but the array length needs to be comptime (unless we want to pass in an allocator here & use that)
-        var str_bytes: [max_str_length]u8 = undefined;
+            var i: usize = 0;
+            while (i < after_zeros_num) : (i += 1) {
+                str_bytes[position] = '0';
+                position += 1;
+            }
 
-        var i: usize = 0;
-
-        for (sign_slice) |c| {
-            str_bytes[i] = c;
-            i += 1;
+            // otherwise append the decimal digits except the trailing zeros
+            for (digit_bytes[before_digits_offset .. num_digits - trailing_zeros]) |c| {
+                str_bytes[position] = c;
+                position += 1;
+            }
         }
 
-        for (before_digits_slice) |c| {
-            str_bytes[i] = c;
-            i += 1;
-        }
-
-        str_bytes[i] = '.';
-        i += 1;
-
-        for (after_zeros_slice) |c| {
-            str_bytes[i] = c;
-            i += 1;
-        }
-
-        for (after_digits_slice) |c| {
-            str_bytes[i] = c;
-            i += 1;
-        }
-
-        return RocStr.init(&str_bytes, str_len);
+        return RocStr.init(&str_bytes, position);
     }
 
     pub fn eq(self: RocDec, other: RocDec) bool {
@@ -368,6 +342,28 @@ pub const RocDec = extern struct {
         return RocDec{ .num = if (is_answer_negative) -unsigned_answer else unsigned_answer };
     }
 };
+
+// A number has `k` trailling zeros if `10^k` divides into it cleanly
+inline fn count_trailing_zeros_base10(input: i128) u6 {
+    if (input == 0) {
+        // this should not happen in practice
+        return 0;
+    }
+
+    var count: u6 = 0;
+    var k: i128 = 1;
+
+    while (true) {
+        if (@mod(input, std.math.pow(i128, 10, k)) == 0) {
+            count += 1;
+            k += 1;
+        } else {
+            break;
+        }
+    }
+
+    return count;
+}
 
 const U256 = struct {
     hi: u128,
