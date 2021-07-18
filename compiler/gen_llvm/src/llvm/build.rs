@@ -363,6 +363,10 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     //
     // https://releases.llvm.org/10.0.0/docs/LangRef.html#standard-c-library-intrinsics
     let f64_type = ctx.f64_type();
+    let i1_type = ctx.bool_type();
+    let i8_type = ctx.i8_type();
+    let i16_type = ctx.i16_type();
+    let i32_type = ctx.i32_type();
     let i64_type = ctx.i64_type();
 
     add_intrinsic(
@@ -412,6 +416,54 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         LLVM_FLOOR_F64,
         f64_type.fn_type(&[f64_type.into()], false),
     );
+
+    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I8, {
+        let fields = [i8_type.into(), i1_type.into()];
+        ctx.struct_type(&fields, false)
+            .fn_type(&[i8_type.into(), i8_type.into()], false)
+    });
+
+    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I16, {
+        let fields = [i16_type.into(), i1_type.into()];
+        ctx.struct_type(&fields, false)
+            .fn_type(&[i16_type.into(), i16_type.into()], false)
+    });
+
+    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I32, {
+        let fields = [i32_type.into(), i1_type.into()];
+        ctx.struct_type(&fields, false)
+            .fn_type(&[i32_type.into(), i32_type.into()], false)
+    });
+
+    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I64, {
+        let fields = [i64_type.into(), i1_type.into()];
+        ctx.struct_type(&fields, false)
+            .fn_type(&[i64_type.into(), i64_type.into()], false)
+    });
+
+    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I8, {
+        let fields = [i8_type.into(), i1_type.into()];
+        ctx.struct_type(&fields, false)
+            .fn_type(&[i8_type.into(), i8_type.into()], false)
+    });
+
+    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I16, {
+        let fields = [i16_type.into(), i1_type.into()];
+        ctx.struct_type(&fields, false)
+            .fn_type(&[i16_type.into(), i16_type.into()], false)
+    });
+
+    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I32, {
+        let fields = [i32_type.into(), i1_type.into()];
+        ctx.struct_type(&fields, false)
+            .fn_type(&[i32_type.into(), i32_type.into()], false)
+    });
+
+    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I64, {
+        let fields = [i64_type.into(), i1_type.into()];
+        ctx.struct_type(&fields, false)
+            .fn_type(&[i64_type.into(), i64_type.into()], false)
+    });
 }
 
 static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
