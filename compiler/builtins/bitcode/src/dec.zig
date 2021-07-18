@@ -98,29 +98,30 @@ pub const RocDec = extern struct {
             before_val_i128 = result;
         }
 
-        var dec: ?RocDec = null;
-        if (before_val_i128) |before| {
-            if (after_val_i128) |after| {
-                var result: i128 = undefined;
-                var overflowed = @addWithOverflow(i128, before, after, &result);
-                if (overflowed) {
-                    @panic("TODO runtime exception for overflow!");
+        const dec: RocDec = blk: {
+            if (before_val_i128) |before| {
+                if (after_val_i128) |after| {
+                    var result: i128 = undefined;
+                    var overflowed = @addWithOverflow(i128, before, after, &result);
+                    if (overflowed) {
+                        @panic("TODO runtime exception for overflow!");
+                    }
+                    break :blk .{ .num = result };
+                } else {
+                    break :blk .{ .num = before };
                 }
-                dec = .{ .num = result };
+            } else if (after_val_i128) |after| {
+                break :blk .{ .num = after };
             } else {
-                dec = .{ .num = before };
+                return null;
             }
-        } else if (after_val_i128) |after| {
-            dec = .{ .num = after };
-        }
+        };
 
-        if (dec) |d| {
-            if (is_negative) {
-                dec = d.negate();
-            }
+        if (is_negative) {
+            return dec.negate();
+        } else {
+            return dec;
         }
-
-        return dec;
     }
 
     pub fn toStr(self: RocDec) ?RocStr {
