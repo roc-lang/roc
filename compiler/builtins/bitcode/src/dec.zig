@@ -913,6 +913,26 @@ test "toStr: 12345678912345678912.111111111111111111 (max number of digits)" {
     try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
 }
 
+test "toStr: std.math.maxInt" {
+    var dec: RocDec = .{ .num = std.math.maxInt(i128) };
+    var res_roc_str = dec.toStr();
+    errdefer res_roc_str.?.deinit();
+    defer res_roc_str.?.deinit();
+
+    const res_slice: []const u8 = "170141183460469231731.687303715884105727"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+}
+
+test "toStr: std.math.minInt" {
+    var dec: RocDec = .{ .num = std.math.minInt(i128) };
+    var res_roc_str = dec.toStr();
+    errdefer res_roc_str.?.deinit();
+    defer res_roc_str.?.deinit();
+
+    const res_slice: []const u8 = "-170141183460469231731.687303715884105728"[0..];
+    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+}
+
 test "toStr: 0" {
     var dec: RocDec = .{ .num = 0 };
     var res_roc_str = dec.toStr();
