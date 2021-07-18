@@ -19,8 +19,7 @@ use crate::llvm::build_str::{
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
-    basic_type_from_builtin, basic_type_from_layout, block_of_memory, block_of_memory_slices,
-    ptr_int,
+    basic_type_from_builtin, basic_type_from_layout, block_of_memory_slices, ptr_int,
 };
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
@@ -1081,6 +1080,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     lookup_at_index_ptr2(
                         env,
+                        union_layout,
                         tag_id_type,
                         field_layouts,
                         *index as usize,
@@ -1094,11 +1094,11 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     lookup_at_index_ptr(
                         env,
+                        union_layout,
                         field_layouts,
                         *index as usize,
                         argument.into_pointer_value(),
                         struct_type.into_struct_type(),
-                        &struct_layout,
                     )
                 }
                 UnionLayout::NullableWrapped {
@@ -1121,6 +1121,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     lookup_at_index_ptr2(
                         env,
+                        union_layout,
                         tag_id_type,
                         field_layouts,
                         *index as usize,
@@ -1141,12 +1142,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     lookup_at_index_ptr(
                         env,
+                        union_layout,
                         field_layouts,
                         // the tag id is not stored
                         *index as usize,
                         argument.into_pointer_value(),
                         struct_type.into_struct_type(),
-                        &struct_layout,
                     )
                 }
             }
@@ -1655,11 +1656,11 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
 
 fn lookup_at_index_ptr<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    union_layout: &UnionLayout<'a>,
     field_layouts: &[Layout<'_>],
     index: usize,
     value: PointerValue<'ctx>,
     struct_type: StructType<'ctx>,
-    structure_layout: &Layout<'_>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
@@ -1681,11 +1682,13 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
     if let Some(Layout::RecursivePointer) = field_layouts.get(index as usize) {
         // a recursive field is stored as a `i64*`, to use it we must cast it to
         // a pointer to the block of memory representation
+        let actual_type = basic_type_from_layout(env, &Layout::Union(*union_layout));
+        debug_assert!(actual_type.is_pointer_type());
+
         builder.build_bitcast(
             result,
-            block_of_memory(env.context, structure_layout, env.ptr_bytes)
-                .ptr_type(AddressSpace::Generic),
-            "cast_rec_pointer_lookup_at_index_ptr",
+            actual_type,
+            "cast_rec_pointer_lookup_at_index_ptr_old",
         )
     } else {
         result
@@ -1694,6 +1697,7 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
 
 fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    union_layout: &UnionLayout<'a>,
     tag_id_type: IntType<'ctx>,
     field_layouts: &[Layout<'_>],
     index: usize,
@@ -1731,17 +1735,13 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
         // a recursive field is stored as a `i64*`, to use it we must cast it to
         // a pointer to the block of memory representation
 
-        let tags = &[field_layouts];
-        let struct_type = block_of_memory_slices(env.context, tags, env.ptr_bytes);
-
-        let opaque_wrapper_type = env
-            .context
-            .struct_type(&[struct_type, tag_id_type.into()], false);
+        let actual_type = basic_type_from_layout(env, &Layout::Union(*union_layout));
+        debug_assert!(actual_type.is_pointer_type());
 
         builder.build_bitcast(
             result,
-            opaque_wrapper_type.ptr_type(AddressSpace::Generic),
-            "cast_rec_pointer_lookup_at_index_ptr",
+            actual_type,
+            "cast_rec_pointer_lookup_at_index_ptr_new",
         )
     } else {
         result
