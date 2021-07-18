@@ -11,6 +11,7 @@ pub const RocDec = extern struct {
     pub const decimal_places: u5 = 18;
     pub const whole_number_places: u5 = 21;
     const max_digits: u6 = 39;
+    const max_str_length: u6 = max_digits + 2; // + 2 here to account for the sign & decimal dot
     const leading_zeros: [17]u8 = "00000000000000000".*;
 
     pub const min: RocDec = .{ .num = math.minInt(i128) };
@@ -25,7 +26,7 @@ pub const RocDec = extern struct {
 
     // TODO: There's got to be a better way to do this other than converting to Str
     pub fn fromF64(num: f64) ?RocDec {
-        var digit_bytes: [19]u8 = undefined; // Max f64 digits + '.' + '-'
+        var digit_bytes: [19]u8 = undefined; // 19 = max f64 digits + '.' + '-'
 
         var fbs = std.io.fixedBufferStream(digit_bytes[0..]);
         std.fmt.formatFloatDecimal(num, .{}, fbs.writer()) catch
@@ -62,7 +63,8 @@ pub const RocDec = extern struct {
                 continue;
             }
 
-            if (!isDigit(byte)) {
+            // Is the char anything but digit?
+            if ((byte -% 48) > 9) {
                 return null;
             }
             index += 1;
@@ -120,10 +122,6 @@ pub const RocDec = extern struct {
         }
 
         return dec;
-    }
-
-    fn isDigit(c: u8) bool {
-        return (c -% 48) <= 9;
     }
 
     pub fn toStr(self: RocDec) ?RocStr {
@@ -198,9 +196,8 @@ pub const RocDec = extern struct {
         const str_len: usize = sign_slice.len + before_digits_slice.len + 1 + after_zeros_slice.len + after_digits_slice.len;
 
         // Join the slices together
-        // We do `max_digits + 2` here because we need to account for a possible sign ('-') and the dot ('.').
-        // Ideally, we'd use str_len here
-        var str_bytes: [max_digits + 2]u8 = undefined;
+        // Ideally, we'd use str_len here, but the array length needs to be comptime (unless we want to pass in an allocator here & use that)
+        var str_bytes: [max_str_length]u8 = undefined;
 
         var i: usize = 0;
 
