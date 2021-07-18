@@ -97,7 +97,8 @@ fn applied_tag_just_enum() {
                 "#
         ),
         (2, 0),
-        (u8, i64)
+        (u8, [u8; 7], u8),
+        |(a, _, c)| (a, c)
     );
 }
 
@@ -1078,8 +1079,8 @@ fn nested_recursive_literal() {
                 #"
         ),
         0,
-        &(i64, i64, u8),
-        |x: &(i64, i64, u8)| x.2
+        usize,
+        |_| 0
     );
 }
 
