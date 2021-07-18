@@ -106,6 +106,7 @@ where
                 call,
                 pass,
                 fail: _,
+                exception_id: _,
             } => {
                 // for now, treat invoke as a normal call
                 self.build_expr(symbol, &Expr::Call(call.clone()), layout)?;
@@ -144,7 +145,7 @@ where
     ) -> Result<(), String>;
 
     /// build_expr builds the expressions for the specified symbol.
-    /// The builder must keep track of the symbol because it may be refered to later.
+    /// The builder must keep track of the symbol because it may be referred to later.
     fn build_expr(
         &mut self,
         sym: &Symbol,
@@ -229,7 +230,7 @@ where
     }
 
     /// build_run_low_level builds the low level opertation and outputs to the specified symbol.
-    /// The builder must keep track of the symbol because it may be refered to later.
+    /// The builder must keep track of the symbol because it may be referred to later.
     fn build_run_low_level(
         &mut self,
         sym: &Symbol,
@@ -443,7 +444,13 @@ where
                             self.set_last_seen(*sym, stmt);
                         }
                     }
-                    Expr::AccessAtIndex { structure, .. } => {
+                    Expr::StructAtIndex { structure, .. } => {
+                        self.set_last_seen(*structure, stmt);
+                    }
+                    Expr::GetTagId { structure, .. } => {
+                        self.set_last_seen(*structure, stmt);
+                    }
+                    Expr::UnionAtIndex { structure, .. } => {
                         self.set_last_seen(*structure, stmt);
                     }
                     Expr::Array { elems, .. } => {
@@ -486,6 +493,7 @@ where
                 call,
                 pass,
                 fail: _,
+                exception_id: _,
             } => {
                 // for now, treat invoke as a normal call
                 self.set_last_seen(*symbol, stmt);
@@ -508,7 +516,7 @@ where
             Stmt::Ret(sym) => {
                 self.set_last_seen(*sym, stmt);
             }
-            Stmt::Rethrow => {}
+            Stmt::Resume(_exception_id) => {}
             Stmt::Refcounting(modify, following) => {
                 let sym = modify.get_symbol();
 
@@ -517,7 +525,7 @@ where
             }
             Stmt::Join {
                 parameters,
-                continuation,
+                body: continuation,
                 remainder,
                 ..
             } => {

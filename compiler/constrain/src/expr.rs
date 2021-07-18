@@ -96,7 +96,7 @@ pub fn constrain_expr(
     expected: Expected<Type>,
 ) -> Constraint {
     match expr {
-        Int(var, percision, _) => int_literal(*var, *percision, expected, region),
+        Int(var, precision, _) => int_literal(*var, *precision, expected, region),
         Num(var, _) => exists(
             vec![*var],
             Eq(
@@ -106,7 +106,7 @@ pub fn constrain_expr(
                 region,
             ),
         ),
-        Float(var, percision, _) => float_literal(*var, *percision, expected, region),
+        Float(var, precision, _) => float_literal(*var, *precision, expected, region),
         EmptyRecord => constrain_empty_record(region, expected),
         Expr::Record { record_var, fields } => {
             if fields.is_empty() {
@@ -220,7 +220,6 @@ pub fn constrain_expr(
         List {
             elem_var,
             loc_elems,
-            list_var: _unused,
         } => {
             if loc_elems.is_empty() {
                 exists(

@@ -5,7 +5,7 @@ use wgpu::{
     ShaderStage,
 };
 
-// orthographic projection is used to transfrom pixel coords to the coordinate system used by wgpu
+// orthographic projection is used to transform pixel coords to the coordinate system used by wgpu
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]

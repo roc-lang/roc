@@ -20,18 +20,18 @@ comptime {
     }
 }
 
-fn testing_roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
+fn testing_roc_alloc(size: usize, _: u32) callconv(.C) ?*c_void {
     return @ptrCast(?*c_void, std.testing.allocator.alloc(u8, size) catch unreachable);
 }
 
-fn testing_roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void {
+fn testing_roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, _: u32) callconv(.C) ?*c_void {
     const ptr = @ptrCast([*]u8, @alignCast(16, c_ptr));
     const slice = ptr[0..old_size];
 
     return @ptrCast(?*c_void, std.testing.allocator.realloc(slice, new_size) catch unreachable);
 }
 
-fn testing_roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
+fn testing_roc_dealloc(c_ptr: *c_void, _: u32) callconv(.C) void {
     const ptr = @ptrCast([*]u8, @alignCast(16, c_ptr));
 
     std.testing.allocator.destroy(ptr);
@@ -53,8 +53,8 @@ pub const Inc = fn (?[*]u8) callconv(.C) void;
 pub const IncN = fn (?[*]u8, u64) callconv(.C) void;
 pub const Dec = fn (?[*]u8) callconv(.C) void;
 
-const REFCOUNT_MAX_ISIZE: comptime isize = 0;
-pub const REFCOUNT_ONE_ISIZE: comptime isize = std.math.minInt(isize);
+const REFCOUNT_MAX_ISIZE: isize = 0;
+pub const REFCOUNT_ONE_ISIZE: isize = std.math.minInt(isize);
 pub const REFCOUNT_ONE: usize = @bitCast(usize, REFCOUNT_ONE_ISIZE);
 
 pub const IntWidth = enum(u8) {
@@ -70,44 +70,6 @@ pub const IntWidth = enum(u8) {
     I128,
     Usize,
 };
-
-pub fn intWidth(width: IntWidth) anytype {
-    switch (width) {
-        IntWidth.U8 => {
-            return u8;
-        },
-        IntWidth.U16 => {
-            return u16;
-        },
-        IntWidth.U32 => {
-            return u32;
-        },
-        IntWidth.U64 => {
-            return u64;
-        },
-        IntWidth.U128 => {
-            return u128;
-        },
-        IntWidth.I8 => {
-            return i8;
-        },
-        IntWidth.I16 => {
-            return i16;
-        },
-        IntWidth.I32 => {
-            return i32;
-        },
-        IntWidth.I64 => {
-            return i64;
-        },
-        IntWidth.I128 => {
-            return i128;
-        },
-        IntWidth.Usize => {
-            return usize;
-        },
-    }
-}
 
 pub fn decref(
     bytes_or_null: ?[*]u8,
@@ -148,7 +110,7 @@ pub fn allocateWithRefcount(
     data_bytes: usize,
     alignment: u32,
 ) [*]u8 {
-    comptime const result_in_place = false;
+    const result_in_place = false;
 
     switch (alignment) {
         16 => {

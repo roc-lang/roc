@@ -105,7 +105,7 @@ impl GridNodeMap {
         }
     }
 
-    // get position of first occurence of node_id if get_first_pos, else get the last occurence
+    // get position of first occurrence of node_id if get_first_pos, else get the last occurrence
     pub fn get_node_position(&self, node_id: MarkNodeId, get_first_pos: bool) -> EdResult<TextPos> {
         let mut last_pos_opt = None;
 

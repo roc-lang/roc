@@ -561,14 +561,14 @@ pub fn sort_can_defs(
                     )));
 
                     declarations.push(Declaration::InvalidCycle(entries));
-
-                    // other groups may depend on the symbols defined here, so
-                    // also push this cycle onto the groups
-                    groups.push(cycle);
-                } else {
-                    // slightly inefficient, because we know this becomes exactly one DeclareRec already
-                    groups.push(cycle);
                 }
+
+                // if it's an invalid cycle, other groups may depend on the
+                // symbols defined here, so also push this cycle onto the groups
+                //
+                // if it's not an invalid cycle, this is slightly inefficient,
+                // because we know this becomes exactly one DeclareRec already
+                groups.push(cycle);
             }
 
             // now we have a collection of groups whose dependencies are not cyclic.

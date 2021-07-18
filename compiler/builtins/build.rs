@@ -9,6 +9,23 @@ use std::str;
 
 fn main() {
     let out_dir = env::var_os("OUT_DIR").unwrap();
+    let dest_obj_path = Path::new(&out_dir).join("builtins.o");
+    let dest_obj = dest_obj_path.to_str().expect("Invalid dest object path");
+
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rustc-env=BUILTINS_O={}", dest_obj);
+
+    // When we build on Netlify, zig is not installed (but also not used,
+    // since all we're doing is generating docs), so we can skip the steps
+    // that require having zig installed.
+    if env::var_os("NO_ZIG_INSTALLED").is_some() {
+        // We still need to do the other things before this point, because
+        // setting the env vars is needed for other parts of the build.
+        return;
+    }
+
+    let big_sur_path = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib";
+    let use_build_script = Path::new(big_sur_path).exists();
 
     // "." is relative to where "build.rs" is
     let build_script_dir_path = fs::canonicalize(Path::new(".")).unwrap();
@@ -16,35 +33,31 @@ fn main() {
 
     let src_obj_path = bitcode_path.join("builtins.o");
     let src_obj = src_obj_path.to_str().expect("Invalid src object path");
-    println!("Compiling zig object to: {}", src_obj);
 
-    run_command(&bitcode_path, "zig", &["build", "object", "-Drelease=true"]);
+    let dest_ir_path = bitcode_path.join("builtins.ll");
+    let dest_ir = dest_ir_path.to_str().expect("Invalid dest ir path");
 
-    let dest_obj_path = Path::new(&out_dir).join("builtins.o");
-    let dest_obj = dest_obj_path.to_str().expect("Invalid dest object path");
+    if use_build_script {
+        println!("Compiling zig object & ir to: {} and {}", src_obj, dest_ir);
+        run_command_with_no_args(&bitcode_path, "./build.sh");
+    } else {
+        println!("Compiling zig object to: {}", src_obj);
+        run_command(&bitcode_path, "zig", &["build", "object", "-Drelease=true"]);
+
+        println!("Compiling ir to: {}", dest_ir);
+        run_command(&bitcode_path, "zig", &["build", "ir", "-Drelease=true"]);
+    }
+
     println!("Moving zig object to: {}", dest_obj);
 
     run_command(&bitcode_path, "mv", &[src_obj, dest_obj]);
 
-    let dest_ir_path = bitcode_path.join("builtins.ll");
-    let dest_ir = dest_ir_path.to_str().expect("Invalid dest ir path");
-    println!("Compiling ir to: {}", dest_ir);
-
-    run_command(&bitcode_path, "zig", &["build", "ir", "-Drelease=true"]);
-
-    let dest_bc_path = Path::new(&out_dir).join("builtins.bc");
+    let dest_bc_path = bitcode_path.join("builtins.bc");
     let dest_bc = dest_bc_path.to_str().expect("Invalid dest bc path");
     println!("Compiling bitcode to: {}", dest_bc);
 
-    run_command(
-        build_script_dir_path,
-        "llvm-as-10",
-        &[dest_ir, "-o", dest_bc],
-    );
+    run_command(build_script_dir_path, "llvm-as", &[dest_ir, "-o", dest_bc]);
 
-    println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rustc-env=BUILTINS_BC={}", dest_bc);
-    println!("cargo:rustc-env=BUILTINS_O={}", dest_obj);
     get_zig_files(bitcode_path.as_path(), &|path| {
         let path: &Path = path;
         println!(
@@ -63,6 +76,25 @@ where
     let output_result = Command::new(OsStr::new(&command_str))
         .current_dir(path)
         .args(args)
+        .output();
+    match output_result {
+        Ok(output) => match output.status.success() {
+            true => (),
+            false => {
+                let error_str = match str::from_utf8(&output.stderr) {
+                    Ok(stderr) => stderr.to_string(),
+                    Err(_) => format!("Failed to run \"{}\"", command_str),
+                };
+                panic!("{} failed: {}", command_str, error_str);
+            }
+        },
+        Err(reason) => panic!("{} failed: {}", command_str, reason),
+    }
+}
+
+fn run_command_with_no_args<P: AsRef<Path>>(path: P, command_str: &str) {
+    let output_result = Command::new(OsStr::new(&command_str))
+        .current_dir(path)
         .output();
     match output_result {
         Ok(output) => match output.status.success() {

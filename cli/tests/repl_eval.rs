@@ -4,12 +4,10 @@ extern crate pretty_assertions;
 #[macro_use]
 extern crate indoc;
 
-mod helpers;
-
 #[cfg(test)]
 mod repl_eval {
-    use crate::helpers;
-    use roc_gen::run_roc::RocCallResult;
+    use cli_utils::helpers;
+    use roc_gen_llvm::run_roc::RocCallResult;
 
     #[test]
     fn check_discriminant_size() {
@@ -18,7 +16,8 @@ mod repl_eval {
         let value: i64 = 1234;
         assert_eq!(
             std::mem::size_of_val(&RocCallResult::Success(value)),
-            roc_gen::run_roc::ROC_CALL_RESULT_DISCRIMINANT_SIZE + std::mem::size_of_val(&value)
+            roc_gen_llvm::run_roc::ROC_CALL_RESULT_DISCRIMINANT_SIZE
+                + std::mem::size_of_val(&value)
         )
     }
 
@@ -500,15 +499,11 @@ mod repl_eval {
 
     #[test]
     fn identity_lambda() {
-        // Even though this gets unwrapped at runtime, the repl should still
-        // report it as a record
         expect_success("\\x -> x", "<function> : a -> a");
     }
 
     #[test]
     fn stdlib_function() {
-        // Even though this gets unwrapped at runtime, the repl should still
-        // report it as a record
         expect_success("Num.abs", "<function> : Num a -> Num a");
     }
 

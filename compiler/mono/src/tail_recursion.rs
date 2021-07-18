@@ -60,7 +60,7 @@ pub fn make_tail_recursive<'a>(
                 id,
                 remainder: jump,
                 parameters: params,
-                continuation: new,
+                body: new,
             }
         }
     }
@@ -102,9 +102,10 @@ fn insert_jumps<'a>(
                 },
             fail,
             pass: Stmt::Ret(rsym),
+            exception_id,
             ..
         } if needle == *fsym && symbol == rsym => {
-            debug_assert_eq!(fail, &&Stmt::Rethrow);
+            debug_assert_eq!(fail, &&Stmt::Resume(*exception_id));
 
             // replace the call and return with a jump
 
@@ -131,6 +132,7 @@ fn insert_jumps<'a>(
             fail,
             pass,
             layout,
+            exception_id,
         } => {
             let opt_pass = insert_jumps(arena, pass, goal_id, needle);
             let opt_fail = insert_jumps(arena, fail, goal_id, needle);
@@ -145,6 +147,7 @@ fn insert_jumps<'a>(
                     layout: *layout,
                     pass,
                     fail,
+                    exception_id: *exception_id,
                 };
 
                 Some(arena.alloc(stmt))
@@ -157,7 +160,7 @@ fn insert_jumps<'a>(
             id,
             parameters,
             remainder,
-            continuation,
+            body: continuation,
         } => {
             let opt_remainder = insert_jumps(arena, remainder, goal_id, needle);
             let opt_continuation = insert_jumps(arena, continuation, goal_id, needle);
@@ -170,7 +173,7 @@ fn insert_jumps<'a>(
                     id: *id,
                     parameters,
                     remainder,
-                    continuation,
+                    body: continuation,
                 }))
             } else {
                 None
@@ -238,7 +241,7 @@ fn insert_jumps<'a>(
             None => None,
         },
 
-        Rethrow => None,
+        Resume(_) => None,
         Ret(_) => None,
         Jump(_, _) => None,
         RuntimeError(_) => None,

@@ -1,0 +1,25 @@
+procedure List.7 (#Attr.2):
+    let Test.8 = lowlevel ListLen #Attr.2;
+    ret Test.8;
+
+procedure List.7 (#Attr.2):
+    let Test.9 = lowlevel ListLen #Attr.2;
+    ret Test.9;
+
+procedure Num.24 (#Attr.2, #Attr.3):
+    let Test.6 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Test.6;
+
+procedure Test.0 ():
+    let Test.11 = 1i64;
+    let Test.12 = 2i64;
+    let Test.13 = 3i64;
+    let Test.1 = Array [Test.11, Test.12, Test.13];
+    let Test.10 = 1f64;
+    let Test.2 = Array [Test.10];
+    let Test.4 = CallByName List.7 Test.1;
+    dec Test.1;
+    let Test.5 = CallByName List.7 Test.2;
+    dec Test.2;
+    let Test.3 = CallByName Num.24 Test.4 Test.5;
+    ret Test.3;

@@ -194,7 +194,7 @@ startsWith : Str, Str -> Bool
 ## if you want to check whether a string begins with something that's representable
 ## in a single code point, you can use (for example) `Str.startsWithCodePoint '鹏'`
 ## instead of `Str.startsWithCodePoint "鹏"`. ('鹏' evaluates to the [U32]
-## value `40527`.) This will not work for graphemes which take up mulitple code
+## value `40527`.) This will not work for graphemes which take up multiple code
 ## points, however; `Str.startsWithCodePoint '👩‍👩‍👦‍👦'` would be a compiler error
 ## because 👩‍👩‍👦‍👦 takes up multiple code points and cannot be represented as a
 ## single [U32]. You'd need to use `Str.startsWithCodePoint "🕊"` instead.
@@ -427,18 +427,68 @@ chomp : Str, Str -> Result Str [ Expected [ ExactStr Str ]* Str ]*
 ## equal to the given [U32], return whatever comes after that code point.
 chompCodePoint : Str, U32 -> Result Str [ Expected [ ExactCodePoint U32 ]* Str ]*
 
-## If the string begins with digits which can represent a valid #U8, return
-## that number along with the rest of the string after the digits.
-parseU8 : Str -> Result { val : U8, rest : Str } [ Expected [ NumU8 ]* Str ]*
-parseI8 : Str -> Result { val : I8, rest : Str } [ Expected [ NumI8 ]* Str ]*
-parseU16 : Str -> Result { val : U16, rest : Str } [ Expected [ NumU16 ]* Str ]*
-parseI16 : Str -> Result { val : I16, rest : Str } [ Expected [ NumI16 ]* Str ]*
-parseU32 : Str -> Result { val : U32, rest : Str } [ Expected [ NumU32 ]* Str ]*
-parseI32 : Str -> Result { val : I32, rest : Str } [ Expected [ NumI32 ]* Str ]*
-parseU64 : Str -> Result { val : U64, rest : Str } [ Expected [ NumU64 ]* Str ]*
-parseI64 : Str -> Result { val : I64, rest : Str } [ Expected [ NumI64 ]* Str ]*
-parseU128 : Str -> Result { val : U128, rest : Str } [ Expected [ NumU128 ]* Str ]*
-parseI128 : Str -> Result { val : I128, rest : Str } [ Expected [ NumI128 ]* Str ]*
+## If the string represents a valid #U8 number, return that number.
+##
+## For more advanced options, see [parseU8].
+toU8 : Str -> Result U8 [ InvalidU8 ]*
+toI8 : Str -> Result I8 [ InvalidI8 ]*
+toU16 : Str -> Result U16 [ InvalidU16 ]*
+toI16 : Str -> Result I16 [ InvalidI16 ]*
+toU32 : Str -> Result U32 [ InvalidU32 ]*
+toI32 : Str -> Result I32 [ InvalidI32 ]*
+toU64 : Str -> Result U64 [ InvalidU64 ]*
+toI64 : Str -> Result I64 [ InvalidI64 ]*
+toU128 : Str -> Result U128 [ InvalidU128 ]*
+toI128 : Str -> Result I128 [ InvalidI128 ]*
+toF64 : Str -> Result U128 [ InvalidF64 ]*
+toF32 : Str -> Result I128 [ InvalidF32 ]*
+toDec : Str -> Result Dec [ InvalidDec ]*
 
-parseF64 : Str -> Result { val : U128, rest : Str } [ Expected [ NumF64 ]* Str ]*
-parseF32 : Str -> Result { val : I128, rest : Str } [ Expected [ NumF32 ]* Str ]*
+## If the string represents a valid number, return that number.
+##
+## The exact number type to look for will be inferred from usage. Here's an
+## example where the `Err` branch matches `Integer Signed64`, which causes this to
+## parse an [I64] because [I64] is defined as `I64 : Num [ Integer [ Signed64 ] ]`.
+##
+## >>> when Str.toNum "12345" is
+## >>>     Ok i64 -> "The I64 was: \(i64)"
+## >>>     Err (ExpectedNum (Integer Signed64)) -> "Not a valid I64!"
+##
+## If the string is exactly `"NaN"`, `"∞"`, or `"-∞"`, they will be accepted
+## only when converting to [F64] or [F32] numbers, and will be translated accordingly.
+##
+## This never accepts numbers with underscores or commas in them. For more
+## advanced options, see [parseNum].
+toNum : Str -> Result (Num a) [ ExpectedNum a ]*
+
+## If the string begins with an [Int] or a [finite](Num.isFinite) [Frac], return
+## that number along with the rest of the string after it.
+##
+## The exact number type to look for will be inferred from usage. Here's an
+## example where the `Err` branch matches `Float Binary64`, which causes this to
+## parse an [F64] because [F64] is defined as `F64 : Num [ Fraction [ Float64 ] ]`.
+##
+## >>> when Str.parseNum input {} is
+## >>>     Ok { val: f64, rest } -> "The F64 was: \(f64)"
+## >>>     Err (ExpectedNum (Fraction Float64)) -> "Not a valid F64!"
+##
+## If the string begins with `"NaN"`, `"∞"`, and `"-∞"` (which do not represent
+## [finite](Num.isFinite) numbers), they will be accepted only when parsing
+## [F64] or [F32] numbers, and translated accordingly.
+parseNum : Str, NumParseConfig -> Result { val : Num a, rest : Str } [ ExpectedNum a ]*
+
+## Notes:
+## * You can allow a decimal mark for integers; they'll only parse if the numbers after it are all 0.
+## * For `wholeSep`, `Required` has a payload for how many digits (e.g. "required every 3 digits")
+## * For `wholeSep`, `Allowed` allows the separator to appear anywhere.
+NumParseConfig :
+    {
+        base ? [ Decimal, Hexadecimal, Octal, Binary ],
+        notation ? [ Standard, Scientific, Any ],
+        decimalMark ? [ Allowed Str, Required Str, Disallowed ],
+        decimalDigits ? [ Any, AtLeast U16, Exactly U16 ],
+        wholeDigits ? [ Any, AtLeast U16, Exactly U16 ],
+        leadingZeroes ? [ Allowed, Disallowed ],
+        trailingZeroes ? [ Allowed, Disallowed ],
+        wholeSep ? { mark : Str, policy : [ Allowed, Required U64 ] }
+    }

@@ -11,6 +11,7 @@ use roc_types::types::Alias;
 pub struct SolvedModule {
     pub solved_types: MutMap<Symbol, SolvedType>,
     pub aliases: MutMap<Symbol, Alias>,
+    pub exposed_symbols: Vec<Symbol>,
     pub exposed_vars_by_symbol: MutMap<Symbol, Variable>,
     pub problems: Vec<solve::TypeError>,
 }

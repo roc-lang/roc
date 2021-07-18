@@ -1,11 +1,15 @@
 #![allow(clippy::manual_map)]
 
+use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasherDefault;
+
 use crate::lang::pattern::{Pattern2, PatternId};
 use crate::lang::pool::Pool;
 use crate::lang::pool::{NodeId, PoolStr, PoolVec, ShallowClone};
 use crate::lang::types::{Type2, TypeId};
 use arraystring::{typenum::U30, ArrayString};
 use roc_can::expr::Recursive;
+use roc_collections::all::WyHash;
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::Symbol;
@@ -114,15 +118,14 @@ pub enum Expr2 {
     InvalidLookup(PoolStr), // 8B
 
     List {
-        list_var: Variable,    // 4B - required for uniqueness of the list
-        elem_var: Variable,    // 4B
-        elems: PoolVec<Expr2>, // 8B
+        elem_var: Variable,     // 4B
+        elems: PoolVec<ExprId>, // 8B
     },
     If {
-        cond_var: Variable,                // 4B
-        expr_var: Variable,                // 4B
-        branches: PoolVec<(Expr2, Expr2)>, // 8B
-        final_else: NodeId<Expr2>,         // 4B
+        cond_var: Variable,                                // 4B
+        expr_var: Variable,                                // 4B
+        branches: PoolVec<(NodeId<Expr2>, NodeId<Expr2>)>, // 8B
+        final_else: NodeId<Expr2>,                         // 4B
     },
     When {
         cond_var: Variable,            // 4B
@@ -136,9 +139,9 @@ pub enum Expr2 {
         body_id: NodeId<Expr2>,     // 4B
     },
     LetFunction {
-        def: NodeId<FunctionDef>, // 4B
-        body_var: Variable,       // 8B
-        body_id: NodeId<Expr2>,   // 4B
+        def_id: NodeId<FunctionDef>, // 4B
+        body_var: Variable,          // 8B
+        body_id: NodeId<Expr2>,      // 4B
     },
     LetValue {
         def_id: NodeId<ValueDef>, // 4B
@@ -218,21 +221,46 @@ pub enum Expr2 {
 }
 
 #[derive(Debug)]
-pub struct ValueDef {
-    pub pattern: PatternId,                  // 4B
-    pub expr_type: Option<(TypeId, Rigids)>, // ?
-    pub expr_var: Variable,                  // 4B
+pub enum ValueDef {
+    WithAnnotation {
+        pattern_id: PatternId, // 4B
+        expr_id: ExprId,       // 4B
+        type_id: TypeId,
+        rigids: Rigids,
+        expr_var: Variable, // 4B
+    },
+    NoAnnotation {
+        pattern_id: PatternId, // 4B
+        expr_id: ExprId,       // 4B
+        expr_var: Variable,    // 4B
+    },
 }
 
 impl ShallowClone for ValueDef {
     fn shallow_clone(&self) -> Self {
-        Self {
-            pattern: self.pattern,
-            expr_type: match &self.expr_type {
-                Some((id, rigids)) => Some((*id, rigids.shallow_clone())),
-                None => None,
+        match self {
+            Self::WithAnnotation {
+                pattern_id,
+                expr_id,
+                type_id,
+                rigids,
+                expr_var,
+            } => Self::WithAnnotation {
+                pattern_id: *pattern_id,
+                expr_id: *expr_id,
+                type_id: *type_id,
+                rigids: rigids.shallow_clone(),
+                expr_var: *expr_var,
             },
-            expr_var: self.expr_var,
+            Self::NoAnnotation {
+                pattern_id,
+                expr_id,
+                expr_var,
+            } => Self::NoAnnotation {
+                pattern_id: *pattern_id,
+                expr_id: *expr_id,
+                expr_var: *expr_var,
+            },
         }
     }
 }
@@ -288,8 +316,68 @@ impl ShallowClone for FunctionDef {
 
 #[derive(Debug)]
 pub struct Rigids {
-    pub named: PoolVec<(PoolStr, Variable)>, // 8B
-    pub unnamed: PoolVec<Variable>,          // 8B
+    pub names: PoolVec<(Option<PoolStr>, Variable)>, // 8B
+    padding: [u8; 1],
+}
+
+#[allow(clippy::needless_collect)]
+impl Rigids {
+    pub fn new(
+        named: HashMap<&str, Variable, BuildHasherDefault<WyHash>>,
+        unnamed: HashSet<Variable, BuildHasherDefault<WyHash>>,
+        pool: &mut Pool,
+    ) -> Self {
+        let names = PoolVec::with_capacity((named.len() + unnamed.len()) as u32, pool);
+
+        let mut temp_names = Vec::new();
+
+        temp_names.extend(named.iter().map(|(name, var)| (Some(*name), *var)));
+
+        temp_names.extend(unnamed.iter().map(|var| (None, *var)));
+
+        for (node_id, (opt_name, variable)) in names.iter_node_ids().zip(temp_names) {
+            let poolstr = opt_name.map(|name| PoolStr::new(name, pool));
+
+            pool[node_id] = (poolstr, variable);
+        }
+
+        Self {
+            names,
+            padding: Default::default(),
+        }
+    }
+
+    pub fn named(&self, pool: &mut Pool) -> PoolVec<(PoolStr, Variable)> {
+        let named = self
+            .names
+            .iter(pool)
+            .filter_map(|(opt_pool_str, var)| {
+                if let Some(pool_str) = opt_pool_str {
+                    Some((*pool_str, *var))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<(PoolStr, Variable)>>();
+
+        PoolVec::new(named.into_iter(), pool)
+    }
+
+    pub fn unnamed(&self, pool: &mut Pool) -> PoolVec<Variable> {
+        let unnamed = self
+            .names
+            .iter(pool)
+            .filter_map(|(opt_pool_str, var)| {
+                if opt_pool_str.is_none() {
+                    Some(*var)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<Variable>>();
+
+        PoolVec::new(unnamed.into_iter(), pool)
+    }
 }
 
 /// This is overflow data from a Closure variant, which needs to store
@@ -348,8 +436,9 @@ impl RecordField {
 
 pub fn expr2_to_string(node_id: NodeId<Expr2>, pool: &Pool) -> String {
     let mut full_string = String::new();
+    let expr2 = pool.get(node_id);
 
-    expr2_to_string_helper(node_id, 0, pool, &mut full_string);
+    expr2_to_string_helper(expr2, 0, pool, &mut full_string);
 
     full_string
 }
@@ -362,13 +451,11 @@ fn get_spacing(indent_level: usize) -> String {
 }
 
 fn expr2_to_string_helper(
-    node_id: NodeId<Expr2>,
+    expr2: &Expr2,
     indent_level: usize,
     pool: &Pool,
     out_string: &mut String,
 ) {
-    let expr2 = pool.get(node_id);
-
     out_string.push_str(&get_spacing(indent_level));
 
     match expr2 {
@@ -385,11 +472,7 @@ fn expr2_to_string_helper(
         Expr2::EmptyRecord => out_string.push_str("EmptyRecord"),
         Expr2::Record { record_var, fields } => {
             out_string.push_str("Record:\n");
-            out_string.push_str(&format!(
-                "{}Var({:?})\n",
-                get_spacing(indent_level + 1),
-                record_var
-            ));
+            out_string.push_str(&var_to_string(&record_var, indent_level + 1));
 
             out_string.push_str(&format!("{}fields: [\n", get_spacing(indent_level + 1)));
 
@@ -428,10 +511,32 @@ fn expr2_to_string_helper(
                             var,
                         ));
 
-                        expr2_to_string_helper(*val_node_id, indent_level + 3, pool, out_string);
+                        let val_expr2 = pool.get(*val_node_id);
+                        expr2_to_string_helper(val_expr2, indent_level + 3, pool, out_string);
                         out_string.push_str(&format!("{})\n", get_spacing(indent_level + 2)));
                     }
                 }
+            }
+
+            out_string.push_str(&format!("{}]\n", get_spacing(indent_level + 1)));
+        }
+        Expr2::List { elem_var, elems } => {
+            out_string.push_str("List:\n");
+            out_string.push_str(&var_to_string(elem_var, indent_level + 1));
+            out_string.push_str(&format!("{}elems: [\n", get_spacing(indent_level + 1)));
+
+            let mut first_elt = true;
+
+            for elem_expr2_id in elems.iter(pool) {
+                if !first_elt {
+                    out_string.push_str(", ")
+                } else {
+                    first_elt = false;
+                }
+
+                let elem_expr2 = pool.get(*elem_expr2_id);
+
+                expr2_to_string_helper(elem_expr2, indent_level + 2, pool, out_string)
             }
 
             out_string.push_str(&format!("{}]\n", get_spacing(indent_level + 1)));
@@ -448,6 +553,10 @@ fn expr2_to_string_helper(
     out_string.push('\n');
 }
 
+fn var_to_string(some_var: &Variable, indent_level: usize) -> String {
+    format!("{}Var({:?})\n", get_spacing(indent_level + 1), some_var)
+}
+
 #[test]
 fn size_of_expr() {
     assert_eq!(std::mem::size_of::<Expr2>(), crate::lang::pool::NODE_BYTES);
@@ -456,8 +565,8 @@ fn size_of_expr() {
 impl ShallowClone for Rigids {
     fn shallow_clone(&self) -> Self {
         Self {
-            named: self.named.shallow_clone(),
-            unnamed: self.unnamed.shallow_clone(),
+            names: self.names.shallow_clone(),
+            padding: self.padding,
         }
     }
 }

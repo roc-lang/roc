@@ -278,10 +278,10 @@ impl ModuleId {
         // This is a no-op that should get DCE'd
     }
 
-    pub fn to_string<'a>(&self, interns: &'a Interns) -> &'a InlinableString {
+    pub fn to_string(self, interns: &Interns) -> &InlinableString {
         interns
             .module_ids
-            .get_name(*self)
+            .get_name(self)
             .unwrap_or_else(|| panic!("Could not find ModuleIds for {:?}", self))
     }
 }
@@ -396,17 +396,15 @@ impl<'a> PackageModuleIds<'a> {
     fn insert_debug_name(module_id: ModuleId, module_name: &PQModuleName) {
         let mut names = DEBUG_MODULE_ID_NAMES.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
-        if !names.contains_key(&module_id.0) {
-            match module_name {
-                PQModuleName::Unqualified(module) => {
-                    names.insert(module_id.0, module.to_string().into());
-                }
+        names
+            .entry(module_id.0)
+            .or_insert_with(|| match module_name {
+                PQModuleName::Unqualified(module) => module.to_string().into(),
                 PQModuleName::Qualified(package, module) => {
                     let name = format!("{}.{}", package, module).into();
-                    names.insert(module_id.0, name);
+                    name
                 }
-            }
-        }
+            });
     }
 
     #[cfg(not(debug_assertions))]
@@ -464,9 +462,9 @@ impl ModuleIds {
         let mut names = DEBUG_MODULE_ID_NAMES.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
         // TODO make sure modules are never added more than once!
-        if !names.contains_key(&module_id.0) {
-            names.insert(module_id.0, module_name.to_string().into());
-        }
+        names
+            .entry(module_id.0)
+            .or_insert_with(|| module_name.to_string().into());
     }
 
     #[cfg(not(debug_assertions))]
@@ -904,6 +902,7 @@ define_builtins! {
         14 STR_UT8_BYTE_PROBLEM: "Utf8ByteProblem" // the Utf8ByteProblem type alias
         15 STR_TO_BYTES: "toBytes"
         16 STR_STARTS_WITH_CODE_POINT: "startsWithCodePoint"
+        17 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -939,6 +938,7 @@ define_builtins! {
         30 LIST_RANGE: "range"
         31 LIST_SORT_WITH: "sortWith"
         32 LIST_DROP: "drop"
+        33 LIST_SWAP: "swap"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" imported // the Result.Result type alias

@@ -12,6 +12,7 @@
 /// This is important for performance.
 use libc::{c_void, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 use roc_can::expected::Expected;
+use roc_can::expected::PExpected;
 use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::mem::size_of;
@@ -42,6 +43,23 @@ pub const NODE_BYTES: usize = 32;
 //   usize pointers, which would be too big for us to have 16B nodes.
 //   On the plus side, we could be okay with higher memory usage early on,
 //   and then later use the Mesh strategy to reduce long-running memory usage.
+//
+// With this system, we can allocate up to 4B nodes. If we wanted to keep
+// a generational index in there, like https://crates.io/crates/sharded-slab
+// does, we could use some of the 32 bits for that. For example, if we wanted
+// to have a 5-bit generational index (supporting up to 32 generations), then
+// we would have 27 bits remaining, meaning we could only support at most
+// 134M nodes. Since the editor has a separate Pool for each module, is that
+// enough for any single module we'll encounter in practice? Probably, and
+// especially if we allocate super large collection literals on the heap instead
+// of in the pool.
+//
+// Another possible design is to try to catch reuse bugs using an "ASan" like
+// approach: in development builds, whenever we "free" a particular slot, we
+// can add it to a dev-build-only "freed nodes" list and don't hand it back
+// out (so, we leak the memory.) Then we can (again, in development builds only)
+// check to see if we're about to store something in zeroed-out memory; if so, check
+// to see if it was
 
 #[derive(Debug, Eq)]
 pub struct NodeId<T> {
@@ -334,11 +352,11 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
             let index = first_node_id.index as isize;
             let mut next_node_ptr = unsafe { pool.nodes.offset(index) } as *mut T;
 
-            for node in nodes {
+            for (indx_inc, node) in nodes.enumerate() {
                 unsafe {
                     *next_node_ptr = node;
 
-                    next_node_ptr = next_node_ptr.offset(1);
+                    next_node_ptr = pool.nodes.offset(index + (indx_inc as isize) + 1) as *mut T;
                 }
             }
 
@@ -585,6 +603,17 @@ impl<T> Iterator for PoolVecIterNodeIds<T> {
     }
 }
 
+#[test]
+fn pool_vec_iter_test() {
+    let expected_vec: Vec<usize> = vec![2, 4, 8, 16];
+
+    let mut test_pool = Pool::with_capacity(1024);
+    let pool_vec = PoolVec::new(expected_vec.clone().into_iter(), &mut test_pool);
+
+    let current_vec: Vec<usize> = pool_vec.iter(&test_pool).copied().collect();
+
+    assert_eq!(current_vec, expected_vec);
+}
 /// Clones the outer node, but does not clone any nodeids
 pub trait ShallowClone {
     fn shallow_clone(&self) -> Self;
@@ -600,6 +629,17 @@ impl<T: ShallowClone> ShallowClone for Expected<T> {
             FromAnnotation(loc_pat, n, source, t) => {
                 FromAnnotation(loc_pat.clone(), *n, *source, t.shallow_clone())
             }
+        }
+    }
+}
+
+impl<T: ShallowClone> ShallowClone for PExpected<T> {
+    fn shallow_clone(&self) -> Self {
+        use PExpected::*;
+
+        match self {
+            NoExpectation(t) => NoExpectation(t.shallow_clone()),
+            ForReason(reason, t, region) => ForReason(reason.clone(), t.shallow_clone(), *region),
         }
     }
 }

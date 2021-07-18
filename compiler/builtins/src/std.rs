@@ -292,7 +292,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // minInt : Int range
     add_type!(Symbol::NUM_MIN_INT, int_type(flex(TVAR1)));
 
-    // div : Int, Int -> Result Int [ DivByZero ]*
+    // divInt : Int a, Int a -> Result (Int a) [ DivByZero ]*
     let div_by_zero = SolvedType::TagUnion(
         vec![(TagName::Global("DivByZero".into()), vec![])],
         Box::new(SolvedType::Wildcard),
@@ -853,6 +853,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_top_level_function_type!(
         Symbol::LIST_DROP,
         vec![list_type(flex(TVAR1)), nat_type()],
+        Box::new(list_type(flex(TVAR1))),
+    );
+
+    // swap : List elem, Nat, Nat -> List elem
+    add_top_level_function_type!(
+        Symbol::LIST_SWAP,
+        vec![list_type(flex(TVAR1)), nat_type(), nat_type()],
         Box::new(list_type(flex(TVAR1))),
     );
 

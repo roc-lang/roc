@@ -30,6 +30,8 @@ comptime {
     exportListFn(list.listConcat, "concat");
     exportListFn(list.listDrop, "drop");
     exportListFn(list.listSet, "set");
+    exportListFn(list.listSetInPlace, "set_in_place");
+    exportListFn(list.listSwap, "swap");
 }
 
 // Dict Module

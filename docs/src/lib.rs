@@ -3,14 +3,15 @@ use roc_builtins::std::StdLib;
 use roc_can::builtins::builtin_defs_map;
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
-use roc_load::file::LoadingProblem;
-use roc_module::symbol::{Interns, ModuleId};
+use roc_load::file::{LoadedModule, LoadingProblem};
+use roc_module::symbol::Interns;
 
 use std::fs;
 extern crate roc_load;
 use bumpalo::Bump;
 use roc_can::scope::Scope;
 use roc_collections::all::MutMap;
+use roc_load::docs::DocEntry::DocDef;
 use roc_region::all::Region;
 use std::path::{Path, PathBuf};
 
@@ -55,17 +56,24 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
             package
                 .modules
                 .iter()
-                .flat_map(|(docs_by_id, _)| docs_by_id.values()),
+                .flat_map(|loaded_module| loaded_module.documentation.values()),
         )
         .as_str(),
     );
 
     // Write each package's module docs html file
-    for (docs_by_id, interns) in package.modules.iter_mut() {
-        for module in docs_by_id.values_mut() {
-            let mut filename = String::new();
-            filename.push_str(module.name.as_str());
-            filename.push_str(".html");
+    for loaded_module in package.modules.iter_mut() {
+        let exports = loaded_module
+            .exposed_values
+            .iter()
+            .map(|symbol| symbol.ident_string(&loaded_module.interns).to_string())
+            .collect::<Vec<String>>();
+
+        for module in loaded_module.documentation.values_mut() {
+            let module_dir = build_dir.join(module.name.replace(".", "/").as_str());
+
+            fs::create_dir_all(&module_dir)
+                .expect("TODO gracefully handle not being able to create the module dir");
 
             let rendered_module = template_html
                 .replace(
@@ -75,10 +83,10 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
                 )
                 .replace(
                     "<!-- Module Docs -->",
-                    render_main_content(interns, module).as_str(),
+                    render_main_content(&loaded_module.interns, &exports, module).as_str(),
                 );
 
-            fs::write(build_dir.join(filename), rendered_module)
+            fs::write(module_dir.join("index.html"), rendered_module)
                 .expect("TODO gracefully handle failing to write html");
         }
     }
@@ -86,7 +94,11 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
     println!("🎉 Docs generated in {}", build_dir.display());
 }
 
-fn render_main_content(interns: &Interns, module: &mut ModuleDocumentation) -> String {
+fn render_main_content(
+    interns: &Interns,
+    exposed_values: &[String],
+    module: &mut ModuleDocumentation,
+) -> String {
     let mut buf = String::new();
 
     buf.push_str(
@@ -99,49 +111,63 @@ fn render_main_content(interns: &Interns, module: &mut ModuleDocumentation) -> S
     );
 
     for entry in &module.entries {
-        match entry {
-            DocEntry::DocDef(doc_def) => {
-                let mut href = String::new();
-                href.push('#');
-                href.push_str(doc_def.name.as_str());
+        let mut should_render_entry = true;
 
-                let name = doc_def.name.as_str();
+        if let DocDef(def) = entry {
+            // We dont want to render entries that arent exposed
+            should_render_entry = exposed_values.contains(&def.name);
+        }
 
-                let mut content = String::new();
+        if should_render_entry {
+            match entry {
+                DocEntry::DocDef(doc_def) => {
+                    let mut href = String::new();
+                    href.push('#');
+                    href.push_str(doc_def.name.as_str());
 
-                content.push_str(html_node("a", vec![("href", href.as_str())], name).as_str());
+                    let name = doc_def.name.as_str();
 
-                for type_var in &doc_def.type_vars {
-                    content.push(' ');
-                    content.push_str(type_var.as_str());
-                }
+                    let mut content = String::new();
 
-                if let Some(type_ann) = &doc_def.type_annotation {
-                    content.push_str(" : ");
+                    content.push_str(html_node("a", vec![("href", href.as_str())], name).as_str());
+
+                    for type_var in &doc_def.type_vars {
+                        content.push(' ');
+                        content.push_str(type_var.as_str());
+                    }
+
+                    let type_ann = &doc_def.type_annotation;
+
+                    match type_ann {
+                        TypeAnnotation::NoTypeAnn => {}
+                        _ => {
+                            content.push_str(" : ");
+                        }
+                    }
+
                     type_annotation_to_html(0, &mut content, &type_ann);
-                }
 
-                buf.push_str(
-                    html_node(
-                        "h3",
-                        vec![("id", name), ("class", "entry-name")],
-                        content.as_str(),
-                    )
-                    .as_str(),
-                );
-
-                if let Some(docs) = &doc_def.docs {
                     buf.push_str(
-                        markdown_to_html(&mut module.scope, interns, docs.to_string()).as_str(),
+                        html_node(
+                            "h3",
+                            vec![("id", name), ("class", "entry-name")],
+                            content.as_str(),
+                        )
+                        .as_str(),
                     );
+
+                    if let Some(docs) = &doc_def.docs {
+                        buf.push_str(
+                            markdown_to_html(&mut module.scope, interns, docs.to_string()).as_str(),
+                        );
+                    }
                 }
-            }
-            DocEntry::DetatchedDoc(docs) => {
-                buf.push_str(
-                    markdown_to_html(&mut module.scope, interns, docs.to_string()).as_str(),
-                );
-            }
-        };
+                DocEntry::DetachedDoc(docs) => {
+                    let markdown = markdown_to_html(&mut module.scope, interns, docs.to_string());
+                    buf.push_str(markdown.as_str());
+                }
+            };
+        }
     }
 
     buf
@@ -221,8 +247,8 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
 
         let href = {
             let mut href_buf = String::new();
+            href_buf.push('/');
             href_buf.push_str(name);
-            href_buf.push_str(".html");
             href_buf
         };
 
@@ -282,10 +308,7 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
     buf
 }
 
-pub fn files_to_documentations(
-    filenames: Vec<PathBuf>,
-    std_lib: StdLib,
-) -> Vec<(MutMap<ModuleId, ModuleDocumentation>, Interns)> {
+pub fn files_to_documentations(filenames: Vec<PathBuf>, std_lib: StdLib) -> Vec<LoadedModule> {
     let arena = Bump::new();
     let mut files_docs = vec![];
 
@@ -299,10 +322,10 @@ pub fn files_to_documentations(
             &std_lib,
             src_dir.as_path(),
             MutMap::default(),
-            8, // TODO: Is it okay to hardcode ptr_bytes here? I think it should be fine since we'er only type checking (also, 8 => 32bit system)
+            std::mem::size_of::<usize>() as u32, // This is just type-checking for docs, so "target" doesn't matter
             builtin_defs_map,
         ) {
-            Ok(loaded) => files_docs.push((loaded.documentation, loaded.interns)),
+            Ok(loaded) => files_docs.push(loaded),
             Err(LoadingProblem::FormattedReport(report)) => {
                 println!("{}", report);
                 panic!();
@@ -327,19 +350,34 @@ fn new_line(buf: &mut String) {
 }
 
 fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &TypeAnnotation) {
+    let is_multiline = should_be_multiline(type_ann);
     match type_ann {
         TypeAnnotation::TagUnion { tags, extension } => {
-            new_line(buf);
+            let tags_len = tags.len();
 
             let tag_union_indent = indent_level + 1;
-            indent(buf, tag_union_indent);
+
+            if is_multiline {
+                new_line(buf);
+
+                indent(buf, tag_union_indent);
+            }
+
             buf.push('[');
-            new_line(buf);
+
+            if is_multiline {
+                new_line(buf);
+            }
 
             let next_indent_level = tag_union_indent + 1;
 
             for (index, tag) in tags.iter().enumerate() {
-                indent(buf, next_indent_level);
+                if is_multiline {
+                    indent(buf, next_indent_level);
+                } else {
+                    buf.push(' ');
+                }
+
                 buf.push_str(tag.name.as_str());
 
                 for type_value in &tag.values {
@@ -347,19 +385,24 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                     type_annotation_to_html(next_indent_level, buf, type_value);
                 }
 
-                if index < (tags.len() - 1) {
-                    buf.push(',');
-                }
+                if is_multiline {
+                    if index < (tags_len - 1) {
+                        buf.push(',');
+                    }
 
-                new_line(buf);
+                    new_line(buf);
+                }
             }
 
-            indent(buf, tag_union_indent);
+            if is_multiline {
+                indent(buf, tag_union_indent);
+            } else {
+                buf.push(' ');
+            }
+
             buf.push(']');
 
-            if let Some(ext) = extension {
-                type_annotation_to_html(indent_level, buf, ext);
-            }
+            type_annotation_to_html(indent_level, buf, extension);
         }
         TypeAnnotation::BoundVariable(var_name) => {
             buf.push_str(var_name);
@@ -377,18 +420,30 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                 buf.push(')');
             }
         }
-        TypeAnnotation::Record { fields } => {
-            new_line(buf);
+        TypeAnnotation::Record { fields, extension } => {
+            let fields_len = fields.len();
 
             let record_indent = indent_level + 1;
-            indent(buf, record_indent);
+
+            if is_multiline {
+                new_line(buf);
+                indent(buf, record_indent);
+            }
+
             buf.push('{');
 
-            new_line(buf);
+            if is_multiline {
+                new_line(buf);
+            }
 
             let next_indent_level = record_indent + 1;
+
             for (index, field) in fields.iter().enumerate() {
-                indent(buf, next_indent_level);
+                if is_multiline {
+                    indent(buf, next_indent_level);
+                } else {
+                    buf.push(' ');
+                }
 
                 let fields_name = match field {
                     RecordField::RecordField { name, .. } => name,
@@ -414,20 +469,139 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
                     RecordField::LabelOnly { .. } => {}
                 }
 
-                if index < (fields.len() - 1) {
-                    buf.push(',');
-                }
+                if is_multiline {
+                    if index < (fields_len - 1) {
+                        buf.push(',');
+                    }
 
-                new_line(buf);
+                    new_line(buf);
+                }
             }
 
-            indent(buf, record_indent);
+            if is_multiline {
+                indent(buf, record_indent);
+            } else {
+                buf.push(' ');
+            }
+
             buf.push('}');
+
+            type_annotation_to_html(indent_level, buf, extension);
         }
+        TypeAnnotation::Function { args, output } => {
+            let mut peekable_args = args.iter().peekable();
+            while let Some(arg) = peekable_args.next() {
+                if is_multiline {
+                    if !should_be_multiline(arg) {
+                        new_line(buf);
+                    }
+                    indent(buf, indent_level + 1);
+                }
+
+                type_annotation_to_html(indent_level, buf, arg);
+
+                if peekable_args.peek().is_some() {
+                    buf.push_str(", ");
+                }
+            }
+
+            if is_multiline {
+                new_line(buf);
+                indent(buf, indent_level + 1);
+            }
+
+            buf.push_str(" -> ");
+
+            let mut next_indent_level = indent_level;
+
+            if should_be_multiline(output) {
+                next_indent_level += 1;
+            }
+
+            type_annotation_to_html(next_indent_level, buf, output);
+        }
+        TypeAnnotation::ObscuredTagUnion => {
+            buf.push_str("[ @.. ]");
+        }
+        TypeAnnotation::ObscuredRecord => {
+            buf.push_str("{ @.. }");
+        }
+        TypeAnnotation::NoTypeAnn => {}
+        TypeAnnotation::Wildcard => buf.push('*'),
     }
 }
 
-fn insert_doc_links(scope: &mut Scope, interns: &Interns, markdown: String) -> String {
+fn should_be_multiline(type_ann: &TypeAnnotation) -> bool {
+    match type_ann {
+        TypeAnnotation::TagUnion { tags, extension } => {
+            let mut is_multiline = should_be_multiline(extension) || tags.len() > 1;
+
+            for tag in tags {
+                for value in &tag.values {
+                    if is_multiline {
+                        break;
+                    }
+                    is_multiline = should_be_multiline(&value);
+                }
+            }
+
+            is_multiline
+        }
+        TypeAnnotation::Function { args, output } => {
+            let mut is_multiline = should_be_multiline(output) || args.len() > 1;
+
+            for arg in args {
+                if is_multiline {
+                    break;
+                }
+
+                is_multiline = should_be_multiline(arg);
+            }
+
+            is_multiline
+        }
+        TypeAnnotation::ObscuredTagUnion => false,
+        TypeAnnotation::ObscuredRecord => false,
+        TypeAnnotation::BoundVariable(_) => false,
+        TypeAnnotation::Apply { parts, .. } => {
+            let mut is_multiline = false;
+
+            for part in parts {
+                is_multiline = should_be_multiline(part);
+
+                if is_multiline {
+                    break;
+                }
+            }
+
+            is_multiline
+        }
+        TypeAnnotation::Record { fields, extension } => {
+            let mut is_multiline = should_be_multiline(extension) || fields.len() > 1;
+
+            for field in fields {
+                if is_multiline {
+                    break;
+                }
+                match field {
+                    RecordField::RecordField {
+                        type_annotation, ..
+                    } => is_multiline = should_be_multiline(type_annotation),
+                    RecordField::OptionalField {
+                        type_annotation, ..
+                    } => is_multiline = should_be_multiline(type_annotation),
+                    RecordField::LabelOnly { .. } => {}
+                }
+            }
+
+            is_multiline
+        }
+        TypeAnnotation::Wildcard => false,
+        TypeAnnotation::NoTypeAnn => false,
+    }
+}
+
+pub fn insert_doc_links(scope: &mut Scope, interns: &Interns, markdown: String) -> String {
     let buf = &markdown;
     let mut result = String::new();
 
@@ -458,7 +632,7 @@ fn insert_doc_links(scope: &mut Scope, interns: &Interns, markdown: String) -> S
                         interns,
                         &buf.chars()
                             .skip(from + 1)
-                            .take(index - from)
+                            .take(index - from - 1)
                             .collect::<String>(),
                     );
 
@@ -473,19 +647,25 @@ fn insert_doc_links(scope: &mut Scope, interns: &Interns, markdown: String) -> S
         }
     }
 
-    result
+    if chomping_from == None {
+        markdown
+    } else {
+        result
+    }
 }
 
 fn make_doc_link(scope: &mut Scope, interns: &Interns, doc_item: &str) -> String {
     match scope.lookup(&doc_item.into(), Region::zero()) {
         Ok(symbol) => {
             let module_str = symbol.module_string(interns);
+
             let ident_str = symbol.ident_string(interns);
 
             let mut link = String::new();
 
+            link.push('/');
             link.push_str(module_str);
-            link.push_str(".html#");
+            link.push('#');
             link.push_str(ident_str);
 
             let mut buf = String::new();
@@ -501,8 +681,8 @@ fn make_doc_link(scope: &mut Scope, interns: &Interns, doc_item: &str) -> String
         }
         Err(_) => {
             panic!(
-                "Could not find symbol in scope for module link : {}",
-                doc_item
+                "Tried to generate an automatic link in docs for symbol `{}`, but that symbol was not in scope in this module. Scope was: {:?}",
+                doc_item, scope
             )
         }
     }
@@ -520,62 +700,65 @@ fn markdown_to_html(scope: &mut Scope, interns: &Interns, markdown: String) -> S
     let mut docs_parser = vec![];
     let (_, _) = pulldown_cmark::Parser::new_ext(&markdown_with_links, markdown_options).fold(
         (0, 0),
-        |(start_quote_count, end_quote_count), event| match event {
-            // Replace this sequence (`>>>` syntax):
-            //     Start(BlockQuote)
-            //     Start(BlockQuote)
-            //     Start(BlockQuote)
-            //     Start(Paragraph)
-            // For `Start(CodeBlock(Fenced(Borrowed("roc"))))`
-            Event::Start(BlockQuote) => {
-                docs_parser.push(event);
-                (start_quote_count + 1, 0)
-            }
-            Event::Start(Paragraph) => {
-                if start_quote_count == 3 {
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.push(Event::Start(CodeBlock(CodeBlockKind::Fenced(
-                        CowStr::Borrowed("roc"),
-                    ))));
-                } else {
+        |(start_quote_count, end_quote_count), event| {
+            match event {
+                // Replace this sequence (`>>>` syntax):
+                //     Start(BlockQuote)
+                //     Start(BlockQuote)
+                //     Start(BlockQuote)
+                //     Start(Paragraph)
+                // For `Start(CodeBlock(Fenced(Borrowed("roc"))))`
+                Event::Start(BlockQuote) => {
                     docs_parser.push(event);
+                    (start_quote_count + 1, 0)
                 }
-                (0, 0)
-            }
-            // Replace this sequence (`>>>` syntax):
-            //     End(Paragraph)
-            //     End(BlockQuote)
-            //     End(BlockQuote)
-            //     End(BlockQuote)
-            // For `End(CodeBlock(Fenced(Borrowed("roc"))))`
-            Event::End(Paragraph) => {
-                docs_parser.push(event);
-                (0, 1)
-            }
-            Event::End(BlockQuote) => {
-                if end_quote_count == 3 {
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.pop();
-                    docs_parser.push(Event::End(CodeBlock(CodeBlockKind::Fenced(
-                        CowStr::Borrowed("roc"),
-                    ))));
+                Event::Start(Paragraph) => {
+                    if start_quote_count == 3 {
+                        docs_parser.pop();
+                        docs_parser.pop();
+                        docs_parser.pop();
+                        docs_parser.push(Event::Start(CodeBlock(CodeBlockKind::Fenced(
+                            CowStr::Borrowed("roc"),
+                        ))));
+                    } else {
+                        docs_parser.push(event);
+                    }
                     (0, 0)
-                } else {
-                    docs_parser.push(event);
-                    (0, end_quote_count + 1)
                 }
-            }
-            _ => {
-                docs_parser.push(event);
-                (0, 0)
+                // Replace this sequence (`>>>` syntax):
+                //     End(Paragraph)
+                //     End(BlockQuote)
+                //     End(BlockQuote)
+                //     End(BlockQuote)
+                // For `End(CodeBlock(Fenced(Borrowed("roc"))))`
+                Event::End(Paragraph) => {
+                    docs_parser.push(event);
+                    (0, 1)
+                }
+                Event::End(BlockQuote) => {
+                    if end_quote_count == 3 {
+                        docs_parser.pop();
+                        docs_parser.pop();
+                        docs_parser.pop();
+                        docs_parser.push(Event::End(CodeBlock(CodeBlockKind::Fenced(
+                            CowStr::Borrowed("roc"),
+                        ))));
+                        (0, 0)
+                    } else {
+                        docs_parser.push(event);
+                        (0, end_quote_count + 1)
+                    }
+                }
+                _ => {
+                    docs_parser.push(event);
+                    (0, 0)
+                }
             }
         },
     );
 
     let mut docs_html = String::new();
+
     pulldown_cmark::html::push_html(&mut docs_html, docs_parser.into_iter());
 
     docs_html

@@ -14,20 +14,30 @@ members = [
     "compiler/reporting",
     "compiler/fmt",
     "compiler/mono",
+    "compiler/test_mono_macros",
+    "compiler/test_mono",
     "compiler/load",
-    "compiler/gen",
+    "compiler/gen_llvm",
     "compiler/gen_dev",
     "compiler/build",
     "compiler/arena_pool",
     "compiler/test_gen",
     "vendor/ena",
+    "vendor/inkwell",
     "vendor/pathfinding",
     "vendor/pretty",
     "editor",
     "cli",
+    "cli/cli_utils",
     "roc_std",
-    "docs"
+    "docs",
 ]
+# Needed to be able to run `cargo run -p roc_cli --no-default-features` -
+# see www/build.sh for more.
+#
+# Without the `-p` flag, cargo ignores `--no-default-features` when you have a
+# workspace, and without `resolver = "2"` here, you can't use `-p` like this.
+resolver = "2"
 
 # Optimizations based on https://deterministic.space/high-performance-rust.html
 [profile.release]

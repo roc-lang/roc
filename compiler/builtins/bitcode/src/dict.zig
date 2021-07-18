@@ -20,13 +20,9 @@ const Slot = packed enum(u8) {
     PreviouslyFilled,
 };
 
-const MaybeIndexTag = enum {
-    index, not_found
-};
+const MaybeIndexTag = enum { index, not_found };
 
-const MaybeIndex = union(MaybeIndexTag) {
-    index: usize, not_found: void
-};
+const MaybeIndex = union(MaybeIndexTag) { index: usize, not_found: void };
 
 fn nextSeed(seed: u64) u64 {
     // TODO is this a valid way to get a new seed? are there better ways?
@@ -572,14 +568,6 @@ pub fn dictKeys(dict: RocDict, alignment: Alignment, key_width: usize, value_wid
     const data_bytes = length * key_width;
     var ptr = allocateWithRefcount(data_bytes, alignment);
 
-    var offset = blk: {
-        if (alignment.keyFirst()) {
-            break :blk 0;
-        } else {
-            break :blk (dict.capacity() * value_width);
-        }
-    };
-
     i = 0;
     var copied: usize = 0;
     while (i < size) : (i += 1) {
@@ -621,14 +609,6 @@ pub fn dictValues(dict: RocDict, alignment: Alignment, key_width: usize, value_w
     const data_bytes = length * value_width;
     var ptr = allocateWithRefcount(data_bytes, alignment);
 
-    var offset = blk: {
-        if (alignment.keyFirst()) {
-            break :blk (dict.capacity() * key_width);
-        } else {
-            break :blk 0;
-        }
-    };
-
     i = 0;
     var copied: usize = 0;
     while (i < size) : (i += 1) {
@@ -648,7 +628,7 @@ pub fn dictValues(dict: RocDict, alignment: Alignment, key_width: usize, value_w
     output.* = RocList{ .bytes = ptr, .length = length };
 }
 
-fn doNothing(ptr: Opaque) callconv(.C) void {
+fn doNothing(_: Opaque) callconv(.C) void {
     return;
 }
 
@@ -768,8 +748,6 @@ pub fn dictWalk(
     key_width: usize,
     value_width: usize,
     accum_width: usize,
-    inc_key: Inc,
-    inc_value: Inc,
     output: Opaque,
 ) callconv(.C) void {
     const alignment_u32 = alignment.toU32();
@@ -795,9 +773,7 @@ pub fn dictWalk(
 
                 caller(data, key, value, b2, b1);
 
-                const temp = b1;
-                b2 = b1;
-                b1 = temp;
+                std.mem.swap([*]u8, &b1, &b2);
             },
             else => {},
         }

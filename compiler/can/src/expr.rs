@@ -60,7 +60,6 @@ pub enum Expr {
     Float(Variable, Variable, f64),
     Str(InlinableString),
     List {
-        list_var: Variable, // required for uniqueness of the list
         elem_var: Variable,
         loc_elems: Vec<Located<Expr>>,
     },
@@ -304,7 +303,6 @@ pub fn canonicalize_expr<'a>(
             if loc_elems.is_empty() {
                 (
                     List {
-                        list_var: var_store.fresh(),
                         elem_var: var_store.fresh(),
                         loc_elems: Vec::new(),
                     },
@@ -331,7 +329,6 @@ pub fn canonicalize_expr<'a>(
 
                 (
                     List {
-                        list_var: var_store.fresh(),
                         elem_var: var_store.fresh(),
                         loc_elems: can_elems,
                     },
@@ -603,7 +600,7 @@ pub fn canonicalize_expr<'a>(
 
             // A "when" with no branches is a runtime error, but it will mess things up
             // if code gen mistakenly thinks this is a tail call just because its condition
-            // happend to be one. (The condition gave us our initial output value.)
+            // happened to be one. (The condition gave us our initial output value.)
             if branches.is_empty() {
                 output.tail_call = None;
             }
@@ -1234,7 +1231,6 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ ForeignCall { .. } => other,
 
         List {
-            list_var,
             elem_var,
             loc_elems,
         } => {
@@ -1250,7 +1246,6 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             }
 
             List {
-                list_var,
                 elem_var,
                 loc_elems: new_elems,
             }

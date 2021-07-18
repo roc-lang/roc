@@ -880,6 +880,29 @@ fn when_peano() {
 
 #[test]
 #[should_panic(expected = "Roc failed with message: ")]
+fn overflow_frees_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            myList = [1,2,3]
+
+            # integer overflow; must use the list so it is defined before the overflow
+            # the list will then be freed in a cleanup block
+            n : I64
+            n = 9_223_372_036_854_775_807 + (Num.intCast (List.len myList))
+
+            index = Num.intCast n
+
+            List.get myList index
+                 "#
+        ),
+        3,
+        i64
+    );
+}
+
+#[test]
+#[should_panic(expected = "Roc failed with message: ")]
 fn undefined_variable() {
     assert_evals_to!(
         indoc!(
@@ -1660,11 +1683,11 @@ fn binary_tree_double_pattern_match() {
             foo = \btree ->
                 when btree is
                     Node (Node (Leaf x) _) _ -> x
-                    _ -> 0
+                    _ -> 1
 
             main : I64
             main =
-                foo (Node (Node (Leaf 32) (Leaf 0)) (Leaf 0))
+                foo (Node (Node (Leaf 32) (Leaf 2)) (Leaf 3))
             "#
         ),
         32,
@@ -2463,5 +2486,46 @@ fn hit_unresolved_type_variable() {
         ),
         RocStr::from_slice(b"B"),
         RocStr
+    );
+}
+
+#[test]
+fn pattern_match_empty_record() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                main : I64
+                main =
+                    when {} is
+                        {} -> 0
+
+            "#
+        ),
+        0,
+        i64
+    );
+}
+
+#[test]
+fn pattern_match_unit_tag() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                unit : [ Unit ]
+                unit = Unit
+
+                main : I64
+                main =
+                    when unit is
+                        Unit -> 0
+
+            "#
+        ),
+        0,
+        i64
     );
 }

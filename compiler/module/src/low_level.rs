@@ -18,7 +18,6 @@ pub enum LowLevel {
     ListLen,
     ListGetUnsafe,
     ListSet,
-    ListSetInPlace,
     ListSingle,
     ListRepeat,
     ListReverse,
@@ -40,6 +39,7 @@ pub enum LowLevel {
     ListKeepErrs,
     ListSortWith,
     ListDrop,
+    ListSwap,
     DictSize,
     DictEmpty,
     DictInsert,
@@ -124,7 +124,6 @@ impl LowLevel {
             | ListLen
             | ListGetUnsafe
             | ListSet
-            | ListSetInPlace
             | ListDrop
             | ListSingle
             | ListRepeat
@@ -135,6 +134,7 @@ impl LowLevel {
             | ListPrepend
             | ListJoin
             | ListRange
+            | ListSwap
             | DictSize
             | DictEmpty
             | DictInsert

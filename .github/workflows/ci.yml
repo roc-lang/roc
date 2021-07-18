@@ -1,4 +1,7 @@
-on: [pull_request]
+on:
+  pull_request:
+    paths-ignore:
+          - '**.md'
 
 name: CI
 
@@ -21,5 +24,4 @@ jobs:
         run: earthly --version
 
       - name: install dependencies, build, run zig tests, rustfmt, clippy, cargo test --release
-        run: ./ci/safe-earthly-test-all.sh
-
+        run: ./ci/safe-earthly.sh +test-all

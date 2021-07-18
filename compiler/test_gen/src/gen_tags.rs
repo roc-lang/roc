@@ -19,8 +19,8 @@ fn applied_tag_nothing_ir() {
                 "#
         ),
         1,
-        (i64, i64),
-        |(tag, _)| tag
+        (i64, u8),
+        |(_, tag)| tag
     );
 }
 
@@ -38,8 +38,8 @@ fn applied_tag_nothing() {
                 "#
         ),
         1,
-        (i64, i64),
-        |(tag, _)| tag
+        (i64, u8),
+        |(_, tag)| tag
     );
 }
 
@@ -56,8 +56,8 @@ fn applied_tag_just() {
                 y
                 "#
         ),
-        (0, 0x4),
-        (i64, i64)
+        (0x4, 0),
+        (i64, u8)
     );
 }
 
@@ -74,8 +74,8 @@ fn applied_tag_just_ir() {
                 y
                 "#
         ),
-        (0, 0x4),
-        (i64, i64)
+        (0x4, 0),
+        (i64, u8)
     );
 }
 
@@ -96,8 +96,8 @@ fn applied_tag_just_enum() {
                 y
                 "#
         ),
-        (0, 2),
-        (i64, u8)
+        (2, 0),
+        (u8, i64)
     );
 }
 
@@ -468,6 +468,118 @@ fn nested_pattern_match() {
         i64
     );
 }
+
+#[test]
+fn if_guard_vanilla() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when "fooz" is
+                    s if s == "foo" -> 0
+                    s -> List.len (Str.toBytes s)
+                "#
+        ),
+        4,
+        i64
+    );
+}
+
+#[test]
+#[ignore]
+fn when_on_single_value_tag() {
+    // this fails because the switched-on symbol is not defined
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Identity 0 is
+                Identity 0 -> 0
+                Identity s -> s
+            "#
+        ),
+        6,
+        i64
+    );
+}
+
+#[test]
+fn if_guard_multiple() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            f = \n ->
+                when Identity n 0 is
+                        Identity x _ if x == 0 -> x + 0
+                        Identity x _ if x == 1 -> x + 0
+                        Identity x _ if x == 2 -> x + 0
+                        Identity x _ -> x - x
+
+            { a: f 0, b: f 1, c: f 2, d: f 4 }
+                "#
+        ),
+        (0, 1, 2, 0),
+        (i64, i64, i64, i64)
+    );
+}
+
+#[test]
+fn if_guard_constructor_switch() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Identity 32 0 is
+                    Identity 41 _ -> 0
+                    Identity s 0 if s == 32 -> 3
+                    # Identity s 0 -> s
+                    Identity z _ -> z
+                "#
+        ),
+        3,
+        i64
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Identity 42 "" is
+                    Identity 41 _ -> 0
+                    Identity 42 _ if 3 == 3 -> 1
+                    Identity z _ -> z
+                "#
+        ),
+        1,
+        i64
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Identity 42 "" is
+                    Identity 41 _ -> 0
+                    Identity 42 _ if 3 != 3 -> 1
+                    Identity z _ -> z
+                "#
+        ),
+        42,
+        i64
+    );
+}
+
+#[test]
+fn if_guard_constructor_chain() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Identity 43 0 is
+                    Identity 42 _ if 3 == 3 -> 43
+                    # Identity 42 _ -> 1
+                    Identity z _ -> z
+                "#
+        ),
+        43,
+        i64
+    );
+}
+
 #[test]
 fn if_guard_pattern_false() {
     assert_evals_to!(
@@ -476,6 +588,24 @@ fn if_guard_pattern_false() {
                 wrapper = \{} ->
                     when 2 is
                         2 if False -> 0
+                        _ -> 42
+
+                wrapper {}
+                "#
+        ),
+        42,
+        i64
+    );
+}
+
+#[test]
+fn if_guard_switch() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                wrapper = \{} ->
+                    when 2 is
+                        2 | 3 if False -> 0
                         _ -> 42
 
                 wrapper {}
@@ -633,8 +763,8 @@ fn nested_tag_union() {
                     x
                 "#
         ),
-        (0, (0, 41)),
-        (i64, (i64, i64))
+        ((41, 0), 0),
+        ((i64, u8), u8)
     );
 }
 #[test]
@@ -805,8 +935,8 @@ fn alignment_in_multi_tag_construction() {
 
                 #"
         ),
-        (1, 32i64, true),
-        (i64, i64, bool)
+        ((32i64, true), 1),
+        ((i64, bool), u8)
     );
 
     assert_evals_to!(
@@ -818,8 +948,8 @@ fn alignment_in_multi_tag_construction() {
                 x
                 #"
         ),
-        (1, 32i64, true, 2u8),
-        (i64, i64, bool, u8)
+        ((32i64, true, 2u8), 1),
+        ((i64, bool, u8), u8)
     );
 }
 
@@ -948,8 +1078,8 @@ fn nested_recursive_literal() {
                 #"
         ),
         0,
-        &i64,
-        |x: &i64| *x
+        &(i64, i64, u8),
+        |x: &(i64, i64, u8)| x.2
     );
 }
 
@@ -1003,14 +1133,14 @@ fn applied_tag_function_result() {
             x : List (Result Str *)
             x = List.map [ "a", "b" ] Ok
 
-            x
+            List.keepOks x (\y -> y)
             "#
         ),
         RocList::from_slice(&[
-            (1, RocStr::from_slice("a".as_bytes())),
-            (1, RocStr::from_slice("b".as_bytes()))
+            (RocStr::from_slice("a".as_bytes())),
+            (RocStr::from_slice("b".as_bytes()))
         ]),
-        RocList<(i64, RocStr)>
+        RocList<RocStr>
     );
 }
 
@@ -1027,6 +1157,23 @@ fn applied_tag_function_linked_list() {
             when List.first x is
                 Ok (Cons "a" Nil) -> 1
                 _ -> 0
+            "#
+        ),
+        1,
+        i64
+    );
+}
+
+#[test]
+#[should_panic(expected = "")]
+fn tag_must_be_its_own_type() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            z : [ A, B, C ]
+            z = Z
+
+            z
             "#
         ),
         1,

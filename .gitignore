@@ -14,6 +14,7 @@ vgcore.*
 #editors
 .idea/
 .vscode/
+.ignore
 
 #files too big to track in git
 editor/benches/resources/100000_lines.roc
@@ -27,3 +28,5 @@ editor/benches/resources/500_lines.roc
 # rust cache (sccache folder)
 sccache_dir
 
+# self-contained benchmark folder
+bench-folder*

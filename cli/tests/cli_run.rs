@@ -7,14 +7,12 @@ extern crate roc_collections;
 extern crate roc_load;
 extern crate roc_module;
 
-mod helpers;
-
 #[macro_use]
 extern crate maplit;
 
 #[cfg(test)]
 mod cli_run {
-    use crate::helpers::{
+    use cli_utils::helpers::{
         example_file, extract_valgrind_errors, run_cmd, run_roc, run_with_valgrind, ValgrindError,
         ValgrindErrorXWhat,
     };
@@ -303,5 +301,163 @@ mod cli_run {
         }
 
         assert_eq!(all_examples, std::collections::HashMap::default());
+    }
+
+    #[serial(hello_world)]
+    fn run_hello_world() {
+        check_output(
+            &example_file("hello-world", "Hello.roc"),
+            "hello-world",
+            &[],
+            "Hello, World!\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(hello_world)]
+    fn run_hello_world_optimized() {
+        check_output(
+            &example_file("hello-world", "Hello.roc"),
+            "hello-world",
+            &[],
+            "Hello, World!\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(quicksort)]
+    fn run_quicksort_not_optimized() {
+        check_output(
+            &example_file("quicksort", "Quicksort.roc"),
+            "quicksort",
+            &[],
+            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(quicksort)]
+    fn run_quicksort_optimized() {
+        check_output(
+            &example_file("quicksort", "Quicksort.roc"),
+            "quicksort",
+            &["--optimize"],
+            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(quicksort)]
+    fn run_quicksort_optimized_valgrind() {
+        check_output(
+            &example_file("quicksort", "Quicksort.roc"),
+            "quicksort",
+            &["--optimize"],
+            "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(nqueens)]
+    fn run_nqueens_not_optimized() {
+        check_output_with_stdin(
+            &example_file("benchmarks", "NQueens.roc"),
+            "6",
+            "nqueens",
+            &[],
+            "4\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(cfold)]
+    fn run_cfold_not_optimized() {
+        check_output_with_stdin(
+            &example_file("benchmarks", "CFold.roc"),
+            "3",
+            "cfold",
+            &[],
+            "11 & 11\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(deriv)]
+    fn run_deriv_not_optimized() {
+        check_output_with_stdin(
+            &example_file("benchmarks", "Deriv.roc"),
+            "2",
+            "deriv",
+            &[],
+            "1 count: 6\n2 count: 22\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(deriv)]
+    fn run_rbtree_insert_not_optimized() {
+        check_output(
+            &example_file("benchmarks", "RBTreeInsert.roc"),
+            "rbtree-insert",
+            &[],
+            "Node Black 0 {} Empty Empty\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(deriv)]
+    fn run_rbtree_delete_not_optimized() {
+        check_output_with_stdin(
+            &example_file("benchmarks", "RBTreeDel.roc"),
+            "420",
+            "rbtree-del",
+            &[],
+            "30\n",
+            true,
+        );
+    }
+    #[test]
+    #[serial(astar)]
+    fn run_astar_optimized_1() {
+        check_output(
+            &example_file("benchmarks", "TestAStar.roc"),
+            "test-astar",
+            &[],
+            "True\n",
+            false,
+        );
+    }
+
+    #[test]
+    #[serial(base64)]
+    fn base64() {
+        check_output(
+            &example_file("benchmarks", "TestBase64.roc"),
+            "test-base64",
+            &[],
+            "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(closure)]
+    fn closure() {
+        check_output(
+            &example_file("benchmarks", "Closure.roc"),
+            "closure",
+            &[],
+            "",
+            true,
+        );
     }
 }

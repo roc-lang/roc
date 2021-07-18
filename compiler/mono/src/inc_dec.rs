@@ -1,5 +1,5 @@
 use crate::borrow::{ParamMap, BORROWED, OWNED};
-use crate::ir::{Expr, JoinPointId, ModifyRc, Param, Proc, Stmt};
+use crate::ir::{Expr, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -7,16 +7,16 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::Symbol;
 
 pub fn free_variables(stmt: &Stmt<'_>) -> MutSet<Symbol> {
-    let (mut occuring, bound) = occuring_variables(stmt);
+    let (mut occurring, bound) = occurring_variables(stmt);
 
     for ref s in bound {
-        occuring.remove(s);
+        occurring.remove(s);
     }
 
-    occuring
+    occurring
 }
 
-pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
+pub fn occurring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
     let mut stack = std::vec![stmt];
     let mut result = MutSet::default();
     let mut bound_variables = MutSet::default();
@@ -26,7 +26,7 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
 
         match stmt {
             Let(symbol, expr, _, cont) => {
-                occuring_variables_expr(expr, &mut result);
+                occurring_variables_expr(expr, &mut result);
                 result.insert(*symbol);
                 bound_variables.insert(*symbol);
                 stack.push(cont);
@@ -39,7 +39,7 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
                 fail,
                 ..
             } => {
-                occuring_variables_call(call, &mut result);
+                occurring_variables_call(call, &mut result);
                 result.insert(*symbol);
                 bound_variables.insert(*symbol);
                 stack.push(pass);
@@ -50,7 +50,7 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
                 result.insert(*symbol);
             }
 
-            Rethrow => {}
+            Resume(_) => {}
 
             Refcounting(modify, cont) => {
                 let symbol = modify.get_symbol();
@@ -64,7 +64,7 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
 
             Join {
                 parameters,
-                continuation,
+                body: continuation,
                 remainder,
                 ..
             } => {
@@ -93,23 +93,23 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
     (result, bound_variables)
 }
 
-fn occuring_variables_call(call: &crate::ir::Call<'_>, result: &mut MutSet<Symbol>) {
+fn occurring_variables_call(call: &crate::ir::Call<'_>, result: &mut MutSet<Symbol>) {
     // NOTE though the function name does occur, it is a static constant in the program
     // for liveness, it should not be included here.
     result.extend(call.arguments.iter().copied());
 }
 
-pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
+pub fn occurring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
     use Expr::*;
 
     match expr {
-        AccessAtIndex {
+        StructAtIndex {
             structure: symbol, ..
         } => {
             result.insert(*symbol);
         }
 
-        Call(call) => occuring_variables_call(call, result),
+        Call(call) => occurring_variables_call(call, result),
 
         Tag { arguments, .. }
         | Struct(arguments)
@@ -129,6 +129,18 @@ pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
         }
 
         EmptyArray | RuntimeErrorFunction(_) | Literal(_) => {}
+
+        GetTagId {
+            structure: symbol, ..
+        } => {
+            result.insert(*symbol);
+        }
+
+        UnionAtIndex {
+            structure: symbol, ..
+        } => {
+            result.insert(*symbol);
+        }
     }
 }
 
@@ -160,13 +172,13 @@ struct Context<'a> {
 fn update_live_vars<'a>(expr: &Expr<'a>, v: &LiveVarSet) -> LiveVarSet {
     let mut v = v.clone();
 
-    occuring_variables_expr(expr, &mut v);
+    occurring_variables_expr(expr, &mut v);
 
     v
 }
 
 /// `isFirstOcc xs x i = true` if `xs[i]` is the first occurrence of `xs[i]` in `xs`
-fn is_first_occurence(xs: &[Symbol], i: usize) -> bool {
+fn is_first_occurrence(xs: &[Symbol], i: usize) -> bool {
     match xs.get(i) {
         None => unreachable!(),
         Some(s) => i == xs.iter().position(|v| s == v).unwrap(),
@@ -213,7 +225,11 @@ fn is_borrow_param(x: Symbol, ys: &[Symbol], ps: &[Param]) -> bool {
 // We do not need to consume the projection of a variable that is not consumed
 fn consume_expr(m: &VarMap, e: &Expr<'_>) -> bool {
     match e {
-        Expr::AccessAtIndex { structure: x, .. } => match m.get(x) {
+        Expr::StructAtIndex { structure: x, .. } => match m.get(x) {
+            Some(info) => info.consume,
+            None => true,
+        },
+        Expr::UnionAtIndex { structure: x, .. } => match m.get(x) {
             Some(info) => info.consume,
             None => true,
         },
@@ -319,7 +335,7 @@ impl<'a> Context<'a> {
     {
         for (i, x) in xs.iter().enumerate() {
             let info = self.get_var_info(*x);
-            if !info.reference || !is_first_occurence(xs, i) {
+            if !info.reference || !is_first_occurrence(xs, i) {
                 // do nothing
             } else {
                 let num_consumptions = get_num_consumptions(*x, xs, consume_param_pred.clone()); // number of times the argument is used
@@ -393,7 +409,7 @@ impl<'a> Context<'a> {
             // Remark: `x` may occur multiple times in the application (e.g., `f x y x`).
             // This is why we check whether it is the first occurrence.
             if self.must_consume(*x)
-                && is_first_occurence(xs, i)
+                && is_first_occurrence(xs, i)
                 && is_borrow_param(*x, xs, ps)
                 && !b_live_vars.contains(x)
             {
@@ -418,7 +434,7 @@ impl<'a> Context<'a> {
             This is why we check whether it is the first occurrence. */
 
             if self.must_consume(*x)
-                && is_first_occurence(xs, i)
+                && is_first_occurrence(xs, i)
                 && *is_borrow
                 && !b_live_vars.contains(x)
             {
@@ -454,7 +470,12 @@ impl<'a> Context<'a> {
             }
 
             HigherOrderLowLevel {
-                op, closure_layout, ..
+                op,
+                closure_env_layout,
+                specialization_id,
+                arg_layouts,
+                ret_layout,
+                ..
             } => {
                 macro_rules! create_call {
                     ($borrows:expr) => {
@@ -462,8 +483,11 @@ impl<'a> Context<'a> {
                             call_type: if let Some(OWNED) = $borrows.map(|p| p.borrow) {
                                 HigherOrderLowLevel {
                                     op: *op,
-                                    closure_layout: *closure_layout,
+                                    closure_env_layout: *closure_env_layout,
                                     function_owns_closure_data: true,
+                                    specialization_id: *specialization_id,
+                                    arg_layouts,
+                                    ret_layout: *ret_layout,
                                 }
                             } else {
                                 call_type
@@ -489,12 +513,17 @@ impl<'a> Context<'a> {
                 const FUNCTION: bool = BORROWED;
                 const CLOSURE_DATA: bool = BORROWED;
 
+                let function_layout = ProcLayout {
+                    arguments: arg_layouts,
+                    result: *ret_layout,
+                };
+
                 match op {
                     roc_module::low_level::LowLevel::ListMap
                     | roc_module::low_level::LowLevel::ListKeepIf
                     | roc_module::low_level::LowLevel::ListKeepOks
                     | roc_module::low_level::LowLevel::ListKeepErrs => {
-                        match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                        match self.param_map.get_symbol(arguments[1], function_layout) {
                             Some(function_ps) => {
                                 let borrows = [function_ps[0].borrow, FUNCTION, CLOSURE_DATA];
 
@@ -516,7 +545,7 @@ impl<'a> Context<'a> {
                         }
                     }
                     roc_module::low_level::LowLevel::ListMapWithIndex => {
-                        match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                        match self.param_map.get_symbol(arguments[1], function_layout) {
                             Some(function_ps) => {
                                 let borrows = [function_ps[1].borrow, FUNCTION, CLOSURE_DATA];
 
@@ -537,7 +566,7 @@ impl<'a> Context<'a> {
                         }
                     }
                     roc_module::low_level::LowLevel::ListMap2 => {
-                        match self.param_map.get_symbol(arguments[2], *closure_layout) {
+                        match self.param_map.get_symbol(arguments[2], function_layout) {
                             Some(function_ps) => {
                                 let borrows = [
                                     function_ps[0].borrow,
@@ -564,7 +593,7 @@ impl<'a> Context<'a> {
                         }
                     }
                     roc_module::low_level::LowLevel::ListMap3 => {
-                        match self.param_map.get_symbol(arguments[3], *closure_layout) {
+                        match self.param_map.get_symbol(arguments[3], function_layout) {
                             Some(function_ps) => {
                                 let borrows = [
                                     function_ps[0].borrow,
@@ -593,7 +622,7 @@ impl<'a> Context<'a> {
                         }
                     }
                     roc_module::low_level::LowLevel::ListSortWith => {
-                        match self.param_map.get_symbol(arguments[1], *closure_layout) {
+                        match self.param_map.get_symbol(arguments[1], function_layout) {
                             Some(function_ps) => {
                                 let borrows = [OWNED, FUNCTION, CLOSURE_DATA];
 
@@ -615,7 +644,7 @@ impl<'a> Context<'a> {
                     | roc_module::low_level::LowLevel::ListWalkUntil
                     | roc_module::low_level::LowLevel::ListWalkBackwards
                     | roc_module::low_level::LowLevel::DictWalk => {
-                        match self.param_map.get_symbol(arguments[2], *closure_layout) {
+                        match self.param_map.get_symbol(arguments[2], function_layout) {
                             Some(function_ps) => {
                                 // borrow data structure based on first argument of the folded function
                                 // borrow the default based on second argument of the folded function
@@ -669,12 +698,17 @@ impl<'a> Context<'a> {
             }
 
             ByName {
-                name, full_layout, ..
+                name,
+                ret_layout,
+                arg_layouts,
+                ..
             } => {
+                let top_level = ProcLayout::new(self.arena, arg_layouts, *ret_layout);
+
                 // get the borrow signature
                 let ps = self
                     .param_map
-                    .get_symbol(*name, *full_layout)
+                    .get_symbol(*name, top_level)
                     .expect("function is defined");
 
                 let v = Expr::Call(crate::ir::Call {
@@ -713,7 +747,19 @@ impl<'a> Context<'a> {
                 self.arena.alloc(Stmt::Let(z, v, l, b)),
                 &b_live_vars,
             ),
-            AccessAtIndex { structure: x, .. } => {
+
+            Call(crate::ir::Call {
+                call_type,
+                arguments,
+            }) => self.visit_call(z, call_type, arguments, l, b, b_live_vars),
+
+            EmptyArray | Literal(_) | Reset(_) | RuntimeErrorFunction(_) => {
+                // EmptyArray is always stack-allocated
+                // function pointers are persistent
+                self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
+
+            StructAtIndex { structure: x, .. } => {
                 let b = self.add_dec_if_needed(x, b, b_live_vars);
                 let info_x = self.get_var_info(x);
                 let b = if info_x.consume {
@@ -725,14 +771,27 @@ impl<'a> Context<'a> {
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            Call(crate::ir::Call {
-                call_type,
-                arguments,
-            }) => self.visit_call(z, call_type, arguments, l, b, b_live_vars),
+            GetTagId { structure: x, .. } => {
+                let b = self.add_dec_if_needed(x, b, b_live_vars);
+                let info_x = self.get_var_info(x);
+                let b = if info_x.consume {
+                    self.add_inc(z, 1, b)
+                } else {
+                    b
+                };
 
-            EmptyArray | Literal(_) | Reset(_) | RuntimeErrorFunction(_) => {
-                // EmptyArray is always stack-allocated
-                // function pointers are persistent
+                self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
+
+            UnionAtIndex { structure: x, .. } => {
+                let b = self.add_dec_if_needed(x, b, b_live_vars);
+                let info_x = self.get_var_info(x);
+                let b = if info_x.consume {
+                    self.add_inc(z, 1, b)
+                } else {
+                    b
+                };
+
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
         };
@@ -892,6 +951,7 @@ impl<'a> Context<'a> {
                 pass,
                 fail,
                 layout,
+                exception_id,
             } => {
                 // live vars of the whole expression
                 let invoke_live_vars = collect_stmt(stmt, &self.jp_live_vars, MutSet::default());
@@ -926,6 +986,7 @@ impl<'a> Context<'a> {
                     pass,
                     fail,
                     layout: *layout,
+                    exception_id: *exception_id,
                 };
 
                 let cont = self.arena.alloc(invoke);
@@ -951,12 +1012,17 @@ impl<'a> Context<'a> {
                     }
 
                     CallType::ByName {
-                        name, full_layout, ..
+                        name,
+                        ret_layout,
+                        arg_layouts,
+                        ..
                     } => {
+                        let top_level = ProcLayout::new(self.arena, arg_layouts, *ret_layout);
+
                         // get the borrow signature
                         let ps = self
                             .param_map
-                            .get_symbol(*name, *full_layout)
+                            .get_symbol(*name, top_level)
                             .expect("function is defined");
                         self.add_dec_after_application(call.arguments, ps, cont, &invoke_live_vars)
                     }
@@ -968,7 +1034,7 @@ impl<'a> Context<'a> {
                 id: j,
                 parameters: _,
                 remainder: b,
-                continuation: v,
+                body: v,
             } => {
                 // get the parameters with borrow signature
                 let xs = self.param_map.get_join_point(*j);
@@ -990,7 +1056,7 @@ impl<'a> Context<'a> {
                         id: *j,
                         parameters: xs,
                         remainder: b,
-                        continuation: v,
+                        body: v,
                     }),
                     b_live_vars,
                 )
@@ -1009,7 +1075,7 @@ impl<'a> Context<'a> {
                 }
             }
 
-            Rethrow => (stmt, MutSet::default()),
+            Resume(_) => (stmt, MutSet::default()),
 
             Jump(j, xs) => {
                 let empty = MutSet::default();
@@ -1094,7 +1160,7 @@ pub fn collect_stmt(
             vars = collect_stmt(cont, jp_live_vars, vars);
             vars.remove(symbol);
             let mut result = MutSet::default();
-            occuring_variables_expr(expr, &mut result);
+            occurring_variables_expr(expr, &mut result);
             vars.extend(result);
 
             vars
@@ -1112,7 +1178,7 @@ pub fn collect_stmt(
             vars.remove(symbol);
 
             let mut result = MutSet::default();
-            occuring_variables_call(call, &mut result);
+            occurring_variables_call(call, &mut result);
 
             vars.extend(result);
 
@@ -1133,7 +1199,7 @@ pub fn collect_stmt(
             id: j,
             parameters,
             remainder: b,
-            continuation: v,
+            body: v,
         } => {
             let mut j_live_vars = collect_stmt(v, jp_live_vars, MutSet::default());
             for param in parameters.iter() {
@@ -1175,7 +1241,7 @@ pub fn collect_stmt(
             vars
         }
 
-        Rethrow => vars,
+        Resume(_) => vars,
 
         RuntimeError(_) => vars,
     }
@@ -1210,7 +1276,7 @@ pub fn visit_proc<'a>(
     arena: &'a Bump,
     param_map: &'a ParamMap<'a>,
     proc: &mut Proc<'a>,
-    layout: Layout<'a>,
+    layout: ProcLayout<'a>,
 ) {
     let ctx = Context::new(arena, param_map);
 

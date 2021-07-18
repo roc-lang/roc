@@ -4,7 +4,7 @@ use crate::editor::slow_pool::{MarkNodeId, SlowPool};
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::editor::{
     ed_error::EdError::ParseError,
-    ed_error::EdResult,
+    ed_error::{EdResult, MissingParent, NoNodeAtCaretPosition},
     markup::attribute::Attributes,
     markup::nodes::{expr2_to_markup, set_parent_for_all, MarkupNode},
 };
@@ -21,6 +21,7 @@ use crate::ui::ui_error::UIResult;
 use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
 use nonempty::NonEmpty;
+use roc_module::symbol::Interns;
 use roc_region::all::Region;
 use std::path::Path;
 
@@ -38,12 +39,13 @@ pub struct EdModel<'a> {
     pub has_focus: bool,
     pub caret_w_select_vec: NonEmpty<(CaretWSelect, Option<MarkNodeId>)>,
     pub selected_expr_opt: Option<SelectedExpression>,
+    pub interns: &'a Interns, // this should eventually come from LoadedModule, see #1442
     pub show_debug_view: bool,
     // EdModel is dirty if it has changed since the previous render.
     pub dirty: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct SelectedExpression {
     pub ast_node_id: NodeId<Expr2>,
     pub mark_node_id: MarkNodeId,
@@ -54,6 +56,7 @@ pub fn init_model<'a>(
     code_str: &'a BumpString,
     file_path: &'a Path,
     env: Env<'a>,
+    interns: &'a Interns,
     code_arena: &'a Bump,
 ) -> EdResult<EdModel<'a>> {
     let mut module = EdModule::new(&code_str, env, code_arena)?;
@@ -99,6 +102,7 @@ pub fn init_model<'a>(
         has_focus: true,
         caret_w_select_vec: NonEmpty::new((CaretWSelect::default(), None)),
         selected_expr_opt: None,
+        interns,
         show_debug_view: false,
         dirty: true,
     })
@@ -130,6 +134,29 @@ impl<'a> EdModel<'a> {
     pub fn node_exists_at_caret(&self) -> bool {
         self.grid_node_map.node_exists_at_pos(self.get_caret())
     }
+
+    // return (index of child in list of children, closest ast index of child corresponding to ast node) of MarkupNode at current caret position
+    pub fn get_curr_child_indices(&self) -> EdResult<(usize, usize)> {
+        if self.node_exists_at_caret() {
+            let curr_mark_node_id = self.get_curr_mark_node_id()?;
+            let curr_mark_node = self.markup_node_pool.get(curr_mark_node_id);
+
+            if let Some(parent_id) = curr_mark_node.get_parent_id_opt() {
+                let parent = self.markup_node_pool.get(parent_id);
+                parent.get_child_indices(curr_mark_node_id, &self.markup_node_pool)
+            } else {
+                MissingParent {
+                    node_id: curr_mark_node_id,
+                }
+                .fail()
+            }
+        } else {
+            NoNodeAtCaretPosition {
+                caret_pos: self.get_caret(),
+            }
+            .fail()
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -155,8 +182,7 @@ impl<'a> EdModule<'a> {
                     let ast_root_id = env.pool.add(expr2);
 
                     // for debugging
-                    // let expr2_str = expr2_to_string(ast_root_id, env.pool);
-                    // println!("expr2_string: {}", expr2_str);
+                    // dbg!(expr2_to_string(ast_root_id, env.pool));
 
                     Ok(EdModule { env, ast_root_id })
                 }
@@ -185,7 +211,7 @@ pub mod test_ed_model {
     use bumpalo::collections::String as BumpString;
     use bumpalo::Bump;
     use ed_model::EdModel;
-    use roc_module::symbol::{IdentIds, ModuleIds};
+    use roc_module::symbol::{IdentIds, Interns, ModuleIds};
     use roc_types::subs::VarStore;
     use std::path::Path;
 
@@ -196,9 +222,11 @@ pub mod test_ed_model {
         let file_path = Path::new("");
 
         let dep_idents = IdentIds::exposed_builtins(8);
-
         let exposed_ident_ids = IdentIds::default();
-        let mod_id = ed_model_refs.module_ids.get_or_insert(&"ModId123".into());
+        let mod_id = ed_model_refs
+            .interns
+            .module_ids
+            .get_or_insert(&"ModId123".into());
 
         let env = Env::new(
             mod_id,
@@ -206,11 +234,17 @@ pub mod test_ed_model {
             &mut ed_model_refs.env_pool,
             &mut ed_model_refs.var_store,
             dep_idents,
-            &ed_model_refs.module_ids,
+            &ed_model_refs.interns.module_ids,
             exposed_ident_ids,
         );
 
-        ed_model::init_model(&code_str, file_path, env, &ed_model_refs.code_arena)
+        ed_model::init_model(
+            &code_str,
+            file_path,
+            env,
+            &ed_model_refs.interns,
+            &ed_model_refs.code_arena,
+        )
     }
 
     pub struct EdModelRefs {
@@ -218,7 +252,7 @@ pub mod test_ed_model {
         env_arena: Bump,
         env_pool: Pool,
         var_store: VarStore,
-        module_ids: ModuleIds,
+        interns: Interns,
     }
 
     pub fn init_model_refs() -> EdModelRefs {
@@ -227,7 +261,10 @@ pub mod test_ed_model {
             env_arena: Bump::new(),
             env_pool: Pool::with_capacity(1024),
             var_store: VarStore::default(),
-            module_ids: ModuleIds::default(),
+            interns: Interns {
+                module_ids: ModuleIds::default(),
+                all_ident_ids: IdentIds::exposed_builtins(8),
+            },
         }
     }
 

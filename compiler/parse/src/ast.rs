@@ -44,7 +44,7 @@ pub enum EscapedChar {
 
 impl EscapedChar {
     /// Returns the char that would have been originally parsed to
-    pub fn to_parsed_char(&self) -> char {
+    pub fn to_parsed_char(self) -> char {
         use EscapedChar::*;
 
         match self {
