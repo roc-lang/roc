@@ -62,8 +62,7 @@ pub const RocDec = extern struct {
                 continue;
             }
 
-            // Is the char anything but digit?
-            if ((byte -% 48) > 9) {
+            if (!isDigit(byte)) {
                 return null;
             }
             index += 1;
@@ -122,6 +121,10 @@ pub const RocDec = extern struct {
         } else {
             return dec;
         }
+    }
+
+    inline fn isDigit(c: u8) bool {
+        return (c -% 48) <= 9;
     }
 
     pub fn toStr(self: RocDec) ?RocStr {
