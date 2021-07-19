@@ -1,31 +1,36 @@
 interface Task
-    exposes [ Task, after, always, fail, map, putLine, getLine ]
-    imports [ Effect ]
+    exposes [ Task, succeed, fail, after, map, putLine, getLine ]
+    imports [ fx.Effect ]
 
-Task a err : Effect.Effect (Result a err)
 
-always : a -> Task a *
-always = \x -> Effect.always (Ok x)
+Task ok err : Effect.Effect (Result ok err)
+
+
+succeed : val -> Task val *
+succeed = \val ->
+    Effect.always (Ok val)
+
 
 fail : err -> Task * err
-fail = \x -> Effect.always (Err x)
+fail = \val ->
+    Effect.always (Err val)
 
-getLine : Task Str *
-getLine = Effect.after Effect.getLine always
+after : Task a err, (a -> Task b err) -> Task b err
+after = \effect, transform ->
+    Effect.after effect \result ->
+        when result is
+            Ok a -> transform a
+            Err err -> Task.fail err
+
+map : Task a err, (a -> b) -> Task b err
+map = \effect, transform ->
+    Effect.map effect \result ->
+        when result is
+            Ok a -> Ok (transform a)
+            Err err -> Err err 
 
 putLine : Str -> Task {} *
 putLine = \line -> Effect.map (Effect.putLine line) (\_ -> Ok {})
 
-map : Task a err, (a -> b) -> Task b err
-map = \task, transform ->
-    Effect.map task \res ->
-        when res is
-            Ok x -> Ok (transform x)
-            Err e -> Err e
-
-after : Task a err, (a -> Task b err) -> Task b err
-after = \task, transform ->
-    Effect.after task \res ->
-        when res is
-            Ok x -> transform x
-            Err e -> Task.fail e
+getLine : Task Str *
+getLine = Effect.map Effect.getLine (\x -> Ok x) 

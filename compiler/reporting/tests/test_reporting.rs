@@ -5950,17 +5950,18 @@ mod test_reporting {
             ),
             indoc!(
                 r#"
-                ── WEIRD PROVIDES ──────────────────────────────────────────────────────────────
+                ── BAD REQUIRES RIGIDS ─────────────────────────────────────────────────────────
 
-                I am partway through parsing a provides list, but I got stuck here:
+                I am partway through parsing a header, but I got stuck here:
 
-                3│      imports [base.Task, Base64 ]
-                4│      provides [ main, @Foo ] to base
-                                         ^
+                1│  platform folkertdev/foo
+                2│      requires { main : Effect {} }
+                                   ^
 
-                I was expecting a type name, value name or function name next, like
+                I am expecting a list of rigids like `{}` or `{model=>Model}` next. A full
+                `requires` definition looks like
 
-                    provides [ Animal, default, tame ]
+                    requires {model=>Model, msg=>Msg} {main : Effect {}}
             "#
             ),
         )

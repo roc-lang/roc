@@ -3239,7 +3239,6 @@ fn to_requires_report<'a>(
         ERequires::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
 
         ERequires::ListStart(row, col) => {
-            dbg!(row, col);
             let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
             let region = Region::from_row_col(row, col);
 
@@ -3280,14 +3279,14 @@ fn to_requires_report<'a>(
                     alloc.reflow(" definition looks like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires {model=>Model, msg=>Msg} {main : Effect {}} ")
+                    .parser_suggestion("requires {model=>Model, msg=>Msg} {main : Effect {}}")
                     .indent(4),
             ]);
 
             Report {
                 filename,
                 doc,
-                title: "BAD RIGIDS".to_string(),
+                title: "BAD REQUIRES RIGIDS".to_string(),
             }
         }
 
@@ -3396,6 +3395,7 @@ fn to_space_report<'a>(
                 title: "TAB CHARACTER".to_string(),
             }
         }
+
         _ => todo!("unhandled type parse error: {:?}", &parse_problem),
     }
 }

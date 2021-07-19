@@ -332,4 +332,17 @@ mod cli_run {
             true,
         );
     }
+
+    #[test]
+    #[serial(effect)]
+    fn run_effect() {
+        check_output_with_stdin(
+            &example_file("effect", "Main.roc"),
+            "hello world how are you",
+            "effect-example",
+            &[],
+            "hello world how are you\n",
+            true,
+        );
+    }
 }
