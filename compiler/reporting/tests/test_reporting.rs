@@ -5930,6 +5930,43 @@ mod test_reporting {
     }
 
     #[test]
+    fn platform_requires_rigids() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                platform folkertdev/foo
+                    requires { main : Effect {} }
+                    exposes []
+                    packages {}
+                    imports [Task]
+                    provides [ mainForHost ]
+                    effects fx.Effect
+                        {
+                            putChar : I64 -> Effect {},
+                            putLine : Str -> Effect {},
+                            getLine : Effect Str
+                        }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD PROVIDES ──────────────────────────────────────────────────────────────
+
+                I am partway through parsing a provides list, but I got stuck here:
+
+                3│      imports [base.Task, Base64 ]
+                4│      provides [ main, @Foo ] to base
+                                         ^
+
+                I was expecting a type name, value name or function name next, like
+
+                    provides [ Animal, default, tame ]
+            "#
+            ),
+        )
+    }
+
+    #[test]
     fn exposes_identifier() {
         report_header_problem_as(
             indoc!(

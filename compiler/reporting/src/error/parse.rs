@@ -3263,6 +3263,34 @@ fn to_requires_report<'a>(
             }
         }
 
+        ERequires::Rigid(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("I am expecting a list of rigids like "),
+                    alloc.keyword("{}"),
+                    alloc.reflow(" or "),
+                    alloc.keyword("{model=>Model}"),
+                    alloc.reflow(" next. A full "),
+                    alloc.keyword("requires"),
+                    alloc.reflow(" definition looks like"),
+                ]),
+                alloc
+                    .parser_suggestion("requires {model=>Model, msg=>Msg} {main : Effect {}} ")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "BAD RIGIDS".to_string(),
+            }
+        }
+
         _ => todo!("unhandled parse error {:?}", parse_problem),
     }
 }
