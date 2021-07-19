@@ -21,25 +21,59 @@ pub const RocDec = extern struct {
     pub const one_point_zero_i128: i128 = math.pow(i128, 10, RocDec.decimal_places);
     pub const one_point_zero: RocDec = .{ .num = one_point_zero_i128 };
 
+    pub const zero_point_one_i128: i128 = math.pow(i128, 10, RocDec.decimal_places - 1);
+    pub const zero_point_one: RocDec = .{ .num = zero_point_one_i128 };
+
+    pub const zero: RocDec = .{ .num = 0 };
+
     pub fn fromU64(num: u64) RocDec {
         return .{ .num = num * one_point_zero_i128 };
     }
 
-    // TODO: There's got to be a better way to do this other than converting to Str
     pub fn fromF64(num: f64) ?RocDec {
-        var digit_bytes: [19]u8 = undefined; // 19 = max f64 digits + '.' + '-'
-
-        var fbs = std.io.fixedBufferStream(digit_bytes[0..]);
-        std.fmt.formatFloatDecimal(num, .{}, fbs.writer()) catch
-            return null;
-
-        var dec = RocDec.fromStr(RocStr.init(&digit_bytes, fbs.pos));
-
-        if (dec) |d| {
-            return d;
-        } else {
+        if (!std.math.isFinite(num)) {
             return null;
         }
+
+        // Get part before decimal point
+        const before_decimal_f64: f64 = @floor(num);
+
+        var before_decimal_i128: i128 = undefined;
+        const did_mul_overflow = @mulWithOverflow(i128, @floatToInt(i128, before_decimal_f64), one_point_zero_i128, &before_decimal_i128);
+        if (did_mul_overflow) {
+            // TODO: Should this @panic?
+            return null;
+        }
+
+        var after_decimal_f64: f64 = num - before_decimal_f64;
+        // Early return num is a whole number
+        if (after_decimal_f64 == 0) {
+            return RocDec{ .num = before_decimal_i128 };
+        }
+
+        // Get the part after the decimal as a whole number
+
+        // For some reason, `after_decimal_f64 < 0` evalutes to false, even when it should be true
+        // So, we check `after_decimal_f64 < 1` and do the final *= 10 after the loop
+        // By this point, after_decimal_f64 will always be less than 1, because of the early return above
+        while (after_decimal_f64 < 1) {
+            after_decimal_f64 *= 10;
+        }
+        after_decimal_f64 *= 10;
+
+        var after_decimal_i128 = @floatToInt(i128, after_decimal_f64);
+        while (after_decimal_i128 < zero_point_one_i128) {
+            after_decimal_i128 *= 10;
+        }
+
+        var final: i128 = undefined;
+        const did_add_overflow = @addWithOverflow(i128, before_decimal_i128, after_decimal_i128, &final);
+        if (did_add_overflow) {
+            // TODO: Should this @panic?
+            return null;
+        }
+
+        return RocDec{ .num = final };
     }
 
     pub fn fromStr(roc_str: RocStr) ?RocDec {
@@ -723,9 +757,20 @@ test "fromU64" {
     try expectEqual(RocDec{ .num = 25000000000000000000 }, dec);
 }
 
-test "fromF64" {
-    var dec = RocDec.fromF64(25.5);
-    try expectEqual(RocDec{ .num = 25500000000000000000 }, dec.?);
+test "fromF64: 10" {
+    try expectEqual(RocDec.fromU64(10), RocDec.fromF64(10).?);
+}
+
+test "fromF64: 0.75" {
+    try expectEqual(RocDec{ .num = 750000000000000000 }, RocDec.fromF64(0.75).?);
+}
+
+test "fromF64: 10.75" {
+    try expectEqual(RocDec{ .num = 10750000000000000000 }, RocDec.fromF64(10.75).?);
+}
+
+test "fromF64: -10.75" {
+    try expectEqual(RocDec{ .num = -10750000000000000000 }, RocDec.fromF64(-10.75).?);
 }
 
 test "fromStr: empty" {
