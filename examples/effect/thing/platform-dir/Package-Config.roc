@@ -2,7 +2,7 @@ platform folkertdev/foo
     requires {model=>Model, msg=>Msg} {main : Effect {}}
     exposes []
     packages {}
-    imports [ Task.{ Task } ]
+    imports [fx.Effect]
     provides [ mainForHost ]
     effects fx.Effect
         {
@@ -12,5 +12,5 @@ platform folkertdev/foo
 
 
 
-mainForHost : Task {} [] as Fx
+mainForHost : Effect.Effect {} as Fx
 mainForHost = main
