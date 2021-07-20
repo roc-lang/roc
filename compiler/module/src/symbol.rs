@@ -438,7 +438,6 @@ pub struct ModuleIds {
 
 impl ModuleIds {
     pub fn get_or_insert(&mut self, module_name: &InlinableString) -> ModuleId {
-        dbg!(module_name);
         match self.by_name.get(module_name) {
             Some(id) => *id,
             None => {
