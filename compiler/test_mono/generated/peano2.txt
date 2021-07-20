@@ -1,11 +1,7 @@
 procedure Test.0 ():
-    let Test.19 = 0i64;
-    let Test.21 = 0i64;
-    let Test.23 = 0i64;
-    let Test.24 = 1i64;
-    let Test.22 = Z ;
-    let Test.20 = S Test.22;
-    let Test.18 = S Test.20;
+    let Test.20 = Z ;
+    let Test.19 = S Test.20;
+    let Test.18 = S Test.19;
     let Test.2 = S Test.18;
     let Test.15 = 0i64;
     let Test.16 = GetTagId Test.2;
