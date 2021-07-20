@@ -175,15 +175,15 @@ mod cli_run {
                     use_valgrind: true,
                 }
             ],
-            "tea" => vec![
-                Example {
-                    filename: "Main.roc",
-                    executable_filename: "tea-example",
-                    stdin: &[],
-                    expected_ending: "",
-                    use_valgrind: true,
-                }
-            ],
+            // "tea" => vec![
+            //     Example {
+            //         filename: "Main.roc",
+            //         executable_filename: "tea-example",
+            //         stdin: &[],
+            //         expected_ending: "",
+            //         use_valgrind: true,
+            //     }
+            // ],
             // "cli" => vec![
             //     Example {
             //         filename: "Echo.roc",
