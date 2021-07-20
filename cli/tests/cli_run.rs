@@ -215,21 +215,21 @@ mod cli_run {
                 Example {
                     filename: "NQueens.roc",
                     executable_filename: "nqueens",
-                    stdin: &[],
+                    stdin: &["6"],
                     expected_ending: "4\n",
                     use_valgrind: true,
                 },
                 Example {
                     filename: "CFold.roc",
                     executable_filename: "cfold",
-                    stdin: &[],
+                    stdin: &["3"],
                     expected_ending: "11 & 11\n",
                     use_valgrind: true,
                 },
                 Example {
                     filename: "Deriv.roc",
                     executable_filename: "deriv",
-                    stdin: &[],
+                    stdin: &["2"],
                     expected_ending: "1 count: 6\n2 count: 22\n",
                     use_valgrind: true,
                 },
@@ -243,7 +243,7 @@ mod cli_run {
                 Example {
                     filename: "RBTreeDel.roc",
                     executable_filename: "rbtree-del",
-                    stdin: &[],
+                    stdin: &["420"],
                     expected_ending: "30\n",
                     use_valgrind: true,
                 },
