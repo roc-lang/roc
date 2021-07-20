@@ -1,5 +1,5 @@
-use crate::llvm::build::Env;
 use crate::llvm::build::{cast_block_of_memory_to_tag, get_tag_id, FAST_CALL_CONV};
+use crate::llvm::build::{tag_pointer_clear_tag_id, Env};
 use crate::llvm::build_list::{list_len, load_list_ptr};
 use crate::llvm::build_str::str_equal;
 use crate::llvm::convert::basic_type_from_layout;
@@ -925,6 +925,10 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
             let id1 = get_tag_id(env, parent, union_layout, tag1);
             let id2 = get_tag_id(env, parent, union_layout, tag2);
 
+            // clear the tag_id so we get a pointer to the actual data
+            let tag1 = tag_pointer_clear_tag_id(env, tag1.into_pointer_value());
+            let tag2 = tag_pointer_clear_tag_id(env, tag2.into_pointer_value());
+
             let compare_tag_fields = ctx.append_basic_block(parent, "compare_tag_fields");
 
             let same_tag =
@@ -944,14 +948,8 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                let answer = eq_ptr_to_struct(
-                    env,
-                    layout_ids,
-                    union_layout,
-                    field_layouts,
-                    tag1.into_pointer_value(),
-                    tag2.into_pointer_value(),
-                );
+                let answer =
+                    eq_ptr_to_struct(env, layout_ids, union_layout, field_layouts, tag1, tag2);
 
                 env.builder.build_return(Some(&answer));
 
@@ -1073,6 +1071,10 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
             let id1 = get_tag_id(env, parent, union_layout, tag1);
             let id2 = get_tag_id(env, parent, union_layout, tag2);
 
+            // clear the tag_id so we get a pointer to the actual data
+            let tag1 = tag_pointer_clear_tag_id(env, tag1.into_pointer_value());
+            let tag2 = tag_pointer_clear_tag_id(env, tag2.into_pointer_value());
+
             let compare_tag_fields = ctx.append_basic_block(parent, "compare_tag_fields");
 
             let same_tag =
@@ -1093,14 +1095,8 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                let answer = eq_ptr_to_struct(
-                    env,
-                    layout_ids,
-                    union_layout,
-                    field_layouts,
-                    tag1.into_pointer_value(),
-                    tag2.into_pointer_value(),
-                );
+                let answer =
+                    eq_ptr_to_struct(env, layout_ids, union_layout, field_layouts, tag1, tag2);
 
                 env.builder.build_return(Some(&answer));
 

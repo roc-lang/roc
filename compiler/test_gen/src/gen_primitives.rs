@@ -1555,9 +1555,9 @@ fn rbtree_balance_full() {
                 balance Red 0 0 Empty Empty
             "#
         ),
-        false,
-        *const i64,
-        |x: *const i64| x.is_null()
+        true,
+        usize,
+        |x| x != 0
     );
 }
 

@@ -3239,7 +3239,6 @@ fn to_requires_report<'a>(
         ERequires::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
 
         ERequires::ListStart(row, col) => {
-            dbg!(row, col);
             let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
             let region = Region::from_row_col(row, col);
 
@@ -3260,6 +3259,34 @@ fn to_requires_report<'a>(
                 filename,
                 doc,
                 title: "MISSING REQUIRES".to_string(),
+            }
+        }
+
+        ERequires::Rigid(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("I am expecting a list of rigids like "),
+                    alloc.keyword("{}"),
+                    alloc.reflow(" or "),
+                    alloc.keyword("{model=>Model}"),
+                    alloc.reflow(" next. A full "),
+                    alloc.keyword("requires"),
+                    alloc.reflow(" definition looks like"),
+                ]),
+                alloc
+                    .parser_suggestion("requires {model=>Model, msg=>Msg} {main : Effect {}}")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "BAD REQUIRES RIGIDS".to_string(),
             }
         }
 
@@ -3368,6 +3395,7 @@ fn to_space_report<'a>(
                 title: "TAB CHARACTER".to_string(),
             }
         }
+
         _ => todo!("unhandled type parse error: {:?}", &parse_problem),
     }
 }

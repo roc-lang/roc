@@ -460,4 +460,76 @@ mod cli_run {
             true,
         );
     }
+
+    //    #[test]
+    //    #[serial(effect)]
+    //    fn run_effect_unoptimized() {
+    //        check_output(
+    //            &example_file("effect", "Main.roc"),
+    //            &[],
+    //            "I am Dep2.str2\n",
+    //            true,
+    //        );
+    //    }
+
+    #[test]
+    #[serial(multi_dep_str)]
+    fn run_multi_dep_str_unoptimized() {
+        check_output(
+            &fixture_file("multi-dep-str", "Main.roc"),
+            "multi-dep-str",
+            &[],
+            "I am Dep2.str2\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(multi_dep_str)]
+    fn run_multi_dep_str_optimized() {
+        check_output(
+            &fixture_file("multi-dep-str", "Main.roc"),
+            "multi-dep-str",
+            &["--optimize"],
+            "I am Dep2.str2\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(multi_dep_thunk)]
+    fn run_multi_dep_thunk_unoptimized() {
+        check_output(
+            &fixture_file("multi-dep-thunk", "Main.roc"),
+            "multi-dep-thunk",
+            &[],
+            "I am Dep2.value2\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(multi_dep_thunk)]
+    fn run_multi_dep_thunk_optimized() {
+        check_output(
+            &fixture_file("multi-dep-thunk", "Main.roc"),
+            "multi-dep-thunk",
+            &["--optimize"],
+            "I am Dep2.value2\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(effect)]
+    fn run_effect() {
+        check_output_with_stdin(
+            &example_file("effect", "Main.roc"),
+            "hello world how are you",
+            "effect-example",
+            &[],
+            "hello world how are you\n",
+            true,
+        );
+    }
 }
