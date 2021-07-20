@@ -4191,13 +4191,23 @@ fn convert_tag_union<'a>(
             let field_symbols_temp = sorted_field_symbols(env, procs, layout_cache, args);
 
             let field_symbols;
-            let opt_tag_id_symbol;
+
+            // we must derive the union layout from the whole_var, building it up
+            // from `layouts` would unroll recursive tag unions, and that leads to
+            // problems down the line because we hash layouts and an unrolled
+            // version is not the same as the minimal version.
+            let union_layout = match return_on_layout_error!(
+                env,
+                layout_cache.from_var(env.arena, variant_var, env.subs)
+            ) {
+                Layout::Union(ul) => ul,
+                _ => unreachable!(),
+            };
 
             use WrappedVariant::*;
             let (tag, union_layout) = match variant {
                 Recursive { sorted_tag_layouts } => {
                     debug_assert!(sorted_tag_layouts.len() > 1);
-                    opt_tag_id_symbol = None;
 
                     field_symbols = {
                         let mut temp = Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
@@ -4213,9 +4223,6 @@ fn convert_tag_union<'a>(
                     for (_, arg_layouts) in sorted_tag_layouts.into_iter() {
                         layouts.push(arg_layouts);
                     }
-
-                    debug_assert!(layouts.len() > 1);
-                    let union_layout = UnionLayout::Recursive(layouts.into_bump_slice());
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
@@ -4227,12 +4234,10 @@ fn convert_tag_union<'a>(
                     (tag, union_layout)
                 }
                 NonNullableUnwrapped {
-                    fields,
                     tag_name: wrapped_tag_name,
+                    ..
                 } => {
                     debug_assert_eq!(tag_name, wrapped_tag_name);
-
-                    opt_tag_id_symbol = None;
 
                     field_symbols = {
                         let mut temp = Vec::with_capacity_in(field_symbols_temp.len(), arena);
@@ -4241,8 +4246,6 @@ fn convert_tag_union<'a>(
 
                         temp.into_bump_slice()
                     };
-
-                    let union_layout = UnionLayout::NonNullableUnwrapped(fields);
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
@@ -4254,8 +4257,6 @@ fn convert_tag_union<'a>(
                     (tag, union_layout)
                 }
                 NonRecursive { sorted_tag_layouts } => {
-                    opt_tag_id_symbol = None;
-
                     field_symbols = {
                         let mut temp = Vec::with_capacity_in(field_symbols_temp.len(), arena);
 
@@ -4271,8 +4272,6 @@ fn convert_tag_union<'a>(
                         layouts.push(arg_layouts);
                     }
 
-                    let union_layout = UnionLayout::NonRecursive(layouts.into_bump_slice());
-
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
                         tag_name,
@@ -4283,12 +4282,8 @@ fn convert_tag_union<'a>(
                     (tag, union_layout)
                 }
                 NullableWrapped {
-                    nullable_id,
-                    nullable_name: _,
-                    sorted_tag_layouts,
+                    sorted_tag_layouts, ..
                 } => {
-                    opt_tag_id_symbol = None;
-
                     field_symbols = {
                         let mut temp = Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
 
@@ -4304,11 +4299,6 @@ fn convert_tag_union<'a>(
                         layouts.push(arg_layouts);
                     }
 
-                    let union_layout = UnionLayout::NullableWrapped {
-                        nullable_id,
-                        other_tags: layouts.into_bump_slice(),
-                    };
-
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
                         tag_name,
@@ -4318,27 +4308,13 @@ fn convert_tag_union<'a>(
 
                     (tag, union_layout)
                 }
-                NullableUnwrapped {
-                    nullable_id,
-                    nullable_name: _,
-                    other_name: _,
-                    other_fields,
-                } => {
-                    // FIXME drop tag
-                    let tag_id_symbol = env.unique_symbol();
-                    opt_tag_id_symbol = Some(tag_id_symbol);
-
+                NullableUnwrapped { .. } => {
                     field_symbols = {
                         let mut temp = Vec::with_capacity_in(field_symbols_temp.len() + 1, arena);
 
                         temp.extend(field_symbols_temp.iter().map(|r| r.1));
 
                         temp.into_bump_slice()
-                    };
-
-                    let union_layout = UnionLayout::NullableUnwrapped {
-                        nullable_id,
-                        other_fields,
                     };
 
                     let tag = Expr::Tag {
@@ -4352,26 +4328,14 @@ fn convert_tag_union<'a>(
                 }
             };
 
-            let mut stmt = Stmt::Let(assigned, tag, Layout::Union(union_layout), hole);
+            let stmt = Stmt::Let(assigned, tag, Layout::Union(union_layout), hole);
             let iter = field_symbols_temp
                 .into_iter()
                 .map(|x| x.2 .0)
                 .rev()
                 .zip(field_symbols.iter().rev());
 
-            stmt = assign_to_symbols(env, procs, layout_cache, iter, stmt);
-
-            if let Some(tag_id_symbol) = opt_tag_id_symbol {
-                // define the tag id
-                stmt = Stmt::Let(
-                    tag_id_symbol,
-                    Expr::Literal(Literal::Int(tag_id as i128)),
-                    union_layout.tag_id_layout(),
-                    arena.alloc(stmt),
-                );
-            }
-
-            stmt
+            assign_to_symbols(env, procs, layout_cache, iter, stmt)
         }
     }
 }
@@ -7047,6 +7011,15 @@ fn from_can_pattern_help<'a>(
                         temp
                     };
 
+                    // we must derive the union layout from the whole_var, building it up
+                    // from `layouts` would unroll recursive tag unions, and that leads to
+                    // problems down the line because we hash layouts and an unrolled
+                    // version is not the same as the minimal version.
+                    let layout = match layout_cache.from_var(env.arena, *whole_var, env.subs) {
+                        Ok(Layout::Union(ul)) => ul,
+                        _ => unreachable!(),
+                    };
+
                     use WrappedVariant::*;
                     match variant {
                         NonRecursive {
@@ -7090,18 +7063,6 @@ fn from_can_pattern_help<'a>(
                                     *layout,
                                 ));
                             }
-
-                            let layouts: Vec<&'a [Layout<'a>]> = {
-                                let mut temp = Vec::with_capacity_in(tags.len(), env.arena);
-
-                                for (_, arg_layouts) in tags.into_iter() {
-                                    temp.push(*arg_layouts);
-                                }
-
-                                temp
-                            };
-
-                            let layout = UnionLayout::NonRecursive(layouts.into_bump_slice());
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
@@ -7148,19 +7109,6 @@ fn from_can_pattern_help<'a>(
                                 ));
                             }
 
-                            let layouts: Vec<&'a [Layout<'a>]> = {
-                                let mut temp = Vec::with_capacity_in(tags.len(), env.arena);
-
-                                for (_, arg_layouts) in tags.into_iter() {
-                                    temp.push(*arg_layouts);
-                                }
-
-                                temp
-                            };
-
-                            debug_assert!(layouts.len() > 1);
-                            let layout = UnionLayout::Recursive(layouts.into_bump_slice());
-
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
                                 tag_id: tag_id as u8,
@@ -7203,8 +7151,6 @@ fn from_can_pattern_help<'a>(
                                     *layout,
                                 ));
                             }
-
-                            let layout = UnionLayout::NonNullableUnwrapped(fields);
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
@@ -7279,21 +7225,6 @@ fn from_can_pattern_help<'a>(
                                 ));
                             }
 
-                            let layouts: Vec<&'a [Layout<'a>]> = {
-                                let mut temp = Vec::with_capacity_in(tags.len(), env.arena);
-
-                                for (_, arg_layouts) in tags.into_iter() {
-                                    temp.push(*arg_layouts);
-                                }
-
-                                temp
-                            };
-
-                            let layout = UnionLayout::NullableWrapped {
-                                nullable_id,
-                                other_tags: layouts.into_bump_slice(),
-                            };
-
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
                                 tag_id: tag_id as u8,
@@ -7349,11 +7280,6 @@ fn from_can_pattern_help<'a>(
                                     *layout,
                                 ));
                             }
-
-                            let layout = UnionLayout::NullableUnwrapped {
-                                nullable_id,
-                                other_fields,
-                            };
 
                             Pattern::AppliedTag {
                                 tag_name: tag_name.clone(),
