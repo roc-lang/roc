@@ -202,15 +202,15 @@ mod cli_run {
             //         use_valgrind: true,
             //     }
             // ],
-            "task" => vec![
-                Example {
-                    filename: "Main.roc",
-                    executable_filename: "task-example",
-                    stdin: &[],
-                    expected_ending: "successfully wrote to file\n",
-                    use_valgrind: true,
-                }
-            ],
+            // "task" => vec![
+            //     Example {
+            //         filename: "Main.roc",
+            //         executable_filename: "task-example",
+            //         stdin: &[],
+            //         expected_ending: "successfully wrote to file\n",
+            //         use_valgrind: true,
+            //     }
+            // ],
             "benchmarks" => vec![
                 Example {
                     filename: "NQueens.roc",
