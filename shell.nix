@@ -59,6 +59,11 @@ let
 
     # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
     llvmPkgs.lld
+
+    # meta-tools
+    # note: niv manages its own nixpkgs so it doesn't need pkgs.callPackage. Do
+    # `cachix use niv` to get cached builds!
+    (import sources.niv { }).niv
   ];
 in pkgs.mkShell {
   buildInputs = inputs ++ darwinInputs ++ linuxInputs;
