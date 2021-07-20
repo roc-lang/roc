@@ -29,7 +29,7 @@ for ctr in `seq 1 $NR_REPEATS`;
         cd bench-folder-branch
 
         # ignore error if file does not exist
-        rm -f $LOG_FILE 2>&1
+        rm -f $LOG_FILE
         touch $LOG_FILE
 
         FULL_CMD=" ./target/release/deps/time_bench --bench"
