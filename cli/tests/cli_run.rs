@@ -193,15 +193,15 @@ mod cli_run {
             //         use_valgrind: true,
             //     }
             // ],
-            "custom-malloc" => vec![
-                Example {
-                    filename: "Main.roc",
-                    executable_filename: "custom-malloc-example",
-                    stdin: &[],
-                    expected_ending: "ms!\nThe list was small!\n",
-                    use_valgrind: true,
-                }
-            ],
+            // "custom-malloc" => vec![
+            //     Example {
+            //         filename: "Main.roc",
+            //         executable_filename: "custom-malloc-example",
+            //         stdin: &[],
+            //         expected_ending: "ms!\nThe list was small!\n",
+            //         use_valgrind: true,
+            //     }
+            // ],
             "task" => vec![
                 Example {
                     filename: "Main.roc",
