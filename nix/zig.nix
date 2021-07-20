@@ -11,7 +11,7 @@ let
 
   archiveName = "zig-${osName}-${arch}-${version}";
 
-  # If you're system is not aarch64, we assume it's x86_64
+  # If your system is not aarch64, we assume it's x86_64
   sha256 = if pkgs.stdenv.isDarwin then
     if isAarch64 then
       "b32d13f66d0e1ff740b3326d66a469ee6baddbd7211fa111c066d3bd57683111"
