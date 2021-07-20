@@ -1,17 +1,8 @@
 {}:
 
 let
-  # Look here for information about how pin version of nixpkgs
-  #  → https://nixos.wiki/wiki/FAQ/Pinning_Nixpkgs
-  # TODO: We should probably use flakes at somepoint
-  pkgs = import (
-    builtins.fetchGit {
-      # name = "nixpkgs-2021-04-23";
-      url = "https://github.com/nixos/nixpkgs/";
-      ref = "refs/heads/nixpkgs-unstable";
-      rev = "51bb9f3e9ab6161a3bf7746e20b955712cef618b";
-    }
-  ) {};
+  sources = import nix/sources.nix { };
+  pkgs = import sources.nixpkgs { };
 
   darwinInputs =
     with pkgs;
