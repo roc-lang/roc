@@ -13,9 +13,10 @@ extern crate maplit;
 #[cfg(test)]
 mod cli_run {
     use cli_utils::helpers::{
-        example_file, extract_valgrind_errors, run_cmd, run_roc, run_with_valgrind, ValgrindError,
-        ValgrindErrorXWhat,
+        example_file, extract_valgrind_errors, fixture_file, run_cmd, run_roc, run_with_valgrind,
+        ValgrindError, ValgrindErrorXWhat,
     };
+    use serial_test::serial;
     use std::fs;
     use std::path::Path;
 
@@ -157,24 +158,6 @@ mod cli_run {
                     use_valgrind: true,
                 }
             ],
-            "multi-dep-str" => vec![
-                Example {
-                    filename: "Main.roc",
-                    executable_filename: "multi-dep-str",
-                    stdin: &[],
-                    expected_ending: "I am Dep2.str2\n",
-                    use_valgrind: true,
-                }
-            ],
-            "multi-dep-thunk" => vec![
-                Example {
-                    filename: "Main.roc",
-                    executable_filename: "multi-dep-thunk",
-                    stdin: &[],
-                    expected_ending: "I am Dep2.value2\n",
-                    use_valgrind: true,
-                }
-            ],
             // "tea" => vec![
             //     Example {
             //         filename: "Main.roc",
@@ -310,5 +293,57 @@ mod cli_run {
         }
 
         assert_eq!(all_examples, std::collections::HashMap::default());
+    }
+
+    #[test]
+    #[serial(multi_dep_str)]
+    fn run_multi_dep_str_unoptimized() {
+        check_output_with_stdin(
+            &fixture_file("multi-dep-str", "Main.roc"),
+            &[],
+            "multi-dep-str",
+            &[],
+            "I am Dep2.str2\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(multi_dep_str)]
+    fn run_multi_dep_str_optimized() {
+        check_output_with_stdin(
+            &fixture_file("multi-dep-str", "Main.roc"),
+            &[],
+            "multi-dep-str",
+            &["--optimize"],
+            "I am Dep2.str2\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(multi_dep_thunk)]
+    fn run_multi_dep_thunk_unoptimized() {
+        check_output_with_stdin(
+            &fixture_file("multi-dep-thunk", "Main.roc"),
+            &[],
+            "multi-dep-thunk",
+            &[],
+            "I am Dep2.value2\n",
+            true,
+        );
+    }
+
+    #[test]
+    #[serial(multi_dep_thunk)]
+    fn run_multi_dep_thunk_optimized() {
+        check_output_with_stdin(
+            &fixture_file("multi-dep-thunk", "Main.roc"),
+            &[],
+            "multi-dep-thunk",
+            &["--optimize"],
+            "I am Dep2.value2\n",
+            true,
+        );
     }
 }
