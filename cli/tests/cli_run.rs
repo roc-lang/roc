@@ -117,7 +117,16 @@ mod cli_run {
                     filename: "Hello.roc",
                     executable_filename: "hello-world",
                     stdin: &[],
-                    expected_ending:"Hello, World!!!!!!!!!!!!!\n",
+                    expected_ending:"Hello, World!\n",
+                    use_valgrind: true,
+                }
+            ],
+            "hello-zig" => vec![
+                Example {
+                    filename: "Hello.roc",
+                    executable_filename: "hello-world",
+                    stdin: &[],
+                    expected_ending:"Hello, World!\n",
                     use_valgrind: true,
                 }
             ],
