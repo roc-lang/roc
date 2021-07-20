@@ -184,15 +184,15 @@ mod cli_run {
                     use_valgrind: true,
                 }
             ],
-            "cli" => vec![
-                Example {
-                    filename: "Echo.roc",
-                    executable_filename: "echo",
-                    stdin: &["Giovanni\n", "Giorgio\n"],
-                    expected_ending: "Giovanni Giorgio!\n",
-                    use_valgrind: true,
-                }
-            ],
+            // "cli" => vec![
+            //     Example {
+            //         filename: "Echo.roc",
+            //         executable_filename: "echo",
+            //         stdin: &["Giovanni\n", "Giorgio\n"],
+            //         expected_ending: "Giovanni Giorgio!\n",
+            //         use_valgrind: true,
+            //     }
+            // ],
             "custom-malloc" => vec![
                 Example {
                     filename: "Main.roc",
