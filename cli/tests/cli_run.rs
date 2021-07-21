@@ -108,6 +108,17 @@ mod cli_run {
         assert!(out.status.success());
     }
 
+    /// This macro does two things.
+    ///
+    /// First, it generates and runs a separate test for each of the given
+    /// Example expressions. Each of these should test a particular .roc file
+    /// in the examples/ directory.
+    ///
+    /// Second, it generates an extra test which recursively traverses the
+    /// examples/ directory and verifies that each of the .roc files in there
+    /// has had a corresponding test generated in the previous step. This test
+    /// will fail if we ever add a new .roc file to examples/ and forget to
+    /// add a test for it here!
     macro_rules! examples {
         ($($name:expr => [$($test_name: ident: $examples:expr,)*],)*) => {
             $(
