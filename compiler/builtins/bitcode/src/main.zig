@@ -132,6 +132,13 @@ test "" {
     testing.refAllDecls(@This());
 }
 
+// For unclear reasons, sometimes this function is not linked in on some machines.
+// Therefore we provide it as LLVM bitcode and mark it as externally linked during our LLVM codegen
+//
+// Taken from
+// https://github.com/ziglang/zig/blob/85755c51d529e7d9b406c6bdf69ce0a0f33f3353/lib/std/special/compiler_rt/muloti4.zig
+//
+// Thank you Zig Contributors!
 export fn __muloti4(a: i128, b: i128, overflow: *c_int) callconv(.C) i128 {
     // @setRuntimeSafety(builtin.is_test);
 
