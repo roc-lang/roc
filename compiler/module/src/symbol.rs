@@ -594,13 +594,16 @@ macro_rules! define_builtins {
                                     $ident_name.into(),
                                 )+
                             ];
-                            let mut by_ident = MutMap::default();
+                            let mut by_ident = MutMap::with_capacity_and_hasher(by_id.len(), default_hasher());
 
                             $(
-                                debug_assert!(!by_ident.contains_key($ident_name.clone().into()), "Error setting up Builtins: when inserting {} …: {:?} into module {} …: {:?} - the Ident name {:?} is already present in the map. Check the map for duplicate ident names within the {:?} module!", $ident_id, $ident_name, $module_id, $module_name, $ident_name, $module_name);
                                 debug_assert!(by_ident.len() == $ident_id, "Error setting up Builtins: when inserting {} …: {:?} into module {} …: {:?} - this entry was assigned an ID of {}, but based on insertion order, it should have had an ID of {} instead! To fix this, change it from {} …: {:?} to {} …: {:?} instead.", $ident_id, $ident_name, $module_id, $module_name, $ident_id, by_ident.len(), $ident_id, $ident_name, by_ident.len(), $ident_name);
 
-                                by_ident.insert($ident_name.into(), IdentId($ident_id));
+                                let exists = by_ident.insert($ident_name.into(), IdentId($ident_id));
+
+                                if let Some(_) = exists {
+                                    debug_assert!(false, "Error setting up Builtins: when inserting {} …: {:?} into module {} …: {:?} - the Ident name {:?} is already present in the map. Check the map for duplicate ident names within the {:?} module!", $ident_id, $ident_name, $module_id, $module_name, $ident_name, $module_name);
+                                }
                             )+
 
                             IdentIds {
