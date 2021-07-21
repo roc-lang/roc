@@ -391,6 +391,14 @@ impl RocStr {
         }
     }
 
+    pub fn get_bytes(&self) -> *const u8 {
+        if self.is_small_str() {
+            self.get_small_str_ptr()
+        } else {
+            self.elements
+        }
+    }
+
     pub fn storage(&self) -> Option<Storage> {
         use core::cmp::Ordering::*;
 
