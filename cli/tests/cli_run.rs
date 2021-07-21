@@ -170,6 +170,16 @@ mod cli_run {
         }
     }
 
+    // examples! macro format:
+    //
+    // "name-of-subdirectory-inside-examples-dir" => [
+    //     test_name_1: Example {
+    //         ...
+    //     },
+    //     test_name_2: Example {
+    //         ...
+    //     },
+    // ]
     examples! {
         "hello-world" => [
             hello_world: Example {
