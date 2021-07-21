@@ -7,10 +7,16 @@ ulimit -s unlimited
 
 LOG_FILE="bench_log.txt"
 
-NR_REPEATS=3
+# one dry run, three regular runs
+NR_REPEATS=4
 
 for ctr in `seq 1 $NR_REPEATS`;
     do
+        if [ $ctr -eq 1 ]; then
+            export BENCH_DRY_RUN=1
+        else
+            export BENCH_DRY_RUN=0
+        fi
         #
         # <run benchmarks>
         #
@@ -38,6 +44,39 @@ for ctr in `seq 1 $NR_REPEATS`;
         script -efq $LOG_FILE -c "$FULL_CMD"
 
         EXIT_CODE=$?
+
+        if [ $ctr -eq 1 ]; then
+
+            rm -f bench_sha_sums.txt
+            touch bench_sha_sums.txt
+
+            # on new branch
+            find examples/benchmarks -executable -type f | while read exec_filename; do
+                sha1sum $exec_filename >> bench_sha_sums.txt
+            done
+
+            # on trunk
+            find ../bench-folder-trunk/examples/benchmarks -executable -type f | while read exec_filename; do
+                sha1sum $exec_filename >> bench_sha_sums.txt
+            done
+
+            # keep only unique sha sums
+            sort bench_sha_sums.txt | uniq -u > bench_sha_sums.txt
+
+            if [ $(cat bench_sha_sums.txt | wc -l) -eq 0 ]; then
+                echo ""
+                echo ""
+                echo "No benchmark executables have changed through changes from this PR."
+                echo ""
+                echo ""
+                exit 0
+            else
+                cd ..
+                # go to next iteration of loop
+                continue
+            fi
+
+        fi
         #
         # </run benchmarks>
         #
