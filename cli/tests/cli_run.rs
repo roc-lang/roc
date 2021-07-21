@@ -7,9 +7,6 @@ extern crate roc_collections;
 extern crate roc_load;
 extern crate roc_module;
 
-#[macro_use]
-extern crate maplit;
-
 #[cfg(test)]
 mod cli_run {
     use cli_utils::helpers::{
@@ -17,6 +14,7 @@ mod cli_run {
         ValgrindError, ValgrindErrorXWhat,
     };
     use serial_test::serial;
+    use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
 
@@ -110,189 +108,206 @@ mod cli_run {
         assert!(out.status.success());
     }
 
-    #[test]
-    fn check_all_examples() {
-        let mut all_examples = hashmap! {
-            "hello-world" => vec![
-                Example {
-                    filename: "Hello.roc",
-                    executable_filename: "hello-world",
-                    stdin: &[],
-                    expected_ending:"Hello, World!\n",
-                    use_valgrind: true,
-                }
-            ],
-            "hello-zig" => vec![
-                Example {
-                    filename: "Hello.roc",
-                    executable_filename: "hello-world",
-                    stdin: &[],
-                    expected_ending:"Hello, World!\n",
-                    use_valgrind: true,
-                }
-            ],
-            "quicksort" => vec![
-                Example {
-                    filename: "Quicksort.roc",
-                    executable_filename: "quicksort",
-                    stdin: &[],
-                    expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
-                    use_valgrind: true,
-                }
-            ],
-            // "shared-quicksort" => vec![
-            //     Example {
-            //         filename: "Quicksort.roc",
-            //         executable_filename: "quicksort",
-            //         stdin: &[],
-            //         expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
-            //         use_valgrind: true,
-            //     }
-            // ],
-            "effect" => vec![
-                Example {
-                    filename: "Main.roc",
-                    executable_filename: "effect-example",
-                    stdin: &["hi there!"],
-                    expected_ending: "hi there!\n",
-                    use_valgrind: true,
-                }
-            ],
-            // "tea" => vec![
-            //     Example {
-            //         filename: "Main.roc",
-            //         executable_filename: "tea-example",
-            //         stdin: &[],
-            //         expected_ending: "",
-            //         use_valgrind: true,
-            //     }
-            // ],
-            // "cli" => vec![
-            //     Example {
-            //         filename: "Echo.roc",
-            //         executable_filename: "echo",
-            //         stdin: &["Giovanni\n", "Giorgio\n"],
-            //         expected_ending: "Giovanni Giorgio!\n",
-            //         use_valgrind: true,
-            //     }
-            // ],
-            // "custom-malloc" => vec![
-            //     Example {
-            //         filename: "Main.roc",
-            //         executable_filename: "custom-malloc-example",
-            //         stdin: &[],
-            //         expected_ending: "ms!\nThe list was small!\n",
-            //         use_valgrind: true,
-            //     }
-            // ],
-            // "task" => vec![
-            //     Example {
-            //         filename: "Main.roc",
-            //         executable_filename: "task-example",
-            //         stdin: &[],
-            //         expected_ending: "successfully wrote to file\n",
-            //         use_valgrind: true,
-            //     }
-            // ],
-            "benchmarks" => vec![
-                Example {
-                    filename: "NQueens.roc",
-                    executable_filename: "nqueens",
-                    stdin: &["6"],
-                    expected_ending: "4\n",
-                    use_valgrind: true,
-                },
-                Example {
-                    filename: "CFold.roc",
-                    executable_filename: "cfold",
-                    stdin: &["3"],
-                    expected_ending: "11 & 11\n",
-                    use_valgrind: true,
-                },
-                Example {
-                    filename: "Deriv.roc",
-                    executable_filename: "deriv",
-                    stdin: &["2"],
-                    expected_ending: "1 count: 6\n2 count: 22\n",
-                    use_valgrind: true,
-                },
-                Example {
-                    filename: "RBTreeInsert.roc",
-                    executable_filename: "rbtree-insert",
-                    stdin: &[],
-                    expected_ending: "Node Black 0 {} Empty Empty\n",
-                    use_valgrind: true,
-                },
-                Example {
-                    filename: "RBTreeDel.roc",
-                    executable_filename: "rbtree-del",
-                    stdin: &["420"],
-                    expected_ending: "30\n",
-                    use_valgrind: true,
-                },
-                Example {
-                    filename: "TestAStar.roc",
-                    executable_filename: "test-astar",
-                    stdin: &[],
-                    expected_ending: "True\n",
-                    use_valgrind: false,
-                },
-                Example {
-                    filename: "TestBase64.roc",
-                    executable_filename: "test-base64",
-                    stdin: &[],
-                    expected_ending: "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
-                    use_valgrind: true,
-                },
-                Example {
-                    filename: "Closure.roc",
-                    executable_filename: "closure",
-                    stdin: &[],
-                    expected_ending: "",
-                    use_valgrind: true,
-                }
-            ],
-        };
+    macro_rules! examples {
+        ($($test_name: ident: $name:expr => $examples:expr,)*) => {
+            $(
+                #[test]
+                fn $test_name() {
+                    let dir_name = $name;
 
+                    for example in $examples {
+                        // Check with and without optimizations
+                        check_output_with_stdin(
+                            &example_file(dir_name, example.filename),
+                            example.stdin,
+                            example.executable_filename,
+                            &[],
+                            example.expected_ending,
+                            example.use_valgrind,
+                        );
+
+                        check_output_with_stdin(
+                            &example_file(dir_name, example.filename),
+                            example.stdin,
+                            example.executable_filename,
+                            &["--optimize"],
+                            example.expected_ending,
+                            example.use_valgrind,
+                        );
+                    }
+                }
+            )*
+
+            #[test]
+            fn all_examples_have_tests() {
+                let mut all_examples: HashMap<&str, &[Example<'_>]> = HashMap::default();
+
+                $(
+                    all_examples.insert($name, $examples);
+                )*
+
+                check_for_tests(&mut all_examples);
+            }
+        }
+    }
+
+    examples! {
+        hello_world: "hello-world" => &[
+            Example {
+                filename: "Hello.roc",
+                executable_filename: "hello-world",
+                stdin: &[],
+                expected_ending:"Hello, World!\n",
+                use_valgrind: true,
+            }
+        ],
+        hello_zig: "hello-zig" => &[
+            Example {
+                filename: "Hello.roc",
+                executable_filename: "hello-world",
+                stdin: &[],
+                expected_ending:"Hello, World!\n",
+                use_valgrind: true,
+            }
+        ],
+        quicksort: "quicksort" => &[
+            Example {
+                filename: "Quicksort.roc",
+                executable_filename: "quicksort",
+                stdin: &[],
+                expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
+                use_valgrind: true,
+            }
+        ],
+        // shared_quicksort: "shared-quicksort" => &[
+        //     Example {
+        //         filename: "Quicksort.roc",
+        //         executable_filename: "quicksort",
+        //         stdin: &[],
+        //         expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
+        //         use_valgrind: true,
+        //     }
+        // ],
+        effect: "effect" => &[
+            Example {
+                filename: "Main.roc",
+                executable_filename: "effect-example",
+                stdin: &["hi there!"],
+                expected_ending: "hi there!\n",
+                use_valgrind: true,
+            }
+        ],
+        // tea: "tea" => &[
+        //     Example {
+        //         filename: "Main.roc",
+        //         executable_filename: "tea-example",
+        //         stdin: &[],
+        //         expected_ending: "",
+        //         use_valgrind: true,
+        //     }
+        // ],
+        // cli: "cli" => &[
+        //     Example {
+        //         filename: "Echo.roc",
+        //         executable_filename: "echo",
+        //         stdin: &["Giovanni\n", "Giorgio\n"],
+        //         expected_ending: "Giovanni Giorgio!\n",
+        //         use_valgrind: true,
+        //     }
+        // ],
+        // custom_malloc: "custom-malloc" => &[
+        //     Example {
+        //         filename: "Main.roc",
+        //         executable_filename: "custom-malloc-example",
+        //         stdin: &[],
+        //         expected_ending: "ms!\nThe list was small!\n",
+        //         use_valgrind: true,
+        //     }
+        // ],
+        // task: "task" => &[
+        //     Example {
+        //         filename: "Main.roc",
+        //         executable_filename: "task-example",
+        //         stdin: &[],
+        //         expected_ending: "successfully wrote to file\n",
+        //         use_valgrind: true,
+        //     }
+        // ],
+        benchmarks: "benchmarks" => &[
+            Example {
+                filename: "NQueens.roc",
+                executable_filename: "nqueens",
+                stdin: &["6"],
+                expected_ending: "4\n",
+                use_valgrind: true,
+            },
+            Example {
+                filename: "CFold.roc",
+                executable_filename: "cfold",
+                stdin: &["3"],
+                expected_ending: "11 & 11\n",
+                use_valgrind: true,
+            },
+            Example {
+                filename: "Deriv.roc",
+                executable_filename: "deriv",
+                stdin: &["2"],
+                expected_ending: "1 count: 6\n2 count: 22\n",
+                use_valgrind: true,
+            },
+            Example {
+                filename: "RBTreeInsert.roc",
+                executable_filename: "rbtree-insert",
+                stdin: &[],
+                expected_ending: "Node Black 0 {} Empty Empty\n",
+                use_valgrind: true,
+            },
+            Example {
+                filename: "RBTreeDel.roc",
+                executable_filename: "rbtree-del",
+                stdin: &["420"],
+                expected_ending: "30\n",
+                use_valgrind: true,
+            },
+            Example {
+                filename: "TestAStar.roc",
+                executable_filename: "test-astar",
+                stdin: &[],
+                expected_ending: "True\n",
+                use_valgrind: false,
+            },
+            Example {
+                filename: "TestBase64.roc",
+                executable_filename: "test-base64",
+                stdin: &[],
+                expected_ending: "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
+                use_valgrind: true,
+            },
+            Example {
+                filename: "Closure.roc",
+                executable_filename: "closure",
+                stdin: &[],
+                expected_ending: "",
+                use_valgrind: true,
+            }
+        ],
+    }
+
+    fn check_for_tests(all_examples: &mut HashMap<&str, &[Example<'_>]>) {
         for entry in fs::read_dir("../examples").unwrap() {
             let entry = entry.unwrap();
 
             if entry.file_type().unwrap().is_dir() {
                 let dir_name = entry.file_name().into_string().unwrap();
-                let examples = all_examples.remove(dir_name.as_str()).unwrap_or(Vec::new());
+                let examples = all_examples.remove(dir_name.as_str()).unwrap_or(&[]);
 
                 if examples.is_empty() {
                     panic!("The directory examples/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops compiling, we'll know about it right away!", dir_name);
                 }
-
-                for example in examples {
-                    println!(
-                        "Running {:?}...",
-                        &example_file(dir_name.as_str(), example.filename),
-                    );
-                    // Check with and without optimizations
-                    check_output_with_stdin(
-                        &example_file(dir_name.as_str(), example.filename),
-                        example.stdin,
-                        example.executable_filename,
-                        &[],
-                        example.expected_ending,
-                        example.use_valgrind,
-                    );
-
-                    check_output_with_stdin(
-                        &example_file(dir_name.as_str(), example.filename),
-                        example.stdin,
-                        example.executable_filename,
-                        &["--optimize"],
-                        example.expected_ending,
-                        example.use_valgrind,
-                    );
-                }
             }
         }
 
-        assert_eq!(all_examples, std::collections::HashMap::default());
+        assert_eq!(all_examples, &mut HashMap::default());
     }
 
     #[test]
