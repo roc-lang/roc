@@ -1,6 +1,6 @@
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::expected::{Expected, PExpected};
-use roc_collections::all::{ImMap, MutMap};
+use roc_collections::all::{default_hasher, MutMap};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::solved_types::Solved;
@@ -413,24 +413,25 @@ fn solve(
                     );
 
                     // Add a variable for each def to new_vars_by_env.
-                    let mut local_def_vars = ImMap::default();
+                    let mut local_def_vars = Vec::with_capacity(let_con.def_types.len());
 
                     for (symbol, loc_type) in let_con.def_types.iter() {
                         let var = type_to_var(subs, rank, pools, cached_aliases, &loc_type.value);
 
-                        local_def_vars.insert(
+                        local_def_vars.push((
                             *symbol,
                             Located {
                                 value: var,
                                 region: loc_type.region,
                             },
-                        );
+                        ));
                     }
 
                     let mut new_env = env.clone();
                     for (symbol, loc_var) in local_def_vars.iter() {
-                        if !new_env.vars_by_symbol.contains_key(&symbol) {
-                            new_env.vars_by_symbol.insert(*symbol, loc_var.value);
+                        // better to ask for forgiveness than for permission
+                        if let Some(old) = new_env.vars_by_symbol.insert(*symbol, loc_var.value) {
+                            new_env.vars_by_symbol.insert(*symbol, old);
                         }
                     }
 
@@ -485,7 +486,7 @@ fn solve(
                     // run solver in next pool
 
                     // Add a variable for each def to local_def_vars.
-                    let mut local_def_vars = ImMap::default();
+                    let mut local_def_vars = Vec::with_capacity(let_con.def_types.len());
 
                     for (symbol, loc_type) in let_con.def_types.iter() {
                         let def_type = &loc_type.value;
@@ -493,13 +494,13 @@ fn solve(
                         let var =
                             type_to_var(subs, next_rank, next_pools, cached_aliases, def_type);
 
-                        local_def_vars.insert(
+                        local_def_vars.push((
                             *symbol,
                             Located {
                                 value: var,
                                 region: loc_type.region,
                             },
-                        );
+                        ));
                     }
 
                     // Solve the assignments' constraints first.
@@ -671,7 +672,7 @@ fn type_to_variable(
             register(subs, rank, pools, content)
         }
         Record(fields, ext) => {
-            let mut field_vars = MutMap::default();
+            let mut field_vars = MutMap::with_capacity_and_hasher(fields.len(), default_hasher());
 
             for (field, field_type) in fields {
                 use RecordField::*;
@@ -700,7 +701,7 @@ fn type_to_variable(
             register(subs, rank, pools, content)
         }
         TagUnion(tags, ext) => {
-            let mut tag_vars = MutMap::default();
+            let mut tag_vars = MutMap::with_capacity_and_hasher(tags.len(), default_hasher());
 
             for (tag, tag_argument_types) in tags {
                 let mut tag_argument_vars = Vec::with_capacity(tag_argument_types.len());
@@ -750,7 +751,7 @@ fn type_to_variable(
             register(subs, rank, pools, content)
         }
         RecursiveTagUnion(rec_var, tags, ext) => {
-            let mut tag_vars = MutMap::default();
+            let mut tag_vars = MutMap::with_capacity_and_hasher(tags.len(), default_hasher());
 
             for (tag, tag_argument_types) in tags {
                 let mut tag_argument_vars = Vec::with_capacity(tag_argument_types.len());
@@ -791,51 +792,18 @@ fn type_to_variable(
         }
         Alias(Symbol::BOOL_BOOL, _, _) => Variable::BOOL,
         Alias(symbol, args, alias_type) => {
-            // TODO cache in uniqueness inference gives problems! all Int's get the same uniqueness var!
-            // Cache aliases without type arguments. Commonly used aliases like `Int` would otherwise get O(n)
-            // different variables (once for each occurrence). The recursion restriction is required
-            // for uniqueness types only: recursive aliases "introduce" an unbound uniqueness
-            // attribute in the body, when
-            //
-            // Peano : [ S Peano, Z ]
-            //
-            // becomes
-            //
-            // Peano : [ S (Attr u Peano), Z ]
-            //
-            // This `u` variable can be different between lists, so giving just one variable to
-            // this type is incorrect.
-            // TODO does caching work at all with uniqueness types? even Int then hides a uniqueness variable
-            let is_recursive = alias_type.is_recursive();
-            let no_args = args.is_empty();
-            /*
-            if no_args && !is_recursive {
-                if let Some(var) = cached.get(symbol) {
-                    return *var;
-                }
-            }
-            */
-
             let mut arg_vars = Vec::with_capacity(args.len());
-            let mut new_aliases = ImMap::default();
 
             for (arg, arg_type) in args {
                 let arg_var = type_to_variable(subs, rank, pools, cached, arg_type);
 
                 arg_vars.push((arg.clone(), arg_var));
-                new_aliases.insert(arg.clone(), arg_var);
             }
 
             let alias_var = type_to_variable(subs, rank, pools, cached, alias_type);
             let content = Content::Alias(*symbol, arg_vars, alias_var);
 
-            let result = register(subs, rank, pools, content);
-
-            if no_args && !is_recursive {
-                // cached.insert(*symbol, result);
-            }
-
-            result
+            register(subs, rank, pools, content)
         }
         HostExposedAlias {
             name: symbol,
@@ -845,13 +813,11 @@ fn type_to_variable(
             ..
         } => {
             let mut arg_vars = Vec::with_capacity(args.len());
-            let mut new_aliases = ImMap::default();
 
             for (arg, arg_type) in args {
                 let arg_var = type_to_variable(subs, rank, pools, cached, arg_type);
 
                 arg_vars.push((arg.clone(), arg_var));
-                new_aliases.insert(arg.clone(), arg_var);
             }
 
             let alias_var = type_to_variable(subs, rank, pools, cached, alias_type);
