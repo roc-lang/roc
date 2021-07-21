@@ -5930,6 +5930,44 @@ mod test_reporting {
     }
 
     #[test]
+    fn platform_requires_rigids() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                platform folkertdev/foo
+                    requires { main : Effect {} }
+                    exposes []
+                    packages {}
+                    imports [Task]
+                    provides [ mainForHost ]
+                    effects fx.Effect
+                        {
+                            putChar : I64 -> Effect {},
+                            putLine : Str -> Effect {},
+                            getLine : Effect Str
+                        }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── BAD REQUIRES RIGIDS ─────────────────────────────────────────────────────────
+
+                I am partway through parsing a header, but I got stuck here:
+
+                1│  platform folkertdev/foo
+                2│      requires { main : Effect {} }
+                                   ^
+
+                I am expecting a list of rigids like `{}` or `{model=>Model}` next. A full
+                `requires` definition looks like
+
+                    requires {model=>Model, msg=>Msg} {main : Effect {}}
+            "#
+            ),
+        )
+    }
+
+    #[test]
     fn exposes_identifier() {
         report_header_problem_as(
             indoc!(

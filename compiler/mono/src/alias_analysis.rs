@@ -1,10 +1,10 @@
 use morphic_lib::TypeContext;
 use morphic_lib::{
     BlockExpr, BlockId, CalleeSpecVar, ConstDefBuilder, ConstName, EntryPointName, ExprContext,
-    FuncDef, FuncDefBuilder, FuncName, ModDefBuilder, ModName, ProgramBuilder, Result, TypeId,
-    UpdateModeVar, ValueId,
+    FuncDef, FuncDefBuilder, FuncName, ModDefBuilder, ModName, ProgramBuilder, Result,
+    TypeDefBuilder, TypeId, TypeName, UpdateModeVar, ValueId,
 };
-use roc_collections::all::MutMap;
+use roc_collections::all::{MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use std::convert::TryFrom;
@@ -25,6 +25,26 @@ pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
 
 const DEBUG: bool = false;
 const SIZE: usize = if DEBUG { 50 } else { 16 };
+
+#[derive(Debug, Clone, Copy, Hash)]
+struct TagUnionId(u64);
+
+fn recursive_tag_union_name_bytes(union_layout: &UnionLayout) -> TagUnionId {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::Hash;
+    use std::hash::Hasher;
+
+    let mut hasher = DefaultHasher::new();
+    union_layout.hash(&mut hasher);
+
+    TagUnionId(hasher.finish())
+}
+
+impl TagUnionId {
+    const fn as_bytes(&self) -> [u8; 8] {
+        self.0.to_ne_bytes()
+    }
+}
 
 pub fn func_name_bytes_help<'a, I>(
     symbol: Symbol,
@@ -134,6 +154,8 @@ where
         let entry_point_name = FuncName(ENTRY_POINT_NAME);
         m.add_func(entry_point_name, entry_point_function)?;
 
+        let mut type_definitions = MutSet::default();
+
         // all other functions
         for proc in procs {
             let bytes = func_name_bytes(proc);
@@ -148,9 +170,30 @@ where
                 );
             }
 
-            let spec = proc_spec(proc)?;
+            let (spec, type_names) = proc_spec(proc)?;
+
+            type_definitions.extend(type_names);
 
             m.add_func(func_name, spec)?;
+        }
+
+        for union_layout in type_definitions {
+            let type_name_bytes = recursive_tag_union_name_bytes(&union_layout).as_bytes();
+            let type_name = TypeName(&type_name_bytes);
+
+            let mut builder = TypeDefBuilder::new();
+
+            let variant_types = build_variant_types(&mut builder, &union_layout)?;
+            let root_type = if let UnionLayout::NonNullableUnwrapped(_) = union_layout {
+                debug_assert_eq!(variant_types.len(), 1);
+                variant_types[0]
+            } else {
+                builder.add_union_type(&variant_types)?
+            };
+
+            let type_def = builder.build(root_type)?;
+
+            m.add_named_type(type_name, type_def)?;
         }
 
         m.build()?
@@ -195,7 +238,7 @@ fn build_entry_point(layout: crate::ir::ProcLayout, func_name: FuncName) -> Resu
     Ok(spec)
 }
 
-fn proc_spec(proc: &Proc) -> Result<FuncDef> {
+fn proc_spec<'a>(proc: &Proc<'a>) -> Result<(FuncDef, MutSet<UnionLayout<'a>>)> {
     let mut builder = FuncDefBuilder::new();
     let mut env = Env::default();
 
@@ -218,21 +261,22 @@ fn proc_spec(proc: &Proc) -> Result<FuncDef> {
 
     let spec = builder.build(arg_type_id, ret_type_id, root)?;
 
-    Ok(spec)
+    Ok((spec, env.type_names))
 }
 
 #[derive(Default)]
-struct Env {
+struct Env<'a> {
     symbols: MutMap<Symbol, ValueId>,
     join_points: MutMap<crate::ir::JoinPointId, morphic_lib::ContinuationId>,
+    type_names: MutSet<UnionLayout<'a>>,
 }
 
-fn stmt_spec(
+fn stmt_spec<'a>(
     builder: &mut FuncDefBuilder,
-    env: &mut Env,
+    env: &mut Env<'a>,
     block: BlockId,
     layout: &Layout,
-    stmt: &Stmt,
+    stmt: &Stmt<'a>,
 ) -> Result<ValueId> {
     use Stmt::*;
 
@@ -420,7 +464,27 @@ fn build_tuple_value(
     builder.add_make_tuple(block, &value_ids)
 }
 
-fn build_tuple_type(builder: &mut FuncDefBuilder, layouts: &[Layout]) -> Result<TypeId> {
+#[derive(Clone, Debug, PartialEq)]
+enum WhenRecursive<'a> {
+    Unreachable,
+    Loop(UnionLayout<'a>),
+}
+
+fn build_recursive_tuple_type(
+    builder: &mut impl TypeContext,
+    layouts: &[Layout],
+    when_recursive: &WhenRecursive,
+) -> Result<TypeId> {
+    let mut field_types = Vec::new();
+
+    for field in layouts.iter() {
+        field_types.push(layout_spec_help(builder, field, when_recursive)?);
+    }
+
+    builder.add_tuple_type(&field_types)
+}
+
+fn build_tuple_type(builder: &mut impl TypeContext, layouts: &[Layout]) -> Result<TypeId> {
     let mut field_types = Vec::new();
 
     for field in layouts.iter() {
@@ -854,46 +918,95 @@ fn lowlevel_spec(
     }
 }
 
+fn recursive_tag_variant(
+    builder: &mut impl TypeContext,
+    union_layout: &UnionLayout,
+    fields: &[Layout],
+) -> Result<TypeId> {
+    let when_recursive = WhenRecursive::Loop(*union_layout);
+
+    let data_id = build_recursive_tuple_type(builder, fields, &when_recursive)?;
+    let cell_id = builder.add_heap_cell_type();
+
+    builder.add_tuple_type(&[cell_id, data_id])
+}
+
 fn build_variant_types(
-    builder: &mut FuncDefBuilder,
+    builder: &mut impl TypeContext,
     union_layout: &UnionLayout,
 ) -> Result<Vec<TypeId>> {
     use UnionLayout::*;
 
-    let mut result = Vec::new();
+    let mut result;
 
     match union_layout {
         NonRecursive(tags) => {
+            result = Vec::with_capacity(tags.len());
+
             for tag in tags.iter() {
                 result.push(build_tuple_type(builder, tag)?);
             }
         }
-        Recursive(_) => unreachable!(),
-        NonNullableUnwrapped(_) => unreachable!(),
+        Recursive(tags) => {
+            result = Vec::with_capacity(tags.len());
+
+            for tag in tags.iter() {
+                result.push(recursive_tag_variant(builder, union_layout, tag)?);
+            }
+        }
+        NonNullableUnwrapped(fields) => {
+            result = vec![recursive_tag_variant(builder, union_layout, fields)?];
+        }
         NullableWrapped {
-            nullable_id: _,
-            other_tags: _,
-        } => unreachable!(),
+            nullable_id,
+            other_tags: tags,
+        } => {
+            result = Vec::with_capacity(tags.len() + 1);
+
+            let cutoff = *nullable_id as usize;
+
+            for tag in tags[..cutoff].iter() {
+                result.push(recursive_tag_variant(builder, union_layout, tag)?);
+            }
+
+            let unit = builder.add_tuple_type(&[])?;
+            result.push(unit);
+
+            for tag in tags[cutoff..].iter() {
+                result.push(recursive_tag_variant(builder, union_layout, tag)?);
+            }
+        }
         NullableUnwrapped {
-            nullable_id: _,
-            other_fields: _,
-        } => unreachable!(),
+            nullable_id,
+            other_fields: fields,
+        } => {
+            let unit = builder.add_tuple_type(&[])?;
+            let other_type = recursive_tag_variant(builder, union_layout, fields)?;
+
+            if *nullable_id {
+                // nullable_id == 1
+                result = vec![other_type, unit];
+            } else {
+                result = vec![unit, other_type];
+            }
+        }
     }
 
     Ok(result)
 }
 
+#[allow(dead_code)]
 fn worst_case_type(context: &mut impl TypeContext) -> Result<TypeId> {
     let cell = context.add_heap_cell_type();
     context.add_bag_type(cell)
 }
 
-fn expr_spec(
+fn expr_spec<'a>(
     builder: &mut FuncDefBuilder,
-    env: &mut Env,
+    env: &mut Env<'a>,
     block: BlockId,
-    layout: &Layout,
-    expr: &Expr,
+    layout: &Layout<'a>,
+    expr: &Expr<'a>,
 ) -> Result<ValueId> {
     use Expr::*;
 
@@ -912,21 +1025,54 @@ fn expr_spec(
             tag_name: _,
             tag_id,
             arguments,
-        } => match tag_layout {
-            UnionLayout::NonRecursive(_) => {
-                let value_id = build_tuple_value(builder, env, block, arguments)?;
-                let variant_types = build_variant_types(builder, tag_layout)?;
-                builder.add_make_union(block, &variant_types, *tag_id as u32, value_id)
-            }
-            UnionLayout::Recursive(_)
-            | UnionLayout::NonNullableUnwrapped(_)
-            | UnionLayout::NullableWrapped { .. }
-            | UnionLayout::NullableUnwrapped { .. } => {
-                let result_type = worst_case_type(builder)?;
-                let value_id = build_tuple_value(builder, env, block, arguments)?;
-                builder.add_unknown_with(block, &[value_id], result_type)
-            }
-        },
+        } => {
+            let variant_types = build_variant_types(builder, tag_layout)?;
+
+            let data_id = build_tuple_value(builder, env, block, arguments)?;
+            let cell_id = builder.add_new_heap_cell(block)?;
+
+            let value_id = match tag_layout {
+                UnionLayout::NonRecursive(_) => {
+                    let value_id = build_tuple_value(builder, env, block, arguments)?;
+                    return builder.add_make_union(block, &variant_types, *tag_id as u32, value_id);
+                }
+                UnionLayout::NonNullableUnwrapped(_) => {
+                    let value_id = builder.add_make_tuple(block, &[cell_id, data_id])?;
+
+                    let type_name_bytes = recursive_tag_union_name_bytes(tag_layout).as_bytes();
+                    let type_name = TypeName(&type_name_bytes);
+
+                    env.type_names.insert(*tag_layout);
+
+                    return builder.add_make_named(block, MOD_APP, type_name, value_id);
+                }
+                UnionLayout::Recursive(_) => builder.add_make_tuple(block, &[cell_id, data_id])?,
+                UnionLayout::NullableWrapped { nullable_id, .. } => {
+                    if *tag_id == *nullable_id as u8 {
+                        data_id
+                    } else {
+                        builder.add_make_tuple(block, &[cell_id, data_id])?
+                    }
+                }
+                UnionLayout::NullableUnwrapped { nullable_id, .. } => {
+                    if *tag_id == *nullable_id as u8 {
+                        data_id
+                    } else {
+                        builder.add_make_tuple(block, &[cell_id, data_id])?
+                    }
+                }
+            };
+
+            let union_id =
+                builder.add_make_union(block, &variant_types, *tag_id as u32, value_id)?;
+
+            let type_name_bytes = recursive_tag_union_name_bytes(tag_layout).as_bytes();
+            let type_name = TypeName(&type_name_bytes);
+
+            env.type_names.insert(*tag_layout);
+
+            builder.add_make_named(block, MOD_APP, type_name, union_id)
+        }
         Struct(fields) => build_tuple_value(builder, env, block, fields),
         UnionAtIndex {
             index,
@@ -942,11 +1088,45 @@ fn expr_spec(
 
                 builder.add_get_tuple_field(block, tuple_value_id, index)
             }
-            _ => {
-                // for the moment recursive tag unions don't quite work
-                let value_id = env.symbols[structure];
-                let result_type = layout_spec(builder, layout)?;
-                builder.add_unknown_with(block, &[value_id], result_type)
+            UnionLayout::Recursive(_)
+            | UnionLayout::NullableUnwrapped { .. }
+            | UnionLayout::NullableWrapped { .. } => {
+                let index = (*index) as u32;
+                let tag_value_id = env.symbols[structure];
+
+                let type_name_bytes = recursive_tag_union_name_bytes(&union_layout).as_bytes();
+                let type_name = TypeName(&type_name_bytes);
+
+                let union_id = builder.add_unwrap_named(block, MOD_APP, type_name, tag_value_id)?;
+                let variant_id = builder.add_unwrap_union(block, union_id, *tag_id as u32)?;
+
+                // we're reading from this value, so touch the heap cell
+                let heap_cell = builder.add_get_tuple_field(block, variant_id, 0)?;
+                builder.add_touch(block, heap_cell)?;
+
+                let tuple_value_id = builder.add_get_tuple_field(block, variant_id, 1)?;
+
+                builder.add_get_tuple_field(block, tuple_value_id, index)
+            }
+            UnionLayout::NonNullableUnwrapped { .. } => {
+                let index = (*index) as u32;
+                debug_assert!(*tag_id == 0);
+
+                let tag_value_id = env.symbols[structure];
+
+                let type_name_bytes = recursive_tag_union_name_bytes(&union_layout).as_bytes();
+                let type_name = TypeName(&type_name_bytes);
+
+                let variant_id =
+                    builder.add_unwrap_named(block, MOD_APP, type_name, tag_value_id)?;
+
+                // we're reading from this value, so touch the heap cell
+                let heap_cell = builder.add_get_tuple_field(block, variant_id, 0)?;
+                builder.add_touch(block, heap_cell)?;
+
+                let tuple_value_id = builder.add_get_tuple_field(block, variant_id, 1)?;
+
+                builder.add_get_tuple_field(block, tuple_value_id, index)
             }
         },
         StructAtIndex {
@@ -1017,34 +1197,66 @@ fn literal_spec(
     }
 }
 
-fn layout_spec(builder: &mut FuncDefBuilder, layout: &Layout) -> Result<TypeId> {
+fn layout_spec(builder: &mut impl TypeContext, layout: &Layout) -> Result<TypeId> {
+    layout_spec_help(builder, layout, &WhenRecursive::Unreachable)
+}
+
+fn layout_spec_help(
+    builder: &mut impl TypeContext,
+    layout: &Layout,
+    when_recursive: &WhenRecursive,
+) -> Result<TypeId> {
     use Layout::*;
 
     match layout {
-        Builtin(builtin) => builtin_spec(builder, builtin),
-        Struct(fields) => build_tuple_type(builder, fields),
-        Union(union_layout) => match union_layout {
-            UnionLayout::NonRecursive(_) => {
-                let variant_types = build_variant_types(builder, union_layout)?;
-                builder.add_union_type(&variant_types)
+        Builtin(builtin) => builtin_spec(builder, builtin, when_recursive),
+        Struct(fields) => build_recursive_tuple_type(builder, fields, when_recursive),
+        Union(union_layout) => {
+            let variant_types = build_variant_types(builder, union_layout)?;
+
+            match union_layout {
+                UnionLayout::NonRecursive(_) => builder.add_union_type(&variant_types),
+                UnionLayout::Recursive(_)
+                | UnionLayout::NullableUnwrapped { .. }
+                | UnionLayout::NullableWrapped { .. }
+                | UnionLayout::NonNullableUnwrapped(_) => {
+                    let type_name_bytes = recursive_tag_union_name_bytes(&union_layout).as_bytes();
+                    let type_name = TypeName(&type_name_bytes);
+
+                    Ok(builder.add_named_type(MOD_APP, type_name))
+                }
             }
-            UnionLayout::Recursive(_) => worst_case_type(builder),
-            UnionLayout::NonNullableUnwrapped(_) => worst_case_type(builder),
-            UnionLayout::NullableWrapped {
-                nullable_id: _,
-                other_tags: _,
-            } => worst_case_type(builder),
-            UnionLayout::NullableUnwrapped {
-                nullable_id: _,
-                other_fields: _,
-            } => worst_case_type(builder),
+        }
+        RecursivePointer => match when_recursive {
+            WhenRecursive::Unreachable => {
+                unreachable!()
+            }
+            WhenRecursive::Loop(union_layout) => match union_layout {
+                UnionLayout::NonRecursive(_) => unreachable!(),
+                UnionLayout::Recursive(_)
+                | UnionLayout::NullableUnwrapped { .. }
+                | UnionLayout::NullableWrapped { .. }
+                | UnionLayout::NonNullableUnwrapped(_) => {
+                    let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();
+                    let type_name = TypeName(&type_name_bytes);
+
+                    Ok(builder.add_named_type(MOD_APP, type_name))
+                }
+            },
         },
-        RecursivePointer => worst_case_type(builder),
-        Closure(_, lambda_set, _) => layout_spec(builder, &lambda_set.runtime_representation()),
+        Closure(_, lambda_set, _) => layout_spec_help(
+            builder,
+            &lambda_set.runtime_representation(),
+            when_recursive,
+        ),
     }
 }
 
-fn builtin_spec(builder: &mut FuncDefBuilder, builtin: &Builtin) -> Result<TypeId> {
+fn builtin_spec(
+    builder: &mut impl TypeContext,
+    builtin: &Builtin,
+    when_recursive: &WhenRecursive,
+) -> Result<TypeId> {
     use Builtin::*;
 
     match builtin {
@@ -1052,8 +1264,8 @@ fn builtin_spec(builder: &mut FuncDefBuilder, builtin: &Builtin) -> Result<TypeI
         Decimal | Float128 | Float64 | Float32 | Float16 => builder.add_tuple_type(&[]),
         Str | EmptyStr => str_type(builder),
         Dict(key_layout, value_layout) => {
-            let value_type = layout_spec(builder, value_layout)?;
-            let key_type = layout_spec(builder, key_layout)?;
+            let value_type = layout_spec_help(builder, value_layout, when_recursive)?;
+            let key_type = layout_spec_help(builder, key_layout, when_recursive)?;
             let element_type = builder.add_tuple_type(&[key_type, value_type])?;
 
             let cell = builder.add_heap_cell_type();
@@ -1062,7 +1274,7 @@ fn builtin_spec(builder: &mut FuncDefBuilder, builtin: &Builtin) -> Result<TypeI
         }
         Set(key_layout) => {
             let value_type = builder.add_tuple_type(&[])?;
-            let key_type = layout_spec(builder, key_layout)?;
+            let key_type = layout_spec_help(builder, key_layout, when_recursive)?;
             let element_type = builder.add_tuple_type(&[key_type, value_type])?;
 
             let cell = builder.add_heap_cell_type();
@@ -1070,7 +1282,7 @@ fn builtin_spec(builder: &mut FuncDefBuilder, builtin: &Builtin) -> Result<TypeI
             builder.add_tuple_type(&[cell, bag])
         }
         List(element_layout) => {
-            let element_type = layout_spec(builder, element_layout)?;
+            let element_type = layout_spec_help(builder, element_layout, when_recursive)?;
 
             let cell = builder.add_heap_cell_type();
             let bag = builder.add_bag_type(element_type)?;

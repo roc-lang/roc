@@ -968,15 +968,6 @@ impl<'a> Context<'a> {
                 // live vars of the whole expression
                 let invoke_live_vars = collect_stmt(stmt, &self.jp_live_vars, MutSet::default());
 
-                // the result of an invoke should not be touched in the fail branch
-                // but it should be present in the pass branch (otherwise it would be dead)
-                // NOTE: we cheat a bit here to allow `invoke` when generating code for `expect`
-                let is_dead = !invoke_live_vars.contains(symbol);
-
-                if is_dead && layout.is_refcounted() {
-                    panic!("A variable of a reference-counted layout is dead; that's a bug!");
-                }
-
                 let fail = {
                     // TODO should we use ctor info like Lean?
                     let ctx = self.clone();

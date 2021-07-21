@@ -1,6 +1,6 @@
 interface Cmd
     exposes [ Cmd, none, map, putLine, getLine, always, after ]
-    imports [ Effect ]
+    imports [ fx.Effect ]
 
 Cmd a : Effect.Effect a
 
@@ -15,7 +15,7 @@ getLine = \toMsg ->
     Effect.map Effect.getLine toMsg
 
 putLine : Str -> Cmd {}
-putLine = \line -> Effect.putLine line 
+putLine = \line -> Effect.putLine line
 
 map : Cmd a, (a -> b) -> Cmd b
 map = \cmd, transform -> Effect.map cmd transform

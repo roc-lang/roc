@@ -30,3 +30,6 @@ sccache_dir
 
 # self-contained benchmark folder
 bench-folder*
+
+# earthly
+earthly_log.txt

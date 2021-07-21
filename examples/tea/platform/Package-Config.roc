@@ -1,8 +1,8 @@
 platform folkertdev/foo
-    requires {}{foo:Str}
+    requires {model=>Model, msg=>Msg}{foo:Str}
     exposes []
     packages {}
-    imports [Cmd]
+    imports [ Cmd ]
     provides [ mainForHost ]
     effects fx.Effect
         {
