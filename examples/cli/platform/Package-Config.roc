@@ -2,7 +2,7 @@ platform rtfeldman/roc-cli
     requires {}{ main : Task.Task {} * } # TODO FIXME
     exposes [] # TODO FIXME actually expose modules
     packages {}
-    imports [ Task.{ Task } ]
+    imports [ Task ]
     provides [ mainForHost ]
     effects fx.Effect
         {
@@ -13,5 +13,5 @@ platform rtfeldman/roc-cli
         }
 
 
-mainForHost : Task {} * as Fx
+mainForHost : Task.Task {} * as Fx
 mainForHost = main
