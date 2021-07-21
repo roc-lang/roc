@@ -439,7 +439,7 @@ fn unify_tag_union(
                 pool,
                 ctx,
                 shared_tags,
-                MutMap::default(),
+                OtherTags::Empty,
                 rec1.ext,
                 recursion_var,
             );
@@ -461,7 +461,7 @@ fn unify_tag_union(
                 pool,
                 ctx,
                 shared_tags,
-                MutMap::default(),
+                OtherTags::Empty,
                 sub_record,
                 recursion_var,
             );
@@ -484,7 +484,7 @@ fn unify_tag_union(
             pool,
             ctx,
             shared_tags,
-            MutMap::default(),
+            OtherTags::Empty,
             sub_record,
             recursion_var,
         );
@@ -493,7 +493,10 @@ fn unify_tag_union(
 
         tag_problems
     } else {
-        let other_tags = union(unique_tags1.clone(), &unique_tags2);
+        let other_tags = OtherTags::Union {
+            tags1: unique_tags1.clone(),
+            tags2: unique_tags2.clone(),
+        };
 
         let ext = fresh(subs, pool, ctx, Content::FlexVar(None));
         let flat_type1 = FlatType::TagUnion(unique_tags1, ext);
@@ -772,12 +775,20 @@ fn unify_shared_tags_recursive_not_recursive(
     }
 }
 
+enum OtherTags {
+    Empty,
+    Union {
+        tags1: MutMap<TagName, Vec<Variable>>,
+        tags2: MutMap<TagName, Vec<Variable>>,
+    },
+}
+
 fn unify_shared_tags(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
     shared_tags: MutMap<TagName, (Vec<Variable>, Vec<Variable>)>,
-    other_tags: MutMap<TagName, Vec<Variable>>,
+    other_tags: OtherTags,
     ext: Variable,
     recursion_var: Option<Variable>,
 ) -> Outcome {
@@ -837,7 +848,16 @@ fn unify_shared_tags(
             Err((new, _)) => new,
         };
 
-        let mut new_tags = union(matching_tags, &other_tags);
+        let mut new_tags = matching_tags;
+
+        match other_tags {
+            OtherTags::Empty => {}
+            OtherTags::Union { tags1, tags2 } => {
+                new_tags.extend(tags1);
+                new_tags.extend(tags2);
+            }
+        }
+
         new_tags.extend(fields.into_iter());
 
         let flat_type = if let Some(rec) = recursion_var {
