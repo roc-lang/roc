@@ -6362,13 +6362,14 @@ fn call_by_name_help<'a>(
     let top_level_layout = ProcLayout::new(env.arena, argument_layouts, *ret_layout);
 
     // the arguments given to the function, stored in symbols
-    let field_symbols = Vec::from_iter_in(
+    let mut field_symbols = Vec::with_capacity_in(loc_args.len(), arena);
+    field_symbols.extend(
         loc_args
             .iter()
             .map(|(_, arg_expr)| possible_reuse_symbol(env, procs, &arg_expr.value)),
-        arena,
-    )
-    .into_bump_slice();
+    );
+
+    let field_symbols = field_symbols.into_bump_slice();
 
     // the variables of the given arguments
     let mut pattern_vars = Vec::with_capacity_in(loc_args.len(), arena);
