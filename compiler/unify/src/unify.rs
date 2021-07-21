@@ -405,6 +405,39 @@ fn unify_shared_fields(
     }
 }
 
+struct Separate<K, V> {
+    only_in_1: MutMap<K, V>,
+    only_in_2: MutMap<K, V>,
+    in_both: MutMap<K, (V, V)>,
+}
+
+fn separate<K, V>(tags1: MutMap<K, V>, mut tags2: MutMap<K, V>) -> Separate<K, V>
+where
+    K: Ord + std::hash::Hash,
+{
+    let mut only_in_1 = MutMap::with_capacity_and_hasher(tags1.len(), default_hasher());
+
+    let max_common = tags1.len().min(tags2.len());
+    let mut in_both = MutMap::with_capacity_and_hasher(max_common, default_hasher());
+
+    for (k, v1) in tags1.into_iter() {
+        match tags2.remove(&k) {
+            Some(v2) => {
+                in_both.insert(k, (v1, v2));
+            }
+            None => {
+                only_in_1.insert(k, v1);
+            }
+        }
+    }
+
+    Separate {
+        only_in_1,
+        only_in_2: tags2,
+        in_both,
+    }
+}
+
 fn unify_tag_union(
     subs: &mut Subs,
     pool: &mut Pool,
@@ -415,10 +448,12 @@ fn unify_tag_union(
 ) -> Outcome {
     let tags1 = rec1.tags;
     let tags2 = rec2.tags;
-    let shared_tags = get_shared(&tags1, &tags2);
-    // NOTE: don't use `difference` here. In contrast to Haskell, im's `difference` is symmetric
-    let unique_tags1 = relative_complement(&tags1, &tags2);
-    let unique_tags2 = relative_complement(&tags2, &tags1);
+
+    let Separate {
+        only_in_1: unique_tags1,
+        only_in_2: unique_tags2,
+        in_both: shared_tags,
+    } = separate(tags1, tags2);
 
     let recursion_var = match recursion {
         (None, None) => None,
