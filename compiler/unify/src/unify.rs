@@ -455,7 +455,14 @@ fn unify_tag_union(
         (Some(v1), Some(_v2)) => Some(v1),
     };
 
-    if tags1.len() == 1 && tags2.len() == 1 && tags1 == tags2 {
+    // heuristic: our closure defunctionalization scheme generates a bunch of one-tag unions
+    // also our number types fall in this category too.
+    if tags1.len() == 1
+        && tags2.len() == 1
+        && tags1 == tags2
+        && subs.get_content_without_compacting(rec1.ext)
+            == subs.get_content_without_compacting(rec2.ext)
+    {
         return unify_shared_tags_merge(subs, ctx, tags1, rec1.ext, recursion_var);
     }
 
