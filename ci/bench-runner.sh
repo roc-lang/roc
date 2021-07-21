@@ -1,84 +1,87 @@
 #!/usr/bin/env bash
 
 # script to return exit code 1 if benchmarks have regressed
+# script assumes we are in repo root
 
-# benchmark trunk
 ulimit -s unlimited
-cd bench-folder-trunk
-./target/release/deps/time_bench --bench
-cd ..
-
-# move benchmark results so they can be compared later
-cp -r bench-folder-trunk/target/criterion bench-folder-branch/target/
-
-cd bench-folder-branch
 
 LOG_FILE="bench_log.txt"
-touch $LOG_FILE
 
-FULL_CMD=" ./target/release/deps/time_bench --bench"
-echo $FULL_CMD
+NR_REPEATS=3
 
-script -efq $LOG_FILE -c "$FULL_CMD"
-EXIT_CODE=$?
+for ctr in `seq 1 $NR_REPEATS`;
+    do
+        #
+        # <run benchmarks>
+        #
+        # delete criterion folder to remove old benchmark data (ignore error if folder does not exist)
+        rm -rf bench-folder-trunk/target/criterion
+        rm -rf bench-folder-branch/target/criterion
+        
+        cd bench-folder-trunk
+        # benchmark trunk
+        ./target/release/deps/time_bench --bench
+        cd ..
 
-if cat $LOG_FILE | grep -q "regressed"; then
+        # move benchmark results so they can be compared later
+        cp -r bench-folder-trunk/target/criterion bench-folder-branch/target/
 
-    grep -B3 "regressed" $LOG_FILE | sed 's/\x1B\[[0-9;]\{1,\}[A-Za-z]//g' | grep -o "\".*\"" | rev | cut -d' ' -f1 | rev > slow_benches_1.txt
-    echo "regression(s) detected in:"
-    cat slow_benches_1.txt
-    echo ""
-    echo ""
-    echo "------<<<<<<>>>>>>------"
-    echo "Benchmark detected regression. Running benchmark again to confirm..."
-    echo "------<<<<<<>>>>>>------"
-    echo ""
-    echo ""
+        cd bench-folder-branch
 
-    # delete criterion folder to remove old benchmark data
-    rm -rf ./target/criterion
+        # ignore error if file does not exist
+        rm -f $LOG_FILE
+        touch $LOG_FILE
 
-    # benchmark trunk again
-    cd ../bench-folder-trunk
-    rm -rf target/criterion
-    ./target/release/deps/time_bench --bench
+        FULL_CMD=" ./target/release/deps/time_bench --bench"
+        echo $FULL_CMD
 
-    cd ../bench-folder-branch
-    cp -r ../bench-folder-trunk/target/criterion ./target
+        script -efq $LOG_FILE -c "$FULL_CMD"
 
-    rm $LOG_FILE
-    touch $LOG_FILE
+        EXIT_CODE=$?
+        #
+        # </run benchmarks>
+        #
 
-    script -efq $LOG_FILE -c "$FULL_CMD"
-    EXIT_CODE=$?
+        #
+        # <save which tests regressed>
+        #
+        REGRESSED_TESTS_FILE_NAME="regressed_$ctr.txt"
+        
+        grep -B3 "regressed" $LOG_FILE | sed 's/\x1B\[[0-9;]\{1,\}[A-Za-z]//g' | grep -o "\".*\"" | rev | cut -d' ' -f1 | rev > $REGRESSED_TESTS_FILE_NAME
 
-    if cat $LOG_FILE | grep -q "regressed"; then
+        #
+        # </save which tests regressed>
+        #
 
-        grep -B3 "regressed" $LOG_FILE | sed 's/\x1B\[[0-9;]\{1,\}[A-Za-z]//g' | grep -o "\".*\"" | rev | cut -d' ' -f1 | rev > slow_benches_2.txt
-        echo "regression(s) detected in:"
-        cat slow_benches_2.txt
-
-        if [[ $(grep -Fxf slow_benches_1.txt slow_benches_2.txt | wc -l) -gt 0 ]]; then
-            echo ""
-            echo ""
-            echo "------<<<<<<!!!!!!>>>>>>------"
-            echo "Benchmarks were run twice and a regression was detected both times for the following benchmarks:"
-            grep -Fxf slow_benches_1.txt slow_benches_2.txt
-            echo "------<<<<<<!!!!!!>>>>>>------"
-            echo ""
-            echo ""
-            exit 1
+        if [ $(cat $REGRESSED_TESTS_FILE_NAME | wc -l) -gt 0 ]; then 
+            if [ $ctr -ne $NR_REPEATS ]; then
+                echo ""
+                echo ""
+                echo "------<<<<<<>>>>>>------"
+                echo "Benchmark regression detected for:"
+                cat $REGRESSED_TESTS_FILE_NAME
+                echo "Running benchmarks again to confirm regression is real..."
+                echo "------<<<<<<>>>>>>------"
+                echo ""
+                echo ""
+            else
+                echo ""
+                echo ""
+                echo "------<<<<<<!!!!!!>>>>>>------"
+                echo "Benchmarks were run $NR_REPEATS times and a regression was detected every time for the following benchmarks:"
+                cat regressed_*.txt > regressed.txt
+                sort regressed.txt | uniq -d 
+                echo "------<<<<<<!!!!!!>>>>>>------"
+                echo ""
+                echo ""
+                exit 1
+            fi
         else
-            echo "Benchmarks were run twice and a regression was detected on one run. We assume this was a fluke."
-            exit 0
+            echo ""
+            echo "Benchmark execution finished with exit code: $EXIT_CODE."
+            echo ""
+            exit $EXIT_CODE
         fi
-    else
-        echo "Benchmarks were run twice and a regression was detected on one run. We assume this was a fluke."
-        exit 0
-    fi
-else
-    echo ""
-    echo "Benchmark execution finished with exit code: $EXIT_CODE."
-    echo ""
-    exit $EXIT_CODE
-fi
+
+        cd ..
+    done  
