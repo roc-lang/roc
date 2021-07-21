@@ -1029,7 +1029,15 @@ fn adjust_rank(
         // Mark the variable as visited before adjusting content, as it may be cyclic.
         subs.set_mark(var, visit_mark);
 
-        let content = &subs.get_ref(var).content.clone();
+        // SAFETY: in this function (and functions it calls, we ONLY modify rank and mark, never content!
+        // hence, we can have an immutable reference to it even though we also have a mutable
+        // reference to the Subs as a whole. This prevents a clone of the content, which turns out
+        // to be quite expensive.
+        let content = {
+            let ptr = &subs.get_ref(var).content as *const _;
+            unsafe { &*ptr }
+        };
+
         let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, &content);
 
         subs.set_rank_mark(var, max_rank, visit_mark);
