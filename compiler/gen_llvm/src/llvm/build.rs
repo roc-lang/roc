@@ -369,6 +369,10 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     let i32_type = ctx.i32_type();
     let i64_type = ctx.i64_type();
 
+    if let Some(func) = module.get_function("__muloti4") {
+        func.set_linkage(Linkage::External);
+    }
+
     add_intrinsic(
         module,
         LLVM_LOG_F64,
