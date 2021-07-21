@@ -339,6 +339,12 @@ impl Subs {
         self.utable.probe_value_ref(key).value.mark
     }
 
+    pub fn get_rank_mark(&mut self, key: Variable) -> (Rank, Mark) {
+        let desc = &self.utable.probe_value_ref(key).value;
+
+        (desc.rank, desc.mark)
+    }
+
     pub fn get_without_compacting(&self, key: Variable) -> Descriptor {
         self.utable.probe_value_without_compacting(key)
     }
@@ -369,6 +375,15 @@ impl Subs {
         let l_key = self.utable.get_root_key(key);
 
         self.utable.update_value(l_key, |node| {
+            node.value.mark = mark;
+        });
+    }
+
+    pub fn set_rank_mark(&mut self, key: Variable, rank: Rank, mark: Mark) {
+        let l_key = self.utable.get_root_key(key);
+
+        self.utable.update_value(l_key, |node| {
+            node.value.rank = rank;
             node.value.mark = mark;
         });
     }

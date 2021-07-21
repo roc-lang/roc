@@ -1023,45 +1023,26 @@ fn adjust_rank(
     group_rank: Rank,
     var: Variable,
 ) -> Rank {
-    let desc = subs.get(var);
+    let (desc_rank, desc_mark) = subs.get_rank_mark(var);
 
-    if desc.mark == young_mark {
-        let Descriptor {
-            content,
-            rank: _,
-            mark: _,
-            copy,
-        } = desc;
-
+    if desc_mark == young_mark {
         // Mark the variable as visited before adjusting content, as it may be cyclic.
         subs.set_mark(var, visit_mark);
 
+        let content = &subs.get_ref(var).content.clone();
         let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, &content);
 
-        subs.set(
-            var,
-            Descriptor {
-                content,
-                rank: max_rank,
-                mark: visit_mark,
-                copy,
-            },
-        );
+        subs.set_rank_mark(var, max_rank, visit_mark);
 
         max_rank
-    } else if desc.mark == visit_mark {
+    } else if desc_mark == visit_mark {
         // nothing changes
-        desc.rank
+        desc_rank
     } else {
-        let mut desc = desc;
-
-        let min_rank = group_rank.min(desc.rank);
+        let min_rank = group_rank.min(desc_rank);
 
         // TODO from elm-compiler: how can min_rank ever be group_rank?
-        desc.rank = min_rank;
-        desc.mark = visit_mark;
-
-        subs.set(var, desc);
+        subs.set_rank_mark(var, min_rank, visit_mark);
 
         min_rank
     }
