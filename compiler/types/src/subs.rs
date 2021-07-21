@@ -349,6 +349,10 @@ impl Subs {
         self.utable.probe_value_without_compacting(key)
     }
 
+    pub fn get_content_without_compacting(&self, key: Variable) -> &Content {
+        &self.utable.probe_value_ref(key).value.content
+    }
+
     pub fn get_root_key(&mut self, key: Variable) -> Variable {
         self.utable.get_root_key(key)
     }

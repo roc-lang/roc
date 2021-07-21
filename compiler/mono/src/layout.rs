@@ -510,8 +510,8 @@ impl<'a> Layout<'a> {
         match content {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
             RecursionVar { structure, .. } => {
-                let structure_content = env.subs.get_without_compacting(structure).content;
-                Self::new_help(env, structure, structure_content)
+                let structure_content = env.subs.get_content_without_compacting(structure);
+                Self::new_help(env, structure, structure_content.clone())
             }
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
@@ -581,8 +581,8 @@ impl<'a> Layout<'a> {
         if env.is_seen(var) {
             Ok(Layout::RecursivePointer)
         } else {
-            let content = env.subs.get_without_compacting(var).content;
-            Self::new_help(env, var, content)
+            let content = env.subs.get_content_without_compacting(var);
+            Self::new_help(env, var, content.clone())
         }
     }
 
@@ -1158,7 +1158,7 @@ fn layout_from_flat_type<'a>(
                     debug_assert_eq!(args.len(), 1);
 
                     let var = args.first().unwrap();
-                    let content = subs.get_without_compacting(*var).content;
+                    let content = subs.get_content_without_compacting(*var);
 
                     layout_from_num_content(content)
                 }
@@ -1197,25 +1197,8 @@ fn layout_from_flat_type<'a>(
                 Err(_) => unreachable!("this would have been a type error"),
             }
 
-            let sorted_fields = sort_record_fields_help(env, fields_map);
-
-            // Determine the layouts of the fields, maintaining sort order
-            let mut layouts = Vec::with_capacity_in(sorted_fields.len(), arena);
-
-            for (_, _, res_layout) in sorted_fields {
-                match res_layout {
-                    Ok(layout) => {
-                        // Drop any zero-sized fields like {}.
-                        if !layout.is_dropped_because_empty() {
-                            layouts.push(layout);
-                        }
-                    }
-                    Err(_) => {
-                        // optional field, ignore
-                        continue;
-                    }
-                }
-            }
+            // discard optional fields
+            let mut layouts = sort_stored_record_fields(env, fields_map);
 
             if layouts.len() == 1 {
                 // If the record has only one field that isn't zero-sized,
@@ -1394,6 +1377,43 @@ fn sort_record_fields_help<'a>(
     sorted_fields
 }
 
+// drops optional fields
+fn sort_stored_record_fields<'a>(
+    env: &mut Env<'a, '_>,
+    fields_map: MutMap<Lowercase, RecordField<Variable>>,
+) -> Vec<'a, Layout<'a>> {
+    // Sort the fields by label
+    let mut sorted_fields = Vec::with_capacity_in(fields_map.len(), env.arena);
+
+    for (label, field) in fields_map {
+        let var = match field {
+            RecordField::Demanded(v) => v,
+            RecordField::Required(v) => v,
+            RecordField::Optional(_) => {
+                continue;
+            }
+        };
+
+        let layout = Layout::from_var(env, var).expect("invalid layout from var");
+
+        sorted_fields.push((label, layout));
+    }
+
+    sorted_fields.sort_by(|(label1, layout1), (label2, layout2)| {
+        let ptr_bytes = 8;
+
+        let size1 = layout1.alignment_bytes(ptr_bytes);
+        let size2 = layout2.alignment_bytes(ptr_bytes);
+
+        size2.cmp(&size1).then(label1.cmp(label2))
+    });
+
+    let mut result = Vec::with_capacity_in(sorted_fields.len(), env.arena);
+    result.extend(sorted_fields.into_iter().map(|t| t.1));
+
+    result
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum UnionVariant<'a> {
     Never,
@@ -1519,8 +1539,8 @@ pub fn union_sorted_tags<'a>(
     subs: &Subs,
 ) -> Result<UnionVariant<'a>, LayoutProblem> {
     let var =
-        if let Content::RecursionVar { structure, .. } = subs.get_without_compacting(var).content {
-            structure
+        if let Content::RecursionVar { structure, .. } = subs.get_content_without_compacting(var) {
+            *structure
         } else {
             var
         };
@@ -1539,9 +1559,9 @@ pub fn union_sorted_tags<'a>(
 }
 
 fn get_recursion_var(subs: &Subs, var: Variable) -> Option<Variable> {
-    match subs.get_without_compacting(var).content {
-        Content::Structure(FlatType::RecursiveTagUnion(rec_var, _, _)) => Some(rec_var),
-        Content::Alias(_, _, actual) => get_recursion_var(subs, actual),
+    match subs.get_content_without_compacting(var) {
+        Content::Structure(FlatType::RecursiveTagUnion(rec_var, _, _)) => Some(*rec_var),
+        Content::Alias(_, _, actual) => get_recursion_var(subs, *actual),
         _ => None,
     }
 }
@@ -1868,7 +1888,7 @@ fn ext_var_is_empty_tag_union(_: &Subs, _: Variable) -> bool {
     unreachable!();
 }
 
-fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutProblem> {
+fn layout_from_num_content<'a>(content: &Content) -> Result<Layout<'a>, LayoutProblem> {
     use roc_types::subs::Content::*;
     use roc_types::subs::FlatType::*;
 
@@ -1881,7 +1901,7 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutPro
             // (e.g. for (5 + 5) assume both 5s are 64-bit integers.)
             Ok(Layout::Builtin(DEFAULT_NUM_BUILTIN))
         }
-        Structure(Apply(symbol, args)) => match symbol {
+        Structure(Apply(symbol, args)) => match *symbol {
             // Ints
             Symbol::NUM_NAT => Ok(Layout::Builtin(Builtin::Usize)),
 
@@ -1905,8 +1925,8 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutPro
 
             _ => {
                 panic!(
-                    "Invalid Num.Num type application: {:?}",
-                    Apply(symbol, args)
+                    "Invalid Num.Num type application: Apply({:?}, {:?})",
+                    symbol, args
                 );
             }
         },
@@ -1921,19 +1941,19 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutPro
 }
 
 fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutProblem> {
-    match subs.get_without_compacting(var).content {
+    match subs.get_content_without_compacting(var) {
         Content::Alias(Symbol::NUM_INTEGER, args, _) => {
             debug_assert!(args.len() == 1);
 
             let (_, precision_var) = args[0];
 
-            let precision = subs.get_without_compacting(precision_var).content;
+            let precision = subs.get_content_without_compacting(precision_var);
 
             match precision {
                 Content::Alias(symbol, args, _) => {
                     debug_assert!(args.is_empty());
 
-                    let builtin = match symbol {
+                    let builtin = match *symbol {
                         Symbol::NUM_SIGNED128 => Builtin::Int128,
                         Symbol::NUM_SIGNED64 => Builtin::Int64,
                         Symbol::NUM_SIGNED32 => Builtin::Int32,
@@ -1962,7 +1982,7 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
 
             let (_, precision_var) = args[0];
 
-            let precision = subs.get_without_compacting(precision_var).content;
+            let precision = subs.get_content_without_compacting(precision_var);
 
             match precision {
                 Content::Alias(Symbol::NUM_BINARY32, args, _) => {
@@ -1997,15 +2017,15 @@ fn dict_layout_from_key_value<'a>(
     key_var: Variable,
     value_var: Variable,
 ) -> Result<Layout<'a>, LayoutProblem> {
-    match env.subs.get_without_compacting(key_var).content {
+    match env.subs.get_content_without_compacting(key_var) {
         Content::FlexVar(_) | Content::RigidVar(_) => {
             // If this was still a (Dict * *) then it must have been an empty dict
             Ok(Layout::Builtin(Builtin::EmptyDict))
         }
         key_content => {
-            let value_content = env.subs.get_without_compacting(value_var).content;
-            let key_layout = Layout::new_help(env, key_var, key_content)?;
-            let value_layout = Layout::new_help(env, value_var, value_content)?;
+            let value_content = env.subs.get_content_without_compacting(value_var);
+            let key_layout = Layout::new_help(env, key_var, key_content.clone())?;
+            let value_layout = Layout::new_help(env, value_var, value_content.clone())?;
 
             // This is a normal list.
             Ok(Layout::Builtin(Builtin::Dict(
@@ -2020,7 +2040,7 @@ pub fn list_layout_from_elem<'a>(
     env: &mut Env<'a, '_>,
     elem_var: Variable,
 ) -> Result<Layout<'a>, LayoutProblem> {
-    match env.subs.get_without_compacting(elem_var).content {
+    match env.subs.get_content_without_compacting(elem_var) {
         Content::FlexVar(_) | Content::RigidVar(_) => {
             // If this was still a (List *) then it must have been an empty list
             Ok(Layout::Builtin(Builtin::EmptyList))
