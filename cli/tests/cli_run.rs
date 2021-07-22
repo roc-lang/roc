@@ -199,6 +199,15 @@ mod cli_run {
                 use_valgrind: true,
             },
         ],
+        "hello-rust" => [
+            hello_rust: Example {
+                filename: "Hello.roc",
+                executable_filename: "hello-world",
+                stdin: &[],
+                expected_ending:"Hello, World!\n",
+                use_valgrind: true,
+            },
+        ],
         "quicksort" => [
             quicksort: Example {
                 filename: "Quicksort.roc",
