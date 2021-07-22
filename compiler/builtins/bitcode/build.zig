@@ -27,7 +27,6 @@ pub fn build(b: *Builder) void {
     llvm_obj.strip = true;
     llvm_obj.emit_llvm_ir = true;
     llvm_obj.emit_bin = false;
-    llvm_obj.bundle_compiler_rt = true;
     const ir = b.step("ir", "Build LLVM ir");
     ir.dependOn(&llvm_obj.step);
 
@@ -40,6 +39,7 @@ pub fn build(b: *Builder) void {
     obj.linkSystemLibrary("c");
     obj.setOutputDir(".");
     obj.strip = true;
+    obj.bundle_compiler_rt = true;
     const obj_step = b.step("object", "Build object file for linking");
     obj_step.dependOn(&obj.step);
 

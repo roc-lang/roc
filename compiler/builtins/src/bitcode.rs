@@ -66,3 +66,12 @@ pub const LIST_SORT_WITH: &str = "roc_builtins.list.sort_with";
 pub const LIST_CONCAT: &str = "roc_builtins.list.concat";
 pub const LIST_SET: &str = "roc_builtins.list.set";
 pub const LIST_SET_IN_PLACE: &str = "roc_builtins.list.set_in_place";
+
+pub const DEC_FROM_F64: &str = "roc_builtins.dec.from_f64";
+pub const DEC_EQ: &str = "roc_builtins.dec.eq";
+pub const DEC_NEQ: &str = "roc_builtins.dec.neq";
+pub const DEC_NEGATE: &str = "roc_builtins.dec.negate";
+pub const DEC_ADD_WITH_OVERFLOW: &str = "roc_builtins.dec.add_with_overflow";
+pub const DEC_SUB_WITH_OVERFLOW: &str = "roc_builtins.dec.sub_with_overflow";
+pub const DEC_MUL_WITH_OVERFLOW: &str = "roc_builtins.dec.mul_with_overflow";
+pub const DEC_DIV: &str = "roc_builtins.dec.div";
