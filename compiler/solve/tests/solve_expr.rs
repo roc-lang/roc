@@ -173,6 +173,21 @@ mod solve_expr {
     }
 
     #[test]
+    fn dec_literal() {
+        infer_eq(
+            indoc!(
+                r#"
+                    val : Dec
+                    val = 1.2
+
+                    val
+                "#
+            ),
+            "Dec",
+        );
+    }
+
+    #[test]
     fn string_literal() {
         infer_eq(
             indoc!(

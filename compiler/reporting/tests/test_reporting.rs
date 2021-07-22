@@ -721,10 +721,10 @@ mod test_reporting {
 
                 these names seem close though:
 
+                    Decimal
+                    Dec
                     Result
                     Num
-                    Set
-                    U8
                 "#
             ),
         );
