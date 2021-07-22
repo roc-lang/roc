@@ -900,6 +900,7 @@ fn unify_shared_tags(
         match other_tags {
             OtherTags::Empty => {}
             OtherTags::Union { tags1, tags2 } => {
+                new_tags.reserve(tags1.len() + tags2.len());
                 new_tags.extend(tags1);
                 new_tags.extend(tags2);
             }
