@@ -405,6 +405,39 @@ fn unify_shared_fields(
     }
 }
 
+struct Separate<K, V> {
+    only_in_1: MutMap<K, V>,
+    only_in_2: MutMap<K, V>,
+    in_both: MutMap<K, (V, V)>,
+}
+
+fn separate<K, V>(tags1: MutMap<K, V>, mut tags2: MutMap<K, V>) -> Separate<K, V>
+where
+    K: Ord + std::hash::Hash,
+{
+    let mut only_in_1 = MutMap::with_capacity_and_hasher(tags1.len(), default_hasher());
+
+    let max_common = tags1.len().min(tags2.len());
+    let mut in_both = MutMap::with_capacity_and_hasher(max_common, default_hasher());
+
+    for (k, v1) in tags1.into_iter() {
+        match tags2.remove(&k) {
+            Some(v2) => {
+                in_both.insert(k, (v1, v2));
+            }
+            None => {
+                only_in_1.insert(k, v1);
+            }
+        }
+    }
+
+    Separate {
+        only_in_1,
+        only_in_2: tags2,
+        in_both,
+    }
+}
+
 fn unify_tag_union(
     subs: &mut Subs,
     pool: &mut Pool,
@@ -415,16 +448,29 @@ fn unify_tag_union(
 ) -> Outcome {
     let tags1 = rec1.tags;
     let tags2 = rec2.tags;
-    let shared_tags = get_shared(&tags1, &tags2);
-    // NOTE: don't use `difference` here. In contrast to Haskell, im's `difference` is symmetric
-    let unique_tags1 = relative_complement(&tags1, &tags2);
-    let unique_tags2 = relative_complement(&tags2, &tags1);
 
     let recursion_var = match recursion {
         (None, None) => None,
         (Some(v), None) | (None, Some(v)) => Some(v),
         (Some(v1), Some(_v2)) => Some(v1),
     };
+
+    // heuristic: our closure defunctionalization scheme generates a bunch of one-tag unions
+    // also our number types fall in this category too.
+    if tags1.len() == 1
+        && tags2.len() == 1
+        && tags1 == tags2
+        && subs.get_content_without_compacting(rec1.ext)
+            == subs.get_content_without_compacting(rec2.ext)
+    {
+        return unify_shared_tags_merge(subs, ctx, tags1, rec1.ext, recursion_var);
+    }
+
+    let Separate {
+        only_in_1: unique_tags1,
+        only_in_2: unique_tags2,
+        in_both: shared_tags,
+    } = separate(tags1, tags2);
 
     if unique_tags1.is_empty() {
         if unique_tags2.is_empty() {
@@ -439,7 +485,7 @@ fn unify_tag_union(
                 pool,
                 ctx,
                 shared_tags,
-                MutMap::default(),
+                OtherTags::Empty,
                 rec1.ext,
                 recursion_var,
             );
@@ -461,7 +507,7 @@ fn unify_tag_union(
                 pool,
                 ctx,
                 shared_tags,
-                MutMap::default(),
+                OtherTags::Empty,
                 sub_record,
                 recursion_var,
             );
@@ -484,7 +530,7 @@ fn unify_tag_union(
             pool,
             ctx,
             shared_tags,
-            MutMap::default(),
+            OtherTags::Empty,
             sub_record,
             recursion_var,
         );
@@ -493,7 +539,10 @@ fn unify_tag_union(
 
         tag_problems
     } else {
-        let other_tags = union(unique_tags1.clone(), &unique_tags2);
+        let other_tags = OtherTags::Union {
+            tags1: unique_tags1.clone(),
+            tags2: unique_tags2.clone(),
+        };
 
         let ext = fresh(subs, pool, ctx, Content::FlexVar(None));
         let flat_type1 = FlatType::TagUnion(unique_tags1, ext);
@@ -686,8 +735,8 @@ fn unify_tag_union_not_recursive_recursive(
 /// into it.
 #[allow(dead_code)]
 fn is_structure(var: Variable, subs: &mut Subs) -> bool {
-    match subs.get(var).content {
-        Content::Alias(_, _, actual) => is_structure(actual, subs),
+    match subs.get_content_without_compacting(var) {
+        Content::Alias(_, _, actual) => is_structure(*actual, subs),
         Content::Structure(_) => true,
         _ => false,
     }
@@ -772,12 +821,20 @@ fn unify_shared_tags_recursive_not_recursive(
     }
 }
 
+enum OtherTags {
+    Empty,
+    Union {
+        tags1: MutMap<TagName, Vec<Variable>>,
+        tags2: MutMap<TagName, Vec<Variable>>,
+    },
+}
+
 fn unify_shared_tags(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
     shared_tags: MutMap<TagName, (Vec<Variable>, Vec<Variable>)>,
-    other_tags: MutMap<TagName, Vec<Variable>>,
+    other_tags: OtherTags,
     ext: Variable,
     recursion_var: Option<Variable>,
 ) -> Outcome {
@@ -829,6 +886,8 @@ fn unify_shared_tags(
     }
 
     if num_shared_tags == matching_tags.len() {
+        let mut new_tags = matching_tags;
+
         // merge fields from the ext_var into this tag union
         let mut fields = Vec::new();
         let new_ext_var = match roc_types::pretty_print::chase_ext_tag_union(subs, ext, &mut fields)
@@ -836,18 +895,18 @@ fn unify_shared_tags(
             Ok(()) => Variable::EMPTY_TAG_UNION,
             Err((new, _)) => new,
         };
-
-        let mut new_tags = union(matching_tags, &other_tags);
         new_tags.extend(fields.into_iter());
 
-        let flat_type = if let Some(rec) = recursion_var {
-            debug_assert!(is_recursion_var(subs, rec));
-            FlatType::RecursiveTagUnion(rec, new_tags, new_ext_var)
-        } else {
-            FlatType::TagUnion(new_tags, new_ext_var)
-        };
+        match other_tags {
+            OtherTags::Empty => {}
+            OtherTags::Union { tags1, tags2 } => {
+                new_tags.reserve(tags1.len() + tags2.len());
+                new_tags.extend(tags1);
+                new_tags.extend(tags2);
+            }
+        }
 
-        merge(subs, ctx, Structure(flat_type))
+        unify_shared_tags_merge(subs, ctx, new_tags, new_ext_var, recursion_var)
     } else {
         mismatch!(
             "Problem with Tag Union\nThere should be {:?} matching tags, but I only got \n{:?}",
@@ -855,6 +914,23 @@ fn unify_shared_tags(
             &matching_tags
         )
     }
+}
+
+fn unify_shared_tags_merge(
+    subs: &mut Subs,
+    ctx: &Context,
+    new_tags: MutMap<TagName, Vec<Variable>>,
+    new_ext_var: Variable,
+    recursion_var: Option<Variable>,
+) -> Outcome {
+    let flat_type = if let Some(rec) = recursion_var {
+        debug_assert!(is_recursion_var(subs, rec));
+        FlatType::RecursiveTagUnion(rec, new_tags, new_ext_var)
+    } else {
+        FlatType::TagUnion(new_tags, new_ext_var)
+    };
+
+    merge(subs, ctx, Structure(flat_type))
 }
 
 fn has_only_optional_fields<'a, I, T>(fields: &mut I) -> bool
@@ -1014,8 +1090,8 @@ fn unify_flat_type(
             if tag_name_1 == tag_name_2 {
                 let problems = unify_pool(subs, pool, *ext_1, *ext_2);
                 if problems.is_empty() {
-                    let desc = subs.get(ctx.second);
-                    merge(subs, ctx, desc.content)
+                    let content = subs.get_content_without_compacting(ctx.second).clone();
+                    merge(subs, ctx, content)
                 } else {
                     problems
                 }
@@ -1237,19 +1313,25 @@ fn fresh(subs: &mut Subs, pool: &mut Pool, ctx: &Context, content: Content) -> V
 
 fn gather_tags(
     subs: &mut Subs,
-    tags: MutMap<TagName, Vec<Variable>>,
+    mut tags: MutMap<TagName, Vec<Variable>>,
     var: Variable,
 ) -> TagUnionStructure {
     use roc_types::subs::Content::*;
     use roc_types::subs::FlatType::*;
 
-    match subs.get(var).content {
+    match subs.get_content_without_compacting(var) {
         Structure(TagUnion(sub_tags, sub_ext)) => {
-            gather_tags(subs, union(tags, &sub_tags), sub_ext)
+            for (k, v) in sub_tags {
+                tags.insert(k.clone(), v.clone());
+            }
+
+            let sub_ext = *sub_ext;
+            gather_tags(subs, tags, sub_ext)
         }
 
         Alias(_, _, var) => {
             // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
+            let var = *var;
             gather_tags(subs, tags, var)
         }
 
@@ -1259,7 +1341,7 @@ fn gather_tags(
 
 fn is_recursion_var(subs: &Subs, var: Variable) -> bool {
     matches!(
-        subs.get_without_compacting(var).content,
+        subs.get_content_without_compacting(var),
         Content::RecursionVar { .. }
     )
 }
