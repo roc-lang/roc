@@ -585,7 +585,7 @@ pub fn chase_ext_tag_union(
     fields: &mut Vec<(TagName, Vec<Variable>)>,
 ) -> Result<(), (Variable, Content)> {
     use FlatType::*;
-    match subs.get_without_compacting(var).content {
+    match subs.get_content_without_compacting(var) {
         Content::Structure(EmptyTagUnion) => Ok(()),
         Content::Structure(TagUnion(tags, ext_var))
         | Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
@@ -593,16 +593,16 @@ pub fn chase_ext_tag_union(
                 fields.push((label.clone(), vars.to_vec()));
             }
 
-            chase_ext_tag_union(subs, ext_var, fields)
+            chase_ext_tag_union(subs, *ext_var, fields)
         }
         Content::Structure(FunctionOrTagUnion(tag_name, _, ext_var)) => {
-            fields.push((tag_name, vec![]));
+            fields.push((tag_name.clone(), vec![]));
 
-            chase_ext_tag_union(subs, ext_var, fields)
+            chase_ext_tag_union(subs, *ext_var, fields)
         }
-        Content::Alias(_, _, var) => chase_ext_tag_union(subs, var, fields),
+        Content::Alias(_, _, var) => chase_ext_tag_union(subs, *var, fields),
 
-        content => Err((var, content)),
+        content => Err((var, content.clone())),
     }
 }
 
