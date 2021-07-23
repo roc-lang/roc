@@ -656,7 +656,7 @@ impl<'a> Layout<'a> {
                             .max()
                             .unwrap_or_default()
                             // the size of the tag_id
-                            + pointer_size
+                            + variant.tag_id_builtin().stack_size(pointer_size)
                     }
 
                     Recursive(_)

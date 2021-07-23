@@ -2106,8 +2106,6 @@ fn specialize_external<'a>(
                                 let expr = Expr::UnionAtIndex {
                                     tag_id,
                                     structure: Symbol::ARG_CLOSURE,
-                                    // union at index still expects the index to be +1; it thinks
-                                    // the tag id is stored
                                     index: index as u64,
                                     union_layout,
                                 };

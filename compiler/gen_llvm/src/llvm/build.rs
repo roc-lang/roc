@@ -2389,7 +2389,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let exception_object = scope.get(&exception_id.into_inner()).unwrap().1;
             env.builder.build_resume(exception_object);
 
-            env.context.i64_type().const_zero().into()
+            env.ptr_int().const_zero().into()
         }
 
         Switch {
