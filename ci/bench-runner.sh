@@ -45,6 +45,12 @@ for ctr in `seq 1 $NR_REPEATS`;
 
         EXIT_CODE=$?
 
+        if  [ $EXIT_CODE -ne 0 ]; then
+            echo ""
+            echo "Benchmark execution failed with exit code: $EXIT_CODE."
+            echo ""
+        fi
+
         if [ $ctr -eq 1 ]; then
 
             rm -f bench_sha_sums.txt
@@ -54,14 +60,24 @@ for ctr in `seq 1 $NR_REPEATS`;
             find examples/benchmarks -executable -type f | while read exec_filename; do
                 sha1sum $exec_filename >> bench_sha_sums.txt
             done
+            echo "cat1"
+            cat bench_sha_sums.txt
 
             # on trunk
             find ../bench-folder-trunk/examples/benchmarks -executable -type f | while read exec_filename; do
                 sha1sum $exec_filename >> bench_sha_sums.txt
             done
+            echo "cat2"
+            cat bench_sha_sums.txt
 
             # keep only unique sha sums
+            echo "sort"
+            sort bench_sha_sums.txt
+            echo "sort with uniq"
+            sort bench_sha_sums.txt | uniq -u
             sort bench_sha_sums.txt | uniq -u > bench_sha_sums.txt
+            echo "cat3"
+            cat bench_sha_sums.txt
 
             if [ $(cat bench_sha_sums.txt | wc -l) -eq 0 ]; then
                 echo ""

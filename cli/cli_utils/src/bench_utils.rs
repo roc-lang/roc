@@ -79,7 +79,7 @@ pub fn bench_nqueens<T: Measurement>(bench_group_opt: Option<&mut BenchmarkGroup
         &example_file("benchmarks", "NQueens.roc"),
         "11",
         "nqueens",
-        "2680\n", //2680-14200
+        "14200\n", //2680-14200
         bench_group_opt,
     );
 }
