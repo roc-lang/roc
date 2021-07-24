@@ -2827,7 +2827,7 @@ fn build_switch_ir<'a, 'ctx, 'env>(
                 .into_int_value()
         }
         Layout::Union(variant) => {
-            cond_layout = Layout::Builtin(Builtin::Int64);
+            cond_layout = variant.tag_id_layout();
 
             get_tag_id(env, parent, &variant, cond_value)
         }

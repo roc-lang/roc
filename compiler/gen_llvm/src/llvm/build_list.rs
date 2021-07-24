@@ -138,11 +138,9 @@ pub fn list_prepend<'a, 'ctx, 'env>(
     let list_ptr = load_list_ptr(builder, original_wrapper, ptr_type);
 
     // The output list length, which is the old list length + 1
-    let new_list_len = env.builder.build_int_add(
-        ctx.i64_type().const_int(1_u64, false),
-        len,
-        "new_list_length",
-    );
+    let new_list_len =
+        env.builder
+            .build_int_add(env.ptr_int.const_int(1_u64, false), len, "new_list_length");
 
     // Allocate space for the new array that we'll copy into.
     let clone_ptr = allocate_list(env, elem_layout, new_list_len);
@@ -152,7 +150,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
     let index_1_ptr = unsafe {
         builder.build_in_bounds_gep(
             clone_ptr,
-            &[ctx.i64_type().const_int(1_u64, false)],
+            &[env.ptr_int.const_int(1_u64, false)],
             "load_index",
         )
     };
