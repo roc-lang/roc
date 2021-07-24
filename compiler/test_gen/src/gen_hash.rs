@@ -37,7 +37,7 @@ fn hash_record() {
 fn hash_result() {
     assert_evals_to!(
         "Dict.hashTestOnly 0 (List.get [ 0x1 ] 0) ",
-        6707068610910845221,
+        2878521786781103245,
         u64
     );
 }
