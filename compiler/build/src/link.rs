@@ -432,7 +432,7 @@ fn link_macos(
     // This path only exists on macOS Big Sur, and it causes ld errors
     // on Catalina if it's specified with -L, so we replace it with a
     // redundant -lSystem if the directory isn't there.
-    let big_sur_path = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib";
+    let big_sur_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
     let big_sur_fix = if Path::new(big_sur_path).exists() {
         format!("-L{}", big_sur_path)
     } else {
