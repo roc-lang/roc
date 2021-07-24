@@ -129,7 +129,6 @@ pub fn list_prepend<'a, 'ctx, 'env>(
     elem_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
-    let ctx = env.context;
 
     // Load the usize length from the wrapper.
     let len = list_len(builder, original_wrapper);
