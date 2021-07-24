@@ -245,6 +245,11 @@ fn jit_to_ast_help<'a>(
                                                 Builtin::Int16 => {
                                                     *(ptr.add(offset as usize) as *const i16) as i64
                                                 }
+                                                Builtin::Int64 => {
+                                                    // used by non-recursive tag unions at the
+                                                    // moment, remove if that is no longer the case
+                                                    *(ptr.add(offset as usize) as *const i64) as i64
+                                                }
                                                 _ => unreachable!("invalid tag id layout"),
                                             };
 
