@@ -848,11 +848,19 @@ impl<'a, 'i> Env<'a, 'i> {
 #[derive(Clone, Debug, PartialEq, Copy, Eq, Hash)]
 pub struct JoinPointId(pub Symbol);
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Param<'a> {
     pub symbol: Symbol,
     pub borrow: bool,
     pub layout: Layout<'a>,
+}
+
+impl<'a> Param<'a> {
+    pub const EMPTY: Self = Param {
+        symbol: Symbol::EMPTY_PARAM,
+        borrow: false,
+        layout: Layout::Struct(&[]),
+    };
 }
 
 pub fn cond<'a>(
