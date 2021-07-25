@@ -29,7 +29,8 @@ pub fn infer_borrow<'a>(
 
     let mut param_map = ParamMap {
         declaration_to_index,
-        items: MutMap::default(),
+        join_points: MutMap::default(),
+        declarations: bumpalo::vec![in arena; &[] as &[_]; procs.len()],
     };
 
     for (key, proc) in procs {
@@ -82,14 +83,20 @@ pub enum Key {
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct DeclarationId(usize);
 
-#[derive(Debug, Clone, Default)]
-pub struct ParamMap<'a> {
-    declaration_to_index: MutMap<(Symbol, ProcLayout<'a>), DeclarationId>,
-    items: MutMap<Key, &'a [Param<'a>]>,
-    // declarations: Vec<'a, &'a [Param<'a>]>,
-    // join_points: Vec<'a, &'a [Param<'a>]>,
+impl From<DeclarationId> for usize {
+    fn from(id: DeclarationId) -> Self {
+        id.0 as usize
+    }
 }
 
+#[derive(Debug, Clone)]
+pub struct ParamMap<'a> {
+    declaration_to_index: MutMap<(Symbol, ProcLayout<'a>), DeclarationId>,
+    declarations: Vec<'a, &'a [Param<'a>]>,
+    join_points: MutMap<JoinPointId, &'a [Param<'a>]>,
+}
+
+/*
 impl<'a> IntoIterator for ParamMap<'a> {
     type Item = (Key, &'a [Param<'a>]);
     type IntoIter = <std::collections::HashMap<Key, &'a [Param<'a>]> as IntoIterator>::IntoIter;
@@ -107,18 +114,16 @@ impl<'a> IntoIterator for &'a ParamMap<'a> {
         self.items.iter()
     }
 }
+*/
 
 impl<'a> ParamMap<'a> {
     pub fn get_symbol(&self, symbol: Symbol, layout: ProcLayout<'a>) -> Option<&'a [Param<'a>]> {
-        let index = self.declaration_to_index[&(symbol, layout)];
-        let key = Key::Declaration(index);
+        let index: usize = self.declaration_to_index[&(symbol, layout)].into();
 
-        self.items.get(&key).copied()
+        self.declarations.get(index).copied()
     }
     pub fn get_join_point(&self, id: JoinPointId) -> &'a [Param<'a>] {
-        let key = Key::JoinPoint(id);
-
-        match self.items.get(&key) {
+        match self.join_points.get(&id) {
             Some(slice) => slice,
             None => unreachable!("join point not in param map: {:?}", id),
         }
@@ -175,13 +180,8 @@ impl<'a> ParamMap<'a> {
             return;
         }
 
-        let index = self.declaration_to_index[&key];
-
-        let already_in_there = self.items.insert(
-            Key::Declaration(index),
-            Self::init_borrow_args(arena, proc.args),
-        );
-        debug_assert!(already_in_there.is_none());
+        let index: usize = self.declaration_to_index[&key].into();
+        self.declarations[index] = Self::init_borrow_args(arena, proc.args);
 
         self.visit_stmt(arena, proc.name, &proc.body);
     }
@@ -192,13 +192,8 @@ impl<'a> ParamMap<'a> {
         proc: &Proc<'a>,
         key: (Symbol, ProcLayout<'a>),
     ) {
-        let index = self.declaration_to_index[&key];
-
-        let already_in_there = self.items.insert(
-            Key::Declaration(index),
-            Self::init_borrow_args_always_owned(arena, proc.args),
-        );
-        debug_assert!(already_in_there.is_none());
+        let index: usize = self.declaration_to_index[&key].into();
+        self.declarations[index] = Self::init_borrow_args_always_owned(arena, proc.args);
 
         self.visit_stmt(arena, proc.name, &proc.body);
     }
@@ -216,14 +211,8 @@ impl<'a> ParamMap<'a> {
                     remainder: v,
                     body: b,
                 } => {
-                    let already_in_there = self
-                        .items
-                        .insert(Key::JoinPoint(*j), Self::init_borrow_params(arena, xs));
-                    debug_assert!(
-                        already_in_there.is_none(),
-                        "join point {:?} is already defined!",
-                        j
-                    );
+                    self.join_points
+                        .insert(*j, Self::init_borrow_params(arena, xs));
 
                     stack.push(v);
                     stack.push(b);
@@ -286,35 +275,36 @@ impl<'a> BorrowInfState<'a> {
         }
     }
 
-    fn update_param_map_declaration(&mut self, symbol: Symbol, layout: ProcLayout<'a>) {
-        let index = self.param_map.declaration_to_index[&(symbol, layout)];
-        let key = Key::Declaration(index);
+    fn update_param_map_help(&mut self, ps: &[Param<'a>]) -> &'a [Param<'a>] {
+        let mut new_ps = Vec::with_capacity_in(ps.len(), self.arena);
+        new_ps.extend(ps.iter().map(|p| {
+            if !p.borrow {
+                *p
+            } else if self.is_owned(p.symbol) {
+                self.modified = true;
+                let mut p = p.clone();
+                p.borrow = false;
 
-        self.update_param_map(key)
+                p
+            } else {
+                *p
+            }
+        }));
+
+        new_ps.into_bump_slice()
     }
 
-    fn update_param_map(&mut self, k: Key) {
-        let arena = self.arena;
-        if let Some(ps) = self.param_map.items.get(&k) {
-            let ps = Vec::from_iter_in(
-                ps.iter().map(|p| {
-                    if !p.borrow {
-                        p.clone()
-                    } else if self.is_owned(p.symbol) {
-                        self.modified = true;
-                        let mut p = p.clone();
-                        p.borrow = false;
+    fn update_param_map_declaration(&mut self, symbol: Symbol, layout: ProcLayout<'a>) {
+        let index: usize = self.param_map.declaration_to_index[&(symbol, layout)].into();
 
-                        p
-                    } else {
-                        p.clone()
-                    }
-                }),
-                arena,
-            );
+        let ps = self.param_map.declarations[index];
+        self.param_map.declarations[index] = self.update_param_map_help(ps);
+    }
 
-            self.param_map.items.insert(k, ps.into_bump_slice());
-        }
+    fn update_param_map_join_point(&mut self, id: JoinPointId) {
+        let ps = self.param_map.join_points[&id];
+        let new_ps = self.update_param_map_help(ps);
+        self.param_map.join_points.insert(id, new_ps);
     }
 
     /// This looks at an application `f x1 x2 x3`
@@ -697,7 +687,7 @@ impl<'a> BorrowInfState<'a> {
                 self.update_param_set(ys);
                 self.collect_stmt(v);
                 self.param_set = old;
-                self.update_param_map(Key::JoinPoint(*j));
+                self.update_param_map_join_point(*j);
 
                 self.collect_stmt(b);
             }
