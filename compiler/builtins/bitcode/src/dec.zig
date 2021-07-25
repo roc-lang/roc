@@ -55,6 +55,7 @@ pub const RocDec = extern struct {
         if (exponent > 0) {
             var exp = @intCast(u7, exponent);
             var result: i128 = undefined;
+
             var overflowed = @shlWithOverflow(i128, val, exp, &result);
             if (overflowed) {
                 return null;
@@ -767,16 +768,6 @@ test "fromF64: -10.75" {
     try expectEqual(RocDec{ .num = -10750000000000000000 }, dec.?);
 }
 
-// TODO: Both of these return null due to overflow, but they should be valid
-// test "fromF64: i128 max" {
-//     var dec = RocDec.fromF64(170141183460469231731.687303715884105727);
-//     try expectEqual(RocDec.max, dec.?);
-// }
-// test "fromF64: i128 min" {
-//     var dec = RocDec.fromF64(-170141183460469231731.687303715884105728);
-//     try expectEqual(RocDec.min, dec.?);
-// }
-
 test "fromF64: f64 max val" {
     var dec = RocDec.fromF64(std.math.f64_max);
     var res: ?RocDec = null;
@@ -787,6 +778,33 @@ test "fromF64: f64 min val" {
     var dec = RocDec.fromF64(std.math.f64_min);
     try expectEqual(RocDec.zero, dec.?);
 }
+
+// TODO: All of the following test cases fail
+
+// test "fromF64: large random number" { // Negative exponent & returns incorrect (but close) value. The value has additional decimal places
+//     var dec = RocDec.fromF64(1687303715.884105727);
+//     try expectEqual(RocDec{ .num = 1687303715884105727000000000 }, dec.?);
+// }
+
+// test "fromF64: large whole number" { // Negative exponent & returns incorrect (but close) value
+//     var dec = RocDec.fromF64(1687303715884105727);
+//     try expectEqual(RocDec.fromU64(1687303715884105727), dec.?);
+// }
+
+// test "fromF64: 18 decimal places" { //  Negative exponent & returns incorrect (but close) value
+//     var dec = RocDec.fromF64(1.687303715884105727);
+//     try expectEqual(RocDec{ .num = 1687303715884105727 }, dec.?);
+// }
+
+// test "fromF64: i128 max" { // Postitive exponent & overflows
+//     var dec = RocDec.fromF64(170141183460469231731.687303715884105727);
+//     try expectEqual(RocDec.max, dec.?);
+// }
+
+// test "fromF64: i128 min" { // Postitive exponent & overflows
+//     var dec = RocDec.fromF64(-170141183460469231731.687303715884105728);
+//     try expectEqual(RocDec.min, dec.?);
+// }
 
 test "fromStr: empty" {
     var roc_str = RocStr.init("", 0);
