@@ -793,10 +793,28 @@ impl<'a> BorrowInfState<'a> {
                 self.collect_stmt(param_map, b);
             }
 
-            Let(x, v, _, b) => {
+            Let(x, v, _, mut b) => {
+                let mut stack = Vec::new_in(self.arena);
+
+                stack.push((*x, v));
+
+                while let Stmt::Let(symbol, expr, _, tail) = b {
+                    b = tail;
+                    stack.push((*symbol, expr));
+                }
+
                 self.collect_stmt(param_map, b);
-                self.collect_expr(param_map, *x, v);
-                self.preserve_tail_call(param_map, *x, v, b);
+
+                let mut it = stack.into_iter().rev();
+
+                // collect the final expr, and see if we need to preserve a tail call
+                let (x, v) = it.next().unwrap();
+                self.collect_expr(param_map, x, v);
+                self.preserve_tail_call(param_map, x, v, b);
+
+                for (x, v) in it {
+                    self.collect_expr(param_map, x, v);
+                }
             }
 
             Invoke {
