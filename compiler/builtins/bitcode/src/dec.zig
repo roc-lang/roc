@@ -21,24 +21,51 @@ pub const RocDec = extern struct {
     pub const one_point_zero_i128: i128 = math.pow(i128, 10, RocDec.decimal_places);
     pub const one_point_zero: RocDec = .{ .num = one_point_zero_i128 };
 
+    pub const zero: RocDec = .{ .num = 0 };
+
     pub fn fromU64(num: u64) RocDec {
         return .{ .num = num * one_point_zero_i128 };
     }
 
-    // TODO: There's got to be a better way to do this other than converting to Str
     pub fn fromF64(num: f64) ?RocDec {
-        var digit_bytes: [19]u8 = undefined; // 19 = max f64 digits + '.' + '-'
-
-        var fbs = std.io.fixedBufferStream(digit_bytes[0..]);
-        std.fmt.formatFloatDecimal(num, .{}, fbs.writer()) catch
+        if (!std.math.isFinite(num)) {
             return null;
+        }
+        if (num == 0) {
+            return zero;
+        }
 
-        var dec = RocDec.fromStr(RocStr.init(&digit_bytes, fbs.pos));
+        var i = @bitCast(i64, num);
 
-        if (dec) |d| {
-            return d;
+        var sign: i2 = if (std.math.signbit(num)) -1 else 1;
+        var exponent = ((i & 0x7FFFFFFFFFFFFFFF) >> 52) - 1023 - 52;
+
+        if (exponent > 128) {
+            return null;
+        }
+        if (exponent < -128) {
+            return zero;
+        }
+
+        var val = @intCast(i128, (i & 0x000FFFFFFFFFFFFF) | (1 << 52));
+        val = val * one_point_zero_i128;
+
+        if (exponent > 0) {
+            var exp = @intCast(u7, exponent);
+            var result: i128 = undefined;
+            var overflowed = @shlWithOverflow(i128, val, exp, &result);
+            if (overflowed) {
+                return null;
+            }
+
+            return RocDec{ .num = result * sign };
+        } else if (exponent < 0) {
+            var exp = @intCast(u7, exponent * -1);
+
+            // If we ever want to handle underflow, the we should use @shrExact here
+            return RocDec{ .num = (val >> exp) * sign };
         } else {
-            return null;
+            return RocDec{ .num = val * sign };
         }
     }
 
@@ -723,9 +750,30 @@ test "fromU64" {
     try expectEqual(RocDec{ .num = 25000000000000000000 }, dec);
 }
 
-test "fromF64" {
-    var dec = RocDec.fromF64(25.5);
-    try expectEqual(RocDec{ .num = 25500000000000000000 }, dec.?);
+test "fromF64: 0" {
+    var dec = RocDec.fromF64(0);
+    try expectEqual(RocDec.zero, dec.?);
+}
+
+test "fromF64: 10.75" {
+    var dec = RocDec.fromF64(10.75);
+    try expectEqual(RocDec{ .num = 10750000000000000000 }, dec.?);
+}
+
+test "fromF64: -10.75" {
+    var dec = RocDec.fromF64(-10.75);
+    try expectEqual(RocDec{ .num = -10750000000000000000 }, dec.?);
+}
+
+test "fromF64: f64 max val" {
+    var dec = RocDec.fromF64(std.math.f64_max);
+    var res: ?RocDec = null;
+    try expectEqual(res, dec);
+}
+
+test "fromF64: f64 min val" {
+    var dec = RocDec.fromF64(std.math.f64_min);
+    try expectEqual(RocDec.zero, dec.?);
 }
 
 test "fromStr: empty" {
