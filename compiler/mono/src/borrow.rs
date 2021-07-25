@@ -2,7 +2,7 @@ use crate::ir::{Expr, JoinPointId, Param, Proc, ProcLayout, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
@@ -20,7 +20,15 @@ pub fn infer_borrow<'a>(
     arena: &'a Bump,
     procs: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> ParamMap<'a> {
+    // intern the layouts
+    let mut declaration_to_index = MutMap::with_capacity_and_hasher(procs.len(), default_hasher());
+
+    for (i, key) in procs.keys().enumerate() {
+        declaration_to_index.insert(*key, DeclarationId(i));
+    }
+
     let mut param_map = ParamMap {
+        declaration_to_index,
         items: MutMap::default(),
     };
 
@@ -66,19 +74,25 @@ pub fn infer_borrow<'a>(
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub enum Key<'a> {
-    Declaration(Symbol, ProcLayout<'a>),
+pub enum Key {
+    Declaration(DeclarationId),
     JoinPoint(JoinPointId),
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub struct DeclarationId(usize);
+
 #[derive(Debug, Clone, Default)]
 pub struct ParamMap<'a> {
-    items: MutMap<Key<'a>, &'a [Param<'a>]>,
+    declaration_to_index: MutMap<(Symbol, ProcLayout<'a>), DeclarationId>,
+    items: MutMap<Key, &'a [Param<'a>]>,
+    // declarations: Vec<'a, &'a [Param<'a>]>,
+    // join_points: Vec<'a, &'a [Param<'a>]>,
 }
 
 impl<'a> IntoIterator for ParamMap<'a> {
-    type Item = (Key<'a>, &'a [Param<'a>]);
-    type IntoIter = <std::collections::HashMap<Key<'a>, &'a [Param<'a>]> as IntoIterator>::IntoIter;
+    type Item = (Key, &'a [Param<'a>]);
+    type IntoIter = <std::collections::HashMap<Key, &'a [Param<'a>]> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
         self.items.into_iter()
@@ -86,9 +100,8 @@ impl<'a> IntoIterator for ParamMap<'a> {
 }
 
 impl<'a> IntoIterator for &'a ParamMap<'a> {
-    type Item = (&'a Key<'a>, &'a &'a [Param<'a>]);
-    type IntoIter =
-        <&'a std::collections::HashMap<Key<'a>, &'a [Param<'a>]> as IntoIterator>::IntoIter;
+    type Item = (&'a Key, &'a &'a [Param<'a>]);
+    type IntoIter = <&'a std::collections::HashMap<Key, &'a [Param<'a>]> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
         self.items.iter()
@@ -97,7 +110,8 @@ impl<'a> IntoIterator for &'a ParamMap<'a> {
 
 impl<'a> ParamMap<'a> {
     pub fn get_symbol(&self, symbol: Symbol, layout: ProcLayout<'a>) -> Option<&'a [Param<'a>]> {
-        let key = Key::Declaration(symbol, layout);
+        let index = self.declaration_to_index[&(symbol, layout)];
+        let key = Key::Declaration(index);
 
         self.items.get(&key).copied()
     }
@@ -108,6 +122,10 @@ impl<'a> ParamMap<'a> {
             Some(slice) => slice,
             None => unreachable!("join point not in param map: {:?}", id),
         }
+    }
+
+    pub fn iter_symbols(&'a self) -> impl Iterator<Item = &'a Symbol> {
+        self.declaration_to_index.iter().map(|t| &t.0 .0)
     }
 }
 
@@ -156,8 +174,11 @@ impl<'a> ParamMap<'a> {
             self.visit_proc_always_owned(arena, proc, key);
             return;
         }
+
+        let index = self.declaration_to_index[&key];
+
         let already_in_there = self.items.insert(
-            Key::Declaration(proc.name, key.1),
+            Key::Declaration(index),
             Self::init_borrow_args(arena, proc.args),
         );
         debug_assert!(already_in_there.is_none());
@@ -171,8 +192,10 @@ impl<'a> ParamMap<'a> {
         proc: &Proc<'a>,
         key: (Symbol, ProcLayout<'a>),
     ) {
+        let index = self.declaration_to_index[&key];
+
         let already_in_there = self.items.insert(
-            Key::Declaration(proc.name, key.1),
+            Key::Declaration(index),
             Self::init_borrow_args_always_owned(arena, proc.args),
         );
         debug_assert!(already_in_there.is_none());
@@ -263,7 +286,14 @@ impl<'a> BorrowInfState<'a> {
         }
     }
 
-    fn update_param_map(&mut self, k: Key<'a>) {
+    fn update_param_map_declaration(&mut self, symbol: Symbol, layout: ProcLayout<'a>) {
+        let index = self.param_map.declaration_to_index[&(symbol, layout)];
+        let key = Key::Declaration(index);
+
+        self.update_param_map(key)
+    }
+
+    fn update_param_map(&mut self, k: Key) {
         let arena = self.arena;
         if let Some(ps) = self.param_map.items.get(&k) {
             let ps = Vec::from_iter_in(
@@ -733,7 +763,7 @@ impl<'a> BorrowInfState<'a> {
         self.owned.entry(proc.name).or_default();
 
         self.collect_stmt(&proc.body);
-        self.update_param_map(Key::Declaration(proc.name, layout));
+        self.update_param_map_declaration(proc.name, layout);
 
         self.param_set = old;
     }

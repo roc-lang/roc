@@ -247,18 +247,16 @@ impl<'a> Context<'a> {
     pub fn new(arena: &'a Bump, param_map: &'a ParamMap<'a>) -> Self {
         let mut vars = MutMap::default();
 
-        for (key, _) in param_map.into_iter() {
-            if let crate::borrow::Key::Declaration(symbol, _) = key {
-                vars.insert(
-                    *symbol,
-                    VarInfo {
-                        reference: false, // assume function symbols are global constants
-                        persistent: true, // assume function symbols are global constants
-                        consume: false,   // no need to consume this variable
-                        reset: false,     // reset symbols cannot be passed as function arguments
-                    },
-                );
-            }
+        for symbol in param_map.iter_symbols() {
+            vars.insert(
+                *symbol,
+                VarInfo {
+                    reference: false, // assume function symbols are global constants
+                    persistent: true, // assume function symbols are global constants
+                    consume: false,   // no need to consume this variable
+                    reset: false,     // reset symbols cannot be passed as function arguments
+                },
+            );
         }
 
         Self {
