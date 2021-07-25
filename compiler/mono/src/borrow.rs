@@ -995,7 +995,6 @@ fn make_successor_mapping<'a>(
 }
 
 struct CallInfo<'a> {
-    // keys: MutSet<(Symbol, ProcLayout<'a>)>,
     keys: Vec<'a, Symbol>,
 }
 
@@ -1009,13 +1008,6 @@ fn call_info_call<'a>(call: &crate::ir::Call<'a>, info: &mut CallInfo<'a>) {
             arg_layouts,
             ..
         } => {
-            let proc_layout = crate::ir::ProcLayout {
-                arguments: arg_layouts,
-                result: ret_layout,
-            };
-
-            //let key = (name, proc_layout);
-            // info.keys.insert(key);
             info.keys.push(name);
         }
         Foreign { .. } => {}
