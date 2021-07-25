@@ -1259,14 +1259,25 @@ fn update_jp_live_vars(j: JoinPointId, ys: &[Param], v: &Stmt<'_>, m: &mut JPLiv
     m.insert(j, j_live_vars);
 }
 
-pub fn visit_proc<'a>(
+pub fn visit_procs<'a>(
     arena: &'a Bump,
     param_map: &'a ParamMap<'a>,
-    proc: &mut Proc<'a>,
-    layout: ProcLayout<'a>,
+    procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) {
     let ctx = Context::new(arena, param_map);
 
+    for (key, proc) in procs.iter_mut() {
+        visit_proc(arena, param_map, &ctx, proc, key.1);
+    }
+}
+
+fn visit_proc<'a>(
+    arena: &'a Bump,
+    param_map: &'a ParamMap<'a>,
+    ctx: &Context<'a>,
+    proc: &mut Proc<'a>,
+    layout: ProcLayout<'a>,
+) {
     let params = match param_map.get_symbol(proc.name, layout) {
         Some(slice) => slice,
         None => Vec::from_iter_in(
