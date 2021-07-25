@@ -352,12 +352,10 @@ impl<'a> BorrowInfState<'a> {
                 self.current_proc
             ),
             Some(set) => {
-                if set.contains(&extracted) {
-                    if set.insert(structure) {
-                        // entered if key was not yet present. If so, the set is modified,
-                        // hence we set this flag
-                        self.modified = true;
-                    }
+                if set.contains(&extracted) && set.insert(structure) {
+                    // entered if key was not yet present. If so, the set is modified,
+                    // hence we set this flag
+                    self.modified = true;
                 }
             }
         }
@@ -380,7 +378,7 @@ impl<'a> BorrowInfState<'a> {
                 *p
             } else if self.is_owned(p.symbol) {
                 self.modified = true;
-                let mut p = p.clone();
+                let mut p = *p;
                 p.borrow = false;
 
                 p
@@ -395,7 +393,6 @@ impl<'a> BorrowInfState<'a> {
     fn update_param_map_declaration(
         &mut self,
         param_map: &mut ParamMap<'a>,
-        symbol: Symbol,
         start: ParamOffset,
         length: usize,
     ) {
@@ -883,7 +880,7 @@ impl<'a> BorrowInfState<'a> {
         self.owned.entry(proc.name).or_default();
 
         self.collect_stmt(param_map, &proc.body);
-        self.update_param_map_declaration(param_map, proc.name, param_offset, proc.args.len());
+        self.update_param_map_declaration(param_map, param_offset, proc.args.len());
 
         self.param_set = old;
     }
@@ -1008,12 +1005,7 @@ fn call_info_call<'a>(call: &crate::ir::Call<'a>, info: &mut CallInfo<'a>) {
     use crate::ir::CallType::*;
 
     match call.call_type {
-        ByName {
-            name,
-            ret_layout,
-            arg_layouts,
-            ..
-        } => {
+        ByName { name, .. } => {
             info.keys.push(name);
         }
         Foreign { .. } => {}
