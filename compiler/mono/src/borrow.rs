@@ -344,6 +344,25 @@ impl<'a> BorrowInfState<'a> {
         }
     }
 
+    /// if the extracted value is owned, then the surrounding structure must be too
+    fn if_is_owned_then_own(&mut self, extracted: Symbol, structure: Symbol) {
+        match self.owned.get_mut(&self.current_proc) {
+            None => unreachable!(
+                "the current procedure symbol {:?} is not in the owned map",
+                self.current_proc
+            ),
+            Some(set) => {
+                if set.contains(&extracted) {
+                    if set.insert(structure) {
+                        // entered if key was not yet present. If so, the set is modified,
+                        // hence we set this flag
+                        self.modified = true;
+                    }
+                }
+            }
+        }
+    }
+
     fn is_owned(&self, x: Symbol) -> bool {
         match self.owned.get(&self.current_proc) {
             None => unreachable!(
@@ -690,38 +709,26 @@ impl<'a> BorrowInfState<'a> {
 
             StructAtIndex { structure: x, .. } => {
                 // if the structure (record/tag/array) is owned, the extracted value is
-                if self.is_owned(*x) {
-                    self.own_var(z);
-                }
+                self.if_is_owned_then_own(*x, z);
 
                 // if the extracted value is owned, the structure must be too
-                if self.is_owned(z) {
-                    self.own_var(*x);
-                }
+                self.if_is_owned_then_own(z, *x);
             }
 
             UnionAtIndex { structure: x, .. } => {
                 // if the structure (record/tag/array) is owned, the extracted value is
-                if self.is_owned(*x) {
-                    self.own_var(z);
-                }
+                self.if_is_owned_then_own(*x, z);
 
                 // if the extracted value is owned, the structure must be too
-                if self.is_owned(z) {
-                    self.own_var(*x);
-                }
+                self.if_is_owned_then_own(z, *x);
             }
 
             GetTagId { structure: x, .. } => {
                 // if the structure (record/tag/array) is owned, the extracted value is
-                if self.is_owned(*x) {
-                    self.own_var(z);
-                }
+                self.if_is_owned_then_own(*x, z);
 
                 // if the extracted value is owned, the structure must be too
-                if self.is_owned(z) {
-                    self.own_var(*x);
-                }
+                self.if_is_owned_then_own(z, *x);
             }
         }
     }
