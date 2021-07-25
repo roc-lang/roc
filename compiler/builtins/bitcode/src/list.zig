@@ -3,8 +3,6 @@ const utils = @import("utils.zig");
 const RocResult = utils.RocResult;
 const mem = std.mem;
 
-const TAG_WIDTH = 8;
-
 const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
 const CompareFn = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) u8;
 const Opaque = ?[*]u8;

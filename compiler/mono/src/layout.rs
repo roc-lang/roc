@@ -170,7 +170,16 @@ impl<'a> UnionLayout<'a> {
 
     pub fn tag_id_builtin(&self) -> Builtin<'a> {
         match self {
-            UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => {
+            UnionLayout::NonRecursive(_tags) => {
+                // let union_size = tags.len();
+                // Self::tag_id_builtin_help(union_size)
+
+                // The quicksort-benchmarks version of Quicksort.roc segfaults when
+                // this number is not I64. There must be some dependence on that fact
+                // somewhere in the code, I have not found where that is yet...
+                Builtin::Int64
+            }
+            UnionLayout::Recursive(tags) => {
                 let union_size = tags.len();
 
                 Self::tag_id_builtin_help(union_size)
@@ -656,7 +665,7 @@ impl<'a> Layout<'a> {
                             .max()
                             .unwrap_or_default()
                             // the size of the tag_id
-                            + pointer_size
+                            + variant.tag_id_builtin().stack_size(pointer_size)
                     }
 
                     Recursive(_)

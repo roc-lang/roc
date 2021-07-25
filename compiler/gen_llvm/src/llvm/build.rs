@@ -370,7 +370,7 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     let i64_type = ctx.i64_type();
 
     if let Some(func) = module.get_function("__muloti4") {
-        func.set_linkage(Linkage::External);
+        func.set_linkage(Linkage::WeakAny);
     }
 
     add_intrinsic(
@@ -2389,7 +2389,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let exception_object = scope.get(&exception_id.into_inner()).unwrap().1;
             env.builder.build_resume(exception_object);
 
-            env.context.i64_type().const_zero().into()
+            env.ptr_int().const_zero().into()
         }
 
         Switch {
@@ -2827,7 +2827,7 @@ fn build_switch_ir<'a, 'ctx, 'env>(
                 .into_int_value()
         }
         Layout::Union(variant) => {
-            cond_layout = Layout::Builtin(Builtin::Int64);
+            cond_layout = variant.tag_id_layout();
 
             get_tag_id(env, parent, &variant, cond_value)
         }

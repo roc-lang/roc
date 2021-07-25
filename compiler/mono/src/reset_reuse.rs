@@ -247,8 +247,6 @@ fn insert_reset<'a>(
 
     let reset_expr = Expr::Reset(x);
 
-    // const I64: Layout<'static> = Layout::Builtin(crate::layout::Builtin::Int64);
-
     let layout = Layout::Union(union_layout);
 
     stmt = env.arena.alloc(Stmt::Let(w, reset_expr, layout, stmt));
