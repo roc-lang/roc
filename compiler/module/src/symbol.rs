@@ -775,7 +775,7 @@ define_builtins! {
         // a caller (wrapper) for comparison
         21 GENERIC_COMPARE_REF: "#generic_compare_ref"
 
-        // used to initialize paramters in borrow.rs
+        // used to initialize parameters in borrow.rs
         22 EMPTY_PARAM: "#empty_param"
     }
     1 NUM: "Num" => {
