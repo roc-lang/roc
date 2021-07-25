@@ -1259,20 +1259,6 @@ fn update_jp_live_vars(j: JoinPointId, ys: &[Param], v: &Stmt<'_>, m: &mut JPLiv
     m.insert(j, j_live_vars);
 }
 
-/// used to process the main function in the repl
-pub fn visit_declaration<'a>(
-    arena: &'a Bump,
-    param_map: &'a ParamMap<'a>,
-    stmt: &'a Stmt<'a>,
-) -> &'a Stmt<'a> {
-    let ctx = Context::new(arena, param_map);
-
-    let params = &[] as &[_];
-    let ctx = ctx.update_var_info_with_params(params);
-    let (b, b_live_vars) = ctx.visit_stmt(stmt);
-    ctx.add_dec_for_dead_params(params, b, &b_live_vars)
-}
-
 pub fn visit_proc<'a>(
     arena: &'a Bump,
     param_map: &'a ParamMap<'a>,
