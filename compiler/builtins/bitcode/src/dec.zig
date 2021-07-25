@@ -27,6 +27,8 @@ pub const RocDec = extern struct {
         return .{ .num = num * one_point_zero_i128 };
     }
 
+    const f64_mantissa_bits = 52;
+
     pub fn fromF64(num: f64) ?RocDec {
         if (!std.math.isFinite(num)) {
             return null;
@@ -38,16 +40,16 @@ pub const RocDec = extern struct {
         var i = @bitCast(i64, num);
 
         var sign: i2 = if (std.math.signbit(num)) -1 else 1;
-        var exponent = ((i & 0x7FFFFFFFFFFFFFFF) >> 52) - 1023 - 52;
+        var exponent = ((i & 0x7FFFFFFFFFFFFFFF) >> f64_mantissa_bits) - 1023 - f64_mantissa_bits;
 
-        if (exponent > 128) {
+        if (exponent >= 128) {
             return null;
         }
-        if (exponent < -128) {
+        if (exponent <= -128) {
             return zero;
         }
 
-        var val = @intCast(i128, (i & 0x000FFFFFFFFFFFFF) | (1 << 52));
+        var val = @intCast(i128, (i & 0x000FFFFFFFFFFFFF) | (1 << f64_mantissa_bits));
         val = val * one_point_zero_i128;
 
         if (exponent > 0) {
@@ -764,6 +766,16 @@ test "fromF64: -10.75" {
     var dec = RocDec.fromF64(-10.75);
     try expectEqual(RocDec{ .num = -10750000000000000000 }, dec.?);
 }
+
+// TODO: Both of these return null due to overflow, but they should be valid
+// test "fromF64: i128 max" {
+//     var dec = RocDec.fromF64(170141183460469231731.687303715884105727);
+//     try expectEqual(RocDec.max, dec.?);
+// }
+// test "fromF64: i128 min" {
+//     var dec = RocDec.fromF64(-170141183460469231731.687303715884105728);
+//     try expectEqual(RocDec.min, dec.?);
+// }
 
 test "fromF64: f64 max val" {
     var dec = RocDec.fromF64(std.math.f64_max);
