@@ -74,12 +74,6 @@ pub fn infer_borrow<'a>(
     env.param_map
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub enum Key {
-    Declaration(DeclarationId),
-    JoinPoint(JoinPointId),
-}
-
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct DeclarationId(usize);
 
@@ -92,29 +86,10 @@ impl From<DeclarationId> for usize {
 #[derive(Debug, Clone)]
 pub struct ParamMap<'a> {
     declaration_to_index: MutMap<(Symbol, ProcLayout<'a>), DeclarationId>,
+    // IDEA: flatten the declarations into just one flat array
     declarations: Vec<'a, &'a [Param<'a>]>,
     join_points: MutMap<JoinPointId, &'a [Param<'a>]>,
 }
-
-/*
-impl<'a> IntoIterator for ParamMap<'a> {
-    type Item = (Key, &'a [Param<'a>]);
-    type IntoIter = <std::collections::HashMap<Key, &'a [Param<'a>]> as IntoIterator>::IntoIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.items.into_iter()
-    }
-}
-
-impl<'a> IntoIterator for &'a ParamMap<'a> {
-    type Item = (&'a Key, &'a &'a [Param<'a>]);
-    type IntoIter = <&'a std::collections::HashMap<Key, &'a [Param<'a>]> as IntoIterator>::IntoIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.items.iter()
-    }
-}
-*/
 
 impl<'a> ParamMap<'a> {
     pub fn get_symbol(&self, symbol: Symbol, layout: ProcLayout<'a>) -> Option<&'a [Param<'a>]> {
