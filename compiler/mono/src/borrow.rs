@@ -337,10 +337,9 @@ impl<'a> BorrowInfState<'a> {
     pub fn own_var(&mut self, x: Symbol) {
         let current = self.owned.get_mut(&self.current_proc).unwrap();
 
-        if current.contains(&x) {
-            // do nothing
-        } else {
-            current.insert(x);
+        if current.insert(x) {
+            // entered if key was not yet present. If so, the set is modified,
+            // hence we set this flag
             self.modified = true;
         }
     }
