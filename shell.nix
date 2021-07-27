@@ -1,34 +1,21 @@
-{}:
+{ }:
 
 let
-  # Look here for information about how pin version of nixpkgs
-  #  → https://nixos.wiki/wiki/FAQ/Pinning_Nixpkgs
-  # TODO: We should probably use flakes at somepoint
-  pkgs = import (
-    builtins.fetchGit {
-      # name = "nixpkgs-2021-04-23";
-      url = "https://github.com/nixos/nixpkgs/";
-      ref = "refs/heads/nixpkgs-unstable";
-      rev = "51bb9f3e9ab6161a3bf7746e20b955712cef618b";
-    }
-  ) {};
+  sources = import nix/sources.nix { };
+  pkgs = import sources.nixpkgs { };
 
-  darwinInputs =
-    with pkgs;
-    lib.optionals stdenv.isDarwin (
-      with pkgs.darwin.apple_sdk.frameworks; [
-        AppKit
-        CoreFoundation
-        CoreServices
-        CoreVideo
-        Foundation
-        Metal
-        Security
-      ]
-    );
+  darwinInputs = with pkgs;
+    lib.optionals stdenv.isDarwin (with pkgs.darwin.apple_sdk.frameworks; [
+      AppKit
+      CoreFoundation
+      CoreServices
+      CoreVideo
+      Foundation
+      Metal
+      Security
+    ]);
 
-  linuxInputs =
-    with pkgs;
+  linuxInputs = with pkgs;
     lib.optionals stdenv.isLinux [
       valgrind
       vulkan-headers
@@ -46,7 +33,7 @@ let
 
   zig = import ./nix/zig.nix { inherit pkgs; };
 
-  inputs = with pkgs;[
+  inputs = with pkgs; [
     # build libraries
     rustc
     cargo
@@ -72,28 +59,26 @@ let
 
     # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
     llvmPkgs.lld
-  ];
-in
-pkgs.mkShell
-  {
-    buildInputs = inputs ++ darwinInputs ++ linuxInputs;
 
-    # Additional Env vars
-    LLVM_SYS_120_PREFIX = "${llvmPkgs.llvm.dev}";
-    LD_LIBRARY_PATH =
-      with pkgs;
-      lib.makeLibraryPath
-        (
-          [
-            pkg-config
-            stdenv.cc.cc.lib
-            llvmPkgs.libcxx
-            llvmPkgs.libcxxabi
-            libunwind
-            libffi
-            ncurses
-            zlib
-          ]
-          ++ linuxInputs
-        );
-  }
+    # meta-tools
+    # note: niv manages its own nixpkgs so it doesn't need pkgs.callPackage. Do
+    # `cachix use niv` to get cached builds!
+    (import sources.niv { }).niv
+  ];
+in pkgs.mkShell {
+  buildInputs = inputs ++ darwinInputs ++ linuxInputs;
+
+  # Additional Env vars
+  LLVM_SYS_120_PREFIX = "${llvmPkgs.llvm.dev}";
+  LD_LIBRARY_PATH = with pkgs;
+    lib.makeLibraryPath ([
+      pkg-config
+      stdenv.cc.cc.lib
+      llvmPkgs.libcxx
+      llvmPkgs.libcxxabi
+      libunwind
+      libffi
+      ncurses
+      zlib
+    ] ++ linuxInputs);
+}
