@@ -1,4 +1,4 @@
-// #[macro_use]
+#[macro_use]
 extern crate pretty_assertions;
 
 extern crate bumpalo;
