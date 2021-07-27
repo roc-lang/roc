@@ -10,7 +10,7 @@ extern crate roc_module;
 #[cfg(test)]
 mod cli_run {
     use cli_utils::helpers::{
-        example_file, extract_valgrind_errors, fixture_file, root_dir, run_cmd, run_roc,
+        example_file, examples_dir, extract_valgrind_errors, fixture_file, run_cmd, run_roc,
         run_with_valgrind, ValgrindError, ValgrindErrorXWhat,
     };
     use serial_test::serial;
@@ -253,7 +253,7 @@ mod cli_run {
                 #[serial(benchmark)]
                 fn $test_name() {
                     let benchmark = $benchmark;
-                    let file_name = root_dir().join("benchmarks").join(benchmark.filename);
+                    let file_name = examples_dir("benchmarks").join(benchmark.filename);
 
                     // Check with and without optimizations
                     check_output_with_stdin(
@@ -286,7 +286,7 @@ mod cli_run {
                     all_benchmarks.insert(benchmark.filename, benchmark);
                 )*
 
-                check_for_benchmarks("../benchmarks", &mut all_benchmarks);
+                check_for_benchmarks("../examples/benchmarks", &mut all_benchmarks);
             }
         }
     }
@@ -378,9 +378,12 @@ mod cli_run {
             if entry.file_type().unwrap().is_dir() {
                 let example_dir_name = entry.file_name().into_string().unwrap();
 
-                all_examples.remove(example_dir_name.as_str()).unwrap_or_else(|| {
+                // We test benchmarks separately
+                if example_dir_name != "benchmarks" {
+                    all_examples.remove(example_dir_name.as_str()).unwrap_or_else(|| {
                     panic!("The example directory {}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", examples_dir, example_dir_name);
                 });
+                }
             }
         }
 
