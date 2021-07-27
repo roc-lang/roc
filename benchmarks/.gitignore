@@ -10,5 +10,6 @@ closure
 cfold
 rbtree-insert
 rbtree-del
+rbtree-ck
 test-astar
 test-base64

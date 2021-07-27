@@ -313,6 +313,13 @@ mod cli_run {
             expected_ending: "1 count: 6\n2 count: 22\n",
             use_valgrind: true,
         },
+        rbtree_ck => Example {
+            filename: "RBTreeCk.roc",
+            executable_filename: "rbtree-ck",
+            stdin: &[],
+            expected_ending: "Node Black 0 {} Empty Empty\n",
+            use_valgrind: true,
+        },
         rbtree_insert => Example {
             filename: "RBTreeInsert.roc",
             executable_filename: "rbtree-insert",
