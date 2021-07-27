@@ -234,7 +234,7 @@ pub fn extract_valgrind_errors(xml: &str) -> Result<Vec<ValgrindError>, serde_xm
 }
 
 #[allow(dead_code)]
-pub fn example_dir(dir_name: &str) -> PathBuf {
+pub fn root_dir() -> PathBuf {
     let mut path = env::current_exe().ok().unwrap();
 
     // Get rid of the filename in target/debug/deps/cli_run-99c65e4e9a1fbd06
@@ -248,6 +248,13 @@ pub fn example_dir(dir_name: &str) -> PathBuf {
     // Get rid of target/debug/ so we're back at the project root
     path.pop();
     path.pop();
+
+    path
+}
+
+#[allow(dead_code)]
+pub fn examples_dir(dir_name: &str) -> PathBuf {
+    let mut path = root_dir();
 
     // Descend into examples/{dir_name}
     path.push("examples");
@@ -258,7 +265,7 @@ pub fn example_dir(dir_name: &str) -> PathBuf {
 
 #[allow(dead_code)]
 pub fn example_file(dir_name: &str, file_name: &str) -> PathBuf {
-    let mut path = example_dir(dir_name);
+    let mut path = examples_dir(dir_name);
 
     path.push(file_name);
 
@@ -267,19 +274,7 @@ pub fn example_file(dir_name: &str, file_name: &str) -> PathBuf {
 
 #[allow(dead_code)]
 pub fn fixtures_dir(dir_name: &str) -> PathBuf {
-    let mut path = env::current_exe().ok().unwrap();
-
-    // Get rid of the filename in target/debug/deps/cli_run-99c65e4e9a1fbd06
-    path.pop();
-
-    // If we're in deps/ get rid of deps/ in target/debug/deps/
-    if path.ends_with("deps") {
-        path.pop();
-    }
-
-    // Get rid of target/debug/ so we're back at the project root
-    path.pop();
-    path.pop();
+    let mut path = root_dir();
 
     // Descend into cli/tests/fixtures/{dir_name}
     path.push("cli");
