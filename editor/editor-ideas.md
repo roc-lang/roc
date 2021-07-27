@@ -231,6 +231,12 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 
 - [Boop](https://github.com/IvanMathy/Boop) scriptable scratchpad for developers. Contains collection of useful conversions: json formatting, url encoding, encode to base64...
 
+## High performance
+
+### Inspiration
+
+- [10x editor](http://www.10xeditor.com/) IDE/Editor targeted at the professional developer with an emphasis on performance and scalability.
+
 ## General Thoughts/Ideas
 
 Thoughts and ideas possibly taken from above inspirations or separate.

@@ -2106,8 +2106,6 @@ fn specialize_external<'a>(
                                 let expr = Expr::UnionAtIndex {
                                     tag_id,
                                     structure: Symbol::ARG_CLOSURE,
-                                    // union at index still expects the index to be +1; it thinks
-                                    // the tag id is stored
                                     index: index as u64,
                                     union_layout,
                                 };
@@ -2733,10 +2731,10 @@ pub fn with_hole<'a>(
                     Layout::Builtin(float_precision_to_builtin(precision)),
                     hole,
                 ),
-                IntOrFloat::DecimalFloatType(precision) => Stmt::Let(
+                IntOrFloat::DecimalFloatType => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Float(num as f64)),
-                    Layout::Builtin(float_precision_to_builtin(precision)),
+                    Layout::Builtin(Builtin::Decimal),
                     hole,
                 ),
                 _ => unreachable!("unexpected float precision for integer"),
@@ -2769,10 +2767,10 @@ pub fn with_hole<'a>(
                 Layout::Builtin(float_precision_to_builtin(precision)),
                 hole,
             ),
-            IntOrFloat::DecimalFloatType(precision) => Stmt::Let(
+            IntOrFloat::DecimalFloatType => Stmt::Let(
                 assigned,
                 Expr::Literal(Literal::Float(num as f64)),
-                Layout::Builtin(float_precision_to_builtin(precision)),
+                Layout::Builtin(Builtin::Decimal),
                 hole,
             ),
         },
@@ -6362,13 +6360,14 @@ fn call_by_name_help<'a>(
     let top_level_layout = ProcLayout::new(env.arena, argument_layouts, *ret_layout);
 
     // the arguments given to the function, stored in symbols
-    let field_symbols = Vec::from_iter_in(
+    let mut field_symbols = Vec::with_capacity_in(loc_args.len(), arena);
+    field_symbols.extend(
         loc_args
             .iter()
             .map(|(_, arg_expr)| possible_reuse_symbol(env, procs, &arg_expr.value)),
-        arena,
-    )
-    .into_bump_slice();
+    );
+
+    let field_symbols = field_symbols.into_bump_slice();
 
     // the variables of the given arguments
     let mut pattern_vars = Vec::with_capacity_in(loc_args.len(), arena);
@@ -6870,7 +6869,7 @@ fn from_can_pattern_help<'a>(
                 IntOrFloat::SignedIntType(_) => Ok(Pattern::IntLiteral(*num as i128)),
                 IntOrFloat::UnsignedIntType(_) => Ok(Pattern::IntLiteral(*num as i128)),
                 IntOrFloat::BinaryFloatType(_) => Ok(Pattern::FloatLiteral(*num as u64)),
-                IntOrFloat::DecimalFloatType(_) => Ok(Pattern::FloatLiteral(*num as u64)),
+                IntOrFloat::DecimalFloatType => Ok(Pattern::FloatLiteral(*num as u64)),
             }
         }
 
@@ -7460,7 +7459,7 @@ pub enum IntOrFloat {
     SignedIntType(IntPrecision),
     UnsignedIntType(IntPrecision),
     BinaryFloatType(FloatPrecision),
-    DecimalFloatType(FloatPrecision),
+    DecimalFloatType,
 }
 
 fn float_precision_to_builtin(precision: FloatPrecision) -> Builtin<'static> {
@@ -7562,6 +7561,10 @@ pub fn num_argument_to_int_or_float(
         | Content::Alias(Symbol::NUM_BINARY64, _, _)
         | Content::Alias(Symbol::NUM_AT_BINARY64, _, _) => {
             IntOrFloat::BinaryFloatType(FloatPrecision::F64)
+        }
+        Content::Alias(Symbol::NUM_DECIMAL, _, _)
+        | Content::Alias(Symbol::NUM_AT_DECIMAL, _, _) => {
+            IntOrFloat::DecimalFloatType
         }
         Content::Alias(Symbol::NUM_F32, _, _)
         | Content::Alias(Symbol::NUM_BINARY32, _, _)

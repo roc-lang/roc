@@ -1,5 +1,7 @@
-use crate::llvm::build::{cast_block_of_memory_to_tag, get_tag_id, FAST_CALL_CONV};
-use crate::llvm::build::{tag_pointer_clear_tag_id, Env};
+use crate::llvm::bitcode::call_bitcode_fn;
+use crate::llvm::build::{
+    cast_block_of_memory_to_tag, get_tag_id, tag_pointer_clear_tag_id, Env, FAST_CALL_CONV,
+};
 use crate::llvm::build_list::{list_len, load_list_ptr};
 use crate::llvm::build_str::str_equal;
 use crate::llvm::convert::basic_type_from_layout;
@@ -9,6 +11,7 @@ use inkwell::values::{
     BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
+use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
@@ -96,6 +99,7 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
 
         Builtin::Usize => int_cmp(IntPredicate::EQ, "eq_usize"),
 
+        Builtin::Decimal => call_bitcode_fn(env, &[lhs_val, rhs_val], &bitcode::DEC_EQ),
         Builtin::Float128 => float_cmp(FloatPredicate::OEQ, "eq_f128"),
         Builtin::Float64 => float_cmp(FloatPredicate::OEQ, "eq_f64"),
         Builtin::Float32 => float_cmp(FloatPredicate::OEQ, "eq_f32"),
@@ -241,6 +245,7 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
 
         Builtin::Usize => int_cmp(IntPredicate::NE, "neq_usize"),
 
+        Builtin::Decimal => call_bitcode_fn(env, &[lhs_val, rhs_val], &bitcode::DEC_NEQ),
         Builtin::Float128 => float_cmp(FloatPredicate::ONE, "neq_f128"),
         Builtin::Float64 => float_cmp(FloatPredicate::ONE, "neq_f64"),
         Builtin::Float32 => float_cmp(FloatPredicate::ONE, "neq_f32"),
