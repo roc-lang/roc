@@ -355,13 +355,13 @@ mod cli_run {
             expected_ending: "",
             use_valgrind: true,
         },
-        quicksort_app => Example {
-            filename: "QuicksortApp.roc",
-            executable_filename: "quicksortapp",
-            stdin: &[],
-            expected_ending: "todo put the correct quicksort answer here",
-            use_valgrind: true,
-        },
+        // quicksort_app => Example {
+        //     filename: "QuicksortApp.roc",
+        //     executable_filename: "quicksortapp",
+        //     stdin: &[],
+        //     expected_ending: "todo put the correct quicksort answer here",
+        //     use_valgrind: true,
+        // },
     }
 
     fn check_for_tests(examples_dir: &str, all_examples: &mut HashMap<&str, Example<'_>>) {
