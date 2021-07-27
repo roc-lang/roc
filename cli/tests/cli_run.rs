@@ -115,7 +115,7 @@ mod cli_run {
     /// Example expressions. Each of these should test a particular .roc file
     /// in the examples/ directory.
     ///
-    /// Second, it generates an extra test which recursively traverses the
+    /// Second, it generates an extra test which (non-recursively) traverses the
     /// examples/ directory and verifies that each of the .roc files in there
     /// has had a corresponding test generated in the previous step. This test
     /// will fail if we ever add a new .roc file to examples/ and forget to
