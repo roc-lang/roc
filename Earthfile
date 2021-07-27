@@ -138,9 +138,9 @@ prep-bench-folder:
     RUN --mount=type=cache,target=$SCCACHE_DIR cd cli && cargo criterion --no-run
     RUN mkdir -p bench-folder/compiler/builtins/bitcode/src
     RUN mkdir -p bench-folder/target/release/deps
-    RUN mkdir -p bench-folder/examples/benchmarks
-    RUN cp examples/benchmarks/*.roc bench-folder/examples/benchmarks/
-    RUN cp -r examples/benchmarks/platform bench-folder/examples/benchmarks/
+    RUN mkdir -p bench-folder/benchmarks
+    RUN cp benchmarks/*.roc bench-folder/benchmarks/
+    RUN cp -r benchmarks/platform bench-folder/benchmarks/
     RUN cp compiler/builtins/bitcode/src/str.zig bench-folder/compiler/builtins/bitcode/src
     RUN cp target/release/roc bench-folder/target/release
     # copy the most recent time bench to bench-folder
