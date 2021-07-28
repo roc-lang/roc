@@ -14,9 +14,6 @@ mod cli_run {
         run_with_valgrind, ValgrindError, ValgrindErrorXWhat,
     };
     use serial_test::serial;
-    use std::collections::HashMap;
-    use std::fs::{self, File};
-    use std::io::Read;
     use std::path::Path;
 
     #[cfg(not(target_os = "macos"))]
@@ -151,6 +148,7 @@ mod cli_run {
             )*
 
             #[test]
+            #[cfg(not(debug_assertions))]
             fn all_examples_have_tests() {
                 let mut all_examples: HashMap<&str, Example<'_>> = HashMap::default();
 
@@ -250,7 +248,7 @@ mod cli_run {
         ($($test_name:ident => $benchmark:expr,)+) => {
             $(
                 #[test]
-                #[serial(benchmark)]
+                #[cfg_attr(not(debug_assertions), serial(benchmark))]
                 fn $test_name() {
                     let benchmark = $benchmark;
                     let file_name = examples_dir("benchmarks").join(benchmark.filename);
@@ -286,6 +284,7 @@ mod cli_run {
             )*
 
             #[test]
+            #[cfg(not(debug_assertions))]
             fn all_benchmarks_have_tests() {
                 let mut all_benchmarks: HashMap<&str, Example<'_>> = HashMap::default();
 
@@ -373,7 +372,11 @@ mod cli_run {
         },
     }
 
+    #[cfg(not(debug_assertions))]
     fn check_for_tests(examples_dir: &str, all_examples: &mut HashMap<&str, Example<'_>>) {
+        use std::collections::HashMap;
+        use std::fs;
+
         let entries = fs::read_dir(examples_dir).unwrap_or_else(|err| {
             panic!(
                 "Error trying to read {} as an examples directory: {}",
@@ -399,8 +402,11 @@ mod cli_run {
         assert_eq!(all_examples, &mut HashMap::default());
     }
 
+    #[cfg(not(debug_assertions))]
     fn check_for_benchmarks(benchmarks_dir: &str, all_benchmarks: &mut HashMap<&str, Example<'_>>) {
         use std::ffi::OsStr;
+        use std::fs::File;
+        use std::io::Read;
 
         let entries = fs::read_dir(benchmarks_dir).unwrap_or_else(|err| {
             panic!(
