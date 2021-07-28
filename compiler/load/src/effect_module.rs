@@ -1,3 +1,4 @@
+use roc_can::annotation::IntroducedVariables;
 use roc_can::def::{Declaration, Def};
 use roc_can::env::Env;
 use roc_can::expr::{Expr, Recursive};
@@ -160,25 +161,22 @@ fn build_effect_always(
         (function_var, closure)
     };
 
-    use roc_can::annotation::IntroducedVariables;
-
     let mut introduced_variables = IntroducedVariables::default();
 
     let signature = {
         // Effect.always : a -> Effect a
         let var_a = var_store.fresh();
-
         introduced_variables.insert_named("a".into(), var_a);
 
-        let effect_a = {
-            let actual = build_effect_actual(effect_tag_name, Type::Variable(var_a), var_store);
-
-            Type::Alias(
-                effect_symbol,
-                vec![("a".into(), Type::Variable(var_a))],
-                Box::new(actual),
-            )
-        };
+        let effect_a = build_effect_alias(
+            effect_symbol,
+            effect_tag_name,
+            "a",
+            var_a,
+            Type::Variable(var_a),
+            var_store,
+            &mut introduced_variables,
+        );
 
         let closure_var = var_store.fresh();
         introduced_variables.insert_wildcard(closure_var);
@@ -353,8 +351,6 @@ fn build_effect_map(
         loc_body: Box::new(Located::at_zero(body)),
     };
 
-    use roc_can::annotation::IntroducedVariables;
-
     let mut introduced_variables = IntroducedVariables::default();
 
     let signature = {
@@ -365,26 +361,25 @@ fn build_effect_map(
         introduced_variables.insert_named("a".into(), var_a);
         introduced_variables.insert_named("b".into(), var_b);
 
-        let effect_a = {
-            let actual =
-                build_effect_actual(effect_tag_name.clone(), Type::Variable(var_a), var_store);
+        let effect_a = build_effect_alias(
+            effect_symbol,
+            effect_tag_name.clone(),
+            "a",
+            var_a,
+            Type::Variable(var_a),
+            var_store,
+            &mut introduced_variables,
+        );
 
-            Type::Alias(
-                effect_symbol,
-                vec![("a".into(), Type::Variable(var_a))],
-                Box::new(actual),
-            )
-        };
-
-        let effect_b = {
-            let actual = build_effect_actual(effect_tag_name, Type::Variable(var_b), var_store);
-
-            Type::Alias(
-                effect_symbol,
-                vec![("b".into(), Type::Variable(var_b))],
-                Box::new(actual),
-            )
-        };
+        let effect_b = build_effect_alias(
+            effect_symbol,
+            effect_tag_name,
+            "b",
+            var_b,
+            Type::Variable(var_b),
+            var_store,
+            &mut introduced_variables,
+        );
 
         let closure_var = var_store.fresh();
         introduced_variables.insert_wildcard(closure_var);
@@ -526,8 +521,6 @@ fn build_effect_after(
         loc_body: Box::new(Located::at_zero(to_effect_call)),
     };
 
-    use roc_can::annotation::IntroducedVariables;
-
     let mut introduced_variables = IntroducedVariables::default();
 
     let signature = {
@@ -537,26 +530,25 @@ fn build_effect_after(
         introduced_variables.insert_named("a".into(), var_a);
         introduced_variables.insert_named("b".into(), var_b);
 
-        let effect_a = {
-            let actual =
-                build_effect_actual(effect_tag_name.clone(), Type::Variable(var_a), var_store);
+        let effect_a = build_effect_alias(
+            effect_symbol,
+            effect_tag_name.clone(),
+            "a",
+            var_a,
+            Type::Variable(var_a),
+            var_store,
+            &mut introduced_variables,
+        );
 
-            Type::Alias(
-                effect_symbol,
-                vec![("a".into(), Type::Variable(var_a))],
-                Box::new(actual),
-            )
-        };
-
-        let effect_b = {
-            let actual = build_effect_actual(effect_tag_name, Type::Variable(var_b), var_store);
-
-            Type::Alias(
-                effect_symbol,
-                vec![("b".into(), Type::Variable(var_b))],
-                Box::new(actual),
-            )
-        };
+        let effect_b = build_effect_alias(
+            effect_symbol,
+            effect_tag_name,
+            "b",
+            var_b,
+            Type::Variable(var_b),
+            var_store,
+            &mut introduced_variables,
+        );
 
         let closure_var = var_store.fresh();
         introduced_variables.insert_wildcard(closure_var);
@@ -760,6 +752,40 @@ pub fn build_host_exposed_def(
         expr_var,
         pattern_vars,
         annotation: Some(def_annotation),
+    }
+}
+
+fn build_effect_alias(
+    effect_symbol: Symbol,
+    effect_tag_name: TagName,
+    a_name: &str,
+    a_var: Variable,
+    a_type: Type,
+    var_store: &mut VarStore,
+    introduced_variables: &mut IntroducedVariables,
+) -> Type {
+    let closure_var = var_store.fresh();
+    introduced_variables.insert_wildcard(closure_var);
+
+    let actual = {
+        Type::TagUnion(
+            vec![(
+                effect_tag_name,
+                vec![Type::Function(
+                    vec![Type::EmptyRec],
+                    Box::new(Type::Variable(closure_var)),
+                    Box::new(a_type),
+                )],
+            )],
+            Box::new(Type::EmptyTagUnion),
+        )
+    };
+
+    Type::Alias {
+        symbol: effect_symbol,
+        type_arguments: vec![(a_name.into(), Type::Variable(a_var))],
+        lambda_set_variables: vec![roc_types::subs::LambdaSet(closure_var)],
+        actual: Box::new(actual),
     }
 }
 

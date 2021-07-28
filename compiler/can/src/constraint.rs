@@ -76,7 +76,7 @@ fn subtract(declared: &Declared, detail: &VariableDetail, accum: &mut VariableDe
         }
 
         if !declared.flex_vars.contains(&var.into_inner()) {
-            accum.lambda_set_variables.insert(*var);
+            accum.lambda_set_variables.push(*var);
         }
     }
 

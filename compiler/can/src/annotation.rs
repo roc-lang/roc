@@ -234,7 +234,12 @@ fn can_annotation_help(
                     // instantiate variables
                     actual.substitute(&substitutions);
 
-                    Type::Alias(symbol, vars, Box::new(actual))
+                    Type::Alias {
+                        symbol,
+                        type_arguments: vars,
+                        lambda_set_variables: alias.lambda_set_variables.clone(),
+                        actual: Box::new(actual),
+                    }
                 }
                 None => {
                     let mut args = Vec::new();
@@ -378,7 +383,12 @@ fn can_annotation_help(
                         actual_var,
                     }
                 } else {
-                    Type::Alias(symbol, vars, Box::new(alias.typ.clone()))
+                    Type::Alias {
+                        symbol,
+                        type_arguments: vars,
+                        lambda_set_variables: alias.lambda_set_variables.clone(),
+                        actual: Box::new(alias.typ.clone()),
+                    }
                 }
             }
             _ => {

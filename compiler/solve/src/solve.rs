@@ -790,8 +790,14 @@ fn type_to_variable(
 
             tag_union_var
         }
-        Alias(Symbol::BOOL_BOOL, _, _) => Variable::BOOL,
-        Alias(symbol, args, alias_type) => {
+
+        Type::Alias {
+            symbol,
+            type_arguments: args,
+            actual: alias_type,
+            lambda_set_variables,
+        } => {
+            dbg!(lambda_set_variables);
             let mut arg_vars = Vec::with_capacity(args.len());
 
             for (arg, arg_type) in args {

@@ -183,6 +183,7 @@ pub enum SolvedType {
     Erroneous(Problem),
 
     /// A type alias
+    /// TODO transmit lambda sets!
     Alias(Symbol, Vec<(Lowercase, SolvedType)>, Box<SolvedType>),
 
     HostExposedAlias {
@@ -293,11 +294,16 @@ impl SolvedType {
                 )
             }
             Erroneous(problem) => SolvedType::Erroneous(problem.clone()),
-            Alias(symbol, args, box_type) => {
+            Alias {
+                symbol,
+                type_arguments,
+                actual: box_type,
+                ..
+            } => {
                 let solved_type = Self::from_type(solved_subs, box_type);
-                let mut solved_args = Vec::with_capacity(args.len());
+                let mut solved_args = Vec::with_capacity(type_arguments.len());
 
-                for (name, var) in args {
+                for (name, var) in type_arguments {
                     solved_args.push((name.clone(), Self::from_type(solved_subs, var)));
                 }
 
@@ -617,7 +623,12 @@ pub fn to_type(
 
             let actual = to_type(solved_actual, free_vars, var_store);
 
-            Type::Alias(*symbol, type_variables, Box::new(actual))
+            Type::Alias {
+                symbol: *symbol,
+                type_arguments: type_variables,
+                lambda_set_variables: vec![], // TODO transfer lambda sets
+                actual: Box::new(actual),
+            }
         }
         HostExposedAlias {
             name,

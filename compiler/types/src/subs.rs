@@ -206,7 +206,7 @@ impl UnifyKey for Variable {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct LambdaSet(Variable);
+pub struct LambdaSet(pub Variable);
 
 impl fmt::Debug for LambdaSet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

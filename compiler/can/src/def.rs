@@ -1634,7 +1634,7 @@ fn make_tag_union_recursive<'a>(
             typ.substitute_alias(symbol, &Type::Variable(rec_var));
         }
         Type::RecursiveTagUnion(_, _, _) => {}
-        Type::Alias(_, _, actual) => make_tag_union_recursive(
+        Type::Alias { actual, .. } => make_tag_union_recursive(
             env,
             symbol,
             region,
