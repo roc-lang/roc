@@ -774,6 +774,9 @@ define_builtins! {
 
         // a caller (wrapper) for comparison
         21 GENERIC_COMPARE_REF: "#generic_compare_ref"
+
+        // used to initialize parameters in borrow.rs
+        22 EMPTY_PARAM: "#empty_param"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias

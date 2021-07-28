@@ -116,9 +116,10 @@ pub fn gen_from_mono_module(
         }
 
         if name.starts_with("roc_builtins.dict")
-            || name.starts_with("dict.RocDict")
             || name.starts_with("roc_builtins.list")
+            || name.starts_with("roc_builtins.dec")
             || name.starts_with("list.RocList")
+            || name.starts_with("dict.RocDict")
         {
             function.add_attribute(AttributeLoc::Function, enum_attr);
         }

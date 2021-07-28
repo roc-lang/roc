@@ -842,7 +842,19 @@ fn lowlevel_spec(
 
             builder.add_bag_insert(block, bag, to_insert)?;
 
-            Ok(list)
+            let new_cell = builder.add_new_heap_cell(block)?;
+            builder.add_make_tuple(block, &[new_cell, bag])
+        }
+        ListSwap => {
+            let list = env.symbols[&arguments[0]];
+
+            let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+            let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+
+            let _unit = builder.add_update(block, update_mode_var, cell)?;
+
+            let new_cell = builder.add_new_heap_cell(block)?;
+            builder.add_make_tuple(block, &[new_cell, bag])
         }
         ListAppend => {
             let list = env.symbols[&arguments[0]];
@@ -853,9 +865,11 @@ fn lowlevel_spec(
 
             let _unit = builder.add_update(block, update_mode_var, cell)?;
 
+            // TODO new heap cell
             builder.add_bag_insert(block, bag, to_insert)?;
 
-            Ok(list)
+            let new_cell = builder.add_new_heap_cell(block)?;
+            builder.add_make_tuple(block, &[new_cell, bag])
         }
         DictEmpty => {
             match layout {
@@ -887,7 +901,6 @@ fn lowlevel_spec(
             let cell = builder.add_get_tuple_field(block, dict, DICT_CELL_INDEX)?;
 
             let _unit = builder.add_touch(block, cell)?;
-
             builder.add_bag_get(block, bag)
         }
         DictInsert => {
@@ -904,7 +917,8 @@ fn lowlevel_spec(
 
             builder.add_bag_insert(block, bag, key_value)?;
 
-            Ok(dict)
+            let new_cell = builder.add_new_heap_cell(block)?;
+            builder.add_make_tuple(block, &[new_cell, bag])
         }
         _other => {
             // println!("missing {:?}", _other);
