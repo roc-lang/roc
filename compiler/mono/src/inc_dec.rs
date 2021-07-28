@@ -247,18 +247,16 @@ impl<'a> Context<'a> {
     pub fn new(arena: &'a Bump, param_map: &'a ParamMap<'a>) -> Self {
         let mut vars = MutMap::default();
 
-        for (key, _) in param_map.into_iter() {
-            if let crate::borrow::Key::Declaration(symbol, _) = key {
-                vars.insert(
-                    *symbol,
-                    VarInfo {
-                        reference: false, // assume function symbols are global constants
-                        persistent: true, // assume function symbols are global constants
-                        consume: false,   // no need to consume this variable
-                        reset: false,     // reset symbols cannot be passed as function arguments
-                    },
-                );
-            }
+        for symbol in param_map.iter_symbols() {
+            vars.insert(
+                *symbol,
+                VarInfo {
+                    reference: false, // assume function symbols are global constants
+                    persistent: true, // assume function symbols are global constants
+                    consume: false,   // no need to consume this variable
+                    reset: false,     // reset symbols cannot be passed as function arguments
+                },
+            );
         }
 
         Self {
@@ -1261,28 +1259,25 @@ fn update_jp_live_vars(j: JoinPointId, ys: &[Param], v: &Stmt<'_>, m: &mut JPLiv
     m.insert(j, j_live_vars);
 }
 
-/// used to process the main function in the repl
-pub fn visit_declaration<'a>(
+pub fn visit_procs<'a>(
     arena: &'a Bump,
     param_map: &'a ParamMap<'a>,
-    stmt: &'a Stmt<'a>,
-) -> &'a Stmt<'a> {
-    let ctx = Context::new(arena, param_map);
-
-    let params = &[] as &[_];
-    let ctx = ctx.update_var_info_with_params(params);
-    let (b, b_live_vars) = ctx.visit_stmt(stmt);
-    ctx.add_dec_for_dead_params(params, b, &b_live_vars)
-}
-
-pub fn visit_proc<'a>(
-    arena: &'a Bump,
-    param_map: &'a ParamMap<'a>,
-    proc: &mut Proc<'a>,
-    layout: ProcLayout<'a>,
+    procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) {
     let ctx = Context::new(arena, param_map);
 
+    for (key, proc) in procs.iter_mut() {
+        visit_proc(arena, param_map, &ctx, proc, key.1);
+    }
+}
+
+fn visit_proc<'a>(
+    arena: &'a Bump,
+    param_map: &'a ParamMap<'a>,
+    ctx: &Context<'a>,
+    proc: &mut Proc<'a>,
+    layout: ProcLayout<'a>,
+) {
     let params = match param_map.get_symbol(proc.name, layout) {
         Some(slice) => slice,
         None => Vec::from_iter_in(
