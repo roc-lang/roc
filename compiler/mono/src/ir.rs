@@ -222,9 +222,7 @@ impl<'a> Proc<'a> {
     ) {
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, procs));
 
-        for (key, proc) in procs.iter_mut() {
-            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1);
-        }
+        crate::inc_dec::visit_procs(arena, borrow_params, procs);
     }
 
     pub fn insert_reset_reuse_operations<'i>(
@@ -430,9 +428,7 @@ impl<'a> Procs<'a> {
 
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
 
-        for (key, proc) in result.iter_mut() {
-            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1);
-        }
+        crate::inc_dec::visit_procs(arena, borrow_params, &mut result);
 
         result
     }
@@ -473,9 +469,7 @@ impl<'a> Procs<'a> {
 
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
 
-        for (key, proc) in result.iter_mut() {
-            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1);
-        }
+        crate::inc_dec::visit_procs(arena, borrow_params, &mut result);
 
         (result, borrow_params)
     }
@@ -848,11 +842,19 @@ impl<'a, 'i> Env<'a, 'i> {
 #[derive(Clone, Debug, PartialEq, Copy, Eq, Hash)]
 pub struct JoinPointId(pub Symbol);
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Param<'a> {
     pub symbol: Symbol,
     pub borrow: bool,
     pub layout: Layout<'a>,
+}
+
+impl<'a> Param<'a> {
+    pub const EMPTY: Self = Param {
+        symbol: Symbol::EMPTY_PARAM,
+        borrow: false,
+        layout: Layout::Struct(&[]),
+    };
 }
 
 pub fn cond<'a>(
