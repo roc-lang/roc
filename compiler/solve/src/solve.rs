@@ -795,9 +795,29 @@ fn type_to_variable(
             symbol,
             type_arguments: args,
             actual: alias_type,
-            lambda_set_variables,
+            lambda_set_variables: _,
         } => {
-            dbg!(lambda_set_variables);
+            // the rank of these variables is NONE (encoded as 0 in practice)
+            // using them for other ranks causes issues
+            if rank.is_none() {
+                match *symbol {
+                    Symbol::NUM_I128 => return Variable::I128,
+                    Symbol::NUM_I64 => return Variable::I64,
+                    Symbol::NUM_I32 => return Variable::I32,
+                    Symbol::NUM_I16 => return Variable::I16,
+                    Symbol::NUM_I8 => return Variable::I8,
+
+                    Symbol::NUM_U128 => return Variable::U128,
+                    Symbol::NUM_U64 => return Variable::U64,
+                    Symbol::NUM_U32 => return Variable::U32,
+                    Symbol::NUM_U16 => return Variable::U16,
+                    Symbol::NUM_U8 => return Variable::U8,
+
+                    Symbol::NUM_NAT => return Variable::NAT,
+                    _ => {}
+                }
+            }
+
             let mut arg_vars = Vec::with_capacity(args.len());
 
             for (arg, arg_type) in args {
