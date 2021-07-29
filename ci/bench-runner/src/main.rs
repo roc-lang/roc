@@ -1,5 +1,6 @@
-use std::{path::Path, process::{self, Command, Stdio}, thread};
+use std::{collections::{HashSet, VecDeque}, io::{BufRead, BufReader}, path::Path, process::{self, Command, Stdio}, thread};
 use clap::{AppSettings, Clap};
+use regex::Regex;
 
 
 fn main() {
@@ -8,12 +9,22 @@ fn main() {
     if Path::new("bench-folder-trunk").exists() && Path::new("bench-folder-branch").exists() {
 
         delete_old_bench_results();
-        
-        do_benchmark("trunk");
-        //do_benchmark("branch");
 
         if optional_args.test_run {
-            //println!("Doing a test run to verify benchmarks are working correctly")
+            println!("Doing a test run to verify benchmarks are working correctly")
+        } else {
+
+            let mut all_regressed_benches: HashSet<String> = HashSet::new();
+
+            for _ in 0..optional_args.nr_repeat_benchmarks {
+                
+                do_benchmark("trunk");
+                let regressed_benches = do_benchmark("branch");
+
+                all_regressed_benches = all_regressed_benches.intersection(&regressed_benches).map(|bench_name_str| bench_name_str.to_owned()).collect();
+            }
+
+            dbg!(all_regressed_benches);
         }
     } else {
         eprintln!(r#"I can't find bench-folder-trunk and bench-folder-branch from the current directory.
@@ -25,7 +36,8 @@ fn main() {
     }
 }
 
-fn do_benchmark(branch_name: &'static str) {
+// returns Vec with names of failed benchmarks
+fn do_benchmark(branch_name: &'static str) -> HashSet<String> {
     /*let builder = thread::Builder::new()
                   .name("reductor".into())
                   .stack_size(32 * 1024 * 1024); // 32MB of stack space, necessary for cfold benchmark
@@ -40,13 +52,41 @@ fn do_benchmark(branch_name: &'static str) {
     
     handler.join().unwrap();*/
 
-    Command::new(format!("./bench-folder-{}/target/release/deps/time_bench", branch_name))
+    let mut cmd_child = Command::new(format!("./bench-folder-{}/target/release/deps/time_bench", branch_name))
         .args(&["--bench", "--noplot"])
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .expect(&format!("Failed to benchmark {}.", branch_name));
 
+    let stdout = cmd_child.stdout.as_mut().unwrap();
+    let stdout_reader = BufReader::new(stdout);
+    let stdout_lines = stdout_reader.lines();
+
+    let mut regressed_benches: HashSet<String> = HashSet::new();
+
+    let mut last_three_lines_queue: VecDeque<String> = VecDeque::with_capacity(3);
+    let bench_name_regex = Regex::new(
+        r#"".*""#
+    ).expect("Failed to build regex");
+
+    for line in stdout_lines {
+        let line_str = line.expect("Failed to get output from banchmark command.");
+
+        if line_str.contains("regressed") {
+            let regressed_bench_name_line = last_three_lines_queue.get(2).expect("Failed to get line that contains benchmark name from last_three_lines_queue.");
+            
+            let regex_match = bench_name_regex.find(regressed_bench_name_line).expect("This line should hoave the benchmark name between double quotes but I could not match it");
+
+            regressed_benches.insert(regex_match.as_str().to_string().replace("\"", ""));
+        }
+
+        last_three_lines_queue.push_front(line_str.clone());
+        
+        println!("bench {:?}: {:?}", branch_name, line_str);
+    }
+
+    regressed_benches
 }
 
 fn delete_old_bench_results() {
