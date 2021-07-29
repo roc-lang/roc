@@ -206,7 +206,7 @@ pub fn constrain_pattern(
                 let pat_type = Type::Variable(*var);
                 let expected = PExpected::NoExpectation(pat_type.clone());
 
-                if !state.headers.contains_key(&symbol) {
+                if !state.headers.contains_key(symbol) {
                     state
                         .headers
                         .insert(*symbol, Located::at(region, pat_type.clone()));

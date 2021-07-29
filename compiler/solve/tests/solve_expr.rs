@@ -118,7 +118,7 @@ mod solve_expr {
             subs.get(variable).content
         };
 
-        let actual_str = content_to_string(content, &subs, home, &interns);
+        let actual_str = content_to_string(content, subs, home, &interns);
 
         // Disregard UnusedDef problems, because those are unavoidable when
         // returning a function from the test expression.

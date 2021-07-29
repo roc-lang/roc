@@ -64,7 +64,7 @@ pub fn dict_len<'a, 'ctx, 'env>(
                 .build_alloca(dict_as_zig_dict.get_type(), "dict_ptr");
             env.builder.build_store(dict_ptr, dict_as_zig_dict);
 
-            call_bitcode_fn(env, &[dict_ptr.into()], &bitcode::DICT_LEN)
+            call_bitcode_fn(env, &[dict_ptr.into()], bitcode::DICT_LEN)
         }
         Layout::Builtin(Builtin::EmptyDict) => ctx.i64_type().const_zero().into(),
         _ => unreachable!("Invalid layout given to Dict.len : {:?}", dict_layout),
@@ -78,7 +78,7 @@ pub fn dict_empty<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'
     // we must give a pointer for the bitcode function to write the result into
     let result_alloc = env.builder.build_alloca(roc_dict_type, "dict_empty");
 
-    call_void_bitcode_fn(env, &[result_alloc.into()], &bitcode::DICT_EMPTY);
+    call_void_bitcode_fn(env, &[result_alloc.into()], bitcode::DICT_EMPTY);
 
     env.builder.build_load(result_alloc, "load_result")
 }
@@ -140,7 +140,7 @@ pub fn dict_insert<'a, 'ctx, 'env>(
             dec_value_fn.as_global_value().as_pointer_value().into(),
             result_ptr.into(),
         ],
-        &bitcode::DICT_INSERT,
+        bitcode::DICT_INSERT,
     );
 
     env.builder.build_load(result_ptr, "load_result")
@@ -199,7 +199,7 @@ pub fn dict_remove<'a, 'ctx, 'env>(
             dec_value_fn.as_global_value().as_pointer_value().into(),
             result_ptr.into(),
         ],
-        &bitcode::DICT_REMOVE,
+        bitcode::DICT_REMOVE,
     );
 
     env.builder.build_load(result_ptr, "load_result")
@@ -250,7 +250,7 @@ pub fn dict_contains<'a, 'ctx, 'env>(
             hash_fn.as_global_value().as_pointer_value().into(),
             eq_fn.as_global_value().as_pointer_value().into(),
         ],
-        &bitcode::DICT_CONTAINS,
+        bitcode::DICT_CONTAINS,
     )
 }
 
@@ -303,7 +303,7 @@ pub fn dict_get<'a, 'ctx, 'env>(
             eq_fn.as_global_value().as_pointer_value().into(),
             inc_value_fn.as_global_value().as_pointer_value().into(),
         ],
-        &bitcode::DICT_GET,
+        bitcode::DICT_GET,
     )
     .into_struct_value();
 
@@ -415,7 +415,7 @@ pub fn dict_elements_rc<'a, 'ctx, 'env>(
             key_fn.as_global_value().as_pointer_value().into(),
             value_fn.as_global_value().as_pointer_value().into(),
         ],
-        &bitcode::DICT_ELEMENTS_RC,
+        bitcode::DICT_ELEMENTS_RC,
     );
 }
 
@@ -460,7 +460,7 @@ pub fn dict_keys<'a, 'ctx, 'env>(
             inc_key_fn.as_global_value().as_pointer_value().into(),
             list_ptr.into(),
         ],
-        &bitcode::DICT_KEYS,
+        bitcode::DICT_KEYS,
     );
 
     let list_ptr = env
@@ -527,7 +527,7 @@ pub fn dict_union<'a, 'ctx, 'env>(
             inc_value_fn.as_global_value().as_pointer_value().into(),
             output_ptr.into(),
         ],
-        &bitcode::DICT_UNION,
+        bitcode::DICT_UNION,
     );
 
     env.builder.build_load(output_ptr, "load_output_ptr")
@@ -549,7 +549,7 @@ pub fn dict_difference<'a, 'ctx, 'env>(
         dict2,
         key_layout,
         value_layout,
-        &bitcode::DICT_DIFFERENCE,
+        bitcode::DICT_DIFFERENCE,
     )
 }
 
@@ -569,7 +569,7 @@ pub fn dict_intersection<'a, 'ctx, 'env>(
         dict2,
         key_layout,
         value_layout,
-        &bitcode::DICT_INTERSECTION,
+        bitcode::DICT_INTERSECTION,
     )
 }
 
@@ -674,7 +674,7 @@ pub fn dict_walk<'a, 'ctx, 'env>(
             layout_width(env, accum_layout),
             env.builder.build_bitcast(output_ptr, u8_ptr, "to_opaque"),
         ],
-        &bitcode::DICT_WALK,
+        bitcode::DICT_WALK,
     );
 
     env.builder.build_load(output_ptr, "load_output_ptr")
@@ -721,7 +721,7 @@ pub fn dict_values<'a, 'ctx, 'env>(
             inc_value_fn.as_global_value().as_pointer_value().into(),
             list_ptr.into(),
         ],
-        &bitcode::DICT_VALUES,
+        bitcode::DICT_VALUES,
     );
 
     let list_ptr = env
@@ -784,7 +784,7 @@ pub fn set_from_list<'a, 'ctx, 'env>(
             dec_key_fn.as_global_value().as_pointer_value().into(),
             result_alloca.into(),
         ],
-        &bitcode::SET_FROM_LIST,
+        bitcode::SET_FROM_LIST,
     );
 
     env.builder.build_load(result_alloca, "load_result")
@@ -800,7 +800,7 @@ fn build_hash_wrapper<'a, 'ctx, 'env>(
 
     let symbol = Symbol::GENERIC_HASH_REF;
     let fn_name = layout_ids
-        .get(symbol, &layout)
+        .get(symbol, layout)
         .to_symbol_string(symbol, &env.interns);
 
     let function_value = match env.module.get_function(fn_name.as_str()) {
@@ -867,7 +867,7 @@ fn dict_symbol_to_zig_dict<'a, 'ctx, 'env>(
 
     let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
 
-    complex_bitcast(&env.builder, dict, zig_dict_type.into(), "dict_to_zig_dict")
+    complex_bitcast(env.builder, dict, zig_dict_type.into(), "dict_to_zig_dict")
         .into_struct_value()
 }
 

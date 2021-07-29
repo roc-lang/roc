@@ -79,7 +79,7 @@ where
     let mut buf = String::new_in(arena);
 
     if let Some(first) = strings.next() {
-        buf.push_str(&first);
+        buf.push_str(first);
 
         for string in strings {
             buf.reserve(join_str.len() + string.len());
@@ -133,7 +133,7 @@ where
     let mut answer = MutMap::default();
 
     for (key, right_value) in map2 {
-        match std::collections::HashMap::get(map1, &key) {
+        match std::collections::HashMap::get(map1, key) {
             None => (),
             Some(left_value) => {
                 answer.insert(key.clone(), (left_value.clone(), right_value.clone()));

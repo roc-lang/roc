@@ -65,7 +65,7 @@ mod test_reporting {
             problems: can_problems,
             ..
         } = can_expr(arena, expr_src)?;
-        let mut subs = Subs::new(var_store.into());
+        let mut subs = Subs::new(var_store);
 
         for (var, name) in output.introduced_variables.name_by_var {
             subs.rigid_var(var, name);
@@ -223,11 +223,9 @@ mod test_reporting {
         list_reports(&arena, src, &mut buf, callback);
 
         // convenient to copy-paste the generated message
-        if true {
-            if buf != expected_rendering {
-                for line in buf.split("\n") {
-                    println!("                {}", line);
-                }
+        if true && buf != expected_rendering {
+            for line in buf.split('\n') {
+                println!("                {}", line);
             }
         }
 
@@ -247,11 +245,9 @@ mod test_reporting {
         list_header_reports(&arena, src, &mut buf, callback);
 
         // convenient to copy-paste the generated message
-        if true {
-            if buf != expected_rendering {
-                for line in buf.split("\n") {
-                    println!("                {}", line);
-                }
+        if true && buf != expected_rendering {
+            for line in buf.split('\n') {
+                println!("                {}", line);
             }
         }
 

@@ -177,7 +177,7 @@ fn unify_alias(
     match other_content {
         FlexVar(_) => {
             // Alias wins
-            merge(subs, &ctx, Alias(symbol, args.to_owned(), real_var))
+            merge(subs, ctx, Alias(symbol, args.to_owned(), real_var))
         }
         RecursionVar { structure, .. } => unify_pool(subs, pool, real_var, *structure),
         RigidVar(_) => unify_pool(subs, pool, real_var, ctx.second),
@@ -190,7 +190,7 @@ fn unify_alias(
                     }
 
                     if problems.is_empty() {
-                        problems.extend(merge(subs, &ctx, other_content.clone()));
+                        problems.extend(merge(subs, ctx, other_content.clone()));
                     }
 
                     if problems.is_empty() {

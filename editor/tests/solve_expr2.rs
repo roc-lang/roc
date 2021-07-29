@@ -121,7 +121,7 @@ fn infer_eq(actual: &str, expected_str: &str) {
                 all_ident_ids: dep_idents,
             };
 
-            let actual_str = content_to_string(content, &subs, mod_id, &interns);
+            let actual_str = content_to_string(content, subs, mod_id, &interns);
 
             assert_eq!(actual_str, expected_str);
         }

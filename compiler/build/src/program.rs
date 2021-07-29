@@ -132,7 +132,7 @@ pub fn gen_from_mono_module(
     // Compile and add all the Procs before adding main
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
     let env = roc_gen_llvm::llvm::build::Env {
-        arena: &arena,
+        arena,
         builder: &builder,
         dibuilder: &dibuilder,
         compile_unit: &compile_unit,
@@ -243,7 +243,7 @@ pub fn gen_from_mono_module(
             target::target_machine(&target, convert_opt_level(opt_level), reloc, model).unwrap();
 
         target_machine
-            .write_to_file(&env.module, FileType::Object, &app_o_file)
+            .write_to_file(env.module, FileType::Object, app_o_file)
             .expect("Writing .o file failed");
     }
 

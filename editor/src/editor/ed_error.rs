@@ -194,7 +194,7 @@ fn color_backtrace(backtrace: &snafu::Backtrace) -> String {
 
     for line in backtrace_split {
         let new_line = if line.contains("src") {
-            if !contains_one_of(&line, &irrelevant_src) {
+            if !contains_one_of(line, &irrelevant_src) {
                 if let Some(prev_line) = prev_line_opt {
                     prev_line_opt = Some(format!("{}", prev_line.truecolor(255, 30, 30)));
                 }

@@ -368,7 +368,7 @@ impl<'a> PackageModuleIds<'a> {
                 self.by_name.insert(module_name.clone(), module_id);
 
                 if cfg!(debug_assertions) {
-                    Self::insert_debug_name(module_id, &module_name);
+                    Self::insert_debug_name(module_id, module_name);
                 }
 
                 module_id
@@ -449,7 +449,7 @@ impl ModuleIds {
                 self.by_name.insert(module_name.clone(), module_id);
 
                 if cfg!(debug_assertions) {
-                    Self::insert_debug_name(module_id, &module_name);
+                    Self::insert_debug_name(module_id, module_name);
                 }
 
                 module_id

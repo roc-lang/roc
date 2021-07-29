@@ -225,7 +225,7 @@ impl<'a> Dependencies<'a> {
         if let Some(to_notify) = self.notifies.get(&key) {
             for notify_key in to_notify {
                 let mut is_empty = false;
-                if let Some(waiting_for_pairs) = self.waiting_for.get_mut(&notify_key) {
+                if let Some(waiting_for_pairs) = self.waiting_for.get_mut(notify_key) {
                     waiting_for_pairs.remove(&key);
                     is_empty = waiting_for_pairs.is_empty();
                 }
@@ -469,7 +469,7 @@ fn start_phase<'a>(
                     for dep_id in deps_by_name.values() {
                         // We already verified that these are all present,
                         // so unwrapping should always succeed here.
-                        let idents = ident_ids_by_module.get(&dep_id).unwrap();
+                        let idents = ident_ids_by_module.get(dep_id).unwrap();
 
                         dep_idents.insert(*dep_id, idents.clone());
                     }
@@ -535,7 +535,7 @@ fn start_phase<'a>(
                     var_store,
                     imported_modules,
                     &mut state.exposed_types,
-                    &state.stdlib,
+                    state.stdlib,
                     declarations,
                 )
             }
@@ -1635,7 +1635,7 @@ fn start_tasks<'a>(
 ) -> Result<(), LoadingProblem<'a>> {
     for (module_id, phase) in work {
         for task in start_phase(module_id, phase, arena, state) {
-            enqueue_task(&injector, worker_listeners, task)?
+            enqueue_task(injector, worker_listeners, task)?
         }
     }
 
@@ -1759,11 +1759,11 @@ fn update<'a>(
 
             state.module_cache.headers.insert(header.module_id, header);
 
-            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
 
             let work = state.dependencies.notify(home, Phase::LoadHeader);
 
-            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1796,7 +1796,7 @@ fn update<'a>(
 
             let work = state.dependencies.notify(module_id, Phase::Parse);
 
-            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1831,7 +1831,7 @@ fn update<'a>(
                 .dependencies
                 .notify(module_id, Phase::CanonicalizeAndConstrain);
 
-            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1882,7 +1882,7 @@ fn update<'a>(
                     .notify(module_id, Phase::CanonicalizeAndConstrain),
             );
 
-            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1986,7 +1986,7 @@ fn update<'a>(
                     state.constrained_ident_ids.insert(module_id, ident_ids);
                 }
 
-                start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
+                start_tasks(arena, &mut state, work, injector, worker_listeners)?;
             }
 
             Ok(state)
@@ -2041,7 +2041,7 @@ fn update<'a>(
                 .dependencies
                 .notify(module_id, Phase::FindSpecializations);
 
-            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -2143,7 +2143,7 @@ fn update<'a>(
                     existing.extend(requested);
                 }
 
-                start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
+                start_tasks(arena, &mut state, work, injector, worker_listeners)?;
             }
 
             Ok(state)
@@ -2348,7 +2348,7 @@ fn load_pkg_config<'a>(
             let parse_start = SystemTime::now();
             let bytes = arena.alloc(bytes_vec);
             let parse_state = parser::State::new(bytes);
-            let parsed = roc_parse::module::parse_header(&arena, parse_state);
+            let parsed = roc_parse::module::parse_header(arena, parse_state);
             let parse_header_duration = parse_start.elapsed().unwrap();
 
             // Insert the first entries for this module's timings
@@ -2518,7 +2518,7 @@ fn parse_header<'a>(
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let parse_start = SystemTime::now();
     let parse_state = parser::State::new(src_bytes);
-    let parsed = roc_parse::module::parse_header(&arena, parse_state);
+    let parsed = roc_parse::module::parse_header(arena, parse_state);
     let parse_header_duration = parse_start.elapsed().unwrap();
 
     // Insert the first entries for this module's timings
@@ -2667,7 +2667,7 @@ fn parse_header<'a>(
         }
         Ok((ast::Module::Platform { header }, _parse_state)) => Ok(fabricate_effects_module(
             arena,
-            &"",
+            "",
             module_ids,
             ident_ids_by_module,
             header,
@@ -2825,7 +2825,7 @@ fn send_header<'a>(
 
         let name = match opt_shorthand {
             Some(shorthand) => {
-                PQModuleName::Qualified(&shorthand, declared_name.as_inline_str().clone())
+                PQModuleName::Qualified(shorthand, declared_name.as_inline_str().clone())
             }
             None => PQModuleName::Unqualified(declared_name.as_inline_str().clone()),
         };
@@ -2901,13 +2901,13 @@ fn send_header<'a>(
         }
 
         if cfg!(debug_assertions) {
-            home.register_debug_idents(&ident_ids);
+            home.register_debug_idents(ident_ids);
         }
 
         ident_ids.clone()
     };
 
-    let mut parse_entries: Vec<_> = (&packages).iter().map(|x| &x.value).collect();
+    let mut parse_entries: Vec<_> = packages.iter().map(|x| &x.value).collect();
     let mut package_entries = MutMap::default();
 
     while let Some(parse_entry) = parse_entries.pop() {
@@ -3053,7 +3053,7 @@ fn send_header_two<'a>(
         let mut module_ids = (*module_ids).lock();
         let mut ident_ids_by_module = (*ident_ids_by_module).lock();
 
-        let name = PQModuleName::Qualified(&shorthand, declared_name);
+        let name = PQModuleName::Qualified(shorthand, declared_name);
         home = module_ids.get_or_insert(&name);
 
         // Ensure this module has an entry in the exposed_ident_ids map.
@@ -3138,13 +3138,13 @@ fn send_header_two<'a>(
         }
 
         if cfg!(debug_assertions) {
-            home.register_debug_idents(&ident_ids);
+            home.register_debug_idents(ident_ids);
         }
 
         ident_ids.clone()
     };
 
-    let mut parse_entries: Vec<_> = (&packages).iter().map(|x| &x.value).collect();
+    let mut parse_entries: Vec<_> = packages.iter().map(|x| &x.value).collect();
     let mut package_entries = MutMap::default();
 
     while let Some(parse_entry) = parse_entries.pop() {
@@ -3390,7 +3390,7 @@ fn fabricate_effects_module<'a>(
 
     let module_id: ModuleId;
 
-    let effect_entries = unpack_exposes_entries(arena, &effects.entries);
+    let effect_entries = unpack_exposes_entries(arena, effects.entries);
     let name = effects.effect_type_name;
     let declared_name: ModuleName = name.into();
 
@@ -3464,7 +3464,7 @@ fn fabricate_effects_module<'a>(
         }
 
         if cfg!(debug_assertions) {
-            module_id.register_debug_idents(&ident_ids);
+            module_id.register_debug_idents(ident_ids);
         }
 
         ident_ids.clone()
@@ -3685,7 +3685,7 @@ where
 
     let mut var_store = VarStore::default();
     let canonicalized = canonicalize_module_defs(
-        &arena,
+        arena,
         parsed_defs,
         module_id,
         module_ids,
@@ -3712,7 +3712,7 @@ where
                     module_output.scope,
                     name.as_str().into(),
                     &module_output.ident_ids,
-                    &parsed_defs,
+                    parsed_defs,
                 )),
             };
 
@@ -3761,7 +3761,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     let parse_start = SystemTime::now();
     let source = header.parse_state.bytes;
     let parse_state = header.parse_state;
-    let parsed_defs = match module_defs().parse(&arena, parse_state) {
+    let parsed_defs = match module_defs().parse(arena, parse_state) {
         Ok((_, success, _state)) => success,
         Err((_, fail, _)) => {
             return Err(LoadingProblem::ParsingFailed(fail.into_parse_problem(
