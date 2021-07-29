@@ -227,8 +227,12 @@ fn can_annotation_help(
                     }
 
                     // make sure hidden variables are freshly instantiated
-                    for var in alias.lambda_set_variables.iter() {
-                        substitutions.insert(var.into_inner(), Type::Variable(var_store.fresh()));
+                    for typ in alias.lambda_set_variables.iter() {
+                        if let Type::Variable(var) = typ.0 {
+                            substitutions.insert(var, Type::Variable(var_store.fresh()));
+                        } else {
+                            unreachable!("at this point there should be only vars in there");
+                        }
                     }
 
                     // instantiate variables

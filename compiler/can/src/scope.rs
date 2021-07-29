@@ -198,6 +198,11 @@ impl Scope {
             true
         });
 
+        let lambda_set_variables: Vec<_> = lambda_set_variables
+            .into_iter()
+            .map(|v| roc_types::types::LambdaSet(Type::Variable(v)))
+            .collect();
+
         let alias = Alias {
             region,
             type_variables: vars,

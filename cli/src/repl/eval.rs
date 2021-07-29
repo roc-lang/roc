@@ -323,7 +323,7 @@ fn jit_to_ast_help<'a>(
                 Content::Structure(FlatType::RecursiveTagUnion(_, _, _)) => {
                     todo!("print recursive tag unions in the REPL")
                 }
-                Content::Alias(_, _, actual) => {
+                Content::Alias(_, _, _, actual) => {
                     let content = env.subs.get_without_compacting(*actual).content;
 
                     jit_to_ast_help(env, lib, main_fn_name, layout, &content)
@@ -738,7 +738,7 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                 }
             }
         }
-        Alias(_, _, var) => {
+        Alias(_, _, _, var) => {
             let content = env.subs.get_without_compacting(*var).content;
 
             bool_to_ast(env, value, &content)
@@ -849,7 +849,7 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                 }
             }
         }
-        Alias(_, _, var) => {
+        Alias(_, _, _, var) => {
             let content = env.subs.get_without_compacting(*var).content;
 
             byte_to_ast(env, value, &content)
@@ -954,7 +954,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                 }
             }
         }
-        Alias(_, _, var) => {
+        Alias(_, _, _, var) => {
             let content = env.subs.get_without_compacting(*var).content;
 
             num_to_ast(env, num_expr, &content)

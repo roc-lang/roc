@@ -193,7 +193,7 @@ fn find_names_needed(
             find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
             find_names_needed(rec_var, subs, roots, root_appearances, names_taken);
         }
-        Alias(_symbol, args, _actual) => {
+        Alias(_symbol, args, _, _actual) => {
             for (_, var) in args {
                 find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
@@ -295,7 +295,7 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
             None => buf.push_str(WILDCARD),
         },
         Structure(flat_type) => write_flat_type(env, flat_type, subs, buf, parens),
-        Alias(symbol, args, _actual) => {
+        Alias(symbol, args, _, _actual) => {
             let write_parens = parens == Parens::InTypeParam && !args.is_empty();
 
             match symbol {
@@ -308,7 +308,7 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
                     let content = subs.get_without_compacting(*arg_var).content;
 
                     match &content {
-                        Alias(nested, _, _) => match *nested {
+                        Alias(nested, _, _, _) => match *nested {
                             Symbol::NUM_INTEGER => buf.push_str("I64"),
                             Symbol::NUM_FLOATINGPOINT => buf.push_str("F64"),
 
@@ -600,7 +600,7 @@ pub fn chase_ext_tag_union(
 
             chase_ext_tag_union(subs, *ext_var, fields)
         }
-        Content::Alias(_, _, var) => chase_ext_tag_union(subs, *var, fields),
+        Content::Alias(_, _, _, var) => chase_ext_tag_union(subs, *var, fields),
 
         content => Err((var, content.clone())),
     }
@@ -623,7 +623,7 @@ pub fn chase_ext_record(
 
         Structure(EmptyRecord) => Ok(()),
 
-        Alias(_, _, var) => chase_ext_record(subs, var, fields),
+        Alias(_, _, _, var) => chase_ext_record(subs, var, fields),
 
         content => Err((var, content)),
     }

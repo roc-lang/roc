@@ -359,6 +359,10 @@ impl LambdaSet {
     pub fn into_inner(self) -> Variable {
         self.0
     }
+
+    pub fn as_inner(&self) -> &Variable {
+        &self.0
+    }
 }
 
 impl From<Variable> for LambdaSet {
@@ -417,7 +421,7 @@ fn integer_type(
     });
 
     subs.set_content(signed64, {
-        Content::Alias(num_signed64, vec![], at_signed64)
+        Content::Alias(num_signed64, vec![], vec![], at_signed64)
     });
 
     // Num.Integer Num.Signed64
@@ -433,6 +437,7 @@ fn integer_type(
         Content::Alias(
             Symbol::NUM_INTEGER,
             vec![("range".into(), signed64)],
+            vec![],
             at_signed64,
         )
     });
@@ -450,12 +455,13 @@ fn integer_type(
         Content::Alias(
             Symbol::NUM_NUM,
             vec![("range".into(), integer_signed64)],
+            vec![],
             at_num_integer_signed64,
         )
     });
 
     subs.set_content(var_i64, {
-        Content::Alias(num_i64, vec![], num_integer_signed64)
+        Content::Alias(num_i64, vec![], vec![], num_integer_signed64)
     });
 }
 
@@ -653,7 +659,7 @@ impl Subs {
         });
 
         subs.set_content(Variable::BOOL, {
-            Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL_ENUM)
+            Content::Alias(Symbol::BOOL_BOOL, vec![], vec![], Variable::BOOL_ENUM)
         });
 
         subs
@@ -960,7 +966,7 @@ pub enum Content {
         opt_name: Option<Lowercase>,
     },
     Structure(FlatType),
-    Alias(Symbol, Vec<(Lowercase, Variable)>, Variable),
+    Alias(Symbol, Vec<(Lowercase, Variable)>, Vec<LambdaSet>, Variable),
     Error,
 }
 
@@ -1066,11 +1072,22 @@ fn occurs(
                     EmptyRecord | EmptyTagUnion | Erroneous(_) => None,
                 }
             }
-            Alias(_, args, _) => {
+            Alias(symbol, type_arguments, lambda_set_variables, _) => {
                 let mut new_seen = seen.clone();
                 new_seen.insert(root_var);
-                let it = args.iter().map(|(_, var)| var);
-                short_circuit(subs, root_var, &new_seen, it)
+
+                let it = type_arguments
+                    .iter()
+                    .map(|(_, var)| var)
+                    .chain(lambda_set_variables.iter().map(|x| x.as_inner()));
+                let x = short_circuit(subs, root_var, &new_seen, it);
+
+                if let Some(_) = x {
+                    dbg!(symbol, type_arguments, lambda_set_variables);
+                    dbg!(&subs);
+                }
+
+                x
             }
         }
     }
@@ -1194,14 +1211,19 @@ fn explicit_substitute(
 
                     in_var
                 }
-                Alias(symbol, mut args, actual) => {
+                Alias(symbol, mut args, lambda_set_variables, actual) => {
+                    debug_assert!(lambda_set_variables.iter().all(|v| v.into_inner() != from));
+
                     for (_, var) in args.iter_mut() {
                         *var = explicit_substitute(subs, from, to, *var, seen);
                     }
 
                     let new_actual = explicit_substitute(subs, from, to, actual, seen);
 
-                    subs.set_content(in_var, Alias(symbol, args, new_actual));
+                    subs.set_content(
+                        in_var,
+                        Alias(symbol, args, lambda_set_variables, new_actual),
+                    );
 
                     in_var
                 }
@@ -1250,7 +1272,7 @@ fn get_var_names(
 
             RigidVar(name) => add_name(subs, 0, name, var, RigidVar, taken_names),
 
-            Alias(_, args, _) => args.into_iter().fold(taken_names, |answer, (_, arg_var)| {
+            Alias(_, args, _, _) => args.into_iter().fold(taken_names, |answer, (_, arg_var)| {
                 get_var_names(subs, arg_var, answer)
             }),
             Structure(flat_type) => match flat_type {
@@ -1437,7 +1459,7 @@ fn content_to_err_type(
             ErrorType::FlexVar(name)
         }
 
-        Alias(symbol, args, aliased_to) => {
+        Alias(symbol, args, _lambda_set_variables, aliased_to) => {
             let err_args = args
                 .into_iter()
                 .map(|(name, var)| (name, var_to_err_type(subs, state, var)))
@@ -1684,9 +1706,13 @@ fn restore_content(subs: &mut Subs, content: &Content) {
 
             Erroneous(_) => (),
         },
-        Alias(_, args, var) => {
+        Alias(_, args, lambda_set_variables, var) => {
             for (_, arg_var) in args {
                 subs.restore(*arg_var);
+            }
+
+            for var in lambda_set_variables {
+                subs.restore(var.into_inner());
             }
 
             subs.restore(*var);

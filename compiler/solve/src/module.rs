@@ -59,8 +59,16 @@ pub fn make_solved_types(
             args.push((name.clone(), SolvedType::new(&solved_subs, *var)));
         }
 
+        let mut lambda_set_variables = Vec::with_capacity(alias.lambda_set_variables.len());
+        for set in alias.lambda_set_variables.iter() {
+            lambda_set_variables.push(roc_types::solved_types::SolvedLambdaSet(
+                SolvedType::from_type(&solved_subs, &set.0),
+            ));
+        }
+
         let solved_type = SolvedType::from_type(&solved_subs, &alias.typ);
-        let solved_alias = SolvedType::Alias(*symbol, args, Box::new(solved_type));
+        let solved_alias =
+            SolvedType::Alias(*symbol, args, lambda_set_variables, Box::new(solved_type));
 
         solved_types.insert(*symbol, solved_alias);
     }

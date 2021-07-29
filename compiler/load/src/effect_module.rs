@@ -784,7 +784,7 @@ fn build_effect_alias(
     Type::Alias {
         symbol: effect_symbol,
         type_arguments: vec![(a_name.into(), Type::Variable(a_var))],
-        lambda_set_variables: vec![roc_types::subs::LambdaSet(closure_var)],
+        lambda_set_variables: vec![roc_types::types::LambdaSet(Type::Variable(closure_var))],
         actual: Box::new(actual),
     }
 }

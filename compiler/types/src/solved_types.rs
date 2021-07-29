@@ -119,18 +119,24 @@ fn hash_solved_type_help<H: Hasher>(
             hash_solved_type_help(ext, flex_vars, state);
         }
 
-        Alias(name, arguments, actual) => {
+        Alias(name, arguments, solved_lambda_sets, actual) => {
             name.hash(state);
             for (name, x) in arguments {
                 name.hash(state);
                 hash_solved_type_help(x, flex_vars, state);
             }
+
+            for set in solved_lambda_sets {
+                hash_solved_type_help(&set.0, flex_vars, state);
+            }
+
             hash_solved_type_help(actual, flex_vars, state);
         }
 
         HostExposedAlias {
             name,
             arguments,
+            lambda_set_variables: solved_lambda_sets,
             actual,
             actual_var,
         } => {
@@ -139,6 +145,11 @@ fn hash_solved_type_help<H: Hasher>(
                 name.hash(state);
                 hash_solved_type_help(x, flex_vars, state);
             }
+
+            for set in solved_lambda_sets {
+                hash_solved_type_help(&set.0, flex_vars, state);
+            }
+
             hash_solved_type_help(actual, flex_vars, state);
             var_id_hash_help(*actual_var, flex_vars, state);
         }
@@ -155,6 +166,9 @@ fn var_id_hash_help<H: Hasher>(var_id: VarId, flex_vars: &mut Vec<VarId>, state:
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SolvedLambdaSet(pub SolvedType);
 
 /// This is a fully solved type, with no Variables remaining in it.
 #[derive(Debug, Clone, Eq)]
@@ -184,11 +198,17 @@ pub enum SolvedType {
 
     /// A type alias
     /// TODO transmit lambda sets!
-    Alias(Symbol, Vec<(Lowercase, SolvedType)>, Box<SolvedType>),
+    Alias(
+        Symbol,
+        Vec<(Lowercase, SolvedType)>,
+        Vec<SolvedLambdaSet>,
+        Box<SolvedType>,
+    ),
 
     HostExposedAlias {
         name: Symbol,
         arguments: Vec<(Lowercase, SolvedType)>,
+        lambda_set_variables: Vec<SolvedLambdaSet>,
         actual_var: VarId,
         actual: Box<SolvedType>,
     },
@@ -297,6 +317,7 @@ impl SolvedType {
             Alias {
                 symbol,
                 type_arguments,
+                lambda_set_variables,
                 actual: box_type,
                 ..
             } => {
@@ -307,12 +328,23 @@ impl SolvedType {
                     solved_args.push((name.clone(), Self::from_type(solved_subs, var)));
                 }
 
-                SolvedType::Alias(*symbol, solved_args, Box::new(solved_type))
+                let mut solved_lambda_sets = Vec::with_capacity(lambda_set_variables.len());
+
+                for var in lambda_set_variables {
+                    solved_lambda_sets.push(SolvedLambdaSet(Self::from_type(solved_subs, &var.0)));
+                }
+
+                SolvedType::Alias(
+                    *symbol,
+                    solved_args,
+                    solved_lambda_sets,
+                    Box::new(solved_type),
+                )
             }
             HostExposedAlias {
                 name,
                 type_arguments: arguments,
-                lambda_set_variables: _todo,
+                lambda_set_variables,
                 actual_var,
                 actual,
             } => {
@@ -323,9 +355,15 @@ impl SolvedType {
                     solved_args.push((name.clone(), Self::from_type(solved_subs, var)));
                 }
 
+                let mut solved_lambda_sets = Vec::with_capacity(lambda_set_variables.len());
+                for var in lambda_set_variables {
+                    solved_lambda_sets.push(SolvedLambdaSet(Self::from_type(solved_subs, &var.0)));
+                }
+
                 SolvedType::HostExposedAlias {
                     name: *name,
                     arguments: solved_args,
+                    lambda_set_variables: solved_lambda_sets,
                     actual_var: VarId::from_var(*actual_var, solved_subs.inner()),
                     actual: Box::new(solved_type),
                 }
@@ -356,7 +394,7 @@ impl SolvedType {
             }
             RigidVar(name) => SolvedType::Rigid(name.clone()),
             Structure(flat_type) => Self::from_flat_type(subs, recursion_vars, flat_type),
-            Alias(symbol, args, actual_var) => {
+            Alias(symbol, args, lambda_set_variables, actual_var) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
                 for (arg_name, arg_var) in args {
@@ -366,11 +404,25 @@ impl SolvedType {
                     ));
                 }
 
+                let mut solved_lambda_sets = Vec::with_capacity(lambda_set_variables.len());
+                for var in lambda_set_variables {
+                    solved_lambda_sets.push(SolvedLambdaSet(Self::from_var_help(
+                        subs,
+                        recursion_vars,
+                        var.into_inner(),
+                    )));
+                }
+
                 let aliased_to = Self::from_var_help(subs, recursion_vars, *actual_var);
 
-                SolvedType::Alias(*symbol, new_args, Box::new(aliased_to))
+                SolvedType::Alias(*symbol, new_args, solved_lambda_sets, Box::new(aliased_to))
             }
-            Error => SolvedType::Error,
+            Error => {
+                dbg!("subs contained an error!");
+                // dbg!(&subs, var);
+                panic!();
+                SolvedType::Error
+            }
         }
     }
 
@@ -615,11 +667,20 @@ pub fn to_type(
                 Box::new(to_type(ext, free_vars, var_store)),
             )
         }
-        Alias(symbol, solved_type_variables, solved_actual) => {
+        Alias(symbol, solved_type_variables, solved_lambda_sets, solved_actual) => {
             let mut type_variables = Vec::with_capacity(solved_type_variables.len());
 
             for (lowercase, solved_arg) in solved_type_variables {
                 type_variables.push((lowercase.clone(), to_type(solved_arg, free_vars, var_store)));
+            }
+
+            let mut lambda_set_variables = Vec::with_capacity(solved_lambda_sets.len());
+            for solved_set in solved_lambda_sets {
+                lambda_set_variables.push(crate::types::LambdaSet(to_type(
+                    &solved_set.0,
+                    free_vars,
+                    var_store,
+                )))
             }
 
             let actual = to_type(solved_actual, free_vars, var_store);
@@ -627,13 +688,14 @@ pub fn to_type(
             Type::Alias {
                 symbol: *symbol,
                 type_arguments: type_variables,
-                lambda_set_variables: vec![], // TODO transfer lambda sets
+                lambda_set_variables,
                 actual: Box::new(actual),
             }
         }
         HostExposedAlias {
             name,
             arguments: solved_type_variables,
+            lambda_set_variables: solved_lambda_sets,
             actual_var,
             actual: solved_actual,
         } => {
@@ -643,12 +705,21 @@ pub fn to_type(
                 type_variables.push((lowercase.clone(), to_type(solved_arg, free_vars, var_store)));
             }
 
+            let mut lambda_set_variables = Vec::with_capacity(solved_lambda_sets.len());
+            for solved_set in solved_lambda_sets {
+                lambda_set_variables.push(crate::types::LambdaSet(to_type(
+                    &solved_set.0,
+                    free_vars,
+                    var_store,
+                )))
+            }
+
             let actual = to_type(solved_actual, free_vars, var_store);
 
             Type::HostExposedAlias {
                 name: *name,
                 type_arguments: type_variables,
-                lambda_set_variables: vec![], // TODO transfer lambda sets
+                lambda_set_variables,
                 actual_var: var_id_to_flex_var(*actual_var, free_vars, var_store),
                 actual: Box::new(actual),
             }

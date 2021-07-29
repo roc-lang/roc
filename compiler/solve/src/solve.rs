@@ -795,7 +795,7 @@ fn type_to_variable(
             symbol,
             type_arguments: args,
             actual: alias_type,
-            lambda_set_variables: _,
+            lambda_set_variables,
         } => {
             // the rank of these variables is NONE (encoded as 0 in practice)
             // using them for other ranks causes issues
@@ -826,8 +826,15 @@ fn type_to_variable(
                 arg_vars.push((arg.clone(), arg_var));
             }
 
+            let lambda_set_variables: Vec<_> = lambda_set_variables
+                .iter()
+                .map(|ls| {
+                    roc_types::subs::LambdaSet(type_to_variable(subs, rank, pools, cached, &ls.0))
+                })
+                .collect();
+
             let alias_var = type_to_variable(subs, rank, pools, cached, alias_type);
-            let content = Content::Alias(*symbol, arg_vars, alias_var);
+            let content = Content::Alias(*symbol, arg_vars, lambda_set_variables, alias_var);
 
             register(subs, rank, pools, content)
         }
@@ -836,6 +843,7 @@ fn type_to_variable(
             type_arguments: args,
             actual: alias_type,
             actual_var,
+            lambda_set_variables,
             ..
         } => {
             let mut arg_vars = Vec::with_capacity(args.len());
@@ -846,6 +854,13 @@ fn type_to_variable(
                 arg_vars.push((arg.clone(), arg_var));
             }
 
+            let lambda_set_variables: Vec<_> = lambda_set_variables
+                .iter()
+                .map(|ls| {
+                    roc_types::subs::LambdaSet(type_to_variable(subs, rank, pools, cached, &ls.0))
+                })
+                .collect();
+
             let alias_var = type_to_variable(subs, rank, pools, cached, alias_type);
 
             // unify the actual_var with the result var
@@ -854,7 +869,7 @@ fn type_to_variable(
             // subs.set_content(*actual_var, descriptor.content);
 
             //subs.set(*actual_var, descriptor.clone());
-            let content = Content::Alias(*symbol, arg_vars, alias_var);
+            let content = Content::Alias(*symbol, arg_vars, lambda_set_variables, alias_var);
 
             let result = register(subs, rank, pools, content);
 
@@ -933,6 +948,8 @@ fn circular_error(
     let var = loc_var.value;
     let (error_type, _) = subs.var_to_error_type(var);
     let problem = TypeError::CircularType(loc_var.region, symbol, error_type);
+
+    dbg!("circular error");
 
     subs.set_content(var, Content::Error);
 
@@ -1162,11 +1179,21 @@ fn adjust_rank_content(
             }
         }
 
-        Alias(_, args, real_var) => {
+        Alias(_, args, lambda_set_variables, real_var) => {
             let mut rank = Rank::toplevel();
 
             for (_, var) in args {
                 rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
+            }
+
+            for var in lambda_set_variables {
+                rank = rank.max(adjust_rank(
+                    subs,
+                    young_mark,
+                    visit_mark,
+                    group_rank,
+                    var.into_inner(),
+                ));
             }
 
             // from elm-compiler: THEORY: anything in the real_var would be Rank::toplevel()
@@ -1372,13 +1399,24 @@ fn instantiate_rigids_help(
             copy
         }
 
-        Alias(symbol, args, real_type_var) => {
+        Alias(symbol, args, lambda_set_variables, real_type_var) => {
             let new_args = args
                 .into_iter()
                 .map(|(name, var)| (name, instantiate_rigids_help(subs, max_rank, pools, var)))
                 .collect();
+
+            let new_lambda_set_variables = lambda_set_variables
+                .into_iter()
+                .map(|var| instantiate_rigids_help(subs, max_rank, pools, var.into_inner()).into())
+                .collect();
+
             let new_real_type_var = instantiate_rigids_help(subs, max_rank, pools, real_type_var);
-            let new_content = Alias(symbol, new_args, new_real_type_var);
+            let new_content = Alias(
+                symbol,
+                new_args,
+                new_lambda_set_variables,
+                new_real_type_var,
+            );
 
             subs.set(copy, make_descriptor(new_content));
 
@@ -1564,13 +1602,24 @@ fn deep_copy_var_help(
             copy
         }
 
-        Alias(symbol, args, real_type_var) => {
+        Alias(symbol, args, lambda_set_variables, real_type_var) => {
             let new_args = args
                 .into_iter()
                 .map(|(name, var)| (name, deep_copy_var_help(subs, max_rank, pools, var)))
                 .collect();
+
+            let new_lambda_set_variables = lambda_set_variables
+                .into_iter()
+                .map(|var| deep_copy_var_help(subs, max_rank, pools, var.into_inner()).into())
+                .collect();
+
             let new_real_type_var = deep_copy_var_help(subs, max_rank, pools, real_type_var);
-            let new_content = Alias(symbol, new_args, new_real_type_var);
+            let new_content = Alias(
+                symbol,
+                new_args,
+                new_lambda_set_variables,
+                new_real_type_var,
+            );
 
             subs.set(copy, make_descriptor(new_content));
 

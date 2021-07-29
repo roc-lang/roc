@@ -7494,88 +7494,88 @@ pub fn num_argument_to_int_or_float(
         Content::FlexVar(_) | Content::RigidVar(_) if known_to_be_float => IntOrFloat::BinaryFloatType(FloatPrecision::F64),
         Content::FlexVar(_) | Content::RigidVar(_) => IntOrFloat::SignedIntType(IntPrecision::I64), // We default (Num *) to I64
 
-        Content::Alias(Symbol::NUM_INTEGER, args, _)  => {
+        Content::Alias(Symbol::NUM_INTEGER, args, _, _)  => {
             debug_assert!(args.len() == 1);
 
             // Recurse on the second argument
             num_argument_to_int_or_float(subs, ptr_bytes, args[0].1, false)
         }
 
-        Content::Alias(Symbol::NUM_I128, _, _)
-        | Content::Alias(Symbol::NUM_SIGNED128, _, _)
-        | Content::Alias(Symbol::NUM_AT_SIGNED128, _, _) => {
+        Content::Alias(Symbol::NUM_I128, _, _, _)
+        | Content::Alias(Symbol::NUM_SIGNED128, _, _, _)
+        | Content::Alias(Symbol::NUM_AT_SIGNED128, _, _, _) => {
             IntOrFloat::SignedIntType(IntPrecision::I128)
         }
-        Content::Alias(Symbol::NUM_INT, _, _)// We default Integer to I64
-        | Content::Alias(Symbol::NUM_I64, _, _)
-        | Content::Alias(Symbol::NUM_SIGNED64, _, _)
-        | Content::Alias(Symbol::NUM_AT_SIGNED64, _, _) => {
+        Content::Alias(Symbol::NUM_INT, _, _, _)// We default Integer to I64
+        | Content::Alias(Symbol::NUM_I64, _, _, _)
+        | Content::Alias(Symbol::NUM_SIGNED64, _, _, _)
+        | Content::Alias(Symbol::NUM_AT_SIGNED64, _, _, _) => {
             IntOrFloat::SignedIntType(IntPrecision::I64)
         }
-        Content::Alias(Symbol::NUM_I32, _, _)
-        | Content::Alias(Symbol::NUM_SIGNED32, _, _)
-        | Content::Alias(Symbol::NUM_AT_SIGNED32, _, _) => {
+        Content::Alias(Symbol::NUM_I32, _, _, _)
+        | Content::Alias(Symbol::NUM_SIGNED32, _, _, _)
+        | Content::Alias(Symbol::NUM_AT_SIGNED32, _, _, _) => {
             IntOrFloat::SignedIntType(IntPrecision::I32)
         }
-        Content::Alias(Symbol::NUM_I16, _, _)
-        | Content::Alias(Symbol::NUM_SIGNED16, _, _)
-        | Content::Alias(Symbol::NUM_AT_SIGNED16, _, _) => {
+        Content::Alias(Symbol::NUM_I16, _, _, _)
+        | Content::Alias(Symbol::NUM_SIGNED16, _, _, _)
+        | Content::Alias(Symbol::NUM_AT_SIGNED16, _, _, _) => {
             IntOrFloat::SignedIntType(IntPrecision::I16)
         }
-        Content::Alias(Symbol::NUM_I8, _, _)
-        | Content::Alias(Symbol::NUM_SIGNED8, _, _)
-        | Content::Alias(Symbol::NUM_AT_SIGNED8, _, _) => {
+        Content::Alias(Symbol::NUM_I8, _, _, _)
+        | Content::Alias(Symbol::NUM_SIGNED8, _, _, _)
+        | Content::Alias(Symbol::NUM_AT_SIGNED8, _, _, _) => {
             IntOrFloat::SignedIntType(IntPrecision::I8)
         }
-        Content::Alias(Symbol::NUM_U128, _, _)
-        | Content::Alias(Symbol::NUM_UNSIGNED128, _, _)
-        | Content::Alias(Symbol::NUM_AT_UNSIGNED128, _, _) => {
+        Content::Alias(Symbol::NUM_U128, _, _, _)
+        | Content::Alias(Symbol::NUM_UNSIGNED128, _, _, _)
+        | Content::Alias(Symbol::NUM_AT_UNSIGNED128, _, _, _) => {
             IntOrFloat::UnsignedIntType(IntPrecision::I128)
         }
-        Content::Alias(Symbol::NUM_U64, _, _)
-        | Content::Alias(Symbol::NUM_UNSIGNED64, _, _)
-        | Content::Alias(Symbol::NUM_AT_UNSIGNED64, _, _) => {
+        Content::Alias(Symbol::NUM_U64, _, _, _)
+        | Content::Alias(Symbol::NUM_UNSIGNED64, _, _, _)
+        | Content::Alias(Symbol::NUM_AT_UNSIGNED64, _, _, _) => {
             IntOrFloat::UnsignedIntType(IntPrecision::I64)
         }
-        Content::Alias(Symbol::NUM_U32, _, _)
-        | Content::Alias(Symbol::NUM_UNSIGNED32, _, _)
-        | Content::Alias(Symbol::NUM_AT_UNSIGNED32, _, _) => {
+        Content::Alias(Symbol::NUM_U32, _, _, _)
+        | Content::Alias(Symbol::NUM_UNSIGNED32, _, _, _)
+        | Content::Alias(Symbol::NUM_AT_UNSIGNED32, _, _, _) => {
             IntOrFloat::UnsignedIntType(IntPrecision::I32)
         }
-        Content::Alias(Symbol::NUM_U16, _, _)
-        | Content::Alias(Symbol::NUM_UNSIGNED16, _, _)
-        | Content::Alias(Symbol::NUM_AT_UNSIGNED16, _, _) => {
+        Content::Alias(Symbol::NUM_U16, _, _, _)
+        | Content::Alias(Symbol::NUM_UNSIGNED16, _, _, _)
+        | Content::Alias(Symbol::NUM_AT_UNSIGNED16, _, _, _) => {
             IntOrFloat::UnsignedIntType(IntPrecision::I16)
         }
-        Content::Alias(Symbol::NUM_U8, _, _)
-        | Content::Alias(Symbol::NUM_UNSIGNED8, _, _)
-        | Content::Alias(Symbol::NUM_AT_UNSIGNED8, _, _) => {
+        Content::Alias(Symbol::NUM_U8, _, _, _)
+        | Content::Alias(Symbol::NUM_UNSIGNED8, _, _, _)
+        | Content::Alias(Symbol::NUM_AT_UNSIGNED8, _, _, _) => {
             IntOrFloat::UnsignedIntType(IntPrecision::I8)
         }
-        Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _)  => {
+        Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _, _)  => {
             debug_assert!(args.len() == 1);
 
             // Recurse on the second argument
             num_argument_to_int_or_float(subs, ptr_bytes, args[0].1, true)
         }
-        Content::Alias(Symbol::NUM_FLOAT, _, _) // We default FloatingPoint to F64
-        | Content::Alias(Symbol::NUM_F64, _, _)
-        | Content::Alias(Symbol::NUM_BINARY64, _, _)
-        | Content::Alias(Symbol::NUM_AT_BINARY64, _, _) => {
+        Content::Alias(Symbol::NUM_FLOAT, _, _, _) // We default FloatingPoint to F64
+        | Content::Alias(Symbol::NUM_F64, _, _, _)
+        | Content::Alias(Symbol::NUM_BINARY64, _, _, _)
+        | Content::Alias(Symbol::NUM_AT_BINARY64, _, _, _) => {
             IntOrFloat::BinaryFloatType(FloatPrecision::F64)
         }
-        Content::Alias(Symbol::NUM_DECIMAL, _, _)
-        | Content::Alias(Symbol::NUM_AT_DECIMAL, _, _) => {
+        Content::Alias(Symbol::NUM_DECIMAL, _, _, _)
+        | Content::Alias(Symbol::NUM_AT_DECIMAL, _, _, _) => {
             IntOrFloat::DecimalFloatType
         }
-        Content::Alias(Symbol::NUM_F32, _, _)
-        | Content::Alias(Symbol::NUM_BINARY32, _, _)
-        | Content::Alias(Symbol::NUM_AT_BINARY32, _, _) => {
+        Content::Alias(Symbol::NUM_F32, _, _, _)
+        | Content::Alias(Symbol::NUM_BINARY32, _, _, _)
+        | Content::Alias(Symbol::NUM_AT_BINARY32, _, _, _) => {
             IntOrFloat::BinaryFloatType(FloatPrecision::F32)
         }
-        Content::Alias(Symbol::NUM_NAT, _, _)
-        | Content::Alias(Symbol::NUM_NATURAL, _, _)
-        | Content::Alias(Symbol::NUM_AT_NATURAL, _, _) => {
+        Content::Alias(Symbol::NUM_NAT, _, _, _)
+        | Content::Alias(Symbol::NUM_NATURAL, _, _, _)
+        | Content::Alias(Symbol::NUM_AT_NATURAL, _, _, _) => {
             match ptr_bytes {
                 1 => IntOrFloat::UnsignedIntType(IntPrecision::I8),
                 2 => IntOrFloat::UnsignedIntType(IntPrecision::I16),

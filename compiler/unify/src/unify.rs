@@ -2,7 +2,7 @@ use roc_collections::all::{default_hasher, get_shared, relative_complement, unio
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::subs::Content::{self, *};
-use roc_types::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
+use roc_types::subs::{Descriptor, FlatType, LambdaSet, Mark, OptVariable, Subs, Variable};
 use roc_types::types::{gather_fields, ErrorType, Mismatch, RecordField, RecordStructure};
 
 macro_rules! mismatch {
@@ -117,7 +117,7 @@ pub fn unify_pool(subs: &mut Subs, pool: &mut Pool, var1: Variable, var2: Variab
 }
 
 fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
-    if false {
+    if true {
         // if true, print the types that are unified.
         //
         // NOTE: names are generated here (when creating an error type) and that modifies names
@@ -155,7 +155,15 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
         Structure(flat_type) => {
             unify_structure(subs, pool, &ctx, flat_type, &ctx.second_desc.content)
         }
-        Alias(symbol, args, real_var) => unify_alias(subs, pool, &ctx, *symbol, args, *real_var),
+        Alias(symbol, args, lambda_set_variables, real_var) => unify_alias(
+            subs,
+            pool,
+            &ctx,
+            *symbol,
+            args,
+            lambda_set_variables,
+            *real_var,
+        ),
         Error => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
             merge(subs, &ctx, Error)
@@ -170,6 +178,7 @@ fn unify_alias(
     ctx: &Context,
     symbol: Symbol,
     args: &[(Lowercase, Variable)],
+    lambda_set_variables: &[LambdaSet],
     real_var: Variable,
 ) -> Outcome {
     let other_content = &ctx.second_desc.content;
@@ -177,16 +186,37 @@ fn unify_alias(
     match other_content {
         FlexVar(_) => {
             // Alias wins
-            merge(subs, &ctx, Alias(symbol, args.to_owned(), real_var))
+            merge(
+                subs,
+                &ctx,
+                Alias(
+                    symbol,
+                    args.to_owned(),
+                    lambda_set_variables.to_owned(),
+                    real_var,
+                ),
+            )
         }
         RecursionVar { structure, .. } => unify_pool(subs, pool, real_var, *structure),
         RigidVar(_) => unify_pool(subs, pool, real_var, ctx.second),
-        Alias(other_symbol, other_args, other_real_var) => {
+        Alias(other_symbol, other_args, other_lambda_set_variables, other_real_var) => {
             if symbol == *other_symbol {
                 if args.len() == other_args.len() {
                     let mut problems = Vec::new();
                     for ((_, l_var), (_, r_var)) in args.iter().zip(other_args.iter()) {
                         problems.extend(unify_pool(subs, pool, *l_var, *r_var));
+                    }
+
+                    for (l_var, r_var) in lambda_set_variables
+                        .iter()
+                        .zip(other_lambda_set_variables.iter())
+                    {
+                        problems.extend(unify_pool(
+                            subs,
+                            pool,
+                            l_var.into_inner(),
+                            r_var.into_inner(),
+                        ));
                     }
 
                     if problems.is_empty() {
@@ -248,7 +278,7 @@ fn unify_structure(
             // Unify the two flat types
             unify_flat_type(subs, pool, ctx, flat_type, other_flat_type)
         }
-        Alias(_, _, real_var) => unify_pool(subs, pool, ctx.first, *real_var),
+        Alias(_, _, _, real_var) => unify_pool(subs, pool, ctx.first, *real_var),
         Error => merge(subs, ctx, Error),
     }
 }
@@ -736,7 +766,7 @@ fn unify_tag_union_not_recursive_recursive(
 #[allow(dead_code)]
 fn is_structure(var: Variable, subs: &mut Subs) -> bool {
     match subs.get_content_without_compacting(var) {
-        Content::Alias(_, _, actual) => is_structure(*actual, subs),
+        Content::Alias(_, _, _, actual) => is_structure(*actual, subs),
         Content::Structure(_) => true,
         _ => false,
     }
@@ -1158,11 +1188,16 @@ fn unify_flat_type(
             unify_tag_union_not_recursive_recursive(subs, pool, ctx, union1, union2, *recursion_var)
         }
 
-        (other1, other2) => mismatch!(
-            "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
-            other1,
-            other2
-        ),
+        (other1, other2) => {
+            //
+            panic!();
+
+            mismatch!(
+                "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
+                other1,
+                other2
+            )
+        }
     }
 }
 
@@ -1188,7 +1223,7 @@ fn unify_rigid(subs: &mut Subs, ctx: &Context, name: &Lowercase, other: &Content
             // If the other is flex, rigid wins!
             merge(subs, ctx, RigidVar(name.clone()))
         }
-        RigidVar(_) | RecursionVar { .. } | Structure(_) | Alias(_, _, _) => {
+        RigidVar(_) | RecursionVar { .. } | Structure(_) | Alias(_, _, _, _) => {
             // Type mismatch! Rigid can only unify with flex, even if the
             // rigid names are the same.
             mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
@@ -1213,7 +1248,7 @@ fn unify_flex(
             merge(subs, ctx, FlexVar(opt_name.clone()))
         }
 
-        FlexVar(Some(_)) | RigidVar(_) | RecursionVar { .. } | Structure(_) | Alias(_, _, _) => {
+        FlexVar(Some(_)) | RigidVar(_) | RecursionVar { .. } | Structure(_) | Alias(_, _, _, _) => {
             // TODO special-case boolean here
             // In all other cases, if left is flex, defer to right.
             // (This includes using right's name if both are flex and named.)
@@ -1266,7 +1301,7 @@ fn unify_recursion(
             },
         ),
 
-        Alias(_, _, actual) => {
+        Alias(_, _, _, actual) => {
             // look at the type the alias stands for
 
             unify_pool(subs, pool, ctx.first, *actual)
@@ -1329,7 +1364,7 @@ fn gather_tags(
             gather_tags(subs, tags, sub_ext)
         }
 
-        Alias(_, _, var) => {
+        Alias(_, _, _, var) => {
             // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
             let var = *var;
             gather_tags(subs, tags, var)

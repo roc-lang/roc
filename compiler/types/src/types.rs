@@ -1,5 +1,5 @@
 use crate::pretty_print::Parens;
-use crate::subs::{LambdaSet, Subs, VarStore, Variable};
+use crate::subs::{Subs, VarStore, Variable};
 use inlinable_string::InlinableString;
 use roc_collections::all::{union, ImMap, ImSet, Index, MutMap, MutSet, SendMap};
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
@@ -137,6 +137,9 @@ impl RecordField<Type> {
         }
     }
 }
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct LambdaSet(pub Type);
 
 #[derive(PartialEq, Eq, Clone)]
 pub enum Type {
@@ -939,7 +942,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
 #[derive(Default)]
 pub struct VariableDetail {
     pub type_variables: MutSet<Variable>,
-    pub lambda_set_variables: Vec<LambdaSet>,
+    pub lambda_set_variables: Vec<Variable>,
     pub recursion_variables: MutSet<Variable>,
 }
 
@@ -966,7 +969,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
                 variables_help_detailed(arg, accum);
             }
             if let Type::Variable(v) = **closure {
-                accum.lambda_set_variables.push(LambdaSet::from(v));
+                accum.lambda_set_variables.push(v);
             } else {
                 variables_help_detailed(closure, accum);
             }
@@ -1594,7 +1597,7 @@ pub fn gather_fields(
             gather_fields(subs, union(fields, &sub_fields), sub_ext)
         }
 
-        Alias(_, _, var) => {
+        Alias(_, _, _, var) => {
             // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
             gather_fields(subs, fields, var)
         }

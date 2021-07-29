@@ -810,7 +810,7 @@ fn type_to_variable<'a>(
             }
 
             let alias_var = type_to_variable(arena, mempool, subs, rank, pools, cached, alias_type);
-            let content = Content::Alias(*symbol, arg_vars, alias_var);
+            let content = Content::Alias(*symbol, arg_vars, vec![], alias_var);
 
             let result = register(subs, rank, pools, content);
 
@@ -1263,7 +1263,7 @@ fn adjust_rank_content(
             }
         }
 
-        Alias(_, args, real_var) => {
+        Alias(_, args, _todo, real_var) => {
             let mut rank = Rank::toplevel();
 
             for (_, var) in args {
@@ -1473,13 +1473,13 @@ fn instantiate_rigids_help(
             copy
         }
 
-        Alias(symbol, args, real_type_var) => {
+        Alias(symbol, args, lambda_set_variables, real_type_var) => {
             let new_args = args
                 .into_iter()
                 .map(|(name, var)| (name, instantiate_rigids_help(subs, max_rank, pools, var)))
                 .collect();
             let new_real_type_var = instantiate_rigids_help(subs, max_rank, pools, real_type_var);
-            let new_content = Alias(symbol, new_args, new_real_type_var);
+            let new_content = Alias(symbol, new_args, lambda_set_variables, new_real_type_var);
 
             subs.set(copy, make_descriptor(new_content));
 
@@ -1665,13 +1665,13 @@ fn deep_copy_var_help(
             copy
         }
 
-        Alias(symbol, args, real_type_var) => {
+        Alias(symbol, args, lambda_set_variables, real_type_var) => {
             let new_args = args
                 .into_iter()
                 .map(|(name, var)| (name, deep_copy_var_help(subs, max_rank, pools, var)))
                 .collect();
             let new_real_type_var = deep_copy_var_help(subs, max_rank, pools, real_type_var);
-            let new_content = Alias(symbol, new_args, new_real_type_var);
+            let new_content = Alias(symbol, new_args, lambda_set_variables, new_real_type_var);
 
             subs.set(copy, make_descriptor(new_content));
 
