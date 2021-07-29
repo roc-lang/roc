@@ -311,7 +311,8 @@ impl SolvedType {
             }
             HostExposedAlias {
                 name,
-                arguments,
+                type_arguments: arguments,
+                lambda_set_variables: _todo,
                 actual_var,
                 actual,
             } => {
@@ -646,7 +647,8 @@ pub fn to_type(
 
             Type::HostExposedAlias {
                 name: *name,
-                arguments: type_variables,
+                type_arguments: type_variables,
+                lambda_set_variables: vec![], // TODO transfer lambda sets
                 actual_var: var_id_to_flex_var(*actual_var, free_vars, var_store),
                 actual: Box::new(actual),
             }

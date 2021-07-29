@@ -378,7 +378,8 @@ fn can_annotation_help(
                     introduced_variables.insert_host_exposed_alias(symbol, actual_var);
                     Type::HostExposedAlias {
                         name: symbol,
-                        arguments: vars,
+                        type_arguments: vars,
+                        lambda_set_variables: alias.lambda_set_variables.clone(),
                         actual: Box::new(alias.typ.clone()),
                         actual_var,
                     }

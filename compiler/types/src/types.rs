@@ -155,7 +155,8 @@ pub enum Type {
     },
     HostExposedAlias {
         name: Symbol,
-        arguments: Vec<(Lowercase, Type)>,
+        type_arguments: Vec<(Lowercase, Type)>,
+        lambda_set_variables: Vec<LambdaSet>,
         actual_var: Variable,
         actual: Box<Type>,
     },
@@ -230,7 +231,9 @@ impl fmt::Debug for Type {
                 Ok(())
             }
             Type::HostExposedAlias {
-                name, arguments, ..
+                name,
+                type_arguments: arguments,
+                ..
             } => {
                 write!(f, "HostExposedAlias {:?}", name)?;
 
@@ -473,7 +476,7 @@ impl Type {
                 actual.substitute(substitutions);
             }
             HostExposedAlias {
-                arguments,
+                type_arguments: arguments,
                 actual: actual_type,
                 ..
             } => {
@@ -674,7 +677,7 @@ impl Type {
                 ext.instantiate_aliases(region, aliases, var_store, introduced);
             }
             HostExposedAlias {
-                arguments: type_args,
+                type_arguments: type_args,
                 actual: actual_type,
                 ..
             }
@@ -916,7 +919,9 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             variables_help(actual, accum);
         }
         HostExposedAlias {
-            arguments, actual, ..
+            type_arguments: arguments,
+            actual,
+            ..
         } => {
             for (_, arg) in arguments {
                 variables_help(arg, accum);
@@ -1018,7 +1023,9 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             variables_help_detailed(actual, accum);
         }
         HostExposedAlias {
-            arguments, actual, ..
+            type_arguments: arguments,
+            actual,
+            ..
         } => {
             for (_, arg) in arguments {
                 variables_help_detailed(arg, accum);

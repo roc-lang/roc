@@ -833,7 +833,7 @@ fn type_to_variable(
         }
         HostExposedAlias {
             name: symbol,
-            arguments: args,
+            type_arguments: args,
             actual: alias_type,
             actual_var,
             ..
