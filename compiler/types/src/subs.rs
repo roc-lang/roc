@@ -600,19 +600,19 @@ fn define_integer_types(subs: &mut Subs) {
         Variable::U8,
     );
 
-    integer_type(
-        subs,
-        Symbol::NUM_AT_NATURAL,
-        Symbol::NUM_NATURAL,
-        Symbol::NUM_NAT,
-        Variable::AT_NATURAL,
-        Variable::NATURAL,
-        Variable::AT_INTEGER_NATURAL,
-        Variable::INTEGER_NATURAL,
-        Variable::AT_NUM_INTEGER_NATURAL,
-        Variable::NUM_INTEGER_NATURAL,
-        Variable::NAT,
-    );
+    //    integer_type(
+    //        subs,
+    //        Symbol::NUM_AT_NATURAL,
+    //        Symbol::NUM_NATURAL,
+    //        Symbol::NUM_NAT,
+    //        Variable::AT_NATURAL,
+    //        Variable::NATURAL,
+    //        Variable::AT_INTEGER_NATURAL,
+    //        Variable::INTEGER_NATURAL,
+    //        Variable::AT_NUM_INTEGER_NATURAL,
+    //        Variable::NUM_INTEGER_NATURAL,
+    //        Variable::NAT,
+    //    );
 }
 
 impl Subs {
