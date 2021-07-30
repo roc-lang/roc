@@ -150,7 +150,8 @@ mod cli_run {
             #[test]
             #[cfg(not(debug_assertions))]
             fn all_examples_have_tests() {
-                let mut all_examples: HashMap<&str, Example<'_>> = HashMap::default();
+                use roc_collections::all::MutMap;
+                let mut all_examples: MutMap<&str, Example<'_>> = MutMap::default();
 
                 $(
                     all_examples.insert($name, $example);
@@ -375,9 +376,8 @@ mod cli_run {
     #[cfg(not(debug_assertions))]
     fn check_for_tests(examples_dir: &str, all_examples: &mut HashMap<&str, Example<'_>>) {
         use std::collections::HashMap;
-        use std::fs;
 
-        let entries = fs::read_dir(examples_dir).unwrap_or_else(|err| {
+        let entries = std::fs::read_dir(examples_dir).unwrap_or_else(|err| {
             panic!(
                 "Error trying to read {} as an examples directory: {}",
                 examples_dir, err
