@@ -117,7 +117,7 @@ pub fn unify_pool(subs: &mut Subs, pool: &mut Pool, var1: Variable, var2: Variab
 }
 
 fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
-    if true {
+    if false {
         // if true, print the types that are unified.
         //
         // NOTE: names are generated here (when creating an error type) and that modifies names
@@ -223,9 +223,7 @@ fn unify_alias(
                         problems.extend(merge(subs, ctx, other_content.clone()));
                     }
 
-                    if problems.is_empty() {
-                        problems.extend(unify_pool(subs, pool, real_var, *other_real_var));
-                    }
+                    // if problems.is_empty() { problems.extend(unify_pool(subs, pool, real_var, *other_real_var)); }
 
                     problems
                 } else {
@@ -1189,9 +1187,7 @@ fn unify_flat_type(
         }
 
         (other1, other2) => {
-            //
-            panic!();
-
+            // any other combination is a mismatch
             mismatch!(
                 "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
                 other1,
