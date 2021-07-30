@@ -1325,13 +1325,7 @@ fn stores_and_condition<'a>(
 
     // Assumption: there is at most 1 guard, and it is the outer layer.
     for (path, test) in test_chain {
-        tests.push(test_to_equality(
-            env,
-            cond_symbol,
-            cond_layout,
-            &path,
-            test,
-        ))
+        tests.push(test_to_equality(env, cond_symbol, cond_layout, &path, test))
     }
 
     tests
