@@ -6,7 +6,7 @@ use roc_module::symbol::Symbol;
 use roc_parse::ast::{AssignedField, Tag, TypeAnnotation};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, Problem, RecordField, Type};
+use roc_types::types::{Alias, LambdaSet, Problem, RecordField, Type};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Annotation {
@@ -227,9 +227,13 @@ fn can_annotation_help(
                     }
 
                     // make sure hidden variables are freshly instantiated
+                    let mut lambda_set_variables =
+                        Vec::with_capacity(alias.lambda_set_variables.len());
                     for typ in alias.lambda_set_variables.iter() {
                         if let Type::Variable(var) = typ.0 {
-                            substitutions.insert(var, Type::Variable(var_store.fresh()));
+                            let fresh = var_store.fresh();
+                            substitutions.insert(var, Type::Variable(fresh));
+                            lambda_set_variables.push(LambdaSet(Type::Variable(fresh)));
                         } else {
                             unreachable!("at this point there should be only vars in there");
                         }
@@ -241,7 +245,7 @@ fn can_annotation_help(
                     Type::Alias {
                         symbol,
                         type_arguments: vars,
-                        lambda_set_variables: alias.lambda_set_variables.clone(),
+                        lambda_set_variables,
                         actual: Box::new(actual),
                     }
                 }
