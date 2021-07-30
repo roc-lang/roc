@@ -328,3 +328,16 @@ fn constrain_update() {
         "{ name : Str }",
     )
 }
+
+#[ignore = "TODO: implement builtins in the editor"]
+#[test]
+fn constrain_run_low_level() {
+    infer_eq(
+        indoc!(
+            r#"
+            List.map [ { name: "roc" }, { name: "bird" } ] .name
+            "#
+        ),
+        "List Str",
+    )
+}
