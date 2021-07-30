@@ -475,7 +475,7 @@ impl<'a> BorrowInfState<'a> {
         }
     }
 
-    /// This looks at the assignement
+    /// This looks at the assignment
     ///
     /// let z = e in ...
     ///

@@ -3820,7 +3820,7 @@ mod solve_expr {
     }
 
     #[test]
-    fn recursive_functon_with_rigid() {
+    fn recursive_function_with_rigid() {
         infer_eq_without_problem(
             indoc!(
                 r#"

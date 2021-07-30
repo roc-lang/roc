@@ -13,7 +13,7 @@ struct List {
 }
 ```
 
-On a 64-bit system, this `struct` would take up 16B in memory. On a 32-bit sysem, it would take up 8B.
+On a 64-bit system, this `struct` would take up 16B in memory. On a 32-bit system, it would take up 8B.
 
 Here's what the fields mean:
 

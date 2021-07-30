@@ -50,7 +50,7 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 // Let's work through the `Cons x xx` example
 //
 // First we need to know the constructor of `xs` in the particular block. This information would
-// normally be lost when we compile pattern matches, but we keep it in the `BrachInfo` field of
+// normally be lost when we compile pattern matches, but we keep it in the `BranchInfo` field of
 // switch branches. here we also store the symbol that was switched on, and the layout of that
 // symbol.
 //
