@@ -1,6 +1,7 @@
 use std::{collections::{HashSet, VecDeque}, io::{BufRead, BufReader}, path::Path, process::{self, Command, Stdio}, thread};
 use clap::{AppSettings, Clap};
 use regex::Regex;
+use is_executable::IsExecutable;
 
 
 fn main() {
@@ -10,13 +11,42 @@ fn main() {
 
         delete_old_bench_results();
 
-        if optional_args.test_run {
-            println!("Doing a test run to verify benchmarks are working correctly")
+        if optional_args.check_executables_changed {
+
+            let benches_path_str = "bench-folder-branch/examples/benchmarks/";
+            let benches_path = Path::new(benches_path_str);
+            let all_bench_files = std::fs::read_dir(benches_path).expect("Failed to create iterator for files in dir.");
+
+            let executables = all_bench_files.into_iter().filter(|file_res| {
+                !file_res
+                .expect("Failed to get DirEntry from ReadDir all_bench_files")
+                .file_name()
+                .into_string()
+                .expect("Failed to create String from OsString for file_name.")
+                .contains(".roc")
+            });
+
+            for file_name in executables {
+                let full_path = 
+            }
+
+            // TODO calc sha1sum for all in executables
         } else {
 
-            let mut all_regressed_benches: HashSet<String> = HashSet::new();
+        }
 
-            for _ in 0..optional_args.nr_repeat_benchmarks {
+        if optional_args.test_run {
+            println!("Doing a test run to verify benchmarks are working correctly");
+
+            std::env::set_var("BENCH_DRY_RUN", "1");
+
+            do_benchmark("branch");
+        } else {
+
+            do_benchmark("trunk");
+            let mut all_regressed_benches = do_benchmark("branch");
+
+            for _ in 1..optional_args.nr_repeat_benchmarks {
                 
                 do_benchmark("trunk");
                 let regressed_benches = do_benchmark("branch");
@@ -106,9 +136,6 @@ fn remove(file_or_folder: &str) {
 #[derive(Clap)]
 #[clap(setting = AppSettings::ColoredHelp)]
 struct OptionalArgs {
-    /// Do a test run: short warmup and few repeats to verify benchmarks are working correctly
-    #[clap(long)]
-    test_run: bool,
     /// How many times to repeat the benchmarks. A single benchmark has to fail every for a regression to be reported.
     #[clap(long, default_value = "3")]
     nr_repeat_benchmarks: usize,

@@ -8,3 +8,5 @@ edition = "2018"
 [dependencies]
 clap = "3.0.0-beta.2"
 regex = "1.5.4"
+is_executable = "1.0.1"
+digest = "0.9.0"
