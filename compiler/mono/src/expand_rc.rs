@@ -187,7 +187,7 @@ impl<'a, 'i> Env<'a, 'i> {
     pub fn unique_symbol(&mut self) -> Symbol {
         let ident_id = self.ident_ids.gen_unique();
 
-        self.home.register_debug_idents(&self.ident_ids);
+        self.home.register_debug_idents(self.ident_ids);
 
         Symbol::new(self.home, ident_id)
     }
@@ -195,7 +195,7 @@ impl<'a, 'i> Env<'a, 'i> {
     fn manual_unique_symbol(home: ModuleId, ident_ids: &mut IdentIds) -> Symbol {
         let ident_id = ident_ids.gen_unique();
 
-        home.register_debug_idents(&ident_ids);
+        home.register_debug_idents(ident_ids);
 
         Symbol::new(home, ident_id)
     }

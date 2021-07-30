@@ -78,7 +78,7 @@ pub fn build_has_tag_id<'a, 'ctx, 'env>(
 
     match env.module.get_function(fn_name) {
         Some(function_value) => function_value,
-        None => build_has_tag_id_help(env, union_layout, &fn_name),
+        None => build_has_tag_id_help(env, union_layout, fn_name),
     }
 }
 
@@ -97,9 +97,9 @@ fn build_has_tag_id_help<'a, 'ctx, 'env>(
 
     let function_value = crate::llvm::refcounting::build_header_help(
         env,
-        &fn_name,
+        fn_name,
         output_type.into(),
-        &argument_types,
+        argument_types,
     );
 
     // called from zig, must use C calling convention
@@ -204,7 +204,7 @@ pub fn build_transform_caller<'a, 'ctx, 'env>(
             function,
             closure_data_layout,
             argument_layouts,
-            &fn_name,
+            fn_name,
         ),
     }
 }
@@ -225,7 +225,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
 
     let function_value = crate::llvm::refcounting::build_header_help(
         env,
-        &fn_name,
+        fn_name,
         env.context.void_type().into(),
         &(bumpalo::vec![ in env.arena; BasicTypeEnum::PointerType(arg_type); argument_layouts.len() + 2 ]),
     );
@@ -394,7 +394,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
 
     let symbol = Symbol::GENERIC_RC_REF;
     let fn_name = layout_ids
-        .get(symbol, &layout)
+        .get(symbol, layout)
         .to_symbol_string(symbol, &env.interns);
 
     let fn_name = match rc_operation {
@@ -489,7 +489,7 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
 
     let symbol = Symbol::GENERIC_EQ_REF;
     let fn_name = layout_ids
-        .get(symbol, &layout)
+        .get(symbol, layout)
         .to_symbol_string(symbol, &env.interns);
 
     let function_value = match env.module.get_function(fn_name.as_str()) {
@@ -576,7 +576,7 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
-                &fn_name,
+                fn_name,
                 env.context.i8_type().into(),
                 &[arg_type.into(), arg_type.into(), arg_type.into()],
             );

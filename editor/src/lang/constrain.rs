@@ -1129,7 +1129,7 @@ pub fn constrain_pattern<'a>(
                 let pat_type = Type2::Variable(*var);
                 let expected = PExpected::NoExpectation(pat_type.shallow_clone());
 
-                if !state.headers.contains_key(&symbol) {
+                if !state.headers.contains_key(symbol) {
                     state.headers.insert(*symbol, pat_type.shallow_clone());
                 }
 

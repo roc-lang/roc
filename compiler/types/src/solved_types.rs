@@ -572,11 +572,11 @@ pub fn to_type(
             let mut new_args = Vec::with_capacity(args.len());
 
             for arg in args {
-                new_args.push(to_type(&arg, free_vars, var_store));
+                new_args.push(to_type(arg, free_vars, var_store));
             }
 
-            let new_ret = to_type(&ret, free_vars, var_store);
-            let new_closure = to_type(&closure, free_vars, var_store);
+            let new_ret = to_type(ret, free_vars, var_store);
+            let new_closure = to_type(closure, free_vars, var_store);
 
             Type::Function(new_args, Box::new(new_closure), Box::new(new_ret))
         }
@@ -584,13 +584,13 @@ pub fn to_type(
             let mut new_args = Vec::with_capacity(args.len());
 
             for arg in args {
-                new_args.push(to_type(&arg, free_vars, var_store));
+                new_args.push(to_type(arg, free_vars, var_store));
             }
 
             Type::Apply(*symbol, new_args)
         }
         Rigid(lowercase) => {
-            if let Some(var) = free_vars.named_vars.get(&lowercase) {
+            if let Some(var) = free_vars.named_vars.get(lowercase) {
                 Type::Variable(*var)
             } else {
                 let var = var_store.fresh();
@@ -611,9 +611,9 @@ pub fn to_type(
 
             for (label, field) in fields {
                 let field_val = match field {
-                    Required(typ) => Required(to_type(&typ, free_vars, var_store)),
-                    Optional(typ) => Optional(to_type(&typ, free_vars, var_store)),
-                    Demanded(typ) => Demanded(to_type(&typ, free_vars, var_store)),
+                    Required(typ) => Required(to_type(typ, free_vars, var_store)),
+                    Optional(typ) => Optional(to_type(typ, free_vars, var_store)),
+                    Demanded(typ) => Demanded(to_type(typ, free_vars, var_store)),
                 };
 
                 new_fields.insert(label.clone(), field_val);

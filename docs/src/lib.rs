@@ -145,7 +145,7 @@ fn render_main_content(
                         }
                     }
 
-                    type_annotation_to_html(0, &mut content, &type_ann);
+                    type_annotation_to_html(0, &mut content, type_ann);
 
                     buf.push_str(
                         html_node(
@@ -541,7 +541,7 @@ fn should_be_multiline(type_ann: &TypeAnnotation) -> bool {
                     if is_multiline {
                         break;
                     }
-                    is_multiline = should_be_multiline(&value);
+                    is_multiline = should_be_multiline(value);
                 }
             }
 

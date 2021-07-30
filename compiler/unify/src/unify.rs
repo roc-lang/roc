@@ -188,7 +188,7 @@ fn unify_alias(
             // Alias wins
             merge(
                 subs,
-                &ctx,
+                ctx,
                 Alias(
                     symbol,
                     args.to_owned(),
@@ -220,7 +220,7 @@ fn unify_alias(
                     }
 
                     if problems.is_empty() {
-                        problems.extend(merge(subs, &ctx, other_content.clone()));
+                        problems.extend(merge(subs, ctx, other_content.clone()));
                     }
 
                     if problems.is_empty() {

@@ -99,7 +99,7 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
 
         Builtin::Usize => int_cmp(IntPredicate::EQ, "eq_usize"),
 
-        Builtin::Decimal => call_bitcode_fn(env, &[lhs_val, rhs_val], &bitcode::DEC_EQ),
+        Builtin::Decimal => call_bitcode_fn(env, &[lhs_val, rhs_val], bitcode::DEC_EQ),
         Builtin::Float128 => float_cmp(FloatPredicate::OEQ, "eq_f128"),
         Builtin::Float64 => float_cmp(FloatPredicate::OEQ, "eq_f64"),
         Builtin::Float32 => float_cmp(FloatPredicate::OEQ, "eq_f32"),
@@ -245,7 +245,7 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
 
         Builtin::Usize => int_cmp(IntPredicate::NE, "neq_usize"),
 
-        Builtin::Decimal => call_bitcode_fn(env, &[lhs_val, rhs_val], &bitcode::DEC_NEQ),
+        Builtin::Decimal => call_bitcode_fn(env, &[lhs_val, rhs_val], bitcode::DEC_NEQ),
         Builtin::Float128 => float_cmp(FloatPredicate::ONE, "neq_f128"),
         Builtin::Float64 => float_cmp(FloatPredicate::ONE, "neq_f64"),
         Builtin::Float32 => float_cmp(FloatPredicate::ONE, "neq_f32"),
@@ -361,13 +361,13 @@ fn build_list_eq<'a, 'ctx, 'env>(
 
     let symbol = Symbol::LIST_EQ;
     let fn_name = layout_ids
-        .get(symbol, &element_layout)
+        .get(symbol, element_layout)
         .to_symbol_string(symbol, &env.interns);
 
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arg_type = basic_type_from_layout(env, &list_layout);
+            let arg_type = basic_type_from_layout(env, list_layout);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -428,7 +428,7 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
             /* current_scope */ lexical_block.as_debug_info_scope(),
             /* inlined_at */ None,
         );
-        builder.set_current_debug_location(&ctx, loc);
+        builder.set_current_debug_location(ctx, loc);
     }
 
     // Add args to scope
@@ -636,7 +636,7 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
             /* current_scope */ lexical_block.as_debug_info_scope(),
             /* inlined_at */ None,
         );
-        builder.set_current_debug_location(&ctx, loc);
+        builder.set_current_debug_location(ctx, loc);
     }
 
     // Add args to scope
@@ -752,13 +752,13 @@ fn build_tag_eq<'a, 'ctx, 'env>(
 
     let symbol = Symbol::GENERIC_EQ;
     let fn_name = layout_ids
-        .get(symbol, &tag_layout)
+        .get(symbol, tag_layout)
         .to_symbol_string(symbol, &env.interns);
 
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arg_type = basic_type_from_layout(env, &tag_layout);
+            let arg_type = basic_type_from_layout(env, tag_layout);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -817,7 +817,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
             /* current_scope */ lexical_block.as_debug_info_scope(),
             /* inlined_at */ None,
         );
-        builder.set_current_debug_location(&ctx, loc);
+        builder.set_current_debug_location(ctx, loc);
     }
 
     // Add args to scope

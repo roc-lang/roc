@@ -56,17 +56,17 @@ pub fn make_solved_types(
         for loc_named_var in alias.type_variables.iter() {
             let (name, var) = &loc_named_var.value;
 
-            args.push((name.clone(), SolvedType::new(&solved_subs, *var)));
+            args.push((name.clone(), SolvedType::new(solved_subs, *var)));
         }
 
         let mut lambda_set_variables = Vec::with_capacity(alias.lambda_set_variables.len());
         for set in alias.lambda_set_variables.iter() {
             lambda_set_variables.push(roc_types::solved_types::SolvedLambdaSet(
-                SolvedType::from_type(&solved_subs, &set.0),
+                SolvedType::from_type(solved_subs, &set.0),
             ));
         }
 
-        let solved_type = SolvedType::from_type(&solved_subs, &alias.typ);
+        let solved_type = SolvedType::from_type(solved_subs, &alias.typ);
         let solved_alias =
             SolvedType::Alias(*symbol, args, lambda_set_variables, Box::new(solved_type));
 
@@ -79,7 +79,7 @@ pub fn make_solved_types(
     // other modules will generate constraints for imported values
     // within the context of their own Subs.
     for (symbol, var) in exposed_vars_by_symbol.iter() {
-        let solved_type = SolvedType::new(&solved_subs, *var);
+        let solved_type = SolvedType::new(solved_subs, *var);
 
         solved_types.insert(*symbol, solved_type);
     }

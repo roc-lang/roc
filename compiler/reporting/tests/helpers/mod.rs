@@ -110,7 +110,7 @@ pub fn can_expr_with<'a>(
     home: ModuleId,
     expr_str: &'a str,
 ) -> Result<CanExprOut, ParseErrOut<'a>> {
-    let loc_expr = match roc_parse::test_helpers::parse_loc_with(&arena, expr_str) {
+    let loc_expr = match roc_parse::test_helpers::parse_loc_with(arena, expr_str) {
         Ok(e) => e,
         Err(fail) => {
             let interns = Interns::default();

@@ -431,7 +431,7 @@ impl Type {
 
         match self {
             Variable(v) => {
-                if let Some(replacement) = substitutions.get(&v) {
+                if let Some(replacement) = substitutions.get(v) {
                     *self = replacement.clone();
                 }
             }
@@ -810,15 +810,15 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
 
     match tipe {
         Function(args, closure, ret) => {
-            symbols_help(&ret, accum);
-            symbols_help(&closure, accum);
+            symbols_help(ret, accum);
+            symbols_help(closure, accum);
             args.iter().for_each(|arg| symbols_help(arg, accum));
         }
         FunctionOrTagUnion(_, _, ext) => {
-            symbols_help(&ext, accum);
+            symbols_help(ext, accum);
         }
         RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
-            symbols_help(&ext, accum);
+            symbols_help(ext, accum);
             tags.iter()
                 .map(|v| v.1.iter())
                 .flatten()
@@ -826,7 +826,7 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
         }
 
         Record(fields, ext) => {
-            symbols_help(&ext, accum);
+            symbols_help(ext, accum);
             fields.values().for_each(|field| {
                 use RecordField::*;
 
@@ -843,11 +843,11 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
             ..
         } => {
             accum.insert(*alias_symbol);
-            symbols_help(&actual_type, accum);
+            symbols_help(actual_type, accum);
         }
         HostExposedAlias { name, actual, .. } => {
             accum.insert(*name);
-            symbols_help(&actual, accum);
+            symbols_help(actual, accum);
         }
         Apply(symbol, args) => {
             accum.insert(*symbol);

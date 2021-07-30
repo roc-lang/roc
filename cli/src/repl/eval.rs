@@ -479,7 +479,7 @@ fn list_to_ast<'a>(
     };
 
     let arena = env.arena;
-    let mut output = Vec::with_capacity_in(len, &arena);
+    let mut output = Vec::with_capacity_in(len, arena);
     let elem_size = elem_layout.stack_size(env.ptr_bytes) as usize;
 
     for index in 0..len {
@@ -533,7 +533,7 @@ where
 {
     let arena = env.arena;
     let subs = env.subs;
-    let mut output = Vec::with_capacity_in(sequence.len(), &arena);
+    let mut output = Vec::with_capacity_in(sequence.len(), arena);
 
     // We'll advance this as we iterate through the fields
     let mut field_ptr = ptr as *const u8;
@@ -560,7 +560,7 @@ fn struct_to_ast<'a>(
 ) -> Expr<'a> {
     let arena = env.arena;
     let subs = env.subs;
-    let mut output = Vec::with_capacity_in(field_layouts.len(), &arena);
+    let mut output = Vec::with_capacity_in(field_layouts.len(), arena);
 
     // The fields, sorted alphabetically
     let mut sorted_fields = {

@@ -19,7 +19,7 @@ pub fn make_rect_pipeline(
         label: Some("Rectangle pipeline layout"),
     });
     let pipeline = create_render_pipeline(
-        &gpu_device,
+        gpu_device,
         &pipeline_layout,
         swap_chain_descr.format,
         &wgpu::ShaderModuleDescriptor {
@@ -42,7 +42,7 @@ pub fn create_render_pipeline(
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Render pipeline"),
-        layout: Some(&layout),
+        layout: Some(layout),
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: "vs_main",

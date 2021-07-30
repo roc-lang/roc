@@ -295,7 +295,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 items,
                 final_comments,
             } => {
-                fmt_list(buf, &items, final_comments, indent);
+                fmt_list(buf, items, final_comments, indent);
             }
             BinOps(lefts, right) => fmt_bin_ops(buf, lefts, right, false, parens, indent),
             UnaryOp(sub_expr, unary_op) => {
