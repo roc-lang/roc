@@ -1080,14 +1080,7 @@ fn occurs(
                     .iter()
                     .map(|(_, var)| var)
                     .chain(lambda_set_variables.iter().map(|x| x.as_inner()));
-                let x = short_circuit(subs, root_var, &new_seen, it);
-
-                if let Some(_) = x {
-                    dbg!(symbol, type_arguments, lambda_set_variables);
-                    dbg!(&subs);
-                }
-
-                x
+                short_circuit(subs, root_var, &new_seen, it)
             }
         }
     }

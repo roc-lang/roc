@@ -949,8 +949,6 @@ fn circular_error(
     let (error_type, _) = subs.var_to_error_type(var);
     let problem = TypeError::CircularType(loc_var.region, symbol, error_type);
 
-    dbg!("circular error");
-
     subs.set_content(var, Content::Error);
 
     problems.push(problem);
