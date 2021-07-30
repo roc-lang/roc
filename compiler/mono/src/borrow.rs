@@ -21,20 +21,14 @@ pub fn infer_borrow<'a>(
     procs: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> ParamMap<'a> {
     // intern the layouts
-    let mut declaration_to_index = MutMap::with_capacity_and_hasher(procs.len(), default_hasher());
 
     let mut param_map = {
-        let mut i = 0;
-        for key in procs.keys() {
-            declaration_to_index.insert(*key, ParamOffset(i));
-
-            i += key.1.arguments.len();
-        }
+        let (declaration_to_index, total_number_of_params) = DeclarationToIndex::new(arena, procs);
 
         ParamMap {
             declaration_to_index,
             join_points: MutMap::default(),
-            declarations: bumpalo::vec![in arena; Param::EMPTY; i],
+            declarations: bumpalo::vec![in arena; Param::EMPTY; total_number_of_params],
         }
     };
 
@@ -118,7 +112,7 @@ pub fn infer_borrow<'a>(
 
             for (key, proc) in procs {
                 let symbol = key.0;
-                let offset = param_map.declaration_to_index[key];
+                let offset = param_map.get_param_offset(key.0, key.1);
 
                 // the component this symbol is a part of
                 let component = symbol_to_component[&symbol];
@@ -169,10 +163,71 @@ impl From<ParamOffset> for usize {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+struct DeclarationToIndex<'a> {
+    elements: Vec<'a, ((Symbol, ProcLayout<'a>), ParamOffset)>,
+}
+
+impl<'a> DeclarationToIndex<'a> {
+    fn new(arena: &'a Bump, procs: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>) -> (Self, usize) {
+        let mut declaration_to_index = Vec::with_capacity_in(procs.len(), arena);
+
+        let mut i = 0;
+        for key in procs.keys().copied() {
+            declaration_to_index.push((key, ParamOffset(i)));
+
+            i += key.1.arguments.len();
+        }
+
+        declaration_to_index.sort_unstable_by_key(|t| t.0 .0);
+
+        (
+            DeclarationToIndex {
+                elements: declaration_to_index,
+            },
+            i,
+        )
+    }
+
+    fn get_param_offset(
+        &self,
+        needle_symbol: Symbol,
+        needle_layout: ProcLayout<'a>,
+    ) -> ParamOffset {
+        if let Ok(middle_index) = self
+            .elements
+            .binary_search_by_key(&needle_symbol, |t| t.0 .0)
+        {
+            // first, iterate backward until we hit a different symbol
+            let backward = self.elements[..middle_index].iter().rev();
+
+            for ((symbol, proc_layout), param_offset) in backward {
+                if *symbol != needle_symbol {
+                    break;
+                } else if *proc_layout == needle_layout {
+                    return *param_offset;
+                }
+            }
+
+            // if not found, iterate forward until we find our combo
+            let forward = self.elements[middle_index..].iter();
+
+            for ((symbol, proc_layout), param_offset) in forward {
+                if *symbol != needle_symbol {
+                    break;
+                } else if *proc_layout == needle_layout {
+                    return *param_offset;
+                }
+            }
+        }
+        unreachable!("symbol/layout combo must be in DeclarationToIndex")
+    }
+}
+
+#[derive(Debug)]
 pub struct ParamMap<'a> {
     /// Map a (Symbol, ProcLayout) pair to the starting index in the `declarations` array
-    declaration_to_index: MutMap<(Symbol, ProcLayout<'a>), ParamOffset>,
+    declaration_to_index: DeclarationToIndex<'a>,
     /// the parameters of all functions in a single flat array.
     ///
     /// - the map above gives the index of the first parameter for the function
@@ -184,11 +239,19 @@ pub struct ParamMap<'a> {
 }
 
 impl<'a> ParamMap<'a> {
+    pub fn get_param_offset(&self, symbol: Symbol, layout: ProcLayout<'a>) -> ParamOffset {
+        self.declaration_to_index
+            .get_param_offset(symbol, layout)
+            .into()
+    }
+
     pub fn get_symbol(&self, symbol: Symbol, layout: ProcLayout<'a>) -> Option<&[Param<'a>]> {
-        let index: usize = self.declaration_to_index[&(symbol, layout)].into();
+        // let index: usize = self.declaration_to_index[&(symbol, layout)].into();
+        let index: usize = self.get_param_offset(symbol, layout).into();
 
         self.declarations.get(index..index + layout.arguments.len())
     }
+
     pub fn get_join_point(&self, id: JoinPointId) -> &'a [Param<'a>] {
         match self.join_points.get(&id) {
             Some(slice) => slice,
@@ -197,7 +260,7 @@ impl<'a> ParamMap<'a> {
     }
 
     pub fn iter_symbols(&'a self) -> impl Iterator<Item = &'a Symbol> {
-        self.declaration_to_index.iter().map(|t| &t.0 .0)
+        self.declaration_to_index.elements.iter().map(|t| &t.0 .0)
     }
 }
 
@@ -247,7 +310,7 @@ impl<'a> ParamMap<'a> {
             return;
         }
 
-        let index: usize = self.declaration_to_index[&key].into();
+        let index: usize = self.get_param_offset(key.0, key.1).into();
 
         for (i, param) in Self::init_borrow_args(arena, proc.args)
             .iter()
@@ -266,7 +329,7 @@ impl<'a> ParamMap<'a> {
         proc: &Proc<'a>,
         key: (Symbol, ProcLayout<'a>),
     ) {
-        let index: usize = self.declaration_to_index[&key].into();
+        let index: usize = self.get_param_offset(key.0, key.1).into();
 
         for (i, param) in Self::init_borrow_args_always_owned(arena, proc.args)
             .iter()
