@@ -114,7 +114,7 @@ impl Pools {
     pub fn split_last(&self) -> (&Vec<Variable>, &[Vec<Variable>]) {
         self.0
             .split_last()
-            .unwrap_or_else(|| panic!("Attempted to split_last() on non-empy Pools"))
+            .unwrap_or_else(|| panic!("Attempted to split_last() on non-empty Pools"))
     }
 
     pub fn extend_to(&mut self, n: usize) {
@@ -257,7 +257,7 @@ fn solve(
             }
         }
         Lookup(symbol, expectation, region) => {
-            match env.vars_by_symbol.get(&symbol) {
+            match env.vars_by_symbol.get(symbol) {
                 Some(var) => {
                     // Deep copy the vars associated with this symbol before unifying them.
                     // Otherwise, suppose we have this:
@@ -390,7 +390,7 @@ fn solve(
                     // If the return expression is guaranteed to solve,
                     // solve the assignments themselves and move on.
                     solve(
-                        &env,
+                        env,
                         state,
                         rank,
                         pools,
@@ -508,7 +508,7 @@ fn solve(
                         env: saved_env,
                         mark,
                     } = solve(
-                        &env,
+                        env,
                         state,
                         next_rank,
                         next_pools,
@@ -577,7 +577,7 @@ fn solve(
                     let mut new_env = env.clone();
                     for (symbol, loc_var) in local_def_vars.iter() {
                         // when there are duplicates, keep the one from `env`
-                        if !new_env.vars_by_symbol.contains_key(&symbol) {
+                        if !new_env.vars_by_symbol.contains_key(symbol) {
                             new_env.vars_by_symbol.insert(*symbol, loc_var.value);
                         }
                     }
@@ -599,7 +599,7 @@ fn solve(
                         problems,
                         cached_aliases,
                         subs,
-                        &ret_con,
+                        ret_con,
                     );
 
                     for (symbol, loc_var) in local_def_vars {
@@ -1004,7 +1004,7 @@ fn adjust_rank(
             unsafe { &*ptr }
         };
 
-        let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, &content);
+        let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, content);
 
         subs.set_rank_mark(var, max_rank, visit_mark);
 

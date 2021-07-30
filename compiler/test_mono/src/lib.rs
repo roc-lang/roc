@@ -3,7 +3,7 @@
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant)]
 // we actually want to compare against the literal float bits
-#![allow(clippy::clippy::float_cmp)]
+#![allow(clippy::float_cmp)]
 
 #[macro_use]
 extern crate pretty_assertions;
@@ -100,7 +100,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
         filename,
-        &module_src,
+        module_src,
         &stdlib,
         src_dir,
         exposed_types,

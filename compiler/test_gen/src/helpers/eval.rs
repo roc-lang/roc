@@ -60,7 +60,7 @@ pub fn helper<'a>(
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
         filename,
-        &module_src,
+        module_src,
         stdlib,
         src_dir,
         exposed_types,
@@ -211,7 +211,7 @@ pub fn helper<'a>(
 
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
-        arena: &arena,
+        arena,
         builder: &builder,
         dibuilder: &dibuilder,
         compile_unit: &compile_unit,
@@ -252,7 +252,7 @@ pub fn helper<'a>(
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
-    let lib = module_to_dylib(&env.module, &target, opt_level)
+    let lib = module_to_dylib(env.module, &target, opt_level)
         .expect("Error loading compiled dylib for test");
 
     (main_fn_name, delayed_errors.join("\n"), lib)

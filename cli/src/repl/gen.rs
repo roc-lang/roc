@@ -219,7 +219,7 @@ pub fn gen_and_eval<'a>(
             );
         }
 
-        let lib = module_to_dylib(&env.module, &target, opt_level)
+        let lib = module_to_dylib(env.module, &target, opt_level)
             .expect("Error loading compiled dylib for test");
         let res_answer = unsafe {
             eval::jit_to_ast(

@@ -1317,7 +1317,7 @@ fn layout_from_flat_type<'a>(
                 }
             } else if tag_layouts.len() == 1 {
                 // drop the tag id
-                UnionLayout::NonNullableUnwrapped(&tag_layouts.pop().unwrap())
+                UnionLayout::NonNullableUnwrapped(tag_layouts.pop().unwrap())
             } else {
                 UnionLayout::Recursive(tag_layouts.into_bump_slice())
             };
@@ -2114,7 +2114,7 @@ impl<'a> LayoutIds<'a> {
         });
 
         // Get the id associated with this layout, or default to next_id.
-        let answer = ids.by_id.get(&layout).copied().unwrap_or(ids.next_id);
+        let answer = ids.by_id.get(layout).copied().unwrap_or(ids.next_id);
 
         // If we had to default to next_id, it must not have been found;
         // store the ID we're going to return and increment next_id.
@@ -2145,7 +2145,7 @@ impl<'a> LayoutIds<'a> {
         // Get the id associated with this layout, or default to next_id.
         let answer = ids
             .toplevels_by_id
-            .get(&layout)
+            .get(layout)
             .copied()
             .unwrap_or(ids.next_id);
 

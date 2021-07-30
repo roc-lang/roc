@@ -1108,7 +1108,7 @@ fn expr_spec<'a>(
                 let index = (*index) as u32;
                 let tag_value_id = env.symbols[structure];
 
-                let type_name_bytes = recursive_tag_union_name_bytes(&union_layout).as_bytes();
+                let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();
                 let type_name = TypeName(&type_name_bytes);
 
                 let union_id = builder.add_unwrap_named(block, MOD_APP, type_name, tag_value_id)?;
@@ -1128,7 +1128,7 @@ fn expr_spec<'a>(
 
                 let tag_value_id = env.symbols[structure];
 
-                let type_name_bytes = recursive_tag_union_name_bytes(&union_layout).as_bytes();
+                let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();
                 let type_name = TypeName(&type_name_bytes);
 
                 let variant_id =
@@ -1234,7 +1234,7 @@ fn layout_spec_help(
                 | UnionLayout::NullableUnwrapped { .. }
                 | UnionLayout::NullableWrapped { .. }
                 | UnionLayout::NonNullableUnwrapped(_) => {
-                    let type_name_bytes = recursive_tag_union_name_bytes(&union_layout).as_bytes();
+                    let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();
                     let type_name = TypeName(&type_name_bytes);
 
                     Ok(builder.add_named_type(MOD_APP, type_name))

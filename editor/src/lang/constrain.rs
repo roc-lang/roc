@@ -1088,7 +1088,7 @@ fn constrain_when_branch<'a>(
 }
 
 /// This accepts PatternState (rather than returning it) so that the caller can
-/// intiialize the Vecs in PatternState using with_capacity
+/// initialize the Vecs in PatternState using with_capacity
 /// based on its knowledge of their lengths.
 pub fn constrain_pattern<'a>(
     arena: &'a Bump,
@@ -1179,7 +1179,7 @@ pub fn constrain_pattern<'a>(
                 let pat_type = Type2::Variable(*var);
                 let expected = PExpected::NoExpectation(pat_type.shallow_clone());
 
-                if !state.headers.contains_key(&symbol) {
+                if !state.headers.contains_key(symbol) {
                     state.headers.insert(*symbol, pat_type.shallow_clone());
                 }
 

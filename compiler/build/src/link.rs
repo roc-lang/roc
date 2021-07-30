@@ -342,7 +342,7 @@ fn link_linux(
             output_path,
         ),
         LinkType::Dylib => {
-            // TODO: do we acually need the version number on this?
+            // TODO: do we actually need the version number on this?
             // Do we even need the "-soname" argument?
             //
             // See https://software.intel.com/content/www/us/en/develop/articles/create-a-unix-including-linux-shared-library.html
@@ -505,7 +505,7 @@ pub fn module_to_dylib(
 
     app_o_file.set_file_name("app.o");
 
-    // Emit the .o file using position-indepedent code (PIC) - needed for dylibs
+    // Emit the .o file using position-independent code (PIC) - needed for dylibs
     let reloc = RelocMode::PIC;
     let model = CodeModel::Default;
     let target_machine =

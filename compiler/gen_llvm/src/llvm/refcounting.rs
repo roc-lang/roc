@@ -720,14 +720,14 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
         &env.interns,
         "increment_list",
         "decrement_list",
-        &layout,
+        layout,
         mode,
     );
 
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = basic_type_from_layout(env, &layout);
+            let basic_type = basic_type_from_layout(env, layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_list_help(
@@ -857,14 +857,14 @@ fn modify_refcount_str<'a, 'ctx, 'env>(
         &env.interns,
         "increment_str",
         "decrement_str",
-        &layout,
+        layout,
         mode,
     );
 
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = basic_type_from_layout(env, &layout);
+            let basic_type = basic_type_from_layout(env, layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_str_help(env, mode, layout, function_value);
@@ -956,14 +956,14 @@ fn modify_refcount_dict<'a, 'ctx, 'env>(
         &env.interns,
         "increment_dict",
         "decrement_dict",
-        &layout,
+        layout,
         mode,
     );
 
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = basic_type_from_layout(env, &layout);
+            let basic_type = basic_type_from_layout(env, layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_dict_help(
@@ -1118,7 +1118,7 @@ pub fn build_header_help<'a, 'ctx, 'env>(
         FAST_CALL_CONV, // Because it's an internal-only function, it should use the fast calling convention.
     );
 
-    let subprogram = env.new_subprogram(&fn_name);
+    let subprogram = env.new_subprogram(fn_name);
     fn_val.set_subprogram(subprogram);
 
     env.dibuilder.finalize();

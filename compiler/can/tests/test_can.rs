@@ -145,7 +145,7 @@ mod test_can {
         let region = Region::zero();
 
         assert_can(
-            &string.clone(),
+            string.clone(),
             RuntimeError(RuntimeError::InvalidFloat(
                 FloatErrorKind::Error,
                 region,
@@ -658,7 +658,7 @@ mod test_can {
                         recursive: recursion,
                         ..
                     }) => recursion.clone(),
-                    Some(other @ _) => {
+                    Some(other) => {
                         panic!("assignment at {} is not a closure, but a {:?}", i, other)
                     }
                     None => {
@@ -680,7 +680,7 @@ mod test_can {
                             recursive: recursion,
                             ..
                         } => recursion.clone(),
-                        other @ _ => {
+                        other => {
                             panic!("assignment at {} is not a closure, but a {:?}", i, other)
                         }
                     }

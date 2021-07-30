@@ -70,7 +70,7 @@ impl<'b> Report<'b> {
     pub fn render_ci(self, buf: &'b mut String, alloc: &'b RocDocAllocator<'b>) {
         let err_msg = "<buffer is not a utf-8 encoded string>";
 
-        self.pretty(&alloc)
+        self.pretty(alloc)
             .1
             .render_raw(70, &mut CiWrite::new(buf))
             .expect(err_msg);
@@ -85,7 +85,7 @@ impl<'b> Report<'b> {
     ) {
         let err_msg = "<buffer is not a utf-8 encoded string>";
 
-        self.pretty(&alloc)
+        self.pretty(alloc)
             .1
             .render_raw(70, &mut ColorWrite::new(palette, buf))
             .expect(err_msg);

@@ -64,7 +64,7 @@ impl Constraint {
 
 fn subtract(declared: &Declared, detail: &VariableDetail, accum: &mut VariableDetail) {
     for var in &detail.type_variables {
-        if !(declared.rigid_vars.contains(&var) || declared.flex_vars.contains(&var)) {
+        if !(declared.rigid_vars.contains(var) || declared.flex_vars.contains(var)) {
             accum.type_variables.insert(*var);
         }
     }
@@ -82,11 +82,11 @@ fn subtract(declared: &Declared, detail: &VariableDetail, accum: &mut VariableDe
 
     // recursion vars should be always rigid
     for var in &detail.recursion_variables {
-        if declared.flex_vars.contains(&var) {
+        if declared.flex_vars.contains(var) {
             panic!("recursion variable {:?} is declared as flex", var);
         }
 
-        if !declared.rigid_vars.contains(&var) {
+        if !declared.rigid_vars.contains(var) {
             accum.recursion_variables.insert(*var);
         }
     }

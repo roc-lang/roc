@@ -59,7 +59,7 @@ pub fn init_model<'a>(
     interns: &'a Interns,
     code_arena: &'a Bump,
 ) -> EdResult<EdModel<'a>> {
-    let mut module = EdModule::new(&code_str, env, code_arena)?;
+    let mut module = EdModule::new(code_str, env, code_arena)?;
 
     let ast_root_id = module.ast_root_id;
     let mut markup_node_pool = SlowPool::new();
@@ -175,7 +175,7 @@ impl<'a> EdModule<'a> {
 
             let region = Region::new(0, 0, 0, 0);
 
-            let expr2_result = str_to_expr2(&ast_arena, &code_str, &mut env, &mut scope, region);
+            let expr2_result = str_to_expr2(ast_arena, code_str, &mut env, &mut scope, region);
 
             match expr2_result {
                 Ok((expr2, _output)) => {
@@ -239,7 +239,7 @@ pub mod test_ed_model {
         );
 
         ed_model::init_model(
-            &code_str,
+            code_str,
             file_path,
             env,
             &ed_model_refs.interns,
