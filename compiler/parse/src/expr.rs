@@ -252,7 +252,7 @@ fn underscore_expression<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
 
         match output {
             Some(name) => Ok((MadeProgress, Expr::Underscore(name), final_state)),
-            None => Ok((MadeProgress, Expr::Underscore(&""), final_state)),
+            None => Ok((MadeProgress, Expr::Underscore(""), final_state)),
         }
     }
 }

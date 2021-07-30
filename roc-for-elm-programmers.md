@@ -437,7 +437,7 @@ when error is
 
     # File.WriteErr possibilities
     DirectoryNotFound -> ...
-    WriteAcessDenied -> ...
+    WriteAccessDenied -> ...
     DiskFull -> ...
 ```
 
@@ -819,7 +819,7 @@ Dict.fromList [ KV "Sam" True, KV "Ali" False KV firstName False
 
 This works, but is not nearly as nice to read.
 
-Additionally, map literals can compile direcly to efficient initialization code
+Additionally, map literals can compile directly to efficient initialization code
 without needing to (hopefully be able to) optimize away the intermediate
 `List` involved in  `fromList`.
 
@@ -969,7 +969,7 @@ test "it works"
 This is convenient with higher-order functions which take a function as their
 final argument. Since many Roc functions have the same type as Elm functions
 except with their arguments flipped, this means it's possible to end a lot
-of expessions with anonymous functions - e.g.
+of expressions with anonymous functions - e.g.
 
 ```elm
 modifiedNums =
@@ -1357,7 +1357,7 @@ are all unions containing a single tag. That means they hold no information at r
 that is, discarded prior to code generation.
 
 During code generation, Roc treats `Quantity [ Km ] Int` as equivalent to `Quantity Int`.
-Then, becaue `Quantity Int` is an alias for `[ Quantity Int ]`, it will unbox again
+Then, because `Quantity Int` is an alias for `[ Quantity Int ]`, it will unbox again
 and reduce that all the way down to to `Int`.
 
 This means that, just like phantom *types*, phantom *values* affect type checking
