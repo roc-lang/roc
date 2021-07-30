@@ -1168,9 +1168,19 @@ fn adjust_rank_content(
                     // THEORY: the recursion var has the same rank as the tag union itself
                     // all types it uses are also in the tags already, so it cannot influence the
                     // rank
-                    debug_assert!(
-                        rank >= adjust_rank(subs, young_mark, visit_mark, group_rank, *rec_var)
-                    );
+
+                    if cfg!(debug_assertions) {
+                        let rec_var_rank =
+                            adjust_rank(subs, young_mark, visit_mark, group_rank, *rec_var);
+
+                        debug_assert!(
+                            rank >= rec_var_rank,
+                            "rank was {:?} but recursion var {:?} has higher rank {:?}",
+                            rank,
+                            rec_var,
+                            rec_var_rank
+                        );
+                    }
 
                     rank
                 }
