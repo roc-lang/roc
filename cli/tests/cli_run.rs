@@ -21,7 +21,7 @@ mod cli_run {
 
     static INIT: Once = Once::new();
 
-    pub fn initialize() {
+    fn initialize() {
         let env_path = "";
         let env_home = "";
         let emit_bin = "-femit-bin=examples/benchmarks/platform/host.o";
@@ -35,7 +35,9 @@ mod cli_run {
                 emit_bin,
                 zig_host_src,
                 zig_str_path,
-            );
+            )
+            .map(|_| ())
+            .unwrap_or(());
         });
     }
 
@@ -273,6 +275,7 @@ mod cli_run {
     macro_rules! benchmarks {
         ($($test_name:ident => $benchmark:expr,)+) => {
             $(
+                #[test]
                 #[cfg_attr(not(debug_assertions), serial(benchmark))]
                 fn $test_name() {
                     let benchmark = $benchmark;
