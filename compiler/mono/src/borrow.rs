@@ -240,9 +240,7 @@ pub struct ParamMap<'a> {
 
 impl<'a> ParamMap<'a> {
     pub fn get_param_offset(&self, symbol: Symbol, layout: ProcLayout<'a>) -> ParamOffset {
-        self.declaration_to_index
-            .get_param_offset(symbol, layout)
-            .into()
+        self.declaration_to_index.get_param_offset(symbol, layout)
     }
 
     pub fn get_symbol(&self, symbol: Symbol, layout: ProcLayout<'a>) -> Option<&[Param<'a>]> {
