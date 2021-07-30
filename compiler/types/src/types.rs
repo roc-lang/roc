@@ -732,43 +732,6 @@ impl Type {
                         substitution.insert(*placeholder, filler);
                     }
 
-                    // Instantiate "hidden" uniqueness variables
-                    //
-                    // Aliases can hide uniqueness variables: e.g. in
-                    //
-                    // Model : { x : Int, y : Bool }
-                    //
-                    // Its lifted variant is
-                    //
-                    // Attr a Model
-                    //
-                    // where the `a` doesn't really mention the attributes on the fields.
-                    for variable in actual.variables() {
-                        if !substitution.contains_key(&variable) {
-                            // Leave attributes on recursion variables untouched!
-                            //
-                            // In a recursive type like
-                            //
-                            // > [ Z, S Peano ] as Peano
-                            //
-                            // By default the lifted version is
-                            //
-                            // > Attr a ([ Z, S (Attr b Peano) ] as Peano)
-                            //
-                            // But, it must be true that a = b because Peano is self-recursive.
-                            // Therefore we earlier have substituted
-                            //
-                            // > Attr a ([ Z, S (Attr a Peano) ] as Peano)
-                            //
-                            // And now we must make sure the `a`s stay the same variable, i.e.
-                            // don't re-instantiate it here.
-                            let var = var_store.fresh();
-                            substitution.insert(variable, Type::Variable(var));
-
-                            introduced.insert(var);
-                        }
-                    }
-
                     actual.substitute(&substitution);
                     actual.instantiate_aliases(region, aliases, var_store, introduced);
 
