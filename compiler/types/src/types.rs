@@ -218,15 +218,19 @@ impl fmt::Debug for Type {
                 lambda_set_variables,
                 ..
             } => {
-                write!(f, "Alias {:?}", symbol)?;
+                write!(f, "(Alias {:?}", symbol)?;
 
                 for (_, arg) in type_arguments {
                     write!(f, " {:?}", arg)?;
                 }
 
-                for (_, greek_letter) in lambda_set_variables.iter().zip(GREEK_LETTERS.iter()) {
-                    write!(f, " {:?}", greek_letter)?;
+                for (lambda_set, greek_letter) in
+                    lambda_set_variables.iter().zip(GREEK_LETTERS.iter())
+                {
+                    write!(f, " {}@{:?}", greek_letter, lambda_set.0)?;
                 }
+
+                write!(f, ")")?;
 
                 // Sometimes it's useful to see the expansion of the alias
                 // write!(f, "[ but actually {:?} ]", _actual)?;
