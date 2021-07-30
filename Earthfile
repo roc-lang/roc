@@ -101,7 +101,7 @@ check-rustfmt:
     RUN cargo fmt --all -- --check
 
 check-typos:
-    RUN cargo install typos-cli
+    RUN cargo install --version 1.0.11 typos-cli
     COPY --dir .github ci cli compiler docs editor examples nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix ./
     RUN typos
 
