@@ -184,10 +184,9 @@ mod test_load {
         expected_types: &mut HashMap<&str, &str>,
     ) {
         for (symbol, expr_var) in &def.pattern_vars {
-            let content = subs.get(*expr_var).content;
-
             name_all_type_vars(*expr_var, subs);
 
+            let content = subs.get_content_without_compacting(*expr_var);
             let actual_str = content_to_string(content, subs, home, interns);
             let fully_qualified = symbol.fully_qualified(interns, home).to_string();
             let expected_type = expected_types

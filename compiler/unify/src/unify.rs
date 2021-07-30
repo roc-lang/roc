@@ -967,8 +967,8 @@ fn unify_flat_type(
         }
 
         (Record(fields1, ext1), Record(fields2, ext2)) => {
-            let rec1 = gather_fields(subs, fields1.clone(), *ext1);
-            let rec2 = gather_fields(subs, fields2.clone(), *ext2);
+            let rec1 = gather_fields(subs, fields1, *ext1);
+            let rec2 = gather_fields(subs, fields2, *ext2);
 
             unify_record(subs, pool, ctx, rec1, rec2)
         }

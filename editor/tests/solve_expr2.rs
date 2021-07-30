@@ -114,7 +114,7 @@ fn infer_eq(actual: &str, expected_str: &str) {
 
             let subs = solved.inner_mut();
 
-            let content = subs.get(var).content;
+            let content = subs.get_content_without_compacting(var);
 
             let interns = Interns {
                 module_ids: env.module_ids.clone(),
