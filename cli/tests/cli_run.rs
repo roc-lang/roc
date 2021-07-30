@@ -16,6 +16,9 @@ mod cli_run {
     use serial_test::serial;
     use std::path::Path;
 
+    #[cfg(not(debug_assertions))]
+    use roc_collections::all::MutMap;
+
     #[cfg(not(target_os = "macos"))]
     const ALLOW_VALGRIND: bool = true;
 
@@ -150,7 +153,6 @@ mod cli_run {
             #[test]
             #[cfg(not(debug_assertions))]
             fn all_examples_have_tests() {
-                use roc_collections::all::MutMap;
                 let mut all_examples: MutMap<&str, Example<'_>> = MutMap::default();
 
                 $(
@@ -287,7 +289,7 @@ mod cli_run {
             #[test]
             #[cfg(not(debug_assertions))]
             fn all_benchmarks_have_tests() {
-                let mut all_benchmarks: HashMap<&str, Example<'_>> = HashMap::default();
+                let mut all_benchmarks: MutMap<&str, Example<'_>> = MutMap::default();
 
                 $(
                     let benchmark = $benchmark;
@@ -374,9 +376,7 @@ mod cli_run {
     }
 
     #[cfg(not(debug_assertions))]
-    fn check_for_tests(examples_dir: &str, all_examples: &mut HashMap<&str, Example<'_>>) {
-        use std::collections::HashMap;
-
+    fn check_for_tests(examples_dir: &str, all_examples: &mut MutMap<&str, Example<'_>>) {
         let entries = std::fs::read_dir(examples_dir).unwrap_or_else(|err| {
             panic!(
                 "Error trying to read {} as an examples directory: {}",
@@ -399,16 +399,16 @@ mod cli_run {
             }
         }
 
-        assert_eq!(all_examples, &mut HashMap::default());
+        assert_eq!(all_examples, &mut MutMap::default());
     }
 
     #[cfg(not(debug_assertions))]
-    fn check_for_benchmarks(benchmarks_dir: &str, all_benchmarks: &mut HashMap<&str, Example<'_>>) {
+    fn check_for_benchmarks(benchmarks_dir: &str, all_benchmarks: &mut MutMap<&str, Example<'_>>) {
         use std::ffi::OsStr;
         use std::fs::File;
         use std::io::Read;
 
-        let entries = fs::read_dir(benchmarks_dir).unwrap_or_else(|err| {
+        let entries = std::fs::read_dir(benchmarks_dir).unwrap_or_else(|err| {
             panic!(
                 "Error trying to read {} as a benchmark directory: {}",
                 benchmarks_dir, err
@@ -438,7 +438,7 @@ mod cli_run {
             }
         }
 
-        assert_eq!(all_benchmarks, &mut HashMap::default());
+        assert_eq!(all_benchmarks, &mut MutMap::default());
     }
 
     #[test]
