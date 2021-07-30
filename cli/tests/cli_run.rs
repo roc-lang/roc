@@ -38,7 +38,9 @@ mod cli_run {
                 emit_bin,
                 zig_host_src,
                 zig_str_path,
-            );
+            )
+            .map(|_| ())
+            .unwrap_or(());
         });
     }
 
