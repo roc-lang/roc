@@ -417,12 +417,7 @@ impl SolvedType {
 
                 SolvedType::Alias(*symbol, new_args, solved_lambda_sets, Box::new(aliased_to))
             }
-            Error => {
-                dbg!("subs contained an error!");
-                // dbg!(&subs, var);
-                panic!();
-                SolvedType::Error
-            }
+            Error => SolvedType::Error,
         }
     }
 
