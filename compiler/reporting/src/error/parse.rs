@@ -211,9 +211,7 @@ fn to_expr_report<'a>(
             to_lambda_report(alloc, filename, context, lambda, *row, *col)
         }
         EExpr::List(list, row, col) => to_list_report(alloc, filename, context, list, *row, *col),
-        EExpr::Str(string, row, col) => {
-            to_str_report(alloc, filename, context, string, *row, *col)
-        }
+        EExpr::Str(string, row, col) => to_str_report(alloc, filename, context, string, *row, *col),
         EExpr::InParens(expr, row, col) => {
             to_expr_in_parens_report(alloc, filename, context, expr, *row, *col)
         }

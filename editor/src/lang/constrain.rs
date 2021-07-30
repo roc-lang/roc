@@ -1038,7 +1038,7 @@ fn constrain_when_branch<'a>(
 }
 
 /// This accepts PatternState (rather than returning it) so that the caller can
-/// intiialize the Vecs in PatternState using with_capacity
+/// initialize the Vecs in PatternState using with_capacity
 /// based on its knowledge of their lengths.
 pub fn constrain_pattern<'a>(
     arena: &'a Bump,

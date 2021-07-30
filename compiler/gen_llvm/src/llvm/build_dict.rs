@@ -867,8 +867,7 @@ fn dict_symbol_to_zig_dict<'a, 'ctx, 'env>(
 
     let zig_dict_type = env.module.get_struct_type("dict.RocDict").unwrap();
 
-    complex_bitcast(env.builder, dict, zig_dict_type.into(), "dict_to_zig_dict")
-        .into_struct_value()
+    complex_bitcast(env.builder, dict, zig_dict_type.into(), "dict_to_zig_dict").into_struct_value()
 }
 
 fn zig_dict_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> inkwell::types::StructType<'ctx> {

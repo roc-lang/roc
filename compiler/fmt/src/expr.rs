@@ -1027,7 +1027,7 @@ fn format_field_multiline<'a, T>(
             format_field_multiline(buf, sub_field, indent, separator_prefix);
         }
         AssignedField::SpaceAfter(sub_field, spaces) => {
-            // We have somethig like that:
+            // We have something like that:
             // ```
             // field # comment
             // , otherfield

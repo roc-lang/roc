@@ -1110,10 +1110,8 @@ fn canonicalize_pending_def<'a>(
             // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
             let outer_identifier = env.tailcallable_symbol;
 
-            if let (
-                &ast::Pattern::Identifier(_name),
-                &Pattern::Identifier(ref defined_symbol),
-            ) = (&loc_pattern.value, &loc_can_pattern.value)
+            if let (&ast::Pattern::Identifier(_name), &Pattern::Identifier(ref defined_symbol)) =
+                (&loc_pattern.value, &loc_can_pattern.value)
             {
                 env.tailcallable_symbol = Some(*defined_symbol);
 

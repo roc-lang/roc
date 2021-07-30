@@ -1280,7 +1280,7 @@ fn linked_list_singleton() {
 }
 
 #[test]
-fn recursive_functon_with_rigid() {
+fn recursive_function_with_rigid() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"

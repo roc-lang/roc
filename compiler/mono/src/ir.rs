@@ -1700,7 +1700,7 @@ fn pattern_to_when<'a>(
 
         UnsupportedPattern(region) => {
             // create the runtime error here, instead of delegating to When.
-            // UnsupportedPattern should then never occcur in When
+            // UnsupportedPattern should then never occur in When
             let error = roc_problem::can::RuntimeError::UnsupportedPattern(*region);
             (env.unique_symbol(), Located::at_zero(RuntimeError(error)))
         }

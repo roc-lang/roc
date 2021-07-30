@@ -317,7 +317,7 @@ impl fmt::Debug for ModuleId {
         }
     }
 
-    /// In relese builds, all we have access to is the number, so only display that.
+    /// In release builds, all we have access to is the number, so only display that.
     #[cfg(not(debug_assertions))]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.0.fmt(f)
