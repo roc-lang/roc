@@ -40,7 +40,7 @@ can write (it would be plain Roc code, but with some extra keywords that aren't
 available in normal modules - kinda like `port module` in Elm), and which
 describe both the Roc-host/C boundary as well as the Roc-host/Roc-app boundary.
 Roc application authors only care about the Roc-host/Roc-app portion, and the
-host author only cares about the Roc-host/C bounary when implementing the host.
+host author only cares about the Roc-host/C boundary when implementing the host.
 
 Using this glue code, the Roc compiler can generate C header files describing the
 boundary. This not only gets us host compatibility with C compilers, but also 

@@ -452,7 +452,7 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
             sorted_fields.sort_by(|(a, _), (b, _)| {
                 a.clone()
                     .as_string(interns, home)
-                    .cmp(&b.as_string(&interns, home))
+                    .cmp(&b.as_string(interns, home))
             });
 
             let mut any_written_yet = false;
@@ -464,7 +464,7 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
                     any_written_yet = true;
                 }
 
-                buf.push_str(&label.as_string(&interns, home));
+                buf.push_str(&label.as_string(interns, home));
 
                 for var in vars {
                     buf.push(' ');
@@ -496,7 +496,7 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
 
             buf.push_str("[ ");
 
-            buf.push_str(&tag_name.as_string(&interns, home));
+            buf.push_str(&tag_name.as_string(interns, home));
 
             buf.push_str(" ]");
 
@@ -539,7 +539,7 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
                 } else {
                     any_written_yet = true;
                 }
-                buf.push_str(&label.as_string(&interns, home));
+                buf.push_str(&label.as_string(interns, home));
 
                 for var in vars {
                     buf.push(' ');
@@ -757,7 +757,7 @@ fn write_symbol(env: &Env, symbol: Symbol, buf: &mut String) {
     // Don't qualify the symbol if it's in our home module,
     // or if it's a builtin (since all their types are always in scope)
     if module_id != env.home && !module_id.is_builtin() {
-        buf.push_str(module_id.to_string(&interns));
+        buf.push_str(module_id.to_string(interns));
         buf.push('.');
     }
 

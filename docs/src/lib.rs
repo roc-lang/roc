@@ -145,7 +145,7 @@ fn render_main_content(
                         }
                     }
 
-                    type_annotation_to_html(0, &mut content, &type_ann);
+                    type_annotation_to_html(0, &mut content, type_ann);
 
                     buf.push_str(
                         html_node(
@@ -218,17 +218,17 @@ fn render_name_and_version(name: &str, version: &str) -> String {
         .as_str(),
     );
 
-    let mut verions_href = String::new();
+    let mut versions_href = String::new();
 
-    verions_href.push('/');
-    verions_href.push_str(name);
-    verions_href.push('/');
-    verions_href.push_str(version);
+    versions_href.push('/');
+    versions_href.push_str(name);
+    versions_href.push('/');
+    versions_href.push_str(version);
 
     buf.push_str(
         html_node(
             "a",
-            vec![("class", "version"), ("href", verions_href.as_str())],
+            vec![("class", "version"), ("href", versions_href.as_str())],
             version,
         )
         .as_str(),
@@ -541,7 +541,7 @@ fn should_be_multiline(type_ann: &TypeAnnotation) -> bool {
                     if is_multiline {
                         break;
                     }
-                    is_multiline = should_be_multiline(&value);
+                    is_multiline = should_be_multiline(value);
                 }
             }
 

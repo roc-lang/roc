@@ -259,7 +259,7 @@ fn loc_ident_pattern_help<'a>(
                         Located {
                             region: loc_ident.region,
                             value: Pattern::Malformed(
-                                String::from_str_in(&malformed_str, &arena).into_bump_str(),
+                                String::from_str_in(&malformed_str, arena).into_bump_str(),
                             ),
                         },
                         state,
@@ -299,7 +299,7 @@ fn underscore_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
 
         match output {
             Some(name) => Ok((MadeProgress, Pattern::Underscore(name), final_state)),
-            None => Ok((MadeProgress, Pattern::Underscore(&""), final_state)),
+            None => Ok((MadeProgress, Pattern::Underscore(""), final_state)),
         }
     }
 }

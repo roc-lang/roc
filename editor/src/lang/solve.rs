@@ -118,7 +118,7 @@ impl Pools {
     pub fn split_last(&self) -> (&Vec<Variable>, &[Vec<Variable>]) {
         self.0
             .split_last()
-            .unwrap_or_else(|| panic!("Attempted to split_last() on non-empy Pools"))
+            .unwrap_or_else(|| panic!("Attempted to split_last() on non-empty Pools"))
     }
 
     pub fn extend_to(&mut self, n: usize) {

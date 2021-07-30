@@ -214,7 +214,7 @@ fn report_bad_type<'b>(
             alloc,
             found,
             expected_type,
-            add_category(alloc, this_is, &category),
+            add_category(alloc, this_is, category),
             further_details,
         ),
     ];
@@ -1443,7 +1443,7 @@ pub fn to_doc<'b>(
 
         Record(fields_map, ext) => {
             let mut fields = fields_map.into_iter().collect::<Vec<_>>();
-            fields.sort_by(|(a, _), (b, _)| a.cmp(&b));
+            fields.sort_by(|(a, _), (b, _)| a.cmp(b));
 
             report_text::record(
                 alloc,
@@ -1482,7 +1482,7 @@ pub fn to_doc<'b>(
                     )
                 })
                 .collect::<Vec<_>>();
-            tags.sort_by(|(a, _), (b, _)| a.cmp(&b));
+            tags.sort_by(|(a, _), (b, _)| a.cmp(b));
 
             report_text::tag_union(
                 alloc,
@@ -1505,7 +1505,7 @@ pub fn to_doc<'b>(
                     )
                 })
                 .collect::<Vec<_>>();
-            tags.sort_by(|(a, _), (b, _)| a.cmp(&b));
+            tags.sort_by(|(a, _), (b, _)| a.cmp(b));
 
             report_text::recursive_tag_union(
                 alloc,

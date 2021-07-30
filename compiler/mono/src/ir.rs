@@ -809,7 +809,7 @@ impl<'a, 'i> Env<'a, 'i> {
     pub fn unique_symbol(&mut self) -> Symbol {
         let ident_id = self.ident_ids.gen_unique();
 
-        self.home.register_debug_idents(&self.ident_ids);
+        self.home.register_debug_idents(self.ident_ids);
 
         Symbol::new(self.home, ident_id)
     }
@@ -1700,7 +1700,7 @@ fn pattern_to_when<'a>(
 
         UnsupportedPattern(region) => {
             // create the runtime error here, instead of delegating to When.
-            // UnsupportedPattern should then never occcur in When
+            // UnsupportedPattern should then never occur in When
             let error = roc_problem::can::RuntimeError::UnsupportedPattern(*region);
             (env.unique_symbol(), Located::at_zero(RuntimeError(error)))
         }
@@ -2468,7 +2468,7 @@ fn specialize_solved_type<'a>(
 
     // for debugging only
     let attempted_layout = layout_cache
-        .from_var(&env.arena, fn_var, env.subs)
+        .from_var(env.arena, fn_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
     let raw = match attempted_layout {
@@ -2509,7 +2509,7 @@ fn specialize_solved_type<'a>(
             debug_assert_eq!(
                 attempted_layout,
                 layout_cache
-                    .from_var(&env.arena, fn_var, env.subs)
+                    .from_var(env.arena, fn_var, env.subs)
                     .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err))
             );
 
@@ -3855,7 +3855,7 @@ pub fn with_hole<'a>(
             let mut arg_symbols = Vec::with_capacity_in(args.len(), env.arena);
 
             for (_, arg_expr) in args.iter() {
-                arg_symbols.push(possible_reuse_symbol(env, procs, &arg_expr));
+                arg_symbols.push(possible_reuse_symbol(env, procs, arg_expr));
             }
             let arg_symbols = arg_symbols.into_bump_slice();
 
@@ -3885,7 +3885,7 @@ pub fn with_hole<'a>(
             let mut arg_symbols = Vec::with_capacity_in(args.len(), env.arena);
 
             for (_, arg_expr) in args.iter() {
-                arg_symbols.push(possible_reuse_symbol(env, procs, &arg_expr));
+                arg_symbols.push(possible_reuse_symbol(env, procs, arg_expr));
             }
             let arg_symbols = arg_symbols.into_bump_slice();
 
@@ -5540,7 +5540,7 @@ fn store_pattern_help<'a>(
                     layout_cache,
                     outer_symbol,
                     &layout,
-                    &arguments,
+                    arguments,
                     stmt,
                 );
             }
@@ -5557,7 +5557,7 @@ fn store_pattern_help<'a>(
                 layout_cache,
                 outer_symbol,
                 *layout,
-                &arguments,
+                arguments,
                 *tag_id,
                 stmt,
             );
@@ -6374,7 +6374,7 @@ fn call_by_name_help<'a>(
     // the variables of the given arguments
     let mut pattern_vars = Vec::with_capacity_in(loc_args.len(), arena);
     for (var, _) in &loc_args {
-        match layout_cache.from_var(&env.arena, *var, &env.subs) {
+        match layout_cache.from_var(env.arena, *var, env.subs) {
             Ok(_) => {
                 pattern_vars.push(*var);
             }

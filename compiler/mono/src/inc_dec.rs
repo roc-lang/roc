@@ -740,7 +740,7 @@ impl<'a> Context<'a> {
     ) -> (&'a Stmt<'a>, LiveVarSet) {
         use Expr::*;
 
-        let mut live_vars = update_live_vars(&v, &b_live_vars);
+        let mut live_vars = update_live_vars(&v, b_live_vars);
         live_vars.remove(&z);
 
         let new_b = match v {
@@ -750,7 +750,7 @@ impl<'a> Context<'a> {
             | Array { elems: ys, .. } => self.add_inc_before_consume_all(
                 ys,
                 self.arena.alloc(Stmt::Let(z, v, l, b)),
-                &b_live_vars,
+                b_live_vars,
             ),
 
             Call(crate::ir::Call {
