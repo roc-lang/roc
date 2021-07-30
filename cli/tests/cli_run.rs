@@ -3,7 +3,6 @@ extern crate pretty_assertions;
 
 extern crate bumpalo;
 extern crate inlinable_string;
-extern crate roc_build;
 extern crate roc_collections;
 extern crate roc_load;
 extern crate roc_module;
@@ -15,34 +14,10 @@ mod cli_run {
         run_with_valgrind, ValgrindError, ValgrindErrorXWhat,
     };
     use serial_test::serial;
-    use std::collections::HashMap;
-    use std::fs::{self, File};
-    use std::io::Read;
     use std::path::Path;
 
-    use std::sync::Once;
-
-    static INIT: Once = Once::new();
-
-    pub fn initialize() {
-        let env_path = "";
-        let env_home = "";
-        let emit_bin = "-femit-bin=examples/benchmarks/platform/host.o";
-        let zig_host_src = "examples/benchmarks/platform/host.zig";
-        let zig_str_path = "compiler/builtins/bitcodes/src/str.zig";
-
-        INIT.call_once_force(|_| {
-            roc_build::link::try_build_zig_host(
-                env_path,
-                env_home,
-                emit_bin,
-                zig_host_src,
-                zig_str_path,
-            )
-            .map(|_| ())
-            .unwrap_or(());
-        });
-    }
+    #[cfg(not(debug_assertions))]
+    use roc_collections::all::MutMap;
 
     #[cfg(not(target_os = "macos"))]
     const ALLOW_VALGRIND: bool = true;
@@ -154,9 +129,6 @@ mod cli_run {
                     let example = $example;
                     let file_name = example_file(dir_name, example.filename);
 
-                    // make sure the `benchmarks` platform is already compiled
-                    initialize();
-
                     // Check with and without optimizations
                     check_output_with_stdin(
                         &file_name,
@@ -179,8 +151,9 @@ mod cli_run {
             )*
 
             #[test]
+            #[cfg(not(debug_assertions))]
             fn all_examples_have_tests() {
-                let mut all_examples: HashMap<&str, Example<'_>> = HashMap::default();
+                let mut all_examples: MutMap<&str, Example<'_>> = MutMap::default();
 
                 $(
                     all_examples.insert($name, $example);
@@ -277,8 +250,8 @@ mod cli_run {
     macro_rules! benchmarks {
         ($($test_name:ident => $benchmark:expr,)+) => {
             $(
-                // #[serial(benchmark)]
                 #[test]
+                #[cfg_attr(not(debug_assertions), serial(benchmark))]
                 fn $test_name() {
                     let benchmark = $benchmark;
                     let file_name = examples_dir("benchmarks").join(benchmark.filename);
@@ -314,8 +287,9 @@ mod cli_run {
             )*
 
             #[test]
+            #[cfg(not(debug_assertions))]
             fn all_benchmarks_have_tests() {
-                let mut all_benchmarks: HashMap<&str, Example<'_>> = HashMap::default();
+                let mut all_benchmarks: MutMap<&str, Example<'_>> = MutMap::default();
 
                 $(
                     let benchmark = $benchmark;
@@ -401,8 +375,9 @@ mod cli_run {
         },
     }
 
-    fn check_for_tests(examples_dir: &str, all_examples: &mut HashMap<&str, Example<'_>>) {
-        let entries = fs::read_dir(examples_dir).unwrap_or_else(|err| {
+    #[cfg(not(debug_assertions))]
+    fn check_for_tests(examples_dir: &str, all_examples: &mut MutMap<&str, Example<'_>>) {
+        let entries = std::fs::read_dir(examples_dir).unwrap_or_else(|err| {
             panic!(
                 "Error trying to read {} as an examples directory: {}",
                 examples_dir, err
@@ -417,7 +392,6 @@ mod cli_run {
 
                 // We test benchmarks separately
                 if example_dir_name != "benchmarks" {
-                    dbg!(&examples_dir, &example_dir_name);
                     all_examples.remove(example_dir_name.as_str()).unwrap_or_else(|| {
                     panic!("The example directory {}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", examples_dir, example_dir_name);
                 });
@@ -425,13 +399,16 @@ mod cli_run {
             }
         }
 
-        assert_eq!(all_examples, &mut HashMap::default());
+        assert_eq!(all_examples, &mut MutMap::default());
     }
 
-    fn check_for_benchmarks(benchmarks_dir: &str, all_benchmarks: &mut HashMap<&str, Example<'_>>) {
+    #[cfg(not(debug_assertions))]
+    fn check_for_benchmarks(benchmarks_dir: &str, all_benchmarks: &mut MutMap<&str, Example<'_>>) {
         use std::ffi::OsStr;
+        use std::fs::File;
+        use std::io::Read;
 
-        let entries = fs::read_dir(benchmarks_dir).unwrap_or_else(|err| {
+        let entries = std::fs::read_dir(benchmarks_dir).unwrap_or_else(|err| {
             panic!(
                 "Error trying to read {} as a benchmark directory: {}",
                 benchmarks_dir, err
@@ -454,20 +431,14 @@ mod cli_run {
 
                 // Only app modules in this directory are considered benchmarks.
                 if "app".as_bytes() == buf {
-                    match all_benchmarks.remove(benchmark_file_name.as_str()) {
-                        Some(_) => {}
-                        None => {
-                            eprintln!(
-                                r"The benchmark {}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!",
-                                benchmarks_dir, benchmark_file_name
-                            );
-                        }
-                    };
+                    all_benchmarks.remove(benchmark_file_name.as_str()).unwrap_or_else(|| {
+                    panic!("The benchmark {}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", benchmarks_dir, benchmark_file_name);
+                });
                 }
             }
         }
 
-        assert_eq!(all_benchmarks, &mut HashMap::default());
+        assert_eq!(all_benchmarks, &mut MutMap::default());
     }
 
     #[test]
