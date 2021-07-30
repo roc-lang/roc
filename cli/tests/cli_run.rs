@@ -3,7 +3,6 @@ extern crate pretty_assertions;
 
 extern crate bumpalo;
 extern crate inlinable_string;
-extern crate roc_build;
 extern crate roc_collections;
 extern crate roc_load;
 extern crate roc_module;
@@ -19,28 +18,6 @@ mod cli_run {
     use std::fs::{self, File};
     use std::io::Read;
     use std::path::Path;
-
-    use std::sync::Once;
-
-    static INIT: Once = Once::new();
-
-    pub fn initialize() {
-        let env_path = "";
-        let env_home = "";
-        let emit_bin = "-femit-bin=examples/benchmarks/platform/host.o";
-        let zig_host_src = "examples/benchmarks/platform/host.zig";
-        let zig_str_path = "compiler/builtins/bitcodes/src/str.zig";
-
-        INIT.call_once_force(|_| {
-            roc_build::link::try_build_zig_host(
-                env_path,
-                env_home,
-                emit_bin,
-                zig_host_src,
-                zig_str_path,
-            );
-        });
-    }
 
     #[cfg(not(target_os = "macos"))]
     const ALLOW_VALGRIND: bool = true;
@@ -151,9 +128,6 @@ mod cli_run {
                     let dir_name = $name;
                     let example = $example;
                     let file_name = example_file(dir_name, example.filename);
-
-                    // make sure the `benchmarks` platform is already compiled
-                    initialize();
 
                     // Check with and without optimizations
                     check_output_with_stdin(
@@ -275,8 +249,8 @@ mod cli_run {
     macro_rules! benchmarks {
         ($($test_name:ident => $benchmark:expr,)+) => {
             $(
-                // #[serial(benchmark)]
                 #[test]
+                #[serial(benchmark)]
                 fn $test_name() {
                     let benchmark = $benchmark;
                     let file_name = examples_dir("benchmarks").join(benchmark.filename);
@@ -415,7 +389,6 @@ mod cli_run {
 
                 // We test benchmarks separately
                 if example_dir_name != "benchmarks" {
-                    dbg!(&examples_dir, &example_dir_name);
                     all_examples.remove(example_dir_name.as_str()).unwrap_or_else(|| {
                     panic!("The example directory {}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", examples_dir, example_dir_name);
                 });
@@ -452,15 +425,9 @@ mod cli_run {
 
                 // Only app modules in this directory are considered benchmarks.
                 if "app".as_bytes() == buf {
-                    match all_benchmarks.remove(benchmark_file_name.as_str()) {
-                        Some(_) => {}
-                        None => {
-                            eprintln!(
-                                r"The benchmark {}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!",
-                                benchmarks_dir, benchmark_file_name
-                            );
-                        }
-                    };
+                    all_benchmarks.remove(benchmark_file_name.as_str()).unwrap_or_else(|| {
+                    panic!("The benchmark {}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", benchmarks_dir, benchmark_file_name);
+                });
                 }
             }
         }
