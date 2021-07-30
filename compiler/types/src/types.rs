@@ -141,6 +141,23 @@ impl RecordField<Type> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct LambdaSet(pub Type);
 
+impl LambdaSet {
+    fn substitute(&mut self, substitutions: &ImMap<Variable, Type>) {
+        self.0.substitute(substitutions);
+    }
+
+    fn instantiate_aliases(
+        &mut self,
+        region: Region,
+        aliases: &ImMap<Symbol, Alias>,
+        var_store: &mut VarStore,
+        introduced: &mut ImSet<Variable>,
+    ) {
+        self.0
+            .instantiate_aliases(region, aliases, var_store, introduced)
+    }
+}
+
 #[derive(PartialEq, Eq, Clone)]
 pub enum Type {
     EmptyRec,
@@ -216,6 +233,7 @@ impl fmt::Debug for Type {
                 symbol,
                 type_arguments,
                 lambda_set_variables,
+                actual: _actual,
                 ..
             } => {
                 write!(f, "(Alias {:?}", symbol)?;
@@ -230,10 +248,10 @@ impl fmt::Debug for Type {
                     write!(f, " {}@{:?}", greek_letter, lambda_set.0)?;
                 }
 
-                write!(f, ")")?;
-
                 // Sometimes it's useful to see the expansion of the alias
-                // write!(f, "[ but actually {:?} ]", _actual)?;
+                write!(f, "[ but actually {:?} ]", _actual)?;
+
+                write!(f, ")")?;
 
                 Ok(())
             }
@@ -473,11 +491,16 @@ impl Type {
             }
             Alias {
                 type_arguments,
+                lambda_set_variables,
                 actual,
                 ..
             } => {
                 for (_, value) in type_arguments.iter_mut() {
                     value.substitute(substitutions);
+                }
+
+                for lambda_set in lambda_set_variables.iter_mut() {
+                    lambda_set.substitute(substitutions);
                 }
 
                 actual.substitute(substitutions);
@@ -685,17 +708,23 @@ impl Type {
             }
             HostExposedAlias {
                 type_arguments: type_args,
+                lambda_set_variables,
                 actual: actual_type,
                 ..
             }
             | Alias {
                 type_arguments: type_args,
+                lambda_set_variables,
                 actual: actual_type,
                 ..
             } => {
                 for arg in type_args {
                     arg.1
                         .instantiate_aliases(region, aliases, var_store, introduced);
+                }
+
+                for arg in lambda_set_variables {
+                    arg.instantiate_aliases(region, aliases, var_store, introduced);
                 }
 
                 actual_type.instantiate_aliases(region, aliases, var_store, introduced);
@@ -730,6 +759,19 @@ impl Type {
                         filler.instantiate_aliases(region, aliases, var_store, introduced);
                         named_args.push((lowercase.clone(), filler.clone()));
                         substitution.insert(*placeholder, filler);
+                    }
+
+                    let mut lambda_set_variables =
+                        Vec::with_capacity(alias.lambda_set_variables.len());
+                    for lambda_set in alias.lambda_set_variables.iter() {
+                        let fresh = var_store.fresh();
+                        introduced.insert(fresh);
+
+                        lambda_set_variables.push(LambdaSet(Type::Variable(fresh)));
+
+                        if let Type::Variable(lambda_set_var) = lambda_set.0 {
+                            substitution.insert(lambda_set_var, Type::Variable(fresh));
+                        }
                     }
 
                     actual.substitute(&substitution);
