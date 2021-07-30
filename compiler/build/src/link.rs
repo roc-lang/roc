@@ -55,14 +55,24 @@ fn find_zig_str_path() -> PathBuf {
     panic!("cannot find `str.zig`")
 }
 
-#[cfg(not(target_os = "macos"))]
-fn build_zig_host(
+pub fn try_build_zig_host(
     env_path: &str,
     env_home: &str,
     emit_bin: &str,
     zig_host_src: &str,
     zig_str_path: &str,
-) -> Output {
+) -> Result<Output, std::io::Error> {
+    build_zig_host_help(env_path, env_home, emit_bin, zig_host_src, zig_str_path)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn build_zig_host_help(
+    env_path: &str,
+    env_home: &str,
+    emit_bin: &str,
+    zig_host_src: &str,
+    zig_str_path: &str,
+) -> Result<Output, std::io::Error> {
     Command::new("zig")
         .env_clear()
         .env("PATH", env_path)
@@ -82,17 +92,16 @@ fn build_zig_host(
             "c",
         ])
         .output()
-        .unwrap()
 }
 
 #[cfg(target_os = "macos")]
-fn build_zig_host(
+pub fn build_zig_host_help(
     env_path: &str,
     env_home: &str,
     emit_bin: &str,
     zig_host_src: &str,
     zig_str_path: &str,
-) -> Output {
+) -> Result<Output, std::io::Error> {
     use serde_json::Value;
 
     // Run `zig env` to find the location of zig's std/ directory
@@ -155,7 +164,6 @@ fn build_zig_host(
             "c",
         ])
         .output()
-        .unwrap()
 }
 
 pub fn rebuild_host(host_input_path: &Path) {
@@ -185,13 +193,14 @@ pub fn rebuild_host(host_input_path: &Path) {
         validate_output(
             "host.zig",
             "zig",
-            build_zig_host(
+            try_build_zig_host(
                 &env_path,
                 &env_home,
                 &emit_bin,
                 zig_host_src.to_str().unwrap(),
                 zig_str_path.to_str().unwrap(),
-            ),
+            )
+            .unwrap(),
         );
     } else {
         // Compile host.c
