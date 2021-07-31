@@ -38,8 +38,35 @@ Fish hooks are used when subvariants should be created e.g.: <collection> means 
 - command: <common algorithm>
     + example: sieve of erathostenes >> `inserts function for sieve of erathostenes`
     + common algorithms: sieve of erathostenes, greatest common divisior, prime factorisation, A* path finding, Dijkstra's algorithm, Breadth First Search...
+- command: current date/datetime
+    + example: current datetime >> `now <- Time.now\n`
+
+
+## AST aware snippets
+
+Snippets are inserted based on type of value on which the cursor is located.
+
+- command: <all builtins for current type>
+    + example:
+        * We have the cursor like this `people|`
+        * User presses snippet shortcut or dot key
+        * We show  a list with all builtin functions for the List type
+        * User chooses contains
+        * We change code to `List.contains people |Blank`
+
 
 ## Snippets with Typed Holes
 
 - command: sort ^List^ (by ^Record Field^) {ascending/descending}
-    + example: sort people by age descending >> TODO
+    + example: sort people by age descending >> ...
+- command: escape url 
+    + example: >> `Url.escape ^String^`
+- command: list files in directory
+    + example: >> 
+        ```
+        path <- File.pathFromStr ^String^
+        dirContents <- File.enumerateDir path
+        ```
+- command: remove/create file
+- command: read/write from file
+        
