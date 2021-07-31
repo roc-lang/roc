@@ -3010,7 +3010,7 @@ pub fn with_hole<'a>(
             let arena = env.arena;
 
             debug_assert!(!matches!(
-                env.subs.get_without_compacting(variant_var).content,
+                env.subs.get_content_without_compacting(variant_var),
                 Content::Structure(FlatType::Func(_, _, _))
             ));
             convert_tag_union(
@@ -3035,12 +3035,15 @@ pub fn with_hole<'a>(
         } => {
             let arena = env.arena;
 
-            let desc = env.subs.get_without_compacting(variant_var);
+            let content = env.subs.get_content_without_compacting(variant_var);
 
-            if let Content::Structure(FlatType::Func(arg_vars, _, ret_var)) = desc.content {
+            if let Content::Structure(FlatType::Func(arg_vars, _, ret_var)) = content {
+                let ret_var = *ret_var;
+                let arg_vars = arg_vars.clone();
+
                 tag_union_to_function(
                     env,
-                    arg_vars,
+                    &arg_vars,
                     ret_var,
                     tag_name,
                     closure_name,
@@ -4343,7 +4346,7 @@ fn convert_tag_union<'a>(
 #[allow(clippy::too_many_arguments)]
 fn tag_union_to_function<'a>(
     env: &mut Env<'a, '_>,
-    argument_variables: std::vec::Vec<Variable>,
+    argument_variables: &[Variable],
     return_variable: Variable,
     tag_name: TagName,
     proc_symbol: Symbol,
@@ -4364,8 +4367,8 @@ fn tag_union_to_function<'a>(
 
         let loc_expr = Located::at_zero(roc_can::expr::Expr::Var(arg_symbol));
 
-        loc_pattern_args.push((arg_var, loc_pattern));
-        loc_expr_args.push((arg_var, loc_expr));
+        loc_pattern_args.push((*arg_var, loc_pattern));
+        loc_expr_args.push((*arg_var, loc_expr));
     }
 
     let loc_body = Located::at_zero(roc_can::expr::Expr::Tag {
@@ -7395,8 +7398,8 @@ fn from_can_pattern_help<'a>(
                         // TODO these don't match up in the uniqueness inference; when we remove
                         // that, reinstate this assert!
                         //
-                        // dbg!(&env.subs.get_without_compacting(*field_var).content);
-                        // dbg!(&env.subs.get_without_compacting(destruct.value.var).content);
+                        // dbg!(&env.subs.get_content_without_compacting(*field_var));
+                        // dbg!(&env.subs.get_content_without_compacting(destruct.var).content);
                         // debug_assert_eq!(
                         //     env.subs.get_root_key_without_compacting(*field_var),
                         //     env.subs.get_root_key_without_compacting(destruct.value.var)
@@ -7490,7 +7493,7 @@ pub fn num_argument_to_int_or_float(
     var: Variable,
     known_to_be_float: bool,
 ) -> IntOrFloat {
-    match subs.get_without_compacting(var).content {
+    match subs.get_content_without_compacting(var){
         Content::FlexVar(_) | Content::RigidVar(_) if known_to_be_float => IntOrFloat::BinaryFloatType(FloatPrecision::F64),
         Content::FlexVar(_) | Content::RigidVar(_) => IntOrFloat::SignedIntType(IntPrecision::I64), // We default (Num *) to I64
 

@@ -612,7 +612,7 @@ impl Content {
 
         eprintln!(
             "{}",
-            crate::pretty_print::content_to_string(self.clone(), subs, home, &interns)
+            crate::pretty_print::content_to_string(&self, subs, home, &interns)
         );
 
         self
@@ -653,7 +653,7 @@ fn occurs(
     if seen.contains(&root_var) {
         Some((root_var, vec![]))
     } else {
-        match subs.get_without_compacting(root_var).content {
+        match subs.get_content_without_compacting(root_var).clone() {
             FlexVar(_) | RigidVar(_) | RecursionVar { .. } | Error => None,
 
             Structure(flat_type) => {

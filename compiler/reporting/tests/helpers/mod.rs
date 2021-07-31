@@ -36,7 +36,10 @@ pub fn infer_expr(
     };
     let (solved, _) = solve::run(&env, problems, subs, constraint);
 
-    let content = solved.inner().get_without_compacting(expr_var).content;
+    let content = solved
+        .inner()
+        .get_content_without_compacting(expr_var)
+        .clone();
 
     (content, solved.into_inner())
 }

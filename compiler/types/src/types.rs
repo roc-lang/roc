@@ -1,7 +1,7 @@
 use crate::pretty_print::Parens;
 use crate::subs::{LambdaSet, Subs, VarStore, Variable};
 use inlinable_string::InlinableString;
-use roc_collections::all::{union, ImMap, ImSet, Index, MutMap, MutSet, SendMap};
+use roc_collections::all::{ImMap, ImSet, Index, MutMap, MutSet, SendMap};
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -1522,22 +1522,35 @@ pub fn name_type_var(letters_used: u32, taken: &mut MutSet<Lowercase>) -> (Lower
 
 pub fn gather_fields(
     subs: &Subs,
-    fields: MutMap<Lowercase, RecordField<Variable>>,
-    var: Variable,
+    other_fields: &MutMap<Lowercase, RecordField<Variable>>,
+    mut var: Variable,
 ) -> RecordStructure {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
-    match subs.get_without_compacting(var).content {
-        Structure(Record(sub_fields, sub_ext)) => {
-            gather_fields(subs, union(fields, &sub_fields), sub_ext)
-        }
+    let mut result = other_fields.clone();
 
-        Alias(_, _, var) => {
-            // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
-            gather_fields(subs, fields, var)
-        }
+    loop {
+        match subs.get_content_without_compacting(var) {
+            Structure(Record(sub_fields, sub_ext)) => {
+                for (lowercase, record_field) in sub_fields {
+                    result.insert(lowercase.clone(), *record_field);
+                }
 
-        _ => RecordStructure { fields, ext: var },
+                var = *sub_ext;
+            }
+
+            Alias(_, _, actual_var) => {
+                // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
+                var = *actual_var;
+            }
+
+            _ => break,
+        }
+    }
+
+    RecordStructure {
+        fields: result,
+        ext: var,
     }
 }

@@ -272,7 +272,7 @@ impl<'a> EdModel<'a> {
 
         let subs = solved.inner_mut();
 
-        let content = subs.get(var).content;
+        let content = subs.get_content_without_compacting(var);
 
         PoolStr::new(
             &content_to_string(content, subs, self.module.env.home, self.interns),
