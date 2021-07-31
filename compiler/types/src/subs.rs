@@ -666,7 +666,7 @@ fn occurs(
                     Func(arg_vars, closure_var, ret_var) => {
                         let it = once(ret_var)
                             .chain(once(closure_var))
-                            .chain(arg_vars.into_iter());
+                            .chain(arg_vars.iter());
                         short_circuit(subs, root_var, &new_seen, it)
                     }
                     Record(vars_by_field, ext_var) => {

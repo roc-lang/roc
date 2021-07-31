@@ -500,7 +500,7 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
                 //
                 // e.g. the "*" at the end of `{ x: I64 }*`
                 // or the "r" at the end of `{ x: I64 }r`
-                write_content(env, &content, subs, buf, parens)
+                write_content(env, content, subs, buf, parens)
             }
         }
 
@@ -519,7 +519,7 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
                 //
                 // e.g. the "*" at the end of `{ x: I64 }*`
                 // or the "r" at the end of `{ x: I64 }r`
-                write_content(env, &content, subs, buf, parens)
+                write_content(env, content, subs, buf, parens)
             }
         }
 
@@ -536,7 +536,7 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
                 //
                 // e.g. the "*" at the end of `{ x: I64 }*`
                 // or the "r" at the end of `{ x: I64 }r`
-                write_content(env, &content, subs, buf, parens)
+                write_content(env, content, subs, buf, parens)
             }
 
             buf.push_str(" as ");
