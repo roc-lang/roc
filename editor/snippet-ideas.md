@@ -40,7 +40,8 @@ Fish hooks are used when subvariants should be created e.g.: <collection> means 
     + common algorithms: sieve of erathostenes, greatest common divisior, prime factorisation, A* path finding, Dijkstra's algorithm, Breadth First Search...
 - command: current date/datetime
     + example: current datetime >> `now <- Time.now\n`
-
+- command: list range 1 to 5
+    + example: >> [ 1, 2, 3, 4, 5 ]
 
 ## AST aware snippets
 
@@ -53,11 +54,12 @@ Snippets are inserted based on type of value on which the cursor is located.
         * We show  a list with all builtin functions for the List type
         * User chooses contains
         * We change code to `List.contains people |Blank`
+- command: Str to charlist
 
 
 ## Snippets with Typed Holes
 
-- command: sort ^List^ (by ^Record Field^) {ascending/descending}
+- command: sort ^List *^ (by ^Record Field^) {ascending/descending}
     + example: sort people by age descending >> ...
 - command: escape url 
     + example: >> `percEncodedString = Url.percentEncode ^String^`
@@ -69,4 +71,11 @@ Snippets are inserted based on type of value on which the cursor is located.
         ```
 - command: remove/create file
 - command: read/write from file
+- command: concatenate strings
+- we should auto create type hole commands for all builtins.
+    + example: List has builtins reverse, repeat, len... generated snippet commands should be:
+        * reverse list > List.reverse ^List *^
+        * repeat list > List.repeat ^elem^ ^Nat^
+        * len list (fuzzy matches should be length of list)
+
         
