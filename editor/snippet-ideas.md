@@ -77,5 +77,18 @@ Snippets are inserted based on type of value on which the cursor is located.
         * reverse list > List.reverse ^List *^
         * repeat list > List.repeat ^elem^ ^Nat^
         * len list (fuzzy matches should be length of list)
+    
+# fuzzy matching
+    
+ some pairs for fuzzy matching unit tests:
+ - hashmap > Dict
+ - map > map (function), Dict
+ - for > map, mapWithIndex, walk, walkBackwards, zip
+ - apply > map
+ - fold > walk, walkBackwards
+ - foldl > walkBackwards
+ - foldr > walk
+ - head > takeFirst
+ - filter > keepIf
 
         
