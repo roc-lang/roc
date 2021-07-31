@@ -800,6 +800,7 @@ fn type_to_variable(
             // the rank of these variables is NONE (encoded as 0 in practice)
             // using them for other ranks causes issues
             if rank.is_none() {
+                // TODO replace by arithmetic?
                 match *symbol {
                     Symbol::NUM_I128 => return Variable::I128,
                     Symbol::NUM_I64 => return Variable::I64,
