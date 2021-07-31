@@ -955,9 +955,9 @@ pub fn constrain_expr<'a>(
 
             exists(arena, vars, And(and_constraints))
         }
+        Expr2::RuntimeError() => True,
         Expr2::Closure { .. } => todo!(),
         Expr2::PrivateTag { .. } => todo!(),
-        Expr2::RuntimeError() => todo!(),
         Expr2::InvalidLookup(_) => todo!(),
         Expr2::LetRec { .. } => todo!(),
         Expr2::LetFunction { .. } => todo!(),
