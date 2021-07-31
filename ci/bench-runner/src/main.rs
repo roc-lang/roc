@@ -1,69 +1,86 @@
-use std::{collections::{HashSet, VecDeque}, io::{BufRead, BufReader}, path::Path, process::{self, Command, Stdio}, thread};
 use clap::{AppSettings, Clap};
-use regex::Regex;
+use data_encoding::HEXUPPER;
 use is_executable::IsExecutable;
+use regex::Regex;
+use ring::digest::{Context, Digest, SHA256};
+use std::fs::File;
+use std::io::Read;
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    io::{self, BufRead, BufReader},
+    path::Path,
+    process::{self, Command, Stdio},
+};
 
+const BENCH_FOLDER_TRUNK: &str = "bench-folder-trunk";
+const BENCH_FOLDER_BRANCH: &str = "bench-folder-branch";
 
 fn main() {
     let optional_args: OptionalArgs = OptionalArgs::parse();
 
-    if Path::new("bench-folder-trunk").exists() && Path::new("bench-folder-branch").exists() {
-
+    if Path::new(BENCH_FOLDER_TRUNK).exists() && Path::new(BENCH_FOLDER_BRANCH).exists() {
         delete_old_bench_results();
 
         if optional_args.check_executables_changed {
-
-            let benches_path_str = "bench-folder-branch/examples/benchmarks/";
-            let benches_path = Path::new(benches_path_str);
-            let all_bench_files = std::fs::read_dir(benches_path).expect("Failed to create iterator for files in dir.");
-
-            let executables = all_bench_files.into_iter().filter(|file_res| {
-                !file_res
-                .expect("Failed to get DirEntry from ReadDir all_bench_files")
-                .file_name()
-                .into_string()
-                .expect("Failed to create String from OsString for file_name.")
-                .contains(".roc")
-            });
-
-            for file_name in executables {
-                let full_path = 
-            }
-
-            // TODO calc sha1sum for all in executables
-        } else {
-
-        }
-
-        if optional_args.test_run {
-            println!("Doing a test run to verify benchmarks are working correctly");
+            println!("Doing a test run to verify benchmarks are working correctly and generate executables.");
 
             std::env::set_var("BENCH_DRY_RUN", "1");
 
-            do_benchmark("branch");
-        } else {
-
             do_benchmark("trunk");
-            let mut all_regressed_benches = do_benchmark("branch");
+            do_benchmark("branch");
 
-            for _ in 1..optional_args.nr_repeat_benchmarks {
-                
-                do_benchmark("trunk");
-                let regressed_benches = do_benchmark("branch");
+            if check_if_bench_executables_changed() {
+                println!(
+                    "Comparison of sha256 of executables reveals changes, doing full benchmarks..."
+                );
 
-                all_regressed_benches = all_regressed_benches.intersection(&regressed_benches).map(|bench_name_str| bench_name_str.to_owned()).collect();
+                let all_regressed_benches = do_all_benches(optional_args.nr_repeat_benchmarks);
+
+                println!(
+                    "The following benchmarks have shown a regression {:?} times: {:?}",
+                    optional_args.nr_repeat_benchmarks, all_regressed_benches
+                );
+            } else {
+                println!("No benchmark executables have changed");
             }
+        } else {
+            let all_regressed_benches = do_all_benches(optional_args.nr_repeat_benchmarks);
 
-            dbg!(all_regressed_benches);
+            println!(
+                "The following benchmarks have shown a regression {:?} times: {:?}",
+                optional_args.nr_repeat_benchmarks, all_regressed_benches
+            );
         }
     } else {
-        eprintln!(r#"I can't find bench-folder-trunk and bench-folder-branch from the current directory.
+        eprintln!(
+            r#"I can't find bench-folder-trunk and bench-folder-branch from the current directory.
         I should be executed from the repo root.
         Use `./ci/safe-earthly.sh --build-arg BENCH_SUFFIX=trunk +prep-bench-folder` to generate bench-folder-trunk.
-        Use `./ci/safe-earthly.sh +prep-bench-folder` to generate bench-folder-branch."#);
-        
+        Use `./ci/safe-earthly.sh +prep-bench-folder` to generate bench-folder-branch."#
+        );
+
         process::exit(1)
     }
+}
+
+// returns all benchmarks that have regressed
+fn do_all_benches(nr_repeat_benchmarks: usize) -> HashSet<String> {
+    delete_old_bench_results();
+    do_benchmark("trunk");
+    let mut all_regressed_benches = do_benchmark("branch");
+
+    for _ in 1..nr_repeat_benchmarks {
+        delete_old_bench_results();
+        do_benchmark("trunk");
+        let regressed_benches = do_benchmark("branch");
+
+        all_regressed_benches = all_regressed_benches
+            .intersection(&regressed_benches)
+            .map(|bench_name_str| bench_name_str.to_owned())
+            .collect();
+    }
+
+    all_regressed_benches
 }
 
 // returns Vec with names of failed benchmarks
@@ -79,15 +96,18 @@ fn do_benchmark(branch_name: &'static str) -> HashSet<String> {
         .output()
         .expect(&format!("Failed to benchmark {}.", branch_name));
     }).unwrap();
-    
+
     handler.join().unwrap();*/
 
-    let mut cmd_child = Command::new(format!("./bench-folder-{}/target/release/deps/time_bench", branch_name))
-        .args(&["--bench", "--noplot"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect(&format!("Failed to benchmark {}.", branch_name));
+    let mut cmd_child = Command::new(format!(
+        "./bench-folder-{}/target/release/deps/time_bench",
+        branch_name
+    ))
+    .args(&["--bench", "--noplot"])
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .unwrap_or_else(|_| panic!("Failed to benchmark {}.", branch_name));
 
     let stdout = cmd_child.stdout.as_mut().unwrap();
     let stdout_reader = BufReader::new(stdout);
@@ -96,23 +116,23 @@ fn do_benchmark(branch_name: &'static str) -> HashSet<String> {
     let mut regressed_benches: HashSet<String> = HashSet::new();
 
     let mut last_three_lines_queue: VecDeque<String> = VecDeque::with_capacity(3);
-    let bench_name_regex = Regex::new(
-        r#"".*""#
-    ).expect("Failed to build regex");
+    let bench_name_regex = Regex::new(r#"".*""#).expect("Failed to build regex");
 
     for line in stdout_lines {
         let line_str = line.expect("Failed to get output from banchmark command.");
 
         if line_str.contains("regressed") {
-            let regressed_bench_name_line = last_three_lines_queue.get(2).expect("Failed to get line that contains benchmark name from last_three_lines_queue.");
-            
+            let regressed_bench_name_line = last_three_lines_queue.get(2).expect(
+                "Failed to get line that contains benchmark name from last_three_lines_queue.",
+            );
+
             let regex_match = bench_name_regex.find(regressed_bench_name_line).expect("This line should hoave the benchmark name between double quotes but I could not match it");
 
             regressed_benches.insert(regex_match.as_str().to_string().replace("\"", ""));
         }
 
         last_three_lines_queue.push_front(line_str.clone());
-        
+
         println!("bench {:?}: {:?}", branch_name, line_str);
     }
 
@@ -130,7 +150,7 @@ fn remove(file_or_folder: &str) {
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .output()
-        .expect(&format!("Something went wrong trying to remove {}", file_or_folder));
+        .unwrap_or_else(|_| panic!("Something went wrong trying to remove {}", file_or_folder));
 }
 
 #[derive(Clap)]
@@ -142,4 +162,89 @@ struct OptionalArgs {
     /// Do not run full benchmarks if no benchmark executable has changed
     #[clap(long)]
     check_executables_changed: bool,
+}
+
+fn sha256_digest<R: Read>(mut reader: R) -> Result<Digest, io::Error> {
+    let mut context = Context::new(&SHA256);
+    let mut buffer = [0; 1024];
+
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        context.update(&buffer[..count]);
+    }
+
+    Ok(context.finish())
+}
+
+fn sha_file(file_path: &Path) -> Result<String, io::Error> {
+    let input = File::open(file_path)?;
+    let reader = BufReader::new(input);
+    let digest = sha256_digest(reader)?;
+
+    Ok(HEXUPPER.encode(digest.as_ref()))
+}
+
+fn calc_hashes_for_folder(benches_path_str: &str) -> HashMap<String, String> {
+    let benches_path = Path::new(benches_path_str);
+    let all_bench_files =
+        std::fs::read_dir(benches_path).expect("Failed to create iterator for files in dir.");
+
+    let non_src_files = all_bench_files
+        .into_iter()
+        .map(|file_res| {
+            file_res
+                .expect("Failed to get DirEntry from ReadDir all_bench_files")
+                .file_name()
+                .into_string()
+                .expect("Failed to create String from OsString for file_name.")
+        })
+        .filter(|file_name_str| !file_name_str.contains(".roc"));
+
+    let mut files_w_sha = HashMap::new();
+
+    for file_name in non_src_files {
+        let full_path_str = [benches_path_str, &file_name].join("");
+        let full_path = Path::new(&full_path_str);
+
+        if full_path.is_executable() {
+            files_w_sha.insert(
+                file_name.clone(),
+                sha_file(full_path).expect("Failed to calculate sha of file"),
+            );
+        }
+    }
+
+    dbg!(&files_w_sha);
+    files_w_sha
+}
+
+fn check_if_bench_executables_changed() -> bool {
+    let bench_folder_str = "/examples/benchmarks/";
+
+    let trunk_benches_path_str = [BENCH_FOLDER_TRUNK, bench_folder_str].join("");
+    let trunk_bench_hashes = calc_hashes_for_folder(&trunk_benches_path_str);
+
+    let branch_benches_path_str = [BENCH_FOLDER_BRANCH, bench_folder_str].join("");
+    let branch_bench_hashes = calc_hashes_for_folder(&branch_benches_path_str);
+
+    if trunk_bench_hashes.keys().len() == branch_bench_hashes.keys().len() {
+        for key in trunk_bench_hashes.keys() {
+            if let Some(trunk_hash_val) = trunk_bench_hashes.get(key) {
+                if let Some(branch_hash_val) = branch_bench_hashes.get(key) {
+                    if !trunk_hash_val.eq(branch_hash_val) {
+                        return true;
+                    }
+                } else {
+                    return true;
+                }
+            }
+        }
+
+        false
+    } else {
+        true
+    }
 }
