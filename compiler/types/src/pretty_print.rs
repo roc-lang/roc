@@ -77,11 +77,11 @@ fn find_names_needed(
     use crate::subs::FlatType::*;
 
     while let Some((recursive, _chain)) = subs.occurs(variable) {
-        let content = subs.get_content_without_compacting(recursive).clone();
+        let rec_var = subs.fresh_unnamed_flex_var();
+        let content = subs.get_content_without_compacting(recursive);
+
         match content {
             Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                let rec_var = subs.fresh_unnamed_flex_var();
-
                 let mut new_tags = MutMap::default();
 
                 for (label, args) in tags {
@@ -94,7 +94,7 @@ fn find_names_needed(
                     new_tags.insert(label.clone(), new_args);
                 }
 
-                let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, ext_var);
+                let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, *ext_var);
                 subs.set_content(recursive, Content::Structure(flat_type));
             }
             _ => panic!(
