@@ -44,7 +44,7 @@ impl<'a> ToolTip<'a> {
             )
                 .into(),
             color: ui_theme.tooltip_text,
-            text: &self.text,
+            text: self.text,
             size: ui_theme.default_font_size,
             ..Default::default()
         }

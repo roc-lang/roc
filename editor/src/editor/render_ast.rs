@@ -108,7 +108,7 @@ fn markup_to_wgpu_helper<'a>(
             attributes: _,
             parent_id_opt: _,
         } => {
-            let highlight_color = map_get(&code_style.ed_theme.syntax_high_map, &syn_high_style)?;
+            let highlight_color = map_get(&code_style.ed_theme.syntax_high_map, syn_high_style)?;
 
             let glyph_text = glyph_brush::OwnedText::new(content)
                 .with_color(colors::to_slice(*highlight_color))
@@ -127,7 +127,7 @@ fn markup_to_wgpu_helper<'a>(
                 .with_color(colors::to_slice(colors::WHITE))
                 .with_scale(code_style.font_size);
 
-            let highlight_color = map_get(&code_style.ed_theme.syntax_high_map, &syn_high_style)?;
+            let highlight_color = map_get(&code_style.ed_theme.syntax_high_map, syn_high_style)?;
 
             let char_width = code_style.glyph_dim_rect.width;
             let char_height = code_style.glyph_dim_rect.height;

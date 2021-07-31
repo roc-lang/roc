@@ -129,7 +129,7 @@ impl MarkupNode {
                             }
                         }
 
-                        let closest_ast_child = slice_get(best_index, &children_ids)?;
+                        let closest_ast_child = slice_get(best_index, children_ids)?;
 
                         let closest_ast_child_index =
                             index_of(*closest_ast_child, &child_ids_with_ast)?;
@@ -259,7 +259,7 @@ pub fn expr2_to_markup<'a, 'b>(
         | Expr2::I128 { text, .. }
         | Expr2::U128 { text, .. }
         | Expr2::Float { text, .. } => {
-            let num_str = get_string(env, &text);
+            let num_str = get_string(env, text);
 
             new_markup_node(
                 num_str,
@@ -275,7 +275,7 @@ pub fn expr2_to_markup<'a, 'b>(
             markup_node_pool,
         ),
         Expr2::GlobalTag { name, .. } => new_markup_node(
-            get_string(env, &name),
+            get_string(env, name),
             expr2_node_id,
             HighlightStyle::Type,
             markup_node_pool,

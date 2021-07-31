@@ -50,7 +50,7 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 // Let's work through the `Cons x xx` example
 //
 // First we need to know the constructor of `xs` in the particular block. This information would
-// normally be lost when we compile pattern matches, but we keep it in the `BrachInfo` field of
+// normally be lost when we compile pattern matches, but we keep it in the `BranchInfo` field of
 // switch branches. here we also store the symbol that was switched on, and the layout of that
 // symbol.
 //
@@ -187,7 +187,7 @@ impl<'a, 'i> Env<'a, 'i> {
     pub fn unique_symbol(&mut self) -> Symbol {
         let ident_id = self.ident_ids.gen_unique();
 
-        self.home.register_debug_idents(&self.ident_ids);
+        self.home.register_debug_idents(self.ident_ids);
 
         Symbol::new(self.home, ident_id)
     }
@@ -195,7 +195,7 @@ impl<'a, 'i> Env<'a, 'i> {
     fn manual_unique_symbol(home: ModuleId, ident_ids: &mut IdentIds) -> Symbol {
         let ident_id = ident_ids.gen_unique();
 
-        home.register_debug_idents(&ident_ids);
+        home.register_debug_idents(ident_ids);
 
         Symbol::new(home, ident_id)
     }

@@ -21,7 +21,7 @@ pub fn start_new_list(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
         curr_mark_node,
         parent_id_opt,
         ast_node_id,
-    } = get_node_context(&ed_model)?;
+    } = get_node_context(ed_model)?;
 
     let is_blank_node = curr_mark_node.is_blank();
 
@@ -101,7 +101,7 @@ pub fn add_blank_child(
         curr_mark_node: _,
         parent_id_opt,
         ast_node_id,
-    } = get_node_context(&ed_model)?;
+    } = get_node_context(ed_model)?;
 
     let trip_result: EdResult<(ExprId, ExprId, MarkNodeId)> = if let Some(parent_id) = parent_id_opt
     {

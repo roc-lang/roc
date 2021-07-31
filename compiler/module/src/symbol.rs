@@ -317,7 +317,7 @@ impl fmt::Debug for ModuleId {
         }
     }
 
-    /// In relese builds, all we have access to is the number, so only display that.
+    /// In release builds, all we have access to is the number, so only display that.
     #[cfg(not(debug_assertions))]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.0.fmt(f)
@@ -368,7 +368,7 @@ impl<'a> PackageModuleIds<'a> {
                 self.by_name.insert(module_name.clone(), module_id);
 
                 if cfg!(debug_assertions) {
-                    Self::insert_debug_name(module_id, &module_name);
+                    Self::insert_debug_name(module_id, module_name);
                 }
 
                 module_id
@@ -449,7 +449,7 @@ impl ModuleIds {
                 self.by_name.insert(module_name.clone(), module_id);
 
                 if cfg!(debug_assertions) {
-                    Self::insert_debug_name(module_id, &module_name);
+                    Self::insert_debug_name(module_id, module_name);
                 }
 
                 module_id

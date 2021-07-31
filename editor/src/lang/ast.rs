@@ -472,7 +472,7 @@ fn expr2_to_string_helper(
         Expr2::EmptyRecord => out_string.push_str("EmptyRecord"),
         Expr2::Record { record_var, fields } => {
             out_string.push_str("Record:\n");
-            out_string.push_str(&var_to_string(&record_var, indent_level + 1));
+            out_string.push_str(&var_to_string(record_var, indent_level + 1));
 
             out_string.push_str(&format!("{}fields: [\n", get_spacing(indent_level + 1)));
 

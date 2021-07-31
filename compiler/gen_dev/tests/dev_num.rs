@@ -31,7 +31,7 @@ mod dev_num {
         assert_evals_to!("-0.0", 0.0, f64);
         assert_evals_to!("1.0", 1.0, f64);
         assert_evals_to!("-1.0", -1.0, f64);
-        assert_evals_to!("3.1415926535897932", 3.1415926535897932, f64);
+        assert_evals_to!("3.1415926535897932", 3.141_592_653_589_793, f64);
         assert_evals_to!(&format!("{:0.1}", f64::MIN), f64::MIN, f64);
         assert_evals_to!(&format!("{:0.1}", f64::MAX), f64::MAX, f64);
     }

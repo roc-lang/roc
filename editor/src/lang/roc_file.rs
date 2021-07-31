@@ -37,11 +37,11 @@ impl<'a> File<'a> {
         let allocation = arena.alloc(bytes);
 
         let module_parse_state = parser::State::new(allocation);
-        let parsed_module = roc_parse::module::parse_header(&arena, module_parse_state);
+        let parsed_module = roc_parse::module::parse_header(arena, module_parse_state);
 
         match parsed_module {
             Ok((module, state)) => {
-                let parsed_defs = module_defs().parse(&arena, state);
+                let parsed_defs = module_defs().parse(arena, state);
 
                 match parsed_defs {
                     Ok((_, defs, _)) => Ok(File {

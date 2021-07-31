@@ -612,7 +612,7 @@ impl Content {
 
         eprintln!(
             "{}",
-            crate::pretty_print::content_to_string(self.clone(), subs, home, &interns)
+            crate::pretty_print::content_to_string(&self, subs, home, &interns)
         );
 
         self
@@ -653,7 +653,7 @@ fn occurs(
     if seen.contains(&root_var) {
         Some((root_var, vec![]))
     } else {
-        match subs.get_without_compacting(root_var).content {
+        match subs.get_content_without_compacting(root_var) {
             FlexVar(_) | RigidVar(_) | RecursionVar { .. } | Error => None,
 
             Structure(flat_type) => {
@@ -664,14 +664,14 @@ fn occurs(
                 match flat_type {
                     Apply(_, args) => short_circuit(subs, root_var, &new_seen, args.iter()),
                     Func(arg_vars, closure_var, ret_var) => {
-                        let it = once(&ret_var)
-                            .chain(once(&closure_var))
+                        let it = once(ret_var)
+                            .chain(once(closure_var))
                             .chain(arg_vars.iter());
                         short_circuit(subs, root_var, &new_seen, it)
                     }
                     Record(vars_by_field, ext_var) => {
                         let it =
-                            once(&ext_var).chain(vars_by_field.values().map(|field| match field {
+                            once(ext_var).chain(vars_by_field.values().map(|field| match field {
                                 RecordField::Optional(var) => var,
                                 RecordField::Required(var) => var,
                                 RecordField::Demanded(var) => var,
@@ -679,16 +679,16 @@ fn occurs(
                         short_circuit(subs, root_var, &new_seen, it)
                     }
                     TagUnion(tags, ext_var) => {
-                        let it = once(&ext_var).chain(tags.values().flatten());
+                        let it = once(ext_var).chain(tags.values().flatten());
                         short_circuit(subs, root_var, &new_seen, it)
                     }
                     FunctionOrTagUnion(_, _, ext_var) => {
-                        let it = once(&ext_var);
+                        let it = once(ext_var);
                         short_circuit(subs, root_var, &new_seen, it)
                     }
                     RecursiveTagUnion(_rec_var, tags, ext_var) => {
                         // TODO rec_var is excluded here, verify that this is correct
-                        let it = once(&ext_var).chain(tags.values().flatten());
+                        let it = once(ext_var).chain(tags.values().flatten());
                         short_circuit(subs, root_var, &new_seen, it)
                     }
                     EmptyRecord | EmptyTagUnion | Erroneous(_) => None,

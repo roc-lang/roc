@@ -148,7 +148,7 @@ fn generate_entry_doc<'a>(
 
     match def {
         Def::SpaceBefore(sub_def, comments_or_new_lines) => {
-            // Comments before a definition are attached to the current defition
+            // Comments before a definition are attached to the current definition
 
             for detached_doc in detached_docs_from_comments_and_new_lines(comments_or_new_lines) {
                 acc.push(DetachedDoc(detached_doc));

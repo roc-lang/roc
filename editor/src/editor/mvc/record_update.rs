@@ -24,7 +24,7 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
         curr_mark_node,
         parent_id_opt,
         ast_node_id,
-    } = get_node_context(&ed_model)?;
+    } = get_node_context(ed_model)?;
 
     let is_blank_node = curr_mark_node.is_blank();
 
@@ -109,7 +109,7 @@ pub fn update_empty_record(
             curr_mark_node,
             parent_id_opt,
             ast_node_id,
-        } = get_node_context(&ed_model)?;
+        } = get_node_context(ed_model)?;
 
         if prev_mark_node.get_content()? == nodes::LEFT_ACCOLADE
             && curr_mark_node.get_content()? == nodes::RIGHT_ACCOLADE
@@ -182,7 +182,7 @@ pub fn update_record_colon(
         curr_mark_node,
         parent_id_opt,
         ast_node_id,
-    } = get_node_context(&ed_model)?;
+    } = get_node_context(ed_model)?;
     if let Some(parent_id) = parent_id_opt {
         let curr_ast_node = ed_model.module.env.pool.get(ast_node_id);
 

@@ -65,7 +65,7 @@ pub fn build_file<'a>(
     };
 
     let loaded = roc_load::file::load_and_monomorphize(
-        &arena,
+        arena,
         roc_file_path.clone(),
         stdlib,
         src_dir.as_path(),
@@ -128,11 +128,11 @@ pub fn build_file<'a>(
     let cwd = roc_file_path.parent().unwrap();
     let binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
     let code_gen_timing = program::gen_from_mono_module(
-        &arena,
+        arena,
         loaded,
         &roc_file_path,
         Triple::host(),
-        &app_o_file,
+        app_o_file,
         opt_level,
         emit_debug_info,
     );

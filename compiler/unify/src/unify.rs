@@ -177,7 +177,7 @@ fn unify_alias(
     match other_content {
         FlexVar(_) => {
             // Alias wins
-            merge(subs, &ctx, Alias(symbol, args.to_owned(), real_var))
+            merge(subs, ctx, Alias(symbol, args.to_owned(), real_var))
         }
         RecursionVar { structure, .. } => unify_pool(subs, pool, real_var, *structure),
         RigidVar(_) => unify_pool(subs, pool, real_var, ctx.second),
@@ -190,7 +190,7 @@ fn unify_alias(
                     }
 
                     if problems.is_empty() {
-                        problems.extend(merge(subs, &ctx, other_content.clone()));
+                        problems.extend(merge(subs, ctx, other_content.clone()));
                     }
 
                     if problems.is_empty() {
@@ -967,8 +967,8 @@ fn unify_flat_type(
         }
 
         (Record(fields1, ext1), Record(fields2, ext2)) => {
-            let rec1 = gather_fields(subs, fields1.clone(), *ext1);
-            let rec2 = gather_fields(subs, fields2.clone(), *ext2);
+            let rec1 = gather_fields(subs, fields1, *ext1);
+            let rec2 = gather_fields(subs, fields2, *ext2);
 
             unify_record(subs, pool, ctx, rec1, rec2)
         }
