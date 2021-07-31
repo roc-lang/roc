@@ -353,13 +353,13 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
     }
 }
 
-fn write_sorted_tags(
+fn write_sorted_tags<'a>(
     env: &Env,
-    subs: &Subs,
+    subs: &'a Subs,
     buf: &mut String,
     tags: &MutMap<TagName, Vec<Variable>>,
     ext_var: Variable,
-) -> Result<(), (Variable, Content)> {
+) -> Result<(), (Variable, &'a Content)> {
     // Sort the fields so they always end up in the same order.
     let mut sorted_fields = Vec::with_capacity(tags.len());
 
@@ -554,11 +554,11 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
     }
 }
 
-pub fn chase_ext_tag_union(
-    subs: &Subs,
+pub fn chase_ext_tag_union<'a>(
+    subs: &'a Subs,
     var: Variable,
     fields: &mut Vec<(TagName, Vec<Variable>)>,
-) -> Result<(), (Variable, Content)> {
+) -> Result<(), (Variable, &'a Content)> {
     use FlatType::*;
     match subs.get_content_without_compacting(var) {
         Content::Structure(EmptyTagUnion) => Ok(()),
@@ -577,7 +577,7 @@ pub fn chase_ext_tag_union(
         }
         Content::Alias(_, _, var) => chase_ext_tag_union(subs, *var, fields),
 
-        content => Err((var, content.clone())),
+        content => Err((var, content)),
     }
 }
 
