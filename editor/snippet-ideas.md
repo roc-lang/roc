@@ -60,7 +60,7 @@ Snippets are inserted based on type of value on which the cursor is located.
 - command: sort ^List^ (by ^Record Field^) {ascending/descending}
     + example: sort people by age descending >> ...
 - command: escape url 
-    + example: >> `Url.escape ^String^`
+    + example: >> `percEncodedString = Url.percentEncode ^String^`
 - command: list files in directory
     + example: >> 
         ```
