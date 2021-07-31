@@ -77,11 +77,11 @@ fn find_names_needed(
     use crate::subs::FlatType::*;
 
     while let Some((recursive, _chain)) = subs.occurs(variable) {
-        let content = subs.get_content_without_compacting(recursive).clone();
+        let rec_var = subs.fresh_unnamed_flex_var();
+        let content = subs.get_content_without_compacting(recursive);
+
         match content {
             Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                let rec_var = subs.fresh_unnamed_flex_var();
-
                 let mut new_tags = MutMap::default();
 
                 for (label, args) in tags {
@@ -94,7 +94,7 @@ fn find_names_needed(
                     new_tags.insert(label.clone(), new_args);
                 }
 
-                let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, ext_var);
+                let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, *ext_var);
                 subs.set_content(recursive, Content::Structure(flat_type));
             }
             _ => panic!(
@@ -353,18 +353,18 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
     }
 }
 
-fn write_sorted_tags(
+fn write_sorted_tags<'a>(
     env: &Env,
-    subs: &Subs,
+    subs: &'a Subs,
     buf: &mut String,
     tags: &MutMap<TagName, Vec<Variable>>,
     ext_var: Variable,
-) -> Result<(), (Variable, Content)> {
+) -> Result<(), (Variable, &'a Content)> {
     // Sort the fields so they always end up in the same order.
     let mut sorted_fields = Vec::with_capacity(tags.len());
 
     for (label, vars) in tags {
-        sorted_fields.push((label.clone(), vars));
+        sorted_fields.push((label, vars));
     }
 
     // If the `ext` contains tags, merge them into the list of tags.
@@ -373,17 +373,14 @@ fn write_sorted_tags(
     let ext_content = chase_ext_tag_union(subs, ext_var, &mut from_ext);
 
     for (tag_name, arguments) in from_ext.iter() {
-        sorted_fields.push((tag_name.clone(), arguments));
+        sorted_fields.push((tag_name, arguments));
     }
 
     let interns = &env.interns;
     let home = env.home;
 
-    sorted_fields.sort_by(|(a, _), (b, _)| {
-        a.clone()
-            .as_string(interns, home)
-            .cmp(&b.as_string(interns, home))
-    });
+    sorted_fields
+        .sort_by(|(a, _), (b, _)| a.as_string(interns, home).cmp(&b.as_string(interns, home)));
 
     let mut any_written_yet = false;
 
@@ -503,7 +500,7 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
                 //
                 // e.g. the "*" at the end of `{ x: I64 }*`
                 // or the "r" at the end of `{ x: I64 }r`
-                write_content(env, &content, subs, buf, parens)
+                write_content(env, content, subs, buf, parens)
             }
         }
 
@@ -522,7 +519,7 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
                 //
                 // e.g. the "*" at the end of `{ x: I64 }*`
                 // or the "r" at the end of `{ x: I64 }r`
-                write_content(env, &content, subs, buf, parens)
+                write_content(env, content, subs, buf, parens)
             }
         }
 
@@ -539,7 +536,7 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
                 //
                 // e.g. the "*" at the end of `{ x: I64 }*`
                 // or the "r" at the end of `{ x: I64 }r`
-                write_content(env, &content, subs, buf, parens)
+                write_content(env, content, subs, buf, parens)
             }
 
             buf.push_str(" as ");
@@ -557,11 +554,11 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
     }
 }
 
-pub fn chase_ext_tag_union(
-    subs: &Subs,
+pub fn chase_ext_tag_union<'a>(
+    subs: &'a Subs,
     var: Variable,
     fields: &mut Vec<(TagName, Vec<Variable>)>,
-) -> Result<(), (Variable, Content)> {
+) -> Result<(), (Variable, &'a Content)> {
     use FlatType::*;
     match subs.get_content_without_compacting(var) {
         Content::Structure(EmptyTagUnion) => Ok(()),
@@ -580,7 +577,7 @@ pub fn chase_ext_tag_union(
         }
         Content::Alias(_, _, var) => chase_ext_tag_union(subs, *var, fields),
 
-        content => Err((var, content.clone())),
+        content => Err((var, content)),
     }
 }
 
