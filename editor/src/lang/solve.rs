@@ -565,11 +565,10 @@ fn solve<'a>(
                                 .get(next_rank)
                                 .iter()
                                 .filter(|var| {
-                                    let current = subs.get_without_compacting(
-                                        roc_types::subs::Variable::clone(var),
-                                    );
+                                    let current_rank =
+                                        subs.get_rank(roc_types::subs::Variable::clone(var));
 
-                                    current.rank.into_usize() > next_rank.into_usize()
+                                    current_rank.into_usize() > next_rank.into_usize()
                                 })
                                 .collect::<Vec<_>>();
 
@@ -598,8 +597,7 @@ fn solve<'a>(
                         let failing: Vec<_> = rigid_vars
                             .iter()
                             .filter(|&var| {
-                                !subs.redundant(*var)
-                                    && subs.get_without_compacting(*var).rank != Rank::NONE
+                                !subs.redundant(*var) && subs.get_rank(*var) != Rank::NONE
                             })
                             .collect();
 

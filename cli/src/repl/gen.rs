@@ -154,8 +154,8 @@ pub fn gen_and_eval<'a>(
 
         // pretty-print the expr type string for later.
         name_all_type_vars(main_fn_var, &mut subs);
-        let content = subs.get(main_fn_var).content;
-        let expr_type_str = content_to_string(content.clone(), &subs, home, &interns);
+        let content = subs.get_content_without_compacting(main_fn_var);
+        let expr_type_str = content_to_string(content, &subs, home, &interns);
 
         let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
             Some(layout) => *layout,
@@ -227,7 +227,7 @@ pub fn gen_and_eval<'a>(
                 lib,
                 main_fn_name,
                 main_fn_layout,
-                &content,
+                content,
                 &env.interns,
                 home,
                 &subs,

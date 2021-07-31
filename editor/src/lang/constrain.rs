@@ -57,7 +57,7 @@ pub fn constrain_expr<'a>(
         Expr2::Blank => True,
         Expr2::EmptyRecord => constrain_empty_record(expected, region),
         Expr2::Var(symbol) => Lookup(*symbol, expected, region),
-        Expr2::SmallInt { var, .. } => {
+        Expr2::SmallInt { var, .. } | Expr2::I128 { var, .. } | Expr2::U128 { var, .. } => {
             let mut flex_vars = BumpVec::with_capacity_in(1, arena);
 
             flex_vars.push(*var);
@@ -910,7 +910,57 @@ pub fn constrain_expr<'a>(
 
             exists(arena, flex_vars, And(cons))
         }
-        _ => todo!("implement constraints for {:?}", expr),
+
+        Expr2::RunLowLevel { op, args, ret_var } => {
+            // This is a modified version of what we do for function calls.
+
+            // The operation's return type
+            let ret_type = Type2::Variable(*ret_var);
+
+            // This will be used in the occurs check
+            let mut vars = BumpVec::with_capacity_in(1 + args.len(), arena);
+
+            vars.push(*ret_var);
+
+            let mut arg_types = BumpVec::with_capacity_in(args.len(), arena);
+            let mut arg_cons = BumpVec::with_capacity_in(args.len(), arena);
+
+            for (index, node_id) in args.iter_node_ids().enumerate() {
+                let (arg_var, arg_id) = env.pool.get(node_id);
+
+                vars.push(*arg_var);
+
+                let arg_type = Type2::Variable(*arg_var);
+
+                let reason = Reason::LowLevelOpArg {
+                    op: *op,
+                    arg_index: Index::zero_based(index),
+                };
+                let expected_arg =
+                    Expected::ForReason(reason, arg_type.shallow_clone(), Region::zero());
+                let arg = env.pool.get(*arg_id);
+
+                let arg_con = constrain_expr(arena, env, arg, expected_arg, Region::zero());
+
+                arg_types.push(arg_type);
+                arg_cons.push(arg_con);
+            }
+
+            let category = Category::LowLevelOpResult(*op);
+
+            let mut and_constraints = BumpVec::with_capacity_in(2, arena);
+
+            and_constraints.push(And(arg_cons));
+            and_constraints.push(Eq(ret_type, expected, category, region));
+
+            exists(arena, vars, And(and_constraints))
+        }
+        Expr2::RuntimeError() => True,
+        Expr2::Closure { .. } => todo!(),
+        Expr2::PrivateTag { .. } => todo!(),
+        Expr2::InvalidLookup(_) => todo!(),
+        Expr2::LetRec { .. } => todo!(),
+        Expr2::LetFunction { .. } => todo!(),
     }
 }
 
