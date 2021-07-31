@@ -364,7 +364,7 @@ fn write_sorted_tags(
     let mut sorted_fields = Vec::with_capacity(tags.len());
 
     for (label, vars) in tags {
-        sorted_fields.push((label.clone(), vars));
+        sorted_fields.push((label, vars));
     }
 
     // If the `ext` contains tags, merge them into the list of tags.
@@ -373,17 +373,14 @@ fn write_sorted_tags(
     let ext_content = chase_ext_tag_union(subs, ext_var, &mut from_ext);
 
     for (tag_name, arguments) in from_ext.iter() {
-        sorted_fields.push((tag_name.clone(), arguments));
+        sorted_fields.push((tag_name, arguments));
     }
 
     let interns = &env.interns;
     let home = env.home;
 
-    sorted_fields.sort_by(|(a, _), (b, _)| {
-        a.clone()
-            .as_string(interns, home)
-            .cmp(&b.as_string(interns, home))
-    });
+    sorted_fields
+        .sort_by(|(a, _), (b, _)| a.as_string(interns, home).cmp(&b.as_string(interns, home)));
 
     let mut any_written_yet = false;
 
