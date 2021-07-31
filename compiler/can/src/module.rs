@@ -139,7 +139,7 @@ where
         }
     }
 
-    let (defs, _scope, output, symbols_introduced) = canonicalize_defs(
+    let (defs, scope, output, symbols_introduced) = canonicalize_defs(
         &mut env,
         Output::default(),
         var_store,
