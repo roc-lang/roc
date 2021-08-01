@@ -52,12 +52,17 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
 
     let template_html = include_str!("./static/index.html").replace(
         "<!-- Module links -->",
-        render_sidebar(
-            package
-                .modules
-                .iter()
-                .flat_map(|loaded_module| loaded_module.documentation.values()),
-        )
+        render_sidebar(package.modules.iter().flat_map(|loaded_module| {
+            loaded_module.documentation.values().map(move |d| {
+                let exposed_values = loaded_module
+                    .exposed_values
+                    .iter()
+                    .map(|symbol| symbol.ident_string(&loaded_module.interns).to_string())
+                    .collect::<Vec<String>>();
+
+                (exposed_values, d)
+            })
+        }))
         .as_str(),
     );
 
@@ -237,10 +242,12 @@ fn render_name_and_version(name: &str, version: &str) -> String {
     buf
 }
 
-fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -> String {
+fn render_sidebar<'a, I: Iterator<Item = (Vec<String>, &'a ModuleDocumentation)>>(
+    modules: I,
+) -> String {
     let mut buf = String::new();
 
-    for module in modules {
+    for (exposed_values, module) in modules {
         let mut sidebar_entry_content = String::new();
 
         let name = module.name.as_str();
@@ -266,20 +273,22 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
 
             for entry in &module.entries {
                 if let DocEntry::DocDef(doc_def) = entry {
-                    let mut entry_href = String::new();
+                    if exposed_values.contains(&doc_def.name) {
+                        let mut entry_href = String::new();
 
-                    entry_href.push_str(href.as_str());
-                    entry_href.push('#');
-                    entry_href.push_str(doc_def.name.as_str());
+                        entry_href.push_str(href.as_str());
+                        entry_href.push('#');
+                        entry_href.push_str(doc_def.name.as_str());
 
-                    entries_buf.push_str(
-                        html_node(
-                            "a",
-                            vec![("href", entry_href.as_str())],
-                            doc_def.name.as_str(),
-                        )
-                        .as_str(),
-                    );
+                        entries_buf.push_str(
+                            html_node(
+                                "a",
+                                vec![("href", entry_href.as_str())],
+                                doc_def.name.as_str(),
+                            )
+                            .as_str(),
+                        );
+                    }
                 }
             }
 
