@@ -18,7 +18,7 @@ mod insert_doc_links {
 
         let dep_idents = IdentIds::exposed_builtins(0);
 
-        let env = Env::new(home, dep_idents, &module_ids, IdentIds::default());
+        let env = Env::new(home, &dep_idents, &module_ids, IdentIds::default());
 
         let all_ident_ids = MutMap::default();
 

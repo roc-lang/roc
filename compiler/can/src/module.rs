@@ -47,7 +47,7 @@ pub fn canonicalize_module_defs<'a, F>(
     home: ModuleId,
     module_ids: &ModuleIds,
     exposed_ident_ids: IdentIds,
-    dep_idents: MutMap<ModuleId, IdentIds>,
+    dep_idents: &'a MutMap<ModuleId, IdentIds>,
     aliases: MutMap<Symbol, Alias>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     exposed_symbols: &MutSet<Symbol>,
