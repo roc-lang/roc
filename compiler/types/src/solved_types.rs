@@ -400,13 +400,8 @@ impl SolvedType {
                 let mut new_fields = Vec::with_capacity(fields.len());
 
                 for (label, field) in fields {
-                    use RecordField::*;
-
-                    let solved_type = match field {
-                        Optional(var) => Optional(Self::from_var_help(subs, recursion_vars, *var)),
-                        Required(var) => Required(Self::from_var_help(subs, recursion_vars, *var)),
-                        Demanded(var) => Demanded(Self::from_var_help(subs, recursion_vars, *var)),
-                    };
+                    let solved_type =
+                        field.map(|var| Self::from_var_help(subs, recursion_vars, *var));
 
                     new_fields.push((label.clone(), solved_type));
                 }

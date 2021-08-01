@@ -2,8 +2,8 @@ use roc_collections::all::{default_hasher, get_shared, relative_complement, unio
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::subs::Content::{self, *};
-use roc_types::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
-use roc_types::types::{gather_fields, ErrorType, Mismatch, RecordField, RecordStructure};
+use roc_types::subs::{Descriptor, FlatType, Mark, OptVariable, RecordFields, Subs, Variable};
+use roc_types::types::{gather_fields_ref, ErrorType, Mismatch, RecordField, RecordStructure};
 
 macro_rules! mismatch {
     () => {{
@@ -262,28 +262,27 @@ fn unify_record(
 ) -> Outcome {
     let fields1 = rec1.fields;
     let fields2 = rec2.fields;
-    let shared_fields = get_shared(&fields1, &fields2);
-    // NOTE: don't use `difference` here. In contrast to Haskell, im's `difference` is symmetric
-    let unique_fields1 = relative_complement(&fields1, &fields2);
-    let unique_fields2 = relative_complement(&fields2, &fields1);
 
-    if unique_fields1.is_empty() {
-        if unique_fields2.is_empty() {
+    let separate = RecordFields::separate(fields1, fields2);
+
+    let shared_fields = separate.in_both;
+
+    if separate.only_in_1.is_empty() {
+        if separate.only_in_2.is_empty() {
             let ext_problems = unify_pool(subs, pool, rec1.ext, rec2.ext);
 
             if !ext_problems.is_empty() {
                 return ext_problems;
             }
 
-            let other_fields = MutMap::default();
             let mut field_problems =
-                unify_shared_fields(subs, pool, ctx, shared_fields, other_fields, rec1.ext);
+                unify_shared_fields(subs, pool, ctx, shared_fields, OtherFields::None, rec1.ext);
 
             field_problems.extend(ext_problems);
 
             field_problems
         } else {
-            let flat_type = FlatType::Record(unique_fields2, rec2.ext);
+            let flat_type = FlatType::Record(separate.only_in_2, rec2.ext);
             let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
             let ext_problems = unify_pool(subs, pool, rec1.ext, sub_record);
 
@@ -291,16 +290,21 @@ fn unify_record(
                 return ext_problems;
             }
 
-            let other_fields = MutMap::default();
-            let mut field_problems =
-                unify_shared_fields(subs, pool, ctx, shared_fields, other_fields, sub_record);
+            let mut field_problems = unify_shared_fields(
+                subs,
+                pool,
+                ctx,
+                shared_fields,
+                OtherFields::None,
+                sub_record,
+            );
 
             field_problems.extend(ext_problems);
 
             field_problems
         }
-    } else if unique_fields2.is_empty() {
-        let flat_type = FlatType::Record(unique_fields1, rec1.ext);
+    } else if separate.only_in_2.is_empty() {
+        let flat_type = FlatType::Record(separate.only_in_1, rec1.ext);
         let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
         let ext_problems = unify_pool(subs, pool, sub_record, rec2.ext);
 
@@ -308,19 +312,29 @@ fn unify_record(
             return ext_problems;
         }
 
-        let other_fields = MutMap::default();
-        let mut field_problems =
-            unify_shared_fields(subs, pool, ctx, shared_fields, other_fields, sub_record);
+        let mut field_problems = unify_shared_fields(
+            subs,
+            pool,
+            ctx,
+            shared_fields,
+            OtherFields::None,
+            sub_record,
+        );
 
         field_problems.extend(ext_problems);
 
         field_problems
     } else {
-        let other_fields = union(unique_fields1.clone(), &unique_fields2);
+        let it = (&separate.only_in_1)
+            .into_iter()
+            .chain((&separate.only_in_2).into_iter());
+        let other: RecordFields = it.collect();
+
+        let other_fields = OtherFields::Other(other);
 
         let ext = fresh(subs, pool, ctx, Content::FlexVar(None));
-        let flat_type1 = FlatType::Record(unique_fields1, ext);
-        let flat_type2 = FlatType::Record(unique_fields2, ext);
+        let flat_type1 = FlatType::Record(separate.only_in_1, ext);
+        let flat_type2 = FlatType::Record(separate.only_in_2, ext);
 
         let sub1 = fresh(subs, pool, ctx, Structure(flat_type1));
         let sub2 = fresh(subs, pool, ctx, Structure(flat_type2));
@@ -346,18 +360,23 @@ fn unify_record(
     }
 }
 
+enum OtherFields {
+    None,
+    Other(RecordFields),
+}
+
 fn unify_shared_fields(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    shared_fields: MutMap<Lowercase, (RecordField<Variable>, RecordField<Variable>)>,
-    other_fields: MutMap<Lowercase, RecordField<Variable>>,
+    shared_fields: Vec<(Lowercase, RecordField<Variable>, RecordField<Variable>)>,
+    other_fields: OtherFields,
     ext: Variable,
 ) -> Outcome {
-    let mut matching_fields = MutMap::default();
+    let mut matching_fields = Vec::with_capacity(shared_fields.len());
     let num_shared_fields = shared_fields.len();
 
-    for (name, (actual, expected)) in shared_fields {
+    for (name, actual, expected) in shared_fields {
         let local_problems = unify_pool(subs, pool, actual.into_inner(), expected.into_inner());
 
         if local_problems.is_empty() {
@@ -383,18 +402,36 @@ fn unify_shared_fields(
                 (Optional(val), Optional(_)) => Optional(val),
             };
 
-            let existing = matching_fields.insert(name, actual);
-            debug_assert_eq!(existing, None);
+            matching_fields.push((name, actual));
         }
     }
 
     if num_shared_fields == matching_fields.len() {
         // pull fields in from the ext_var
-        let mut fields = union(matching_fields, &other_fields);
 
-        let new_ext_var = match roc_types::pretty_print::chase_ext_record(subs, ext, &mut fields) {
-            Ok(()) => Variable::EMPTY_RECORD,
-            Err((new, _)) => new,
+        let mut ext_fields = MutMap::default();
+        let new_ext_var =
+            match roc_types::pretty_print::chase_ext_record(subs, ext, &mut ext_fields) {
+                Ok(()) => Variable::EMPTY_RECORD,
+                Err((new, _)) => new,
+            };
+
+        let fields: RecordFields = match other_fields {
+            OtherFields::None => {
+                if ext_fields.is_empty() {
+                    RecordFields::from_sorted_vec(matching_fields)
+                } else {
+                    matching_fields
+                        .into_iter()
+                        .chain(ext_fields.into_iter())
+                        .collect()
+                }
+            }
+            OtherFields::Other(other_fields) => matching_fields
+                .into_iter()
+                .chain(other_fields.into_iter())
+                .chain(ext_fields.into_iter())
+                .collect(),
         };
 
         let flat_type = FlatType::Record(fields, new_ext_var);
@@ -460,8 +497,8 @@ fn unify_tag_union(
     if tags1.len() == 1
         && tags2.len() == 1
         && tags1 == tags2
-        && subs.get_content_without_compacting(rec1.ext)
-            == subs.get_content_without_compacting(rec2.ext)
+        && subs.get_root_key_without_compacting(rec1.ext)
+            == subs.get_root_key_without_compacting(rec2.ext)
     {
         return unify_shared_tags_merge(subs, ctx, tags1, rec1.ext, recursion_var);
     }
@@ -933,18 +970,6 @@ fn unify_shared_tags_merge(
     merge(subs, ctx, Structure(flat_type))
 }
 
-fn has_only_optional_fields<'a, I, T>(fields: &mut I) -> bool
-where
-    I: Iterator<Item = &'a RecordField<T>>,
-    T: 'a,
-{
-    fields.all(|field| match field {
-        RecordField::Required(_) => false,
-        RecordField::Demanded(_) => false,
-        RecordField::Optional(_) => true,
-    })
-}
-
 #[inline(always)]
 fn unify_flat_type(
     subs: &mut Subs,
@@ -958,17 +983,17 @@ fn unify_flat_type(
     match (left, right) {
         (EmptyRecord, EmptyRecord) => merge(subs, ctx, Structure(left.clone())),
 
-        (Record(fields, ext), EmptyRecord) if has_only_optional_fields(&mut fields.values()) => {
+        (Record(fields, ext), EmptyRecord) if fields.has_only_optional_fields() => {
             unify_pool(subs, pool, *ext, ctx.second)
         }
 
-        (EmptyRecord, Record(fields, ext)) if has_only_optional_fields(&mut fields.values()) => {
+        (EmptyRecord, Record(fields, ext)) if fields.has_only_optional_fields() => {
             unify_pool(subs, pool, ctx.first, *ext)
         }
 
         (Record(fields1, ext1), Record(fields2, ext2)) => {
-            let rec1 = gather_fields(subs, fields1, *ext1);
-            let rec2 = gather_fields(subs, fields2, *ext2);
+            let rec1 = gather_fields_ref(subs, fields1, *ext1);
+            let rec2 = gather_fields_ref(subs, fields2, *ext2);
 
             unify_record(subs, pool, ctx, rec1, rec2)
         }

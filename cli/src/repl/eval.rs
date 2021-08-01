@@ -1,17 +1,15 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use libloading::Library;
-use roc_collections::all::MutMap;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::ident::TagName;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{union_sorted_tags_help, Builtin, Layout, UnionLayout, UnionVariant};
 use roc_parse::ast::{AssignedField, Expr, StrLiteral};
 use roc_region::all::{Located, Region};
-use roc_types::subs::{Content, FlatType, Subs, Variable};
-use roc_types::types::RecordField;
+use roc_types::subs::{Content, FlatType, RecordFields, Subs, Variable};
 
 struct Env<'a, 'env> {
     arena: &'a Bump,
@@ -155,9 +153,12 @@ fn jit_to_ast_help<'a>(
                 Content::Structure(FlatType::Record(fields, _)) => {
                     Ok(struct_to_ast(env, ptr, field_layouts, fields))
                 }
-                Content::Structure(FlatType::EmptyRecord) => {
-                    Ok(struct_to_ast(env, ptr, field_layouts, &MutMap::default()))
-                }
+                Content::Structure(FlatType::EmptyRecord) => Ok(struct_to_ast(
+                    env,
+                    ptr,
+                    field_layouts,
+                    &RecordFields::with_capacity(0),
+                )),
                 Content::Structure(FlatType::TagUnion(tags, _)) => {
                     debug_assert_eq!(tags.len(), 1);
 
@@ -437,7 +438,7 @@ fn ptr_to_ast<'a>(
                 single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), &[])
             }
             Content::Structure(FlatType::EmptyRecord) => {
-                struct_to_ast(env, ptr, &[], &MutMap::default())
+                struct_to_ast(env, ptr, &[], &RecordFields::with_capacity(0))
             }
             other => {
                 unreachable!(
@@ -556,26 +557,15 @@ fn struct_to_ast<'a>(
     env: &Env<'a, '_>,
     ptr: *const u8,
     field_layouts: &'a [Layout<'a>],
-    fields: &MutMap<Lowercase, RecordField<Variable>>,
+    sorted_fields: &RecordFields,
 ) -> Expr<'a> {
     let arena = env.arena;
     let subs = env.subs;
     let mut output = Vec::with_capacity_in(field_layouts.len(), arena);
 
-    // The fields, sorted alphabetically
-    let mut sorted_fields = {
-        let mut vec = fields
-            .iter()
-            .collect::<std::vec::Vec<(&Lowercase, &RecordField<Variable>)>>();
-
-        vec.sort_by(|(label1, _), (label2, _)| label1.cmp(label2));
-
-        vec
-    };
-
     if sorted_fields.len() == 1 {
         // this is a 1-field wrapper record around another record or 1-tag tag union
-        let (label, field) = sorted_fields.pop().unwrap();
+        let (label, field) = sorted_fields.into_iter().next().unwrap();
 
         let inner_content = env.subs.get_content_without_compacting(field.into_inner());
 

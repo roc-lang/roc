@@ -1,7 +1,7 @@
 use crate::pretty_print::Parens;
-use crate::subs::{LambdaSet, Subs, VarStore, Variable};
+use crate::subs::{LambdaSet, RecordFields, Subs, VarStore, Variable};
 use inlinable_string::InlinableString;
-use roc_collections::all::{ImMap, ImSet, Index, MutMap, MutSet, SendMap};
+use roc_collections::all::{ImMap, ImSet, Index, MutSet, SendMap};
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -980,7 +980,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
 }
 
 pub struct RecordStructure {
-    pub fields: MutMap<Lowercase, RecordField<Variable>>,
+    pub fields: RecordFields,
     pub ext: Variable,
 }
 
@@ -1522,20 +1522,18 @@ pub fn name_type_var(letters_used: u32, taken: &mut MutSet<Lowercase>) -> (Lower
 
 pub fn gather_fields(
     subs: &Subs,
-    other_fields: &MutMap<Lowercase, RecordField<Variable>>,
+    other_fields: RecordFields,
     mut var: Variable,
 ) -> RecordStructure {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
-    let mut result = other_fields.clone();
+    let mut result = other_fields;
 
     loop {
         match subs.get_content_without_compacting(var) {
             Structure(Record(sub_fields, sub_ext)) => {
-                for (lowercase, record_field) in sub_fields {
-                    result.insert(lowercase.clone(), *record_field);
-                }
+                result = RecordFields::merge(result, sub_fields.clone());
 
                 var = *sub_ext;
             }
@@ -1552,5 +1550,48 @@ pub fn gather_fields(
     RecordStructure {
         fields: result,
         ext: var,
+    }
+}
+
+pub fn gather_fields_ref(
+    subs: &Subs,
+    other_fields: &RecordFields,
+    mut var: Variable,
+) -> RecordStructure {
+    use crate::subs::Content::*;
+    use crate::subs::FlatType::*;
+
+    let mut from_ext = Vec::new();
+
+    loop {
+        match subs.get_content_without_compacting(var) {
+            Structure(Record(sub_fields, sub_ext)) => {
+                from_ext.extend(sub_fields.into_iter());
+
+                var = *sub_ext;
+            }
+
+            Alias(_, _, actual_var) => {
+                // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
+                var = *actual_var;
+            }
+
+            _ => break,
+        }
+    }
+
+    if from_ext.is_empty() {
+        RecordStructure {
+            fields: other_fields.clone(),
+            ext: var,
+        }
+    } else {
+        RecordStructure {
+            fields: other_fields
+                .into_iter()
+                .chain(from_ext.into_iter())
+                .collect(),
+            ext: var,
+        }
     }
 }
