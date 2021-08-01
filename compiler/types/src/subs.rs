@@ -674,7 +674,7 @@ impl RecordFields {
         self.variables.iter()
     }
 
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Variable> {
+    pub fn iter_variables_mut(&mut self) -> impl Iterator<Item = &mut Variable> {
         self.variables.iter_mut()
     }
 
@@ -683,13 +683,9 @@ impl RecordFields {
     }
 
     pub fn has_only_optional_fields(&self) -> bool {
-        for field in self.field_type.iter() {
-            if !matches!(field, RecordField::Optional(_)) {
-                return false;
-            }
-        }
-
-        true
+        self.field_type
+            .iter()
+            .all(|field| matches!(field, RecordField::Optional(_)))
     }
 
     pub fn from_vec(mut vec: Vec<(Lowercase, RecordField<Variable>)>) -> Self {

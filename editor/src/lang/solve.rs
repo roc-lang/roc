@@ -1548,7 +1548,7 @@ fn deep_copy_var_help(
                 same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
 
                 Record(mut fields, ext_var) => {
-                    for var in fields.iter_mut() {
+                    for var in fields.iter_variables_mut() {
                         *var = deep_copy_var_help(subs, max_rank, pools, *var);
                     }
 
