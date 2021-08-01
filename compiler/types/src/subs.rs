@@ -3,7 +3,7 @@ use roc_collections::all::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use std::fmt;
-use std::iter::{once, Iterator};
+use std::iter::{once, FromIterator, Iterator, Map, Zip};
 use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
@@ -638,6 +638,65 @@ pub enum Builtin {
     Int,
     Float,
     EmptyRecord,
+}
+
+struct RecordFields {
+    field_names: Vec<Lowercase>,
+    variables: Vec<Variable>,
+    field_type: Vec<RecordField<()>>,
+}
+
+impl FromIterator<(Lowercase, RecordField<Variable>)> for RecordFields {
+    fn from_iter<T: IntoIterator<Item = (Lowercase, RecordField<Variable>)>>(iter: T) -> Self {
+        let mut vec: Vec<_> = iter.into_iter().collect();
+
+        // we assume there are no duplicate field names in there
+        vec.sort_unstable_by(|(name1, _), (name2, _)| name1.cmp(name2));
+
+        let mut field_names = Vec::with_capacity(vec.len());
+        let mut variables = Vec::with_capacity(vec.len());
+        let mut field_type = Vec::with_capacity(vec.len());
+
+        for (name, record_field) in vec {
+            field_names.push(name);
+            field_type.push(record_field.map(|_| ()));
+            variables.push(record_field.into_inner());
+        }
+
+        RecordFields {
+            field_names,
+            variables,
+            field_type,
+        }
+    }
+}
+
+impl IntoIterator for RecordFields {
+    type Item = (Lowercase, RecordField<Variable>);
+
+    type IntoIter = Map<
+        Zip<
+            Zip<std::vec::IntoIter<Lowercase>, std::vec::IntoIter<Variable>>,
+            std::vec::IntoIter<RecordField<()>>,
+        >,
+        fn(((Lowercase, Variable), RecordField<()>)) -> (Lowercase, RecordField<Variable>),
+    >;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.field_names
+            .into_iter()
+            .zip(self.variables.into_iter())
+            .zip(self.field_type.into_iter())
+            .map(record_fields_into_iterator_help)
+    }
+}
+
+fn record_fields_into_iterator_help(
+    arg: ((Lowercase, Variable), RecordField<()>),
+) -> (Lowercase, RecordField<Variable>) {
+    let ((name, var), field_type) = arg;
+
+    (name, field_type.map(|_| var))
 }
 
 fn occurs(
