@@ -739,9 +739,9 @@ fn markdown_to_html(
     let mut broken_link_callback = |link: BrokenLink| {
         // A shortcut link - see https://spec.commonmark.org/0.30/#shortcut-reference-link -
         // is something like `[foo]` in markdown. If you have a shortcut link
-        // without a corresponding `[foo]: https://foo.com` link
+        // without a corresponding `[foo]: https://foo.com` entry
         // at the end of the document, we resolve it as an identifier based on
-        // what's currently in stuff, so you write things like [Str.join] or
+        // what's currently in scope, so you write things like [Str.join] or
         // [myFunction] and have them resolve to the docs for what you wrote.
         match link.link_type {
             LinkType::Shortcut => {
