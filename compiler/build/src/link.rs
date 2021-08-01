@@ -140,7 +140,7 @@ pub fn build_zig_host(
         .args(&[
             "build-obj",
             zig_host_src,
-            &emit_bin,
+            emit_bin,
             "--pkg-begin",
             "str",
             zig_str_path,
