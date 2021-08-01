@@ -2,8 +2,9 @@ use crate::types::{name_type_var, ErrorType, Problem, RecordField, TypeExt};
 use roc_collections::all::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
+use std::cmp::Ordering;
 use std::fmt;
-use std::iter::{once, FromIterator, Iterator, Map, Zip};
+use std::iter::{once, Extend, FromIterator, Iterator, Map, Zip};
 use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
@@ -646,28 +647,129 @@ struct RecordFields {
     field_type: Vec<RecordField<()>>,
 }
 
-impl FromIterator<(Lowercase, RecordField<Variable>)> for RecordFields {
-    fn from_iter<T: IntoIterator<Item = (Lowercase, RecordField<Variable>)>>(iter: T) -> Self {
-        let mut vec: Vec<_> = iter.into_iter().collect();
+impl RecordFields {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            field_names: Vec::with_capacity(capacity),
+            variables: Vec::with_capacity(capacity),
+            field_type: Vec::with_capacity(capacity),
+        }
+    }
 
+    pub fn len(&self) -> usize {
+        let answer = self.field_names.len();
+
+        debug_assert_eq!(answer, self.variables.len());
+        debug_assert_eq!(answer, self.field_type.len());
+
+        answer
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn from_vec(mut vec: Vec<(Lowercase, RecordField<Variable>)>) -> Self {
         // we assume there are no duplicate field names in there
         vec.sort_unstable_by(|(name1, _), (name2, _)| name1.cmp(name2));
 
-        let mut field_names = Vec::with_capacity(vec.len());
-        let mut variables = Vec::with_capacity(vec.len());
-        let mut field_type = Vec::with_capacity(vec.len());
+        let mut result = RecordFields::with_capacity(vec.len());
 
-        for (name, record_field) in vec {
-            field_names.push(name);
-            field_type.push(record_field.map(|_| ()));
-            variables.push(record_field.into_inner());
+        result.extend(vec);
+
+        result
+    }
+
+    pub fn merge(self, other: Self) -> Self {
+        // maximum final size (if there is no overlap at all)
+        let final_size = self.len() + other.len();
+
+        let mut result = Self::with_capacity(final_size);
+
+        let mut it1 = self.into_iter().peekable();
+        let mut it2 = other.into_iter().peekable();
+
+        loop {
+            let which = match (it1.peek(), it2.peek()) {
+                (Some((l, _)), Some((r, _))) => Some(l.cmp(r)),
+                (Some(_), None) => Some(Ordering::Less),
+                (None, Some(_)) => Some(Ordering::Greater),
+                (None, None) => None,
+            };
+
+            let next_element = match which {
+                Some(Ordering::Less) => it1.next(),
+                Some(Ordering::Equal) => {
+                    let _ = it2.next();
+                    it1.next()
+                }
+                Some(Ordering::Greater) => it2.next(),
+                None => break,
+            };
+
+            result.extend([next_element.unwrap()]);
         }
 
-        RecordFields {
-            field_names,
-            variables,
-            field_type,
+        result
+    }
+
+    fn separate(self, other: Self) -> SeparateRecordFields {
+        let max_common = self.len().min(other.len());
+
+        let mut result = SeparateRecordFields {
+            only_in_1: RecordFields::with_capacity(self.len()),
+            only_in_2: RecordFields::with_capacity(other.len()),
+            in_both: Vec::with_capacity(max_common),
+        };
+
+        let mut it1 = self.into_iter().peekable();
+        let mut it2 = other.into_iter().peekable();
+
+        loop {
+            let which = match (it1.peek(), it2.peek()) {
+                (Some((l, _)), Some((r, _))) => Some(l.cmp(r)),
+                (Some(_), None) => Some(Ordering::Less),
+                (None, Some(_)) => Some(Ordering::Greater),
+                (None, None) => None,
+            };
+
+            match which {
+                Some(Ordering::Less) => result.only_in_1.extend(it1.next()),
+                Some(Ordering::Equal) => {
+                    let (label, field1) = it1.next().unwrap();
+                    let (_, field2) = it2.next().unwrap();
+
+                    result.in_both.push((label, field1, field2));
+                }
+                Some(Ordering::Greater) => result.only_in_2.extend(it2.next()),
+                None => break,
+            };
         }
+
+        result
+    }
+}
+
+struct SeparateRecordFields {
+    only_in_1: RecordFields,
+    only_in_2: RecordFields,
+    in_both: Vec<(Lowercase, RecordField<Variable>, RecordField<Variable>)>,
+}
+
+impl Extend<(Lowercase, RecordField<Variable>)> for RecordFields {
+    fn extend<T: IntoIterator<Item = (Lowercase, RecordField<Variable>)>>(&mut self, iter: T) {
+        for (name, record_field) in iter.into_iter() {
+            self.field_names.push(name);
+            self.field_type.push(record_field.map(|_| ()));
+            self.variables.push(record_field.into_inner());
+        }
+    }
+}
+
+impl FromIterator<(Lowercase, RecordField<Variable>)> for RecordFields {
+    fn from_iter<T: IntoIterator<Item = (Lowercase, RecordField<Variable>)>>(iter: T) -> Self {
+        let vec: Vec<_> = iter.into_iter().collect();
+        Self::from_vec(vec)
     }
 }
 
