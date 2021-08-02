@@ -4499,6 +4499,6 @@ mod solve_expr {
             std::mem::size_of::<roc_types::types::Problem>(),
         );
 
-        assert_eq!(query, (40, 80, 64, 56, 64))
+        assert_eq!((40, 72, 56, 48, 64), query)
     }
 }

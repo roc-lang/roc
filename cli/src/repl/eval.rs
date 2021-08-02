@@ -173,7 +173,7 @@ fn jit_to_ast_help<'a>(
                     ))
                 }
                 Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => Ok(
-                    single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), &[]),
+                    single_tag_union_to_ast(env, ptr, field_layouts, *tag_name.clone(), &[]),
                 ),
                 Content::Structure(FlatType::Func(_, _, _)) => {
                     // a function with a struct as the closure environment
@@ -435,7 +435,7 @@ fn ptr_to_ast<'a>(
                 single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), payload_vars)
             }
             Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
-                single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), &[])
+                single_tag_union_to_ast(env, ptr, field_layouts, *tag_name.clone(), &[])
             }
             Content::Structure(FlatType::EmptyRecord) => {
                 struct_to_ast(env, ptr, &[], &RecordFields::with_capacity(0))

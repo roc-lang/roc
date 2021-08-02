@@ -737,7 +737,7 @@ fn type_to_variable(
             debug_assert!(ext_tag_vec.is_empty());
 
             let content = Content::Structure(FlatType::FunctionOrTagUnion(
-                tag_name.clone(),
+                Box::new(tag_name.clone()),
                 *symbol,
                 new_ext_var,
             ));
