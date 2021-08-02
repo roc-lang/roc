@@ -524,6 +524,7 @@ fn start_phase<'a>(
                     var_store,
                     imported_modules,
                     declarations,
+                    dep_idents,
                     ..
                 } = constrained;
 
@@ -536,6 +537,7 @@ fn start_phase<'a>(
                     imported_modules,
                     &mut state.exposed_types,
                     state.stdlib,
+                    dep_idents,
                     declarations,
                 )
             }
@@ -621,6 +623,7 @@ pub struct LoadedModule {
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
+    pub dep_idents: MutMap<ModuleId, IdentIds>,
     pub exposed_aliases: MutMap<Symbol, Alias>,
     pub exposed_values: Vec<Symbol>,
     pub header_sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
@@ -676,6 +679,7 @@ struct ConstrainedModule {
     constraint: Constraint,
     ident_ids: IdentIds,
     var_store: VarStore,
+    dep_idents: MutMap<ModuleId, IdentIds>,
     module_timing: ModuleTiming,
 }
 
@@ -759,6 +763,7 @@ enum Msg<'a> {
         solved_module: SolvedModule,
         solved_subs: Solved<Subs>,
         decls: Vec<Declaration>,
+        dep_idents: MutMap<ModuleId, IdentIds>,
         module_timing: ModuleTiming,
         unused_imports: MutMap<ModuleId, Region>,
     },
@@ -767,6 +772,7 @@ enum Msg<'a> {
         exposed_vars_by_symbol: MutMap<Symbol, Variable>,
         exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
         exposed_values: Vec<Symbol>,
+        dep_idents: MutMap<ModuleId, IdentIds>,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
     },
     FoundSpecializations {
@@ -985,6 +991,7 @@ enum BuildTask<'a> {
         constraint: Constraint,
         var_store: VarStore,
         declarations: Vec<Declaration>,
+        dep_idents: MutMap<ModuleId, IdentIds>,
         unused_imports: MutMap<ModuleId, Region>,
     },
     BuildPendingSpecializations {
@@ -1516,6 +1523,7 @@ where
                         exposed_vars_by_symbol,
                         exposed_aliases_by_symbol,
                         exposed_values,
+                        dep_idents,
                         documentation,
                     } => {
                         // We're done! There should be no more messages pending.
@@ -1534,6 +1542,7 @@ where
                             exposed_values,
                             exposed_aliases_by_symbol,
                             exposed_vars_by_symbol,
+                            dep_idents,
                             documentation,
                         )));
                     }
@@ -1892,6 +1901,7 @@ fn update<'a>(
             solved_module,
             solved_subs,
             decls,
+            dep_idents,
             mut module_timing,
             mut unused_imports,
         } => {
@@ -1949,6 +1959,7 @@ fn update<'a>(
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
                         exposed_values: solved_module.exposed_symbols,
                         exposed_aliases_by_symbol: solved_module.aliases,
+                        dep_idents,
                         documentation,
                     })
                     .map_err(|_| LoadingProblem::MsgChannelDied)?;
@@ -2283,6 +2294,7 @@ fn finish(
     exposed_values: Vec<Symbol>,
     exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
     exposed_vars_by_symbol: MutMap<Symbol, Variable>,
+    dep_idents: MutMap<ModuleId, IdentIds>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
 ) -> LoadedModule {
     let module_ids = Arc::try_unwrap(state.arc_modules)
@@ -2316,6 +2328,7 @@ fn finish(
         can_problems: state.module_cache.can_problems,
         type_problems: state.module_cache.type_problems,
         declarations_by_id: state.declarations_by_id,
+        dep_idents,
         exposed_aliases: exposed_aliases_by_symbol,
         exposed_values,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
@@ -3234,6 +3247,7 @@ impl<'a> BuildTask<'a> {
         imported_modules: MutMap<ModuleId, Region>,
         exposed_types: &mut SubsByModule,
         stdlib: &StdLib,
+        dep_idents: MutMap<ModuleId, IdentIds>,
         declarations: Vec<Declaration>,
     ) -> Self {
         let home = module.module_id;
@@ -3261,6 +3275,7 @@ impl<'a> BuildTask<'a> {
             constraint,
             var_store,
             declarations,
+            dep_idents,
             module_timing,
             unused_imports,
         }
@@ -3276,6 +3291,7 @@ fn run_solve<'a>(
     constraint: Constraint,
     mut var_store: VarStore,
     decls: Vec<Declaration>,
+    dep_idents: MutMap<ModuleId, IdentIds>,
     unused_imports: MutMap<ModuleId, Region>,
 ) -> Msg<'a> {
     // We have more constraining work to do now, so we'll add it to our timings.
@@ -3330,6 +3346,7 @@ fn run_solve<'a>(
         solved_subs,
         ident_ids,
         decls,
+        dep_idents,
         solved_module,
         module_timing,
         unused_imports,
@@ -3478,7 +3495,8 @@ fn fabricate_effects_module<'a>(
     let module_ids = { (*module_ids).lock().clone() }.into_module_ids();
 
     let mut scope = roc_can::scope::Scope::new(module_id, &mut var_store);
-    let mut can_env = roc_can::env::Env::new(module_id, dep_idents, &module_ids, exposed_ident_ids);
+    let mut can_env =
+        roc_can::env::Env::new(module_id, &dep_idents, &module_ids, exposed_ident_ids);
 
     let effect_symbol = scope
         .introduce(
@@ -3611,6 +3629,7 @@ fn fabricate_effects_module<'a>(
         var_store,
         constraint,
         ident_ids: module_output.ident_ids,
+        dep_idents,
         module_timing,
     };
 
@@ -3690,7 +3709,7 @@ where
         module_id,
         module_ids,
         exposed_ident_ids,
-        dep_idents,
+        &dep_idents,
         aliases,
         exposed_imports,
         &exposed_symbols,
@@ -3738,6 +3757,7 @@ where
                 var_store,
                 constraint,
                 ident_ids: module_output.ident_ids,
+                dep_idents,
                 module_timing,
             };
 
@@ -4210,6 +4230,7 @@ where
             var_store,
             ident_ids,
             declarations,
+            dep_idents,
             unused_imports,
         } => Ok(run_solve(
             module,
@@ -4219,6 +4240,7 @@ where
             constraint,
             var_store,
             declarations,
+            dep_idents,
             unused_imports,
         )),
         BuildPendingSpecializations {
