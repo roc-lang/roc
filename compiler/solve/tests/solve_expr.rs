@@ -4488,4 +4488,13 @@ mod solve_expr {
             "RBTree {}",
         );
     }
+
+    #[test]
+    fn sizes() {
+        assert_eq!(std::mem::size_of::<roc_module::ident::TagName>(), 40);
+        assert_eq!(std::mem::size_of::<roc_types::subs::Descriptor>(), 136);
+        assert_eq!(std::mem::size_of::<roc_types::subs::Content>(), 120);
+        assert_eq!(std::mem::size_of::<roc_types::subs::FlatType>(), 112);
+        assert_eq!(std::mem::size_of::<roc_types::types::Problem>(), 104);
+    }
 }
