@@ -2,8 +2,9 @@ use crate::types::{name_type_var, ErrorType, Problem, RecordField, TypeExt};
 use roc_collections::all::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
+use std::cmp::Ordering;
 use std::fmt;
-use std::iter::{once, Iterator};
+use std::iter::{once, Extend, FromIterator, Iterator, Map, Zip};
 use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
@@ -535,7 +536,7 @@ impl From<usize> for Rank {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct Descriptor {
     pub content: Content,
     pub rank: Rank,
@@ -573,7 +574,7 @@ impl From<Content> for Descriptor {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum Content {
     /// A type variable which the user did not name in an annotation,
     ///
@@ -619,11 +620,11 @@ impl Content {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum FlatType {
     Apply(Symbol, Vec<Variable>),
     Func(Vec<Variable>, Variable, Variable),
-    Record(MutMap<Lowercase, RecordField<Variable>>, Variable),
+    Record(RecordFields, Variable),
     TagUnion(MutMap<TagName, Vec<Variable>>, Variable),
     FunctionOrTagUnion(TagName, Symbol, Variable),
     RecursiveTagUnion(Variable, MutMap<TagName, Vec<Variable>>, Variable),
@@ -638,6 +639,232 @@ pub enum Builtin {
     Int,
     Float,
     EmptyRecord,
+}
+
+#[derive(Clone, Debug)]
+pub struct RecordFields {
+    field_names: Vec<Lowercase>,
+    variables: Vec<Variable>,
+    field_type: Vec<RecordField<()>>,
+}
+
+impl RecordFields {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            field_names: Vec::with_capacity(capacity),
+            variables: Vec::with_capacity(capacity),
+            field_type: Vec::with_capacity(capacity),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        let answer = self.field_names.len();
+
+        debug_assert_eq!(answer, self.variables.len());
+        debug_assert_eq!(answer, self.field_type.len());
+
+        answer
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn iter_variables(&self) -> impl Iterator<Item = &Variable> {
+        self.variables.iter()
+    }
+
+    pub fn iter_variables_mut(&mut self) -> impl Iterator<Item = &mut Variable> {
+        self.variables.iter_mut()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&Lowercase, RecordField<Variable>)> {
+        self.into_iter()
+    }
+
+    pub fn has_only_optional_fields(&self) -> bool {
+        self.field_type
+            .iter()
+            .all(|field| matches!(field, RecordField::Optional(_)))
+    }
+
+    pub fn from_vec(mut vec: Vec<(Lowercase, RecordField<Variable>)>) -> Self {
+        // we assume there are no duplicate field names in there
+        vec.sort_unstable_by(|(name1, _), (name2, _)| name1.cmp(name2));
+
+        Self::from_sorted_vec(vec)
+    }
+
+    pub fn from_sorted_vec(vec: Vec<(Lowercase, RecordField<Variable>)>) -> Self {
+        let mut result = RecordFields::with_capacity(vec.len());
+
+        result.extend(vec);
+
+        result
+    }
+
+    pub fn merge(self, other: Self) -> Self {
+        if other.is_empty() {
+            return self;
+        }
+
+        // maximum final size (if there is no overlap at all)
+        let final_size = self.len() + other.len();
+
+        let mut result = Self::with_capacity(final_size);
+
+        let mut it1 = self.into_iter().peekable();
+        let mut it2 = other.into_iter().peekable();
+
+        loop {
+            let which = match (it1.peek(), it2.peek()) {
+                (Some((l, _)), Some((r, _))) => Some(l.cmp(r)),
+                (Some(_), None) => Some(Ordering::Less),
+                (None, Some(_)) => Some(Ordering::Greater),
+                (None, None) => None,
+            };
+
+            let next_element = match which {
+                Some(Ordering::Less) => it1.next(),
+                Some(Ordering::Equal) => {
+                    let _ = it2.next();
+                    it1.next()
+                }
+                Some(Ordering::Greater) => it2.next(),
+                None => break,
+            };
+
+            result.extend([next_element.unwrap()]);
+        }
+
+        result
+    }
+
+    pub fn separate(self, other: Self) -> SeparateRecordFields {
+        let max_common = self.len().min(other.len());
+
+        let mut result = SeparateRecordFields {
+            only_in_1: RecordFields::with_capacity(self.len()),
+            only_in_2: RecordFields::with_capacity(other.len()),
+            in_both: Vec::with_capacity(max_common),
+        };
+
+        let mut it1 = self.into_iter().peekable();
+        let mut it2 = other.into_iter().peekable();
+
+        loop {
+            let which = match (it1.peek(), it2.peek()) {
+                (Some((l, _)), Some((r, _))) => Some(l.cmp(r)),
+                (Some(_), None) => Some(Ordering::Less),
+                (None, Some(_)) => Some(Ordering::Greater),
+                (None, None) => None,
+            };
+
+            match which {
+                Some(Ordering::Less) => result.only_in_1.extend(it1.next()),
+                Some(Ordering::Equal) => {
+                    let (label, field1) = it1.next().unwrap();
+                    let (_, field2) = it2.next().unwrap();
+
+                    result.in_both.push((label, field1, field2));
+                }
+                Some(Ordering::Greater) => result.only_in_2.extend(it2.next()),
+                None => break,
+            };
+        }
+
+        result
+    }
+}
+
+pub struct SeparateRecordFields {
+    pub only_in_1: RecordFields,
+    pub only_in_2: RecordFields,
+    pub in_both: Vec<(Lowercase, RecordField<Variable>, RecordField<Variable>)>,
+}
+
+impl Extend<(Lowercase, RecordField<Variable>)> for RecordFields {
+    fn extend<T: IntoIterator<Item = (Lowercase, RecordField<Variable>)>>(&mut self, iter: T) {
+        for (name, record_field) in iter.into_iter() {
+            self.field_names.push(name);
+            self.field_type.push(record_field.map(|_| ()));
+            self.variables.push(record_field.into_inner());
+        }
+    }
+}
+
+impl FromIterator<(Lowercase, RecordField<Variable>)> for RecordFields {
+    fn from_iter<T: IntoIterator<Item = (Lowercase, RecordField<Variable>)>>(iter: T) -> Self {
+        let vec: Vec<_> = iter.into_iter().collect();
+        Self::from_vec(vec)
+    }
+}
+
+impl<'a> FromIterator<(&'a Lowercase, RecordField<Variable>)> for RecordFields {
+    fn from_iter<T: IntoIterator<Item = (&'a Lowercase, RecordField<Variable>)>>(iter: T) -> Self {
+        let vec: Vec<_> = iter.into_iter().map(|(a, b)| (a.clone(), b)).collect();
+        Self::from_vec(vec)
+    }
+}
+
+impl IntoIterator for RecordFields {
+    type Item = (Lowercase, RecordField<Variable>);
+
+    #[allow(clippy::type_complexity)]
+    type IntoIter = Map<
+        Zip<
+            Zip<std::vec::IntoIter<Lowercase>, std::vec::IntoIter<Variable>>,
+            std::vec::IntoIter<RecordField<()>>,
+        >,
+        fn(((Lowercase, Variable), RecordField<()>)) -> (Lowercase, RecordField<Variable>),
+    >;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.field_names
+            .into_iter()
+            .zip(self.variables.into_iter())
+            .zip(self.field_type.into_iter())
+            .map(record_fields_into_iterator_help)
+    }
+}
+
+fn record_fields_into_iterator_help(
+    arg: ((Lowercase, Variable), RecordField<()>),
+) -> (Lowercase, RecordField<Variable>) {
+    let ((name, var), field_type) = arg;
+
+    (name, field_type.map(|_| var))
+}
+
+impl<'a> IntoIterator for &'a RecordFields {
+    type Item = (&'a Lowercase, RecordField<Variable>);
+
+    #[allow(clippy::type_complexity)]
+    type IntoIter = Map<
+        Zip<
+            Zip<std::slice::Iter<'a, Lowercase>, std::slice::Iter<'a, Variable>>,
+            std::slice::Iter<'a, RecordField<()>>,
+        >,
+        fn(
+            ((&'a Lowercase, &Variable), &RecordField<()>),
+        ) -> (&'a Lowercase, RecordField<Variable>),
+    >;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.field_names
+            .iter()
+            .zip(self.variables.iter())
+            .zip(self.field_type.iter())
+            .map(ref_record_fields_into_iterator_help)
+    }
+}
+
+fn ref_record_fields_into_iterator_help<'a>(
+    arg: ((&'a Lowercase, &Variable), &RecordField<()>),
+) -> (&'a Lowercase, RecordField<Variable>) {
+    let ((name, var), field_type) = arg;
+
+    (name, field_type.map(|_| *var))
 }
 
 fn occurs(
@@ -670,12 +897,7 @@ fn occurs(
                         short_circuit(subs, root_var, &new_seen, it)
                     }
                     Record(vars_by_field, ext_var) => {
-                        let it =
-                            once(ext_var).chain(vars_by_field.values().map(|field| match field {
-                                RecordField::Optional(var) => var,
-                                RecordField::Required(var) => var,
-                                RecordField::Demanded(var) => var,
-                            }));
+                        let it = once(ext_var).chain(vars_by_field.iter_variables());
                         short_circuit(subs, root_var, &new_seen, it)
                     }
                     TagUnion(tags, ext_var) => {
@@ -799,21 +1021,10 @@ fn explicit_substitute(
                         Record(mut vars_by_field, ext_var) => {
                             let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
 
-                            for (_, field) in vars_by_field.iter_mut() {
-                                use RecordField::*;
-
-                                *field = match field {
-                                    Optional(var) => {
-                                        Optional(explicit_substitute(subs, from, to, *var, seen))
-                                    }
-                                    Required(var) => {
-                                        Required(explicit_substitute(subs, from, to, *var, seen))
-                                    }
-                                    Demanded(var) => {
-                                        Demanded(explicit_substitute(subs, from, to, *var, seen))
-                                    }
-                                };
+                            for var in vars_by_field.variables.iter_mut() {
+                                *var = explicit_substitute(subs, from, to, *var, seen);
                             }
+
                             subs.set_content(in_var, Structure(Record(vars_by_field, new_ext_var)));
                         }
 
@@ -1284,8 +1495,8 @@ fn restore_content(subs: &mut Subs, content: &Content) {
             EmptyTagUnion => (),
 
             Record(fields, ext_var) => {
-                for field in fields.values() {
-                    subs.restore(field.into_inner());
+                for var in fields.iter_variables() {
+                    subs.restore(*var);
                 }
 
                 subs.restore(*ext_var);

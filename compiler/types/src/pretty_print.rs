@@ -152,19 +152,9 @@ fn find_names_needed(
 
             find_names_needed(*ret_var, subs, roots, root_appearances, names_taken);
         }
-        Structure(Record(fields, ext_var)) => {
-            let mut sorted_fields: Vec<_> = fields.iter().collect();
-
-            sorted_fields.sort_by(|(label1, _), (label2, _)| label1.cmp(label2));
-
-            for (_, field) in sorted_fields {
-                find_names_needed(
-                    field.into_inner(),
-                    subs,
-                    roots,
-                    root_appearances,
-                    names_taken,
-                );
+        Structure(Record(sorted_fields, ext_var)) => {
+            for var in sorted_fields.iter_variables() {
+                find_names_needed(*var, subs, roots, root_appearances, names_taken);
             }
 
             find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
@@ -420,19 +410,16 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
             use crate::types::{gather_fields, RecordStructure};
 
             // If the `ext` has concrete fields (e.g. { foo : I64}{ bar : Bool }), merge them
-            let RecordStructure { fields, ext } = gather_fields(subs, fields, *ext_var);
+            let RecordStructure {
+                fields: sorted_fields,
+                ext,
+            } = gather_fields(subs, fields.clone(), *ext_var);
             let ext_var = ext;
 
             if fields.is_empty() {
                 buf.push_str(EMPTY_RECORD)
             } else {
                 buf.push_str("{ ");
-
-                // Sort the fields so they always end up in the same order.
-                let mut sorted_fields = Vec::with_capacity(fields.len());
-
-                sorted_fields.extend(fields);
-                sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
 
                 let mut any_written_yet = false;
 
@@ -592,7 +579,7 @@ pub fn chase_ext_record(
     match subs.get_content_without_compacting(var) {
         Structure(Record(sub_fields, sub_ext)) => {
             for (field_name, record_field) in sub_fields {
-                fields.insert(field_name.clone(), *record_field);
+                fields.insert(field_name.clone(), record_field);
             }
 
             chase_ext_record(subs, *sub_ext, fields)

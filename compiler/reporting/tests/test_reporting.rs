@@ -2156,8 +2156,8 @@ mod test_reporting {
                 This is usually a typo. Here are the `x` fields that are most similar:
 
                     { fo : Num c
-                    , foobar : Num a
-                    , bar : Num e
+                    , foobar : Num d
+                    , bar : Num a
                     , baz : Num b
                     , ...
                     }
