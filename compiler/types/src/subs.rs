@@ -627,7 +627,7 @@ pub enum FlatType {
     TagUnion(MutMap<TagName, Vec<Variable>>, Variable),
     FunctionOrTagUnion(TagName, Symbol, Variable),
     RecursiveTagUnion(Variable, MutMap<TagName, Vec<Variable>>, Variable),
-    Erroneous(Problem),
+    Erroneous(Box<Problem>),
     EmptyRecord,
     EmptyTagUnion,
 }
@@ -1242,7 +1242,7 @@ fn flat_type_to_err_type(
         }
 
         Erroneous(problem) => {
-            state.problems.push(problem);
+            state.problems.push(*problem);
 
             ErrorType::Error
         }

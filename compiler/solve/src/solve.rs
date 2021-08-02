@@ -841,7 +841,7 @@ fn type_to_variable(
             result
         }
         Erroneous(problem) => {
-            let content = Content::Structure(FlatType::Erroneous(problem.clone()));
+            let content = Content::Structure(FlatType::Erroneous(Box::new(problem.clone())));
 
             register(subs, rank, pools, content)
         }

@@ -465,7 +465,7 @@ impl SolvedType {
             }
             EmptyRecord => SolvedType::EmptyRecord,
             EmptyTagUnion => SolvedType::EmptyTagUnion,
-            Erroneous(problem) => SolvedType::Erroneous(problem.clone()),
+            Erroneous(problem) => SolvedType::Erroneous(*problem.clone()),
         }
     }
 }
