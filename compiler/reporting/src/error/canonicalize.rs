@@ -146,7 +146,7 @@ pub fn can_problem<'b>(
             },
         ),
         Problem::CyclicAlias(symbol, region, others) => {
-            let (doc, title) = crate::error::r#type::cyclic_alias(alloc, symbol, region, &*others);
+            let (doc, title) = crate::error::r#type::cyclic_alias(alloc, symbol, region, others);
 
             return Report {
                 title,

@@ -91,7 +91,7 @@ pub fn type_problem<'b>(
                     }
                 }
                 CyclicAlias(symbol, region, others) => {
-                    let (doc, title) = cyclic_alias(alloc, symbol, region, &*others);
+                    let (doc, title) = cyclic_alias(alloc, symbol, region, others);
 
                     Report {
                         title,
@@ -110,7 +110,7 @@ pub fn cyclic_alias<'b>(
     alloc: &'b RocDocAllocator<'b>,
     symbol: Symbol,
     region: roc_region::all::Region,
-    others: &[Symbol],
+    others: Vec<Symbol>,
 ) -> (RocDocBuilder<'b>, String) {
     let doc = if others.is_empty() {
         alloc.stack(vec![
@@ -140,7 +140,7 @@ pub fn cyclic_alias<'b>(
                 alloc.symbol_unqualified(symbol),
                 others
                     .into_iter()
-                    .map(|other| alloc.symbol_unqualified(*other))
+                    .map(|other| alloc.symbol_unqualified(other))
                     .collect::<Vec<_>>(),
             ),
             alloc.reflow("Recursion in aliases is only allowed if recursion happens behind a tag."),
