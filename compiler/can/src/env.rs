@@ -12,7 +12,7 @@ pub struct Env<'a> {
     /// are assumed to be relative to this path.
     pub home: ModuleId,
 
-    pub dep_idents: MutMap<ModuleId, IdentIds>,
+    pub dep_idents: &'a MutMap<ModuleId, IdentIds>,
 
     pub module_ids: &'a ModuleIds,
 
@@ -40,7 +40,7 @@ pub struct Env<'a> {
 impl<'a> Env<'a> {
     pub fn new(
         home: ModuleId,
-        dep_idents: MutMap<ModuleId, IdentIds>,
+        dep_idents: &'a MutMap<ModuleId, IdentIds>,
         module_ids: &'a ModuleIds,
         exposed_ident_ids: IdentIds,
     ) -> Env<'a> {
