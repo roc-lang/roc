@@ -1642,7 +1642,11 @@ fn make_tag_union_recursive<'a>(
             can_report_error,
         ),
         _ => {
-            let problem = roc_types::types::Problem::CyclicAlias(symbol, region, others.clone());
+            let problem = roc_types::types::Problem::CyclicAlias(
+                symbol,
+                region,
+                others.clone().into_boxed_slice(),
+            );
             *typ = Type::Erroneous(problem);
 
             // ensure cyclic error is only reported for one element of the cycle

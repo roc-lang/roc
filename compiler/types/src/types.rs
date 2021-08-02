@@ -1117,7 +1117,7 @@ pub struct Alias {
 pub enum Problem {
     CanonicalizationProblem,
     CircularType(Symbol, Box<ErrorType>, Region),
-    CyclicAlias(Symbol, Region, Vec<Symbol>),
+    CyclicAlias(Symbol, Region, Box<[Symbol]>),
     UnrecognizedIdent(InlinableString),
     Shadowed(Region, Located<Ident>),
     BadTypeArguments {

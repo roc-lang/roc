@@ -4497,8 +4497,9 @@ mod solve_expr {
             std::mem::size_of::<roc_types::subs::Content>(),
             std::mem::size_of::<roc_types::subs::FlatType>(),
             std::mem::size_of::<roc_types::types::Problem>(),
+            std::mem::size_of::<roc_module::ident::Ident>(),
         );
 
-        assert_eq!(query, (40, 96, 80, 72, 64))
+        assert_eq!(query, (40, 96, 80, 72, 64, 32))
     }
 }
