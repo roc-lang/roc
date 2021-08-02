@@ -29,6 +29,8 @@ fn main() {
             do_benchmark("trunk");
             do_benchmark("branch");
 
+            std::env::set_var("BENCH_DRY_RUN", "0");
+
             if check_if_bench_executables_changed() {
                 println!(
                     "Comparison of sha256 of executables reveals changes, doing full benchmarks..."
