@@ -4499,6 +4499,7 @@ mod solve_expr {
             std::mem::size_of::<roc_types::types::Problem>(),
         );
 
-        assert_eq!((40, 72, 56, 48, 64), query)
+        // without RecordFields in FlatType assert_eq!((40, 72, 56, 48, 64), query)
+        assert_eq!((40, 104, 88, 80, 64), query)
     }
 }
