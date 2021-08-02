@@ -1116,7 +1116,7 @@ pub struct Alias {
 #[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub enum Problem {
     CanonicalizationProblem,
-    CircularType(Symbol, ErrorType, Region),
+    CircularType(Symbol, Box<ErrorType>, Region),
     CyclicAlias(Symbol, Region, Vec<Symbol>),
     UnrecognizedIdent(InlinableString),
     Shadowed(Region, Located<Ident>),

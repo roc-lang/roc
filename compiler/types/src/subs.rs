@@ -626,9 +626,9 @@ pub enum FlatType {
     Func(Vec<Variable>, Variable, Variable),
     Record(RecordFields, Variable),
     TagUnion(MutMap<TagName, Vec<Variable>>, Variable),
-    FunctionOrTagUnion(TagName, Symbol, Variable),
+    FunctionOrTagUnion(Box<TagName>, Symbol, Variable),
     RecursiveTagUnion(Variable, MutMap<TagName, Vec<Variable>>, Variable),
-    Erroneous(Problem),
+    Erroneous(Box<Problem>),
     EmptyRecord,
     EmptyTagUnion,
 }
@@ -1389,6 +1389,8 @@ fn flat_type_to_err_type(
         }
 
         FunctionOrTagUnion(tag_name, _, ext_var) => {
+            let tag_name = *tag_name;
+
             let mut err_tags = SendMap::default();
 
             err_tags.insert(tag_name, vec![]);
@@ -1453,7 +1455,7 @@ fn flat_type_to_err_type(
         }
 
         Erroneous(problem) => {
-            state.problems.push(problem);
+            state.problems.push(*problem);
 
             ErrorType::Error
         }

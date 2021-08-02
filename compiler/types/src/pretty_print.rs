@@ -494,8 +494,8 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
         FunctionOrTagUnion(tag_name, _, ext_var) => {
             buf.push_str("[ ");
 
-            let mut tags = MutMap::default();
-            tags.insert(tag_name.clone(), vec![]);
+            let mut tags: MutMap<TagName, _> = MutMap::default();
+            tags.insert(*tag_name.clone(), vec![]);
             let ext_content = write_sorted_tags(env, subs, buf, &tags, *ext_var);
 
             buf.push_str(" ]");
@@ -558,7 +558,7 @@ pub fn chase_ext_tag_union<'a>(
             chase_ext_tag_union(subs, *ext_var, fields)
         }
         Content::Structure(FunctionOrTagUnion(tag_name, _, ext_var)) => {
-            fields.push((tag_name.clone(), vec![]));
+            fields.push((*tag_name.clone(), vec![]));
 
             chase_ext_tag_union(subs, *ext_var, fields)
         }

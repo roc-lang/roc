@@ -4488,4 +4488,18 @@ mod solve_expr {
             "RBTree {}",
         );
     }
+
+    #[test]
+    fn sizes() {
+        let query = (
+            std::mem::size_of::<roc_module::ident::TagName>(),
+            std::mem::size_of::<roc_types::subs::Descriptor>(),
+            std::mem::size_of::<roc_types::subs::Content>(),
+            std::mem::size_of::<roc_types::subs::FlatType>(),
+            std::mem::size_of::<roc_types::types::Problem>(),
+        );
+
+        // without RecordFields in FlatType assert_eq!((40, 72, 56, 48, 64), query)
+        assert_eq!((40, 104, 88, 80, 64), query)
+    }
 }
