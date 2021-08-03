@@ -207,6 +207,14 @@ impl Default for IdentStr {
     }
 }
 
+impl std::ops::Deref for IdentStr {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
 impl From<&str> for IdentStr {
     fn from(str: &str) -> Self {
         Self::from_slice(str.as_bytes())

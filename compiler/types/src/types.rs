@@ -1,6 +1,5 @@
 use crate::pretty_print::Parens;
 use crate::subs::{LambdaSet, RecordFields, Subs, VarStore, Variable};
-use inlinable_string::InlinableString;
 use roc_collections::all::{ImMap, ImSet, Index, MutSet, SendMap};
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -1118,7 +1117,7 @@ pub enum Problem {
     CanonicalizationProblem,
     CircularType(Symbol, Box<ErrorType>, Region),
     CyclicAlias(Symbol, Region, Vec<Symbol>),
-    UnrecognizedIdent(InlinableString),
+    UnrecognizedIdent(Ident),
     Shadowed(Region, Located<Ident>),
     BadTypeArguments {
         symbol: Symbol,
@@ -1196,7 +1195,7 @@ fn write_error_type_help(
             if write_parens {
                 buf.push('(');
             }
-            buf.push_str(symbol.ident_string(interns));
+            buf.push_str(symbol.ident_str(interns).as_str());
 
             for arg in arguments {
                 buf.push(' ');

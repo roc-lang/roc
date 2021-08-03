@@ -1,6 +1,6 @@
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{Index, MutSet, SendMap};
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::ident::{IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_solve::solve;
 use roc_types::pretty_print::Parens;
@@ -1312,6 +1312,12 @@ pub mod suggest {
         }
     }
 
+    impl ToStr for super::IdentStr {
+        fn to_str(&self) -> &str {
+            self.as_str()
+        }
+    }
+
     impl<A, B> ToStr for (A, B)
     where
         A: ToStr,
@@ -2426,11 +2432,11 @@ fn type_problem_to_pretty<'b>(
             }
         },
         TagTypo(typo, possibilities_tn) => {
-            let possibilities = possibilities_tn
+            let possibilities: Vec<IdentStr> = possibilities_tn
                 .into_iter()
-                .map(|tag_name| tag_name.as_string(alloc.interns, alloc.home))
+                .map(|tag_name| tag_name.as_ident_str(alloc.interns, alloc.home))
                 .collect();
-            let typo_str = format!("{}", typo.as_string(alloc.interns, alloc.home));
+            let typo_str = format!("{}", typo.as_ident_str(alloc.interns, alloc.home));
             let suggestions = suggest::sort(&typo_str, possibilities);
 
             match suggestions.get(0) {

@@ -259,19 +259,19 @@ impl<'a> RocDocAllocator<'a> {
     }
 
     pub fn symbol_unqualified(&'a self, symbol: Symbol) -> DocBuilder<'a, Self, Annotation> {
-        self.text(format!("{}", symbol.ident_string(self.interns)))
+        self.text(format!("{}", symbol.ident_str(self.interns)))
             .annotate(Annotation::Symbol)
     }
     pub fn symbol_foreign_qualified(&'a self, symbol: Symbol) -> DocBuilder<'a, Self, Annotation> {
         if symbol.module_id() == self.home || symbol.module_id().is_builtin() {
             // Render it unqualified if it's in the current module or a builtin
-            self.text(format!("{}", symbol.ident_string(self.interns)))
+            self.text(format!("{}", symbol.ident_str(self.interns)))
                 .annotate(Annotation::Symbol)
         } else {
             self.text(format!(
                 "{}.{}",
                 symbol.module_string(self.interns),
-                symbol.ident_string(self.interns),
+                symbol.ident_str(self.interns),
             ))
             .annotate(Annotation::Symbol)
         }
@@ -280,7 +280,7 @@ impl<'a> RocDocAllocator<'a> {
         self.text(format!(
             "{}.{}",
             symbol.module_string(self.interns),
-            symbol.ident_string(self.interns),
+            symbol.ident_str(self.interns),
         ))
         .annotate(Annotation::Symbol)
     }
@@ -288,13 +288,13 @@ impl<'a> RocDocAllocator<'a> {
     pub fn private_tag_name(&'a self, symbol: Symbol) -> DocBuilder<'a, Self, Annotation> {
         if symbol.module_id() == self.home {
             // Render it unqualified if it's in the current module.
-            self.text(format!("{}", symbol.ident_string(self.interns)))
+            self.text(format!("{}", symbol.ident_str(self.interns)))
                 .annotate(Annotation::PrivateTag)
         } else {
             self.text(format!(
                 "{}.{}",
                 symbol.module_string(self.interns),
-                symbol.ident_string(self.interns),
+                symbol.ident_str(self.interns),
             ))
             .annotate(Annotation::PrivateTag)
         }

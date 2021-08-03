@@ -2837,10 +2837,8 @@ fn send_header<'a>(
         let mut ident_ids_by_module = (*ident_ids_by_module).lock();
 
         let name = match opt_shorthand {
-            Some(shorthand) => {
-                PQModuleName::Qualified(shorthand, declared_name.as_inline_str().clone())
-            }
-            None => PQModuleName::Unqualified(declared_name.as_inline_str().clone()),
+            Some(shorthand) => PQModuleName::Qualified(shorthand, declared_name),
+            None => PQModuleName::Unqualified(declared_name),
         };
         home = module_ids.get_or_insert(&name);
 
@@ -2859,13 +2857,11 @@ fn send_header<'a>(
             let pq_module_name = match qualified_module_name.opt_package {
                 None => match opt_shorthand {
                     Some(shorthand) => {
-                        PQModuleName::Qualified(shorthand, qualified_module_name.module.into())
+                        PQModuleName::Qualified(shorthand, qualified_module_name.module)
                     }
-                    None => PQModuleName::Unqualified(qualified_module_name.module.into()),
+                    None => PQModuleName::Unqualified(qualified_module_name.module),
                 },
-                Some(package) => {
-                    PQModuleName::Qualified(package, cloned_module_name.clone().into())
-                }
+                Some(package) => PQModuleName::Qualified(package, cloned_module_name),
             };
 
             let module_id = module_ids.get_or_insert(&pq_module_name);
@@ -2881,7 +2877,7 @@ fn send_header<'a>(
                 .or_insert_with(IdentIds::default);
 
             for ident in exposed_idents {
-                let ident_id = ident_ids.get_or_insert(ident.as_inline_str());
+                let ident_id = ident_ids.get_or_insert(&ident);
                 let symbol = Symbol::new(module_id, ident_id);
 
                 // Since this value is exposed, add it to our module's default scope.
@@ -3011,8 +3007,6 @@ fn send_header_two<'a>(
     ident_ids_by_module: Arc<Mutex<MutMap<ModuleId, IdentIds>>>,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
-    use inlinable_string::InlinableString;
-
     let PlatformHeaderInfo {
         filename,
         shorthand,
@@ -3025,7 +3019,7 @@ fn send_header_two<'a>(
         imports,
     } = info;
 
-    let declared_name: InlinableString = "".into();
+    let declared_name: ModuleName = "".into();
 
     let mut imported: Vec<(QualifiedModuleName, Vec<Ident>, Region)> =
         Vec::with_capacity(imports.len());
@@ -3082,10 +3076,8 @@ fn send_header_two<'a>(
         for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
             let cloned_module_name = qualified_module_name.module.clone();
             let pq_module_name = match qualified_module_name.opt_package {
-                None => PQModuleName::Qualified(shorthand, qualified_module_name.module.into()),
-                Some(package) => {
-                    PQModuleName::Qualified(package, cloned_module_name.clone().into())
-                }
+                None => PQModuleName::Qualified(shorthand, qualified_module_name.module),
+                Some(package) => PQModuleName::Qualified(package, cloned_module_name.clone()),
             };
 
             let module_id = module_ids.get_or_insert(&pq_module_name);
@@ -3101,7 +3093,7 @@ fn send_header_two<'a>(
                 .or_insert_with(IdentIds::default);
 
             for ident in exposed_idents {
-                let ident_id = ident_ids.get_or_insert(ident.as_inline_str());
+                let ident_id = ident_ids.get_or_insert(&ident);
                 let symbol = Symbol::new(module_id, ident_id);
 
                 // Since this value is exposed, add it to our module's default scope.
@@ -3118,7 +3110,7 @@ fn send_header_two<'a>(
 
             for (loc_ident, _) in unpack_exposes_entries(arena, requires) {
                 let ident: Ident = loc_ident.value.into();
-                let ident_id = ident_ids.get_or_insert(ident.as_inline_str());
+                let ident_id = ident_ids.get_or_insert(&ident);
                 let symbol = Symbol::new(app_module_id, ident_id);
 
                 // Since this value is exposed, add it to our module's default scope.
@@ -3185,7 +3177,7 @@ fn send_header_two<'a>(
     let module_name = ModuleNameEnum::PkgConfig;
 
     let main_for_host = {
-        let ident_str: InlinableString = provides[0].value.as_str().into();
+        let ident_str: Ident = provides[0].value.as_str().into();
         let ident_id = ident_ids.get_or_insert(&ident_str);
 
         Symbol::new(home, ident_id)
@@ -3426,7 +3418,10 @@ fn fabricate_effects_module<'a>(
 
         for exposed in header.exposes {
             if let ExposesEntry::Exposed(module_name) = exposed.value {
-                module_ids.get_or_insert(&PQModuleName::Qualified(shorthand, module_name.into()));
+                module_ids.get_or_insert(&PQModuleName::Qualified(
+                    shorthand,
+                    module_name.as_str().into(),
+                ));
             }
         }
     }
@@ -3436,7 +3431,7 @@ fn fabricate_effects_module<'a>(
         let mut module_ids = (*module_ids).lock();
         let mut ident_ids_by_module = (*ident_ids_by_module).lock();
 
-        let name = PQModuleName::Qualified(shorthand, declared_name.as_inline_str().clone());
+        let name = PQModuleName::Qualified(shorthand, declared_name);
         module_id = module_ids.get_or_insert(&name);
 
         // Ensure this module has an entry in the exposed_ident_ids map.

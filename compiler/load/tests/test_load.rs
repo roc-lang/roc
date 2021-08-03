@@ -17,7 +17,6 @@ mod helpers;
 mod test_load {
     use crate::helpers::fixtures_dir;
     use bumpalo::Bump;
-    use inlinable_string::InlinableString;
     use roc_can::builtins::builtin_defs_map;
     use roc_can::def::Declaration::*;
     use roc_can::def::Def;
@@ -169,8 +168,8 @@ mod test_load {
             .expect("Test ModuleID not found in module_ids");
 
         // App module names are hardcoded and not based on anything user-specified
-        if expected_name != ModuleName::APP {
-            assert_eq!(expected_name, &InlinableString::from(module_name));
+        if expected_name.as_str() != ModuleName::APP {
+            assert_eq!(&expected_name.as_str(), &module_name);
         }
 
         loaded_module
@@ -340,7 +339,7 @@ mod test_load {
             .get_name(loaded_module.module_id)
             .expect("Test ModuleID not found in module_ids");
 
-        assert_eq!(expected_name, &InlinableString::from("Primary"));
+        assert_eq!(expected_name.as_str(), "Primary");
         assert_eq!(def_count, 10);
     }
 

@@ -4,7 +4,6 @@
 use crate::lang::expr::Env;
 use crate::lang::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
 use crate::lang::scope::Scope;
-use inlinable_string::InlinableString;
 // use roc_can::expr::Output;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Ident, TagName};

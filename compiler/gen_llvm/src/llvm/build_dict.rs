@@ -830,8 +830,8 @@ fn build_hash_wrapper<'a, 'ctx, 'env>(
             let seed_arg = it.next().unwrap().into_int_value();
             let value_ptr = it.next().unwrap().into_pointer_value();
 
-            seed_arg.set_name(Symbol::ARG_1.ident_string(&env.interns));
-            value_ptr.set_name(Symbol::ARG_2.ident_string(&env.interns));
+            seed_arg.set_name(Symbol::ARG_1.as_str(&env.interns));
+            value_ptr.set_name(Symbol::ARG_2.as_str(&env.interns));
 
             let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 

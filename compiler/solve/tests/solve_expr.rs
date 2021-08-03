@@ -4500,6 +4500,6 @@ mod solve_expr {
         );
 
         // without RecordFields in FlatType assert_eq!((40, 72, 56, 48, 64), query)
-        assert_eq!((24, 104, 88, 80, 64), query)
+        assert_eq!((24, 104, 88, 80, 48), query)
     }
 }

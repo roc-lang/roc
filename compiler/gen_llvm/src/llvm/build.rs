@@ -2997,7 +2997,7 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
     roc_function: FunctionValue<'ctx>,
 ) {
     // Assumption: there is only one specialization of a host-exposed function
-    let ident_string = symbol.ident_string(&env.interns);
+    let ident_string = symbol.as_str(&env.interns);
     let c_function_name: String = format!("roc__{}_1_exposed", ident_string);
 
     expose_function_to_host_help(env, ident_string, roc_function, &c_function_name);
@@ -3005,7 +3005,7 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
 
 fn expose_function_to_host_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    ident_string: &inlinable_string::InlinableString,
+    ident_string: &str,
     roc_function: FunctionValue<'ctx>,
     c_function_name: &str,
 ) -> FunctionValue<'ctx> {
@@ -3485,7 +3485,7 @@ fn func_spec_name<'a>(
 
     let mut buf = bumpalo::collections::String::with_capacity_in(1, arena);
 
-    let ident_string = symbol.ident_string(interns);
+    let ident_string = symbol.as_str(interns);
     let module_string = interns.module_ids.get_name(symbol.module_id()).unwrap();
     write!(buf, "{}_{}_", module_string, ident_string).unwrap();
 
@@ -3554,7 +3554,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     let function_name = format!(
         "roc__{}_{}_caller",
         def_name,
-        alias_symbol.ident_string(&env.interns)
+        alias_symbol.as_str(&env.interns)
     );
 
     let mut argument_types = Vec::with_capacity_in(arguments.len() + 3, env.arena);
@@ -3667,14 +3667,14 @@ fn build_host_exposed_alias_size_help<'a, 'ctx, 'env>(
         format!(
             "roc__{}_{}_{}_size",
             def_name,
-            alias_symbol.ident_string(&env.interns),
+            alias_symbol.as_str(&env.interns),
             label
         )
     } else {
         format!(
             "roc__{}_{}_size",
             def_name,
-            alias_symbol.ident_string(&env.interns)
+            alias_symbol.as_str(&env.interns)
         )
     };
 
@@ -3741,7 +3741,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
                             &top_level.result,
                         );
 
-                        let ident_string = proc.name.ident_string(&env.interns);
+                        let ident_string = proc.name.as_str(&env.interns);
                         let fn_name: String = format!("{}_1", ident_string);
 
                         build_closure_caller(
@@ -3770,7 +3770,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
 
     // Add args to scope
     for (arg_val, (layout, arg_symbol)) in fn_val.get_param_iter().zip(args) {
-        arg_val.set_name(arg_symbol.ident_string(&env.interns));
+        arg_val.set_name(arg_symbol.as_str(&env.interns));
         scope.insert(*arg_symbol, (*layout, arg_val));
     }
 
