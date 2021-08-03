@@ -402,6 +402,7 @@ dependencies = [
  "bumpalo",
  "criterion",
  "inlinable_string",
+ "rlimit",
  "roc_cli",
  "roc_collections",
  "roc_load",
@@ -2978,6 +2979,15 @@ name = "renderdoc-sys"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1382d1f0a252c4bf97dc20d979a2fdd05b024acd7c2ed0f7595d7817666a157"
+
+[[package]]
+name = "rlimit"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc0bf25554376fd362f54332b8410a625c71f15445bca32ffdfdf4ec9ac91726"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "roc_build"
