@@ -3329,6 +3329,7 @@ dependencies = [
  "roc_collections",
  "roc_ident",
  "roc_region",
+ "static_assertions",
 ]
 
 [[package]]
@@ -3461,6 +3462,7 @@ dependencies = [
  "roc_collections",
  "roc_module",
  "roc_region",
+ "static_assertions",
  "ven_ena",
 ]
 

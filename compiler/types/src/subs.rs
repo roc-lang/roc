@@ -7,6 +7,13 @@ use std::fmt;
 use std::iter::{once, Extend, FromIterator, Iterator, Map, Zip};
 use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 
+// if your changes cause this number to go down, great!
+// please change it to the lower number.
+// if it went up, maybe check that the change is really required
+static_assertions::assert_eq_size!([u8; 104], Descriptor);
+static_assertions::assert_eq_size!([u8; 88], Content);
+static_assertions::assert_eq_size!([u8; 80], FlatType);
+
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Mark(i32);
 
@@ -494,7 +501,7 @@ fn unnamed_flex_var() -> Content {
 }
 
 #[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Rank(usize);
+pub struct Rank(u32);
 
 impl Rank {
     pub const NONE: Rank = Rank(0);
@@ -508,7 +515,7 @@ impl Rank {
     }
 
     pub fn into_usize(self) -> usize {
-        self.0
+        self.0 as usize
     }
 }
 
@@ -526,13 +533,13 @@ impl fmt::Debug for Rank {
 
 impl From<Rank> for usize {
     fn from(rank: Rank) -> Self {
-        rank.0
+        rank.0 as usize
     }
 }
 
 impl From<usize> for Rank {
     fn from(index: usize) -> Self {
-        Rank(index)
+        Rank(index as u32)
     }
 }
 
