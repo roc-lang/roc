@@ -65,13 +65,6 @@ impl IdentStr {
         last_byte != 0
     }
 
-    pub fn empty() -> Self {
-        IdentStr {
-            length: 0,
-            elements: core::ptr::null_mut(),
-        }
-    }
-
     pub fn get(&self, index: usize) -> Option<&u8> {
         if index < self.len() {
             Some(unsafe {
@@ -106,8 +99,9 @@ impl IdentStr {
         match len.cmp(&mem::size_of::<Self>()) {
             Ordering::Less => {
                 // This fits in a small string, but needs its length recorded
-                let mut answer_bytes: [u8; mem::size_of::<Self>()] =
-                    unsafe { mem::transmute::<Self, [u8; mem::size_of::<Self>()]>(Self::empty()) };
+                let mut answer_bytes: [u8; mem::size_of::<Self>()] = unsafe {
+                    mem::transmute::<Self, [u8; mem::size_of::<Self>()]>(Self::default())
+                };
 
                 // Copy the bytes from the slice into the answer
                 let dest_slice =
@@ -132,8 +126,9 @@ impl IdentStr {
             Ordering::Equal => {
                 // This fits in a small string, and is exactly long enough to
                 // take up the entire available struct
-                let mut answer_bytes: [u8; mem::size_of::<Self>()] =
-                    unsafe { mem::transmute::<Self, [u8; mem::size_of::<Self>()]>(Self::empty()) };
+                let mut answer_bytes: [u8; mem::size_of::<Self>()] = unsafe {
+                    mem::transmute::<Self, [u8; mem::size_of::<Self>()]>(Self::default())
+                };
 
                 // Copy the bytes from the slice into the answer
                 let dest_slice = unsafe {
@@ -203,6 +198,15 @@ impl IdentStr {
         *(buf.add(self.len())) = 0;
 
         buf as *mut char
+    }
+}
+
+impl Default for IdentStr {
+    fn default() -> Self {
+        Self {
+            length: 0,
+            elements: core::ptr::null_mut(),
+        }
     }
 }
 
@@ -276,8 +280,8 @@ impl Drop for IdentStr {
 }
 
 #[test]
-fn empty() {
-    let answer = IdentStr::empty();
+fn default() {
+    let answer = IdentStr::default();
 
     assert_eq!(answer.len(), 0);
     assert_eq!(answer, answer);
