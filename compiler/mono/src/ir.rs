@@ -222,9 +222,7 @@ impl<'a> Proc<'a> {
     ) {
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, procs));
 
-        for (key, proc) in procs.iter_mut() {
-            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1);
-        }
+        crate::inc_dec::visit_procs(arena, borrow_params, procs);
     }
 
     pub fn insert_reset_reuse_operations<'i>(
@@ -430,9 +428,7 @@ impl<'a> Procs<'a> {
 
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
 
-        for (key, proc) in result.iter_mut() {
-            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1);
-        }
+        crate::inc_dec::visit_procs(arena, borrow_params, &mut result);
 
         result
     }
@@ -473,9 +469,7 @@ impl<'a> Procs<'a> {
 
         let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, &result));
 
-        for (key, proc) in result.iter_mut() {
-            crate::inc_dec::visit_proc(arena, borrow_params, proc, key.1);
-        }
+        crate::inc_dec::visit_procs(arena, borrow_params, &mut result);
 
         (result, borrow_params)
     }
@@ -815,7 +809,7 @@ impl<'a, 'i> Env<'a, 'i> {
     pub fn unique_symbol(&mut self) -> Symbol {
         let ident_id = self.ident_ids.gen_unique();
 
-        self.home.register_debug_idents(&self.ident_ids);
+        self.home.register_debug_idents(self.ident_ids);
 
         Symbol::new(self.home, ident_id)
     }
@@ -848,11 +842,19 @@ impl<'a, 'i> Env<'a, 'i> {
 #[derive(Clone, Debug, PartialEq, Copy, Eq, Hash)]
 pub struct JoinPointId(pub Symbol);
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Param<'a> {
     pub symbol: Symbol,
     pub borrow: bool,
     pub layout: Layout<'a>,
+}
+
+impl<'a> Param<'a> {
+    pub const EMPTY: Self = Param {
+        symbol: Symbol::EMPTY_PARAM,
+        borrow: false,
+        layout: Layout::Struct(&[]),
+    };
 }
 
 pub fn cond<'a>(
@@ -1698,7 +1700,7 @@ fn pattern_to_when<'a>(
 
         UnsupportedPattern(region) => {
             // create the runtime error here, instead of delegating to When.
-            // UnsupportedPattern should then never occcur in When
+            // UnsupportedPattern should then never occur in When
             let error = roc_problem::can::RuntimeError::UnsupportedPattern(*region);
             (env.unique_symbol(), Located::at_zero(RuntimeError(error)))
         }
@@ -2106,8 +2108,6 @@ fn specialize_external<'a>(
                                 let expr = Expr::UnionAtIndex {
                                     tag_id,
                                     structure: Symbol::ARG_CLOSURE,
-                                    // union at index still expects the index to be +1; it thinks
-                                    // the tag id is stored
                                     index: index as u64,
                                     union_layout,
                                 };
@@ -2468,7 +2468,7 @@ fn specialize_solved_type<'a>(
 
     // for debugging only
     let attempted_layout = layout_cache
-        .from_var(&env.arena, fn_var, env.subs)
+        .from_var(env.arena, fn_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
     let raw = match attempted_layout {
@@ -2509,7 +2509,7 @@ fn specialize_solved_type<'a>(
             debug_assert_eq!(
                 attempted_layout,
                 layout_cache
-                    .from_var(&env.arena, fn_var, env.subs)
+                    .from_var(env.arena, fn_var, env.subs)
                     .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err))
             );
 
@@ -2733,10 +2733,10 @@ pub fn with_hole<'a>(
                     Layout::Builtin(float_precision_to_builtin(precision)),
                     hole,
                 ),
-                IntOrFloat::DecimalFloatType(precision) => Stmt::Let(
+                IntOrFloat::DecimalFloatType => Stmt::Let(
                     assigned,
                     Expr::Literal(Literal::Float(num as f64)),
-                    Layout::Builtin(float_precision_to_builtin(precision)),
+                    Layout::Builtin(Builtin::Decimal),
                     hole,
                 ),
                 _ => unreachable!("unexpected float precision for integer"),
@@ -2769,10 +2769,10 @@ pub fn with_hole<'a>(
                 Layout::Builtin(float_precision_to_builtin(precision)),
                 hole,
             ),
-            IntOrFloat::DecimalFloatType(precision) => Stmt::Let(
+            IntOrFloat::DecimalFloatType => Stmt::Let(
                 assigned,
                 Expr::Literal(Literal::Float(num as f64)),
-                Layout::Builtin(float_precision_to_builtin(precision)),
+                Layout::Builtin(Builtin::Decimal),
                 hole,
             ),
         },
@@ -3010,7 +3010,7 @@ pub fn with_hole<'a>(
             let arena = env.arena;
 
             debug_assert!(!matches!(
-                env.subs.get_without_compacting(variant_var).content,
+                env.subs.get_content_without_compacting(variant_var),
                 Content::Structure(FlatType::Func(_, _, _))
             ));
             convert_tag_union(
@@ -3035,12 +3035,15 @@ pub fn with_hole<'a>(
         } => {
             let arena = env.arena;
 
-            let desc = env.subs.get_without_compacting(variant_var);
+            let content = env.subs.get_content_without_compacting(variant_var);
 
-            if let Content::Structure(FlatType::Func(arg_vars, _, ret_var)) = desc.content {
+            if let Content::Structure(FlatType::Func(arg_vars, _, ret_var)) = content {
+                let ret_var = *ret_var;
+                let arg_vars = arg_vars.clone();
+
                 tag_union_to_function(
                     env,
-                    arg_vars,
+                    &arg_vars,
                     ret_var,
                     tag_name,
                     closure_name,
@@ -3855,7 +3858,7 @@ pub fn with_hole<'a>(
             let mut arg_symbols = Vec::with_capacity_in(args.len(), env.arena);
 
             for (_, arg_expr) in args.iter() {
-                arg_symbols.push(possible_reuse_symbol(env, procs, &arg_expr));
+                arg_symbols.push(possible_reuse_symbol(env, procs, arg_expr));
             }
             let arg_symbols = arg_symbols.into_bump_slice();
 
@@ -3885,7 +3888,7 @@ pub fn with_hole<'a>(
             let mut arg_symbols = Vec::with_capacity_in(args.len(), env.arena);
 
             for (_, arg_expr) in args.iter() {
-                arg_symbols.push(possible_reuse_symbol(env, procs, &arg_expr));
+                arg_symbols.push(possible_reuse_symbol(env, procs, arg_expr));
             }
             let arg_symbols = arg_symbols.into_bump_slice();
 
@@ -4343,7 +4346,7 @@ fn convert_tag_union<'a>(
 #[allow(clippy::too_many_arguments)]
 fn tag_union_to_function<'a>(
     env: &mut Env<'a, '_>,
-    argument_variables: std::vec::Vec<Variable>,
+    argument_variables: &[Variable],
     return_variable: Variable,
     tag_name: TagName,
     proc_symbol: Symbol,
@@ -4364,8 +4367,8 @@ fn tag_union_to_function<'a>(
 
         let loc_expr = Located::at_zero(roc_can::expr::Expr::Var(arg_symbol));
 
-        loc_pattern_args.push((arg_var, loc_pattern));
-        loc_expr_args.push((arg_var, loc_expr));
+        loc_pattern_args.push((*arg_var, loc_pattern));
+        loc_expr_args.push((*arg_var, loc_expr));
     }
 
     let loc_body = Located::at_zero(roc_can::expr::Expr::Tag {
@@ -5540,7 +5543,7 @@ fn store_pattern_help<'a>(
                     layout_cache,
                     outer_symbol,
                     &layout,
-                    &arguments,
+                    arguments,
                     stmt,
                 );
             }
@@ -5557,7 +5560,7 @@ fn store_pattern_help<'a>(
                 layout_cache,
                 outer_symbol,
                 *layout,
-                &arguments,
+                arguments,
                 *tag_id,
                 stmt,
             );
@@ -6362,18 +6365,19 @@ fn call_by_name_help<'a>(
     let top_level_layout = ProcLayout::new(env.arena, argument_layouts, *ret_layout);
 
     // the arguments given to the function, stored in symbols
-    let field_symbols = Vec::from_iter_in(
+    let mut field_symbols = Vec::with_capacity_in(loc_args.len(), arena);
+    field_symbols.extend(
         loc_args
             .iter()
             .map(|(_, arg_expr)| possible_reuse_symbol(env, procs, &arg_expr.value)),
-        arena,
-    )
-    .into_bump_slice();
+    );
+
+    let field_symbols = field_symbols.into_bump_slice();
 
     // the variables of the given arguments
     let mut pattern_vars = Vec::with_capacity_in(loc_args.len(), arena);
     for (var, _) in &loc_args {
-        match layout_cache.from_var(&env.arena, *var, &env.subs) {
+        match layout_cache.from_var(env.arena, *var, env.subs) {
             Ok(_) => {
                 pattern_vars.push(*var);
             }
@@ -6870,7 +6874,7 @@ fn from_can_pattern_help<'a>(
                 IntOrFloat::SignedIntType(_) => Ok(Pattern::IntLiteral(*num as i128)),
                 IntOrFloat::UnsignedIntType(_) => Ok(Pattern::IntLiteral(*num as i128)),
                 IntOrFloat::BinaryFloatType(_) => Ok(Pattern::FloatLiteral(*num as u64)),
-                IntOrFloat::DecimalFloatType(_) => Ok(Pattern::FloatLiteral(*num as u64)),
+                IntOrFloat::DecimalFloatType => Ok(Pattern::FloatLiteral(*num as u64)),
             }
         }
 
@@ -7394,8 +7398,8 @@ fn from_can_pattern_help<'a>(
                         // TODO these don't match up in the uniqueness inference; when we remove
                         // that, reinstate this assert!
                         //
-                        // dbg!(&env.subs.get_without_compacting(*field_var).content);
-                        // dbg!(&env.subs.get_without_compacting(destruct.value.var).content);
+                        // dbg!(&env.subs.get_content_without_compacting(*field_var));
+                        // dbg!(&env.subs.get_content_without_compacting(destruct.var).content);
                         // debug_assert_eq!(
                         //     env.subs.get_root_key_without_compacting(*field_var),
                         //     env.subs.get_root_key_without_compacting(destruct.value.var)
@@ -7460,7 +7464,7 @@ pub enum IntOrFloat {
     SignedIntType(IntPrecision),
     UnsignedIntType(IntPrecision),
     BinaryFloatType(FloatPrecision),
-    DecimalFloatType(FloatPrecision),
+    DecimalFloatType,
 }
 
 fn float_precision_to_builtin(precision: FloatPrecision) -> Builtin<'static> {
@@ -7489,7 +7493,7 @@ pub fn num_argument_to_int_or_float(
     var: Variable,
     known_to_be_float: bool,
 ) -> IntOrFloat {
-    match subs.get_without_compacting(var).content {
+    match subs.get_content_without_compacting(var){
         Content::FlexVar(_) | Content::RigidVar(_) if known_to_be_float => IntOrFloat::BinaryFloatType(FloatPrecision::F64),
         Content::FlexVar(_) | Content::RigidVar(_) => IntOrFloat::SignedIntType(IntPrecision::I64), // We default (Num *) to I64
 
@@ -7562,6 +7566,10 @@ pub fn num_argument_to_int_or_float(
         | Content::Alias(Symbol::NUM_BINARY64, _, _)
         | Content::Alias(Symbol::NUM_AT_BINARY64, _, _) => {
             IntOrFloat::BinaryFloatType(FloatPrecision::F64)
+        }
+        Content::Alias(Symbol::NUM_DECIMAL, _, _)
+        | Content::Alias(Symbol::NUM_AT_DECIMAL, _, _) => {
+            IntOrFloat::DecimalFloatType
         }
         Content::Alias(Symbol::NUM_F32, _, _)
         | Content::Alias(Symbol::NUM_BINARY32, _, _)

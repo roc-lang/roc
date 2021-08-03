@@ -1,7 +1,7 @@
 use crate::pretty_print::Parens;
-use crate::subs::{LambdaSet, Subs, VarStore, Variable};
+use crate::subs::{LambdaSet, RecordFields, Subs, VarStore, Variable};
 use inlinable_string::InlinableString;
-use roc_collections::all::{union, ImMap, ImSet, Index, MutMap, MutSet, SendMap};
+use roc_collections::all::{ImMap, ImSet, Index, MutSet, SendMap};
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -406,7 +406,7 @@ impl Type {
 
         match self {
             Variable(v) => {
-                if let Some(replacement) = substitutions.get(&v) {
+                if let Some(replacement) = substitutions.get(v) {
                     *self = replacement.clone();
                 }
             }
@@ -762,15 +762,15 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
 
     match tipe {
         Function(args, closure, ret) => {
-            symbols_help(&ret, accum);
-            symbols_help(&closure, accum);
+            symbols_help(ret, accum);
+            symbols_help(closure, accum);
             args.iter().for_each(|arg| symbols_help(arg, accum));
         }
         FunctionOrTagUnion(_, _, ext) => {
-            symbols_help(&ext, accum);
+            symbols_help(ext, accum);
         }
         RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
-            symbols_help(&ext, accum);
+            symbols_help(ext, accum);
             tags.iter()
                 .map(|v| v.1.iter())
                 .flatten()
@@ -778,7 +778,7 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
         }
 
         Record(fields, ext) => {
-            symbols_help(&ext, accum);
+            symbols_help(ext, accum);
             fields.values().for_each(|field| {
                 use RecordField::*;
 
@@ -791,11 +791,11 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
         }
         Alias(alias_symbol, _, actual_type) => {
             accum.insert(*alias_symbol);
-            symbols_help(&actual_type, accum);
+            symbols_help(actual_type, accum);
         }
         HostExposedAlias { name, actual, .. } => {
             accum.insert(*name);
-            symbols_help(&actual, accum);
+            symbols_help(actual, accum);
         }
         Apply(symbol, args) => {
             accum.insert(*symbol);
@@ -980,7 +980,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
 }
 
 pub struct RecordStructure {
-    pub fields: MutMap<Lowercase, RecordField<Variable>>,
+    pub fields: RecordFields,
     pub ext: Variable,
 }
 
@@ -1116,7 +1116,7 @@ pub struct Alias {
 #[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub enum Problem {
     CanonicalizationProblem,
-    CircularType(Symbol, ErrorType, Region),
+    CircularType(Symbol, Box<ErrorType>, Region),
     CyclicAlias(Symbol, Region, Vec<Symbol>),
     UnrecognizedIdent(InlinableString),
     Shadowed(Region, Located<Ident>),
@@ -1522,22 +1522,76 @@ pub fn name_type_var(letters_used: u32, taken: &mut MutSet<Lowercase>) -> (Lower
 
 pub fn gather_fields(
     subs: &Subs,
-    fields: MutMap<Lowercase, RecordField<Variable>>,
-    var: Variable,
+    other_fields: RecordFields,
+    mut var: Variable,
 ) -> RecordStructure {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
-    match subs.get_without_compacting(var).content {
-        Structure(Record(sub_fields, sub_ext)) => {
-            gather_fields(subs, union(fields, &sub_fields), sub_ext)
-        }
+    let mut result = other_fields;
 
-        Alias(_, _, var) => {
-            // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
-            gather_fields(subs, fields, var)
-        }
+    loop {
+        match subs.get_content_without_compacting(var) {
+            Structure(Record(sub_fields, sub_ext)) => {
+                result = RecordFields::merge(result, sub_fields.clone());
 
-        _ => RecordStructure { fields, ext: var },
+                var = *sub_ext;
+            }
+
+            Alias(_, _, actual_var) => {
+                // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
+                var = *actual_var;
+            }
+
+            _ => break,
+        }
+    }
+
+    RecordStructure {
+        fields: result,
+        ext: var,
+    }
+}
+
+pub fn gather_fields_ref(
+    subs: &Subs,
+    other_fields: &RecordFields,
+    mut var: Variable,
+) -> RecordStructure {
+    use crate::subs::Content::*;
+    use crate::subs::FlatType::*;
+
+    let mut from_ext = Vec::new();
+
+    loop {
+        match subs.get_content_without_compacting(var) {
+            Structure(Record(sub_fields, sub_ext)) => {
+                from_ext.extend(sub_fields.into_iter());
+
+                var = *sub_ext;
+            }
+
+            Alias(_, _, actual_var) => {
+                // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
+                var = *actual_var;
+            }
+
+            _ => break,
+        }
+    }
+
+    if from_ext.is_empty() {
+        RecordStructure {
+            fields: other_fields.clone(),
+            ext: var,
+        }
+    } else {
+        RecordStructure {
+            fields: other_fields
+                .into_iter()
+                .chain(from_ext.into_iter())
+                .collect(),
+            ext: var,
+        }
     }
 }

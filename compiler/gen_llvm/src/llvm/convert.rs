@@ -58,8 +58,7 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
                     }
                 }
                 NullableUnwrapped { other_fields, .. } => {
-                    let block =
-                        block_of_memory_slices(env.context, &[&other_fields], env.ptr_bytes);
+                    let block = block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
                     block.ptr_type(AddressSpace::Generic).into()
                 }
                 NonNullableUnwrapped(fields) => {
@@ -97,6 +96,7 @@ pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
         Int8 => context.i8_type().as_basic_type_enum(),
         Int1 => context.bool_type().as_basic_type_enum(),
         Usize => ptr_int(context, ptr_bytes).as_basic_type_enum(),
+        Decimal => context.i128_type().as_basic_type_enum(),
         Float128 => context.f128_type().as_basic_type_enum(),
         Float64 => context.f64_type().as_basic_type_enum(),
         Float32 => context.f32_type().as_basic_type_enum(),
@@ -220,4 +220,12 @@ pub fn zig_has_tag_id_type<'a, 'ctx, 'env>(
     env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
 ) -> StructType<'ctx> {
     env.module.get_struct_type("list.HasTagId").unwrap()
+}
+
+pub fn zig_with_overflow_roc_dec<'a, 'ctx, 'env>(
+    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
+) -> StructType<'ctx> {
+    env.module
+        .get_struct_type("utils.WithOverflow(dec.RocDec)")
+        .unwrap()
 }

@@ -118,7 +118,7 @@ impl Pools {
     pub fn split_last(&self) -> (&Vec<Variable>, &[Vec<Variable>]) {
         self.0
             .split_last()
-            .unwrap_or_else(|| panic!("Attempted to split_last() on non-empy Pools"))
+            .unwrap_or_else(|| panic!("Attempted to split_last() on non-empty Pools"))
     }
 
     pub fn extend_to(&mut self, n: usize) {
@@ -565,11 +565,10 @@ fn solve<'a>(
                                 .get(next_rank)
                                 .iter()
                                 .filter(|var| {
-                                    let current = subs.get_without_compacting(
-                                        roc_types::subs::Variable::clone(var),
-                                    );
+                                    let current_rank =
+                                        subs.get_rank(roc_types::subs::Variable::clone(var));
 
-                                    current.rank.into_usize() > next_rank.into_usize()
+                                    current_rank.into_usize() > next_rank.into_usize()
                                 })
                                 .collect::<Vec<_>>();
 
@@ -598,8 +597,7 @@ fn solve<'a>(
                         let failing: Vec<_> = rigid_vars
                             .iter()
                             .filter(|&var| {
-                                !subs.redundant(*var)
-                                    && subs.get_without_compacting(*var).rank != Rank::NONE
+                                !subs.redundant(*var) && subs.get_rank(*var) != Rank::NONE
                             })
                             .collect();
 
@@ -762,7 +760,9 @@ fn type_to_variable<'a>(
                 Err((new, _)) => new,
             };
 
-            let content = Content::Structure(FlatType::Record(field_vars, new_ext_var));
+            let record_fields = field_vars.into_iter().collect();
+
+            let content = Content::Structure(FlatType::Record(record_fields, new_ext_var));
 
             register(subs, rank, pools, content)
         }
@@ -1214,14 +1214,9 @@ fn adjust_rank_content(
                 Record(fields, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
 
-                    for var in fields.values() {
-                        rank = rank.max(adjust_rank(
-                            subs,
-                            young_mark,
-                            visit_mark,
-                            group_rank,
-                            var.into_inner(),
-                        ));
+                    for var in fields.iter_variables() {
+                        rank =
+                            rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
                     }
 
                     rank
@@ -1374,28 +1369,12 @@ fn instantiate_rigids_help(
                 same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
 
                 Record(fields, ext_var) => {
-                    let mut new_fields = MutMap::default();
-
-                    for (label, field) in fields {
-                        use RecordField::*;
-
-                        let new_field = match field {
-                            Demanded(var) => {
-                                Demanded(instantiate_rigids_help(subs, max_rank, pools, var))
-                            }
-                            Required(var) => {
-                                Required(instantiate_rigids_help(subs, max_rank, pools, var))
-                            }
-                            Optional(var) => {
-                                Optional(instantiate_rigids_help(subs, max_rank, pools, var))
-                            }
-                        };
-
-                        new_fields.insert(label, new_field);
+                    for var in fields.iter_variables() {
+                        instantiate_rigids_help(subs, max_rank, pools, *var);
                     }
 
                     Record(
-                        new_fields,
+                        fields,
                         instantiate_rigids_help(subs, max_rank, pools, ext_var),
                     )
                 }
@@ -1568,31 +1547,12 @@ fn deep_copy_var_help(
 
                 same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
 
-                Record(fields, ext_var) => {
-                    let mut new_fields = MutMap::default();
-
-                    for (label, field) in fields {
-                        use RecordField::*;
-
-                        let new_field = match field {
-                            Demanded(var) => {
-                                Demanded(deep_copy_var_help(subs, max_rank, pools, var))
-                            }
-                            Required(var) => {
-                                Required(deep_copy_var_help(subs, max_rank, pools, var))
-                            }
-                            Optional(var) => {
-                                Optional(deep_copy_var_help(subs, max_rank, pools, var))
-                            }
-                        };
-
-                        new_fields.insert(label, new_field);
+                Record(mut fields, ext_var) => {
+                    for var in fields.iter_variables_mut() {
+                        *var = deep_copy_var_help(subs, max_rank, pools, *var);
                     }
 
-                    Record(
-                        new_fields,
-                        deep_copy_var_help(subs, max_rank, pools, ext_var),
-                    )
+                    Record(fields, deep_copy_var_help(subs, max_rank, pools, ext_var))
                 }
 
                 TagUnion(tags, ext_var) => {

@@ -1,17 +1,15 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use libloading::Library;
-use roc_collections::all::MutMap;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::ident::TagName;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{union_sorted_tags_help, Builtin, Layout, UnionLayout, UnionVariant};
 use roc_parse::ast::{AssignedField, Expr, StrLiteral};
 use roc_region::all::{Located, Region};
-use roc_types::subs::{Content, FlatType, Subs, Variable};
-use roc_types::types::RecordField;
+use roc_types::subs::{Content, FlatType, RecordFields, Subs, Variable};
 
 struct Env<'a, 'env> {
     arena: &'a Bump,
@@ -155,9 +153,12 @@ fn jit_to_ast_help<'a>(
                 Content::Structure(FlatType::Record(fields, _)) => {
                     Ok(struct_to_ast(env, ptr, field_layouts, fields))
                 }
-                Content::Structure(FlatType::EmptyRecord) => {
-                    Ok(struct_to_ast(env, ptr, field_layouts, &MutMap::default()))
-                }
+                Content::Structure(FlatType::EmptyRecord) => Ok(struct_to_ast(
+                    env,
+                    ptr,
+                    field_layouts,
+                    &RecordFields::with_capacity(0),
+                )),
                 Content::Structure(FlatType::TagUnion(tags, _)) => {
                     debug_assert_eq!(tags.len(), 1);
 
@@ -172,7 +173,7 @@ fn jit_to_ast_help<'a>(
                     ))
                 }
                 Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => Ok(
-                    single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), &[]),
+                    single_tag_union_to_ast(env, ptr, field_layouts, *tag_name.clone(), &[]),
                 ),
                 Content::Structure(FlatType::Func(_, _, _)) => {
                     // a function with a struct as the closure environment
@@ -244,6 +245,11 @@ fn jit_to_ast_help<'a>(
                                                 }
                                                 Builtin::Int16 => {
                                                     *(ptr.add(offset as usize) as *const i16) as i64
+                                                }
+                                                Builtin::Int64 => {
+                                                    // used by non-recursive tag unions at the
+                                                    // moment, remove if that is no longer the case
+                                                    *(ptr.add(offset as usize) as *const i64) as i64
                                                 }
                                                 _ => unreachable!("invalid tag id layout"),
                                             };
@@ -319,9 +325,9 @@ fn jit_to_ast_help<'a>(
                     todo!("print recursive tag unions in the REPL")
                 }
                 Content::Alias(_, _, actual) => {
-                    let content = env.subs.get_without_compacting(*actual).content;
+                    let content = env.subs.get_content_without_compacting(*actual);
 
-                    jit_to_ast_help(env, lib, main_fn_name, layout, &content)
+                    jit_to_ast_help(env, lib, main_fn_name, layout, content)
                 }
                 other => unreachable!("Weird content for Union layout: {:?}", other),
             }
@@ -429,10 +435,10 @@ fn ptr_to_ast<'a>(
                 single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), payload_vars)
             }
             Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
-                single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), &[])
+                single_tag_union_to_ast(env, ptr, field_layouts, *tag_name.clone(), &[])
             }
             Content::Structure(FlatType::EmptyRecord) => {
-                struct_to_ast(env, ptr, &[], &MutMap::default())
+                struct_to_ast(env, ptr, &[], &RecordFields::with_capacity(0))
             }
             other => {
                 unreachable!(
@@ -463,7 +469,7 @@ fn list_to_ast<'a>(
 
             let elem_var = *vars.first().unwrap();
 
-            env.subs.get_without_compacting(elem_var).content
+            env.subs.get_content_without_compacting(elem_var)
         }
         other => {
             unreachable!(
@@ -474,14 +480,14 @@ fn list_to_ast<'a>(
     };
 
     let arena = env.arena;
-    let mut output = Vec::with_capacity_in(len, &arena);
+    let mut output = Vec::with_capacity_in(len, arena);
     let elem_size = elem_layout.stack_size(env.ptr_bytes) as usize;
 
     for index in 0..len {
         let offset_bytes = index * elem_size;
         let elem_ptr = unsafe { ptr.add(offset_bytes) };
         let loc_expr = &*arena.alloc(Located {
-            value: ptr_to_ast(env, elem_ptr, elem_layout, &elem_content),
+            value: ptr_to_ast(env, elem_ptr, elem_layout, elem_content),
             region: Region::zero(),
         });
 
@@ -528,14 +534,14 @@ where
 {
     let arena = env.arena;
     let subs = env.subs;
-    let mut output = Vec::with_capacity_in(sequence.len(), &arena);
+    let mut output = Vec::with_capacity_in(sequence.len(), arena);
 
     // We'll advance this as we iterate through the fields
     let mut field_ptr = ptr as *const u8;
 
     for (var, layout) in sequence {
-        let content = subs.get_without_compacting(var).content;
-        let expr = ptr_to_ast(env, field_ptr, layout, &content);
+        let content = subs.get_content_without_compacting(var);
+        let expr = ptr_to_ast(env, field_ptr, layout, content);
         let loc_expr = Located::at_zero(expr);
 
         output.push(&*arena.alloc(loc_expr));
@@ -551,31 +557,20 @@ fn struct_to_ast<'a>(
     env: &Env<'a, '_>,
     ptr: *const u8,
     field_layouts: &'a [Layout<'a>],
-    fields: &MutMap<Lowercase, RecordField<Variable>>,
+    sorted_fields: &RecordFields,
 ) -> Expr<'a> {
     let arena = env.arena;
     let subs = env.subs;
-    let mut output = Vec::with_capacity_in(field_layouts.len(), &arena);
-
-    // The fields, sorted alphabetically
-    let mut sorted_fields = {
-        let mut vec = fields
-            .iter()
-            .collect::<std::vec::Vec<(&Lowercase, &RecordField<Variable>)>>();
-
-        vec.sort_by(|(label1, _), (label2, _)| label1.cmp(label2));
-
-        vec
-    };
+    let mut output = Vec::with_capacity_in(field_layouts.len(), arena);
 
     if sorted_fields.len() == 1 {
         // this is a 1-field wrapper record around another record or 1-tag tag union
-        let (label, field) = sorted_fields.pop().unwrap();
+        let (label, field) = sorted_fields.into_iter().next().unwrap();
 
-        let inner_content = env.subs.get_without_compacting(field.into_inner()).content;
+        let inner_content = env.subs.get_content_without_compacting(field.into_inner());
 
         let loc_expr = &*arena.alloc(Located {
-            value: ptr_to_ast(env, ptr, &Layout::Struct(field_layouts), &inner_content),
+            value: ptr_to_ast(env, ptr, &Layout::Struct(field_layouts), inner_content),
             region: Region::zero(),
         });
 
@@ -601,9 +596,9 @@ fn struct_to_ast<'a>(
         let mut field_ptr = ptr;
 
         for ((label, field), field_layout) in sorted_fields.iter().zip(field_layouts.iter()) {
-            let content = subs.get_without_compacting(*field.as_inner()).content;
+            let content = subs.get_content_without_compacting(*field.as_inner());
             let loc_expr = &*arena.alloc(Located {
-                value: ptr_to_ast(env, field_ptr, field_layout, &content),
+                value: ptr_to_ast(env, field_ptr, field_layout, content),
                 region: Region::zero(),
             });
 
@@ -654,9 +649,9 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                         // and/or records (e.g. { a: { b: { c: True }  } }),
                         // so we need to do this recursively on the field type.
                         let field_var = *field.as_inner();
-                        let field_content = env.subs.get_without_compacting(field_var).content;
+                        let field_content = env.subs.get_content_without_compacting(field_var);
                         let loc_expr = Located {
-                            value: bool_to_ast(env, value, &field_content),
+                            value: bool_to_ast(env, value, field_content),
                             region: Region::zero(),
                         };
 
@@ -696,10 +691,10 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                         debug_assert_eq!(payload_vars.len(), 1);
 
                         let var = *payload_vars.iter().next().unwrap();
-                        let content = env.subs.get_without_compacting(var).content;
+                        let content = env.subs.get_content_without_compacting(var);
 
                         let loc_payload = &*arena.alloc(Located {
-                            value: bool_to_ast(env, value, &content),
+                            value: bool_to_ast(env, value, content),
                             region: Region::zero(),
                         });
 
@@ -734,9 +729,9 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
             }
         }
         Alias(_, _, var) => {
-            let content = env.subs.get_without_compacting(*var).content;
+            let content = env.subs.get_content_without_compacting(*var);
 
-            bool_to_ast(env, value, &content)
+            bool_to_ast(env, value, content)
         }
         other => {
             unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);
@@ -766,9 +761,9 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                         // and/or records (e.g. { a: { b: { c: True }  } }),
                         // so we need to do this recursively on the field type.
                         let field_var = *field.as_inner();
-                        let field_content = env.subs.get_without_compacting(field_var).content;
+                        let field_content = env.subs.get_content_without_compacting(field_var);
                         let loc_expr = Located {
-                            value: byte_to_ast(env, value, &field_content),
+                            value: byte_to_ast(env, value, field_content),
                             region: Region::zero(),
                         };
 
@@ -808,10 +803,10 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                         debug_assert_eq!(payload_vars.len(), 1);
 
                         let var = *payload_vars.iter().next().unwrap();
-                        let content = env.subs.get_without_compacting(var).content;
+                        let content = env.subs.get_content_without_compacting(var);
 
                         let loc_payload = &*arena.alloc(Located {
-                            value: byte_to_ast(env, value, &content),
+                            value: byte_to_ast(env, value, content),
                             region: Region::zero(),
                         });
 
@@ -845,9 +840,9 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
             }
         }
         Alias(_, _, var) => {
-            let content = env.subs.get_without_compacting(*var).content;
+            let content = env.subs.get_content_without_compacting(*var);
 
-            byte_to_ast(env, value, &content)
+            byte_to_ast(env, value, content)
         }
         other => {
             unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);
@@ -882,9 +877,9 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                         // and/or records (e.g. { a: { b: { c: 5 }  } }),
                         // so we need to do this recursively on the field type.
                         let field_var = *field.as_inner();
-                        let field_content = env.subs.get_without_compacting(field_var).content;
+                        let field_content = env.subs.get_content_without_compacting(field_var);
                         let loc_expr = Located {
-                            value: num_to_ast(env, num_expr, &field_content),
+                            value: num_to_ast(env, num_expr, field_content),
                             region: Region::zero(),
                         };
 
@@ -932,10 +927,10 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                         debug_assert_eq!(payload_vars.len(), 1);
 
                         let var = *payload_vars.iter().next().unwrap();
-                        let content = env.subs.get_without_compacting(var).content;
+                        let content = env.subs.get_content_without_compacting(var);
 
                         let loc_payload = &*arena.alloc(Located {
-                            value: num_to_ast(env, num_expr, &content),
+                            value: num_to_ast(env, num_expr, content),
                             region: Region::zero(),
                         });
 
@@ -950,9 +945,9 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
             }
         }
         Alias(_, _, var) => {
-            let content = env.subs.get_without_compacting(*var).content;
+            let content = env.subs.get_content_without_compacting(*var);
 
-            num_to_ast(env, num_expr, &content)
+            num_to_ast(env, num_expr, content)
         }
         other => {
             panic!("Unexpected FlatType {:?} in num_to_ast", other);

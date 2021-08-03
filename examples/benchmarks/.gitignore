@@ -1,0 +1,16 @@
+app
+*.o
+*.dSYM
+libhost.a
+roc_app.ll
+roc_app.bc
+nqueens
+deriv
+closure
+cfold
+rbtree-insert
+rbtree-del
+rbtree-ck
+test-astar
+test-base64
+quicksortapp

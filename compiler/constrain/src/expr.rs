@@ -1446,7 +1446,7 @@ fn instantiate_rigids(
     let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
 
     for (name, var) in introduced_vars.var_by_name.iter() {
-        if let Some(existing_rigid) = ftv.get(&name) {
+        if let Some(existing_rigid) = ftv.get(name) {
             rigid_substitution.insert(*var, Type::Variable(*existing_rigid));
         } else {
             // It's possible to use this rigid in nested defs

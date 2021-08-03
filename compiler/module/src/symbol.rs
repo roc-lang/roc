@@ -317,7 +317,7 @@ impl fmt::Debug for ModuleId {
         }
     }
 
-    /// In relese builds, all we have access to is the number, so only display that.
+    /// In release builds, all we have access to is the number, so only display that.
     #[cfg(not(debug_assertions))]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.0.fmt(f)
@@ -368,7 +368,7 @@ impl<'a> PackageModuleIds<'a> {
                 self.by_name.insert(module_name.clone(), module_id);
 
                 if cfg!(debug_assertions) {
-                    Self::insert_debug_name(module_id, &module_name);
+                    Self::insert_debug_name(module_id, module_name);
                 }
 
                 module_id
@@ -449,7 +449,7 @@ impl ModuleIds {
                 self.by_name.insert(module_name.clone(), module_id);
 
                 if cfg!(debug_assertions) {
-                    Self::insert_debug_name(module_id, &module_name);
+                    Self::insert_debug_name(module_id, module_name);
                 }
 
                 module_id
@@ -594,13 +594,16 @@ macro_rules! define_builtins {
                                     $ident_name.into(),
                                 )+
                             ];
-                            let mut by_ident = MutMap::default();
+                            let mut by_ident = MutMap::with_capacity_and_hasher(by_id.len(), default_hasher());
 
                             $(
-                                debug_assert!(!by_ident.contains_key($ident_name.clone().into()), "Error setting up Builtins: when inserting {} …: {:?} into module {} …: {:?} - the Ident name {:?} is already present in the map. Check the map for duplicate ident names within the {:?} module!", $ident_id, $ident_name, $module_id, $module_name, $ident_name, $module_name);
                                 debug_assert!(by_ident.len() == $ident_id, "Error setting up Builtins: when inserting {} …: {:?} into module {} …: {:?} - this entry was assigned an ID of {}, but based on insertion order, it should have had an ID of {} instead! To fix this, change it from {} …: {:?} to {} …: {:?} instead.", $ident_id, $ident_name, $module_id, $module_name, $ident_id, by_ident.len(), $ident_id, $ident_name, by_ident.len(), $ident_name);
 
-                                by_ident.insert($ident_name.into(), IdentId($ident_id));
+                                let exists = by_ident.insert($ident_name.into(), IdentId($ident_id));
+
+                                if let Some(_) = exists {
+                                    debug_assert!(false, "Error setting up Builtins: when inserting {} …: {:?} into module {} …: {:?} - the Ident name {:?} is already present in the map. Check the map for duplicate ident names within the {:?} module!", $ident_id, $ident_name, $module_id, $module_name, $ident_name, $module_name);
+                                }
                             )+
 
                             IdentIds {
@@ -771,6 +774,9 @@ define_builtins! {
 
         // a caller (wrapper) for comparison
         21 GENERIC_COMPARE_REF: "#generic_compare_ref"
+
+        // used to initialize parameters in borrow.rs
+        22 EMPTY_PARAM: "#empty_param"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -873,6 +879,9 @@ define_builtins! {
         97 NUM_INT_CAST: "intCast"
         98 NUM_MAX_I128: "maxI128"
         99 NUM_IS_MULTIPLE_OF: "isMultipleOf"
+        100 NUM_AT_DECIMAL: "@Decimal"
+        101 NUM_DECIMAL: "Decimal" imported
+        102 NUM_DEC: "Dec" imported // the Num.Dectype alias
 
     }
     2 BOOL: "Bool" => {

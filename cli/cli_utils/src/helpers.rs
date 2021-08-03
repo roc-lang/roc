@@ -65,7 +65,7 @@ pub fn run_roc(args: &[&str]) -> Out {
 }
 
 #[allow(dead_code)]
-pub fn run_cmd(cmd_name: &str, stdin_str: &str, args: &[&str]) -> Out {
+pub fn run_cmd(cmd_name: &str, stdin_vals: &[&str], args: &[&str]) -> Out {
     let mut cmd = Command::new(cmd_name);
 
     for arg in args {
@@ -81,9 +81,12 @@ pub fn run_cmd(cmd_name: &str, stdin_str: &str, args: &[&str]) -> Out {
 
     {
         let stdin = child.stdin.as_mut().expect("Failed to open stdin");
-        stdin
-            .write_all(stdin_str.as_bytes())
-            .expect("Failed to write to stdin");
+
+        for stdin_str in stdin_vals {
+            stdin
+                .write_all(stdin_str.as_bytes())
+                .expect("Failed to write to stdin");
+        }
     }
 
     let output = child
@@ -98,7 +101,7 @@ pub fn run_cmd(cmd_name: &str, stdin_str: &str, args: &[&str]) -> Out {
 }
 
 #[allow(dead_code)]
-pub fn run_with_valgrind(stdin_str: &str, args: &[&str]) -> (Out, String) {
+pub fn run_with_valgrind(stdin_vals: &[&str], args: &[&str]) -> (Out, String) {
     //TODO: figure out if there is a better way to get the valgrind executable.
     let mut cmd = Command::new("valgrind");
     let named_tempfile =
@@ -142,9 +145,12 @@ pub fn run_with_valgrind(stdin_str: &str, args: &[&str]) -> (Out, String) {
 
     {
         let stdin = child.stdin.as_mut().expect("Failed to open stdin");
-        stdin
-            .write_all(stdin_str.as_bytes())
-            .expect("Failed to write to stdin");
+
+        for stdin_str in stdin_vals {
+            stdin
+                .write_all(stdin_str.as_bytes())
+                .expect("Failed to write to stdin");
+        }
     }
 
     let output = child
@@ -228,7 +234,7 @@ pub fn extract_valgrind_errors(xml: &str) -> Result<Vec<ValgrindError>, serde_xm
 }
 
 #[allow(dead_code)]
-pub fn example_dir(dir_name: &str) -> PathBuf {
+pub fn root_dir() -> PathBuf {
     let mut path = env::current_exe().ok().unwrap();
 
     // Get rid of the filename in target/debug/deps/cli_run-99c65e4e9a1fbd06
@@ -242,6 +248,13 @@ pub fn example_dir(dir_name: &str) -> PathBuf {
     // Get rid of target/debug/ so we're back at the project root
     path.pop();
     path.pop();
+
+    path
+}
+
+#[allow(dead_code)]
+pub fn examples_dir(dir_name: &str) -> PathBuf {
+    let mut path = root_dir();
 
     // Descend into examples/{dir_name}
     path.push("examples");
@@ -252,7 +265,7 @@ pub fn example_dir(dir_name: &str) -> PathBuf {
 
 #[allow(dead_code)]
 pub fn example_file(dir_name: &str, file_name: &str) -> PathBuf {
-    let mut path = example_dir(dir_name);
+    let mut path = examples_dir(dir_name);
 
     path.push(file_name);
 
@@ -261,19 +274,7 @@ pub fn example_file(dir_name: &str, file_name: &str) -> PathBuf {
 
 #[allow(dead_code)]
 pub fn fixtures_dir(dir_name: &str) -> PathBuf {
-    let mut path = env::current_exe().ok().unwrap();
-
-    // Get rid of the filename in target/debug/deps/cli_run-99c65e4e9a1fbd06
-    path.pop();
-
-    // If we're in deps/ get rid of deps/ in target/debug/deps/
-    if path.ends_with("deps") {
-        path.pop();
-    }
-
-    // Get rid of target/debug/ so we're back at the project root
-    path.pop();
-    path.pop();
+    let mut path = root_dir();
 
     // Descend into cli/tests/fixtures/{dir_name}
     path.push("cli");

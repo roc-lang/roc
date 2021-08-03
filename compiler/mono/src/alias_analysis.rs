@@ -842,7 +842,19 @@ fn lowlevel_spec(
 
             builder.add_bag_insert(block, bag, to_insert)?;
 
-            Ok(list)
+            let new_cell = builder.add_new_heap_cell(block)?;
+            builder.add_make_tuple(block, &[new_cell, bag])
+        }
+        ListSwap => {
+            let list = env.symbols[&arguments[0]];
+
+            let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+            let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+
+            let _unit = builder.add_update(block, update_mode_var, cell)?;
+
+            let new_cell = builder.add_new_heap_cell(block)?;
+            builder.add_make_tuple(block, &[new_cell, bag])
         }
         ListAppend => {
             let list = env.symbols[&arguments[0]];
@@ -853,9 +865,11 @@ fn lowlevel_spec(
 
             let _unit = builder.add_update(block, update_mode_var, cell)?;
 
+            // TODO new heap cell
             builder.add_bag_insert(block, bag, to_insert)?;
 
-            Ok(list)
+            let new_cell = builder.add_new_heap_cell(block)?;
+            builder.add_make_tuple(block, &[new_cell, bag])
         }
         DictEmpty => {
             match layout {
@@ -887,7 +901,6 @@ fn lowlevel_spec(
             let cell = builder.add_get_tuple_field(block, dict, DICT_CELL_INDEX)?;
 
             let _unit = builder.add_touch(block, cell)?;
-
             builder.add_bag_get(block, bag)
         }
         DictInsert => {
@@ -904,7 +917,8 @@ fn lowlevel_spec(
 
             builder.add_bag_insert(block, bag, key_value)?;
 
-            Ok(dict)
+            let new_cell = builder.add_new_heap_cell(block)?;
+            builder.add_make_tuple(block, &[new_cell, bag])
         }
         _other => {
             // println!("missing {:?}", _other);
@@ -1094,7 +1108,7 @@ fn expr_spec<'a>(
                 let index = (*index) as u32;
                 let tag_value_id = env.symbols[structure];
 
-                let type_name_bytes = recursive_tag_union_name_bytes(&union_layout).as_bytes();
+                let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();
                 let type_name = TypeName(&type_name_bytes);
 
                 let union_id = builder.add_unwrap_named(block, MOD_APP, type_name, tag_value_id)?;
@@ -1114,7 +1128,7 @@ fn expr_spec<'a>(
 
                 let tag_value_id = env.symbols[structure];
 
-                let type_name_bytes = recursive_tag_union_name_bytes(&union_layout).as_bytes();
+                let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();
                 let type_name = TypeName(&type_name_bytes);
 
                 let variant_id =
@@ -1220,7 +1234,7 @@ fn layout_spec_help(
                 | UnionLayout::NullableUnwrapped { .. }
                 | UnionLayout::NullableWrapped { .. }
                 | UnionLayout::NonNullableUnwrapped(_) => {
-                    let type_name_bytes = recursive_tag_union_name_bytes(&union_layout).as_bytes();
+                    let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();
                     let type_name = TypeName(&type_name_bytes);
 
                     Ok(builder.add_named_type(MOD_APP, type_name))
@@ -1261,7 +1275,7 @@ fn builtin_spec(
 
     match builtin {
         Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize => builder.add_tuple_type(&[]),
-        Float128 | Float64 | Float32 | Float16 => builder.add_tuple_type(&[]),
+        Decimal | Float128 | Float64 | Float32 | Float16 => builder.add_tuple_type(&[]),
         Str | EmptyStr => str_type(builder),
         Dict(key_layout, value_layout) => {
             let value_type = layout_spec_help(builder, value_layout, when_recursive)?;

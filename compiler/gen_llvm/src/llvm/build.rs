@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::llvm::bitcode::call_bitcode_fn;
+use crate::llvm::bitcode::{call_bitcode_fn, call_void_bitcode_fn};
 use crate::llvm::build_dict::{
     dict_contains, dict_difference, dict_empty, dict_get, dict_insert, dict_intersection,
     dict_keys, dict_len, dict_remove, dict_union, dict_values, dict_walk, set_from_list,
@@ -347,7 +347,7 @@ pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Modu
     // we compile the builtins into LLVM bitcode
     let bitcode_bytes: &[u8] = include_bytes!("../../../builtins/bitcode/builtins.bc");
 
-    let memory_buffer = MemoryBuffer::create_from_memory_range(&bitcode_bytes, module_name);
+    let memory_buffer = MemoryBuffer::create_from_memory_range(bitcode_bytes, module_name);
 
     let module = Module::parse_bitcode_from_buffer(&memory_buffer, ctx)
         .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {:?}", err));
@@ -362,13 +362,16 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     // List of all supported LLVM intrinsics:
     //
     // https://releases.llvm.org/10.0.0/docs/LangRef.html#standard-c-library-intrinsics
-    let i1_type = ctx.bool_type();
     let f64_type = ctx.f64_type();
-    let i128_type = ctx.i128_type();
-    let i64_type = ctx.i64_type();
-    let i32_type = ctx.i32_type();
-    let i16_type = ctx.i16_type();
+    let i1_type = ctx.bool_type();
     let i8_type = ctx.i8_type();
+    let i16_type = ctx.i16_type();
+    let i32_type = ctx.i32_type();
+    let i64_type = ctx.i64_type();
+
+    if let Some(func) = module.get_function("__muloti4") {
+        func.set_linkage(Linkage::WeakAny);
+    }
 
     add_intrinsic(
         module,
@@ -418,8 +421,6 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         f64_type.fn_type(&[f64_type.into()], false),
     );
 
-    // add with overflow
-
     add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I8, {
         let fields = [i8_type.into(), i1_type.into()];
         ctx.struct_type(&fields, false)
@@ -444,14 +445,6 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
             .fn_type(&[i64_type.into(), i64_type.into()], false)
     });
 
-    add_intrinsic(module, LLVM_SADD_WITH_OVERFLOW_I128, {
-        let fields = [i128_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i128_type.into(), i128_type.into()], false)
-    });
-
-    // sub with overflow
-
     add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I8, {
         let fields = [i8_type.into(), i1_type.into()];
         ctx.struct_type(&fields, false)
@@ -474,12 +467,6 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
         let fields = [i64_type.into(), i1_type.into()];
         ctx.struct_type(&fields, false)
             .fn_type(&[i64_type.into(), i64_type.into()], false)
-    });
-
-    add_intrinsic(module, LLVM_SSUB_WITH_OVERFLOW_I128, {
-        let fields = [i128_type.into(), i1_type.into()];
-        ctx.struct_type(&fields, false)
-            .fn_type(&[i128_type.into(), i128_type.into()], false)
     });
 }
 
@@ -640,10 +627,15 @@ pub fn float_with_precision<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     value: f64,
     precision: &Builtin,
-) -> FloatValue<'ctx> {
+) -> BasicValueEnum<'ctx> {
     match precision {
-        Builtin::Float64 => env.context.f64_type().const_float(value),
-        Builtin::Float32 => env.context.f32_type().const_float(value),
+        Builtin::Decimal => call_bitcode_fn(
+            env,
+            &[env.context.f64_type().const_float(value).into()],
+            bitcode::DEC_FROM_F64,
+        ),
+        Builtin::Float64 => env.context.f64_type().const_float(value).into(),
+        Builtin::Float32 => env.context.f32_type().const_float(value).into(),
         _ => panic!("Invalid layout for float literal = {:?}", precision),
     }
 }
@@ -662,7 +654,7 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
         },
 
         Float(float) => match layout {
-            Layout::Builtin(builtin) => float_with_precision(env, *float, builtin).into(),
+            Layout::Builtin(builtin) => float_with_precision(env, *float, builtin),
             _ => panic!("Invalid layout for float literal = {:?}", layout),
         },
 
@@ -984,7 +976,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                 // The layout of the struct expects them to be dropped!
                 let (field_expr, field_layout) = load_symbol_and_layout(scope, symbol);
                 if !field_layout.is_dropped_because_empty() {
-                    field_types.push(basic_type_from_layout(env, &field_layout));
+                    field_types.push(basic_type_from_layout(env, field_layout));
 
                     field_vals.push(field_expr);
                 }
@@ -1195,7 +1187,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     )
                 }
                 UnionLayout::NonNullableUnwrapped(field_layouts) => {
-                    let struct_layout = Layout::Struct(&field_layouts);
+                    let struct_layout = Layout::Struct(field_layouts);
 
                     let struct_type = basic_type_from_layout(env, &struct_layout);
 
@@ -1268,7 +1260,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             // cast the argument bytes into the desired shape for this tag
             let (argument, _structure_layout) = load_symbol_and_layout(scope, structure);
 
-            get_tag_id(env, parent, &union_layout, argument).into()
+            get_tag_id(env, parent, union_layout, argument).into()
         }
     }
 }
@@ -1467,7 +1459,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
                 union_layout,
                 tag_id,
                 arguments,
-                &tag_field_layouts,
+                tag_field_layouts,
                 tags,
                 reuse_allocation,
                 parent,
@@ -1499,7 +1491,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
                 union_layout,
                 tag_id,
                 arguments,
-                &tag_field_layouts,
+                tag_field_layouts,
                 tags,
                 reuse_allocation,
                 parent,
@@ -2277,7 +2269,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     scope,
                     parent,
                     layout,
-                    &expr,
+                    expr,
                 );
 
                 // Make a new scope which includes the binding we just encountered.
@@ -2397,7 +2389,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let exception_object = scope.get(&exception_id.into_inner()).unwrap().1;
             env.builder.build_resume(exception_object);
 
-            env.context.i64_type().const_zero().into()
+            env.ptr_int().const_zero().into()
         }
 
         Switch {
@@ -2407,7 +2399,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             cond_layout,
             cond_symbol,
         } => {
-            let ret_type = basic_type_from_layout(env, &ret_layout);
+            let ret_type = basic_type_from_layout(env, ret_layout);
 
             let switch_args = SwitchArgsIr {
                 cond_layout: *cond_layout,
@@ -2485,7 +2477,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             );
 
             // remove this join point again
-            scope.join_points.remove(&id);
+            scope.join_points.remove(id);
 
             cont_block.move_after(phi_block).unwrap();
 
@@ -2835,7 +2827,7 @@ fn build_switch_ir<'a, 'ctx, 'env>(
                 .into_int_value()
         }
         Layout::Union(variant) => {
-            cond_layout = Layout::Builtin(Builtin::Int64);
+            cond_layout = variant.tag_id_layout();
 
             get_tag_id(env, parent, &variant, cond_value)
         }
@@ -3129,7 +3121,7 @@ where
     let call_result = {
         let call = builder.build_invoke(
             function,
-            &arguments,
+            arguments,
             then_block,
             catch_block,
             "call_roc_function",
@@ -3299,7 +3291,7 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
     // Add main to the module.
     let wrapper_function = add_func(
         env.module,
-        &wrapper_function_name,
+        wrapper_function_name,
         wrapper_function_type,
         Linkage::External,
         C_CALL_CONV,
@@ -3422,7 +3414,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
-    let headers = build_proc_headers(env, &mod_solutions, procedures, &mut scope);
+    let headers = build_proc_headers(env, mod_solutions, procedures, &mut scope);
 
     let (_, function_pass) = construct_optimization_passes(env.module, opt_level);
 
@@ -3436,7 +3428,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
             current_scope.retain_top_level_thunks_for_module(home);
 
             build_proc(
-                &env,
+                env,
                 mod_solutions,
                 &mut layout_ids,
                 func_spec_solutions,
@@ -3449,7 +3441,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
             env.dibuilder.finalize();
 
             if fn_val.verify(true) {
-                function_pass.run_on(&fn_val);
+                function_pass.run_on(fn_val);
             } else {
                 let mode = "NON-OPTIMIZED";
 
@@ -3519,7 +3511,7 @@ fn build_proc_header<'a, 'ctx, 'env>(
     let mut arg_basic_types = Vec::with_capacity_in(args.len(), arena);
 
     for (layout, _) in args.iter() {
-        let arg_type = basic_type_from_layout(env, &layout);
+        let arg_type = basic_type_from_layout(env, layout);
 
         arg_basic_types.push(arg_type);
     }
@@ -5257,6 +5249,39 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
     }
 }
 
+fn throw_on_overflow<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    result: StructValue<'ctx>, // of the form { value: T, has_overflowed: bool }
+    message: &str,
+) -> BasicValueEnum<'ctx> {
+    let bd = env.builder;
+    let context = env.context;
+
+    let has_overflowed = bd.build_extract_value(result, 1, "has_overflowed").unwrap();
+
+    let condition = bd.build_int_compare(
+        IntPredicate::EQ,
+        has_overflowed.into_int_value(),
+        context.bool_type().const_zero(),
+        "has_not_overflowed",
+    );
+
+    let then_block = context.append_basic_block(parent, "then_block");
+    let throw_block = context.append_basic_block(parent, "throw_block");
+
+    bd.build_conditional_branch(condition, then_block, throw_block);
+
+    bd.position_at_end(throw_block);
+
+    throw_exception(env, message);
+
+    bd.position_at_end(then_block);
+
+    bd.build_extract_value(result, 0, "operation_result")
+        .unwrap()
+}
+
 fn build_int_binop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
@@ -5273,8 +5298,6 @@ fn build_int_binop<'a, 'ctx, 'env>(
 
     match op {
         NumAdd => {
-            let context = env.context;
-
             let intrinsic = match lhs_layout {
                 Layout::Builtin(Builtin::Int8) => LLVM_SADD_WITH_OVERFLOW_I8,
                 Layout::Builtin(Builtin::Int16) => LLVM_SADD_WITH_OVERFLOW_I16,
@@ -5293,34 +5316,11 @@ fn build_int_binop<'a, 'ctx, 'env>(
                 .call_intrinsic(intrinsic, &[lhs.into(), rhs.into()])
                 .into_struct_value();
 
-            let add_result = bd.build_extract_value(result, 0, "add_result").unwrap();
-            let has_overflowed = bd.build_extract_value(result, 1, "has_overflowed").unwrap();
-
-            let condition = bd.build_int_compare(
-                IntPredicate::EQ,
-                has_overflowed.into_int_value(),
-                context.bool_type().const_zero(),
-                "has_not_overflowed",
-            );
-
-            let then_block = context.append_basic_block(parent, "then_block");
-            let throw_block = context.append_basic_block(parent, "throw_block");
-
-            bd.build_conditional_branch(condition, then_block, throw_block);
-
-            bd.position_at_end(throw_block);
-
-            throw_exception(env, "integer addition overflowed!");
-
-            bd.position_at_end(then_block);
-
-            add_result
+            throw_on_overflow(env, parent, result, "integer addition overflowed!")
         }
         NumAddWrap => bd.build_int_add(lhs, rhs, "add_int_wrap").into(),
         NumAddChecked => env.call_intrinsic(LLVM_SADD_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()]),
         NumSub => {
-            let context = env.context;
-
             let intrinsic = match lhs_layout {
                 Layout::Builtin(Builtin::Int8) => LLVM_SSUB_WITH_OVERFLOW_I8,
                 Layout::Builtin(Builtin::Int16) => LLVM_SSUB_WITH_OVERFLOW_I16,
@@ -5339,59 +5339,16 @@ fn build_int_binop<'a, 'ctx, 'env>(
                 .call_intrinsic(intrinsic, &[lhs.into(), rhs.into()])
                 .into_struct_value();
 
-            let sub_result = bd.build_extract_value(result, 0, "sub_result").unwrap();
-            let has_overflowed = bd.build_extract_value(result, 1, "has_overflowed").unwrap();
-
-            let condition = bd.build_int_compare(
-                IntPredicate::EQ,
-                has_overflowed.into_int_value(),
-                context.bool_type().const_zero(),
-                "has_not_overflowed",
-            );
-
-            let then_block = context.append_basic_block(parent, "then_block");
-            let throw_block = context.append_basic_block(parent, "throw_block");
-
-            bd.build_conditional_branch(condition, then_block, throw_block);
-
-            bd.position_at_end(throw_block);
-
-            throw_exception(env, "integer subtraction overflowed!");
-
-            bd.position_at_end(then_block);
-
-            sub_result
+            throw_on_overflow(env, parent, result, "integer subtraction overflowed!")
         }
         NumSubWrap => bd.build_int_sub(lhs, rhs, "sub_int").into(),
         NumSubChecked => env.call_intrinsic(LLVM_SSUB_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()]),
         NumMul => {
-            let context = env.context;
             let result = env
                 .call_intrinsic(LLVM_SMUL_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()])
                 .into_struct_value();
 
-            let mul_result = bd.build_extract_value(result, 0, "mul_result").unwrap();
-            let has_overflowed = bd.build_extract_value(result, 1, "has_overflowed").unwrap();
-
-            let condition = bd.build_int_compare(
-                IntPredicate::EQ,
-                has_overflowed.into_int_value(),
-                context.bool_type().const_zero(),
-                "has_not_overflowed",
-            );
-
-            let then_block = context.append_basic_block(parent, "then_block");
-            let throw_block = context.append_basic_block(parent, "throw_block");
-
-            bd.build_conditional_branch(condition, then_block, throw_block);
-
-            bd.position_at_end(throw_block);
-
-            throw_exception(env, "integer multiplication overflowed!");
-
-            bd.position_at_end(then_block);
-
-            mul_result
+            throw_on_overflow(env, parent, result, "integer multiplication overflowed!")
         }
         NumMulWrap => bd.build_int_mul(lhs, rhs, "mul_int").into(),
         NumMulChecked => env.call_intrinsic(LLVM_SMUL_WITH_OVERFLOW_I64, &[lhs.into(), rhs.into()]),
@@ -5469,7 +5426,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
             }
         }
         NumDivUnchecked => bd.build_int_signed_div(lhs, rhs, "div_int").into(),
-        NumPowInt => call_bitcode_fn(env, &[lhs.into(), rhs.into()], &bitcode::NUM_POW_INT),
+        NumPowInt => call_bitcode_fn(env, &[lhs.into(), rhs.into()], bitcode::NUM_POW_INT),
         NumBitwiseAnd => bd.build_and(lhs, rhs, "int_bitwise_and").into(),
         NumBitwiseXor => bd.build_xor(lhs, rhs, "int_bitwise_xor").into(),
         NumBitwiseOr => bd.build_or(lhs, rhs, "int_bitwise_or").into(),
@@ -5530,6 +5487,9 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
                     rhs_layout,
                     op,
                 ),
+                Decimal => {
+                    build_dec_binop(env, parent, lhs_arg, lhs_layout, rhs_arg, rhs_layout, op)
+                }
                 _ => {
                     unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, lhs_layout);
                 }
@@ -5563,7 +5523,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
-                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE).into_int_value();
+                call_bitcode_fn(env, &[result.into()], bitcode::NUM_IS_FINITE).into_int_value();
 
             let then_block = context.append_basic_block(parent, "then_block");
             let throw_block = context.append_basic_block(parent, "throw_block");
@@ -5584,7 +5544,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
-                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE).into_int_value();
+                call_bitcode_fn(env, &[result.into()], bitcode::NUM_IS_FINITE).into_int_value();
             let is_infinite = bd.build_not(is_finite, "negate");
 
             let struct_type = context.struct_type(
@@ -5612,7 +5572,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_sub(lhs, rhs, "sub_float");
 
             let is_finite =
-                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE).into_int_value();
+                call_bitcode_fn(env, &[result.into()], bitcode::NUM_IS_FINITE).into_int_value();
 
             let then_block = context.append_basic_block(parent, "then_block");
             let throw_block = context.append_basic_block(parent, "throw_block");
@@ -5633,7 +5593,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_sub(lhs, rhs, "sub_float");
 
             let is_finite =
-                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE).into_int_value();
+                call_bitcode_fn(env, &[result.into()], bitcode::NUM_IS_FINITE).into_int_value();
             let is_infinite = bd.build_not(is_finite, "negate");
 
             let struct_type = context.struct_type(
@@ -5661,7 +5621,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_mul(lhs, rhs, "mul_float");
 
             let is_finite =
-                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE).into_int_value();
+                call_bitcode_fn(env, &[result.into()], bitcode::NUM_IS_FINITE).into_int_value();
 
             let then_block = context.append_basic_block(parent, "then_block");
             let throw_block = context.append_basic_block(parent, "throw_block");
@@ -5682,7 +5642,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             let result = bd.build_float_mul(lhs, rhs, "mul_float");
 
             let is_finite =
-                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE).into_int_value();
+                call_bitcode_fn(env, &[result.into()], bitcode::NUM_IS_FINITE).into_int_value();
             let is_infinite = bd.build_not(is_finite, "negate");
 
             let struct_type = context.struct_type(
@@ -5714,6 +5674,75 @@ fn build_float_binop<'a, 'ctx, 'env>(
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
     }
+}
+
+fn build_dec_binop<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    lhs: BasicValueEnum<'ctx>,
+    _lhs_layout: &Layout<'a>,
+    rhs: BasicValueEnum<'ctx>,
+    _rhs_layout: &Layout<'a>,
+    op: LowLevel,
+) -> BasicValueEnum<'ctx> {
+    use roc_module::low_level::LowLevel::*;
+
+    match op {
+        NumAddChecked => call_bitcode_fn(env, &[lhs, rhs], bitcode::DEC_ADD_WITH_OVERFLOW),
+        NumSubChecked => call_bitcode_fn(env, &[lhs, rhs], bitcode::DEC_SUB_WITH_OVERFLOW),
+        NumMulChecked => call_bitcode_fn(env, &[lhs, rhs], bitcode::DEC_MUL_WITH_OVERFLOW),
+        NumAdd => build_dec_binop_throw_on_overflow(
+            env,
+            parent,
+            bitcode::DEC_ADD_WITH_OVERFLOW,
+            lhs,
+            rhs,
+            "decimal addition overflowed",
+        ),
+        NumSub => build_dec_binop_throw_on_overflow(
+            env,
+            parent,
+            bitcode::DEC_SUB_WITH_OVERFLOW,
+            lhs,
+            rhs,
+            "decimal subtraction overflowed",
+        ),
+        NumMul => build_dec_binop_throw_on_overflow(
+            env,
+            parent,
+            bitcode::DEC_MUL_WITH_OVERFLOW,
+            lhs,
+            rhs,
+            "decimal multiplication overflowed",
+        ),
+        NumDivUnchecked => call_bitcode_fn(env, &[lhs, rhs], bitcode::DEC_DIV),
+        _ => {
+            unreachable!("Unrecognized int binary operation: {:?}", op);
+        }
+    }
+}
+
+fn build_dec_binop_throw_on_overflow<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    operation: &str,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+    message: &str,
+) -> BasicValueEnum<'ctx> {
+    let overflow_type = crate::llvm::convert::zig_with_overflow_roc_dec(env);
+
+    let result_ptr = env.builder.build_alloca(overflow_type, "result_ptr");
+    call_void_bitcode_fn(env, &[result_ptr.into(), lhs, rhs], operation);
+
+    let result = env
+        .builder
+        .build_load(result_ptr, "load_overflow")
+        .into_struct_value();
+
+    let value = throw_on_overflow(env, parent, result, message).into_struct_value();
+
+    env.builder.build_extract_value(value, 0, "num").unwrap()
 }
 
 fn int_type_signed_min(int_type: IntType) -> IntValue {
@@ -5909,10 +5938,10 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
             env.context.i64_type(),
             "num_floor",
         ),
-        NumIsFinite => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_IS_FINITE),
-        NumAtan => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ATAN),
-        NumAcos => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ACOS),
-        NumAsin => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ASIN),
+        NumIsFinite => call_bitcode_fn(env, &[arg.into()], bitcode::NUM_IS_FINITE),
+        NumAtan => call_bitcode_fn(env, &[arg.into()], bitcode::NUM_ATAN),
+        NumAcos => call_bitcode_fn(env, &[arg.into()], bitcode::NUM_ACOS),
+        NumAsin => call_bitcode_fn(env, &[arg.into()], bitcode::NUM_ASIN),
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }
@@ -6078,7 +6107,7 @@ fn cxa_allocate_exception<'a, 'ctx, 'env>(
     let context = env.context;
     let u8_ptr = context.i8_type().ptr_type(AddressSpace::Generic);
 
-    let function = match module.get_function(&name) {
+    let function = match module.get_function(name) {
         Some(gvalue) => gvalue,
         None => {
             // void *__cxa_allocate_exception(size_t thrown_size);
@@ -6112,7 +6141,7 @@ fn cxa_throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, info: BasicVal
 
     let u8_ptr = context.i8_type().ptr_type(AddressSpace::Generic);
 
-    let function = match module.get_function(&name) {
+    let function = match module.get_function(name) {
         Some(value) => value,
         None => {
             // void __cxa_throw (void *thrown_exception, std::type_info *tinfo, void (*dest) (void *) );
@@ -6178,7 +6207,7 @@ fn get_gxx_personality_v0<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> Function
     let module = env.module;
     let context = env.context;
 
-    match module.get_function(&name) {
+    match module.get_function(name) {
         Some(gvalue) => gvalue,
         None => {
             let personality_func = add_func(
@@ -6200,7 +6229,7 @@ fn cxa_end_catch(env: &Env<'_, '_, '_>) {
     let module = env.module;
     let context = env.context;
 
-    let function = match module.get_function(&name) {
+    let function = match module.get_function(name) {
         Some(gvalue) => gvalue,
         None => {
             let cxa_end_catch = add_func(
@@ -6228,7 +6257,7 @@ fn cxa_begin_catch<'a, 'ctx, 'env>(
     let module = env.module;
     let context = env.context;
 
-    let function = match module.get_function(&name) {
+    let function = match module.get_function(name) {
         Some(gvalue) => gvalue,
         None => {
             let u8_ptr = context.i8_type().ptr_type(AddressSpace::Generic);

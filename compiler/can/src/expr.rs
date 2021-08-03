@@ -980,7 +980,7 @@ where
             visited.insert(defined_symbol);
 
             for local in refs.lookups.iter() {
-                if !visited.contains(&local) {
+                if !visited.contains(local) {
                     let other_refs: References =
                         references_from_local(*local, visited, refs_by_def, closures);
 
@@ -991,7 +991,7 @@ where
             }
 
             for call in refs.calls.iter() {
-                if !visited.contains(&call) {
+                if !visited.contains(call) {
                     let other_refs = references_from_call(*call, visited, refs_by_def, closures);
 
                     answer = answer.union(other_refs);
@@ -1022,7 +1022,7 @@ where
             visited.insert(call_symbol);
 
             for closed_over_local in references.lookups.iter() {
-                if !visited.contains(&closed_over_local) {
+                if !visited.contains(closed_over_local) {
                     let other_refs =
                         references_from_local(*closed_over_local, visited, refs_by_def, closures);
 
@@ -1033,7 +1033,7 @@ where
             }
 
             for call in references.calls.iter() {
-                if !visited.contains(&call) {
+                if !visited.contains(call) {
                     let other_refs = references_from_call(*call, visited, refs_by_def, closures);
 
                     answer = answer.union(other_refs);

@@ -221,7 +221,7 @@ impl<'a> EdModel<'a> {
             if self.grid_node_map.node_exists_at_pos(caret_pos) {
                 let (expr_start_pos, expr_end_pos, ast_node_id, mark_node_id) = self
                     .grid_node_map
-                    .get_expr_start_end_pos(self.get_caret(), &self)?;
+                    .get_expr_start_end_pos(self.get_caret(), self)?;
 
                 self.set_selected_expr(expr_start_pos, expr_end_pos, ast_node_id, mark_node_id)?;
             } else if self
@@ -230,7 +230,7 @@ impl<'a> EdModel<'a> {
             {
                 let (expr_start_pos, expr_end_pos, ast_node_id, mark_node_id) = self
                     .grid_node_map
-                    .get_expr_start_end_pos(self.get_caret().decrement_col(), &self)?;
+                    .get_expr_start_end_pos(self.get_caret().decrement_col(), self)?;
 
                 self.set_selected_expr(expr_start_pos, expr_end_pos, ast_node_id, mark_node_id)?;
             }
@@ -247,7 +247,7 @@ impl<'a> EdModel<'a> {
         let constrained = constrain_expr(
             &arena,
             &mut self.module.env,
-            &expr,
+            expr,
             Expected::NoExpectation(Type2::Variable(var)),
             Region::zero(),
         );
@@ -272,10 +272,10 @@ impl<'a> EdModel<'a> {
 
         let subs = solved.inner_mut();
 
-        let content = subs.get(var).content;
+        let content = subs.get_content_without_compacting(var);
 
         PoolStr::new(
-            &content_to_string(content, &subs, self.module.env.home, self.interns),
+            &content_to_string(content, subs, self.module.env.home, self.interns),
             self.module.env.pool,
         )
     }
@@ -605,7 +605,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                         }
                                         Expr2::SmallStr(old_arr_str) => {
                                             update_small_string(
-                                                &ch, old_arr_str, ed_model
+                                                ch, old_arr_str, ed_model
                                             )?
                                         }
                                         Expr2::Str(old_pool_str) => {
@@ -2043,11 +2043,11 @@ pub mod test_ed_update {
         expected_tooltip: &str,
         new_char: char,
     ) -> Result<(), String> {
-        assert_type_tooltips_seq(pre_lines, &vec![expected_tooltip], &new_char.to_string())
+        assert_type_tooltips_seq(pre_lines, &[expected_tooltip], &new_char.to_string())
     }
 
     pub fn assert_type_tooltip_clean(lines: &[&str], expected_tooltip: &str) -> Result<(), String> {
-        assert_type_tooltips_seq(lines, &vec![expected_tooltip], "")
+        assert_type_tooltips_seq(lines, &[expected_tooltip], "")
     }
 
     // When doing ctrl+shift+up multiple times we select the surrounding expression every time,

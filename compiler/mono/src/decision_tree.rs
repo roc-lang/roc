@@ -924,7 +924,7 @@ fn pick_path<'a>(branches: &'a [Branch]) -> &'a Vec<PathInstruction> {
         for (path, pattern) in &branch.patterns {
             // NOTE we no longer check for the guard here
             // if !branch.guard.is_none() || needs_tests(&pattern) {
-            if needs_tests(&pattern) {
+            if needs_tests(pattern) {
                 all_paths.push(path);
             } else {
                 // do nothing
@@ -996,7 +996,7 @@ where
             let mut min_paths = vec![first_path];
 
             for path in all_paths {
-                let weight = small_defaults(branches, &path);
+                let weight = small_defaults(branches, path);
 
                 use std::cmp::Ordering;
                 match weight.cmp(&min_weight) {
@@ -1217,15 +1217,9 @@ fn test_to_equality<'a>(
     cond_layout: &Layout<'a>,
     path: &[PathInstruction],
     test: Test<'a>,
-) -> (
-    StoresVec<'a>,
-    Symbol,
-    Symbol,
-    Layout<'a>,
-    Option<ConstructorKnown<'a>>,
-) {
+) -> (StoresVec<'a>, Symbol, Symbol, Option<ConstructorKnown<'a>>) {
     let (rhs_symbol, mut stores, test_layout) =
-        path_to_expr_help(env, cond_symbol, &path, *cond_layout);
+        path_to_expr_help(env, cond_symbol, path, *cond_layout);
 
     match test {
         Test::IsCtor { tag_id, union, .. } => {
@@ -1255,7 +1249,6 @@ fn test_to_equality<'a>(
                         stores,
                         lhs_symbol,
                         rhs_symbol,
-                        Layout::Builtin(Builtin::Int64),
                         Some(ConstructorKnown::OnlyPass {
                             scrutinee: path_symbol,
                             layout: *cond_layout,
@@ -1273,13 +1266,7 @@ fn test_to_equality<'a>(
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
 
-            (
-                stores,
-                lhs_symbol,
-                rhs_symbol,
-                Layout::Builtin(Builtin::Int64),
-                None,
-            )
+            (stores, lhs_symbol, rhs_symbol, None)
         }
 
         Test::IsFloat(test_int) => {
@@ -1289,13 +1276,7 @@ fn test_to_equality<'a>(
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Float64), lhs));
 
-            (
-                stores,
-                lhs_symbol,
-                rhs_symbol,
-                Layout::Builtin(Builtin::Float64),
-                None,
-            )
+            (stores, lhs_symbol, rhs_symbol, None)
         }
 
         Test::IsByte {
@@ -1305,13 +1286,7 @@ fn test_to_equality<'a>(
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Int8), lhs));
 
-            (
-                stores,
-                lhs_symbol,
-                rhs_symbol,
-                Layout::Builtin(Builtin::Int8),
-                None,
-            )
+            (stores, lhs_symbol, rhs_symbol, None)
         }
 
         Test::IsBit(test_bit) => {
@@ -1319,13 +1294,7 @@ fn test_to_equality<'a>(
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Int1), lhs));
 
-            (
-                stores,
-                lhs_symbol,
-                rhs_symbol,
-                Layout::Builtin(Builtin::Int1),
-                None,
-            )
+            (stores, lhs_symbol, rhs_symbol, None)
         }
 
         Test::IsStr(test_str) => {
@@ -1334,13 +1303,7 @@ fn test_to_equality<'a>(
 
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Str), lhs));
 
-            (
-                stores,
-                lhs_symbol,
-                rhs_symbol,
-                Layout::Builtin(Builtin::Str),
-                None,
-            )
+            (stores, lhs_symbol, rhs_symbol, None)
         }
     }
 }
@@ -1349,7 +1312,6 @@ type Tests<'a> = std::vec::Vec<(
     bumpalo::collections::Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
     Symbol,
     Symbol,
-    Layout<'a>,
     Option<ConstructorKnown<'a>>,
 )>;
 
@@ -1363,13 +1325,7 @@ fn stores_and_condition<'a>(
 
     // Assumption: there is at most 1 guard, and it is the outer layer.
     for (path, test) in test_chain {
-        tests.push(test_to_equality(
-            env,
-            cond_symbol,
-            &cond_layout,
-            &path,
-            test,
-        ))
+        tests.push(test_to_equality(env, cond_symbol, cond_layout, &path, test))
     }
 
     tests
@@ -1495,7 +1451,7 @@ fn compile_tests<'a>(
     fail: &'a Stmt<'a>,
     mut cond: Stmt<'a>,
 ) -> Stmt<'a> {
-    for (new_stores, lhs, rhs, _layout, opt_constructor_info) in tests.into_iter() {
+    for (new_stores, lhs, rhs, opt_constructor_info) in tests.into_iter() {
         match opt_constructor_info {
             None => {
                 cond = compile_test(env, ret_layout, new_stores, lhs, rhs, fail, cond);
@@ -1578,7 +1534,7 @@ fn decide_to_branching<'a>(
     match decider {
         Leaf(Jump(label)) => {
             let index = jumps
-                .binary_search_by_key(&label, |ref r| r.0)
+                .binary_search_by_key(&label, |r| r.0)
                 .expect("jump not in list of jumps");
 
             Stmt::Jump(jumps[index].1, &[])
@@ -1684,7 +1640,7 @@ fn decide_to_branching<'a>(
             if number_of_tests == 1 {
                 // if there is just one test, compile to a simple if-then-else
 
-                let (new_stores, lhs, rhs, _layout, _cinfo) = tests.into_iter().next().unwrap();
+                let (new_stores, lhs, rhs, _cinfo) = tests.into_iter().next().unwrap();
 
                 compile_test_help(
                     env,

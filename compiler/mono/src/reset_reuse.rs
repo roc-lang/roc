@@ -58,7 +58,7 @@ impl<'a, 'i> Env<'a, 'i> {
     fn unique_symbol(&mut self) -> Symbol {
         let ident_id = self.ident_ids.gen_unique();
 
-        self.home.register_debug_idents(&self.ident_ids);
+        self.home.register_debug_idents(self.ident_ids);
 
         Symbol::new(self.home, ident_id)
     }
@@ -246,8 +246,6 @@ fn insert_reset<'a>(
     }
 
     let reset_expr = Expr::Reset(x);
-
-    // const I64: Layout<'static> = Layout::Builtin(crate::layout::Builtin::Int64);
 
     let layout = Layout::Union(union_layout);
 

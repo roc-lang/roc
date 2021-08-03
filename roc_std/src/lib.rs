@@ -1,5 +1,6 @@
 #![crate_type = "lib"]
 #![no_std]
+use core::convert::From;
 use core::ffi::c_void;
 use core::{fmt, mem, ptr};
 
@@ -391,6 +392,14 @@ impl RocStr {
         }
     }
 
+    pub fn get_bytes(&self) -> *const u8 {
+        if self.is_small_str() {
+            self.get_small_str_ptr()
+        } else {
+            self.elements
+        }
+    }
+
     pub fn storage(&self) -> Option<Storage> {
         use core::cmp::Ordering::*;
 
@@ -692,5 +701,74 @@ impl<'a, T: Sized + Copy> From<&'a RocCallResult<T>> for Result<T, &'a str> {
                 msg
             }),
         }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct RocDec(pub i128);
+
+impl RocDec {
+    pub const MIN: Self = Self(i128::MIN);
+    pub const MAX: Self = Self(i128::MAX);
+
+    pub const DECIMAL_PLACES: u32 = 18;
+
+    pub const ONE_POINT_ZERO: i128 = 10i128.pow(Self::DECIMAL_PLACES);
+
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(value: &str) -> Option<Self> {
+        // Split the string into the parts before and after the "."
+        let mut parts = value.split('.');
+
+        let before_point = match parts.next() {
+            Some(answer) => answer,
+            None => {
+                return None;
+            }
+        };
+
+        let after_point = match parts.next() {
+            Some(answer) if answer.len() <= Self::DECIMAL_PLACES as usize => answer,
+            _ => {
+                return None;
+            }
+        };
+
+        // There should have only been one "." in the string!
+        if parts.next().is_some() {
+            return None;
+        }
+
+        // Calculate the low digits - the ones after the decimal point.
+        let lo = match after_point.parse::<i128>() {
+            Ok(answer) => {
+                // Translate e.g. the 1 from 0.1 into 10000000000000000000
+                // by "restoring" the elided trailing zeroes to the number!
+                let trailing_zeroes = Self::DECIMAL_PLACES as usize - after_point.len();
+                let lo = answer * 10i128.pow(trailing_zeroes as u32);
+
+                if !before_point.starts_with('-') {
+                    lo
+                } else {
+                    -lo
+                }
+            }
+            Err(_) => {
+                return None;
+            }
+        };
+
+        // Calculate the high digits - the ones before the decimal point.
+        match before_point.parse::<i128>() {
+            Ok(answer) => match answer.checked_mul(10i128.pow(Self::DECIMAL_PLACES)) {
+                Some(hi) => hi.checked_add(lo).map(RocDec),
+                None => None,
+            },
+            Err(_) => None,
+        }
+    }
+
+    pub fn from_str_to_i128_unsafe(val: &str) -> i128 {
+        RocDec::from_str(val).unwrap().0
     }
 }

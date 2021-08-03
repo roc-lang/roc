@@ -119,7 +119,7 @@ fn headers_from_annotation_help(
 }
 
 /// This accepts PatternState (rather than returning it) so that the caller can
-/// intiialize the Vecs in PatternState using with_capacity
+/// initialize the Vecs in PatternState using with_capacity
 /// based on its knowledge of their lengths.
 pub fn constrain_pattern(
     env: &Env,
@@ -206,7 +206,7 @@ pub fn constrain_pattern(
                 let pat_type = Type::Variable(*var);
                 let expected = PExpected::NoExpectation(pat_type.clone());
 
-                if !state.headers.contains_key(&symbol) {
+                if !state.headers.contains_key(symbol) {
                     state
                         .headers
                         .insert(*symbol, Located::at(region, pat_type.clone()));

@@ -128,8 +128,9 @@ fn hash_builtin<'a, 'ctx, 'env>(
         | Builtin::Float32
         | Builtin::Float128
         | Builtin::Float16
+        | Builtin::Decimal
         | Builtin::Usize => {
-            let hash_bytes = store_and_use_as_u8_ptr(env, val, &layout);
+            let hash_bytes = store_and_use_as_u8_ptr(env, val, layout);
             hash_bitcode_fn(env, seed, hash_bytes, layout.stack_size(ptr_bytes))
         }
         Builtin::Str => {
@@ -137,7 +138,7 @@ fn hash_builtin<'a, 'ctx, 'env>(
             call_bitcode_fn(
                 env,
                 &[seed.into(), build_str::str_to_i128(env, val).into()],
-                &bitcode::DICT_HASH_STR,
+                bitcode::DICT_HASH_STR,
             )
             .into_int_value()
         }
@@ -326,7 +327,7 @@ fn build_hash_tag<'a, 'ctx, 'env>(
 
     let symbol = Symbol::GENERIC_HASH;
     let fn_name = layout_ids
-        .get(symbol, &layout)
+        .get(symbol, layout)
         .to_symbol_string(symbol, &env.interns);
 
     let function = match env.module.get_function(fn_name.as_str()) {
@@ -334,7 +335,7 @@ fn build_hash_tag<'a, 'ctx, 'env>(
         None => {
             let seed_type = env.context.i64_type();
 
-            let arg_type = basic_type_from_layout(env, &layout);
+            let arg_type = basic_type_from_layout(env, layout);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -658,7 +659,7 @@ fn build_hash_list<'a, 'ctx, 'env>(
 
     let symbol = Symbol::GENERIC_HASH;
     let fn_name = layout_ids
-        .get(symbol, &layout)
+        .get(symbol, layout)
         .to_symbol_string(symbol, &env.interns);
 
     let function = match env.module.get_function(fn_name.as_str()) {
@@ -666,7 +667,7 @@ fn build_hash_list<'a, 'ctx, 'env>(
         None => {
             let seed_type = env.context.i64_type();
 
-            let arg_type = basic_type_from_layout(env, &layout);
+            let arg_type = basic_type_from_layout(env, layout);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -869,7 +870,7 @@ fn store_and_use_as_u8_ptr<'a, 'ctx, 'env>(
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
 ) -> PointerValue<'ctx> {
-    let basic_type = basic_type_from_layout(env, &layout);
+    let basic_type = basic_type_from_layout(env, layout);
     let alloc = env.builder.build_alloca(basic_type, "store");
     env.builder.build_store(alloc, value);
 
@@ -894,7 +895,7 @@ fn hash_bitcode_fn<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[seed.into(), buffer.into(), num_bytes.into()],
-        &bitcode::DICT_HASH,
+        bitcode::DICT_HASH,
     )
     .into_int_value()
 }

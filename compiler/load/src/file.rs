@@ -225,7 +225,7 @@ impl<'a> Dependencies<'a> {
         if let Some(to_notify) = self.notifies.get(&key) {
             for notify_key in to_notify {
                 let mut is_empty = false;
-                if let Some(waiting_for_pairs) = self.waiting_for.get_mut(&notify_key) {
+                if let Some(waiting_for_pairs) = self.waiting_for.get_mut(notify_key) {
                     waiting_for_pairs.remove(&key);
                     is_empty = waiting_for_pairs.is_empty();
                 }
@@ -469,7 +469,7 @@ fn start_phase<'a>(
                     for dep_id in deps_by_name.values() {
                         // We already verified that these are all present,
                         // so unwrapping should always succeed here.
-                        let idents = ident_ids_by_module.get(&dep_id).unwrap();
+                        let idents = ident_ids_by_module.get(dep_id).unwrap();
 
                         dep_idents.insert(*dep_id, idents.clone());
                     }
@@ -524,6 +524,7 @@ fn start_phase<'a>(
                     var_store,
                     imported_modules,
                     declarations,
+                    dep_idents,
                     ..
                 } = constrained;
 
@@ -535,7 +536,8 @@ fn start_phase<'a>(
                     var_store,
                     imported_modules,
                     &mut state.exposed_types,
-                    &state.stdlib,
+                    state.stdlib,
+                    dep_idents,
                     declarations,
                 )
             }
@@ -621,6 +623,7 @@ pub struct LoadedModule {
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub declarations_by_id: MutMap<ModuleId, Vec<Declaration>>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
+    pub dep_idents: MutMap<ModuleId, IdentIds>,
     pub exposed_aliases: MutMap<Symbol, Alias>,
     pub exposed_values: Vec<Symbol>,
     pub header_sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
@@ -676,6 +679,7 @@ struct ConstrainedModule {
     constraint: Constraint,
     ident_ids: IdentIds,
     var_store: VarStore,
+    dep_idents: MutMap<ModuleId, IdentIds>,
     module_timing: ModuleTiming,
 }
 
@@ -759,6 +763,7 @@ enum Msg<'a> {
         solved_module: SolvedModule,
         solved_subs: Solved<Subs>,
         decls: Vec<Declaration>,
+        dep_idents: MutMap<ModuleId, IdentIds>,
         module_timing: ModuleTiming,
         unused_imports: MutMap<ModuleId, Region>,
     },
@@ -767,6 +772,7 @@ enum Msg<'a> {
         exposed_vars_by_symbol: MutMap<Symbol, Variable>,
         exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
         exposed_values: Vec<Symbol>,
+        dep_idents: MutMap<ModuleId, IdentIds>,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
     },
     FoundSpecializations {
@@ -985,6 +991,7 @@ enum BuildTask<'a> {
         constraint: Constraint,
         var_store: VarStore,
         declarations: Vec<Declaration>,
+        dep_idents: MutMap<ModuleId, IdentIds>,
         unused_imports: MutMap<ModuleId, Region>,
     },
     BuildPendingSpecializations {
@@ -1516,6 +1523,7 @@ where
                         exposed_vars_by_symbol,
                         exposed_aliases_by_symbol,
                         exposed_values,
+                        dep_idents,
                         documentation,
                     } => {
                         // We're done! There should be no more messages pending.
@@ -1534,6 +1542,7 @@ where
                             exposed_values,
                             exposed_aliases_by_symbol,
                             exposed_vars_by_symbol,
+                            dep_idents,
                             documentation,
                         )));
                     }
@@ -1635,7 +1644,7 @@ fn start_tasks<'a>(
 ) -> Result<(), LoadingProblem<'a>> {
     for (module_id, phase) in work {
         for task in start_phase(module_id, phase, arena, state) {
-            enqueue_task(&injector, worker_listeners, task)?
+            enqueue_task(injector, worker_listeners, task)?
         }
     }
 
@@ -1759,11 +1768,11 @@ fn update<'a>(
 
             state.module_cache.headers.insert(header.module_id, header);
 
-            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
 
             let work = state.dependencies.notify(home, Phase::LoadHeader);
 
-            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1796,7 +1805,7 @@ fn update<'a>(
 
             let work = state.dependencies.notify(module_id, Phase::Parse);
 
-            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1831,7 +1840,7 @@ fn update<'a>(
                 .dependencies
                 .notify(module_id, Phase::CanonicalizeAndConstrain);
 
-            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1882,7 +1891,7 @@ fn update<'a>(
                     .notify(module_id, Phase::CanonicalizeAndConstrain),
             );
 
-            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -1892,6 +1901,7 @@ fn update<'a>(
             solved_module,
             solved_subs,
             decls,
+            dep_idents,
             mut module_timing,
             mut unused_imports,
         } => {
@@ -1949,6 +1959,7 @@ fn update<'a>(
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
                         exposed_values: solved_module.exposed_symbols,
                         exposed_aliases_by_symbol: solved_module.aliases,
+                        dep_idents,
                         documentation,
                     })
                     .map_err(|_| LoadingProblem::MsgChannelDied)?;
@@ -1986,7 +1997,7 @@ fn update<'a>(
                     state.constrained_ident_ids.insert(module_id, ident_ids);
                 }
 
-                start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
+                start_tasks(arena, &mut state, work, injector, worker_listeners)?;
             }
 
             Ok(state)
@@ -2041,7 +2052,7 @@ fn update<'a>(
                 .dependencies
                 .notify(module_id, Phase::FindSpecializations);
 
-            start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
+            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
 
             Ok(state)
         }
@@ -2143,7 +2154,7 @@ fn update<'a>(
                     existing.extend(requested);
                 }
 
-                start_tasks(arena, &mut state, work, &injector, worker_listeners)?;
+                start_tasks(arena, &mut state, work, injector, worker_listeners)?;
             }
 
             Ok(state)
@@ -2283,6 +2294,7 @@ fn finish(
     exposed_values: Vec<Symbol>,
     exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
     exposed_vars_by_symbol: MutMap<Symbol, Variable>,
+    dep_idents: MutMap<ModuleId, IdentIds>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
 ) -> LoadedModule {
     let module_ids = Arc::try_unwrap(state.arc_modules)
@@ -2316,6 +2328,7 @@ fn finish(
         can_problems: state.module_cache.can_problems,
         type_problems: state.module_cache.type_problems,
         declarations_by_id: state.declarations_by_id,
+        dep_idents,
         exposed_aliases: exposed_aliases_by_symbol,
         exposed_values,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
@@ -2348,7 +2361,7 @@ fn load_pkg_config<'a>(
             let parse_start = SystemTime::now();
             let bytes = arena.alloc(bytes_vec);
             let parse_state = parser::State::new(bytes);
-            let parsed = roc_parse::module::parse_header(&arena, parse_state);
+            let parsed = roc_parse::module::parse_header(arena, parse_state);
             let parse_header_duration = parse_start.elapsed().unwrap();
 
             // Insert the first entries for this module's timings
@@ -2518,7 +2531,7 @@ fn parse_header<'a>(
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let parse_start = SystemTime::now();
     let parse_state = parser::State::new(src_bytes);
-    let parsed = roc_parse::module::parse_header(&arena, parse_state);
+    let parsed = roc_parse::module::parse_header(arena, parse_state);
     let parse_header_duration = parse_start.elapsed().unwrap();
 
     // Insert the first entries for this module's timings
@@ -2667,7 +2680,7 @@ fn parse_header<'a>(
         }
         Ok((ast::Module::Platform { header }, _parse_state)) => Ok(fabricate_effects_module(
             arena,
-            &"",
+            "",
             module_ids,
             ident_ids_by_module,
             header,
@@ -2825,7 +2838,7 @@ fn send_header<'a>(
 
         let name = match opt_shorthand {
             Some(shorthand) => {
-                PQModuleName::Qualified(&shorthand, declared_name.as_inline_str().clone())
+                PQModuleName::Qualified(shorthand, declared_name.as_inline_str().clone())
             }
             None => PQModuleName::Unqualified(declared_name.as_inline_str().clone()),
         };
@@ -2901,13 +2914,13 @@ fn send_header<'a>(
         }
 
         if cfg!(debug_assertions) {
-            home.register_debug_idents(&ident_ids);
+            home.register_debug_idents(ident_ids);
         }
 
         ident_ids.clone()
     };
 
-    let mut parse_entries: Vec<_> = (&packages).iter().map(|x| &x.value).collect();
+    let mut parse_entries: Vec<_> = packages.iter().map(|x| &x.value).collect();
     let mut package_entries = MutMap::default();
 
     while let Some(parse_entry) = parse_entries.pop() {
@@ -3053,7 +3066,7 @@ fn send_header_two<'a>(
         let mut module_ids = (*module_ids).lock();
         let mut ident_ids_by_module = (*ident_ids_by_module).lock();
 
-        let name = PQModuleName::Qualified(&shorthand, declared_name);
+        let name = PQModuleName::Qualified(shorthand, declared_name);
         home = module_ids.get_or_insert(&name);
 
         // Ensure this module has an entry in the exposed_ident_ids map.
@@ -3138,13 +3151,13 @@ fn send_header_two<'a>(
         }
 
         if cfg!(debug_assertions) {
-            home.register_debug_idents(&ident_ids);
+            home.register_debug_idents(ident_ids);
         }
 
         ident_ids.clone()
     };
 
-    let mut parse_entries: Vec<_> = (&packages).iter().map(|x| &x.value).collect();
+    let mut parse_entries: Vec<_> = packages.iter().map(|x| &x.value).collect();
     let mut package_entries = MutMap::default();
 
     while let Some(parse_entry) = parse_entries.pop() {
@@ -3234,6 +3247,7 @@ impl<'a> BuildTask<'a> {
         imported_modules: MutMap<ModuleId, Region>,
         exposed_types: &mut SubsByModule,
         stdlib: &StdLib,
+        dep_idents: MutMap<ModuleId, IdentIds>,
         declarations: Vec<Declaration>,
     ) -> Self {
         let home = module.module_id;
@@ -3261,6 +3275,7 @@ impl<'a> BuildTask<'a> {
             constraint,
             var_store,
             declarations,
+            dep_idents,
             module_timing,
             unused_imports,
         }
@@ -3276,6 +3291,7 @@ fn run_solve<'a>(
     constraint: Constraint,
     mut var_store: VarStore,
     decls: Vec<Declaration>,
+    dep_idents: MutMap<ModuleId, IdentIds>,
     unused_imports: MutMap<ModuleId, Region>,
 ) -> Msg<'a> {
     // We have more constraining work to do now, so we'll add it to our timings.
@@ -3330,6 +3346,7 @@ fn run_solve<'a>(
         solved_subs,
         ident_ids,
         decls,
+        dep_idents,
         solved_module,
         module_timing,
         unused_imports,
@@ -3390,7 +3407,7 @@ fn fabricate_effects_module<'a>(
 
     let module_id: ModuleId;
 
-    let effect_entries = unpack_exposes_entries(arena, &effects.entries);
+    let effect_entries = unpack_exposes_entries(arena, effects.entries);
     let name = effects.effect_type_name;
     let declared_name: ModuleName = name.into();
 
@@ -3464,7 +3481,7 @@ fn fabricate_effects_module<'a>(
         }
 
         if cfg!(debug_assertions) {
-            module_id.register_debug_idents(&ident_ids);
+            module_id.register_debug_idents(ident_ids);
         }
 
         ident_ids.clone()
@@ -3478,7 +3495,8 @@ fn fabricate_effects_module<'a>(
     let module_ids = { (*module_ids).lock().clone() }.into_module_ids();
 
     let mut scope = roc_can::scope::Scope::new(module_id, &mut var_store);
-    let mut can_env = roc_can::env::Env::new(module_id, dep_idents, &module_ids, exposed_ident_ids);
+    let mut can_env =
+        roc_can::env::Env::new(module_id, &dep_idents, &module_ids, exposed_ident_ids);
 
     let effect_symbol = scope
         .introduce(
@@ -3611,6 +3629,7 @@ fn fabricate_effects_module<'a>(
         var_store,
         constraint,
         ident_ids: module_output.ident_ids,
+        dep_idents,
         module_timing,
     };
 
@@ -3685,12 +3704,12 @@ where
 
     let mut var_store = VarStore::default();
     let canonicalized = canonicalize_module_defs(
-        &arena,
+        arena,
         parsed_defs,
         module_id,
         module_ids,
         exposed_ident_ids,
-        dep_idents,
+        &dep_idents,
         aliases,
         exposed_imports,
         &exposed_symbols,
@@ -3712,7 +3731,7 @@ where
                     module_output.scope,
                     name.as_str().into(),
                     &module_output.ident_ids,
-                    &parsed_defs,
+                    parsed_defs,
                 )),
             };
 
@@ -3738,6 +3757,7 @@ where
                 var_store,
                 constraint,
                 ident_ids: module_output.ident_ids,
+                dep_idents,
                 module_timing,
             };
 
@@ -3761,7 +3781,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     let parse_start = SystemTime::now();
     let source = header.parse_state.bytes;
     let parse_state = header.parse_state;
-    let parsed_defs = match module_defs().parse(&arena, parse_state) {
+    let parsed_defs = match module_defs().parse(arena, parse_state) {
         Ok((_, success, _state)) => success,
         Err((_, fail, _)) => {
             return Err(LoadingProblem::ParsingFailed(fail.into_parse_problem(
@@ -4210,6 +4230,7 @@ where
             var_store,
             ident_ids,
             declarations,
+            dep_idents,
             unused_imports,
         } => Ok(run_solve(
             module,
@@ -4219,6 +4240,7 @@ where
             constraint,
             var_store,
             declarations,
+            dep_idents,
             unused_imports,
         )),
         BuildPendingSpecializations {

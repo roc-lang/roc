@@ -36,7 +36,7 @@ fn check_cmd_output(
 ) {
     let out = run_cmd(
         file.with_file_name(executable_filename).to_str().unwrap(),
-        stdin_str,
+        &[stdin_str],
         &[],
     );
 
@@ -60,7 +60,7 @@ fn bench_cmd<T: Measurement>(
             b.iter(|| {
                 run_cmd(
                     black_box(file.with_file_name(executable_filename).to_str().unwrap()),
-                    black_box(stdin_str),
+                    black_box(&[stdin_str]),
                     &[],
                 )
             })
@@ -68,7 +68,7 @@ fn bench_cmd<T: Measurement>(
     } else {
         run_cmd(
             black_box(file.with_file_name(executable_filename).to_str().unwrap()),
-            black_box(stdin_str),
+            black_box(&[stdin_str]),
             &[],
         );
     }
