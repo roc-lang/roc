@@ -4,8 +4,6 @@ use core::convert::From;
 use core::ffi::c_void;
 use core::{fmt, mem, ptr, slice};
 
-pub mod alloca;
-
 // A list of C functions that are being imported
 extern "C" {
     pub fn printf(format: *const u8, ...) -> i32;
