@@ -15,7 +15,7 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Located, Region};
 use roc_types::solved_types::SolvedType;
-use roc_types::subs::{Content, FlatType, Subs, Variable};
+use roc_types::subs::{Content, FlatType, Subs, SubsSlice, Variable};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
@@ -3039,11 +3039,11 @@ pub fn with_hole<'a>(
 
             if let Content::Structure(FlatType::Func(arg_vars, _, ret_var)) = content {
                 let ret_var = *ret_var;
-                let arg_vars = arg_vars.clone();
+                let arg_vars = *arg_vars;
 
                 tag_union_to_function(
                     env,
-                    &arg_vars,
+                    arg_vars,
                     ret_var,
                     tag_name,
                     closure_name,
@@ -4346,7 +4346,7 @@ fn convert_tag_union<'a>(
 #[allow(clippy::too_many_arguments)]
 fn tag_union_to_function<'a>(
     env: &mut Env<'a, '_>,
-    argument_variables: &[Variable],
+    argument_variables: SubsSlice<Variable>,
     return_variable: Variable,
     tag_name: TagName,
     proc_symbol: Symbol,
@@ -4360,15 +4360,17 @@ fn tag_union_to_function<'a>(
     let mut loc_pattern_args = vec![];
     let mut loc_expr_args = vec![];
 
-    for arg_var in argument_variables {
+    for index in argument_variables {
+        let arg_var = env.subs[index];
+
         let arg_symbol = env.unique_symbol();
 
         let loc_pattern = Located::at_zero(roc_can::pattern::Pattern::Identifier(arg_symbol));
 
         let loc_expr = Located::at_zero(roc_can::expr::Expr::Var(arg_symbol));
 
-        loc_pattern_args.push((*arg_var, loc_pattern));
-        loc_expr_args.push((*arg_var, loc_expr));
+        loc_pattern_args.push((arg_var, loc_pattern));
+        loc_expr_args.push((arg_var, loc_expr));
     }
 
     let loc_body = Located::at_zero(roc_can::expr::Expr::Tag {

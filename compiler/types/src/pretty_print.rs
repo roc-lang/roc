@@ -1,4 +1,4 @@
-use crate::subs::{Content, FlatType, Subs, Variable};
+use crate::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
 use crate::types::{name_type_var, RecordField};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
@@ -146,8 +146,9 @@ fn find_names_needed(
             }
         }
         Structure(Func(arg_vars, _closure_var, ret_var)) => {
-            for var in arg_vars {
-                find_names_needed(*var, subs, roots, root_appearances, names_taken);
+            for index in arg_vars.into_iter() {
+                let var = subs[index];
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
 
             find_names_needed(*ret_var, subs, roots, root_appearances, names_taken);
@@ -407,7 +408,9 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
         Apply(symbol, args) => write_apply(env, *symbol, args, subs, buf, parens),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
-        Func(args, _closure, ret) => write_fn(env, args, *ret, subs, buf, parens),
+        Func(args, _closure, ret) => {
+            write_fn(env, subs.get_subs_slice(*args), *ret, subs, buf, parens)
+        }
         Record(fields, ext_var) => {
             use crate::types::{gather_fields, RecordStructure};
 

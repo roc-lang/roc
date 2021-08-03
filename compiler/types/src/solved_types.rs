@@ -1,4 +1,4 @@
-use crate::subs::{FlatType, Subs, VarId, VarStore, Variable};
+use crate::subs::{FlatType, GetSubsSlice, Subs, VarId, VarStore, Variable};
 use crate::types::{Problem, RecordField, Type};
 use roc_collections::all::{ImMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
@@ -387,7 +387,7 @@ impl SolvedType {
             Func(args, closure, ret) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for var in args {
+                for var in subs.get_subs_slice(*args) {
                     new_args.push(Self::from_var_help(subs, recursion_vars, *var));
                 }
 

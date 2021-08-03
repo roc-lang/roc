@@ -9,7 +9,9 @@ use roc_collections::all::{BumpMap, BumpMapDefault, MutMap};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::solved_types::Solved;
-use roc_types::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
+use roc_types::subs::{
+    Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, SubsSlice, Variable,
+};
 use roc_types::types::{Alias, Category, ErrorType, PatternCategory, RecordField};
 use roc_unify::unify::unify;
 use roc_unify::unify::Unified::*;
@@ -857,19 +859,23 @@ fn type_to_variable<'a>(
             register(subs, rank, pools, content)
         }
         // This case is important for the rank of boolean variables
-        Function(args, closure_type_id, ret_type_id) => {
-            let mut arg_vars = Vec::with_capacity(args.len());
-
+        Function(arg_vars, closure_type_id, ret_type_id) => {
             let closure_type = mempool.get(*closure_type_id);
             let ret_type = mempool.get(*ret_type_id);
 
-            for arg_id in args.iter_node_ids() {
-                let arg = mempool.get(arg_id);
+            let mut new_arg_vars = Vec::with_capacity(arg_vars.len());
 
-                arg_vars.push(type_to_variable(
-                    arena, mempool, subs, rank, pools, cached, arg,
-                ))
+            for var_id in arg_vars.iter_node_ids() {
+                let arg = mempool.get(var_id);
+                let var = type_to_variable(arena, mempool, subs, rank, pools, cached, arg);
+                new_arg_vars.push(var)
             }
+
+            let start = subs.variables.len() as u32;
+            let length = arg_vars.len() as u16;
+            let arg_vars = SubsSlice::new(start, length);
+
+            subs.variables.extend(new_arg_vars);
 
             let ret_var = type_to_variable(arena, mempool, subs, rank, pools, cached, ret_type);
             let closure_var =
@@ -1196,9 +1202,9 @@ fn adjust_rank_content(
                         ));
                     }
 
-                    for var in arg_vars {
-                        rank =
-                            rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
+                    for index in arg_vars.into_iter() {
+                        let var = subs[index];
+                        rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
                     }
 
                     rank
@@ -1344,128 +1350,82 @@ fn instantiate_rigids_help(
     // will not repeat this work or crawl this variable again.
     match content {
         Structure(flat_type) => {
-            let new_flat_type = match flat_type {
-                Apply(symbol, args) => {
-                    let args = args
-                        .into_iter()
-                        .map(|var| instantiate_rigids_help(subs, max_rank, pools, var))
-                        .collect();
-
-                    Apply(symbol, args)
+            match flat_type {
+                Apply(_, args) => {
+                    for var in args.into_iter() {
+                        instantiate_rigids_help(subs, max_rank, pools, var);
+                    }
                 }
 
                 Func(arg_vars, closure_var, ret_var) => {
-                    let new_ret_var = instantiate_rigids_help(subs, max_rank, pools, ret_var);
-                    let new_closure_var =
-                        instantiate_rigids_help(subs, max_rank, pools, closure_var);
-                    let arg_vars = arg_vars
-                        .into_iter()
-                        .map(|var| instantiate_rigids_help(subs, max_rank, pools, var))
-                        .collect();
+                    instantiate_rigids_help(subs, max_rank, pools, ret_var);
+                    instantiate_rigids_help(subs, max_rank, pools, closure_var);
 
-                    Func(arg_vars, new_closure_var, new_ret_var)
+                    for index in arg_vars.into_iter() {
+                        let var = subs[index];
+                        instantiate_rigids_help(subs, max_rank, pools, var);
+                    }
                 }
 
-                same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
+                EmptyRecord | EmptyTagUnion | Erroneous(_) => {}
 
                 Record(fields, ext_var) => {
                     for var in fields.iter_variables() {
                         instantiate_rigids_help(subs, max_rank, pools, *var);
                     }
 
-                    Record(
-                        fields,
-                        instantiate_rigids_help(subs, max_rank, pools, ext_var),
-                    )
+                    instantiate_rigids_help(subs, max_rank, pools, ext_var);
                 }
 
                 TagUnion(tags, ext_var) => {
-                    let mut new_tags = MutMap::default();
-
-                    for (tag, vars) in tags {
-                        let new_vars: Vec<Variable> = vars
-                            .into_iter()
-                            .map(|var| instantiate_rigids_help(subs, max_rank, pools, var))
-                            .collect();
-                        new_tags.insert(tag, new_vars);
+                    for (_, vars) in tags {
+                        for var in vars.into_iter() {
+                            instantiate_rigids_help(subs, max_rank, pools, var);
+                        }
                     }
 
-                    TagUnion(
-                        new_tags,
-                        instantiate_rigids_help(subs, max_rank, pools, ext_var),
-                    )
+                    instantiate_rigids_help(subs, max_rank, pools, ext_var);
                 }
 
-                FunctionOrTagUnion(tag_name, symbol, ext_var) => FunctionOrTagUnion(
-                    tag_name,
-                    symbol,
-                    instantiate_rigids_help(subs, max_rank, pools, ext_var),
-                ),
+                FunctionOrTagUnion(_tag_name, _symbol, ext_var) => {
+                    instantiate_rigids_help(subs, max_rank, pools, ext_var);
+                }
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    let mut new_tags = MutMap::default();
+                    instantiate_rigids_help(subs, max_rank, pools, rec_var);
 
-                    let new_rec_var = instantiate_rigids_help(subs, max_rank, pools, rec_var);
-
-                    for (tag, vars) in tags {
-                        let new_vars: Vec<Variable> = vars
-                            .into_iter()
-                            .map(|var| instantiate_rigids_help(subs, max_rank, pools, var))
-                            .collect();
-                        new_tags.insert(tag, new_vars);
+                    for (_, vars) in tags {
+                        for var in vars.into_iter() {
+                            instantiate_rigids_help(subs, max_rank, pools, var);
+                        }
                     }
 
-                    RecursiveTagUnion(
-                        new_rec_var,
-                        new_tags,
-                        instantiate_rigids_help(subs, max_rank, pools, ext_var),
-                    )
+                    instantiate_rigids_help(subs, max_rank, pools, ext_var);
                 }
             };
-
-            subs.set(copy, make_descriptor(Structure(new_flat_type)));
-
-            copy
         }
 
-        FlexVar(_) | Error => copy,
+        FlexVar(_) | Error => {}
 
-        RecursionVar {
-            opt_name,
-            structure,
-        } => {
-            let new_structure = instantiate_rigids_help(subs, max_rank, pools, structure);
-
-            subs.set(
-                copy,
-                make_descriptor(RecursionVar {
-                    opt_name,
-                    structure: new_structure,
-                }),
-            );
-
-            copy
+        RecursionVar { structure, .. } => {
+            instantiate_rigids_help(subs, max_rank, pools, structure);
         }
 
         RigidVar(name) => {
+            // what it's all about: convert the rigid var into a flex var
             subs.set(copy, make_descriptor(FlexVar(Some(name))));
-
-            copy
         }
 
-        Alias(symbol, args, real_type_var) => {
-            let new_args = args
-                .into_iter()
-                .map(|(name, var)| (name, instantiate_rigids_help(subs, max_rank, pools, var)))
-                .collect();
-            let new_real_type_var = instantiate_rigids_help(subs, max_rank, pools, real_type_var);
-            let new_content = Alias(symbol, new_args, new_real_type_var);
+        Alias(_, args, real_type_var) => {
+            for (_, var) in args.into_iter() {
+                instantiate_rigids_help(subs, max_rank, pools, var);
+            }
 
-            subs.set(copy, make_descriptor(new_content));
-
-            copy
+            instantiate_rigids_help(subs, max_rank, pools, real_type_var);
         }
     }
+
+    var
 }
 
 fn deep_copy_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) -> Variable {
@@ -1537,10 +1497,20 @@ fn deep_copy_var_help(
                 Func(arg_vars, closure_var, ret_var) => {
                     let new_ret_var = deep_copy_var_help(subs, max_rank, pools, ret_var);
                     let new_closure_var = deep_copy_var_help(subs, max_rank, pools, closure_var);
-                    let arg_vars = arg_vars
-                        .into_iter()
-                        .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
-                        .collect();
+
+                    let mut new_arg_vars = Vec::with_capacity(arg_vars.len());
+
+                    for index in arg_vars.into_iter() {
+                        let var = subs[index];
+                        let copy_var = deep_copy_var_help(subs, max_rank, pools, var);
+                        new_arg_vars.push(copy_var);
+                    }
+
+                    let start = subs.variables.len() as u32;
+                    let length = arg_vars.len() as u16;
+                    let arg_vars = SubsSlice::new(start, length);
+
+                    subs.variables.extend(new_arg_vars);
 
                     Func(arg_vars, new_closure_var, new_ret_var)
                 }

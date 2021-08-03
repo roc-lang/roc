@@ -53,17 +53,56 @@ struct ErrorTypeState {
 #[derive(Default, Clone)]
 pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>,
-    variables: Vec<Variable>,
+    pub variables: Vec<Variable>,
     tag_names: Vec<TagName>,
     field_names: Vec<Lowercase>,
     record_fields: Vec<RecordField<()>>,
 }
 
-#[repr(packed(2))]
 pub struct SubsSlice<T> {
     start: u32,
     length: u16,
     _marker: std::marker::PhantomData<T>,
+}
+
+pub struct SubsIndex<T> {
+    start: u32,
+    _marker: std::marker::PhantomData<T>,
+}
+
+impl std::ops::Index<SubsIndex<Variable>> for Subs {
+    type Output = Variable;
+
+    fn index(&self, index: SubsIndex<Variable>) -> &Self::Output {
+        &self.variables[index.start as usize]
+    }
+}
+
+impl std::ops::IndexMut<SubsIndex<Variable>> for Subs {
+    fn index_mut(&mut self, index: SubsIndex<Variable>) -> &mut Self::Output {
+        &mut self.variables[index.start as usize]
+    }
+}
+
+impl<T> std::fmt::Debug for SubsSlice<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "SubsSlice {{ start: {}, length: {} }}",
+            self.start, self.length
+        )
+    }
+}
+
+impl<T> Copy for SubsIndex<T> {}
+
+impl<T> Clone for SubsIndex<T> {
+    fn clone(&self) -> Self {
+        Self {
+            start: self.start,
+            _marker: self._marker,
+        }
+    }
 }
 
 impl<T> Copy for SubsSlice<T> {}
@@ -90,19 +129,61 @@ impl<T> Default for SubsSlice<T> {
 
 impl<T> SubsSlice<T> {
     pub fn get_slice<'a>(&self, slice: &'a [T]) -> &'a [T] {
-        &slice[..self.start as usize][..self.length as usize]
+        &slice[self.start as usize..][..self.length as usize]
+    }
+
+    pub fn get_slice_mut<'a>(&self, slice: &'a mut [T]) -> &'a mut [T] {
+        &mut slice[self.start as usize..][..self.length as usize]
+    }
+
+    pub fn len(&self) -> usize {
+        self.length as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn new(start: u32, length: u16) -> Self {
+        Self {
+            start,
+            length,
+            _marker: std::marker::PhantomData,
+        }
     }
 }
 
-pub trait GetSubsSlice {
-    fn get_subs_slice(subs: &Subs, subs_slice: SubsSlice<Self>) -> &[Self]
-    where
-        Self: Sized;
+impl<T> IntoIterator for SubsSlice<T> {
+    type Item = SubsIndex<T>;
+
+    #[allow(clippy::type_complexity)]
+    type IntoIter = Map<std::ops::Range<u32>, fn(u32) -> Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        (self.start..(self.start + self.length as u32)).map(u32_to_index)
+    }
 }
 
-impl GetSubsSlice for Variable {
-    fn get_subs_slice(subs: &Subs, subs_slice: SubsSlice<Self>) -> &[Self] {
-        subs_slice.get_slice(&subs.variables)
+fn u32_to_index<T>(i: u32) -> SubsIndex<T> {
+    SubsIndex {
+        start: i,
+        _marker: std::marker::PhantomData,
+    }
+}
+
+pub trait GetSubsSlice<T> {
+    fn get_subs_slice(&self, subs_slice: SubsSlice<T>) -> &[T];
+
+    fn get_subs_slice_mut(&mut self, subs_slice: SubsSlice<T>) -> &mut [T];
+}
+
+impl GetSubsSlice<Variable> for Subs {
+    fn get_subs_slice(&self, subs_slice: SubsSlice<Variable>) -> &[Variable] {
+        subs_slice.get_slice(&self.variables)
+    }
+
+    fn get_subs_slice_mut(&mut self, subs_slice: SubsSlice<Variable>) -> &mut [Variable] {
+        subs_slice.get_slice_mut(&mut self.variables)
     }
 }
 
@@ -683,7 +764,7 @@ impl Content {
 #[derive(Clone, Debug)]
 pub enum FlatType {
     Apply(Symbol, Vec<Variable>),
-    Func(Vec<Variable>, Variable, Variable),
+    Func(SubsSlice<Variable>, Variable, Variable),
     Record(RecordFields, Variable),
     TagUnion(MutMap<TagName, Vec<Variable>>, Variable),
     FunctionOrTagUnion(Box<TagName>, Symbol, Variable),
@@ -953,7 +1034,7 @@ fn occurs(
                     Func(arg_vars, closure_var, ret_var) => {
                         let it = once(ret_var)
                             .chain(once(closure_var))
-                            .chain(arg_vars.iter());
+                            .chain(subs.get_subs_slice(*arg_vars).iter());
                         short_circuit(subs, root_var, &new_seen, it)
                     }
                     Record(vars_by_field, ext_var) => {
@@ -1036,17 +1117,19 @@ fn explicit_substitute(
                             subs.set_content(in_var, Structure(Apply(symbol, new_args)));
                         }
                         Func(arg_vars, closure_var, ret_var) => {
-                            let new_arg_vars = arg_vars
-                                .iter()
-                                .map(|var| explicit_substitute(subs, from, to, *var, seen))
-                                .collect();
+                            for var_index in arg_vars.into_iter() {
+                                let var = subs[var_index];
+                                let answer = explicit_substitute(subs, from, to, var, seen);
+                                subs[var_index] = answer;
+                            }
+
                             let new_ret_var = explicit_substitute(subs, from, to, ret_var, seen);
                             let new_closure_var =
                                 explicit_substitute(subs, from, to, closure_var, seen);
 
                             subs.set_content(
                                 in_var,
-                                Structure(Func(new_arg_vars, new_closure_var, new_ret_var)),
+                                Structure(Func(arg_vars, new_closure_var, new_ret_var)),
                             );
                         }
                         TagUnion(mut tags, ext_var) => {
@@ -1163,9 +1246,15 @@ fn get_var_names(
                     let taken_names = get_var_names(subs, ret_var, taken_names);
                     let taken_names = get_var_names(subs, closure_var, taken_names);
 
-                    arg_vars.into_iter().fold(taken_names, |answer, arg_var| {
-                        get_var_names(subs, arg_var, answer)
-                    })
+                    let mut accum = taken_names;
+
+                    for var_index in arg_vars.into_iter() {
+                        let arg_var = subs[var_index];
+
+                        accum = get_var_names(subs, arg_var, accum)
+                    }
+
+                    accum
                 }
 
                 FlatType::EmptyRecord | FlatType::EmptyTagUnion | FlatType::Erroneous(_) => {
@@ -1370,8 +1459,12 @@ fn flat_type_to_err_type(
         Func(arg_vars, closure_var, ret_var) => {
             let args = arg_vars
                 .into_iter()
-                .map(|arg_var| var_to_err_type(subs, state, arg_var))
+                .map(|index| {
+                    let arg_var = subs[index];
+                    var_to_err_type(subs, state, arg_var)
+                })
                 .collect();
+
             let ret = var_to_err_type(subs, state, ret_var);
             let closure = var_to_err_type(subs, state, closure_var);
 
@@ -1545,7 +1638,8 @@ fn restore_content(subs: &mut Subs, content: &Content) {
             }
 
             Func(arg_vars, closure_var, ret_var) => {
-                for &var in arg_vars {
+                for index in arg_vars.into_iter() {
+                    let var = subs[index];
                     subs.restore(var);
                 }
 
