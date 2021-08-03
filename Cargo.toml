@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "compiler/ident",
     "compiler/region",
     "compiler/collections",
     "compiler/module",
