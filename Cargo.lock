@@ -3335,6 +3335,7 @@ dependencies = [
  "maplit",
  "pretty_assertions 0.5.1",
  "roc_collections",
+ "roc_ident",
  "roc_region",
 ]
 

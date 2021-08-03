@@ -24,7 +24,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 #[cfg(target_endian = "little")]
 #[repr(C)]
 pub struct IdentStr {
-    elements: *mut u8,
+    elements: *const u8,
     length: usize,
 }
 
@@ -213,6 +213,12 @@ impl From<&str> for IdentStr {
     }
 }
 
+impl From<String> for IdentStr {
+    fn from(str: String) -> Self {
+        Self::from_slice(str.as_bytes())
+    }
+}
+
 impl fmt::Debug for IdentStr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // IdentStr { is_small_str: false, storage: Refcounted(3), elements: [ 1,2,3,4] }
@@ -223,6 +229,16 @@ impl fmt::Debug for IdentStr {
     }
 }
 
+impl fmt::Display for IdentStr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // IdentStr { is_small_str: false, storage: Refcounted(3), elements: [ 1,2,3,4] }
+        f.write_str(self.as_str())
+    }
+}
+
+unsafe impl std::marker::Sync for IdentStr {}
+unsafe impl std::marker::Send for IdentStr {}
+
 impl PartialEq for IdentStr {
     fn eq(&self, other: &Self) -> bool {
         self.as_slice() == other.as_slice()
@@ -230,6 +246,27 @@ impl PartialEq for IdentStr {
 }
 
 impl Eq for IdentStr {}
+
+impl PartialOrd for IdentStr {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.as_str().partial_cmp(other.as_str())
+    }
+}
+
+impl Ord for IdentStr {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+impl std::hash::Hash for IdentStr {
+    fn hash<H>(&self, hasher: &mut H)
+    where
+        H: std::hash::Hasher,
+    {
+        self.as_str().hash(hasher)
+    }
+}
 
 impl Clone for IdentStr {
     fn clone(&self) -> Self {
@@ -270,7 +307,7 @@ impl Drop for IdentStr {
                 let align = mem::align_of::<u8>();
                 let layout = Layout::from_size_align_unchecked(self.length, align);
 
-                System.dealloc(self.elements, layout);
+                System.dealloc(self.elements as *mut _, layout);
             }
         }
     }

@@ -26,7 +26,7 @@ pub struct Lowercase(InlinableString);
 
 /// A capitalized identifier, such as a tag name or module name
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Uppercase(InlinableString);
+pub struct Uppercase(roc_ident::IdentStr);
 
 /// A string representing a foreign (linked-in) symbol
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
@@ -54,7 +54,7 @@ pub enum TagName {
 impl TagName {
     pub fn as_string(&self, interns: &Interns, home: ModuleId) -> InlinableString {
         match self {
-            TagName::Global(uppercase) => uppercase.as_inline_str().clone(),
+            TagName::Global(uppercase) => uppercase.as_inline_str().as_str().clone().into(),
             TagName::Private(symbol) => symbol.fully_qualified(interns, home),
             TagName::Closure(symbol) => symbol.fully_qualified(interns, home),
         }
@@ -159,10 +159,10 @@ impl<'a> From<String> for ForeignSymbol {
 
 impl Uppercase {
     pub fn as_str(&self) -> &str {
-        &*self.0
+        self.0.as_str()
     }
 
-    pub fn as_inline_str(&self) -> &InlinableString {
+    pub fn as_inline_str(&self) -> &roc_ident::IdentStr {
         &self.0
     }
 }
