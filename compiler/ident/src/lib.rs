@@ -174,11 +174,10 @@ impl IdentStr {
         }
     }
 
-    #[allow(clippy::missing_safety_doc)]
-    pub unsafe fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &str {
         let slice = self.as_slice();
 
-        core::str::from_utf8_unchecked(slice)
+        unsafe { core::str::from_utf8_unchecked(slice) }
     }
 
     /// Write a CStr (null-terminated) representation of this IdentStr into
@@ -287,8 +286,8 @@ fn default() {
     assert_eq!(answer, answer);
     assert_eq!(answer.clone(), answer);
     assert_eq!(answer.clone(), answer.clone());
-    assert_eq!(unsafe { answer.as_str() }, "");
-    assert_eq!(unsafe { answer.clone().as_str() }, "");
+    assert_eq!(answer.as_str(), "");
+    assert_eq!(answer.clone().as_str(), "");
 }
 
 #[test]
@@ -304,8 +303,8 @@ fn big_str() {
         assert_eq!(answer, answer);
         assert_eq!(answer.clone(), answer);
         assert_eq!(answer.clone(), answer.clone());
-        assert_eq!(unsafe { answer.as_str() }, string);
-        assert_eq!(unsafe { answer.clone().as_str() }, string);
+        assert_eq!(answer.as_str(), string);
+        assert_eq!(answer.clone().as_str(), string);
     }
 }
 
@@ -336,8 +335,8 @@ fn small_var_length() {
         assert_eq!(answer, answer);
         assert_eq!(answer.clone(), answer);
         assert_eq!(answer.clone(), answer.clone());
-        assert_eq!(unsafe { answer.as_str() }, string);
-        assert_eq!(unsafe { answer.clone().as_str() }, string);
+        assert_eq!(answer.as_str(), string);
+        assert_eq!(answer.clone().as_str(), string);
     }
 }
 
@@ -353,8 +352,8 @@ fn small_var_length() {
         assert_eq!(answer, answer);
         assert_eq!(answer.clone(), answer);
         assert_eq!(answer.clone(), answer.clone());
-        assert_eq!(unsafe { answer.as_str() }, string);
-        assert_eq!(unsafe { answer.clone().as_str() }, string);
+        assert_eq!(answer.as_str(), string);
+        assert_eq!(answer.clone().as_str(), string);
     }
 }
 
@@ -368,8 +367,8 @@ fn small_max_length() {
     assert_eq!(answer, answer);
     assert_eq!(answer.clone(), answer);
     assert_eq!(answer.clone(), answer.clone());
-    assert_eq!(unsafe { answer.as_str() }, string);
-    assert_eq!(unsafe { answer.clone().as_str() }, string);
+    assert_eq!(answer.as_str(), string);
+    assert_eq!(answer.clone().as_str(), string);
 }
 
 #[cfg(target_pointer_width = "32")]
@@ -382,6 +381,6 @@ fn small_max_length() {
     assert_eq!(answer, answer);
     assert_eq!(answer.clone(), answer);
     assert_eq!(answer.clone(), answer.clone());
-    assert_eq!(unsafe { answer.as_str() }, string);
-    assert_eq!(unsafe { answer.clone().as_str() }, string);
+    assert_eq!(answer.as_str(), string);
+    assert_eq!(answer.clone().as_str(), string);
 }
