@@ -3289,6 +3289,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_ident"
+version = "0.1.0"
+
+[[package]]
 name = "roc_load"
 version = "0.1.0"
 dependencies = [
