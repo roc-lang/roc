@@ -48,10 +48,12 @@ fn main() {
         } else {
             let all_regressed_benches = do_all_benches(optional_args.nr_repeat_benchmarks);
 
-            println!(
-                "The following benchmarks have shown a regression {:?} times: {:?}",
-                optional_args.nr_repeat_benchmarks, all_regressed_benches
-            );
+            if !all_regressed_benches.is_empty() {
+                println!(
+                    "The following benchmarks have shown a regression {:?} times: {:?}",
+                    optional_args.nr_repeat_benchmarks, all_regressed_benches
+                );
+            }
         }
     } else {
         eprintln!(
