@@ -60,10 +60,9 @@ fn main() {
 }
 
 fn finish(all_regressed_benches: HashSet<String>, nr_repeat_benchmarks: usize) {
-
     if !all_regressed_benches.is_empty() {
         eprintln!(
-    r#"
+            r#"
 
     FAILED: The following benchmarks have shown a regression {:?} times: {:?}
     
@@ -73,7 +72,6 @@ fn finish(all_regressed_benches: HashSet<String>, nr_repeat_benchmarks: usize) {
 
         process::exit(1);
     }
-    
 }
 
 // returns all benchmarks that have regressed
