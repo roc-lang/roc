@@ -61,7 +61,7 @@ impl<T> RocList<T> {
     }
 
     pub fn empty() -> Self {
-        RocList {
+        Self {
             length: 0,
             elements: core::ptr::null_mut(),
         }
@@ -129,7 +129,7 @@ impl<T> RocList<T> {
         }
     }
 
-    pub fn from_slice_with_capacity(slice: &[T], capacity: usize) -> RocList<T>
+    pub fn from_slice_with_capacity(slice: &[T], capacity: usize) -> Self
     where
         T: Clone,
     {
@@ -184,13 +184,13 @@ impl<T> RocList<T> {
             raw_ptr
         };
 
-        RocList {
+        Self {
             length: slice.len(),
             elements,
         }
     }
 
-    pub fn from_slice(slice: &[T]) -> RocList<T>
+    pub fn from_slice(slice: &[T]) -> Self
     where
         T: Clone,
     {
@@ -445,22 +445,22 @@ impl RocStr {
     }
 
     fn get_small_str_ptr(&self) -> *const u8 {
-        (self as *const RocStr).cast()
+        (self as *const Self).cast()
     }
 
     fn get_small_str_ptr_mut(&mut self) -> *mut u8 {
-        (self as *mut RocStr).cast()
+        (self as *mut Self).cast()
     }
 
-    fn from_slice_with_capacity_str(slice: &[u8], capacity: usize) -> RocStr {
+    fn from_slice_with_capacity_str(slice: &[u8], capacity: usize) -> Self {
         assert!(
             slice.len() <= capacity,
             "RocStr::from_slice_with_capacity_str length bigger than capacity {} {}",
             slice.len(),
             capacity
         );
-        if capacity < core::mem::size_of::<RocStr>() {
-            let mut rocstr = RocStr::empty();
+        if capacity < core::mem::size_of::<Self>() {
+            let mut rocstr = Self::empty();
             let target_ptr = rocstr.get_small_str_ptr_mut();
             let source_ptr = slice.as_ptr() as *const u8;
             for index in 0..slice.len() {
@@ -502,14 +502,14 @@ impl RocStr {
                 raw_ptr as *mut u8
             };
 
-            RocStr {
+            Self {
                 length: slice.len(),
                 elements,
             }
         }
     }
 
-    pub fn from_slice(slice: &[u8]) -> RocStr {
+    pub fn from_slice(slice: &[u8]) -> Self {
         Self::from_slice_with_capacity_str(slice, slice.len())
     }
 
@@ -759,7 +759,7 @@ impl RocDec {
         // Calculate the high digits - the ones before the decimal point.
         match before_point.parse::<i128>() {
             Ok(answer) => match answer.checked_mul(10i128.pow(Self::DECIMAL_PLACES)) {
-                Some(hi) => hi.checked_add(lo).map(RocDec),
+                Some(hi) => hi.checked_add(lo).map(Self),
                 None => None,
             },
             Err(_) => None,
@@ -767,6 +767,6 @@ impl RocDec {
     }
 
     pub fn from_str_to_i128_unsafe(val: &str) -> i128 {
-        RocDec::from_str(val).unwrap().0
+        Self::from_str(val).unwrap().0
     }
 }
