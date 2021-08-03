@@ -590,7 +590,7 @@ impl Clone for RocStr {
 
                 libc::memcpy(
                     raw,
-                    self.elements.offset(-(capacity_size as isize)) as *mut libc::c_void,
+                    self.elements.offset(-(capacity_size as isize)) as *mut c_void,
                     copy_length,
                 );
 
