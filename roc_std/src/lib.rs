@@ -371,7 +371,6 @@ impl RocStr {
 
     pub fn empty() -> Self {
         RocStr {
-            // The first bit of length is 1 to specify small str.
             length: 0,
             elements: core::ptr::null_mut(),
         }
