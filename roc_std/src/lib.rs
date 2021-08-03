@@ -584,10 +584,15 @@ impl Clone for RocStr {
             let capacity_size = core::mem::size_of::<usize>();
             let copy_length = self.length + capacity_size;
             let elements = unsafe {
+                // We use *mut u8 here even though technically these are
+                // usize-aligned (due to the refcount slot).
+                // This avoids any potential edge cases around there somehow
+                // being unreadable memory after the last byte, which would
+                // potentially get read when reading <usize> bytes at a time.
                 let raw_ptr =
-                    roc_alloc(copy_length, core::mem::size_of::<usize>() as u32) as *mut usize;
+                    roc_alloc(copy_length, core::mem::size_of::<usize>() as u32) as *mut u8;
                 let dest_slice = slice::from_raw_parts_mut(raw_ptr, copy_length);
-                let src_ptr = self.elements.offset(-(capacity_size as isize)) as *mut usize;
+                let src_ptr = self.elements.offset(-(capacity_size as isize)) as *mut u8;
                 let src_slice = slice::from_raw_parts(src_ptr, copy_length);
 
                 dest_slice.copy_from_slice(src_slice);
