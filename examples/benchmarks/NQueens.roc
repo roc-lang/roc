@@ -6,7 +6,7 @@ app "nqueens"
 main : Task.Task {} []
 main =
     Task.after Task.getInt \n ->
-        queens n # original koka 13
+        queens 12 # original koka 13
             |> Str.fromInt
             |> Task.putLine
 
