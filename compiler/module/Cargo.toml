@@ -10,7 +10,6 @@ roc_region = { path = "../region" }
 roc_ident = { path = "../ident" }
 roc_collections = { path = "../collections" }
 bumpalo = { version = "3.6.1", features = ["collections"] }
-inlinable_string = "0.1"
 lazy_static = "1.4"
 
 [dev-dependencies]

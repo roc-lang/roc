@@ -596,12 +596,7 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
     let main_fn_name = "$Test.main";
 
     // Add main to the module.
-    let main_fn = expose_function_to_host_help(
-        env,
-        &inlinable_string::InlinableString::from(main_fn_name),
-        roc_main_fn,
-        main_fn_name,
-    );
+    let main_fn = expose_function_to_host_help(env, main_fn_name, roc_main_fn, main_fn_name);
 
     (main_fn_name, main_fn)
 }

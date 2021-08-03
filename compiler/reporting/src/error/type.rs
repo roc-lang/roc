@@ -1280,8 +1280,6 @@ fn problems_to_tip<'b>(
 }
 
 pub mod suggest {
-    use core::convert::AsRef;
-    use inlinable_string::InlinableString;
     use roc_module::ident::Lowercase;
 
     pub trait ToStr {
@@ -1297,12 +1295,6 @@ pub mod suggest {
     impl ToStr for &Lowercase {
         fn to_str(&self) -> &str {
             self.as_str()
-        }
-    }
-
-    impl ToStr for InlinableString {
-        fn to_str(&self) -> &str {
-            self.as_ref()
         }
     }
 

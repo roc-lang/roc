@@ -1,5 +1,4 @@
 use crate::symbol::{Interns, ModuleId, Symbol};
-use inlinable_string::InlinableString;
 pub use roc_ident::IdentStr;
 use std::fmt;
 
@@ -44,7 +43,7 @@ pub struct ForeignSymbol(IdentStr);
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TagName {
     /// Global tags have no module, but tend to be short strings (since they're
-    /// never qualified), so we store them as inlinable strings.
+    /// never qualified), so we store them as ident strings.
     ///
     /// This is allows canonicalization to happen in parallel without locks.
     /// If global tags had a Symbol representation, then each module would have to
@@ -201,12 +200,6 @@ impl<'a> From<&'a str> for Lowercase {
 impl<'a> From<String> for Lowercase {
     fn from(string: String) -> Self {
         Self(string.into())
-    }
-}
-
-impl From<Lowercase> for InlinableString {
-    fn from(lowercase: Lowercase) -> Self {
-        lowercase.0.as_str().into()
     }
 }
 

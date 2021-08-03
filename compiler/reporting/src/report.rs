@@ -1,4 +1,3 @@
-use inlinable_string::InlinableString;
 use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -331,10 +330,6 @@ impl<'a> RocDocAllocator<'a> {
         };
 
         self.text(name).annotate(Annotation::Module)
-    }
-
-    pub fn inlinable_string(&'a self, s: InlinableString) -> DocBuilder<'a, Self, Annotation> {
-        self.text(format!("{}", s)).annotate(Annotation::Module)
     }
 
     pub fn binop(

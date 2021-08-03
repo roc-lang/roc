@@ -10,7 +10,6 @@ roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 ven_ena = { path = "../../vendor/ena" }
-inlinable_string = "0.1"
 
 [dev-dependencies]
 pretty_assertions = "0.5.1"
