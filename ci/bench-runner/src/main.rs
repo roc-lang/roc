@@ -36,14 +36,16 @@ fn main() {
                     "Comparison of sha256 of executables reveals changes, doing full benchmarks..."
                 );
 
-                finish(all_regressed_benches);
+                let all_regressed_benches = do_all_benches(optional_args.nr_repeat_benchmarks);
+
+                finish(all_regressed_benches, optional_args.nr_repeat_benchmarks);
             } else {
                 println!("No benchmark executables have changed");
             }
         } else {
             let all_regressed_benches = do_all_benches(optional_args.nr_repeat_benchmarks);
 
-            finish(all_regressed_benches);
+            finish(all_regressed_benches, optional_args.nr_repeat_benchmarks);
         }
     } else {
         eprintln!(
@@ -57,12 +59,12 @@ fn main() {
     }
 }
 
-fn finish(all_regressed_benches: HashSet<String>) {
+fn finish(all_regressed_benches: HashSet<String>, nr_repeat_benchmarks: usize) {
 
     if !all_regressed_benches.is_empty() {
         eprintln!(
             "The following benchmarks have shown a regression {:?} times: {:?}",
-            optional_args.nr_repeat_benchmarks, all_regressed_benches
+            nr_repeat_benchmarks, all_regressed_benches
         );
 
         process::exit(1);
