@@ -52,6 +52,42 @@ struct ErrorTypeState {
 #[derive(Default, Clone)]
 pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>,
+    //    variables: Vec<Variable>,
+    //    tag_names: Vec<TagName>,
+    //    field_names: Vec<Lowercase>,
+}
+
+#[repr(packed(2))]
+pub struct SubsSlice<T> {
+    start: u32,
+    length: u16,
+    _marker: std::marker::PhantomData<T>,
+}
+
+impl<T> Copy for SubsSlice<T> {}
+
+impl<T> Clone for SubsSlice<T> {
+    fn clone(&self) -> Self {
+        Self {
+            start: self.start,
+            length: self.length,
+            _marker: self._marker,
+        }
+    }
+}
+
+impl<T> Default for SubsSlice<T> {
+    fn default() -> Self {
+        Self {
+            start: Default::default(),
+            length: Default::default(),
+            _marker: Default::default(),
+        }
+    }
+}
+
+pub trait GetSubsSlice<T> {
+    fn get_subs_slice(subs: &Subs, subs_slice: SubsSlice<T>) -> &[T];
 }
 
 impl fmt::Debug for Subs {
