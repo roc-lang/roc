@@ -186,17 +186,15 @@ impl IdentStr {
     /// # Safety
     /// This assumes the given buffer has enough space, so make sure you only
     /// pass in a pointer to an allocation that's at least as long as this Str!
-    pub unsafe fn write_c_str(&self, buf: *mut u8) -> *mut char {
+    pub unsafe fn write_c_str(&self, buf: *mut char) {
         if self.is_small_str() {
-            ptr::copy_nonoverlapping(self.get_small_str_ptr(), buf, self.len());
+            ptr::copy_nonoverlapping(self.get_small_str_ptr(), buf as *mut u8, self.len());
         } else {
-            ptr::copy_nonoverlapping(self.elements, buf, self.len());
+            ptr::copy_nonoverlapping(self.elements, buf as *mut u8, self.len());
         }
 
         // null-terminate
-        *(buf.add(self.len())) = 0;
-
-        buf as *mut char
+        *(buf.add(self.len())) = '\0';
     }
 }
 
