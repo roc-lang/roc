@@ -13,6 +13,7 @@ use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 static_assertions::assert_eq_size!([u8; 104], Descriptor);
 static_assertions::assert_eq_size!([u8; 88], Content);
 static_assertions::assert_eq_size!([u8; 80], FlatType);
+static_assertions::assert_eq_size!([u8; 48], Problem);
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Mark(i32);
@@ -52,9 +53,10 @@ struct ErrorTypeState {
 #[derive(Default, Clone)]
 pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>,
-    //    variables: Vec<Variable>,
-    //    tag_names: Vec<TagName>,
-    //    field_names: Vec<Lowercase>,
+    variables: Vec<Variable>,
+    tag_names: Vec<TagName>,
+    field_names: Vec<Lowercase>,
+    record_fields: Vec<RecordField<()>>,
 }
 
 #[repr(packed(2))]
@@ -86,8 +88,22 @@ impl<T> Default for SubsSlice<T> {
     }
 }
 
-pub trait GetSubsSlice<T> {
-    fn get_subs_slice(subs: &Subs, subs_slice: SubsSlice<T>) -> &[T];
+impl<T> SubsSlice<T> {
+    pub fn get_slice<'a>(&self, slice: &'a [T]) -> &'a [T] {
+        &slice[..self.start as usize][..self.length as usize]
+    }
+}
+
+pub trait GetSubsSlice {
+    fn get_subs_slice(subs: &Subs, subs_slice: SubsSlice<Self>) -> &[Self]
+    where
+        Self: Sized;
+}
+
+impl GetSubsSlice for Variable {
+    fn get_subs_slice(subs: &Subs, subs_slice: SubsSlice<Self>) -> &[Self] {
+        subs_slice.get_slice(&subs.variables)
+    }
 }
 
 impl fmt::Debug for Subs {
@@ -299,6 +315,7 @@ impl Subs {
 
         let mut subs = Subs {
             utable: UnificationTable::default(),
+            ..Default::default()
         };
 
         // NOTE the utable does not (currently) have a with_capacity; using this as the next-best thing
