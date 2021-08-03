@@ -353,7 +353,8 @@ impl RocStr {
     pub fn len(&self) -> usize {
         if self.is_small_str() {
             let bytes = self.length.to_ne_bytes();
-            let last_byte = bytes[bytes.len() - 1];
+            let last_byte = bytes[mem::size_of::<usize>() - 1];
+
             (last_byte ^ 0b1000_0000) as usize
         } else {
             self.length
@@ -472,7 +473,7 @@ impl RocStr {
             }
             // Write length and small string bit to last byte of length.
             let mut bytes = rocstr.length.to_ne_bytes();
-            bytes[bytes.len() - 1] = capacity as u8 ^ 0b1000_0000;
+            bytes[mem::size_of::<usize>() - 1] = capacity as u8 ^ 0b1000_0000;
             rocstr.length = usize::from_ne_bytes(bytes);
 
             rocstr
