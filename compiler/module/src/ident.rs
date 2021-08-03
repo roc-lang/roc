@@ -22,7 +22,7 @@ pub struct ModuleName(InlinableString);
 
 /// An uncapitalized identifier, such as a field name or local variable
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Lowercase(InlinableString);
+pub struct Lowercase(roc_ident::IdentStr);
 
 /// A capitalized identifier, such as a tag name or module name
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -181,7 +181,7 @@ impl<'a> From<String> for Uppercase {
 
 impl Lowercase {
     pub fn as_str(&self) -> &str {
-        &*self.0
+        self.0.as_str()
     }
 }
 
@@ -199,7 +199,7 @@ impl<'a> From<String> for Lowercase {
 
 impl From<Lowercase> for InlinableString {
     fn from(lowercase: Lowercase) -> Self {
-        lowercase.0
+        lowercase.0.as_str().into()
     }
 }
 
