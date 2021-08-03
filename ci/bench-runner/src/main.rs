@@ -63,7 +63,11 @@ fn finish(all_regressed_benches: HashSet<String>, nr_repeat_benchmarks: usize) {
 
     if !all_regressed_benches.is_empty() {
         eprintln!(
-            "The following benchmarks have shown a regression {:?} times: {:?}",
+    r#"
+
+    FAILED: The following benchmarks have shown a regression {:?} times: {:?}
+    
+    "#,
             nr_repeat_benchmarks, all_regressed_benches
         );
 
@@ -82,6 +86,11 @@ fn do_all_benches(nr_repeat_benchmarks: usize) -> HashSet<String> {
         delete_old_bench_results();
         do_benchmark("trunk");
         let regressed_benches = do_benchmark("branch");
+
+        // if no benches failed this round, abort early
+        if regressed_benches.is_empty() {
+            return HashSet::new();
+        }
 
         all_regressed_benches = all_regressed_benches
             .intersection(&regressed_benches)
