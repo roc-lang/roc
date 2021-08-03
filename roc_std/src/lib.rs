@@ -2,7 +2,7 @@
 #![no_std]
 use core::convert::From;
 use core::ffi::c_void;
-use core::{fmt, mem, ptr};
+use core::{fmt, mem, ptr, slice};
 
 pub mod alloca;
 
@@ -586,17 +586,17 @@ impl Clone for RocStr {
             let capacity_size = core::mem::size_of::<usize>();
             let copy_length = self.length + capacity_size;
             let elements = unsafe {
-                let raw = roc_alloc(copy_length, core::mem::size_of::<usize>() as u32);
+                let raw_ptr =
+                    roc_alloc(copy_length, core::mem::size_of::<usize>() as u32) as *mut usize;
+                let dest_slice = slice::from_raw_parts_mut(raw_ptr, copy_length);
+                let src_ptr = self.elements.offset(-(capacity_size as isize)) as *mut usize;
+                let src_slice = slice::from_raw_parts(src_ptr, copy_length);
 
-                libc::memcpy(
-                    raw,
-                    self.elements.offset(-(capacity_size as isize)) as *mut c_void,
-                    copy_length,
-                );
+                dest_slice.copy_from_slice(src_slice);
 
-                *(raw as *mut usize) = self.length;
+                *(raw_ptr as *mut usize) = self.length;
 
-                (raw as *mut u8).add(capacity_size)
+                (raw_ptr as *mut u8).add(capacity_size)
             };
 
             Self {
