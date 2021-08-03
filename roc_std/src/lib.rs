@@ -31,7 +31,7 @@ pub enum RocOrder {
 //#[macro_export]
 //macro_rules! roclist {
 //    () => (
-//        $crate::RocList::empty()
+//        $crate::RocList::default()
 //    );
 //    ($($x:expr),+ $(,)?) => (
 //        $crate::RocList::from_slice(&[$($x),+])
@@ -58,13 +58,6 @@ impl<T> RocList<T> {
 
     pub fn is_empty(&self) -> bool {
         self.length == 0
-    }
-
-    pub fn empty() -> Self {
-        Self {
-            length: 0,
-            elements: core::ptr::null_mut(),
-        }
     }
 
     pub fn get(&self, index: usize) -> Option<&T> {
@@ -287,6 +280,15 @@ impl<T> RocList<T> {
     }
 }
 
+impl<T> Default for RocList<T> {
+    fn default() -> Self {
+        Self {
+            length: 0,
+            elements: core::ptr::null_mut(),
+        }
+    }
+}
+
 impl<T: fmt::Debug> fmt::Debug for RocList<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // RocList { storage: Refcounted(3), elements: [ 1,2,3,4] }
@@ -365,13 +367,6 @@ impl RocStr {
 
     pub fn is_small_str(&self) -> bool {
         (self.length as isize) < 0
-    }
-
-    pub fn empty() -> Self {
-        RocStr {
-            length: 0,
-            elements: core::ptr::null_mut(),
-        }
     }
 
     pub fn get(&self, index: usize) -> Option<&u8> {
@@ -460,7 +455,7 @@ impl RocStr {
             capacity
         );
         if capacity < core::mem::size_of::<Self>() {
-            let mut rocstr = Self::empty();
+            let mut rocstr = Self::default();
             let target_ptr = rocstr.get_small_str_ptr_mut();
             let source_ptr = slice.as_ptr() as *const u8;
             for index in 0..slice.len() {
@@ -545,6 +540,15 @@ impl RocStr {
         *(buf.add(self.len())) = 0;
 
         buf as *mut char
+    }
+}
+
+impl Default for RocStr {
+    fn default() -> Self {
+        Self {
+            length: 0,
+            elements: core::ptr::null_mut(),
+        }
     }
 }
 

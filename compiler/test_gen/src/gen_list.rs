@@ -1955,7 +1955,7 @@ fn lists_with_incompatible_type_param_in_if() {
             ""
             "#
         ),
-        RocStr::empty(),
+        RocStr::default(),
         RocStr
     );
 }
