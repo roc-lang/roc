@@ -36,24 +36,14 @@ fn main() {
                     "Comparison of sha256 of executables reveals changes, doing full benchmarks..."
                 );
 
-                let all_regressed_benches = do_all_benches(optional_args.nr_repeat_benchmarks);
-
-                println!(
-                    "The following benchmarks have shown a regression {:?} times: {:?}",
-                    optional_args.nr_repeat_benchmarks, all_regressed_benches
-                );
+                finish(all_regressed_benches);
             } else {
                 println!("No benchmark executables have changed");
             }
         } else {
             let all_regressed_benches = do_all_benches(optional_args.nr_repeat_benchmarks);
 
-            if !all_regressed_benches.is_empty() {
-                println!(
-                    "The following benchmarks have shown a regression {:?} times: {:?}",
-                    optional_args.nr_repeat_benchmarks, all_regressed_benches
-                );
-            }
+            finish(all_regressed_benches);
         }
     } else {
         eprintln!(
@@ -65,6 +55,19 @@ fn main() {
 
         process::exit(1)
     }
+}
+
+fn finish(all_regressed_benches: HashSet<String>) {
+
+    if !all_regressed_benches.is_empty() {
+        eprintln!(
+            "The following benchmarks have shown a regression {:?} times: {:?}",
+            optional_args.nr_repeat_benchmarks, all_regressed_benches
+        );
+
+        process::exit(1);
+    }
+    
 }
 
 // returns all benchmarks that have regressed
@@ -87,22 +90,8 @@ fn do_all_benches(nr_repeat_benchmarks: usize) -> HashSet<String> {
     all_regressed_benches
 }
 
-// returns Vec with names of failed benchmarks
+// returns Vec with names of regressed benchmarks
 fn do_benchmark(branch_name: &'static str) -> HashSet<String> {
-    /*let builder = thread::Builder::new()
-                  .name("reductor".into())
-                  .stack_size(32 * 1024 * 1024); // 32MB of stack space, necessary for cfold benchmark
-
-    let handler = builder.spawn(move || {
-        Command::new(format!("./bench-folder-{}/target/release/deps/time_bench", branch_name))
-        .args(&BENCH_ARGS)
-        .stdout(Stdio::inherit())
-        .output()
-        .expect(&format!("Failed to benchmark {}.", branch_name));
-    }).unwrap();
-
-    handler.join().unwrap();*/
-
     let mut cmd_child = Command::new(format!(
         "./bench-folder-{}/target/release/deps/time_bench",
         branch_name
