@@ -13,6 +13,8 @@ cp -r public/ build/
 
 pushd ..
 echo 'Generating docs...'
+cargo --version
+rustc --version
 # We run the CLI with --no-default-features because that way we don't have the
 # "llvm" feature and therefore don't depend on LLVM being installed on the
 # system. (Netlify's build servers have Rust installed, but not LLVM.)
