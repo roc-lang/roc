@@ -3,7 +3,7 @@ use bumpalo::{collections::Vec as BumpVec, Bump};
 use crate::lang::{
     ast::{Expr2, ExprId, RecordField, ValueDef, WhenBranch},
     expr::Env,
-    pattern::{DestructType, Pattern2, PatternState2, RecordDestruct},
+    pattern::{DestructType, Pattern2, PatternId, PatternState2, RecordDestruct},
     pool::{Pool, PoolStr, PoolVec, ShallowClone},
     types::{Type2, TypeId},
 };
@@ -55,6 +55,7 @@ pub fn constrain_expr<'a>(
         Expr2::Str(_) => Eq(str_type(env.pool), expected, Category::Str, region),
         Expr2::SmallStr(_) => Eq(str_type(env.pool), expected, Category::Str, region),
         Expr2::Blank => True,
+        Expr2::RuntimeError() => True,
         Expr2::EmptyRecord => constrain_empty_record(expected, region),
         Expr2::Var(symbol) => Lookup(*symbol, expected, region),
         Expr2::SmallInt { var, .. } | Expr2::I128 { var, .. } | Expr2::U128 { var, .. } => {
@@ -230,58 +231,37 @@ pub fn constrain_expr<'a>(
             name,
             arguments,
         } => {
-            let mut flex_vars = BumpVec::with_capacity_in(arguments.len(), arena);
-            let types = PoolVec::with_capacity(arguments.len() as u32, env.pool);
-            let mut arg_cons = BumpVec::with_capacity_in(arguments.len(), arena);
+            let tag_name = TagName::Global(name.as_str(env.pool).into());
 
-            for (argument_node_id, type_node_id) in
-                arguments.iter_node_ids().zip(types.iter_node_ids())
-            {
-                let (var, expr_node_id) = env.pool.get(argument_node_id);
-
-                let argument_expr = env.pool.get(*expr_node_id);
-
-                let arg_con = constrain_expr(
-                    arena,
-                    env,
-                    argument_expr,
-                    Expected::NoExpectation(Type2::Variable(*var)),
-                    region,
-                );
-
-                arg_cons.push(arg_con);
-                flex_vars.push(*var);
-
-                env.pool[type_node_id] = Type2::Variable(*var);
-            }
-
-            let union_con = Eq(
-                Type2::TagUnion(
-                    PoolVec::new(std::iter::once((*name, types)), env.pool),
-                    env.pool.add(Type2::Variable(*ext_var)),
-                ),
-                expected.shallow_clone(),
-                Category::TagApply {
-                    tag_name: TagName::Global(name.as_str(env.pool).into()),
-                    args_count: arguments.len(),
-                },
-                region,
-            );
-
-            let ast_con = Eq(
-                Type2::Variable(*variant_var),
+            constrain_tag(
+                arena,
+                env,
                 expected,
-                Category::Storage(std::file!(), std::line!()),
                 region,
-            );
+                tag_name,
+                arguments,
+                *ext_var,
+                *variant_var,
+            )
+        }
+        Expr2::PrivateTag {
+            name,
+            arguments,
+            ext_var,
+            variant_var,
+        } => {
+            let tag_name = TagName::Private(*name);
 
-            flex_vars.push(*variant_var);
-            flex_vars.push(*ext_var);
-
-            arg_cons.push(union_con);
-            arg_cons.push(ast_con);
-
-            exists(arena, flex_vars, And(arg_cons))
+            constrain_tag(
+                arena,
+                env,
+                expected,
+                region,
+                tag_name,
+                arguments,
+                *ext_var,
+                *variant_var,
+            )
         }
         Expr2::Call {
             args,
@@ -955,9 +935,7 @@ pub fn constrain_expr<'a>(
 
             exists(arena, vars, And(and_constraints))
         }
-        Expr2::RuntimeError() => True,
         Expr2::Closure { .. } => todo!(),
-        Expr2::PrivateTag { .. } => todo!(),
         Expr2::InvalidLookup(_) => todo!(),
         Expr2::LetRec { .. } => todo!(),
         Expr2::LetFunction { .. } => todo!(),
@@ -976,6 +954,71 @@ fn exists<'a>(
         defs_constraint,
         ret_constraint: Constraint::True,
     }))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn constrain_tag<'a>(
+    arena: &'a Bump,
+    env: &mut Env,
+    expected: Expected<Type2>,
+    region: Region,
+    tag_name: TagName,
+    arguments: &PoolVec<(Variable, ExprId)>,
+    ext_var: Variable,
+    variant_var: Variable,
+) -> Constraint<'a> {
+    use Constraint::*;
+
+    let mut flex_vars = BumpVec::with_capacity_in(arguments.len(), arena);
+    let types = PoolVec::with_capacity(arguments.len() as u32, env.pool);
+    let mut arg_cons = BumpVec::with_capacity_in(arguments.len(), arena);
+
+    for (argument_node_id, type_node_id) in arguments.iter_node_ids().zip(types.iter_node_ids()) {
+        let (var, expr_node_id) = env.pool.get(argument_node_id);
+
+        let argument_expr = env.pool.get(*expr_node_id);
+
+        let arg_con = constrain_expr(
+            arena,
+            env,
+            argument_expr,
+            Expected::NoExpectation(Type2::Variable(*var)),
+            region,
+        );
+
+        arg_cons.push(arg_con);
+        flex_vars.push(*var);
+
+        env.pool[type_node_id] = Type2::Variable(*var);
+    }
+
+    let union_con = Eq(
+        Type2::TagUnion(
+            PoolVec::new(std::iter::once((tag_name.clone(), types)), env.pool),
+            env.pool.add(Type2::Variable(ext_var)),
+        ),
+        expected.shallow_clone(),
+        Category::TagApply {
+            tag_name,
+            args_count: arguments.len(),
+        },
+        region,
+    );
+
+    let ast_con = Eq(
+        Type2::Variable(variant_var),
+        expected,
+        Category::Storage(std::file!(), std::line!()),
+        region,
+    );
+
+    flex_vars.push(variant_var);
+    flex_vars.push(ext_var);
+
+    arg_cons.push(union_con);
+    arg_cons.push(ast_con);
+
+    exists(arena, flex_vars, And(arg_cons))
 }
 
 fn constrain_field<'a>(
@@ -1275,64 +1318,94 @@ pub fn constrain_pattern<'a>(
         GlobalTag {
             whole_var,
             ext_var,
-            tag_name,
+            tag_name: name,
             arguments,
         } => {
-            let mut argument_types = Vec::with_capacity(arguments.len());
+            let tag_name = TagName::Global(name.as_str(env.pool).into());
 
-            for (index, arg_id) in arguments.iter_node_ids().enumerate() {
-                let (pattern_var, pattern_id) = env.pool.get(arg_id);
-                let pattern = env.pool.get(*pattern_id);
-
-                state.vars.push(*pattern_var);
-
-                let pattern_type = Type2::Variable(*pattern_var);
-                argument_types.push(pattern_type.shallow_clone());
-
-                let expected = PExpected::ForReason(
-                    PReason::TagArg {
-                        tag_name: TagName::Global(tag_name.as_str(env.pool).into()),
-                        index: Index::zero_based(index),
-                    },
-                    pattern_type,
-                    region,
-                );
-
-                // TODO region should come from pattern
-                constrain_pattern(arena, env, pattern, region, expected, state);
-            }
-
-            let whole_con = Constraint::Eq(
-                Type2::Variable(*whole_var),
-                Expected::NoExpectation(Type2::TagUnion(
-                    PoolVec::new(
-                        vec![(
-                            *tag_name,
-                            PoolVec::new(argument_types.into_iter(), env.pool),
-                        )]
-                        .into_iter(),
-                        env.pool,
-                    ),
-                    env.pool.add(Type2::Variable(*ext_var)),
-                )),
-                Category::Storage(std::file!(), std::line!()),
-                region,
+            constrain_tag_pattern(
+                arena, env, region, expected, state, *whole_var, *ext_var, arguments, tag_name,
             );
-
-            let tag_con = Constraint::Pattern(
-                region,
-                PatternCategory::Ctor(TagName::Global(tag_name.as_str(env.pool).into())),
-                Type2::Variable(*whole_var),
-                expected,
-            );
-
-            state.vars.push(*whole_var);
-            state.vars.push(*ext_var);
-            state.constraints.push(whole_con);
-            state.constraints.push(tag_con);
         }
-        PrivateTag { .. } => todo!(),
+        PrivateTag {
+            whole_var,
+            ext_var,
+            tag_name: name,
+            arguments,
+        } => {
+            let tag_name = TagName::Private(*name);
+
+            constrain_tag_pattern(
+                arena, env, region, expected, state, *whole_var, *ext_var, arguments, tag_name,
+            );
+        }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn constrain_tag_pattern<'a>(
+    arena: &'a Bump,
+    env: &mut Env,
+    region: Region,
+    expected: PExpected<Type2>,
+    state: &mut PatternState2<'a>,
+    whole_var: Variable,
+    ext_var: Variable,
+    arguments: &PoolVec<(Variable, PatternId)>,
+    tag_name: TagName,
+) {
+    let mut argument_types = Vec::with_capacity(arguments.len());
+
+    for (index, arg_id) in arguments.iter_node_ids().enumerate() {
+        let (pattern_var, pattern_id) = env.pool.get(arg_id);
+        let pattern = env.pool.get(*pattern_id);
+
+        state.vars.push(*pattern_var);
+
+        let pattern_type = Type2::Variable(*pattern_var);
+        argument_types.push(pattern_type.shallow_clone());
+
+        let expected = PExpected::ForReason(
+            PReason::TagArg {
+                tag_name: tag_name.clone(),
+                index: Index::zero_based(index),
+            },
+            pattern_type,
+            region,
+        );
+
+        // TODO region should come from pattern
+        constrain_pattern(arena, env, pattern, region, expected, state);
+    }
+
+    let whole_con = Constraint::Eq(
+        Type2::Variable(whole_var),
+        Expected::NoExpectation(Type2::TagUnion(
+            PoolVec::new(
+                vec![(
+                    tag_name.clone(),
+                    PoolVec::new(argument_types.into_iter(), env.pool),
+                )]
+                .into_iter(),
+                env.pool,
+            ),
+            env.pool.add(Type2::Variable(ext_var)),
+        )),
+        Category::Storage(std::file!(), std::line!()),
+        region,
+    );
+
+    let tag_con = Constraint::Pattern(
+        region,
+        PatternCategory::Ctor(tag_name),
+        Type2::Variable(whole_var),
+        expected,
+    );
+
+    state.vars.push(whole_var);
+    state.vars.push(ext_var);
+    state.constraints.push(whole_con);
+    state.constraints.push(tag_con);
 }
 
 #[inline(always)]
@@ -1377,8 +1450,7 @@ fn num_floatingpoint(pool: &mut Pool, range: TypeId) -> Type2 {
     let alias_content = Type2::TagUnion(
         PoolVec::new(
             vec![(
-                // TagName::Private(Symbol::NUM_AT_FLOATINGPOINT)
-                PoolStr::new("Num.@FloatingPoint", pool),
+                TagName::Private(Symbol::NUM_AT_FLOATINGPOINT),
                 PoolVec::new(vec![range_type.shallow_clone()].into_iter(), pool),
             )]
             .into_iter(),
@@ -1413,8 +1485,11 @@ fn num_int(pool: &mut Pool, range: TypeId) -> Type2 {
 fn _num_signed64(pool: &mut Pool) -> Type2 {
     let alias_content = Type2::TagUnion(
         PoolVec::new(
-            // TagName::Private(Symbol::NUM_AT_SIGNED64)
-            vec![(PoolStr::new("Num.@Signed64", pool), PoolVec::empty(pool))].into_iter(),
+            vec![(
+                TagName::Private(Symbol::NUM_AT_SIGNED64),
+                PoolVec::empty(pool),
+            )]
+            .into_iter(),
             pool,
         ),
         pool.add(Type2::EmptyTagUnion),
@@ -1434,8 +1509,7 @@ fn _num_integer(pool: &mut Pool, range: TypeId) -> Type2 {
     let alias_content = Type2::TagUnion(
         PoolVec::new(
             vec![(
-                // TagName::Private(Symbol::NUM_AT_INTEGER)
-                PoolStr::new("Num.@Integer", pool),
+                TagName::Private(Symbol::NUM_AT_INTEGER),
                 PoolVec::new(vec![range_type.shallow_clone()].into_iter(), pool),
             )]
             .into_iter(),
@@ -1458,8 +1532,7 @@ fn num_num(pool: &mut Pool, type_id: TypeId) -> Type2 {
     let alias_content = Type2::TagUnion(
         PoolVec::new(
             vec![(
-                // TagName::Private(Symbol::NUM_AT_NUM)
-                PoolStr::new("Num.@Num", pool),
+                TagName::Private(Symbol::NUM_AT_NUM),
                 PoolVec::new(vec![range_type.shallow_clone()].into_iter(), pool),
             )]
             .into_iter(),
