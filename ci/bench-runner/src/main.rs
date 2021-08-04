@@ -80,12 +80,17 @@ fn do_all_benches(nr_repeat_benchmarks: usize) -> HashSet<String> {
     do_benchmark("trunk");
     let mut all_regressed_benches = do_benchmark("branch");
 
+    // if no benches regressed this round, abort early
+    if all_regressed_benches.is_empty() {
+        return HashSet::new();
+    }
+
     for _ in 1..nr_repeat_benchmarks {
         delete_old_bench_results();
         do_benchmark("trunk");
         let regressed_benches = do_benchmark("branch");
 
-        // if no benches failed this round, abort early
+        // if no benches regressed this round, abort early
         if regressed_benches.is_empty() {
             return HashSet::new();
         }
