@@ -348,11 +348,11 @@ fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {
     match tag_name {
         TagName::Global(_) => Expr::GlobalTag(
             env.arena
-                .alloc_str(&tag_name.as_string(env.interns, env.home)),
+                .alloc_str(&tag_name.as_ident_str(env.interns, env.home)),
         ),
         TagName::Private(_) => Expr::PrivateTag(
             env.arena
-                .alloc_str(&tag_name.as_string(env.interns, env.home)),
+                .alloc_str(&tag_name.as_ident_str(env.interns, env.home)),
         ),
         TagName::Closure(_) => unreachable!("User cannot type this"),
     }
@@ -672,7 +672,7 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                     let (tag_name, payload_vars) = tags.iter().next().unwrap();
 
                     let loc_tag_expr = {
-                        let tag_name = &tag_name.as_string(env.interns, env.home);
+                        let tag_name = &tag_name.as_ident_str(env.interns, env.home);
                         let tag_expr = if tag_name.starts_with('@') {
                             Expr::PrivateTag(arena.alloc_str(tag_name))
                         } else {
@@ -713,11 +713,11 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
 
                     let tag_name = if value {
                         max_by_key(tag_name_1, tag_name_2, |n| {
-                            n.as_string(env.interns, env.home)
+                            n.as_ident_str(env.interns, env.home)
                         })
                     } else {
                         min_by_key(tag_name_1, tag_name_2, |n| {
-                            n.as_string(env.interns, env.home)
+                            n.as_ident_str(env.interns, env.home)
                         })
                     };
 
@@ -784,7 +784,7 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                     let (tag_name, payload_vars) = tags.iter().next().unwrap();
 
                     let loc_tag_expr = {
-                        let tag_name = &tag_name.as_string(env.interns, env.home);
+                        let tag_name = &tag_name.as_ident_str(env.interns, env.home);
                         let tag_expr = if tag_name.starts_with('@') {
                             Expr::PrivateTag(arena.alloc_str(tag_name))
                         } else {
@@ -908,7 +908,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                     }
 
                     let loc_tag_expr = {
-                        let tag_name = &tag_name.as_string(env.interns, env.home);
+                        let tag_name = &tag_name.as_ident_str(env.interns, env.home);
                         let tag_expr = if tag_name.starts_with('@') {
                             Expr::PrivateTag(arena.alloc_str(tag_name))
                         } else {

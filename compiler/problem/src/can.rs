@@ -1,4 +1,3 @@
-use inlinable_string::InlinableString;
 use roc_collections::all::MutSet;
 use roc_module::ident::{Ident, Lowercase, ModuleName, TagName};
 use roc_module::operator::BinOp;
@@ -135,14 +134,14 @@ pub enum RuntimeError {
     UnresolvedTypeVar,
     ErroneousType,
 
-    LookupNotInScope(Located<InlinableString>, MutSet<Box<str>>),
+    LookupNotInScope(Located<Ident>, MutSet<Box<str>>),
     ValueNotExposed {
         module_name: ModuleName,
-        ident: InlinableString,
+        ident: Ident,
         region: Region,
     },
     ModuleNotImported {
-        module_name: InlinableString,
+        module_name: ModuleName,
         imported_modules: MutSet<Box<str>>,
         region: Region,
     },

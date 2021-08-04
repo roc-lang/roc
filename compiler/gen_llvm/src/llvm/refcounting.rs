@@ -399,7 +399,7 @@ fn modify_refcount_struct_help<'a, 'ctx, 'env>(
     let arg_symbol = Symbol::ARG_1;
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
-    arg_val.set_name(arg_symbol.ident_string(&env.interns));
+    arg_val.set_name(arg_symbol.as_str(&env.interns));
 
     let parent = fn_val;
 
@@ -781,7 +781,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
     let arg_symbol = Symbol::ARG_1;
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
-    arg_val.set_name(arg_symbol.ident_string(&env.interns));
+    arg_val.set_name(arg_symbol.as_str(&env.interns));
 
     let parent = fn_val;
     let original_wrapper = arg_val.into_struct_value();
@@ -900,7 +900,7 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
     let arg_symbol = Symbol::ARG_1;
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
-    arg_val.set_name(arg_symbol.ident_string(&env.interns));
+    arg_val.set_name(arg_symbol.as_str(&env.interns));
 
     let parent = fn_val;
 
@@ -1019,7 +1019,7 @@ fn modify_refcount_dict_help<'a, 'ctx, 'env>(
     let arg_symbol = Symbol::ARG_1;
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
-    arg_val.set_name(arg_symbol.ident_string(&env.interns));
+    arg_val.set_name(arg_symbol.as_str(&env.interns));
 
     let parent = fn_val;
 
@@ -1226,7 +1226,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
 
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
-    arg_val.set_name(arg_symbol.ident_string(&env.interns));
+    arg_val.set_name(arg_symbol.as_str(&env.interns));
 
     let parent = fn_val;
 
@@ -1574,7 +1574,7 @@ fn build_reuse_rec_union_help<'a, 'ctx, 'env>(
 
     let arg_val = reset_function.get_param_iter().next().unwrap();
 
-    arg_val.set_name(arg_symbol.ident_string(&env.interns));
+    arg_val.set_name(arg_symbol.as_str(&env.interns));
 
     let parent = reset_function;
 
@@ -1732,7 +1732,7 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
     let arg_symbol = Symbol::ARG_1;
     let arg_val = fn_val.get_param_iter().next().unwrap();
 
-    arg_val.set_name(arg_symbol.ident_string(&env.interns));
+    arg_val.set_name(arg_symbol.as_str(&env.interns));
 
     let parent = fn_val;
 

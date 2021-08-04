@@ -1,6 +1,6 @@
-use crate::ident::Ident;
-use inlinable_string::InlinableString;
+use crate::ident::{Ident, ModuleName};
 use roc_collections::all::{default_hasher, MutMap, SendMap};
+use roc_ident::IdentStr;
 use roc_region::all::Region;
 use std::collections::HashMap;
 use std::{fmt, u32};
@@ -52,7 +52,7 @@ impl Symbol {
         self.module_id().is_builtin()
     }
 
-    pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a InlinableString {
+    pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a ModuleName {
         interns
             .module_ids
             .get_name(self.module_id())
@@ -65,7 +65,11 @@ impl Symbol {
             })
     }
 
-    pub fn ident_string(self, interns: &Interns) -> &InlinableString {
+    pub fn as_str(self, interns: &Interns) -> &str {
+        self.ident_str(interns).as_str()
+    }
+
+    pub fn ident_str(self, interns: &Interns) -> &IdentStr {
         let ident_ids = interns
             .all_ident_ids
             .get(&self.module_id())
@@ -77,30 +81,33 @@ impl Symbol {
                 )
             });
 
-        ident_ids.get_name(self.ident_id()).unwrap_or_else(|| {
-            panic!(
-                "ident_string's IdentIds did not contain an entry for {} in module {:?}",
-                self.ident_id().0,
-                self.module_id()
-            )
-        })
+        ident_ids
+            .get_name(self.ident_id())
+            .unwrap_or_else(|| {
+                panic!(
+                    "ident_string's IdentIds did not contain an entry for {} in module {:?}",
+                    self.ident_id().0,
+                    self.module_id()
+                )
+            })
+            .into()
     }
 
     pub fn as_u64(self) -> u64 {
         self.0
     }
 
-    pub fn fully_qualified(self, interns: &Interns, home: ModuleId) -> InlinableString {
+    pub fn fully_qualified(self, interns: &Interns, home: ModuleId) -> ModuleName {
         let module_id = self.module_id();
 
         if module_id == home {
-            self.ident_string(interns).clone()
+            self.ident_str(interns).clone().into()
         } else {
             // TODO do this without format! to avoid allocation for short strings
             format!(
                 "{}.{}",
-                self.module_string(interns),
-                self.ident_string(interns)
+                self.module_string(interns).as_str(),
+                self.ident_str(interns)
             )
             .into()
         }
@@ -209,11 +216,11 @@ pub struct Interns {
 }
 
 impl Interns {
-    pub fn module_id(&mut self, name: &InlinableString) -> ModuleId {
+    pub fn module_id(&mut self, name: &ModuleName) -> ModuleId {
         self.module_ids.get_or_insert(name)
     }
 
-    pub fn module_name(&self, module_id: ModuleId) -> &InlinableString {
+    pub fn module_name(&self, module_id: ModuleId) -> &ModuleName {
         self.module_ids.get_name(module_id).unwrap_or_else(|| {
             panic!(
                 "Unable to find interns entry for module_id {:?} in Interns {:?}",
@@ -222,7 +229,9 @@ impl Interns {
         })
     }
 
-    pub fn symbol(&self, module_id: ModuleId, ident: InlinableString) -> Symbol {
+    pub fn symbol(&self, module_id: ModuleId, ident: IdentStr) -> Symbol {
+        let ident: Ident = ident.into();
+
         match self.all_ident_ids.get(&module_id) {
             Some(ident_ids) => match ident_ids.get_id(&ident) {
                 Some(ident_id) => Symbol::new(module_id, *ident_id),
@@ -278,7 +287,7 @@ impl ModuleId {
         // This is a no-op that should get DCE'd
     }
 
-    pub fn to_string(self, interns: &Interns) -> &InlinableString {
+    pub fn to_ident_str(self, interns: &Interns) -> &ModuleName {
         interns
             .module_ids
             .get_name(self)
@@ -338,7 +347,7 @@ pub enum PackageQualified<'a, T> {
 }
 
 /// Package-qualified module name
-pub type PQModuleName<'a> = PackageQualified<'a, InlinableString>;
+pub type PQModuleName<'a> = PackageQualified<'a, ModuleName>;
 
 impl<'a, T> PackageQualified<'a, T> {
     pub fn as_inner(&self) -> &T {
@@ -377,13 +386,13 @@ impl<'a> PackageModuleIds<'a> {
     }
 
     pub fn into_module_ids(self) -> ModuleIds {
-        let by_name: MutMap<InlinableString, ModuleId> = self
+        let by_name: MutMap<ModuleName, ModuleId> = self
             .by_name
             .into_iter()
             .map(|(pqname, module_id)| (pqname.as_inner().clone(), module_id))
             .collect();
 
-        let by_id: Vec<InlinableString> = self
+        let by_id: Vec<ModuleName> = self
             .by_id
             .into_iter()
             .map(|pqname| pqname.as_inner().clone())
@@ -399,9 +408,9 @@ impl<'a> PackageModuleIds<'a> {
         names
             .entry(module_id.0)
             .or_insert_with(|| match module_name {
-                PQModuleName::Unqualified(module) => module.to_string().into(),
+                PQModuleName::Unqualified(module) => module.as_str().into(),
                 PQModuleName::Qualified(package, module) => {
-                    let name = format!("{}.{}", package, module).into();
+                    let name = format!("{}.{}", package, module.as_str()).into();
                     name
                 }
             });
@@ -431,13 +440,13 @@ impl<'a> PackageModuleIds<'a> {
 /// Since these are interned strings, this shouldn't result in many total allocations in practice.
 #[derive(Debug, Clone)]
 pub struct ModuleIds {
-    by_name: MutMap<InlinableString, ModuleId>,
+    by_name: MutMap<ModuleName, ModuleId>,
     /// Each ModuleId is an index into this Vec
-    by_id: Vec<InlinableString>,
+    by_id: Vec<ModuleName>,
 }
 
 impl ModuleIds {
-    pub fn get_or_insert(&mut self, module_name: &InlinableString) -> ModuleId {
+    pub fn get_or_insert(&mut self, module_name: &ModuleName) -> ModuleId {
         match self.by_name.get(module_name) {
             Some(id) => *id,
             None => {
@@ -458,29 +467,29 @@ impl ModuleIds {
     }
 
     #[cfg(debug_assertions)]
-    fn insert_debug_name(module_id: ModuleId, module_name: &InlinableString) {
+    fn insert_debug_name(module_id: ModuleId, module_name: &ModuleName) {
         let mut names = DEBUG_MODULE_ID_NAMES.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
         // TODO make sure modules are never added more than once!
         names
             .entry(module_id.0)
-            .or_insert_with(|| module_name.to_string().into());
+            .or_insert_with(|| module_name.as_str().to_string().into());
     }
 
     #[cfg(not(debug_assertions))]
-    fn insert_debug_name(_module_id: ModuleId, _module_name: &InlinableString) {
+    fn insert_debug_name(_module_id: ModuleId, _module_name: &ModuleName) {
         // By design, this is a no-op in release builds!
     }
 
-    pub fn get_id(&self, module_name: &InlinableString) -> Option<&ModuleId> {
+    pub fn get_id(&self, module_name: &ModuleName) -> Option<&ModuleId> {
         self.by_name.get(module_name)
     }
 
-    pub fn get_name(&self, id: ModuleId) -> Option<&InlinableString> {
+    pub fn get_name(&self, id: ModuleId) -> Option<&ModuleName> {
         self.by_id.get(id.0 as usize)
     }
 
-    pub fn available_modules(&self) -> impl Iterator<Item = &InlinableString> {
+    pub fn available_modules(&self) -> impl Iterator<Item = &ModuleName> {
         self.by_id.iter()
     }
 }
@@ -500,23 +509,23 @@ pub struct IdentId(u32);
 /// Since these are interned strings, this shouldn't result in many total allocations in practice.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IdentIds {
-    by_ident: MutMap<InlinableString, IdentId>,
+    by_ident: MutMap<Ident, IdentId>,
 
     /// Each IdentId is an index into this Vec
-    by_id: Vec<InlinableString>,
+    by_id: Vec<Ident>,
 
     next_generated_name: u32,
 }
 
 impl IdentIds {
-    pub fn idents(&self) -> impl Iterator<Item = (IdentId, &InlinableString)> {
+    pub fn idents(&self) -> impl Iterator<Item = (IdentId, &Ident)> {
         self.by_id
             .iter()
             .enumerate()
             .map(|(index, ident)| (IdentId(index as u32), ident))
     }
 
-    pub fn add(&mut self, ident_name: InlinableString) -> IdentId {
+    pub fn add(&mut self, ident_name: Ident) -> IdentId {
         let by_id = &mut self.by_id;
         let ident_id = IdentId(by_id.len() as u32);
 
@@ -526,7 +535,7 @@ impl IdentIds {
         ident_id
     }
 
-    pub fn get_or_insert(&mut self, name: &InlinableString) -> IdentId {
+    pub fn get_or_insert(&mut self, name: &Ident) -> IdentId {
         match self.by_ident.get(name) {
             Some(id) => *id,
             None => {
@@ -542,7 +551,7 @@ impl IdentIds {
         }
     }
 
-    /// Generates a unique, new name that's just a strigified integer
+    /// Generates a unique, new name that's just a stringified integer
     /// (e.g. "1" or "5"), using an internal counter. Since valid Roc variable
     /// names cannot begin with a number, this has no chance of colliding
     /// with actual user-defined variables.
@@ -550,7 +559,7 @@ impl IdentIds {
     /// This is used, for example, during canonicalization of an Expr::Closure
     /// to generate a unique symbol to refer to that closure.
     pub fn gen_unique(&mut self) -> IdentId {
-        // TODO convert this directly from u32 into InlinableString,
+        // TODO convert this directly from u32 into IdentStr,
         // without allocating an extra string along the way like this.
         let ident = self.next_generated_name.to_string().into();
 
@@ -559,11 +568,11 @@ impl IdentIds {
         self.add(ident)
     }
 
-    pub fn get_id(&self, ident_name: &InlinableString) -> Option<&IdentId> {
+    pub fn get_id(&self, ident_name: &Ident) -> Option<&IdentId> {
         self.by_ident.get(ident_name)
     }
 
-    pub fn get_name(&self, id: IdentId) -> Option<&InlinableString> {
+    pub fn get_name(&self, id: IdentId) -> Option<&Ident> {
         self.by_id.get(id.0 as usize)
     }
 }
@@ -655,7 +664,7 @@ macro_rules! define_builtins {
                 let mut by_id = Vec::with_capacity(capacity);
 
                 let mut insert_both = |id: ModuleId, name_str: &'static str| {
-                    let name: InlinableString = name_str.into();
+                    let name: ModuleName = name_str.into();
 
                     if cfg!(debug_assertions) {
                         Self::insert_debug_name(id, &name);
@@ -682,8 +691,8 @@ macro_rules! define_builtins {
                 let mut by_id = Vec::with_capacity(capacity);
 
                 let mut insert_both = |id: ModuleId, name_str: &'static str| {
-                    let raw_name: InlinableString = name_str.into();
-                    let name = PQModuleName::Unqualified(raw_name);
+                    let raw_name: IdentStr = name_str.into();
+                    let name = PQModuleName::Unqualified(raw_name.into());
 
                     if cfg!(debug_assertions) {
                         Self::insert_debug_name(id, &name);

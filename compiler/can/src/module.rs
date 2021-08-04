@@ -98,7 +98,7 @@ where
     // Here we essentially add those "defs" to "the beginning of the module"
     // by canonicalizing them right before we canonicalize the actual ast::Def nodes.
     for (ident, (symbol, region)) in exposed_imports {
-        let first_char = ident.as_inline_str().chars().next().unwrap();
+        let first_char = ident.as_inline_str().as_str().chars().next().unwrap();
 
         if first_char.is_lowercase() {
             // this is a value definition

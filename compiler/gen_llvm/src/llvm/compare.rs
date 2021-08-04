@@ -436,8 +436,8 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
     let list1 = it.next().unwrap().into_struct_value();
     let list2 = it.next().unwrap().into_struct_value();
 
-    list1.set_name(Symbol::ARG_1.ident_string(&env.interns));
-    list2.set_name(Symbol::ARG_2.ident_string(&env.interns));
+    list1.set_name(Symbol::ARG_1.as_str(&env.interns));
+    list2.set_name(Symbol::ARG_2.as_str(&env.interns));
 
     let entry = ctx.append_basic_block(parent, "entry");
     env.builder.position_at_end(entry);
@@ -644,8 +644,8 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
     let struct1 = it.next().unwrap().into_struct_value();
     let struct2 = it.next().unwrap().into_struct_value();
 
-    struct1.set_name(Symbol::ARG_1.ident_string(&env.interns));
-    struct2.set_name(Symbol::ARG_2.ident_string(&env.interns));
+    struct1.set_name(Symbol::ARG_1.as_str(&env.interns));
+    struct2.set_name(Symbol::ARG_2.as_str(&env.interns));
 
     let entry = ctx.append_basic_block(parent, "entry");
     let start = ctx.append_basic_block(parent, "start");
@@ -825,8 +825,8 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
     let tag1 = it.next().unwrap();
     let tag2 = it.next().unwrap();
 
-    tag1.set_name(Symbol::ARG_1.ident_string(&env.interns));
-    tag2.set_name(Symbol::ARG_2.ident_string(&env.interns));
+    tag1.set_name(Symbol::ARG_1.as_str(&env.interns));
+    tag2.set_name(Symbol::ARG_2.as_str(&env.interns));
 
     let entry = ctx.append_basic_block(parent, "entry");
 
