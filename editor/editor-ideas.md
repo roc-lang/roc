@@ -141,7 +141,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Show productivity/feature tips on startup. Show link to page with all tips. Allow not seeing tips next time.
 * Search friendly editor docs inside the editor. Offer to send search string to Roc maintainers when no results, or if no results were clicked.
 * File history timeline view. Show timeline with commits that changed this file, the number of lines added and deleted as well as which user made the changes. Arrow navigation should allow you to quickly view different versions of the file.
-* Suggested quick fixes should be directly visible and clickable. Not like in vs code where you put the caret on an error until a lightbulb appears in the margin which you have to click for the fixes to apppear, after which you click to apply the fix you want :( .
+* Suggested quick fixes should be directly visible and clickable. Not like in vs code where you put the caret on an error until a lightbulb appears in the margin which you have to click for the fixes to apppear, after which you click to apply the fix you want :( . You should be able to apply suggestions in rapid succession. e.g. if you copy some roc code from the internet you should be able to apply 5 import suggestions quickly. 
 * Regex-like find and substitution based on plain english description and example (replacement). i.e. replace all `[` between double quotes with `{`. [Inspiration](https://alexmoltzau.medium.com/english-to-regex-thanks-to-gpt-3-13f03b68236e).
 * Show productivity tips based on behavior. i.e. if the user is scrolling through the error bar and clicking on the next error several times, show a tip with "go to next error" shortcut.
 * Command to "benchmark this function" or "benchmark this test" with flamegraph and execution time per line.
@@ -153,6 +153,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     * search through a database of our zullip questions
     * ...
 * smart insert: press a shortcut and enter a plain english description of a code snippet you need. Examples: "convert string to list of chars", "sort list of records by field foo descending", "plot this list with date on x-axis"...
+* After the user has refactored code to be simpler, try finding other places in the code base where the same simplification can be made.
 
 #### Autocomplete
 
@@ -223,6 +224,22 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     * Modern editors may guide developers to the source code too easily.
     The API and documentation are meant to interface with humans.
 * [DocC](https://developer.apple.com/videos/play/wwdc2021/10166/) neat documentation approach for swift. 
+
+## General Plugin Ideas
+
+### Ideas
+
+* Plugin to translate linux commands like curl to Roc code
+
+### Inspiration
+
+- [Boop](https://github.com/IvanMathy/Boop) scriptable scratchpad for developers. Contains collection of useful conversions: json formatting, url encoding, encode to base64...
+
+## High performance
+
+### Inspiration
+
+- [10x editor](http://www.10xeditor.com/) IDE/Editor targeted at the professional developer with an emphasis on performance and scalability.
 
 ## General Thoughts/Ideas
 

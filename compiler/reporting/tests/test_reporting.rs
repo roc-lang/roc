@@ -65,7 +65,7 @@ mod test_reporting {
             problems: can_problems,
             ..
         } = can_expr(arena, expr_src)?;
-        let mut subs = Subs::new(var_store.into());
+        let mut subs = Subs::new(var_store);
 
         for (var, name) in output.introduced_variables.name_by_var {
             subs.rigid_var(var, name);
@@ -223,11 +223,9 @@ mod test_reporting {
         list_reports(&arena, src, &mut buf, callback);
 
         // convenient to copy-paste the generated message
-        if true {
-            if buf != expected_rendering {
-                for line in buf.split("\n") {
-                    println!("                {}", line);
-                }
+        if true && buf != expected_rendering {
+            for line in buf.split('\n') {
+                println!("                {}", line);
             }
         }
 
@@ -247,11 +245,9 @@ mod test_reporting {
         list_header_reports(&arena, src, &mut buf, callback);
 
         // convenient to copy-paste the generated message
-        if true {
-            if buf != expected_rendering {
-                for line in buf.split("\n") {
-                    println!("                {}", line);
-                }
+        if true && buf != expected_rendering {
+            for line in buf.split('\n') {
+                println!("                {}", line);
             }
         }
 
@@ -721,10 +717,10 @@ mod test_reporting {
 
                 these names seem close though:
 
+                    Decimal
+                    Dec
                     Result
                     Num
-                    Set
-                    U8
                 "#
             ),
         );
@@ -2160,8 +2156,8 @@ mod test_reporting {
                 This is usually a typo. Here are the `x` fields that are most similar:
 
                     { fo : Num c
-                    , foobar : Num a
-                    , bar : Num e
+                    , foobar : Num d
+                    , bar : Num a
                     , baz : Num b
                     , ...
                     }
@@ -5924,6 +5920,44 @@ mod test_reporting {
                 I was expecting a type name, value name or function name next, like
 
                     provides [ Animal, default, tame ]
+            "#
+            ),
+        )
+    }
+
+    #[test]
+    fn platform_requires_rigids() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                platform folkertdev/foo
+                    requires { main : Effect {} }
+                    exposes []
+                    packages {}
+                    imports [Task]
+                    provides [ mainForHost ]
+                    effects fx.Effect
+                        {
+                            putChar : I64 -> Effect {},
+                            putLine : Str -> Effect {},
+                            getLine : Effect Str
+                        }
+                "#
+            ),
+            indoc!(
+                r#"
+                ── BAD REQUIRES RIGIDS ─────────────────────────────────────────────────────────
+
+                I am partway through parsing a header, but I got stuck here:
+
+                1│  platform folkertdev/foo
+                2│      requires { main : Effect {} }
+                                   ^
+
+                I am expecting a list of rigids like `{}` or `{model=>Model}` next. A full
+                `requires` definition looks like
+
+                    requires {model=>Model, msg=>Msg} {main : Effect {}}
             "#
             ),
         )

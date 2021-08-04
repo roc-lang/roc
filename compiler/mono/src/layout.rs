@@ -148,6 +148,16 @@ impl<'a> UnionLayout<'a> {
         }
     }
 
+    pub fn number_of_tags(&'a self) -> usize {
+        match self {
+            UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => tags.len(),
+
+            UnionLayout::NullableWrapped { other_tags, .. } => other_tags.len() + 1,
+            UnionLayout::NonNullableUnwrapped(_) => 1,
+            UnionLayout::NullableUnwrapped { .. } => 2,
+        }
+    }
+
     fn tag_id_builtin_help(union_size: usize) -> Builtin<'a> {
         if union_size <= u8::MAX as usize {
             Builtin::Int8
@@ -160,7 +170,16 @@ impl<'a> UnionLayout<'a> {
 
     pub fn tag_id_builtin(&self) -> Builtin<'a> {
         match self {
-            UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => {
+            UnionLayout::NonRecursive(_tags) => {
+                // let union_size = tags.len();
+                // Self::tag_id_builtin_help(union_size)
+
+                // The quicksort-benchmarks version of Quicksort.roc segfaults when
+                // this number is not I64. There must be some dependence on that fact
+                // somewhere in the code, I have not found where that is yet...
+                Builtin::Int64
+            }
+            UnionLayout::Recursive(tags) => {
                 let union_size = tags.len();
 
                 Self::tag_id_builtin_help(union_size)
@@ -178,12 +197,40 @@ impl<'a> UnionLayout<'a> {
         Layout::Builtin(self.tag_id_builtin())
     }
 
-    pub fn stores_tag_id(&self) -> bool {
+    fn stores_tag_id_in_pointer_bits(tags: &[&[Layout<'a>]], ptr_bytes: u32) -> bool {
+        tags.len() <= ptr_bytes as usize
+    }
+
+    // i.e. it is not implicit and not stored in the pointer bits
+    pub fn stores_tag_id_as_data(&self, ptr_bytes: u32) -> bool {
+        match self {
+            UnionLayout::NonRecursive(_) => true,
+            UnionLayout::Recursive(tags)
+            | UnionLayout::NullableWrapped {
+                other_tags: tags, ..
+            } => !Self::stores_tag_id_in_pointer_bits(tags, ptr_bytes),
+            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => false,
+        }
+    }
+
+    pub fn stores_tag_id_in_pointer(&self, ptr_bytes: u32) -> bool {
+        match self {
+            UnionLayout::NonRecursive(_) => false,
+            UnionLayout::Recursive(tags)
+            | UnionLayout::NullableWrapped {
+                other_tags: tags, ..
+            } => Self::stores_tag_id_in_pointer_bits(tags, ptr_bytes),
+            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => false,
+        }
+    }
+
+    pub fn tag_is_null(&self, tag_id: u8) -> bool {
         match self {
             UnionLayout::NonRecursive(_)
-            | UnionLayout::Recursive(_)
-            | UnionLayout::NullableWrapped { .. } => true,
-            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => false,
+            | UnionLayout::NonNullableUnwrapped(_)
+            | UnionLayout::Recursive(_) => false,
+            UnionLayout::NullableWrapped { nullable_id, .. } => *nullable_id == tag_id as i64,
+            UnionLayout::NullableUnwrapped { nullable_id, .. } => *nullable_id == (tag_id != 0),
         }
     }
 
@@ -213,7 +260,6 @@ pub enum ClosureRepresentation<'a> {
         tag_layout: &'a [Layout<'a>],
         tag_name: TagName,
         tag_id: u8,
-        union_size: u8,
         union_layout: UnionLayout<'a>,
     },
     /// the representation is anything but a union
@@ -252,7 +298,6 @@ impl<'a> LambdaSet<'a> {
                             .unwrap();
 
                         ClosureRepresentation::Union {
-                            union_size: self.set.len() as u8,
                             tag_id: index as u8,
                             tag_layout: tags[index],
                             tag_name: TagName::Closure(function_symbol),
@@ -424,6 +469,7 @@ pub enum Builtin<'a> {
     Int8,
     Int1,
     Usize,
+    Decimal,
     Float128,
     Float64,
     Float32,
@@ -474,8 +520,8 @@ impl<'a> Layout<'a> {
         match content {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
             RecursionVar { structure, .. } => {
-                let structure_content = env.subs.get_without_compacting(structure).content;
-                Self::new_help(env, structure, structure_content)
+                let structure_content = env.subs.get_content_without_compacting(structure);
+                Self::new_help(env, structure, structure_content.clone())
             }
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
@@ -545,8 +591,8 @@ impl<'a> Layout<'a> {
         if env.is_seen(var) {
             Ok(Layout::RecursivePointer)
         } else {
-            let content = env.subs.get_without_compacting(var).content;
-            Self::new_help(env, var, content)
+            let content = env.subs.get_content_without_compacting(var);
+            Self::new_help(env, var, content.clone())
         }
     }
 
@@ -619,7 +665,7 @@ impl<'a> Layout<'a> {
                             .max()
                             .unwrap_or_default()
                             // the size of the tag_id
-                            + pointer_size
+                            + variant.tag_id_builtin().stack_size(pointer_size)
                     }
 
                     Recursive(_)
@@ -713,6 +759,7 @@ impl<'a> Layout<'a> {
                 }
             }
             RecursivePointer => true,
+
             Closure(_, closure_layout, _) => closure_layout.contains_refcounted(),
         }
     }
@@ -915,6 +962,7 @@ impl<'a> Builtin<'a> {
     const I8_SIZE: u32 = std::mem::size_of::<i8>() as u32;
     const I1_SIZE: u32 = std::mem::size_of::<bool>() as u32;
     const USIZE_SIZE: u32 = std::mem::size_of::<usize>() as u32;
+    const DECIMAL_SIZE: u32 = std::mem::size_of::<i128>() as u32;
     const F128_SIZE: u32 = 16;
     const F64_SIZE: u32 = std::mem::size_of::<f64>() as u32;
     const F32_SIZE: u32 = std::mem::size_of::<f32>() as u32;
@@ -944,6 +992,7 @@ impl<'a> Builtin<'a> {
             Int8 => Builtin::I8_SIZE,
             Int1 => Builtin::I1_SIZE,
             Usize => Builtin::USIZE_SIZE,
+            Decimal => Builtin::DECIMAL_SIZE,
             Float128 => Builtin::F128_SIZE,
             Float64 => Builtin::F64_SIZE,
             Float32 => Builtin::F32_SIZE,
@@ -970,6 +1019,7 @@ impl<'a> Builtin<'a> {
             Int8 => align_of::<i8>() as u32,
             Int1 => align_of::<bool>() as u32,
             Usize => align_of::<usize>() as u32,
+            Decimal => align_of::<i128>() as u32,
             Float128 => align_of::<i128>() as u32,
             Float64 => align_of::<f64>() as u32,
             Float32 => align_of::<f32>() as u32,
@@ -985,8 +1035,8 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize | Float128 | Float64 | Float32
-            | Float16 | EmptyStr | EmptyDict | EmptyList | EmptySet => true,
+            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize | Decimal | Float128 | Float64
+            | Float32 | Float16 | EmptyStr | EmptyDict | EmptyList | EmptySet => true,
             Str | Dict(_, _) | Set(_) | List(_) => false,
         }
     }
@@ -996,8 +1046,8 @@ impl<'a> Builtin<'a> {
         use Builtin::*;
 
         match self {
-            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize | Float128 | Float64 | Float32
-            | Float16 | EmptyStr | EmptyDict | EmptyList | EmptySet => false,
+            Int128 | Int64 | Int32 | Int16 | Int8 | Int1 | Usize | Decimal | Float128 | Float64
+            | Float32 | Float16 | EmptyStr | EmptyDict | EmptyList | EmptySet => false,
             List(_) => true,
 
             Str | Dict(_, _) | Set(_) => true,
@@ -1020,6 +1070,7 @@ impl<'a> Builtin<'a> {
             Int8 => alloc.text("Int8"),
             Int1 => alloc.text("Int1"),
             Usize => alloc.text("Usize"),
+            Decimal => alloc.text("Decimal"),
             Float128 => alloc.text("Float128"),
             Float64 => alloc.text("Float64"),
             Float32 => alloc.text("Float32"),
@@ -1107,6 +1158,10 @@ fn layout_from_flat_type<'a>(
                 }
 
                 // Floats
+                Symbol::NUM_DEC => {
+                    debug_assert_eq!(args.len(), 0);
+                    Ok(Layout::Builtin(Builtin::Decimal))
+                }
                 Symbol::NUM_F64 => {
                     debug_assert_eq!(args.len(), 0);
                     Ok(Layout::Builtin(Builtin::Float64))
@@ -1121,7 +1176,7 @@ fn layout_from_flat_type<'a>(
                     debug_assert_eq!(args.len(), 1);
 
                     let var = args.first().unwrap();
-                    let content = subs.get_without_compacting(*var).content;
+                    let content = subs.get_content_without_compacting(*var);
 
                     layout_from_num_content(content)
                 }
@@ -1138,7 +1193,8 @@ fn layout_from_flat_type<'a>(
         Func(args, closure_var, ret_var) => {
             let mut fn_args = Vec::with_capacity_in(args.len(), arena);
 
-            for arg_var in args {
+            for index in args.into_iter() {
+                let arg_var = env.subs[index];
                 fn_args.push(Layout::from_var(env, arg_var)?);
             }
 
@@ -1160,25 +1216,8 @@ fn layout_from_flat_type<'a>(
                 Err(_) => unreachable!("this would have been a type error"),
             }
 
-            let sorted_fields = sort_record_fields_help(env, fields_map);
-
-            // Determine the layouts of the fields, maintaining sort order
-            let mut layouts = Vec::with_capacity_in(sorted_fields.len(), arena);
-
-            for (_, _, res_layout) in sorted_fields {
-                match res_layout {
-                    Ok(layout) => {
-                        // Drop any zero-sized fields like {}.
-                        if !layout.is_dropped_because_empty() {
-                            layouts.push(layout);
-                        }
-                    }
-                    Err(_) => {
-                        // optional field, ignore
-                        continue;
-                    }
-                }
-            }
+            // discard optional fields
+            let mut layouts = sort_stored_record_fields(env, fields_map);
 
             if layouts.len() == 1 {
                 // If the record has only one field that isn't zero-sized,
@@ -1197,7 +1236,7 @@ fn layout_from_flat_type<'a>(
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
             let mut tags = MutMap::default();
-            tags.insert(tag_name, vec![]);
+            tags.insert(*tag_name, vec![]);
 
             Ok(layout_from_tag_union(arena, tags, subs))
         }
@@ -1279,7 +1318,7 @@ fn layout_from_flat_type<'a>(
                 }
             } else if tag_layouts.len() == 1 {
                 // drop the tag id
-                UnionLayout::NonNullableUnwrapped(&tag_layouts.pop().unwrap())
+                UnionLayout::NonNullableUnwrapped(tag_layouts.pop().unwrap())
             } else {
                 UnionLayout::Recursive(tag_layouts.into_bump_slice())
             };
@@ -1355,6 +1394,43 @@ fn sort_record_fields_help<'a>(
     );
 
     sorted_fields
+}
+
+// drops optional fields
+fn sort_stored_record_fields<'a>(
+    env: &mut Env<'a, '_>,
+    fields_map: MutMap<Lowercase, RecordField<Variable>>,
+) -> Vec<'a, Layout<'a>> {
+    // Sort the fields by label
+    let mut sorted_fields = Vec::with_capacity_in(fields_map.len(), env.arena);
+
+    for (label, field) in fields_map {
+        let var = match field {
+            RecordField::Demanded(v) => v,
+            RecordField::Required(v) => v,
+            RecordField::Optional(_) => {
+                continue;
+            }
+        };
+
+        let layout = Layout::from_var(env, var).expect("invalid layout from var");
+
+        sorted_fields.push((label, layout));
+    }
+
+    sorted_fields.sort_by(|(label1, layout1), (label2, layout2)| {
+        let ptr_bytes = 8;
+
+        let size1 = layout1.alignment_bytes(ptr_bytes);
+        let size2 = layout2.alignment_bytes(ptr_bytes);
+
+        size2.cmp(&size1).then(label1.cmp(label2))
+    });
+
+    let mut result = Vec::with_capacity_in(sorted_fields.len(), env.arena);
+    result.extend(sorted_fields.into_iter().map(|t| t.1));
+
+    result
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1482,8 +1558,8 @@ pub fn union_sorted_tags<'a>(
     subs: &Subs,
 ) -> Result<UnionVariant<'a>, LayoutProblem> {
     let var =
-        if let Content::RecursionVar { structure, .. } = subs.get_without_compacting(var).content {
-            structure
+        if let Content::RecursionVar { structure, .. } = subs.get_content_without_compacting(var) {
+            *structure
         } else {
             var
         };
@@ -1502,11 +1578,23 @@ pub fn union_sorted_tags<'a>(
 }
 
 fn get_recursion_var(subs: &Subs, var: Variable) -> Option<Variable> {
-    match subs.get_without_compacting(var).content {
-        Content::Structure(FlatType::RecursiveTagUnion(rec_var, _, _)) => Some(rec_var),
-        Content::Alias(_, _, actual) => get_recursion_var(subs, actual),
+    match subs.get_content_without_compacting(var) {
+        Content::Structure(FlatType::RecursiveTagUnion(rec_var, _, _)) => Some(*rec_var),
+        Content::Alias(_, _, actual) => get_recursion_var(subs, *actual),
         _ => None,
     }
+}
+
+fn is_recursive_tag_union(layout: &Layout) -> bool {
+    matches!(
+        layout,
+        Layout::Union(
+            UnionLayout::NullableUnwrapped { .. }
+                | UnionLayout::Recursive(_)
+                | UnionLayout::NullableWrapped { .. }
+                | UnionLayout::NonNullableUnwrapped { .. },
+        )
+    )
 }
 
 pub fn union_sorted_tags_help<'a>(
@@ -1624,10 +1712,17 @@ pub fn union_sorted_tags_help<'a>(
                 for var in arguments {
                     match Layout::from_var(&mut env, var) {
                         Ok(layout) => {
-                            // Drop any zero-sized arguments like {}
-                            if !layout.is_dropped_because_empty() {
-                                has_any_arguments = true;
+                            has_any_arguments = true;
 
+                            // make sure to not unroll recursive types!
+                            let self_recursion = opt_rec_var.is_some()
+                                && subs.get_root_key_without_compacting(var)
+                                    == subs.get_root_key_without_compacting(opt_rec_var.unwrap())
+                                && is_recursive_tag_union(&layout);
+
+                            if self_recursion {
+                                arg_layouts.push(Layout::RecursivePointer);
+                            } else {
                                 arg_layouts.push(layout);
                             }
                         }
@@ -1812,7 +1907,7 @@ fn ext_var_is_empty_tag_union(_: &Subs, _: Variable) -> bool {
     unreachable!();
 }
 
-fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutProblem> {
+fn layout_from_num_content<'a>(content: &Content) -> Result<Layout<'a>, LayoutProblem> {
     use roc_types::subs::Content::*;
     use roc_types::subs::FlatType::*;
 
@@ -1825,7 +1920,7 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutPro
             // (e.g. for (5 + 5) assume both 5s are 64-bit integers.)
             Ok(Layout::Builtin(DEFAULT_NUM_BUILTIN))
         }
-        Structure(Apply(symbol, args)) => match symbol {
+        Structure(Apply(symbol, args)) => match *symbol {
             // Ints
             Symbol::NUM_NAT => Ok(Layout::Builtin(Builtin::Usize)),
 
@@ -1844,13 +1939,14 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutPro
 
             // Floats
             Symbol::NUM_FLOATINGPOINT => Ok(Layout::Builtin(Builtin::Float64)),
+            Symbol::NUM_DEC => Ok(Layout::Builtin(Builtin::Decimal)),
             Symbol::NUM_F64 => Ok(Layout::Builtin(Builtin::Float64)),
             Symbol::NUM_F32 => Ok(Layout::Builtin(Builtin::Float32)),
 
             _ => {
                 panic!(
-                    "Invalid Num.Num type application: {:?}",
-                    Apply(symbol, args)
+                    "Invalid Num.Num type application: Apply({:?}, {:?})",
+                    symbol, args
                 );
             }
         },
@@ -1865,19 +1961,19 @@ fn layout_from_num_content<'a>(content: Content) -> Result<Layout<'a>, LayoutPro
 }
 
 fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutProblem> {
-    match subs.get_without_compacting(var).content {
+    match subs.get_content_without_compacting(var) {
         Content::Alias(Symbol::NUM_INTEGER, args, _) => {
             debug_assert!(args.len() == 1);
 
             let (_, precision_var) = args[0];
 
-            let precision = subs.get_without_compacting(precision_var).content;
+            let precision = subs.get_content_without_compacting(precision_var);
 
             match precision {
                 Content::Alias(symbol, args, _) => {
                     debug_assert!(args.is_empty());
 
-                    let builtin = match symbol {
+                    let builtin = match *symbol {
                         Symbol::NUM_SIGNED128 => Builtin::Int128,
                         Symbol::NUM_SIGNED64 => Builtin::Int64,
                         Symbol::NUM_SIGNED32 => Builtin::Int32,
@@ -1906,7 +2002,7 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
 
             let (_, precision_var) = args[0];
 
-            let precision = subs.get_without_compacting(precision_var).content;
+            let precision = subs.get_content_without_compacting(precision_var);
 
             match precision {
                 Content::Alias(Symbol::NUM_BINARY32, args, _) => {
@@ -1918,6 +2014,11 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
                     debug_assert!(args.is_empty());
 
                     Ok(Layout::Builtin(Builtin::Float64))
+                }
+                Content::Alias(Symbol::NUM_DECIMAL, args, _) => {
+                    debug_assert!(args.is_empty());
+
+                    Ok(Layout::Builtin(Builtin::Decimal))
                 }
                 Content::FlexVar(_) | Content::RigidVar(_) => {
                     // default to f64
@@ -1941,15 +2042,15 @@ fn dict_layout_from_key_value<'a>(
     key_var: Variable,
     value_var: Variable,
 ) -> Result<Layout<'a>, LayoutProblem> {
-    match env.subs.get_without_compacting(key_var).content {
+    match env.subs.get_content_without_compacting(key_var) {
         Content::FlexVar(_) | Content::RigidVar(_) => {
             // If this was still a (Dict * *) then it must have been an empty dict
             Ok(Layout::Builtin(Builtin::EmptyDict))
         }
         key_content => {
-            let value_content = env.subs.get_without_compacting(value_var).content;
-            let key_layout = Layout::new_help(env, key_var, key_content)?;
-            let value_layout = Layout::new_help(env, value_var, value_content)?;
+            let value_content = env.subs.get_content_without_compacting(value_var);
+            let key_layout = Layout::new_help(env, key_var, key_content.clone())?;
+            let value_layout = Layout::new_help(env, value_var, value_content.clone())?;
 
             // This is a normal list.
             Ok(Layout::Builtin(Builtin::Dict(
@@ -1964,7 +2065,7 @@ pub fn list_layout_from_elem<'a>(
     env: &mut Env<'a, '_>,
     elem_var: Variable,
 ) -> Result<Layout<'a>, LayoutProblem> {
-    match env.subs.get_without_compacting(elem_var).content {
+    match env.subs.get_content_without_compacting(elem_var) {
         Content::FlexVar(_) | Content::RigidVar(_) => {
             // If this was still a (List *) then it must have been an empty list
             Ok(Layout::Builtin(Builtin::EmptyList))
@@ -1984,7 +2085,7 @@ impl LayoutId {
     // Returns something like "foo#1" when given a symbol that interns to "foo"
     // and a LayoutId of 1.
     pub fn to_symbol_string(self, symbol: Symbol, interns: &Interns) -> String {
-        let ident_string = symbol.ident_string(interns);
+        let ident_string = symbol.ident_str(interns);
         let module_string = interns.module_ids.get_name(symbol.module_id()).unwrap();
         format!("{}_{}_{}", module_string, ident_string, self.0)
     }
@@ -2014,7 +2115,7 @@ impl<'a> LayoutIds<'a> {
         });
 
         // Get the id associated with this layout, or default to next_id.
-        let answer = ids.by_id.get(&layout).copied().unwrap_or(ids.next_id);
+        let answer = ids.by_id.get(layout).copied().unwrap_or(ids.next_id);
 
         // If we had to default to next_id, it must not have been found;
         // store the ID we're going to return and increment next_id.
@@ -2045,7 +2146,7 @@ impl<'a> LayoutIds<'a> {
         // Get the id associated with this layout, or default to next_id.
         let answer = ids
             .toplevels_by_id
-            .get(&layout)
+            .get(layout)
             .copied()
             .unwrap_or(ids.next_id);
 

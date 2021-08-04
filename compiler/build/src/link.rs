@@ -56,7 +56,7 @@ fn find_zig_str_path() -> PathBuf {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn build_zig_host(
+pub fn build_zig_host(
     env_path: &str,
     env_home: &str,
     emit_bin: &str,
@@ -86,7 +86,7 @@ fn build_zig_host(
 }
 
 #[cfg(target_os = "macos")]
-fn build_zig_host(
+pub fn build_zig_host(
     env_path: &str,
     env_home: &str,
     emit_bin: &str,
@@ -140,7 +140,7 @@ fn build_zig_host(
         .args(&[
             "build-obj",
             zig_host_src,
-            &emit_bin,
+            emit_bin,
             "--pkg-begin",
             "str",
             zig_str_path,
@@ -333,7 +333,7 @@ fn link_linux(
             output_path,
         ),
         LinkType::Dylib => {
-            // TODO: do we acually need the version number on this?
+            // TODO: do we actually need the version number on this?
             // Do we even need the "-soname" argument?
             //
             // See https://software.intel.com/content/www/us/en/develop/articles/create-a-unix-including-linux-shared-library.html
@@ -432,7 +432,7 @@ fn link_macos(
     // This path only exists on macOS Big Sur, and it causes ld errors
     // on Catalina if it's specified with -L, so we replace it with a
     // redundant -lSystem if the directory isn't there.
-    let big_sur_path = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib";
+    let big_sur_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
     let big_sur_fix = if Path::new(big_sur_path).exists() {
         format!("-L{}", big_sur_path)
     } else {
@@ -496,7 +496,7 @@ pub fn module_to_dylib(
 
     app_o_file.set_file_name("app.o");
 
-    // Emit the .o file using position-indepedent code (PIC) - needed for dylibs
+    // Emit the .o file using position-independent code (PIC) - needed for dylibs
     let reloc = RelocMode::PIC;
     let model = CodeModel::Default;
     let target_machine =

@@ -1,6 +1,10 @@
 const std = @import("std");
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 
+pub fn WithOverflow(comptime T: type) type {
+    return extern struct { value: T, has_overflowed: bool };
+}
+
 // If allocation fails, this must cxa_throw - it must not return a null pointer!
 extern fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void;
 
@@ -20,18 +24,18 @@ comptime {
     }
 }
 
-fn testing_roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
+fn testing_roc_alloc(size: usize, _: u32) callconv(.C) ?*c_void {
     return @ptrCast(?*c_void, std.testing.allocator.alloc(u8, size) catch unreachable);
 }
 
-fn testing_roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void {
+fn testing_roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, _: u32) callconv(.C) ?*c_void {
     const ptr = @ptrCast([*]u8, @alignCast(16, c_ptr));
     const slice = ptr[0..old_size];
 
     return @ptrCast(?*c_void, std.testing.allocator.realloc(slice, new_size) catch unreachable);
 }
 
-fn testing_roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
+fn testing_roc_dealloc(c_ptr: *c_void, _: u32) callconv(.C) void {
     const ptr = @ptrCast([*]u8, @alignCast(16, c_ptr));
 
     std.testing.allocator.destroy(ptr);
@@ -53,8 +57,8 @@ pub const Inc = fn (?[*]u8) callconv(.C) void;
 pub const IncN = fn (?[*]u8, u64) callconv(.C) void;
 pub const Dec = fn (?[*]u8) callconv(.C) void;
 
-const REFCOUNT_MAX_ISIZE: comptime isize = 0;
-pub const REFCOUNT_ONE_ISIZE: comptime isize = std.math.minInt(isize);
+const REFCOUNT_MAX_ISIZE: isize = 0;
+pub const REFCOUNT_ONE_ISIZE: isize = std.math.minInt(isize);
 pub const REFCOUNT_ONE: usize = @bitCast(usize, REFCOUNT_ONE_ISIZE);
 
 pub const IntWidth = enum(u8) {
@@ -110,7 +114,7 @@ pub fn allocateWithRefcount(
     data_bytes: usize,
     alignment: u32,
 ) [*]u8 {
-    comptime const result_in_place = false;
+    const result_in_place = false;
 
     switch (alignment) {
         16 => {

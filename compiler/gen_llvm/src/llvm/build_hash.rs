@@ -1,5 +1,6 @@
 use crate::debug_info_init;
 use crate::llvm::bitcode::call_bitcode_fn;
+use crate::llvm::build::tag_pointer_clear_tag_id;
 use crate::llvm::build::Env;
 use crate::llvm::build::{cast_block_of_memory_to_tag, get_tag_id, FAST_CALL_CONV, TAG_DATA_INDEX};
 use crate::llvm::build_str;
@@ -127,8 +128,9 @@ fn hash_builtin<'a, 'ctx, 'env>(
         | Builtin::Float32
         | Builtin::Float128
         | Builtin::Float16
+        | Builtin::Decimal
         | Builtin::Usize => {
-            let hash_bytes = store_and_use_as_u8_ptr(env, val, &layout);
+            let hash_bytes = store_and_use_as_u8_ptr(env, val, layout);
             hash_bitcode_fn(env, seed, hash_bytes, layout.stack_size(ptr_bytes))
         }
         Builtin::Str => {
@@ -136,7 +138,7 @@ fn hash_builtin<'a, 'ctx, 'env>(
             call_bitcode_fn(
                 env,
                 &[seed.into(), build_str::str_to_i128(env, val).into()],
-                &bitcode::DICT_HASH_STR,
+                bitcode::DICT_HASH_STR,
             )
             .into_int_value()
         }
@@ -234,8 +236,8 @@ fn build_hash_struct_help<'a, 'ctx, 'env>(
     let seed = it.next().unwrap().into_int_value();
     let value = it.next().unwrap().into_struct_value();
 
-    seed.set_name(Symbol::ARG_1.ident_string(&env.interns));
-    value.set_name(Symbol::ARG_2.ident_string(&env.interns));
+    seed.set_name(Symbol::ARG_1.as_str(&env.interns));
+    value.set_name(Symbol::ARG_2.as_str(&env.interns));
 
     let entry = ctx.append_basic_block(parent, "entry");
     env.builder.position_at_end(entry);
@@ -325,7 +327,7 @@ fn build_hash_tag<'a, 'ctx, 'env>(
 
     let symbol = Symbol::GENERIC_HASH;
     let fn_name = layout_ids
-        .get(symbol, &layout)
+        .get(symbol, layout)
         .to_symbol_string(symbol, &env.interns);
 
     let function = match env.module.get_function(fn_name.as_str()) {
@@ -333,7 +335,7 @@ fn build_hash_tag<'a, 'ctx, 'env>(
         None => {
             let seed_type = env.context.i64_type();
 
-            let arg_type = basic_type_from_layout(env, &layout);
+            let arg_type = basic_type_from_layout(env, layout);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -375,8 +377,8 @@ fn build_hash_tag_help<'a, 'ctx, 'env>(
     let seed = it.next().unwrap().into_int_value();
     let value = it.next().unwrap();
 
-    seed.set_name(Symbol::ARG_1.ident_string(&env.interns));
-    value.set_name(Symbol::ARG_2.ident_string(&env.interns));
+    seed.set_name(Symbol::ARG_1.as_str(&env.interns));
+    value.set_name(Symbol::ARG_2.as_str(&env.interns));
 
     let entry = ctx.append_basic_block(parent, "entry");
     env.builder.position_at_end(entry);
@@ -493,14 +495,9 @@ fn hash_tag<'a, 'ctx, 'env>(
                 );
 
                 // hash the tag data
-                let answer = hash_ptr_to_struct(
-                    env,
-                    layout_ids,
-                    union_layout,
-                    field_layouts,
-                    seed,
-                    tag.into_pointer_value(),
-                );
+                let tag = tag_pointer_clear_tag_id(env, tag.into_pointer_value());
+                let answer =
+                    hash_ptr_to_struct(env, layout_ids, union_layout, field_layouts, seed, tag);
 
                 merge_phi.add_incoming(&[(&answer, block)]);
                 env.builder.build_unconditional_branch(merge_block);
@@ -598,6 +595,7 @@ fn hash_tag<'a, 'ctx, 'env>(
                     );
 
                     // hash tag data
+                    let tag = tag_pointer_clear_tag_id(env, tag);
                     let answer = hash_ptr_to_struct(
                         env,
                         layout_ids,
@@ -661,7 +659,7 @@ fn build_hash_list<'a, 'ctx, 'env>(
 
     let symbol = Symbol::GENERIC_HASH;
     let fn_name = layout_ids
-        .get(symbol, &layout)
+        .get(symbol, layout)
         .to_symbol_string(symbol, &env.interns);
 
     let function = match env.module.get_function(fn_name.as_str()) {
@@ -669,7 +667,7 @@ fn build_hash_list<'a, 'ctx, 'env>(
         None => {
             let seed_type = env.context.i64_type();
 
-            let arg_type = basic_type_from_layout(env, &layout);
+            let arg_type = basic_type_from_layout(env, layout);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -718,8 +716,8 @@ fn build_hash_list_help<'a, 'ctx, 'env>(
     let seed = it.next().unwrap().into_int_value();
     let value = it.next().unwrap().into_struct_value();
 
-    seed.set_name(Symbol::ARG_1.ident_string(&env.interns));
-    value.set_name(Symbol::ARG_2.ident_string(&env.interns));
+    seed.set_name(Symbol::ARG_1.as_str(&env.interns));
+    value.set_name(Symbol::ARG_2.as_str(&env.interns));
 
     let entry = ctx.append_basic_block(parent, "entry");
     env.builder.position_at_end(entry);
@@ -872,7 +870,7 @@ fn store_and_use_as_u8_ptr<'a, 'ctx, 'env>(
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
 ) -> PointerValue<'ctx> {
-    let basic_type = basic_type_from_layout(env, &layout);
+    let basic_type = basic_type_from_layout(env, layout);
     let alloc = env.builder.build_alloca(basic_type, "store");
     env.builder.build_store(alloc, value);
 
@@ -897,7 +895,7 @@ fn hash_bitcode_fn<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[seed.into(), buffer.into(), num_bytes.into()],
-        &bitcode::DICT_HASH,
+        bitcode::DICT_HASH,
     )
     .into_int_value()
 }

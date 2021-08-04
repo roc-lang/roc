@@ -1,6 +1,6 @@
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{Index, MutSet, SendMap};
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::ident::{IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_solve::solve;
 use roc_types::pretty_print::Parens;
@@ -214,7 +214,7 @@ fn report_bad_type<'b>(
             alloc,
             found,
             expected_type,
-            add_category(alloc, this_is, &category),
+            add_category(alloc, this_is, category),
             further_details,
         ),
     ];
@@ -1280,8 +1280,6 @@ fn problems_to_tip<'b>(
 }
 
 pub mod suggest {
-    use core::convert::AsRef;
-    use inlinable_string::InlinableString;
     use roc_module::ident::Lowercase;
 
     pub trait ToStr {
@@ -1300,15 +1298,15 @@ pub mod suggest {
         }
     }
 
-    impl ToStr for InlinableString {
-        fn to_str(&self) -> &str {
-            self.as_ref()
-        }
-    }
-
     impl ToStr for &str {
         fn to_str(&self) -> &str {
             self
+        }
+    }
+
+    impl ToStr for super::IdentStr {
+        fn to_str(&self) -> &str {
+            self.as_str()
         }
     }
 
@@ -1443,7 +1441,7 @@ pub fn to_doc<'b>(
 
         Record(fields_map, ext) => {
             let mut fields = fields_map.into_iter().collect::<Vec<_>>();
-            fields.sort_by(|(a, _), (b, _)| a.cmp(&b));
+            fields.sort_by(|(a, _), (b, _)| a.cmp(b));
 
             report_text::record(
                 alloc,
@@ -1482,7 +1480,7 @@ pub fn to_doc<'b>(
                     )
                 })
                 .collect::<Vec<_>>();
-            tags.sort_by(|(a, _), (b, _)| a.cmp(&b));
+            tags.sort_by(|(a, _), (b, _)| a.cmp(b));
 
             report_text::tag_union(
                 alloc,
@@ -1505,7 +1503,7 @@ pub fn to_doc<'b>(
                     )
                 })
                 .collect::<Vec<_>>();
-            tags.sort_by(|(a, _), (b, _)| a.cmp(&b));
+            tags.sort_by(|(a, _), (b, _)| a.cmp(b));
 
             report_text::recursive_tag_union(
                 alloc,
@@ -2426,11 +2424,11 @@ fn type_problem_to_pretty<'b>(
             }
         },
         TagTypo(typo, possibilities_tn) => {
-            let possibilities = possibilities_tn
+            let possibilities: Vec<IdentStr> = possibilities_tn
                 .into_iter()
-                .map(|tag_name| tag_name.as_string(alloc.interns, alloc.home))
+                .map(|tag_name| tag_name.as_ident_str(alloc.interns, alloc.home))
                 .collect();
-            let typo_str = format!("{}", typo.as_string(alloc.interns, alloc.home));
+            let typo_str = format!("{}", typo.as_ident_str(alloc.interns, alloc.home));
             let suggestions = suggest::sort(&typo_str, possibilities);
 
             match suggestions.get(0) {

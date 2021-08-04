@@ -31,43 +31,39 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
             basic_type_from_layout(env, &closure_data_layout)
         }
         Struct(sorted_fields) => basic_type_from_record(env, sorted_fields),
-        Union(variant) => {
+        Union(union_layout) => {
             use UnionLayout::*;
 
-            let tag_id_type = basic_type_from_layout(env, &variant.tag_id_layout());
+            let tag_id_type = basic_type_from_layout(env, &union_layout.tag_id_layout());
 
-            match variant {
-                NullableWrapped {
+            match union_layout {
+                NonRecursive(tags) => {
+                    let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
+
+                    env.context.struct_type(&[data, tag_id_type], false).into()
+                }
+                Recursive(tags)
+                | NullableWrapped {
                     other_tags: tags, ..
                 } => {
                     let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
 
-                    env.context
-                        .struct_type(&[data, tag_id_type], false)
-                        .ptr_type(AddressSpace::Generic)
-                        .into()
+                    if union_layout.stores_tag_id_as_data(env.ptr_bytes) {
+                        env.context
+                            .struct_type(&[data, tag_id_type], false)
+                            .ptr_type(AddressSpace::Generic)
+                            .into()
+                    } else {
+                        data.ptr_type(AddressSpace::Generic).into()
+                    }
                 }
                 NullableUnwrapped { other_fields, .. } => {
-                    let block =
-                        block_of_memory_slices(env.context, &[&other_fields], env.ptr_bytes);
+                    let block = block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
                     block.ptr_type(AddressSpace::Generic).into()
                 }
                 NonNullableUnwrapped(fields) => {
                     let block = block_of_memory_slices(env.context, &[fields], env.ptr_bytes);
                     block.ptr_type(AddressSpace::Generic).into()
-                }
-                Recursive(tags) => {
-                    let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
-
-                    env.context
-                        .struct_type(&[data, tag_id_type], false)
-                        .ptr_type(AddressSpace::Generic)
-                        .into()
-                }
-                NonRecursive(tags) => {
-                    let data = block_of_memory_slices(env.context, tags, env.ptr_bytes);
-
-                    env.context.struct_type(&[data, tag_id_type], false).into()
                 }
             }
         }
@@ -100,6 +96,7 @@ pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
         Int8 => context.i8_type().as_basic_type_enum(),
         Int1 => context.bool_type().as_basic_type_enum(),
         Usize => ptr_int(context, ptr_bytes).as_basic_type_enum(),
+        Decimal => context.i128_type().as_basic_type_enum(),
         Float128 => context.f128_type().as_basic_type_enum(),
         Float64 => context.f64_type().as_basic_type_enum(),
         Float32 => context.f32_type().as_basic_type_enum(),
@@ -143,16 +140,6 @@ pub fn union_data_is_struct_type<'ctx>(
 ) -> StructType<'ctx> {
     let tag_id_type = context.i64_type();
     context.struct_type(&[struct_type.into(), tag_id_type.into()], false)
-}
-
-pub fn union_data_block_of_memory<'ctx>(
-    context: &'ctx Context,
-    tag_id_int_type: IntType<'ctx>,
-    layouts: &[&[Layout<'_>]],
-    ptr_bytes: u32,
-) -> StructType<'ctx> {
-    let data_type = block_of_memory_slices(context, layouts, ptr_bytes);
-    context.struct_type(&[data_type, tag_id_int_type.into()], false)
 }
 
 pub fn block_of_memory<'ctx>(
@@ -233,4 +220,12 @@ pub fn zig_has_tag_id_type<'a, 'ctx, 'env>(
     env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
 ) -> StructType<'ctx> {
     env.module.get_struct_type("list.HasTagId").unwrap()
+}
+
+pub fn zig_with_overflow_roc_dec<'a, 'ctx, 'env>(
+    env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
+) -> StructType<'ctx> {
+    env.module
+        .get_struct_type("utils.WithOverflow(dec.RocDec)")
+        .unwrap()
 }

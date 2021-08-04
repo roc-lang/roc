@@ -154,11 +154,12 @@ struct VarInfo {
     reference: bool,  // true if the variable may be a reference (aka pointer) at runtime
     persistent: bool, // true if the variable is statically known to be marked a Persistent at runtime
     consume: bool,    // true if the variable RC must be "consumed"
+    reset: bool,      // true if the variable is the result of a Reset operation
 }
 
 type VarMap = MutMap<Symbol, VarInfo>;
-type LiveVarSet = MutSet<Symbol>;
-type JPLiveVarMap = MutMap<JoinPointId, LiveVarSet>;
+pub type LiveVarSet = MutSet<Symbol>;
+pub type JPLiveVarMap = MutMap<JoinPointId, LiveVarSet>;
 
 #[derive(Clone, Debug)]
 struct Context<'a> {
@@ -246,17 +247,16 @@ impl<'a> Context<'a> {
     pub fn new(arena: &'a Bump, param_map: &'a ParamMap<'a>) -> Self {
         let mut vars = MutMap::default();
 
-        for (key, _) in param_map.into_iter() {
-            if let crate::borrow::Key::Declaration(symbol, _) = key {
-                vars.insert(
-                    *symbol,
-                    VarInfo {
-                        reference: false, // assume function symbols are global constants
-                        persistent: true, // assume function symbols are global constants
-                        consume: false,   // no need to consume this variable
-                    },
-                );
-            }
+        for symbol in param_map.iter_symbols() {
+            vars.insert(
+                *symbol,
+                VarInfo {
+                    reference: false, // assume function symbols are global constants
+                    persistent: true, // assume function symbols are global constants
+                    consume: false,   // no need to consume this variable
+                    reset: false,     // reset symbols cannot be passed as function arguments
+                },
+            );
         }
 
         Self {
@@ -310,7 +310,12 @@ impl<'a> Context<'a> {
             return stmt;
         }
 
-        let modify = ModifyRc::Dec(symbol);
+        let modify = if info.reset {
+            ModifyRc::DecRef(symbol)
+        } else {
+            ModifyRc::Dec(symbol)
+        };
+
         self.arena.alloc(Stmt::Refcounting(modify, stmt))
     }
 
@@ -735,7 +740,7 @@ impl<'a> Context<'a> {
     ) -> (&'a Stmt<'a>, LiveVarSet) {
         use Expr::*;
 
-        let mut live_vars = update_live_vars(&v, &b_live_vars);
+        let mut live_vars = update_live_vars(&v, b_live_vars);
         live_vars.remove(&z);
 
         let new_b = match v {
@@ -745,19 +750,13 @@ impl<'a> Context<'a> {
             | Array { elems: ys, .. } => self.add_inc_before_consume_all(
                 ys,
                 self.arena.alloc(Stmt::Let(z, v, l, b)),
-                &b_live_vars,
+                b_live_vars,
             ),
 
             Call(crate::ir::Call {
                 call_type,
                 arguments,
             }) => self.visit_call(z, call_type, arguments, l, b, b_live_vars),
-
-            EmptyArray | Literal(_) | Reset(_) | RuntimeErrorFunction(_) => {
-                // EmptyArray is always stack-allocated
-                // function pointers are persistent
-                self.arena.alloc(Stmt::Let(z, v, l, b))
-            }
 
             StructAtIndex { structure: x, .. } => {
                 let b = self.add_dec_if_needed(x, b, b_live_vars);
@@ -794,6 +793,12 @@ impl<'a> Context<'a> {
 
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
+
+            EmptyArray | Literal(_) | Reset(_) | RuntimeErrorFunction(_) => {
+                // EmptyArray is always stack-allocated
+                // function pointers are persistent
+                self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
         };
 
         (new_b, live_vars)
@@ -812,7 +817,7 @@ impl<'a> Context<'a> {
         // must this value be consumed?
         let consume = consume_call(&self.vars, call);
 
-        self.update_var_info_help(symbol, layout, persistent, consume)
+        self.update_var_info_help(symbol, layout, persistent, consume, false)
     }
 
     fn update_var_info(&self, symbol: Symbol, layout: &Layout<'a>, expr: &Expr<'a>) -> Self {
@@ -823,7 +828,9 @@ impl<'a> Context<'a> {
         // must this value be consumed?
         let consume = consume_expr(&self.vars, expr);
 
-        self.update_var_info_help(symbol, layout, persistent, consume)
+        let reset = matches!(expr, Expr::Reset(_));
+
+        self.update_var_info_help(symbol, layout, persistent, consume, reset)
     }
 
     fn update_var_info_help(
@@ -832,6 +839,7 @@ impl<'a> Context<'a> {
         layout: &Layout<'a>,
         persistent: bool,
         consume: bool,
+        reset: bool,
     ) -> Self {
         // should we perform incs and decs on this value?
         let reference = layout.contains_refcounted();
@@ -840,6 +848,7 @@ impl<'a> Context<'a> {
             reference,
             persistent,
             consume,
+            reset,
         };
 
         let mut ctx = self.clone();
@@ -857,6 +866,7 @@ impl<'a> Context<'a> {
                 reference: p.layout.contains_refcounted(),
                 consume: !p.borrow,
                 persistent: false,
+                reset: false,
             };
             ctx.vars.insert(p.symbol, info);
         }
@@ -955,15 +965,6 @@ impl<'a> Context<'a> {
             } => {
                 // live vars of the whole expression
                 let invoke_live_vars = collect_stmt(stmt, &self.jp_live_vars, MutSet::default());
-
-                // the result of an invoke should not be touched in the fail branch
-                // but it should be present in the pass branch (otherwise it would be dead)
-                // NOTE: we cheat a bit here to allow `invoke` when generating code for `expect`
-                let is_dead = !invoke_live_vars.contains(symbol);
-
-                if is_dead && layout.is_refcounted() {
-                    panic!("A variable of a reference-counted layout is dead; that's a bug!");
-                }
 
                 let fail = {
                     // TODO should we use ctor info like Lean?
@@ -1258,28 +1259,25 @@ fn update_jp_live_vars(j: JoinPointId, ys: &[Param], v: &Stmt<'_>, m: &mut JPLiv
     m.insert(j, j_live_vars);
 }
 
-/// used to process the main function in the repl
-pub fn visit_declaration<'a>(
+pub fn visit_procs<'a>(
     arena: &'a Bump,
     param_map: &'a ParamMap<'a>,
-    stmt: &'a Stmt<'a>,
-) -> &'a Stmt<'a> {
-    let ctx = Context::new(arena, param_map);
-
-    let params = &[] as &[_];
-    let ctx = ctx.update_var_info_with_params(params);
-    let (b, b_live_vars) = ctx.visit_stmt(stmt);
-    ctx.add_dec_for_dead_params(params, b, &b_live_vars)
-}
-
-pub fn visit_proc<'a>(
-    arena: &'a Bump,
-    param_map: &'a ParamMap<'a>,
-    proc: &mut Proc<'a>,
-    layout: ProcLayout<'a>,
+    procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) {
     let ctx = Context::new(arena, param_map);
 
+    for (key, proc) in procs.iter_mut() {
+        visit_proc(arena, param_map, &ctx, proc, key.1);
+    }
+}
+
+fn visit_proc<'a>(
+    arena: &'a Bump,
+    param_map: &'a ParamMap<'a>,
+    ctx: &Context<'a>,
+    proc: &mut Proc<'a>,
+    layout: ProcLayout<'a>,
+) {
     let params = match param_map.get_symbol(proc.name, layout) {
         Some(slice) => slice,
         None => Vec::from_iter_in(

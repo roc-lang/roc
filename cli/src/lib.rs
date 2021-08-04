@@ -94,7 +94,7 @@ pub fn build_app<'a>() -> App<'a> {
                 .arg(Arg::with_name(DIRECTORY_OR_FILES)
                     .index(1)
                     .multiple(true)
-                    .required(true)
+                    .required(false)
                     .help("The directory or files to build documentation for")
 
                 )
@@ -151,8 +151,7 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
         LinkType::Executable
     };
 
-    let path = Path::new(filename).canonicalize().unwrap();
-    let src_dir = path.parent().unwrap().canonicalize().unwrap();
+    let path = Path::new(filename);
 
     // Spawn the root task
     let path = path.canonicalize().unwrap_or_else(|err| {
@@ -173,6 +172,7 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
         }
     });
 
+    let src_dir = path.parent().unwrap().canonicalize().unwrap();
     let res_binary_path = build_file(
         &arena,
         target,

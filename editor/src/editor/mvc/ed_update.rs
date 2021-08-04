@@ -13,7 +13,7 @@ use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_model::SelectedExpression;
 use crate::editor::mvc::int_update::start_new_int;
 use crate::editor::mvc::int_update::update_int;
-use crate::editor::mvc::list_update::{prep_empty_list, start_new_list};
+use crate::editor::mvc::list_update::{add_blank_child, start_new_list};
 use crate::editor::mvc::lookup_update::update_invalid_lookup;
 use crate::editor::mvc::record_update::start_new_record;
 use crate::editor::mvc::record_update::update_empty_record;
@@ -76,6 +76,15 @@ impl<'a> EdModel<'a> {
     pub fn simple_move_carets_right(&mut self, repeat: usize) {
         for caret_tup in self.caret_w_select_vec.iter_mut() {
             caret_tup.0.caret_pos.column += repeat;
+            caret_tup.1 = None;
+        }
+    }
+
+    // disregards EdModel.code_lines because the caller knows the resulting caret position will be valid.
+    // allows us to prevent multiple updates to EdModel.code_lines
+    pub fn simple_move_carets_left(&mut self, repeat: usize) {
+        for caret_tup in self.caret_w_select_vec.iter_mut() {
+            caret_tup.0.caret_pos.column -= repeat;
             caret_tup.1 = None;
         }
     }
@@ -212,7 +221,7 @@ impl<'a> EdModel<'a> {
             if self.grid_node_map.node_exists_at_pos(caret_pos) {
                 let (expr_start_pos, expr_end_pos, ast_node_id, mark_node_id) = self
                     .grid_node_map
-                    .get_expr_start_end_pos(self.get_caret(), &self)?;
+                    .get_expr_start_end_pos(self.get_caret(), self)?;
 
                 self.set_selected_expr(expr_start_pos, expr_end_pos, ast_node_id, mark_node_id)?;
             } else if self
@@ -221,7 +230,7 @@ impl<'a> EdModel<'a> {
             {
                 let (expr_start_pos, expr_end_pos, ast_node_id, mark_node_id) = self
                     .grid_node_map
-                    .get_expr_start_end_pos(self.get_caret().decrement_col(), &self)?;
+                    .get_expr_start_end_pos(self.get_caret().decrement_col(), self)?;
 
                 self.set_selected_expr(expr_start_pos, expr_end_pos, ast_node_id, mark_node_id)?;
             }
@@ -238,7 +247,7 @@ impl<'a> EdModel<'a> {
         let constrained = constrain_expr(
             &arena,
             &mut self.module.env,
-            &expr,
+            expr,
             Expected::NoExpectation(Type2::Variable(var)),
             Region::zero(),
         );
@@ -263,10 +272,10 @@ impl<'a> EdModel<'a> {
 
         let subs = solved.inner_mut();
 
-        let content = subs.get(var).content;
+        let content = subs.get_content_without_compacting(var);
 
         PoolStr::new(
-            &content_to_string(content, &subs, self.module.env.home, self.interns),
+            &content_to_string(content, subs, self.module.env.home, self.interns),
             self.module.env.pool,
         )
     }
@@ -596,7 +605,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                         }
                                         Expr2::SmallStr(old_arr_str) => {
                                             update_small_string(
-                                                &ch, old_arr_str, ed_model
+                                                ch, old_arr_str, ed_model
                                             )?
                                         }
                                         Expr2::Str(old_pool_str) => {
@@ -687,13 +696,13 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                 Expr2::List{ elem_var: _, elems: _} => {
                                                     let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
 
-                                                    if prev_mark_node.get_content()? == nodes::LEFT_SQUARE_BR {
-                                                        if curr_mark_node.get_content()? == nodes::RIGHT_SQUARE_BR {
-                                                            prep_empty_list(ed_model)?; // insert a Blank first, this results in cleaner code
-                                                            handle_new_char(received_char, ed_model)?
-                                                        } else {
-                                                            InputOutcome::Ignored
-                                                        }
+                                                    if prev_mark_node.get_content()? == nodes::LEFT_SQUARE_BR && curr_mark_node.get_content()? == nodes::RIGHT_SQUARE_BR {
+                                                        // based on if, we are at the start of the list
+                                                        let new_child_index = 1;
+                                                        let new_ast_child_index = 0;
+                                                        // insert a Blank first, this results in cleaner code
+                                                        add_blank_child(new_child_index, new_ast_child_index, ed_model)?;
+                                                        handle_new_char(received_char, ed_model)?
                                                     } else {
                                                         InputOutcome::Ignored
                                                     }
@@ -726,19 +735,54 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                     } else {
                                         InputOutcome::Ignored
                                     }
-                                } else if "\"{[".contains(*ch) {
-                                    let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
+                                } else if *ch == ',' {
+                                    if curr_mark_node.get_content()? == nodes::LEFT_SQUARE_BR {
+                                        InputOutcome::Ignored
+                                    } else {
+                                        let mark_parent_id_opt = curr_mark_node.get_parent_id_opt();
 
-                                    if prev_mark_node.get_content()? == nodes::LEFT_SQUARE_BR {
-                                        if curr_mark_node.get_content()? == nodes::RIGHT_SQUARE_BR {
-                                            prep_empty_list(ed_model)?; // insert a Blank first, this results in cleaner code
-                                            handle_new_char(received_char, ed_model)?
+                                        if let Some(mark_parent_id) = mark_parent_id_opt {
+                                            let parent_ast_id = ed_model.markup_node_pool.get(mark_parent_id).get_ast_node_id();
+                                            let parent_expr2 = ed_model.module.env.pool.get(parent_ast_id);
+
+                                            match parent_expr2 {
+                                                Expr2::List { elem_var:_, elems:_} => {
+
+                                                    let (new_child_index, new_ast_child_index) = ed_model.get_curr_child_indices()?;
+                                                    // insert a Blank first, this results in cleaner code
+                                                    add_blank_child(
+                                                        new_child_index,
+                                                        new_ast_child_index,
+                                                        ed_model
+                                                    )?
+                                                }
+                                                Expr2::Record { record_var:_, fields:_ } => {
+                                                    todo!("multiple record fields")
+                                                }
+                                                _ => {
+                                                    InputOutcome::Ignored
+                                                }
+                                            }
                                         } else {
                                             InputOutcome::Ignored
                                         }
+                                    }
+                                } else if "\"{[".contains(*ch) {
+                                    let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
+
+                                    if prev_mark_node.get_content()? == nodes::LEFT_SQUARE_BR && curr_mark_node.get_content()? == nodes::RIGHT_SQUARE_BR {
+                                        let (new_child_index, new_ast_child_index) = ed_model.get_curr_child_indices()?;
+                                        // insert a Blank first, this results in cleaner code
+                                        add_blank_child(
+                                            new_child_index,
+                                            new_ast_child_index,
+                                            ed_model
+                                        )?;
+                                        handle_new_char(received_char, ed_model)?
                                     } else {
                                         InputOutcome::Ignored
                                     }
+
                                 } else {
                                     InputOutcome::Ignored
                                 }
@@ -849,7 +893,13 @@ pub mod test_ed_update {
         let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
 
         for input_char in new_char_seq.chars() {
-            ed_res_to_res(handle_new_char(&input_char, &mut ed_model))?;
+            if input_char == '🡲' {
+                ed_model.simple_move_carets_right(1);
+            } else if input_char == '🡰' {
+                ed_model.simple_move_carets_left(1);
+            } else {
+                ed_res_to_res(handle_new_char(&input_char, &mut ed_model))?;
+            }
         }
 
         let post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
@@ -1523,7 +1573,7 @@ pub mod test_ed_update {
     }
 
     #[test]
-    fn test_list() -> Result<(), String> {
+    fn test_single_elt_list() -> Result<(), String> {
         assert_insert(&["┃"], &["[ ┃ ]"], '[')?;
 
         assert_insert_seq(&["┃"], &["[ 0┃ ]"], "[0")?;
@@ -1559,7 +1609,48 @@ pub mod test_ed_update {
     }
 
     #[test]
-    fn test_ignore_list() -> Result<(), String> {
+    fn test_multi_elt_list() -> Result<(), String> {
+        assert_insert_seq(&["┃"], &["[ 0, 1┃ ]"], "[0,1")?;
+        assert_insert_seq(&["┃"], &["[ 987, 6543, 210┃ ]"], "[987,6543,210")?;
+
+        assert_insert_seq(
+            &["┃"],
+            &["[ \"a\", \"bcd\", \"EFGH┃\" ]"],
+            "[\"a🡲,\"bcd🡲,\"EFGH",
+        )?;
+
+        assert_insert_seq(
+            &["┃"],
+            &["[ { a: 1 }, { b: 23 }, { c: 456┃ } ]"],
+            "[{a:1🡲🡲,{b:23🡲🡲,{c:456",
+        )?;
+
+        assert_insert_seq(&["┃"], &["[ [ 1 ], [ 23 ], [ 456┃ ] ]"], "[[1🡲🡲,[23🡲🡲,[456")?;
+
+        // insert element in between
+        assert_insert_seq(&["┃"], &["[ 0, 2┃, 1 ]"], "[0,1🡰🡰🡰,2")?;
+        assert_insert_seq(&["┃"], &["[ 0, 2, 3┃, 1 ]"], "[0,1🡰🡰🡰,2,3")?;
+        assert_insert_seq(&["┃"], &["[ 0, 3┃, 2, 1 ]"], "[0,1🡰🡰🡰,2🡰🡰🡰,3")?;
+
+        assert_insert_seq(
+            &["┃"],
+            &["[ \"abc\", \"f┃\", \"de\" ]"],
+            "[\"abc🡲,\"de🡰🡰🡰🡰🡰,\"f",
+        )?;
+
+        assert_insert_seq(&["┃"], &["[ [ 0 ], [ 2┃ ], [ 1 ] ]"], "[[0🡲🡲,[1🡰🡰🡰🡰🡰,[2")?;
+
+        assert_insert_seq(
+            &["┃"],
+            &["[ { a: 0 }, { a: 2┃ }, { a: 1 } ]"],
+            "[{a:0🡲🡲,{a:1🡰🡰🡰🡰🡰🡰🡰🡰,{a:2",
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ignore_single_elt_list() -> Result<(), String> {
         assert_insert_seq_ignore(&["┃[  ]"], IGNORE_CHARS)?;
         assert_insert_seq_ignore(&["[  ]┃"], IGNORE_CHARS)?;
         assert_insert_seq_ignore(&["[┃  ]"], IGNORE_CHARS)?;
@@ -1602,6 +1693,51 @@ pub mod test_ed_update {
         assert_insert_seq_ignore(&["[ [  ]┃ ]"], IGNORE_CHARS)?;
         assert_insert_seq_ignore(&["[ [┃  ] ]"], IGNORE_CHARS)?;
         assert_insert_seq_ignore(&["[ [  ┃] ]"], IGNORE_CHARS)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ignore_multi_elt_list() -> Result<(), String> {
+        assert_insert_seq_ignore(&["┃[ 0, 1 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ 0, 1 ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[┃ 0, 1 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ 0, 1 ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ 0,┃ 1 ]"], IGNORE_CHARS)?;
+
+        assert_insert_seq_ignore(&["┃[ 123, 56, 7 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ 123, 56, 7 ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[┃ 123, 56, 7 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ 123, 56, 7 ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ 123,┃ 56, 7 ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ 123, 56,┃ 7 ]"], IGNORE_CHARS)?;
+
+        assert_insert_seq_ignore(&["┃[ \"123\", \"56\", \"7\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ \"123\", \"56\", \"7\" ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[┃ \"123\", \"56\", \"7\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ \"123\", \"56\", \"7\" ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ \"123\",┃ \"56\", \"7\" ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ \"123\", \"56\",┃ \"7\" ]"], IGNORE_CHARS)?;
+
+        assert_insert_seq_ignore(&["┃[ { a: 0 }, { a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ { a: 0 }, { a: 1 } ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[┃ { a: 0 }, { a: 1 } ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ { a: 0 }, { a: 1 } ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ { a: 0 },┃ { a: 1 } ]"], IGNORE_CHARS)?;
+
+        assert_insert_seq_ignore(&["┃[ [ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [ 0 ], [ 1 ] ]┃"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[┃ [ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [ 0 ], [ 1 ] ┃]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [ 0 ],┃ [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ ┃[ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [ 0 ]┃, [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [┃ 0 ], [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [ 0 ┃], [ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [ 0 ], ┃[ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [ 0 ], [┃ 1 ] ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [ 0 ], [ 1 ]┃ ]"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["[ [ 0 ], [ 1 ┃] ]"], IGNORE_CHARS)?;
 
         Ok(())
     }
@@ -1879,7 +2015,11 @@ pub mod test_ed_update {
         let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
 
         for input_char in new_char_seq.chars() {
-            ed_res_to_res(handle_new_char(&input_char, &mut ed_model))?;
+            if input_char == '🡲' {
+                ed_model.simple_move_carets_right(1);
+            } else {
+                ed_res_to_res(handle_new_char(&input_char, &mut ed_model))?;
+            }
         }
 
         for expected_tooltip in expected_tooltips.iter() {
@@ -1903,11 +2043,11 @@ pub mod test_ed_update {
         expected_tooltip: &str,
         new_char: char,
     ) -> Result<(), String> {
-        assert_type_tooltips_seq(pre_lines, &vec![expected_tooltip], &new_char.to_string())
+        assert_type_tooltips_seq(pre_lines, &[expected_tooltip], &new_char.to_string())
     }
 
     pub fn assert_type_tooltip_clean(lines: &[&str], expected_tooltip: &str) -> Result<(), String> {
-        assert_type_tooltips_seq(lines, &vec![expected_tooltip], "")
+        assert_type_tooltips_seq(lines, &[expected_tooltip], "")
     }
 
     // When doing ctrl+shift+up multiple times we select the surrounding expression every time,
@@ -1936,16 +2076,13 @@ pub mod test_ed_update {
         assert_type_tooltip_clean(&["{ ┃z: {  } }"], "{ z : {} }")?;
         assert_type_tooltip_clean(&["{ camelCase: ┃0 }"], "Num *")?;
 
-        assert_type_tooltips_seq(&["┃"], &vec!["*"], "")?;
-        assert_type_tooltips_seq(&["┃"], &vec!["*", "{ a : * }"], "{a:")?;
+        assert_type_tooltips_seq(&["┃"], &["*"], "")?;
+        assert_type_tooltips_seq(&["┃"], &["*", "{ a : * }"], "{a:")?;
 
-        assert_type_tooltips_clean(
-            &["{ camelCase: ┃0 }"],
-            &vec!["Num *", "{ camelCase : Num * }"],
-        )?;
+        assert_type_tooltips_clean(&["{ camelCase: ┃0 }"], &["Num *", "{ camelCase : Num * }"])?;
         assert_type_tooltips_clean(
             &["{ a: { b: { c: \"hello┃, hello.0123456789ZXY{}[]-><-\" } } }"],
-            &vec![
+            &[
                 "Str",
                 "{ c : Str }",
                 "{ b : { c : Str } }",
@@ -1953,13 +2090,18 @@ pub mod test_ed_update {
             ],
         )?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_type_tooltip_list() -> Result<(), String> {
         assert_type_tooltip(&["┃"], "List *", '[')?;
-        assert_type_tooltips_seq(&["┃"], &vec!["List (Num *)"], "[0")?;
-        assert_type_tooltips_seq(&["┃"], &vec!["List (Num *)", "List (List (Num *))"], "[[0")?;
-        assert_type_tooltips_seq(&["┃"], &vec!["Str", "List Str"], "[\"a")?;
+        assert_type_tooltips_seq(&["┃"], &["List (Num *)"], "[0")?;
+        assert_type_tooltips_seq(&["┃"], &["List (Num *)", "List (List (Num *))"], "[[0")?;
+        assert_type_tooltips_seq(&["┃"], &["Str", "List Str"], "[\"a")?;
         assert_type_tooltips_seq(
             &["┃"],
-            &vec![
+            &[
                 "Str",
                 "List Str",
                 "List (List Str)",
@@ -1969,12 +2111,40 @@ pub mod test_ed_update {
         )?;
         assert_type_tooltips_seq(
             &["┃"],
-            &vec![
+            &[
                 "{ a : Num * }",
                 "List { a : Num * }",
                 "List (List { a : Num * })",
             ],
             "[[{a:1",
+        )?;
+
+        // multi element lists
+        assert_type_tooltips_seq(&["┃"], &["List (Num *)"], "[1,2,3")?;
+        assert_type_tooltips_seq(&["┃"], &["Str", "List Str"], "[\"abc🡲,\"de🡲,\"f")?;
+        assert_type_tooltips_seq(
+            &["┃"],
+            &["{ a : Num * }", "List { a : Num * }"],
+            "[{a:0🡲🡲,{a:12🡲🡲,{a:444",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_type_tooltip_mismatch() -> Result<(), String> {
+        assert_type_tooltips_seq(&["┃"], &["Str", "List <type mismatch>"], "[1,\"abc")?;
+        assert_type_tooltips_seq(&["┃"], &["List <type mismatch>"], "[\"abc🡲,50")?;
+
+        assert_type_tooltips_seq(
+            &["┃"],
+            &["Str", "{ a : Str }", "List <type mismatch>"],
+            "[{a:0🡲🡲,{a:\"0",
+        )?;
+
+        assert_type_tooltips_seq(
+            &["┃"],
+            &["List (Num *)", "List (List <type mismatch>)"],
+            "[[0,1,\"2🡲🡲🡲,[3, 4, 5",
         )?;
 
         Ok(())

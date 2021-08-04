@@ -78,7 +78,7 @@ pub fn build_has_tag_id<'a, 'ctx, 'env>(
 
     match env.module.get_function(fn_name) {
         Some(function_value) => function_value,
-        None => build_has_tag_id_help(env, union_layout, &fn_name),
+        None => build_has_tag_id_help(env, union_layout, fn_name),
     }
 }
 
@@ -97,9 +97,9 @@ fn build_has_tag_id_help<'a, 'ctx, 'env>(
 
     let function_value = crate::llvm::refcounting::build_header_help(
         env,
-        &fn_name,
+        fn_name,
         output_type.into(),
-        &argument_types,
+        argument_types,
     );
 
     // called from zig, must use C calling convention
@@ -121,7 +121,7 @@ fn build_has_tag_id_help<'a, 'ctx, 'env>(
         bumpalo::collections::Vec::from_iter_in(it.take(argument_types.len()), env.arena);
 
     for (argument, name) in arguments.iter().zip(ARGUMENT_SYMBOLS.iter()) {
-        argument.set_name(name.ident_string(&env.interns));
+        argument.set_name(name.as_str(&env.interns));
     }
 
     match arguments.as_slice() {
@@ -204,7 +204,7 @@ pub fn build_transform_caller<'a, 'ctx, 'env>(
             function,
             closure_data_layout,
             argument_layouts,
-            &fn_name,
+            fn_name,
         ),
     }
 }
@@ -225,7 +225,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
 
     let function_value = crate::llvm::refcounting::build_header_help(
         env,
-        &fn_name,
+        fn_name,
         env.context.void_type().into(),
         &(bumpalo::vec![ in env.arena; BasicTypeEnum::PointerType(arg_type); argument_layouts.len() + 2 ]),
     );
@@ -245,13 +245,13 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
 
     let mut it = function_value.get_param_iter();
     let closure_ptr = it.next().unwrap().into_pointer_value();
-    closure_ptr.set_name(Symbol::ARG_1.ident_string(&env.interns));
+    closure_ptr.set_name(Symbol::ARG_1.as_str(&env.interns));
 
     let arguments =
         bumpalo::collections::Vec::from_iter_in(it.take(argument_layouts.len()), env.arena);
 
     for (argument, name) in arguments.iter().zip(ARGUMENT_SYMBOLS[1..].iter()) {
-        argument.set_name(name.ident_string(&env.interns));
+        argument.set_name(name.as_str(&env.interns));
     }
 
     let mut arguments_cast =
@@ -394,7 +394,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
 
     let symbol = Symbol::GENERIC_RC_REF;
     let fn_name = layout_ids
-        .get(symbol, &layout)
+        .get(symbol, layout)
         .to_symbol_string(symbol, &env.interns);
 
     let fn_name = match rc_operation {
@@ -439,7 +439,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
             let mut it = function_value.get_param_iter();
             let value_ptr = it.next().unwrap().into_pointer_value();
 
-            value_ptr.set_name(Symbol::ARG_1.ident_string(&env.interns));
+            value_ptr.set_name(Symbol::ARG_1.as_str(&env.interns));
 
             let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 
@@ -457,7 +457,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
                 }
                 Mode::IncN => {
                     let n = it.next().unwrap().into_int_value();
-                    n.set_name(Symbol::ARG_2.ident_string(&env.interns));
+                    n.set_name(Symbol::ARG_2.as_str(&env.interns));
 
                     increment_n_refcount_layout(env, function_value, layout_ids, n, value, layout);
                 }
@@ -489,7 +489,7 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
 
     let symbol = Symbol::GENERIC_EQ_REF;
     let fn_name = layout_ids
-        .get(symbol, &layout)
+        .get(symbol, layout)
         .to_symbol_string(symbol, &env.interns);
 
     let function_value = match env.module.get_function(fn_name.as_str()) {
@@ -521,8 +521,8 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
             let value_ptr1 = it.next().unwrap().into_pointer_value();
             let value_ptr2 = it.next().unwrap().into_pointer_value();
 
-            value_ptr1.set_name(Symbol::ARG_1.ident_string(&env.interns));
-            value_ptr2.set_name(Symbol::ARG_2.ident_string(&env.interns));
+            value_ptr1.set_name(Symbol::ARG_1.as_str(&env.interns));
+            value_ptr2.set_name(Symbol::ARG_2.as_str(&env.interns));
 
             let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 
@@ -576,7 +576,7 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
-                &fn_name,
+                fn_name,
                 env.context.i8_type().into(),
                 &[arg_type.into(), arg_type.into(), arg_type.into()],
             );
@@ -602,9 +602,9 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
             let value_ptr1 = it.next().unwrap().into_pointer_value();
             let value_ptr2 = it.next().unwrap().into_pointer_value();
 
-            closure_ptr.set_name(Symbol::ARG_1.ident_string(&env.interns));
-            value_ptr1.set_name(Symbol::ARG_2.ident_string(&env.interns));
-            value_ptr2.set_name(Symbol::ARG_3.ident_string(&env.interns));
+            closure_ptr.set_name(Symbol::ARG_1.as_str(&env.interns));
+            value_ptr1.set_name(Symbol::ARG_2.as_str(&env.interns));
+            value_ptr2.set_name(Symbol::ARG_3.as_str(&env.interns));
 
             let value_type = basic_type_from_layout(env, layout);
             let value_ptr_type = value_type.ptr_type(AddressSpace::Generic);

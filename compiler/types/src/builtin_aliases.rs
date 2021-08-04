@@ -239,6 +239,16 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
+    // Decimal : [ @Decimal ]
+    add_alias(
+        Symbol::NUM_DECIMAL,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: vec![],
+            typ: decimal_alias_content(),
+        },
+    );
+
     // Binary64 : [ @Binary64 ]
     add_alias(
         Symbol::NUM_BINARY64,
@@ -266,6 +276,16 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: vec![Located::at(Region::zero(), "range".into())],
             typ: floatingpoint_alias_content(flex(TVAR1)),
+        },
+    );
+
+    // Dec : Float Decimal
+    add_alias(
+        Symbol::NUM_DEC,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: float_alias_content(decimal_type()),
         },
     );
 
@@ -655,6 +675,20 @@ pub fn unsigned8_type() -> SolvedType {
 #[inline(always)]
 fn unsigned8_alias_content() -> SolvedType {
     single_private_tag(Symbol::NUM_AT_UNSIGNED8, vec![])
+}
+
+#[inline(always)]
+fn decimal_alias_content() -> SolvedType {
+    single_private_tag(Symbol::NUM_AT_DECIMAL, vec![])
+}
+
+#[inline(always)]
+pub fn decimal_type() -> SolvedType {
+    SolvedType::Alias(
+        Symbol::NUM_DECIMAL,
+        vec![],
+        Box::new(decimal_alias_content()),
+    )
 }
 
 #[inline(always)]

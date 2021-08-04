@@ -22,7 +22,8 @@ fn compile<'a>(raw_branches: Vec<(Guard<'a>, Pattern<'a>, u64)>) -> DecisionTree
         .into_iter()
         .map(|(guard, pattern, index)| Branch {
             goal: index,
-            patterns: vec![(Vec::new(), guard, pattern)],
+            guard,
+            patterns: vec![(Vec::new(), pattern)],
         })
         .collect();
 
@@ -33,9 +34,8 @@ fn compile<'a>(raw_branches: Vec<(Guard<'a>, Pattern<'a>, u64)>) -> DecisionTree
 pub enum Guard<'a> {
     NoGuard,
     Guard {
-        /// Symbol that stores a boolean
-        /// when true this branch is picked, otherwise skipped
-        symbol: Symbol,
+        /// pattern
+        pattern: Pattern<'a>,
         /// after assigning to symbol, the stmt jumps to this label
         id: JoinPointId,
         stmt: Stmt<'a>,
@@ -60,22 +60,19 @@ enum DecisionTree<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 enum GuardedTest<'a> {
-    TestGuarded {
-        test: Test<'a>,
-
-        /// after assigning to symbol, the stmt jumps to this label
-        id: JoinPointId,
-        stmt: Stmt<'a>,
-    },
     // e.g. `_ if True -> ...`
     GuardedNoTest {
+        /// pattern
+        pattern: Pattern<'a>,
         /// after assigning to symbol, the stmt jumps to this label
         id: JoinPointId,
+        /// body
         stmt: Stmt<'a>,
     },
     TestNotGuarded {
         test: Test<'a>,
     },
+    Placeholder,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -136,16 +133,16 @@ impl<'a> Hash for Test<'a> {
 impl<'a> Hash for GuardedTest<'a> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
-            GuardedTest::TestGuarded { test, .. } => {
+            GuardedTest::GuardedNoTest { id, .. } => {
+                state.write_u8(1);
+                id.hash(state);
+            }
+            GuardedTest::TestNotGuarded { test } => {
                 state.write_u8(0);
                 test.hash(state);
             }
-            GuardedTest::GuardedNoTest { .. } => {
-                state.write_u8(1);
-            }
-            GuardedTest::TestNotGuarded { test } => {
+            GuardedTest::Placeholder => {
                 state.write_u8(2);
-                test.hash(state);
             }
         }
     }
@@ -156,22 +153,70 @@ impl<'a> Hash for GuardedTest<'a> {
 #[derive(Clone, Debug, PartialEq)]
 struct Branch<'a> {
     goal: Label,
-    patterns: Vec<(Vec<PathInstruction>, Guard<'a>, Pattern<'a>)>,
+    guard: Guard<'a>,
+    patterns: Vec<(Vec<PathInstruction>, Pattern<'a>)>,
 }
 
 fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
     let branches: Vec<_> = raw_branches.into_iter().map(flatten_patterns).collect();
 
+    debug_assert!(!branches.is_empty());
+
     match check_for_match(&branches) {
-        Some(goal) => DecisionTree::Match(goal),
-        None => {
+        Match::Exact(goal) => DecisionTree::Match(goal),
+
+        Match::GuardOnly => {
+            // the first branch has no more tests to do, but it has an if-guard
+
+            let mut branches = branches;
+            let first = branches.remove(0);
+
+            match first.guard {
+                Guard::NoGuard => unreachable!(),
+
+                Guard::Guard { id, stmt, pattern } => {
+                    let guarded_test = GuardedTest::GuardedNoTest { id, stmt, pattern };
+
+                    // the guard test does not have a path
+                    let path = vec![];
+
+                    // we expect none of the patterns need tests, those decisions should have been made already
+                    debug_assert!(first
+                        .patterns
+                        .iter()
+                        .all(|(_, pattern)| !needs_tests(pattern)));
+
+                    let default = if branches.is_empty() {
+                        None
+                    } else {
+                        Some(Box::new(to_decision_tree(branches)))
+                    };
+
+                    DecisionTree::Decision {
+                        path,
+                        edges: vec![(guarded_test, DecisionTree::Match(first.goal))],
+                        default,
+                    }
+                }
+            }
+        }
+
+        Match::None => {
             // must clone here to release the borrow on `branches`
             let path = pick_path(&branches).clone();
+
+            let bs = branches.clone();
             let (edges, fallback) = gather_edges(branches, &path);
 
             let mut decision_edges: Vec<_> = edges
                 .into_iter()
-                .map(|(a, b)| (a, to_decision_tree(b)))
+                .map(|(test, branches)| {
+                    if bs == branches {
+                        panic!();
+                    } else {
+                        (test, to_decision_tree(branches))
+                    }
+                })
                 .collect();
 
             match (decision_edges.as_slice(), fallback.as_slice()) {
@@ -181,21 +226,55 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
                     // get the `_decision_tree` without cloning
                     decision_edges.pop().unwrap().1
                 }
-                (_, []) => DecisionTree::Decision {
-                    path,
-                    edges: decision_edges,
-                    default: None,
-                },
+                (_, []) => break_out_guard(path, decision_edges, None),
                 ([], _) => {
                     // should be guaranteed by the patterns
                     debug_assert!(!fallback.is_empty());
                     to_decision_tree(fallback)
                 }
-                (_, _) => DecisionTree::Decision {
+                (_, _) => break_out_guard(
                     path,
-                    edges: decision_edges,
-                    default: Some(Box::new(to_decision_tree(fallback))),
-                },
+                    decision_edges,
+                    Some(Box::new(to_decision_tree(fallback))),
+                ),
+            }
+        }
+    }
+}
+
+/// Give a guard it's own Decision
+fn break_out_guard<'a>(
+    path: Vec<PathInstruction>,
+    mut edges: Vec<(GuardedTest<'a>, DecisionTree<'a>)>,
+    default: Option<Box<DecisionTree<'a>>>,
+) -> DecisionTree<'a> {
+    match edges
+        .iter()
+        .position(|(t, _)| matches!(t, GuardedTest::Placeholder))
+    {
+        None => DecisionTree::Decision {
+            path,
+            edges,
+            default,
+        },
+        Some(index) => {
+            let (a, b) = edges.split_at_mut(index + 1);
+
+            let new_default = break_out_guard(path.clone(), b.to_vec(), default);
+
+            let mut left = a.to_vec();
+            let guard = left.pop().unwrap();
+
+            let help = DecisionTree::Decision {
+                path: path.clone(),
+                edges: vec![guard],
+                default: Some(Box::new(new_default)),
+            };
+
+            DecisionTree::Decision {
+                path,
+                edges: left,
+                default: Some(Box::new(help)),
             }
         }
     }
@@ -205,10 +284,14 @@ fn guarded_tests_are_complete(tests: &[GuardedTest]) -> bool {
     let length = tests.len();
     debug_assert!(length > 0);
 
+    let no_guard = tests
+        .iter()
+        .all(|t| matches!(t, GuardedTest::TestNotGuarded { .. }));
+
     match tests.last().unwrap() {
-        GuardedTest::TestGuarded { .. } => false,
+        GuardedTest::Placeholder => false,
         GuardedTest::GuardedNoTest { .. } => false,
-        GuardedTest::TestNotGuarded { test } => tests_are_complete_help(test, length),
+        GuardedTest::TestNotGuarded { test } => no_guard && tests_are_complete_help(test, length),
     }
 }
 
@@ -231,16 +314,16 @@ fn flatten_patterns(branch: Branch) -> Branch {
     }
 
     Branch {
-        goal: branch.goal,
         patterns: result,
+        ..branch
     }
 }
 
 fn flatten<'a>(
-    path_pattern: (Vec<PathInstruction>, Guard<'a>, Pattern<'a>),
-    path_patterns: &mut Vec<(Vec<PathInstruction>, Guard<'a>, Pattern<'a>)>,
+    path_pattern: (Vec<PathInstruction>, Pattern<'a>),
+    path_patterns: &mut Vec<(Vec<PathInstruction>, Pattern<'a>)>,
 ) {
-    match path_pattern.2 {
+    match path_pattern.1 {
         Pattern::AppliedTag {
             union,
             arguments,
@@ -257,7 +340,6 @@ fn flatten<'a>(
                 // NOTE here elm will unbox, but we don't use that
                 path_patterns.push((
                     path,
-                    path_pattern.1.clone(),
                     Pattern::AppliedTag {
                         union,
                         arguments,
@@ -274,15 +356,7 @@ fn flatten<'a>(
                         tag_id,
                     });
 
-                    flatten(
-                        (
-                            new_path,
-                            // same guard here?
-                            path_pattern.1.clone(),
-                            arg_pattern.clone(),
-                        ),
-                        path_patterns,
-                    );
+                    flatten((new_path, arg_pattern.clone()), path_patterns);
                 }
             }
         }
@@ -299,21 +373,33 @@ fn flatten<'a>(
 /// path. If that is the case we give the resulting label and a mapping from free
 /// variables to "how to get their value". So a pattern like (Just (x,_)) will give
 /// us something like ("x" => value.0.0)
-fn check_for_match(branches: &[Branch]) -> Option<Label> {
+
+enum Match {
+    Exact(Label),
+    GuardOnly,
+    None,
+}
+
+fn check_for_match(branches: &[Branch]) -> Match {
     match branches.get(0) {
-        Some(Branch { goal, patterns })
-            if patterns
-                .iter()
-                .all(|(_, guard, pattern)| guard.is_none() && !needs_tests(pattern)) =>
-        {
-            Some(*goal)
+        Some(Branch {
+            goal,
+            patterns,
+            guard,
+        }) if patterns.iter().all(|(_, pattern)| !needs_tests(pattern)) => {
+            if guard.is_none() {
+                Match::Exact(*goal)
+            } else {
+                Match::GuardOnly
+            }
         }
-        _ => None,
+        _ => Match::None,
     }
 }
 
 /// GATHER OUTGOING EDGES
 
+// my understanding: branches that we could jump to based on the pattern at the current path
 fn gather_edges<'a>(
     branches: Vec<Branch<'a>>,
     path: &[PathInstruction],
@@ -351,7 +437,7 @@ fn tests_at_path<'a>(
     let mut all_tests = Vec::new();
 
     for branch in branches {
-        test_at_path(selected_path, branch, &mut all_tests);
+        all_tests.extend(test_at_path(selected_path, branch));
     }
 
     // The rust HashMap also uses equality, here we really want to use the custom hash function
@@ -382,28 +468,26 @@ fn tests_at_path<'a>(
 fn test_at_path<'a>(
     selected_path: &[PathInstruction],
     branch: &Branch<'a>,
-    guarded_tests: &mut Vec<GuardedTest<'a>>,
-) {
+) -> Option<GuardedTest<'a>> {
     use Pattern::*;
     use Test::*;
 
     match branch
         .patterns
         .iter()
-        .find(|(path, _, _)| path == selected_path)
+        .find(|(path, _)| path == selected_path)
     {
-        None => {}
-        Some((_, guard, pattern)) => {
+        None => None,
+        Some((_, pattern)) => {
             let test = match pattern {
                 Identifier(_) | Underscore => {
-                    if let Guard::Guard { id, stmt, .. } = guard {
-                        guarded_tests.push(GuardedTest::GuardedNoTest {
-                            stmt: stmt.clone(),
-                            id: *id,
-                        });
+                    if let Guard::Guard { .. } = &branch.guard {
+                        // no tests for this pattern remain, but we cannot discard it yet
+                        // because it has a guard!
+                        return Some(GuardedTest::Placeholder);
+                    } else {
+                        return None;
                     }
-
-                    return;
                 }
 
                 RecordDestructure(destructs, _) => {
@@ -475,23 +559,16 @@ fn test_at_path<'a>(
                 StrLiteral(v) => IsStr(v.clone()),
             };
 
-            let guarded_test = if let Guard::Guard { id, stmt, .. } = guard {
-                GuardedTest::TestGuarded {
-                    test,
-                    stmt: stmt.clone(),
-                    id: *id,
-                }
-            } else {
-                GuardedTest::TestNotGuarded { test }
-            };
+            let guarded_test = GuardedTest::TestNotGuarded { test };
 
-            guarded_tests.push(guarded_test);
+            Some(guarded_test)
         }
     }
 }
 
 /// BUILD EDGES
 
+// understanding: if the test is successful, where could we go?
 fn edges_for<'a>(
     path: &[PathInstruction],
     branches: Vec<Branch<'a>>,
@@ -499,8 +576,22 @@ fn edges_for<'a>(
 ) -> (GuardedTest<'a>, Vec<Branch<'a>>) {
     let mut new_branches = Vec::new();
 
-    for branch in branches.iter() {
-        to_relevant_branch(&test, path, branch, &mut new_branches);
+    // if we test for a guard, skip all branches until one that has a guard
+
+    let it = match test {
+        GuardedTest::GuardedNoTest { .. } | GuardedTest::Placeholder => {
+            let index = branches
+                .iter()
+                .position(|b| !b.guard.is_none())
+                .expect("if testing for a guard, one branch must have a guard");
+
+            branches[index..].iter()
+        }
+        GuardedTest::TestNotGuarded { .. } => branches.iter(),
+    };
+
+    for branch in it {
+        new_branches.extend(to_relevant_branch(&test, path, branch));
     }
 
     (test, new_branches)
@@ -510,59 +601,38 @@ fn to_relevant_branch<'a>(
     guarded_test: &GuardedTest<'a>,
     path: &[PathInstruction],
     branch: &Branch<'a>,
-    new_branches: &mut Vec<Branch<'a>>,
-) {
+) -> Option<Branch<'a>> {
     // TODO remove clone
     match extract(path, branch.patterns.clone()) {
-        Extract::NotFound => {
-            new_branches.push(branch.clone());
-        }
+        Extract::NotFound => Some(branch.clone()),
         Extract::Found {
             start,
-            found_pattern: (guard, pattern),
+            found_pattern: pattern,
             end,
-        } => {
-            let actual_test = match guarded_test {
-                GuardedTest::TestGuarded { test, .. } => test,
-                GuardedTest::GuardedNoTest { .. } => {
-                    let mut new_branch = branch.clone();
+        } => match guarded_test {
+            GuardedTest::Placeholder | GuardedTest::GuardedNoTest { .. } => {
+                // if there is no test, the pattern should not require any
+                debug_assert!(
+                    matches!(pattern, Pattern::Identifier(_) | Pattern::Underscore,),
+                    "{:?}",
+                    pattern,
+                );
 
-                    // guards can/should only occur at the top level. When we recurse on these
-                    // branches, the guard is not relevant any more. Not setthing the guard to None
-                    // leads to infinite recursion.
-                    new_branch.patterns.iter_mut().for_each(|(_, guard, _)| {
-                        *guard = Guard::NoGuard;
-                    });
-
-                    new_branches.push(new_branch);
-                    return;
-                }
-                GuardedTest::TestNotGuarded { test } => test,
-            };
-
-            if let Some(mut new_branch) =
-                to_relevant_branch_help(actual_test, path, start, end, branch, guard, pattern)
-            {
-                // guards can/should only occur at the top level. When we recurse on these
-                // branches, the guard is not relevant any more. Not setthing the guard to None
-                // leads to infinite recursion.
-                new_branch.patterns.iter_mut().for_each(|(_, guard, _)| {
-                    *guard = Guard::NoGuard;
-                });
-
-                new_branches.push(new_branch);
+                Some(branch.clone())
             }
-        }
+            GuardedTest::TestNotGuarded { test } => {
+                to_relevant_branch_help(test, path, start, end, branch, pattern)
+            }
+        },
     }
 }
 
 fn to_relevant_branch_help<'a>(
     test: &Test<'a>,
     path: &[PathInstruction],
-    mut start: Vec<(Vec<PathInstruction>, Guard<'a>, Pattern<'a>)>,
-    end: Vec<(Vec<PathInstruction>, Guard<'a>, Pattern<'a>)>,
+    mut start: Vec<(Vec<PathInstruction>, Pattern<'a>)>,
+    end: Vec<(Vec<PathInstruction>, Pattern<'a>)>,
     branch: &Branch<'a>,
-    guard: Guard<'a>,
     pattern: Pattern<'a>,
 ) -> Option<Branch<'a>> {
     use Pattern::*;
@@ -590,13 +660,14 @@ fn to_relevant_branch_help<'a>(
                         tag_id: *tag_id,
                     });
 
-                    (new_path, Guard::NoGuard, pattern)
+                    (new_path, pattern)
                 });
                 start.extend(sub_positions);
                 start.extend(end);
 
                 Some(Branch {
                     goal: branch.goal,
+                    guard: branch.guard.clone(),
                     patterns: start,
                 })
             }
@@ -626,13 +697,14 @@ fn to_relevant_branch_help<'a>(
                                 index: index as u64,
                                 tag_id,
                             });
-                            (new_path, Guard::NoGuard, pattern)
+                            (new_path, pattern)
                         });
                 start.extend(sub_positions);
                 start.extend(end);
 
                 Some(Branch {
                     goal: branch.goal,
+                    guard: branch.guard.clone(),
                     patterns: start,
                 })
             }
@@ -665,7 +737,7 @@ fn to_relevant_branch_help<'a>(
                             {
                                 // NOTE here elm unboxes, but we ignore that
                                 // Path::Unbox(Box::new(path.clone()))
-                                start.push((path.to_vec(), guard, arg.0));
+                                start.push((path.to_vec(), arg.0));
                                 start.extend(end);
                             }
                         }
@@ -680,7 +752,7 @@ fn to_relevant_branch_help<'a>(
                                             index: index as u64,
                                             tag_id,
                                         });
-                                        (new_path, Guard::NoGuard, pattern)
+                                        (new_path, pattern)
                                     });
                             start.extend(sub_positions);
                             start.extend(end);
@@ -699,7 +771,7 @@ fn to_relevant_branch_help<'a>(
                                             index: index as u64,
                                             tag_id,
                                         });
-                                        (new_path, Guard::NoGuard, pattern)
+                                        (new_path, pattern)
                                     });
                             start.extend(sub_positions);
                             start.extend(end);
@@ -708,6 +780,7 @@ fn to_relevant_branch_help<'a>(
 
                     Some(Branch {
                         goal: branch.goal,
+                        guard: branch.guard.clone(),
                         patterns: start,
                     })
                 }
@@ -719,6 +792,7 @@ fn to_relevant_branch_help<'a>(
                 start.extend(end);
                 Some(Branch {
                     goal: branch.goal,
+                    guard: branch.guard.clone(),
                     patterns: start,
                 })
             }
@@ -730,6 +804,7 @@ fn to_relevant_branch_help<'a>(
                 start.extend(end);
                 Some(Branch {
                     goal: branch.goal,
+                    guard: branch.guard.clone(),
                     patterns: start,
                 })
             }
@@ -741,6 +816,7 @@ fn to_relevant_branch_help<'a>(
                 start.extend(end);
                 Some(Branch {
                     goal: branch.goal,
+                    guard: branch.guard.clone(),
                     patterns: start,
                 })
             }
@@ -752,6 +828,7 @@ fn to_relevant_branch_help<'a>(
                 start.extend(end);
                 Some(Branch {
                     goal: branch.goal,
+                    guard: branch.guard.clone(),
                     patterns: start,
                 })
             }
@@ -765,6 +842,7 @@ fn to_relevant_branch_help<'a>(
                 start.extend(end);
                 Some(Branch {
                     goal: branch.goal,
+                    guard: branch.guard.clone(),
                     patterns: start,
                 })
             }
@@ -777,15 +855,15 @@ fn to_relevant_branch_help<'a>(
 enum Extract<'a> {
     NotFound,
     Found {
-        start: Vec<(Vec<PathInstruction>, Guard<'a>, Pattern<'a>)>,
-        found_pattern: (Guard<'a>, Pattern<'a>),
-        end: Vec<(Vec<PathInstruction>, Guard<'a>, Pattern<'a>)>,
+        start: Vec<(Vec<PathInstruction>, Pattern<'a>)>,
+        found_pattern: Pattern<'a>,
+        end: Vec<(Vec<PathInstruction>, Pattern<'a>)>,
     },
 }
 
 fn extract<'a>(
     selected_path: &[PathInstruction],
-    path_patterns: Vec<(Vec<PathInstruction>, Guard<'a>, Pattern<'a>)>,
+    path_patterns: Vec<(Vec<PathInstruction>, Pattern<'a>)>,
 ) -> Extract<'a> {
     let mut start = Vec::new();
 
@@ -795,7 +873,7 @@ fn extract<'a>(
         if current.0 == selected_path {
             return Extract::Found {
                 start,
-                found_pattern: (current.1, current.2),
+                found_pattern: current.1,
                 end: it.collect::<Vec<_>>(),
             };
         } else {
@@ -812,10 +890,10 @@ fn is_irrelevant_to<'a>(selected_path: &[PathInstruction], branch: &Branch<'a>) 
     match branch
         .patterns
         .iter()
-        .find(|(path, _, _)| path == selected_path)
+        .find(|(path, _)| path == selected_path)
     {
         None => true,
-        Some((_, guard, pattern)) => guard.is_none() && !needs_tests(pattern),
+        Some((_, pattern)) => branch.guard.is_none() && !needs_tests(pattern),
     }
 }
 
@@ -843,8 +921,10 @@ fn pick_path<'a>(branches: &'a [Branch]) -> &'a Vec<PathInstruction> {
 
     // is choice path
     for branch in branches {
-        for (path, guard, pattern) in &branch.patterns {
-            if !guard.is_none() || needs_tests(&pattern) {
+        for (path, pattern) in &branch.patterns {
+            // NOTE we no longer check for the guard here
+            // if !branch.guard.is_none() || needs_tests(&pattern) {
+            if needs_tests(pattern) {
                 all_paths.push(path);
             } else {
                 // do nothing
@@ -916,7 +996,7 @@ where
             let mut min_paths = vec![first_path];
 
             for path in all_paths {
-                let weight = small_defaults(branches, &path);
+                let weight = small_defaults(branches, path);
 
                 use std::cmp::Ordering;
                 match weight.cmp(&min_weight) {
@@ -960,6 +1040,7 @@ enum Decider<'a, T> {
         /// after assigning to symbol, the stmt jumps to this label
         id: JoinPointId,
         stmt: Stmt<'a>,
+        pattern: Pattern<'a>,
 
         success: Box<Decider<'a, T>>,
         failure: Box<Decider<'a, T>>,
@@ -997,11 +1078,15 @@ pub fn optimize_when<'a>(
         .into_iter()
         .enumerate()
         .map(|(index, (pattern, guard, branch))| {
-            ((guard, pattern, index as u64), (index as u64, branch))
+            let has_guard = !guard.is_none();
+            (
+                (guard, pattern.clone(), index as u64),
+                (index as u64, branch, pattern, has_guard),
+            )
         })
         .unzip();
 
-    let indexed_branches: Vec<(u64, Stmt<'a>)> = _indexed_branches;
+    let indexed_branches: Vec<_> = _indexed_branches;
 
     let decision_tree = compile(patterns);
     let decider = tree_to_decider(decision_tree);
@@ -1013,7 +1098,14 @@ pub fn optimize_when<'a>(
     let mut choices = MutMap::default();
     let mut jumps = Vec::new();
 
-    for (index, branch) in indexed_branches.into_iter() {
+    for (index, mut branch, pattern, has_guard) in indexed_branches.into_iter() {
+        // bind the fields referenced in the pattern. For guards this happens separately, so
+        // the pattern variables are defined when evaluating the guard.
+        if !has_guard {
+            branch =
+                crate::ir::store_pattern(env, procs, layout_cache, &pattern, cond_symbol, branch);
+        }
+
         let ((branch_index, choice), opt_jump) = create_choices(&target_counts, index, branch);
 
         if let Some((index, body)) = opt_jump {
@@ -1125,15 +1217,9 @@ fn test_to_equality<'a>(
     cond_layout: &Layout<'a>,
     path: &[PathInstruction],
     test: Test<'a>,
-) -> (
-    StoresVec<'a>,
-    Symbol,
-    Symbol,
-    Layout<'a>,
-    Option<ConstructorKnown<'a>>,
-) {
+) -> (StoresVec<'a>, Symbol, Symbol, Option<ConstructorKnown<'a>>) {
     let (rhs_symbol, mut stores, test_layout) =
-        path_to_expr_help(env, cond_symbol, &path, *cond_layout);
+        path_to_expr_help(env, cond_symbol, path, *cond_layout);
 
     match test {
         Test::IsCtor { tag_id, union, .. } => {
@@ -1163,7 +1249,6 @@ fn test_to_equality<'a>(
                         stores,
                         lhs_symbol,
                         rhs_symbol,
-                        Layout::Builtin(Builtin::Int64),
                         Some(ConstructorKnown::OnlyPass {
                             scrutinee: path_symbol,
                             layout: *cond_layout,
@@ -1181,13 +1266,7 @@ fn test_to_equality<'a>(
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Int64), lhs));
 
-            (
-                stores,
-                lhs_symbol,
-                rhs_symbol,
-                Layout::Builtin(Builtin::Int64),
-                None,
-            )
+            (stores, lhs_symbol, rhs_symbol, None)
         }
 
         Test::IsFloat(test_int) => {
@@ -1197,13 +1276,7 @@ fn test_to_equality<'a>(
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Float64), lhs));
 
-            (
-                stores,
-                lhs_symbol,
-                rhs_symbol,
-                Layout::Builtin(Builtin::Float64),
-                None,
-            )
+            (stores, lhs_symbol, rhs_symbol, None)
         }
 
         Test::IsByte {
@@ -1213,13 +1286,7 @@ fn test_to_equality<'a>(
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Int8), lhs));
 
-            (
-                stores,
-                lhs_symbol,
-                rhs_symbol,
-                Layout::Builtin(Builtin::Int8),
-                None,
-            )
+            (stores, lhs_symbol, rhs_symbol, None)
         }
 
         Test::IsBit(test_bit) => {
@@ -1227,13 +1294,7 @@ fn test_to_equality<'a>(
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Int1), lhs));
 
-            (
-                stores,
-                lhs_symbol,
-                rhs_symbol,
-                Layout::Builtin(Builtin::Int1),
-                None,
-            )
+            (stores, lhs_symbol, rhs_symbol, None)
         }
 
         Test::IsStr(test_str) => {
@@ -1242,13 +1303,7 @@ fn test_to_equality<'a>(
 
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Str), lhs));
 
-            (
-                stores,
-                lhs_symbol,
-                rhs_symbol,
-                Layout::Builtin(Builtin::Str),
-                None,
-            )
+            (stores, lhs_symbol, rhs_symbol, None)
         }
     }
 }
@@ -1257,7 +1312,6 @@ type Tests<'a> = std::vec::Vec<(
     bumpalo::collections::Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
     Symbol,
     Symbol,
-    Layout<'a>,
     Option<ConstructorKnown<'a>>,
 )>;
 
@@ -1271,13 +1325,7 @@ fn stores_and_condition<'a>(
 
     // Assumption: there is at most 1 guard, and it is the outer layer.
     for (path, test) in test_chain {
-        tests.push(test_to_equality(
-            env,
-            cond_symbol,
-            &cond_layout,
-            &path,
-            test,
-        ))
+        tests.push(test_to_equality(env, cond_symbol, cond_layout, &path, test))
     }
 
     tests
@@ -1403,7 +1451,7 @@ fn compile_tests<'a>(
     fail: &'a Stmt<'a>,
     mut cond: Stmt<'a>,
 ) -> Stmt<'a> {
-    for (new_stores, lhs, rhs, _layout, opt_constructor_info) in tests.into_iter() {
+    for (new_stores, lhs, rhs, opt_constructor_info) in tests.into_iter() {
         match opt_constructor_info {
             None => {
                 cond = compile_test(env, ret_layout, new_stores, lhs, rhs, fail, cond);
@@ -1486,7 +1534,7 @@ fn decide_to_branching<'a>(
     match decider {
         Leaf(Jump(label)) => {
             let index = jumps
-                .binary_search_by_key(&label, |ref r| r.0)
+                .binary_search_by_key(&label, |r| r.0)
                 .expect("jump not in list of jumps");
 
             Stmt::Jump(jumps[index].1, &[])
@@ -1495,6 +1543,7 @@ fn decide_to_branching<'a>(
         Guarded {
             id,
             stmt,
+            pattern,
             success,
             failure,
         } => {
@@ -1540,12 +1589,14 @@ fn decide_to_branching<'a>(
                 borrow: false,
             };
 
-            Stmt::Join {
+            let join = Stmt::Join {
                 id,
                 parameters: arena.alloc([param]),
                 remainder: arena.alloc(stmt),
                 body: arena.alloc(decide),
-            }
+            };
+
+            crate::ir::store_pattern(env, procs, layout_cache, &pattern, cond_symbol, join)
         }
         Chain {
             test_chain,
@@ -1589,7 +1640,7 @@ fn decide_to_branching<'a>(
             if number_of_tests == 1 {
                 // if there is just one test, compile to a simple if-then-else
 
-                let (new_stores, lhs, rhs, _layout, _cinfo) = tests.into_iter().next().unwrap();
+                let (new_stores, lhs, rhs, _cinfo) = tests.into_iter().next().unwrap();
 
                 compile_test_help(
                     env,
@@ -1835,7 +1886,7 @@ fn fanout_decider<'a>(
     let fallback_decider = tree_to_decider(fallback);
     let necessary_tests = edges
         .into_iter()
-        .map(|(test, tree)| fanout_decider_help(tree, test, &fallback_decider))
+        .map(|(test, tree)| fanout_decider_help(tree, test))
         .collect();
 
     Decider::FanOut {
@@ -1848,25 +1899,15 @@ fn fanout_decider<'a>(
 fn fanout_decider_help<'a>(
     dectree: DecisionTree<'a>,
     guarded_test: GuardedTest<'a>,
-    fallback_decider: &Decider<'a, u64>,
 ) -> (Test<'a>, Decider<'a, u64>) {
-    let decider = tree_to_decider(dectree);
-
     match guarded_test {
-        GuardedTest::TestGuarded { test, id, stmt } => {
-            let guarded = Decider::Guarded {
-                id,
-                stmt,
-                success: Box::new(decider),
-                failure: Box::new(fallback_decider.clone()),
-            };
-
-            (test, guarded)
-        }
-        GuardedTest::GuardedNoTest { .. } => {
+        GuardedTest::Placeholder | GuardedTest::GuardedNoTest { .. } => {
             unreachable!("this would not end up in a switch")
         }
-        GuardedTest::TestNotGuarded { test } => (test, decider),
+        GuardedTest::TestNotGuarded { test } => {
+            let decider = tree_to_decider(dectree);
+            (test, decider)
+        }
     }
 }
 
@@ -1877,30 +1918,14 @@ fn chain_decider<'a>(
     success_tree: DecisionTree<'a>,
 ) -> Decider<'a, u64> {
     match guarded_test {
-        GuardedTest::TestGuarded { test, id, stmt } => {
-            let failure = Box::new(tree_to_decider(failure_tree));
-            let success = Box::new(tree_to_decider(success_tree));
-
-            let guarded = Decider::Guarded {
-                id,
-                stmt,
-                success,
-                failure: failure.clone(),
-            };
-
-            Decider::Chain {
-                test_chain: vec![(path, test)],
-                success: Box::new(guarded),
-                failure,
-            }
-        }
-        GuardedTest::GuardedNoTest { id, stmt } => {
+        GuardedTest::GuardedNoTest { id, stmt, pattern } => {
             let failure = Box::new(tree_to_decider(failure_tree));
             let success = Box::new(tree_to_decider(success_tree));
 
             Decider::Guarded {
                 id,
                 stmt,
+                pattern,
                 success,
                 failure: failure.clone(),
             }
@@ -1911,6 +1936,11 @@ fn chain_decider<'a>(
             } else {
                 to_chain(path, test, success_tree, failure_tree)
             }
+        }
+
+        GuardedTest::Placeholder => {
+            // ?
+            tree_to_decider(success_tree)
         }
     }
 }
@@ -2022,11 +2052,13 @@ fn insert_choices<'a>(
         Guarded {
             id,
             stmt,
+            pattern,
             success,
             failure,
         } => Guarded {
             id,
             stmt,
+            pattern,
             success: Box::new(insert_choices(choice_dict, *success)),
             failure: Box::new(insert_choices(choice_dict, *failure)),
         },

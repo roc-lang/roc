@@ -7,9 +7,9 @@ use criterion::{
 
 fn bench_group_wall_time(c: &mut Criterion) {
     let mut group = c.benchmark_group("bench-group_wall-time");
-    // calculate statistics based on a fixed(flat) 300 runs
+    // calculate statistics based on a fixed(flat) 200 runs
     group.sampling_mode(SamplingMode::Flat);
-    group.sample_size(300);
+    group.sample_size(200);
 
     let bench_funcs: Vec<fn(Option<&mut BenchmarkGroup<WallTime>>) -> ()> = vec![
         bench_nqueens,       // queens 11

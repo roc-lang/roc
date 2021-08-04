@@ -1,5 +1,5 @@
-use crate::editor::slow_pool::MarkNodeId;
 use crate::ui::ui_error::UIResult;
+use crate::{editor::slow_pool::MarkNodeId, ui::text::text_pos::TextPos};
 use colored::*;
 use snafu::{Backtrace, ErrorCompat, NoneError, ResultExt, Snafu};
 
@@ -112,6 +112,15 @@ pub enum EdError {
     },
 
     #[snafu(display(
+        "NoNodeAtCaretPosition: there was no node at the current caret position {:?}.",
+        caret_pos,
+    ))]
+    NoNodeAtCaretPosition {
+        caret_pos: TextPos,
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display(
         "UnexpectedASTNode: required a {} at this position, node was a {}.",
         required_node_type,
         encountered_node_type
@@ -185,7 +194,7 @@ fn color_backtrace(backtrace: &snafu::Backtrace) -> String {
 
     for line in backtrace_split {
         let new_line = if line.contains("src") {
-            if !contains_one_of(&line, &irrelevant_src) {
+            if !contains_one_of(line, &irrelevant_src) {
                 if let Some(prev_line) = prev_line_opt {
                     prev_line_opt = Some(format!("{}", prev_line.truecolor(255, 30, 30)));
                 }

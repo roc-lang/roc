@@ -1280,7 +1280,7 @@ fn linked_list_singleton() {
 }
 
 #[test]
-fn recursive_functon_with_rigid() {
+fn recursive_function_with_rigid() {
     assert_non_opt_evals_to!(
         indoc!(
             r#"
@@ -1555,9 +1555,9 @@ fn rbtree_balance_full() {
                 balance Red 0 0 Empty Empty
             "#
         ),
-        false,
-        *const i64,
-        |x: *const i64| x.is_null()
+        true,
+        usize,
+        |x| x != 0
     );
 }
 
@@ -1882,7 +1882,7 @@ fn hof_conditional() {
 
 #[test]
 #[should_panic(
-    expected = "Roc failed with message: \"Shadowing { original_region: |L 3-3, C 4-5|, shadow: |L 6-6, C 8-9| Ident(\\\"x\\\") }\""
+    expected = "Roc failed with message: \"Shadowing { original_region: |L 3-3, C 4-5|, shadow: |L 6-6, C 8-9| Ident"
 )]
 fn pattern_shadowing() {
     assert_evals_to!(
@@ -2361,7 +2361,7 @@ fn backpassing_result() {
 
 #[test]
 #[should_panic(
-    expected = "Shadowing { original_region: |L 3-3, C 4-5|, shadow: |L 5-5, C 6-7| Ident(\\\"x\\\") }"
+    expected = "Shadowing { original_region: |L 3-3, C 4-5|, shadow: |L 5-5, C 6-7| Ident"
 )]
 fn function_malformed_pattern() {
     assert_evals_to!(

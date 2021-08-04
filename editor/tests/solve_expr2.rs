@@ -114,14 +114,14 @@ fn infer_eq(actual: &str, expected_str: &str) {
 
             let subs = solved.inner_mut();
 
-            let content = subs.get(var).content;
+            let content = subs.get_content_without_compacting(var);
 
             let interns = Interns {
                 module_ids: env.module_ids.clone(),
                 all_ident_ids: dep_idents,
             };
 
-            let actual_str = content_to_string(content, &subs, mod_id, &interns);
+            let actual_str = content_to_string(content, subs, mod_id, &interns);
 
             assert_eq!(actual_str, expected_str);
         }
@@ -326,5 +326,18 @@ fn constrain_update() {
             "#
         ),
         "{ name : Str }",
+    )
+}
+
+#[ignore = "TODO: implement builtins in the editor"]
+#[test]
+fn constrain_run_low_level() {
+    infer_eq(
+        indoc!(
+            r#"
+            List.map [ { name: "roc" }, { name: "bird" } ] .name
+            "#
+        ),
+        "List Str",
     )
 }

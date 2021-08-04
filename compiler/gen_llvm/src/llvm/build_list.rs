@@ -94,7 +94,7 @@ pub fn list_single<'a, 'ctx, 'env>(
             pass_element_as_opaque(env, element),
             layout_width(env, element_layout),
         ],
-        &bitcode::LIST_SINGLE,
+        bitcode::LIST_SINGLE,
     )
 }
 
@@ -129,7 +129,6 @@ pub fn list_prepend<'a, 'ctx, 'env>(
     elem_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
-    let ctx = env.context;
 
     // Load the usize length from the wrapper.
     let len = list_len(builder, original_wrapper);
@@ -139,7 +138,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
 
     // The output list length, which is the old list length + 1
     let new_list_len = env.builder.build_int_add(
-        ctx.i64_type().const_int(1_u64, false),
+        env.ptr_int().const_int(1_u64, false),
         len,
         "new_list_length",
     );
@@ -152,7 +151,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
     let index_1_ptr = unsafe {
         builder.build_in_bounds_gep(
             clone_ptr,
-            &[ctx.i64_type().const_int(1_u64, false)],
+            &[env.ptr_int().const_int(1_u64, false)],
             "load_index",
         )
     };
@@ -207,7 +206,7 @@ pub fn list_join<'a, 'ctx, 'env>(
                     env.alignment_intvalue(element_layout),
                     layout_width(env, element_layout),
                 ],
-                &bitcode::LIST_JOIN,
+                bitcode::LIST_JOIN,
             )
         }
         _ => {
@@ -240,7 +239,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
             env.alignment_intvalue(&element_layout),
             layout_width(env, &element_layout),
         ],
-        &bitcode::LIST_REVERSE,
+        bitcode::LIST_REVERSE,
     )
 }
 
@@ -292,11 +291,11 @@ pub fn list_append<'a, 'ctx, 'env>(
         env,
         &[
             pass_list_as_i128(env, original_wrapper.into()),
-            env.alignment_intvalue(&element_layout),
+            env.alignment_intvalue(element_layout),
             pass_element_as_opaque(env, element),
             layout_width(env, element_layout),
         ],
-        &bitcode::LIST_APPEND,
+        bitcode::LIST_APPEND,
     )
 }
 
@@ -312,12 +311,12 @@ pub fn list_swap<'a, 'ctx, 'env>(
         env,
         &[
             pass_list_as_i128(env, original_wrapper.into()),
-            env.alignment_intvalue(&element_layout),
-            layout_width(env, &element_layout),
+            env.alignment_intvalue(element_layout),
+            layout_width(env, element_layout),
             index_1.into(),
             index_2.into(),
         ],
-        &bitcode::LIST_SWAP,
+        bitcode::LIST_SWAP,
     )
 }
 
@@ -329,17 +328,17 @@ pub fn list_drop<'a, 'ctx, 'env>(
     count: IntValue<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let dec_element_fn = build_dec_wrapper(env, layout_ids, &element_layout);
+    let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
     call_bitcode_fn_returns_list(
         env,
         &[
             pass_list_as_i128(env, original_wrapper.into()),
-            env.alignment_intvalue(&element_layout),
-            layout_width(env, &element_layout),
+            env.alignment_intvalue(element_layout),
+            layout_width(env, element_layout),
             count.into(),
             dec_element_fn.as_global_value().as_pointer_value().into(),
         ],
-        &bitcode::LIST_DROP,
+        bitcode::LIST_DROP,
     )
 }
 
@@ -361,24 +360,32 @@ pub fn list_set<'a, 'ctx, 'env>(
         env.context.i8_type().ptr_type(AddressSpace::Generic),
     );
 
-    let symbol = match update_mode {
-        UpdateMode::InPlace => bitcode::LIST_SET_IN_PLACE,
-        UpdateMode::Immutable => bitcode::LIST_SET,
+    let new_bytes = match update_mode {
+        UpdateMode::InPlace => call_bitcode_fn(
+            env,
+            &[
+                bytes.into(),
+                index.into(),
+                pass_element_as_opaque(env, element),
+                layout_width(env, element_layout),
+                dec_element_fn.as_global_value().as_pointer_value().into(),
+            ],
+            bitcode::LIST_SET_IN_PLACE,
+        ),
+        UpdateMode::Immutable => call_bitcode_fn(
+            env,
+            &[
+                bytes.into(),
+                length.into(),
+                env.alignment_intvalue(element_layout),
+                index.into(),
+                pass_element_as_opaque(env, element),
+                layout_width(env, element_layout),
+                dec_element_fn.as_global_value().as_pointer_value().into(),
+            ],
+            bitcode::LIST_SET,
+        ),
     };
-
-    let new_bytes = call_bitcode_fn(
-        env,
-        &[
-            bytes.into(),
-            length.into(),
-            env.alignment_intvalue(&element_layout),
-            index.into(),
-            pass_element_as_opaque(env, element),
-            layout_width(env, element_layout),
-            dec_element_fn.as_global_value().as_pointer_value().into(),
-        ],
-        &symbol,
-    );
 
     store_list(env, new_bytes.into_pointer_value(), length)
 }
@@ -449,7 +456,7 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
                     roc_function_call.inc_n_data.into(),
                     roc_function_call.data_is_owned.into(),
                     pass_as_opaque(env, default_ptr),
-                    env.alignment_intvalue(&element_layout),
+                    env.alignment_intvalue(element_layout),
                     layout_width(env, element_layout),
                     layout_width(env, default_layout),
                     pass_as_opaque(env, result_ptr),
@@ -480,7 +487,7 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
                     roc_function_call.inc_n_data.into(),
                     roc_function_call.data_is_owned.into(),
                     pass_as_opaque(env, default_ptr),
-                    env.alignment_intvalue(&element_layout),
+                    env.alignment_intvalue(element_layout),
                     layout_width(env, element_layout),
                     layout_width(env, function_call_return_layout),
                     layout_width(env, default_layout),
@@ -556,7 +563,7 @@ pub fn list_range<'a, 'ctx, 'env>(
             pass_as_opaque(env, low_ptr),
             pass_as_opaque(env, high_ptr),
         ],
-        &bitcode::LIST_RANGE,
+        bitcode::LIST_RANGE,
     )
 }
 
@@ -604,12 +611,12 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            env.alignment_intvalue(&element_layout),
+            env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
             inc_element_fn.as_global_value().as_pointer_value().into(),
             dec_element_fn.as_global_value().as_pointer_value().into(),
         ],
-        &bitcode::LIST_KEEP_IF,
+        bitcode::LIST_KEEP_IF,
     )
 }
 
@@ -646,7 +653,7 @@ pub fn list_keep_oks<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            env.alignment_intvalue(&before_layout),
+            env.alignment_intvalue(before_layout),
             layout_width(env, before_layout),
             layout_width(env, result_layout),
             layout_width(env, after_layout),
@@ -690,7 +697,7 @@ pub fn list_keep_errs<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            env.alignment_intvalue(&before_layout),
+            env.alignment_intvalue(before_layout),
             layout_width(env, before_layout),
             layout_width(env, result_layout),
             layout_width(env, after_layout),
@@ -717,7 +724,7 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            env.alignment_intvalue(&element_layout),
+            env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
         ],
         bitcode::LIST_SORT_WITH,
@@ -740,7 +747,7 @@ pub fn list_map_with_index<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            env.alignment_intvalue(&element_layout),
+            env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
             layout_width(env, return_layout),
         ],
@@ -764,7 +771,7 @@ pub fn list_map<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            env.alignment_intvalue(&element_layout),
+            env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
             layout_width(env, return_layout),
         ],
@@ -866,7 +873,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
                 env.alignment_intvalue(elem_layout),
                 layout_width(env, elem_layout),
             ],
-            &bitcode::LIST_CONCAT,
+            bitcode::LIST_CONCAT,
         ),
         _ => {
             unreachable!("Invalid List layout for List.concat {:?}", list_layout);

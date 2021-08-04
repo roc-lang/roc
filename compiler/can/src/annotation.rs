@@ -159,7 +159,7 @@ fn can_annotation_help(
                     Err(problem) => {
                         env.problem(roc_problem::can::Problem::RuntimeError(problem));
 
-                        return Type::Erroneous(Problem::UnrecognizedIdent(ident.into()));
+                        return Type::Erroneous(Problem::UnrecognizedIdent(ident));
                     }
                 }
             } else {
