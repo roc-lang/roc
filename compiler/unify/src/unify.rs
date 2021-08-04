@@ -2,7 +2,9 @@ use roc_collections::all::{default_hasher, get_shared, relative_complement, unio
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::subs::Content::{self, *};
-use roc_types::subs::{Descriptor, FlatType, Mark, OptVariable, RecordFields, Subs, Variable};
+use roc_types::subs::{
+    Descriptor, FlatType, GetSubsSlice, Mark, OptVariable, RecordFields, Subs, SubsSlice, Variable,
+};
 use roc_types::types::{gather_fields_ref, ErrorType, Mismatch, RecordField, RecordStructure};
 
 macro_rules! mismatch {
@@ -1064,16 +1066,12 @@ fn unify_flat_type(
         (Func(l_args, l_closure, l_ret), Func(r_args, r_closure, r_ret))
             if l_args.len() == r_args.len() =>
         {
-            let arg_problems = unify_zip(subs, pool, l_args.iter(), r_args.iter());
+            let arg_problems = unify_zip_slices(subs, pool, *l_args, *r_args);
             let ret_problems = unify_pool(subs, pool, *l_ret, *r_ret);
             let closure_problems = unify_pool(subs, pool, *l_closure, *r_closure);
 
             if arg_problems.is_empty() && closure_problems.is_empty() && ret_problems.is_empty() {
-                merge(
-                    subs,
-                    ctx,
-                    Structure(Func((*r_args).clone(), *r_closure, *r_ret)),
-                )
+                merge(subs, ctx, Structure(Func(*r_args, *r_closure, *r_ret)))
             } else {
                 let mut problems = ret_problems;
 
@@ -1091,7 +1089,7 @@ fn unify_flat_type(
                 tag_name,
                 *tag_symbol,
                 *ext,
-                args,
+                *args,
                 *ret,
                 *closure,
                 true,
@@ -1105,7 +1103,7 @@ fn unify_flat_type(
                 tag_name,
                 *tag_symbol,
                 *ext,
-                args,
+                *args,
                 *ret,
                 *closure,
                 false,
@@ -1189,6 +1187,26 @@ fn unify_flat_type(
             other2
         ),
     }
+}
+
+fn unify_zip_slices(
+    subs: &mut Subs,
+    pool: &mut Pool,
+    left: SubsSlice<Variable>,
+    right: SubsSlice<Variable>,
+) -> Outcome {
+    let mut problems = Vec::new();
+
+    let it = left.into_iter().zip(right.into_iter());
+
+    for (l_index, r_index) in it {
+        let l_var = subs[l_index];
+        let r_var = subs[r_index];
+
+        problems.extend(unify_pool(subs, pool, l_var, r_var));
+    }
+
+    problems
 }
 
 fn unify_zip<'a, I>(subs: &mut Subs, pool: &mut Pool, left_iter: I, right_iter: I) -> Outcome
@@ -1379,7 +1397,7 @@ fn unify_function_or_tag_union_and_func(
     tag_name: &TagName,
     tag_symbol: Symbol,
     tag_ext: Variable,
-    function_arguments: &[Variable],
+    function_arguments: SubsSlice<Variable>,
     function_return: Variable,
     function_lambda_set: Variable,
     left: bool,
@@ -1388,7 +1406,10 @@ fn unify_function_or_tag_union_and_func(
 
     let mut new_tags = MutMap::with_capacity_and_hasher(1, default_hasher());
 
-    new_tags.insert(tag_name.clone(), function_arguments.to_owned());
+    new_tags.insert(
+        tag_name.clone(),
+        subs.get_subs_slice(function_arguments).to_owned(),
+    );
 
     let content = Structure(TagUnion(new_tags, tag_ext));
 
