@@ -1,5 +1,4 @@
 extern crate bumpalo;
-extern crate inlinable_string;
 extern crate roc_collections;
 extern crate roc_load;
 extern crate roc_module;

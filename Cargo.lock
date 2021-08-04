@@ -3047,7 +3047,6 @@ dependencies = [
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
- "inlinable_string",
  "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
@@ -3075,7 +3074,6 @@ dependencies = [
  "im-rc 14.3.0",
  "indoc 0.3.6",
  "inkwell 0.1.0",
- "inlinable_string",
  "libc",
  "libloading 0.6.7",
  "maplit",
@@ -3172,7 +3170,6 @@ dependencies = [
  "im 15.0.0",
  "im-rc 15.0.0",
  "indoc 1.0.3",
- "inlinable_string",
  "libc",
  "log",
  "maplit",
@@ -3214,7 +3211,6 @@ dependencies = [
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
- "inlinable_string",
  "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
@@ -3233,7 +3229,6 @@ dependencies = [
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
- "inlinable_string",
  "itertools 0.9.0",
  "libc",
  "libloading 0.6.7",
@@ -3272,7 +3267,6 @@ dependencies = [
  "im-rc 14.3.0",
  "indoc 0.3.6",
  "inkwell 0.1.0",
- "inlinable_string",
  "libc",
  "maplit",
  "morphic_lib",
@@ -3299,13 +3293,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_ident"
+version = "0.1.0"
+
+[[package]]
 name = "roc_load"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
  "crossbeam",
  "indoc 0.3.6",
- "inlinable_string",
  "maplit",
  "morphic_lib",
  "num_cpus",
@@ -3336,12 +3333,13 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "indoc 0.3.6",
- "inlinable_string",
  "lazy_static",
  "maplit",
  "pretty_assertions 0.5.1",
  "roc_collections",
+ "roc_ident",
  "roc_region",
+ "static_assertions",
 ]
 
 [[package]]
@@ -3380,7 +3378,6 @@ dependencies = [
  "bumpalo",
  "encode_unicode",
  "indoc 0.3.6",
- "inlinable_string",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -3394,7 +3391,6 @@ name = "roc_problem"
 version = "0.1.0"
 dependencies = [
  "indoc 0.3.6",
- "inlinable_string",
  "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
@@ -3418,7 +3414,6 @@ dependencies = [
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
- "inlinable_string",
  "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
@@ -3464,16 +3459,12 @@ dependencies = [
 [[package]]
 name = "roc_std"
 version = "0.1.0"
-dependencies = [
- "libc",
-]
 
 [[package]]
 name = "roc_types"
 version = "0.1.0"
 dependencies = [
  "indoc 0.3.6",
- "inlinable_string",
  "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
@@ -3481,6 +3472,7 @@ dependencies = [
  "roc_collections",
  "roc_module",
  "roc_region",
+ "static_assertions",
  "ven_ena",
 ]
 
@@ -3961,7 +3953,6 @@ dependencies = [
  "im-rc 14.3.0",
  "indoc 0.3.6",
  "inkwell 0.1.0",
- "inlinable_string",
  "libc",
  "libloading 0.6.7",
  "maplit",
@@ -3997,7 +3988,6 @@ dependencies = [
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
- "inlinable_string",
  "libc",
  "libloading 0.6.7",
  "pretty_assertions 0.5.1",

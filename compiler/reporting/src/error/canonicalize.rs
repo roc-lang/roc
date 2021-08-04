@@ -1,5 +1,5 @@
 use roc_collections::all::MutSet;
-use roc_module::ident::Lowercase;
+use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_parse::parser::{Col, Row};
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{BadPattern, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
@@ -1002,13 +1002,16 @@ fn to_circular_def_doc<'b>(
 fn not_found<'b>(
     alloc: &'b RocDocAllocator<'b>,
     region: roc_region::all::Region,
-    name: &str,
+    name: &Ident,
     thing: &'b str,
     options: MutSet<Box<str>>,
 ) -> RocDocBuilder<'b> {
     use crate::error::r#type::suggest;
 
-    let mut suggestions = suggest::sort(name, options.iter().map(|v| v.as_ref()).collect());
+    let mut suggestions = suggest::sort(
+        name.as_inline_str().as_str(),
+        options.iter().map(|v| v.as_ref()).collect(),
+    );
     suggestions.truncate(4);
 
     let default_no = alloc.concat(vec![
@@ -1049,12 +1052,13 @@ fn not_found<'b>(
 fn module_not_found<'b>(
     alloc: &'b RocDocAllocator<'b>,
     region: roc_region::all::Region,
-    name: &str,
+    name: &ModuleName,
     options: MutSet<Box<str>>,
 ) -> RocDocBuilder<'b> {
     use crate::error::r#type::suggest;
 
-    let mut suggestions = suggest::sort(name, options.iter().map(|v| v.as_ref()).collect());
+    let mut suggestions =
+        suggest::sort(name.as_str(), options.iter().map(|v| v.as_ref()).collect());
     suggestions.truncate(4);
 
     let default_no = alloc.concat(vec![

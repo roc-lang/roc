@@ -4,7 +4,9 @@ use roc_collections::all::{default_hasher, MutMap};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::solved_types::Solved;
-use roc_types::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
+use roc_types::subs::{
+    Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, SubsSlice, Variable,
+};
 use roc_types::types::Type::{self, *};
 use roc_types::types::{Alias, Category, ErrorType, PatternCategory};
 use roc_unify::unify::unify;
@@ -656,12 +658,19 @@ fn type_to_variable(
         EmptyTagUnion => Variable::EMPTY_TAG_UNION,
 
         // This case is important for the rank of boolean variables
-        Function(args, closure_type, ret_type) => {
-            let mut arg_vars = Vec::with_capacity(args.len());
+        Function(arg_vars, closure_type, ret_type) => {
+            let mut new_arg_vars = Vec::with_capacity(arg_vars.len());
 
-            for arg in args {
-                arg_vars.push(type_to_variable(subs, rank, pools, cached, arg))
+            for arg in arg_vars {
+                let var = type_to_variable(subs, rank, pools, cached, arg);
+                new_arg_vars.push(var);
             }
+
+            let start = subs.variables.len() as u32;
+            let length = arg_vars.len() as u16;
+            let arg_vars = SubsSlice::new(start, length);
+
+            subs.variables.extend(new_arg_vars);
 
             let ret_var = type_to_variable(subs, rank, pools, cached, ret_type);
             let closure_var = type_to_variable(subs, rank, pools, cached, closure_type);
@@ -1062,9 +1071,9 @@ fn adjust_rank_content(
                         ));
                     }
 
-                    for var in arg_vars {
-                        rank =
-                            rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
+                    for index in arg_vars.into_iter() {
+                        let var = subs[index];
+                        rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
                     }
 
                     rank
@@ -1221,7 +1230,8 @@ fn instantiate_rigids_help(
                     instantiate_rigids_help(subs, max_rank, pools, ret_var);
                     instantiate_rigids_help(subs, max_rank, pools, closure_var);
 
-                    for var in arg_vars.into_iter() {
+                    for index in arg_vars.into_iter() {
+                        let var = subs[index];
                         instantiate_rigids_help(subs, max_rank, pools, var);
                     }
                 }
@@ -1356,10 +1366,20 @@ fn deep_copy_var_help(
                 Func(arg_vars, closure_var, ret_var) => {
                     let new_ret_var = deep_copy_var_help(subs, max_rank, pools, ret_var);
                     let new_closure_var = deep_copy_var_help(subs, max_rank, pools, closure_var);
-                    let arg_vars = arg_vars
-                        .into_iter()
-                        .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
-                        .collect();
+
+                    let mut new_arg_vars = Vec::with_capacity(arg_vars.len());
+
+                    for index in arg_vars.into_iter() {
+                        let var = subs[index];
+                        let copy_var = deep_copy_var_help(subs, max_rank, pools, var);
+                        new_arg_vars.push(copy_var);
+                    }
+
+                    let start = subs.variables.len() as u32;
+                    let length = arg_vars.len() as u16;
+                    let arg_vars = SubsSlice::new(start, length);
+
+                    subs.variables.extend(new_arg_vars);
 
                     Func(arg_vars, new_closure_var, new_ret_var)
                 }

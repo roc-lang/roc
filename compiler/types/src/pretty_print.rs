@@ -1,4 +1,4 @@
-use crate::subs::{Content, FlatType, Subs, Variable};
+use crate::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
 use crate::types::{name_type_var, RecordField};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
@@ -146,8 +146,9 @@ fn find_names_needed(
             }
         }
         Structure(Func(arg_vars, _closure_var, ret_var)) => {
-            for var in arg_vars {
-                find_names_needed(*var, subs, roots, root_appearances, names_taken);
+            for index in arg_vars.into_iter() {
+                let var = subs[index];
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
 
             find_names_needed(*ret_var, subs, roots, root_appearances, names_taken);
@@ -369,8 +370,10 @@ fn write_sorted_tags<'a>(
     let interns = &env.interns;
     let home = env.home;
 
-    sorted_fields
-        .sort_by(|(a, _), (b, _)| a.as_string(interns, home).cmp(&b.as_string(interns, home)));
+    sorted_fields.sort_by(|(a, _), (b, _)| {
+        a.as_ident_str(interns, home)
+            .cmp(&b.as_ident_str(interns, home))
+    });
 
     let mut any_written_yet = false;
 
@@ -381,7 +384,7 @@ fn write_sorted_tags<'a>(
             any_written_yet = true;
         }
 
-        buf.push_str(&label.as_string(interns, home));
+        buf.push_str(label.as_ident_str(interns, home).as_str());
 
         for var in vars {
             buf.push(' ');
@@ -405,7 +408,9 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
         Apply(symbol, args) => write_apply(env, *symbol, args, subs, buf, parens),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
-        Func(args, _closure, ret) => write_fn(env, args, *ret, subs, buf, parens),
+        Func(args, _closure, ret) => {
+            write_fn(env, subs.get_subs_slice(*args), *ret, subs, buf, parens)
+        }
         Record(fields, ext_var) => {
             use crate::types::{gather_fields, RecordStructure};
 
@@ -715,15 +720,15 @@ fn write_fn(
 
 fn write_symbol(env: &Env, symbol: Symbol, buf: &mut String) {
     let interns = &env.interns;
-    let ident = symbol.ident_string(interns);
+    let ident = symbol.ident_str(interns);
     let module_id = symbol.module_id();
 
     // Don't qualify the symbol if it's in our home module,
     // or if it's a builtin (since all their types are always in scope)
     if module_id != env.home && !module_id.is_builtin() {
-        buf.push_str(module_id.to_string(interns));
+        buf.push_str(module_id.to_ident_str(interns).as_str());
         buf.push('.');
     }
 
-    buf.push_str(ident);
+    buf.push_str(ident.as_str());
 }

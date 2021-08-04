@@ -227,6 +227,10 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 
 ## General Plugin Ideas
 
+### Ideas
+
+* Plugin to translate linux commands like curl to Roc code
+
 ### Inspiration
 
 - [Boop](https://github.com/IvanMathy/Boop) scriptable scratchpad for developers. Contains collection of useful conversions: json formatting, url encoding, encode to base64...

@@ -1193,7 +1193,8 @@ fn layout_from_flat_type<'a>(
         Func(args, closure_var, ret_var) => {
             let mut fn_args = Vec::with_capacity_in(args.len(), arena);
 
-            for arg_var in args {
+            for index in args.into_iter() {
+                let arg_var = env.subs[index];
                 fn_args.push(Layout::from_var(env, arg_var)?);
             }
 
@@ -2084,7 +2085,7 @@ impl LayoutId {
     // Returns something like "foo#1" when given a symbol that interns to "foo"
     // and a LayoutId of 1.
     pub fn to_symbol_string(self, symbol: Symbol, interns: &Interns) -> String {
-        let ident_string = symbol.ident_string(interns);
+        let ident_string = symbol.ident_str(interns);
         let module_string = interns.module_ids.get_name(symbol.module_id()).unwrap();
         format!("{}_{}_{}", module_string, ident_string, self.0)
     }

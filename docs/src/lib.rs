@@ -59,7 +59,7 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
                 let exposed_values = loaded_module
                     .exposed_values
                     .iter()
-                    .map(|symbol| symbol.ident_string(&loaded_module.interns).to_string())
+                    .map(|symbol| symbol.ident_str(&loaded_module.interns).to_string())
                     .collect::<Vec<String>>();
 
                 (exposed_values, d)
@@ -77,7 +77,7 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
 
         // TODO should this also include exposed_aliases?
         for symbol in loaded_module.exposed_values.iter() {
-            exports.push(symbol.ident_string(&loaded_module.interns));
+            exports.push(symbol.ident_str(&loaded_module.interns));
         }
 
         let exports = exports.into_bump_slice();

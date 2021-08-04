@@ -20,7 +20,6 @@ morphic_lib = { path = "../../vendor/morphic_lib" }
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.6.1", features = ["collections"] }
-inlinable_string = "0.1"
 inkwell = { path = "../../vendor/inkwell" }
 target-lexicon = "0.10"
 
