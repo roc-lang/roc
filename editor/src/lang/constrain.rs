@@ -52,12 +52,11 @@ pub fn constrain_expr<'a>(
     use Constraint::*;
 
     match expr {
+        Expr2::Blank | Expr2::RuntimeError() | Expr2::InvalidLookup(_) => True,
         Expr2::Str(_) => Eq(str_type(env.pool), expected, Category::Str, region),
         Expr2::SmallStr(_) => Eq(str_type(env.pool), expected, Category::Str, region),
-        Expr2::Blank => True,
-        Expr2::RuntimeError() => True,
-        Expr2::EmptyRecord => constrain_empty_record(expected, region),
         Expr2::Var(symbol) => Lookup(*symbol, expected, region),
+        Expr2::EmptyRecord => constrain_empty_record(expected, region),
         Expr2::SmallInt { var, .. } | Expr2::I128 { var, .. } | Expr2::U128 { var, .. } => {
             let mut flex_vars = BumpVec::with_capacity_in(1, arena);
 
@@ -936,7 +935,6 @@ pub fn constrain_expr<'a>(
             exists(arena, vars, And(and_constraints))
         }
         Expr2::Closure { .. } => todo!(),
-        Expr2::InvalidLookup(_) => todo!(),
         Expr2::LetRec { .. } => todo!(),
         Expr2::LetFunction { .. } => todo!(),
     }
