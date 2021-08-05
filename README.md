@@ -17,6 +17,19 @@ If you're curious about where the language's name and logo came from,
     ```
 4. Check out [these tests](https://github.com/rtfeldman/roc/blob/trunk/cli/tests/repl_eval.rs) for examples of using the REPL
 
+### Examples
+
+Took a look at the `examples` folder, `examples/benchmarks` contains some larger examples.
+
+Run examples as follows:
+1. Navigate to `/examples`
+2. Run with:
+```
+cargo run run hello-world/Hello.roc
+```
+Some examples like `examples/benchmarks/NQueens.roc` require input after running.
+For NQueens, input 10 in the terminal and press enter.  
+
 ## Applications and Platforms
 
 Applications are often built on a *framework.* Typically, both application and framework are written in the same language.

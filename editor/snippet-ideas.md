@@ -91,4 +91,9 @@ Snippets are inserted based on type of value on which the cursor is located.
  - head > takeFirst
  - filter > keepIf
 
-        
+# Inspiration
+
+- [grepper](https://www.codegrepper.com/) snippet collection that embeds in google search results. See also this [collection of common questions](https://www.codegrepper.com/code-examples/rust).
+- [github copilot](https://copilot.github.com/) snippet generation with machine learning
+- [stackoverflow](https://stackoverflow.com) 
+- [rosetta code](http://www.rosettacode.org/wiki/Rosetta_Code) snippets in many different programming languages. Many [snippets](https://www.rosettacode.org/wiki/Category:Programming_Tasks) are programming contest style problems, but there also problems that demonstrate the use of JSON, SHA-256, read a file line by line...
