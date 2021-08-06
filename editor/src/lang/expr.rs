@@ -5,10 +5,7 @@ use bumpalo::{collections::Vec as BumpVec, Bump};
 use inlinable_string::InlinableString;
 use std::collections::HashMap;
 
-use crate::lang::ast::{
-    expr2_to_string, ClosureExtra, Expr2, ExprId, FloatVal, IntStyle, IntVal, RecordField,
-    WhenBranch,
-};
+use crate::lang::ast::{ClosureExtra, Expr2, ExprId, FloatVal, IntStyle, IntVal, RecordField, ValueDef, WhenBranch, expr2_to_string};
 use crate::lang::def::{
     canonicalize_defs, sort_can_defs, CanDefs, Declaration, Def, PendingDef, References,
 };
@@ -299,6 +296,7 @@ pub fn str_to_expr2<'a>(
 ) -> Result<(Expr2, self::Output), SyntaxError<'a>> {
     match roc_parse::test_helpers::parse_loc_with(arena, input.trim()) {
         Ok(loc_expr) => {
+            dbg!(loc_expr);
             let desugared_loc_expr = desugar_expr(arena, arena.alloc(loc_expr));
 
             Ok(to_expr2(
@@ -1414,7 +1412,20 @@ fn decl_to_let(pool: &mut Pool, var_store: &mut VarStore, decl: Declaration, ret
         Declaration::Declare(def) => match def {
             Def::AnnotationOnly { .. } => todo!(),
             Def::Value(value_def) => {
+
+                // TODO remove me
+                match &value_def {
+                    ValueDef::NoAnnotation{ pattern_id, expr_id, expr_var} => {
+                        dbg!(pool.get(*pattern_id));
+                        dbg!(pool.get(*expr_id));
+                        dbg!(expr_var);
+                    }
+                    _ => panic!("REMOVE THIS BLOCK")
+                }
+
                 let def_id = pool.add(value_def);
+
+                dbg!(&ret);
                 let body_id = pool.add(ret);
 
                 Expr2::LetValue {

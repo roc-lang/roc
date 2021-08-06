@@ -738,8 +738,8 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                         InputOutcome::Ignored
                                                     }
                                                 }
-                                                Expr2::LetValue{ def_id, .. } => {
-                                                    update_let_value(prev_mark_node_id, *def_id, ed_model, ch)?
+                                                Expr2::LetValue{ def_id, body_id, body_var:_ } => {
+                                                    update_let_value(prev_mark_node_id, *def_id, *body_id, ed_model, ch)?
                                                 }
                                                 _ => {
                                                     match ast_node_ref {

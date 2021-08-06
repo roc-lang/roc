@@ -66,6 +66,10 @@ impl Symbol {
     }
 
     pub fn ident_string(self, interns: &Interns) -> &InlinableString {
+        dbg!(&interns.all_ident_ids);
+
+        let stop = "here";
+
         let ident_ids = interns
             .all_ident_ids
             .get(&self.module_id())
@@ -538,6 +542,45 @@ impl IdentIds {
                 self.by_ident.insert(name.clone(), ident_id);
 
                 ident_id
+            }
+        }
+    }
+
+    pub fn update_key(&mut self, old_ident_name: InlinableString, new_ident_name: InlinableString) -> Result<IdentId, String> {
+
+        let ident_id_ref_opt = self.by_ident.get(&old_ident_name);
+
+        match ident_id_ref_opt {
+            Some(ident_id_ref) => {
+                let ident_id = (*ident_id_ref).clone();
+
+                self.by_ident.remove(&old_ident_name);
+                self.by_ident.insert(new_ident_name.clone(), ident_id);
+
+                let by_id = &mut self.by_id;
+                let key_index_opt = by_id.iter().position(|x| *x == old_ident_name);
+
+                if let Some(key_index) = key_index_opt {
+                    if let Some(vec_elt) = by_id.get_mut(key_index) {
+                        *vec_elt = new_ident_name;
+                    } else {
+                        // we get the index from by_id so unless there is a bug in the rust std lib, this is unreachable
+                        unreachable!()
+                    }
+
+                    Ok(ident_id)
+                } else {
+                    Err(
+                        format!(
+                            "Tried to find position of key {:?} in IdentIds.by_id but I could not find the key. IdentIds.by_id: {:?}",
+                            old_ident_name,
+                            self.by_id
+                        )
+                    )
+                }
+            }
+            None => {
+                Err("Tried to update key in IdentIds but I could not find the key.".to_string())
             }
         }
     }

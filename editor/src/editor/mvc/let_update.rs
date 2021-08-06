@@ -12,8 +12,7 @@ use crate::editor::mvc::ed_update::get_node_context;
 use crate::editor::mvc::ed_update::NodeContext;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::syntax_highlight::HighlightStyle;
-use crate::lang::ast::{ArrString};
-use crate::lang::ast::{Expr2, ValueDef, update_str_expr};
+use crate::lang::ast::{Expr2, ValueDef};
 use crate::lang::pattern::Pattern2;
 use crate::lang::pool::NodeId;
 use crate::ui::text::lines::SelectableLines;
@@ -33,26 +32,22 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
 
     let val_name_string = new_char.to_string();
     // safe unwrap because our ArrString has a 30B capacity
-    let val_name_string_container = ArrString::try_from_str(val_name_string.clone()).unwrap();
-    let val_name_expr2_node = 
-        Expr2::SmallStr(
-            val_name_string_container
-        );
-    let val_name_expr_id = ed_model.module.env.pool.add(val_name_expr2_node);
-
-    let body_placeholder = Expr2::Blank;
-    let body_id = ed_model.module.env.pool.add(body_placeholder);
+    let val_expr2_node = Expr2::Blank;
+    let val_expr_id = ed_model.module.env.pool.add(val_expr2_node);
 
     let ident_string = InlinableString::from_iter(val_name_string.chars());
     let ident_id = ed_model.module.env.ident_ids.add(ident_string);
+    let var_symbol = Symbol::new(ed_model.module.env.home, ident_id);
+    let body = Expr2::Var(var_symbol);
+    let body_id = ed_model.module.env.pool.add(body);    
 
-    let pattern = Pattern2::Identifier(Symbol::new(ed_model.module.env.home, ident_id));
+    let pattern = Pattern2::Identifier(var_symbol);
     let pattern_id = ed_model.module.env.pool.add(pattern);
 
     let value_def =
         ValueDef::NoAnnotation {
             pattern_id,
-            expr_id: val_name_expr_id,
+            expr_id: val_expr_id,
             expr_var: ed_model.module.env.var_store.fresh()
         };
     let def_id = ed_model.module.env.pool.add(value_def);
@@ -109,19 +104,37 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     }
 }
 
-pub fn update_let_value(val_name_mn_id: MarkNodeId, def_id: NodeId<ValueDef>, ed_model: &mut EdModel, new_char: &char) -> EdResult<InputOutcome> {
+pub fn update_let_value(val_name_mn_id: MarkNodeId, def_id: NodeId<ValueDef>, body_id: NodeId<Expr2>, ed_model: &mut EdModel, new_char: &char) -> EdResult<InputOutcome> {
     if new_char.is_ascii_alphanumeric() {
         let old_caret_pos = ed_model.get_caret();
 
         // update markup
         let val_name_mn_mut = ed_model.markup_node_pool.get_mut(val_name_mn_id);
         let content_str_mut = val_name_mn_mut.get_content_mut()?;
+
+        let old_val_name = content_str_mut.clone();
+        let old_val_ident_string = InlinableString::from_iter(old_val_name.chars());
+
         let node_caret_offset = ed_model
             .grid_node_map
             .get_offset_to_node_id(old_caret_pos, val_name_mn_id)?;
 
         if node_caret_offset != 0 && node_caret_offset <= content_str_mut.len() {
             content_str_mut.insert(node_caret_offset, *new_char);
+
+            // update ast
+            let value_def = ed_model.module.env.pool.get(def_id);
+            let value_ident_pattern_id = value_def.get_pattern_id();
+
+            let ident_string = InlinableString::from_iter(content_str_mut.chars());
+            // TODO no unwrap
+            let ident_id = ed_model.module.env.ident_ids.update_key(old_val_ident_string, ident_string).unwrap();
+
+            let new_var_symbol = Symbol::new(ed_model.module.env.home, ident_id);
+
+            ed_model.module.env.pool.set(value_ident_pattern_id, Pattern2::Identifier(new_var_symbol));
+            
+            ed_model.module.env.pool.set(body_id, Expr2::Var(new_var_symbol));
 
             // update GridNodeMap and CodeLines
             ed_model.insert_between_line(
@@ -133,12 +146,6 @@ pub fn update_let_value(val_name_mn_id: MarkNodeId, def_id: NodeId<ValueDef>, ed
 
             // update caret
             ed_model.simple_move_carets_right(1);
-
-            // update ast
-            let value_def = ed_model.module.env.pool.get(def_id);
-            let value_name_expr_id = value_def.get_expr_id();
-            
-            update_str_expr(value_name_expr_id, *new_char, node_caret_offset, ed_model.module.env.pool)?;
 
             Ok(InputOutcome::Accepted)
         } else {

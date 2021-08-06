@@ -162,7 +162,7 @@ pub struct EdModule<'a> {
 }
 
 // for debugging
-// use crate::lang::ast::expr2_to_string;
+use crate::lang::ast::expr2_to_string;
 
 impl<'a> EdModule<'a> {
     pub fn new(code_str: &'a str, mut env: Env<'a>, ast_arena: &'a Bump) -> EdResult<EdModule<'a>> {
@@ -178,7 +178,7 @@ impl<'a> EdModule<'a> {
                     let ast_root_id = env.pool.add(expr2);
 
                     // for debugging
-                    // dbg!(expr2_to_string(ast_root_id, env.pool));
+                    dbg!(expr2_to_string(ast_root_id, env.pool));
 
                     Ok(EdModule { env, ast_root_id })
                 }
