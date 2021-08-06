@@ -1,6 +1,9 @@
 #[macro_use]
 extern crate clap;
 
+#[macro_use]
+extern crate const_format;
+
 use build::{BuildOutcome, BuiltFile};
 use bumpalo::Bump;
 use clap::{App, AppSettings, Arg, ArgMatches};
@@ -32,7 +35,7 @@ pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
 pub fn build_app<'a>() -> App<'a> {
     let app = App::new("roc")
-        .version(crate_version!())
+        .version(concatcp!(crate_version!(), "\n"))
         .subcommand(App::new(CMD_BUILD)
             .about("Build a program")
             .arg(
