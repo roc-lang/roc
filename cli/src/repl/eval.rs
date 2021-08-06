@@ -564,7 +564,7 @@ fn struct_to_ast<'a>(
     let mut output = Vec::with_capacity_in(field_layouts.len(), arena);
 
     let sorted_fields: Vec<_> = Vec::from_iter_in(
-        record_fields.sorted_iterator(&env.subs, Variable::EMPTY_RECORD),
+        record_fields.sorted_iterator(env.subs, Variable::EMPTY_RECORD),
         env.arena,
     );
 
@@ -646,7 +646,7 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                     debug_assert_eq!(fields.len(), 1);
 
                     let (label, field) = fields
-                        .sorted_iterator(&env.subs, Variable::EMPTY_RECORD)
+                        .sorted_iterator(env.subs, Variable::EMPTY_RECORD)
                         .next()
                         .unwrap();
 
@@ -762,7 +762,7 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                     debug_assert_eq!(fields.len(), 1);
 
                     let (label, field) = fields
-                        .sorted_iterator(&env.subs, Variable::EMPTY_RECORD)
+                        .sorted_iterator(env.subs, Variable::EMPTY_RECORD)
                         .next()
                         .unwrap();
 
@@ -882,7 +882,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                     debug_assert_eq!(fields.len(), 1);
 
                     let (label, field) = fields
-                        .sorted_iterator(&env.subs, Variable::EMPTY_RECORD)
+                        .sorted_iterator(env.subs, Variable::EMPTY_RECORD)
                         .next()
                         .unwrap();
 

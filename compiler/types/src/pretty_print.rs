@@ -419,7 +419,7 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
             let RecordStructure {
                 fields: sorted_fields,
                 ext,
-            } = gather_fields(subs, fields.clone(), *ext_var);
+            } = gather_fields(subs, *fields, *ext_var);
             let ext_var = ext;
 
             if fields.is_empty() {

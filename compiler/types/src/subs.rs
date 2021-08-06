@@ -2,9 +2,8 @@ use crate::types::{name_type_var, ErrorType, Problem, RecordField, TypeExt};
 use roc_collections::all::{ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use std::cmp::Ordering;
 use std::fmt;
-use std::iter::{once, Extend, FromIterator, Iterator, Map, Zip};
+use std::iter::{once, Iterator, Map};
 use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 
 // if your changes cause this number to go down, great!
@@ -865,6 +864,8 @@ fn first<K: Ord, V>(x: &(K, V), y: &(K, V)) -> std::cmp::Ordering {
     x.0.cmp(&y.0)
 }
 
+pub type SortedIterator<'a> = Box<dyn Iterator<Item = (Lowercase, RecordField<Variable>)> + 'a>;
+
 impl RecordFields {
     pub fn len(&self) -> usize {
         self.length as usize
@@ -932,11 +933,7 @@ impl RecordFields {
     }
 
     #[inline(always)]
-    pub fn sorted_iterator<'a>(
-        &'_ self,
-        subs: &'a Subs,
-        ext: Variable,
-    ) -> Box<dyn Iterator<Item = (Lowercase, RecordField<Variable>)> + 'a> {
+    pub fn sorted_iterator<'a>(&'_ self, subs: &'a Subs, ext: Variable) -> SortedIterator<'a> {
         self.sorted_iterator_help(subs, ext).0
     }
 
@@ -945,10 +942,7 @@ impl RecordFields {
         &'_ self,
         subs: &'a Subs,
         ext: Variable,
-    ) -> (
-        Box<dyn Iterator<Item = (Lowercase, RecordField<Variable>)> + 'a>,
-        Variable,
-    ) {
+    ) -> (SortedIterator<'a>, Variable) {
         if is_empty_record(subs, ext) {
             (
                 Box::new(self.iter_all().map(move |(i1, i2, i3)| {
@@ -1178,7 +1172,7 @@ fn explicit_substitute(
                                 Structure(RecursiveTagUnion(rec_var, tags, new_ext_var)),
                             );
                         }
-                        Record(mut vars_by_field, ext_var) => {
+                        Record(vars_by_field, ext_var) => {
                             let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
 
                             for index in vars_by_field.iter_variables() {

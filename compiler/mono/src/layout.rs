@@ -1210,7 +1210,7 @@ fn layout_from_flat_type<'a>(
         Record(fields, ext_var) => {
             // extract any values from the ext_var
             // TODO short-circuit the sorting here
-            let mut fields_map: MutMap<_, _> = fields.sorted_iterator(subs, ext_var).collect();
+            let fields_map: MutMap<_, _> = fields.sorted_iterator(subs, ext_var).collect();
 
             // discard optional fields
             let mut layouts = sort_stored_record_fields(env, fields_map);

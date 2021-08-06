@@ -5,7 +5,7 @@ use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
     Descriptor, FlatType, GetSubsSlice, Mark, OptVariable, RecordFields, Subs, SubsSlice, Variable,
 };
-use roc_types::types::{gather_fields, ErrorType, Mismatch, RecordField, RecordStructure};
+use roc_types::types::{ErrorType, Mismatch, RecordField};
 
 macro_rules! mismatch {
     () => {{
@@ -367,11 +367,13 @@ enum OtherFields {
     Other(RecordFields, RecordFields),
 }
 
+type SharedFields = Vec<(Lowercase, (RecordField<Variable>, RecordField<Variable>))>;
+
 fn unify_shared_fields(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    shared_fields: Vec<(Lowercase, (RecordField<Variable>, RecordField<Variable>))>,
+    shared_fields: SharedFields,
     other_fields: OtherFields,
     ext: Variable,
 ) -> Outcome {
@@ -480,9 +482,8 @@ fn separate_record_fields(
     let (it1, new_ext1) = fields1.sorted_iterator_help(subs, ext1);
     let (it2, new_ext2) = fields2.sorted_iterator_help(subs, ext2);
 
-    use std::iter::FromIterator;
-    let it1 = Vec::from_iter(it1);
-    let it2 = Vec::from_iter(it2);
+    let it1 = it1.collect::<Vec<_>>();
+    let it2 = it2.collect::<Vec<_>>();
 
     (separate(it1, it2), new_ext1, new_ext2)
 }
@@ -512,7 +513,7 @@ where
 
     loop {
         let which = match (it1.peek(), it2.peek()) {
-            (Some((l, _)), Some((r, _))) => Some(l.cmp(&r)),
+            (Some((l, _)), Some((r, _))) => Some(l.cmp(r)),
             (Some(_), None) => Some(Ordering::Less),
             (None, Some(_)) => Some(Ordering::Greater),
             (None, None) => None,
@@ -561,7 +562,7 @@ where
 
     loop {
         let which = match (it1.peek(), it2.peek()) {
-            (Some((l, _)), Some((r, _))) => Some(l.cmp(&r)),
+            (Some((l, _)), Some((r, _))) => Some(l.cmp(r)),
             (Some(_), None) => Some(Ordering::Less),
             (None, Some(_)) => Some(Ordering::Greater),
             (None, None) => None,

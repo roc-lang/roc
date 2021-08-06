@@ -1521,7 +1521,7 @@ fn deep_copy_var_help(
 
                 same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
 
-                Record(mut fields, ext_var) => {
+                Record(fields, ext_var) => {
                     let mut new_vars = Vec::with_capacity(fields.len());
                     for index in fields.iter_variables() {
                         let var = subs[index];
@@ -1541,7 +1541,10 @@ fn deep_copy_var_help(
 
                     let record_fields = RecordFields::insert_into_subs(subs, vec);
 
-                    Record(fields, deep_copy_var_help(subs, max_rank, pools, ext_var))
+                    Record(
+                        record_fields,
+                        deep_copy_var_help(subs, max_rank, pools, ext_var),
+                    )
                 }
 
                 TagUnion(tags, ext_var) => {

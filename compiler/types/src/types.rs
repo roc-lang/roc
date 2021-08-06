@@ -1521,12 +1521,12 @@ pub fn name_type_var(letters_used: u32, taken: &mut MutSet<Lowercase>) -> (Lower
     }
 }
 
-pub fn gather_fields_unsorted_iter<'a>(
-    subs: &'a Subs,
+pub fn gather_fields_unsorted_iter(
+    subs: &Subs,
     other_fields: RecordFields,
     mut var: Variable,
 ) -> (
-    impl Iterator<Item = (&'a Lowercase, RecordField<Variable>)> + 'a,
+    impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + '_,
     Variable,
 ) {
     use crate::subs::Content::*;
