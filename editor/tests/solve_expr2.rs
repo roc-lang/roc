@@ -364,11 +364,9 @@ fn constrain_closure() {
             r#"
             x = 1
 
-            y = \{} -> x
-
-            y
+            \{} -> x
             "#
         ),
-        "{ name : Str }",
+        "{}* -> Num *",
     )
 }
