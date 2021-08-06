@@ -385,6 +385,7 @@ impl Rigids {
 /// This is overflow data from a Closure variant, which needs to store
 /// more than 32B of total data
 #[derive(Debug)]
+#[repr(align(32))]
 pub struct ClosureExtra {
     pub return_type: Variable,                         // 4B
     pub captured_symbols: PoolVec<(Symbol, Variable)>, // 8B
