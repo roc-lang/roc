@@ -827,7 +827,7 @@ fn type_to_variable<'a>(
             let mut tag_vars = MutMap::default();
             let ext = mempool.get(*ext_id);
 
-            for (tag, tag_argument_types) in tags.iter(mempool) {
+            for (tag_name, tag_argument_types) in tags.iter(mempool) {
                 let mut tag_argument_vars = Vec::with_capacity(tag_argument_types.len());
 
                 for arg_type in tag_argument_types.iter(mempool) {
@@ -836,10 +836,7 @@ fn type_to_variable<'a>(
                     ));
                 }
 
-                tag_vars.insert(
-                    roc_module::ident::TagName::Global(tag.as_str(mempool).into()),
-                    tag_argument_vars,
-                );
+                tag_vars.insert(tag_name.clone(), tag_argument_vars);
             }
 
             let temp_ext_var = type_to_variable(arena, mempool, subs, rank, pools, cached, ext);

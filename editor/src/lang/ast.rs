@@ -85,6 +85,7 @@ pub enum Expr2 {
         style: IntStyle, // 1B
         text: PoolStr,   // 8B
     },
+    // TODO(rvcas): rename this eventually
     /// A large (over 64-bit) negative number literal without a dot.
     /// This variant can't use IntVal because if IntVal stored 128-bit
     /// integers, it would be 32B on its own because of alignment.
@@ -94,6 +95,7 @@ pub enum Expr2 {
         style: IntStyle, // 1B
         text: PoolStr,   // 8B
     },
+    // TODO(rvcas): rename this eventually
     /// A large (over 64-bit) nonnegative number literal without a dot
     /// This variant can't use IntVal because if IntVal stored 128-bit
     /// integers, it would be 32B on its own because of alignment.
