@@ -245,7 +245,7 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
                     // Forward all the arguments after the .roc file argument
                     // to the new process. This way, you can do things like:
                     //
-                    // roc run app.roc foo bar baz
+                    // roc app.roc foo bar baz
                     //
                     // ...and have it so that app.roc will receive only `foo`,
                     // `bar`, and `baz` as its arguments.
@@ -293,16 +293,16 @@ fn roc_run(cmd: &mut Command) -> io::Result<i32> {
                         .spawn()
                         .unwrap_or_else(|err| panic!("Failed to run app after building it: {:?}", err))
                         .wait()
-                        .expect("TODO gracefully handle block_on failing when roc run spawns a subprocess for the compiled app");
+                        .expect("TODO gracefully handle block_on failing when `roc` spawns a subprocess for the compiled app");
 
-    // `roc run` exits with the same status code as the app it ran.
+    // `roc [FILE]` exits with the same status code as the app it ran.
     //
     // If you want to know whether there were compilation problems
     // via status code, use either `roc build` or `roc check` instead!
     match exit_status.code() {
         Some(code) => Ok(code),
         None => {
-            todo!("TODO gracefully handle the roc run subprocess terminating with a signal.");
+            todo!("TODO gracefully handle the `roc [FILE]` subprocess terminating with a signal.");
         }
     }
 }
