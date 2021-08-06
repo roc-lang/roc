@@ -64,7 +64,7 @@ pub fn build_app<'a>() -> App<'a> {
             )
         )
         .subcommand(App::new(CMD_RUN)
-            .about("Build and run a program")
+            .about("DEPRECATED - now use `roc [FILE]` instead of `roc run [FILE]`")
             .setting(AppSettings::TrailingVarArg)
             .arg(
                 Arg::with_name(FLAG_OPTIMIZE)
@@ -80,7 +80,7 @@ pub fn build_app<'a>() -> App<'a> {
             )
             .arg(
                 Arg::with_name(ROC_FILE)
-                    .help("The .roc file of an app to build and run")
+                    .help("The .roc file of an app to run")
                     .required(true),
             )
             .arg(
@@ -102,6 +102,32 @@ pub fn build_app<'a>() -> App<'a> {
                     .help("The directory or files to build documentation for")
 
                 )
+        )
+        .setting(AppSettings::TrailingVarArg)
+        .arg(
+            Arg::with_name(FLAG_OPTIMIZE)
+                .long(FLAG_OPTIMIZE)
+                .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+                .requires(ROC_FILE)
+                .required(false),
+        )
+        .arg(
+            Arg::with_name(FLAG_DEBUG)
+                .long(FLAG_DEBUG)
+                .help("Store LLVM debug information in the generated program")
+                .requires(ROC_FILE)
+                .required(false),
+        )
+        .arg(
+            Arg::with_name(ROC_FILE)
+                .help("The .roc file of an app to build and run")
+                .required(false),
+        )
+        .arg(
+            Arg::with_name(ARGS_FOR_APP)
+                .help("Arguments to pass into the app being run")
+                .requires(ROC_FILE)
+                .multiple(true),
         );
 
     if cfg!(feature = "editor") {
