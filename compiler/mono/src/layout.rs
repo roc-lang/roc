@@ -1209,12 +1209,8 @@ fn layout_from_flat_type<'a>(
         }
         Record(fields, ext_var) => {
             // extract any values from the ext_var
-            let mut fields_map = MutMap::default();
-            fields_map.extend(fields);
-            match roc_types::pretty_print::chase_ext_record(subs, ext_var, &mut fields_map) {
-                Ok(()) | Err((_, Content::FlexVar(_))) => {}
-                Err(_) => unreachable!("this would have been a type error"),
-            }
+            // TODO short-circuit the sorting here
+            let mut fields_map: MutMap<_, _> = fields.sorted_iterator(subs, ext_var).collect();
 
             // discard optional fields
             let mut layouts = sort_stored_record_fields(env, fields_map);

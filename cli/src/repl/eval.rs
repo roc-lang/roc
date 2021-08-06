@@ -151,13 +151,13 @@ fn jit_to_ast_help<'a>(
         Layout::Struct(field_layouts) => {
             let ptr_to_ast = |ptr: *const u8| match content {
                 Content::Structure(FlatType::Record(fields, _)) => {
-                    Ok(struct_to_ast(env, ptr, field_layouts, fields))
+                    Ok(struct_to_ast(env, ptr, field_layouts, *fields))
                 }
                 Content::Structure(FlatType::EmptyRecord) => Ok(struct_to_ast(
                     env,
                     ptr,
                     field_layouts,
-                    &RecordFields::with_capacity(0),
+                    RecordFields::empty(),
                 )),
                 Content::Structure(FlatType::TagUnion(tags, _)) => {
                     debug_assert_eq!(tags.len(), 1);
@@ -426,7 +426,7 @@ fn ptr_to_ast<'a>(
         }
         Layout::Struct(field_layouts) => match content {
             Content::Structure(FlatType::Record(fields, _)) => {
-                struct_to_ast(env, ptr, field_layouts, fields)
+                struct_to_ast(env, ptr, field_layouts, *fields)
             }
             Content::Structure(FlatType::TagUnion(tags, _)) => {
                 debug_assert_eq!(tags.len(), 1);
@@ -438,7 +438,7 @@ fn ptr_to_ast<'a>(
                 single_tag_union_to_ast(env, ptr, field_layouts, *tag_name.clone(), &[])
             }
             Content::Structure(FlatType::EmptyRecord) => {
-                struct_to_ast(env, ptr, &[], &RecordFields::with_capacity(0))
+                struct_to_ast(env, ptr, &[], RecordFields::empty())
             }
             other => {
                 unreachable!(
@@ -557,11 +557,16 @@ fn struct_to_ast<'a>(
     env: &Env<'a, '_>,
     ptr: *const u8,
     field_layouts: &'a [Layout<'a>],
-    sorted_fields: &RecordFields,
+    record_fields: RecordFields,
 ) -> Expr<'a> {
     let arena = env.arena;
     let subs = env.subs;
     let mut output = Vec::with_capacity_in(field_layouts.len(), arena);
+
+    let sorted_fields: Vec<_> = Vec::from_iter_in(
+        record_fields.sorted_iterator(&env.subs, Variable::EMPTY_RECORD),
+        env.arena,
+    );
 
     if sorted_fields.len() == 1 {
         // this is a 1-field wrapper record around another record or 1-tag tag union
@@ -595,8 +600,10 @@ fn struct_to_ast<'a>(
         // We'll advance this as we iterate through the fields
         let mut field_ptr = ptr;
 
-        for ((label, field), field_layout) in sorted_fields.iter().zip(field_layouts.iter()) {
-            let content = subs.get_content_without_compacting(*field.as_inner());
+        for ((label, field), field_layout) in sorted_fields.into_iter().zip(field_layouts.iter()) {
+            let var = field.into_inner();
+
+            let content = subs.get_content_without_compacting(var);
             let loc_expr = &*arena.alloc(Located {
                 value: ptr_to_ast(env, field_ptr, field_layout, content),
                 region: Region::zero(),
@@ -638,7 +645,11 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                 FlatType::Record(fields, _) => {
                     debug_assert_eq!(fields.len(), 1);
 
-                    let (label, field) = fields.iter().next().unwrap();
+                    let (label, field) = fields
+                        .sorted_iterator(&env.subs, Variable::EMPTY_RECORD)
+                        .next()
+                        .unwrap();
+
                     let loc_label = Located {
                         value: &*arena.alloc_str(label.as_str()),
                         region: Region::zero(),
@@ -750,7 +761,11 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                 FlatType::Record(fields, _) => {
                     debug_assert_eq!(fields.len(), 1);
 
-                    let (label, field) = fields.iter().next().unwrap();
+                    let (label, field) = fields
+                        .sorted_iterator(&env.subs, Variable::EMPTY_RECORD)
+                        .next()
+                        .unwrap();
+
                     let loc_label = Located {
                         value: &*arena.alloc_str(label.as_str()),
                         region: Region::zero(),
@@ -866,7 +881,11 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                     // Its type signature will tell us that.
                     debug_assert_eq!(fields.len(), 1);
 
-                    let (label, field) = fields.iter().next().unwrap();
+                    let (label, field) = fields
+                        .sorted_iterator(&env.subs, Variable::EMPTY_RECORD)
+                        .next()
+                        .unwrap();
+
                     let loc_label = Located {
                         value: &*arena.alloc_str(label.as_str()),
                         region: Region::zero(),

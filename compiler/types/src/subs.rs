@@ -10,9 +10,9 @@ use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
-static_assertions::assert_eq_size!([u8; 104], Descriptor);
-static_assertions::assert_eq_size!([u8; 88], Content);
-static_assertions::assert_eq_size!([u8; 80], FlatType);
+static_assertions::assert_eq_size!([u8; 72], Descriptor);
+static_assertions::assert_eq_size!([u8; 56], Content);
+static_assertions::assert_eq_size!([u8; 48], FlatType);
 static_assertions::assert_eq_size!([u8; 48], Problem);
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
@@ -54,9 +54,9 @@ struct ErrorTypeState {
 pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>,
     pub variables: Vec<Variable>,
-    tag_names: Vec<TagName>,
-    field_names: Vec<Lowercase>,
-    record_fields: Vec<RecordField<()>>,
+    pub tag_names: Vec<TagName>,
+    pub field_names: Vec<Lowercase>,
+    pub record_fields: Vec<RecordField<()>>,
 }
 
 pub struct SubsSlice<T> {
@@ -70,6 +70,17 @@ pub struct SubsIndex<T> {
     _marker: std::marker::PhantomData<T>,
 }
 
+impl<T> std::fmt::Debug for SubsIndex<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "SubsIndex<{}>({})",
+            std::any::type_name::<T>(),
+            self.start
+        )
+    }
+}
+
 impl std::ops::Index<SubsIndex<Variable>> for Subs {
     type Output = Variable;
 
@@ -81,6 +92,34 @@ impl std::ops::Index<SubsIndex<Variable>> for Subs {
 impl std::ops::IndexMut<SubsIndex<Variable>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<Variable>) -> &mut Self::Output {
         &mut self.variables[index.start as usize]
+    }
+}
+
+impl std::ops::Index<SubsIndex<Lowercase>> for Subs {
+    type Output = Lowercase;
+
+    fn index(&self, index: SubsIndex<Lowercase>) -> &Self::Output {
+        &self.field_names[index.start as usize]
+    }
+}
+
+impl std::ops::IndexMut<SubsIndex<Lowercase>> for Subs {
+    fn index_mut(&mut self, index: SubsIndex<Lowercase>) -> &mut Self::Output {
+        &mut self.field_names[index.start as usize]
+    }
+}
+
+impl std::ops::Index<SubsIndex<RecordField<()>>> for Subs {
+    type Output = RecordField<()>;
+
+    fn index(&self, index: SubsIndex<RecordField<()>>) -> &Self::Output {
+        &self.record_fields[index.start as usize]
+    }
+}
+
+impl std::ops::IndexMut<SubsIndex<RecordField<()>>> for Subs {
+    fn index_mut(&mut self, index: SubsIndex<RecordField<()>>) -> &mut Self::Output {
+        &mut self.record_fields[index.start as usize]
     }
 }
 
@@ -153,6 +192,15 @@ impl<T> SubsSlice<T> {
     }
 }
 
+impl<T> SubsIndex<T> {
+    pub fn new(start: u32) -> Self {
+        Self {
+            start,
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
 impl<T> IntoIterator for SubsSlice<T> {
     type Item = SubsIndex<T>;
 
@@ -184,6 +232,29 @@ impl GetSubsSlice<Variable> for Subs {
 
     fn get_subs_slice_mut(&mut self, subs_slice: SubsSlice<Variable>) -> &mut [Variable] {
         subs_slice.get_slice_mut(&mut self.variables)
+    }
+}
+
+impl GetSubsSlice<RecordField<()>> for Subs {
+    fn get_subs_slice(&self, subs_slice: SubsSlice<RecordField<()>>) -> &[RecordField<()>] {
+        subs_slice.get_slice(&self.record_fields)
+    }
+
+    fn get_subs_slice_mut(
+        &mut self,
+        subs_slice: SubsSlice<RecordField<()>>,
+    ) -> &mut [RecordField<()>] {
+        subs_slice.get_slice_mut(&mut self.record_fields)
+    }
+}
+
+impl GetSubsSlice<Lowercase> for Subs {
+    fn get_subs_slice(&self, subs_slice: SubsSlice<Lowercase>) -> &[Lowercase] {
+        subs_slice.get_slice(&self.field_names)
+    }
+
+    fn get_subs_slice_mut(&mut self, subs_slice: SubsSlice<Lowercase>) -> &mut [Lowercase] {
+        subs_slice.get_slice_mut(&mut self.field_names)
     }
 }
 
@@ -782,230 +853,174 @@ pub enum Builtin {
     EmptyRecord,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct RecordFields {
-    field_names: Vec<Lowercase>,
-    variables: Vec<Variable>,
-    field_type: Vec<RecordField<()>>,
+    pub length: u16,
+    pub field_names_start: u32,
+    pub variables_start: u32,
+    pub field_types_start: u32,
+}
+
+fn first<K: Ord, V>(x: &(K, V), y: &(K, V)) -> std::cmp::Ordering {
+    x.0.cmp(&y.0)
 }
 
 impl RecordFields {
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            field_names: Vec::with_capacity(capacity),
-            variables: Vec::with_capacity(capacity),
-            field_type: Vec::with_capacity(capacity),
-        }
-    }
-
     pub fn len(&self) -> usize {
-        let answer = self.field_names.len();
-
-        debug_assert_eq!(answer, self.variables.len());
-        debug_assert_eq!(answer, self.field_type.len());
-
-        answer
+        self.length as usize
     }
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    pub fn iter_variables(&self) -> impl Iterator<Item = &Variable> {
-        self.variables.iter()
+    pub fn empty() -> Self {
+        Self {
+            length: 0,
+            field_names_start: 0,
+            variables_start: 0,
+            field_types_start: 0,
+        }
     }
 
-    pub fn iter_variables_mut(&mut self) -> impl Iterator<Item = &mut Variable> {
-        self.variables.iter_mut()
+    pub fn iter_variables(&self) -> impl Iterator<Item = SubsIndex<Variable>> {
+        let slice = SubsSlice::new(self.variables_start, self.length);
+        slice.into_iter()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&Lowercase, RecordField<Variable>)> {
-        self.into_iter()
-    }
+    pub fn has_only_optional_fields(&self, subs: &Subs) -> bool {
+        let slice: SubsSlice<RecordField<()>> = SubsSlice::new(self.field_types_start, self.length);
 
-    pub fn has_only_optional_fields(&self) -> bool {
-        self.field_type
+        subs.get_subs_slice(slice)
             .iter()
             .all(|field| matches!(field, RecordField::Optional(_)))
     }
 
-    pub fn from_vec(mut vec: Vec<(Lowercase, RecordField<Variable>)>) -> Self {
-        // we assume there are no duplicate field names in there
-        vec.sort_unstable_by(|(name1, _), (name2, _)| name1.cmp(name2));
-
-        Self::from_sorted_vec(vec)
+    pub fn compare(
+        x: &(Lowercase, RecordField<Variable>),
+        y: &(Lowercase, RecordField<Variable>),
+    ) -> std::cmp::Ordering {
+        first(x, y)
     }
 
-    pub fn from_sorted_vec(vec: Vec<(Lowercase, RecordField<Variable>)>) -> Self {
-        let mut result = RecordFields::with_capacity(vec.len());
+    pub fn insert_into_subs<I>(subs: &mut Subs, input: I) -> Self
+    where
+        I: IntoIterator<Item = (Lowercase, RecordField<Variable>)>,
+    {
+        let field_names_start = subs.field_names.len() as u32;
+        let variables_start = subs.variables.len() as u32;
+        let field_types_start = subs.record_fields.len() as u32;
 
-        result.extend(vec);
+        let mut length = 0;
+        for (k, v) in input {
+            let var = *v.as_inner();
+            let record_field = v.map(|_| ());
 
-        result
-    }
+            subs.field_names.push(k);
+            subs.variables.push(var);
+            subs.record_fields.push(record_field);
 
-    pub fn merge(self, other: Self) -> Self {
-        if other.is_empty() {
-            return self;
+            length += 1;
         }
 
-        // maximum final size (if there is no overlap at all)
-        let final_size = self.len() + other.len();
+        RecordFields {
+            length,
+            field_names_start,
+            variables_start,
+            field_types_start,
+        }
+    }
 
-        let mut result = Self::with_capacity(final_size);
+    #[inline(always)]
+    pub fn sorted_iterator<'a>(
+        &'_ self,
+        subs: &'a Subs,
+        ext: Variable,
+    ) -> Box<dyn Iterator<Item = (Lowercase, RecordField<Variable>)> + 'a> {
+        self.sorted_iterator_help(subs, ext).0
+    }
 
-        let mut it1 = self.into_iter().peekable();
-        let mut it2 = other.into_iter().peekable();
+    #[inline(always)]
+    pub fn sorted_iterator_help<'a>(
+        &'_ self,
+        subs: &'a Subs,
+        ext: Variable,
+    ) -> (
+        Box<dyn Iterator<Item = (Lowercase, RecordField<Variable>)> + 'a>,
+        Variable,
+    ) {
+        if is_empty_record(subs, ext) {
+            (
+                Box::new(self.iter_all().map(move |(i1, i2, i3)| {
+                    let field_name: Lowercase = subs[i1].clone();
+                    let variable = subs[i2];
+                    let record_field: RecordField<Variable> = subs[i3].map(|_| variable);
 
-        loop {
-            let which = match (it1.peek(), it2.peek()) {
-                (Some((l, _)), Some((r, _))) => Some(l.cmp(r)),
-                (Some(_), None) => Some(Ordering::Less),
-                (None, Some(_)) => Some(Ordering::Greater),
-                (None, None) => None,
-            };
+                    (field_name, record_field)
+                })),
+                ext,
+            )
+        } else {
+            let record_structure = crate::types::gather_fields(subs, *self, ext);
 
-            let next_element = match which {
-                Some(Ordering::Less) => it1.next(),
-                Some(Ordering::Equal) => {
-                    let _ = it2.next();
-                    it1.next()
+            (
+                Box::new(record_structure.fields.into_iter()),
+                record_structure.ext,
+            )
+        }
+    }
+
+    pub fn iter_all(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            SubsIndex<Lowercase>,
+            SubsIndex<Variable>,
+            SubsIndex<RecordField<()>>,
+        ),
+    > {
+        let range1 = self.field_names_start..self.field_names_start + self.length as u32;
+        let range2 = self.variables_start..self.variables_start + self.length as u32;
+        let range3 = self.field_types_start..self.field_types_start + self.length as u32;
+
+        let it = range1
+            .into_iter()
+            .zip(range2.into_iter())
+            .zip(range3.into_iter());
+
+        it.map(|((i1, i2), i3)| (SubsIndex::new(i1), SubsIndex::new(i2), SubsIndex::new(i3)))
+    }
+}
+
+fn is_empty_record(subs: &Subs, mut var: Variable) -> bool {
+    use crate::subs::Content::*;
+    use crate::subs::FlatType::*;
+
+    loop {
+        match subs.get_content_without_compacting(var) {
+            Structure(EmptyRecord) => return true,
+            Structure(Record(sub_fields, sub_ext)) => {
+                if !sub_fields.is_empty() {
+                    return false;
                 }
-                Some(Ordering::Greater) => it2.next(),
-                None => break,
-            };
 
-            result.extend([next_element.unwrap()]);
+                var = *sub_ext;
+            }
+
+            Alias(_, _, actual_var) => {
+                // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
+                var = *actual_var;
+            }
+
+            _ => return false,
         }
-
-        result
-    }
-
-    pub fn separate(self, other: Self) -> SeparateRecordFields {
-        let max_common = self.len().min(other.len());
-
-        let mut result = SeparateRecordFields {
-            only_in_1: RecordFields::with_capacity(self.len()),
-            only_in_2: RecordFields::with_capacity(other.len()),
-            in_both: Vec::with_capacity(max_common),
-        };
-
-        let mut it1 = self.into_iter().peekable();
-        let mut it2 = other.into_iter().peekable();
-
-        loop {
-            let which = match (it1.peek(), it2.peek()) {
-                (Some((l, _)), Some((r, _))) => Some(l.cmp(r)),
-                (Some(_), None) => Some(Ordering::Less),
-                (None, Some(_)) => Some(Ordering::Greater),
-                (None, None) => None,
-            };
-
-            match which {
-                Some(Ordering::Less) => result.only_in_1.extend(it1.next()),
-                Some(Ordering::Equal) => {
-                    let (label, field1) = it1.next().unwrap();
-                    let (_, field2) = it2.next().unwrap();
-
-                    result.in_both.push((label, field1, field2));
-                }
-                Some(Ordering::Greater) => result.only_in_2.extend(it2.next()),
-                None => break,
-            };
-        }
-
-        result
     }
 }
 
 pub struct SeparateRecordFields {
-    pub only_in_1: RecordFields,
-    pub only_in_2: RecordFields,
+    pub only_in_1: Vec<(Lowercase, RecordField<Variable>)>,
+    pub only_in_2: Vec<(Lowercase, RecordField<Variable>)>,
     pub in_both: Vec<(Lowercase, RecordField<Variable>, RecordField<Variable>)>,
-}
-
-impl Extend<(Lowercase, RecordField<Variable>)> for RecordFields {
-    fn extend<T: IntoIterator<Item = (Lowercase, RecordField<Variable>)>>(&mut self, iter: T) {
-        for (name, record_field) in iter.into_iter() {
-            self.field_names.push(name);
-            self.field_type.push(record_field.map(|_| ()));
-            self.variables.push(record_field.into_inner());
-        }
-    }
-}
-
-impl FromIterator<(Lowercase, RecordField<Variable>)> for RecordFields {
-    fn from_iter<T: IntoIterator<Item = (Lowercase, RecordField<Variable>)>>(iter: T) -> Self {
-        let vec: Vec<_> = iter.into_iter().collect();
-        Self::from_vec(vec)
-    }
-}
-
-impl<'a> FromIterator<(&'a Lowercase, RecordField<Variable>)> for RecordFields {
-    fn from_iter<T: IntoIterator<Item = (&'a Lowercase, RecordField<Variable>)>>(iter: T) -> Self {
-        let vec: Vec<_> = iter.into_iter().map(|(a, b)| (a.clone(), b)).collect();
-        Self::from_vec(vec)
-    }
-}
-
-impl IntoIterator for RecordFields {
-    type Item = (Lowercase, RecordField<Variable>);
-
-    #[allow(clippy::type_complexity)]
-    type IntoIter = Map<
-        Zip<
-            Zip<std::vec::IntoIter<Lowercase>, std::vec::IntoIter<Variable>>,
-            std::vec::IntoIter<RecordField<()>>,
-        >,
-        fn(((Lowercase, Variable), RecordField<()>)) -> (Lowercase, RecordField<Variable>),
-    >;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.field_names
-            .into_iter()
-            .zip(self.variables.into_iter())
-            .zip(self.field_type.into_iter())
-            .map(record_fields_into_iterator_help)
-    }
-}
-
-fn record_fields_into_iterator_help(
-    arg: ((Lowercase, Variable), RecordField<()>),
-) -> (Lowercase, RecordField<Variable>) {
-    let ((name, var), field_type) = arg;
-
-    (name, field_type.map(|_| var))
-}
-
-impl<'a> IntoIterator for &'a RecordFields {
-    type Item = (&'a Lowercase, RecordField<Variable>);
-
-    #[allow(clippy::type_complexity)]
-    type IntoIter = Map<
-        Zip<
-            Zip<std::slice::Iter<'a, Lowercase>, std::slice::Iter<'a, Variable>>,
-            std::slice::Iter<'a, RecordField<()>>,
-        >,
-        fn(
-            ((&'a Lowercase, &Variable), &RecordField<()>),
-        ) -> (&'a Lowercase, RecordField<Variable>),
-    >;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.field_names
-            .iter()
-            .zip(self.variables.iter())
-            .zip(self.field_type.iter())
-            .map(ref_record_fields_into_iterator_help)
-    }
-}
-
-fn ref_record_fields_into_iterator_help<'a>(
-    arg: ((&'a Lowercase, &Variable), &RecordField<()>),
-) -> (&'a Lowercase, RecordField<Variable>) {
-    let ((name, var), field_type) = arg;
-
-    (name, field_type.map(|_| *var))
 }
 
 fn occurs(
@@ -1038,7 +1053,9 @@ fn occurs(
                         short_circuit(subs, root_var, &new_seen, it)
                     }
                     Record(vars_by_field, ext_var) => {
-                        let it = once(ext_var).chain(vars_by_field.iter_variables());
+                        let slice =
+                            SubsSlice::new(vars_by_field.variables_start, vars_by_field.length);
+                        let it = once(ext_var).chain(subs.get_subs_slice(slice).iter());
                         short_circuit(subs, root_var, &new_seen, it)
                     }
                     TagUnion(tags, ext_var) => {
@@ -1164,8 +1181,10 @@ fn explicit_substitute(
                         Record(mut vars_by_field, ext_var) => {
                             let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
 
-                            for var in vars_by_field.variables.iter_mut() {
-                                *var = explicit_substitute(subs, from, to, *var, seen);
+                            for index in vars_by_field.iter_variables() {
+                                let var = subs[index];
+                                let new_var = explicit_substitute(subs, from, to, var, seen);
+                                subs[index] = new_var;
                             }
 
                             subs.set_content(in_var, Structure(Record(vars_by_field, new_ext_var)));
@@ -1262,13 +1281,15 @@ fn get_var_names(
                 }
 
                 FlatType::Record(vars_by_field, ext_var) => {
-                    let taken_names = get_var_names(subs, ext_var, taken_names);
+                    let mut accum = get_var_names(subs, ext_var, taken_names);
 
-                    vars_by_field
-                        .into_iter()
-                        .fold(taken_names, |answer, (_, field)| {
-                            get_var_names(subs, field.into_inner(), answer)
-                        })
+                    for var_index in vars_by_field.iter_variables() {
+                        let arg_var = subs[var_index];
+
+                        accum = get_var_names(subs, arg_var, accum)
+                    }
+
+                    accum
                 }
                 FlatType::TagUnion(tags, ext_var) => {
                     let mut taken_names = get_var_names(subs, ext_var, taken_names);
@@ -1477,16 +1498,21 @@ fn flat_type_to_err_type(
         Record(vars_by_field, ext_var) => {
             let mut err_fields = SendMap::default();
 
-            for (field, field_var) in vars_by_field.into_iter() {
-                use RecordField::*;
+            for (i1, i2, i3) in vars_by_field.iter_all() {
+                let label = subs[i1].clone();
+                let var = subs[i2];
+                let record_field = subs[i3];
 
-                let err_type = match field_var {
-                    Optional(var) => Optional(var_to_err_type(subs, state, var)),
-                    Required(var) => Required(var_to_err_type(subs, state, var)),
-                    Demanded(var) => Demanded(var_to_err_type(subs, state, var)),
+                let error_type = var_to_err_type(subs, state, var);
+
+                use RecordField::*;
+                let err_record_field = match record_field {
+                    Optional(_) => Optional(error_type),
+                    Required(_) => Required(error_type),
+                    Demanded(_) => Demanded(error_type),
                 };
 
-                err_fields.insert(field, err_type);
+                err_fields.insert(label, err_record_field);
             }
 
             match var_to_err_type(subs, state, ext_var).unwrap_alias() {
@@ -1651,8 +1677,9 @@ fn restore_content(subs: &mut Subs, content: &Content) {
             EmptyTagUnion => (),
 
             Record(fields, ext_var) => {
-                for var in fields.iter_variables() {
-                    subs.restore(*var);
+                for index in fields.iter_variables() {
+                    let var = subs[index];
+                    subs.restore(var);
                 }
 
                 subs.restore(*ext_var);

@@ -978,8 +978,10 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
     }
 }
 
+#[derive(Debug)]
 pub struct RecordStructure {
-    pub fields: RecordFields,
+    /// Invariant: these should be sorted!
+    pub fields: Vec<(Lowercase, RecordField<Variable>)>,
     pub ext: Variable,
 }
 
@@ -1519,20 +1521,23 @@ pub fn name_type_var(letters_used: u32, taken: &mut MutSet<Lowercase>) -> (Lower
     }
 }
 
-pub fn gather_fields(
-    subs: &Subs,
+pub fn gather_fields_unsorted_iter<'a>(
+    subs: &'a Subs,
     other_fields: RecordFields,
     mut var: Variable,
-) -> RecordStructure {
+) -> (
+    impl Iterator<Item = (&'a Lowercase, RecordField<Variable>)> + 'a,
+    Variable,
+) {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
-    let mut result = other_fields;
+    let mut stack = vec![other_fields];
 
     loop {
         match subs.get_content_without_compacting(var) {
             Structure(Record(sub_fields, sub_ext)) => {
-                result = RecordFields::merge(result, sub_fields.clone());
+                stack.push(*sub_fields);
 
                 var = *sub_ext;
             }
@@ -1545,52 +1550,33 @@ pub fn gather_fields(
             _ => break,
         }
     }
+
+    let it = stack
+        .into_iter()
+        .map(|fields| fields.iter_all())
+        .flatten()
+        .map(move |(i1, i2, i3)| {
+            let field_name: &Lowercase = &subs[i1];
+            let variable = subs[i2];
+            let record_field: RecordField<Variable> = subs[i3].map(|_| variable);
+
+            (field_name, record_field)
+        });
+
+    (it, var)
+}
+
+pub fn gather_fields(subs: &Subs, other_fields: RecordFields, var: Variable) -> RecordStructure {
+    let (it, ext) = gather_fields_unsorted_iter(subs, other_fields, var);
+
+    let mut result: Vec<_> = it
+        .map(|(ref_label, field)| (ref_label.clone(), field))
+        .collect();
+
+    result.sort_by(|(a, _), (b, _)| a.cmp(b));
 
     RecordStructure {
         fields: result,
-        ext: var,
-    }
-}
-
-pub fn gather_fields_ref(
-    subs: &Subs,
-    other_fields: &RecordFields,
-    mut var: Variable,
-) -> RecordStructure {
-    use crate::subs::Content::*;
-    use crate::subs::FlatType::*;
-
-    let mut from_ext = Vec::new();
-
-    loop {
-        match subs.get_content_without_compacting(var) {
-            Structure(Record(sub_fields, sub_ext)) => {
-                from_ext.extend(sub_fields.into_iter());
-
-                var = *sub_ext;
-            }
-
-            Alias(_, _, actual_var) => {
-                // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
-                var = *actual_var;
-            }
-
-            _ => break,
-        }
-    }
-
-    if from_ext.is_empty() {
-        RecordStructure {
-            fields: other_fields.clone(),
-            ext: var,
-        }
-    } else {
-        RecordStructure {
-            fields: other_fields
-                .into_iter()
-                .chain(from_ext.into_iter())
-                .collect(),
-            ext: var,
-        }
+        ext,
     }
 }

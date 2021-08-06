@@ -10,7 +10,7 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
-    Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, SubsSlice, Variable,
+    Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs, SubsSlice, Variable,
 };
 use roc_types::types::{Alias, Category, ErrorType, PatternCategory, RecordField};
 use roc_unify::unify::unify;
@@ -762,7 +762,10 @@ fn type_to_variable<'a>(
                 Err((new, _)) => new,
             };
 
-            let record_fields = field_vars.into_iter().collect();
+            let mut all_fields: Vec<_> = field_vars.into_iter().collect();
+            all_fields.sort_unstable_by(RecordFields::compare);
+
+            let record_fields = RecordFields::insert_into_subs(subs, all_fields);
 
             let content = Content::Structure(FlatType::Record(record_fields, new_ext_var));
 
@@ -1220,9 +1223,9 @@ fn adjust_rank_content(
                 Record(fields, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
 
-                    for var in fields.iter_variables() {
-                        rank =
-                            rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
+                    for index in fields.iter_variables() {
+                        let var = subs[index];
+                        rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
                     }
 
                     rank
@@ -1370,8 +1373,9 @@ fn instantiate_rigids_help(
                 EmptyRecord | EmptyTagUnion | Erroneous(_) => {}
 
                 Record(fields, ext_var) => {
-                    for var in fields.iter_variables() {
-                        instantiate_rigids_help(subs, max_rank, pools, *var);
+                    for index in fields.iter_variables() {
+                        let var = subs[index];
+                        instantiate_rigids_help(subs, max_rank, pools, var);
                     }
 
                     instantiate_rigids_help(subs, max_rank, pools, ext_var);
@@ -1518,9 +1522,24 @@ fn deep_copy_var_help(
                 same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
 
                 Record(mut fields, ext_var) => {
-                    for var in fields.iter_variables_mut() {
-                        *var = deep_copy_var_help(subs, max_rank, pools, *var);
+                    let mut new_vars = Vec::with_capacity(fields.len());
+                    for index in fields.iter_variables() {
+                        let var = subs[index];
+                        let copy_var = deep_copy_var_help(subs, max_rank, pools, var);
+                        new_vars.push(copy_var);
                     }
+
+                    let it = fields.iter_all().zip(new_vars).map(|((i1, _, i3), var)| {
+                        let label = subs[i1].clone();
+                        let record_field = subs[i3].map(|_| var);
+
+                        (label, record_field)
+                    });
+
+                    // lifetime troubles
+                    let vec: Vec<_> = it.collect();
+
+                    let record_fields = RecordFields::insert_into_subs(subs, vec);
 
                     Record(fields, deep_copy_var_help(subs, max_rank, pools, ext_var))
                 }
