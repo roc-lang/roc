@@ -356,3 +356,19 @@ fn constrain_run_low_level() {
         "List Str",
     )
 }
+
+#[test]
+fn constrain_closure() {
+    infer_eq(
+        indoc!(
+            r#"
+            x = 1
+
+            y = \{} -> x
+
+            y
+            "#
+        ),
+        "{ name : Str }",
+    )
+}
