@@ -13,6 +13,7 @@
 use libc::{c_void, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 use roc_can::expected::Expected;
 use roc_can::expected::PExpected;
+use std::any::type_name;
 use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::mem::size_of;
@@ -322,7 +323,12 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
     }
 
     pub fn with_capacity(len: u32, pool: &mut Pool) -> Self {
-        debug_assert!(size_of::<T>() <= NODE_BYTES, "{}", size_of::<T>());
+        debug_assert!(
+            size_of::<T>() <= NODE_BYTES,
+            "{} has a size of {}",
+            type_name::<T>(),
+            size_of::<T>()
+        );
 
         if len == 0 {
             Self::empty(pool)
