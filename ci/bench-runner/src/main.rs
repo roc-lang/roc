@@ -224,7 +224,6 @@ fn calc_hashes_for_folder(benches_path_str: &str) -> HashMap<String, String> {
         }
     }
 
-    dbg!(&files_w_sha);
     files_w_sha
 }
 
