@@ -969,7 +969,7 @@ pub fn constrain_expr<'a>(
 
             let captured_symbols_as_vec = captured_symbols
                 .iter(env.pool)
-                .map(|x| *x)
+                .copied()
                 .collect::<Vec<(Symbol, Variable)>>();
 
             // make sure the captured symbols are sorted!
@@ -1543,6 +1543,7 @@ fn constrain_untyped_args<'a>(
     (vars, pattern_state, function_type)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn constrain_closure_size<'a>(
     arena: &'a Bump,
     env: &mut Env,
