@@ -58,27 +58,24 @@ pub struct Subs {
     pub record_fields: Vec<RecordField<()>>,
 }
 
+/// A slice into the Vec<T> of subs
+///
+/// The starting position is a u32 which should be plenty
+/// We limit slices to u16::MAX = 65535 elements
 pub struct SubsSlice<T> {
     start: u32,
     length: u16,
     _marker: std::marker::PhantomData<T>,
 }
 
+/// An index into the Vec<T> of subs
 pub struct SubsIndex<T> {
     start: u32,
     _marker: std::marker::PhantomData<T>,
 }
 
-impl<T> std::fmt::Debug for SubsIndex<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "SubsIndex<{}>({})",
-            std::any::type_name::<T>(),
-            self.start
-        )
-    }
-}
+// make `subs[some_index]` work. The types/trait resolution make sure we get the
+// element from the right vector
 
 impl std::ops::Index<SubsIndex<Variable>> for Subs {
     type Output = Variable;
@@ -122,6 +119,19 @@ impl std::ops::IndexMut<SubsIndex<RecordField<()>>> for Subs {
     }
 }
 
+// custom debug
+
+impl<T> std::fmt::Debug for SubsIndex<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "SubsIndex<{}>({})",
+            std::any::type_name::<T>(),
+            self.start
+        )
+    }
+}
+
 impl<T> std::fmt::Debug for SubsSlice<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -131,6 +141,8 @@ impl<T> std::fmt::Debug for SubsSlice<T> {
         )
     }
 }
+
+// derive of copy and clone does not play well with PhantomData
 
 impl<T> Copy for SubsIndex<T> {}
 
@@ -220,17 +232,11 @@ fn u32_to_index<T>(i: u32) -> SubsIndex<T> {
 
 pub trait GetSubsSlice<T> {
     fn get_subs_slice(&self, subs_slice: SubsSlice<T>) -> &[T];
-
-    fn get_subs_slice_mut(&mut self, subs_slice: SubsSlice<T>) -> &mut [T];
 }
 
 impl GetSubsSlice<Variable> for Subs {
     fn get_subs_slice(&self, subs_slice: SubsSlice<Variable>) -> &[Variable] {
         subs_slice.get_slice(&self.variables)
-    }
-
-    fn get_subs_slice_mut(&mut self, subs_slice: SubsSlice<Variable>) -> &mut [Variable] {
-        subs_slice.get_slice_mut(&mut self.variables)
     }
 }
 
@@ -238,22 +244,11 @@ impl GetSubsSlice<RecordField<()>> for Subs {
     fn get_subs_slice(&self, subs_slice: SubsSlice<RecordField<()>>) -> &[RecordField<()>] {
         subs_slice.get_slice(&self.record_fields)
     }
-
-    fn get_subs_slice_mut(
-        &mut self,
-        subs_slice: SubsSlice<RecordField<()>>,
-    ) -> &mut [RecordField<()>] {
-        subs_slice.get_slice_mut(&mut self.record_fields)
-    }
 }
 
 impl GetSubsSlice<Lowercase> for Subs {
     fn get_subs_slice(&self, subs_slice: SubsSlice<Lowercase>) -> &[Lowercase] {
         subs_slice.get_slice(&self.field_names)
-    }
-
-    fn get_subs_slice_mut(&mut self, subs_slice: SubsSlice<Lowercase>) -> &mut [Lowercase] {
-        subs_slice.get_slice_mut(&mut self.field_names)
     }
 }
 
@@ -932,13 +927,20 @@ impl RecordFields {
         }
     }
 
+    /// Get a sorted iterator over the fields of this record type
+    ///
+    /// Implementation: When the record has an `ext` variable that is the empty record, then
+    /// we read the (assumed sorted) fields directly from Subs. Otherwise we have to chase the
+    /// ext var, then sort the fields.
+    ///
+    /// Hopefully the inline will get rid of the Box in practice
     #[inline(always)]
     pub fn sorted_iterator<'a>(&'_ self, subs: &'a Subs, ext: Variable) -> SortedIterator<'a> {
-        self.sorted_iterator_help(subs, ext).0
+        self.sorted_iterator_and_ext(subs, ext).0
     }
 
     #[inline(always)]
-    pub fn sorted_iterator_help<'a>(
+    pub fn sorted_iterator_and_ext<'a>(
         &'_ self,
         subs: &'a Subs,
         ext: Variable,
@@ -1009,12 +1011,6 @@ fn is_empty_record(subs: &Subs, mut var: Variable) -> bool {
             _ => return false,
         }
     }
-}
-
-pub struct SeparateRecordFields {
-    pub only_in_1: Vec<(Lowercase, RecordField<Variable>)>,
-    pub only_in_2: Vec<(Lowercase, RecordField<Variable>)>,
-    pub in_both: Vec<(Lowercase, RecordField<Variable>, RecordField<Variable>)>,
 }
 
 fn occurs(
