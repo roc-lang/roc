@@ -36,8 +36,9 @@ pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 pub fn build_app<'a>() -> App<'a> {
     let app = App::new("roc")
         .version(concatcp!(crate_version!(), "\n"))
+        .about("Runs the given .roc file. Use one of the SUBCOMMANDS below to do something else!")
         .subcommand(App::new(CMD_BUILD)
-            .about("Build a program")
+            .about("Build a binary from the given .roc file, but don't run it")
             .arg(
                 Arg::with_name(ROC_FILE)
                     .help("The .roc file to build")
@@ -46,7 +47,7 @@ pub fn build_app<'a>() -> App<'a> {
             .arg(
                 Arg::with_name(FLAG_OPTIMIZE)
                     .long(FLAG_OPTIMIZE)
-                    .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+                    .help("Optimize your compiled Roc program to run faster. (Optimization takes time to complete.)")
                     .required(false),
             )
             .arg(
