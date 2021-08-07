@@ -1547,7 +1547,13 @@ pub fn gather_fields_unsorted_iter(
                 var = *actual_var;
             }
 
-            _ => break,
+            Structure(EmptyRecord) => break,
+            FlexVar(_) => break,
+
+            // TODO investigate apparently this one pops up in the reporting tests!
+            RigidVar(_) => break,
+
+            other => unreachable!("something weird ended up in a record type: {:?}", other),
         }
     }
 

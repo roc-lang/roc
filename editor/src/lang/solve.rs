@@ -13,7 +13,9 @@ use roc_types::subs::{
     Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs, Variable,
     VariableSubsSlice,
 };
-use roc_types::types::{Alias, Category, ErrorType, PatternCategory, RecordField};
+use roc_types::types::{
+    gather_fields_unsorted_iter, Alias, Category, ErrorType, PatternCategory, RecordField,
+};
 use roc_unify::unify::unify;
 use roc_unify::unify::Unified::*;
 
@@ -712,7 +714,7 @@ fn type_to_variable<'a>(
         EmptyTagUnion => roc_types::subs::Variable::EMPTY_TAG_UNION,
 
         Record(fields, ext_id) => {
-            let mut field_vars = MutMap::default();
+            let mut field_vars = Vec::new();
 
             for node_id in fields.iter_node_ids() {
                 use RecordField::*;
@@ -749,24 +751,23 @@ fn type_to_variable<'a>(
                     )),
                 };
 
-                field_vars.insert(field.as_str(mempool).into(), field_var);
+                field_vars.push((field.as_str(mempool).into(), field_var));
             }
 
             let ext = mempool.get(*ext_id);
             let temp_ext_var = type_to_variable(arena, mempool, subs, rank, pools, cached, ext);
-            let new_ext_var = match roc_types::pretty_print::chase_ext_record(
-                subs,
-                temp_ext_var,
-                &mut field_vars,
-            ) {
-                Ok(()) => roc_types::subs::Variable::EMPTY_RECORD,
-                Err((new, _)) => new,
-            };
 
-            let mut all_fields: Vec<_> = field_vars.into_iter().collect();
-            all_fields.sort_unstable_by(RecordFields::compare);
+            let (it, new_ext_var) =
+                gather_fields_unsorted_iter(subs, RecordFields::empty(), temp_ext_var);
 
-            let record_fields = RecordFields::insert_into_subs(subs, all_fields);
+            let it = it
+                .into_iter()
+                .map(|(field, field_type)| (field.clone(), field_type));
+
+            field_vars.extend(it);
+            field_vars.sort_unstable_by(RecordFields::compare);
+
+            let record_fields = RecordFields::insert_into_subs(subs, field_vars);
 
             let content = Content::Structure(FlatType::Record(record_fields, new_ext_var));
 

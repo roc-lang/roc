@@ -414,15 +414,8 @@ fn unify_shared_fields(
     if num_shared_fields == matching_fields.len() {
         // pull fields in from the ext_var
 
-        let mut ext_fields = MutMap::default();
-        let new_ext_var =
-            match roc_types::pretty_print::chase_ext_record(subs, ext, &mut ext_fields) {
-                Ok(()) => Variable::EMPTY_RECORD,
-                Err((new, _)) => new,
-            };
-
-        let mut ext_fields: Vec<_> = ext_fields.into_iter().collect();
-        ext_fields.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
+        let (ext_fields, new_ext_var) = RecordFields::empty().sorted_iterator_and_ext(subs, ext);
+        let ext_fields: Vec<_> = ext_fields.into_iter().collect();
 
         let fields: RecordFields = match other_fields {
             OtherFields::None => {
@@ -1265,11 +1258,11 @@ fn unify_flat_type(
                 }
             } else {
                 let mut tags1 = MutMap::default();
-                tags1.insert(tag_name_1.clone(), vec![]);
+                tags1.insert(tag_name_1, vec![]);
                 let union1 = gather_tags(subs, tags1, *ext_1);
 
                 let mut tags2 = MutMap::default();
-                tags2.insert(tag_name_2.clone(), vec![]);
+                tags2.insert(tag_name_2, vec![]);
                 let union2 = gather_tags(subs, tags2, *ext_2);
 
                 unify_tag_union(subs, pool, ctx, union1, union2, (None, None))
@@ -1280,7 +1273,7 @@ fn unify_flat_type(
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
 
             let mut tags2 = MutMap::default();
-            tags2.insert(tag_name.clone(), vec![]);
+            tags2.insert(tag_name, vec![]);
             let union2 = gather_tags(subs, tags2, *ext2);
 
             unify_tag_union(subs, pool, ctx, union1, union2, (None, None))
@@ -1288,7 +1281,7 @@ fn unify_flat_type(
         (FunctionOrTagUnion(tag_name, _, ext1), TagUnion(tags2, ext2)) => {
             let tag_name = subs[*tag_name].clone();
             let mut tags1 = MutMap::default();
-            tags1.insert(tag_name.clone(), vec![]);
+            tags1.insert(tag_name, vec![]);
             let union1 = gather_tags(subs, tags1, *ext1);
 
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
@@ -1303,7 +1296,7 @@ fn unify_flat_type(
             let tag_name = subs[*tag_name].clone();
 
             let mut tags2 = MutMap::default();
-            tags2.insert(tag_name.clone(), vec![]);
+            tags2.insert(tag_name, vec![]);
 
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
             let union2 = gather_tags(subs, tags2, *ext2);
@@ -1324,7 +1317,7 @@ fn unify_flat_type(
             let tag_name = subs[*tag_name].clone();
 
             let mut tags1 = MutMap::default();
-            tags1.insert(tag_name.clone(), vec![]);
+            tags1.insert(tag_name, vec![]);
 
             let union1 = gather_tags(subs, tags1, *ext1);
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
@@ -1560,7 +1553,7 @@ fn unify_function_or_tag_union_and_func(
     let mut new_tags = MutMap::with_capacity_and_hasher(1, default_hasher());
 
     new_tags.insert(
-        tag_name.clone(),
+        tag_name,
         subs.get_subs_slice(*function_arguments.as_subs_slice())
             .to_owned(),
     );

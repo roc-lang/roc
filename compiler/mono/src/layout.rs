@@ -4,8 +4,8 @@ use bumpalo::Bump;
 use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
-use roc_types::subs::{Content, FlatType, Subs, Variable};
-use roc_types::types::RecordField;
+use roc_types::subs::{Content, FlatType, RecordFields, Subs, Variable};
+use roc_types::types::{gather_fields_unsorted_iter, RecordField};
 use std::collections::HashMap;
 use ven_pretty::{DocAllocator, DocBuilder};
 
@@ -1358,26 +1358,27 @@ pub fn sort_record_fields<'a>(
     var: Variable,
     subs: &Subs,
 ) -> Vec<'a, (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>)> {
-    let mut fields_map = MutMap::default();
-
     let mut env = Env {
         arena,
         subs,
         seen: MutSet::default(),
     };
 
-    match roc_types::pretty_print::chase_ext_record(subs, var, &mut fields_map) {
-        Ok(()) | Err((_, Content::FlexVar(_))) => sort_record_fields_help(&mut env, fields_map),
-        Err(other) => panic!("invalid content in record variable: {:?}", other),
-    }
+    let (it, _) = gather_fields_unsorted_iter(subs, RecordFields::empty(), var);
+
+    let it = it
+        .into_iter()
+        .map(|(field, field_type)| (field.clone(), field_type));
+
+    sort_record_fields_help(&mut env, it)
 }
 
 fn sort_record_fields_help<'a>(
     env: &mut Env<'a, '_>,
-    fields_map: MutMap<Lowercase, RecordField<Variable>>,
+    fields_map: impl Iterator<Item = (Lowercase, RecordField<Variable>)>,
 ) -> Vec<'a, (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>)> {
     // Sort the fields by label
-    let mut sorted_fields = Vec::with_capacity_in(fields_map.len(), env.arena);
+    let mut sorted_fields = Vec::with_capacity_in(fields_map.size_hint().0, env.arena);
 
     for (label, field) in fields_map {
         let var = match field {
@@ -1392,10 +1393,7 @@ fn sort_record_fields_help<'a>(
 
         let layout = Layout::from_var(env, var).expect("invalid layout from var");
 
-        // Drop any zero-sized fields like {}
-        if !layout.is_dropped_because_empty() {
-            sorted_fields.push((label, var, Ok(layout)));
-        }
+        sorted_fields.push((label, var, Ok(layout)));
     }
 
     sorted_fields.sort_by(

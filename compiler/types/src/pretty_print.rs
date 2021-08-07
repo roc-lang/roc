@@ -572,35 +572,6 @@ pub fn chase_ext_tag_union<'a>(
     }
 }
 
-pub fn chase_ext_record(
-    subs: &Subs,
-    var: Variable,
-    fields: &mut MutMap<Lowercase, RecordField<Variable>>,
-) -> Result<(), (Variable, Content)> {
-    use crate::subs::Content::*;
-    use crate::subs::FlatType::*;
-
-    match subs.get_content_without_compacting(var) {
-        Structure(Record(sub_fields, sub_ext)) => {
-            for (i1, i2, i3) in sub_fields.iter_all() {
-                let label = &subs[i1];
-                let var = subs[i2];
-                let record_field = subs[i3].map(|_| var);
-
-                fields.insert(label.clone(), record_field);
-            }
-
-            chase_ext_record(subs, *sub_ext, fields)
-        }
-
-        Structure(EmptyRecord) => Ok(()),
-
-        Alias(_, _, var) => chase_ext_record(subs, *var, fields),
-
-        content => Err((var, content.clone())),
-    }
-}
-
 fn write_apply(
     env: &Env,
     symbol: Symbol,
