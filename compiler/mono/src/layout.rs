@@ -1256,7 +1256,7 @@ fn layout_from_flat_type<'a>(
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
             let mut tags = MutMap::default();
-            tags.insert(*tag_name, vec![]);
+            tags.insert(subs[tag_name].clone(), vec![]);
 
             Ok(layout_from_tag_union(arena, tags, subs))
         }

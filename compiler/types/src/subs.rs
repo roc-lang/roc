@@ -100,6 +100,20 @@ impl std::ops::Index<SubsIndex<Lowercase>> for Subs {
     }
 }
 
+impl std::ops::Index<SubsIndex<TagName>> for Subs {
+    type Output = TagName;
+
+    fn index(&self, index: SubsIndex<TagName>) -> &Self::Output {
+        &self.tag_names[index.start as usize]
+    }
+}
+
+impl std::ops::IndexMut<SubsIndex<TagName>> for Subs {
+    fn index_mut(&mut self, index: SubsIndex<TagName>) -> &mut Self::Output {
+        &mut self.tag_names[index.start as usize]
+    }
+}
+
 impl std::ops::IndexMut<SubsIndex<Lowercase>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<Lowercase>) -> &mut Self::Output {
         &mut self.field_names[index.start as usize]
@@ -833,7 +847,7 @@ pub enum FlatType {
     Func(VariableSubsSlice, Variable, Variable),
     Record(RecordFields, Variable),
     TagUnion(MutMap<TagName, Vec<Variable>>, Variable),
-    FunctionOrTagUnion(Box<TagName>, Symbol, Variable),
+    FunctionOrTagUnion(SubsIndex<TagName>, Symbol, Variable),
     RecursiveTagUnion(Variable, MutMap<TagName, Vec<Variable>>, Variable),
     Erroneous(Box<Problem>),
     EmptyRecord,
@@ -1661,7 +1675,7 @@ fn flat_type_to_err_type(
         }
 
         FunctionOrTagUnion(tag_name, _, ext_var) => {
-            let tag_name = *tag_name;
+            let tag_name = subs[tag_name].clone();
 
             let mut err_tags = SendMap::default();
 

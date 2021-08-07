@@ -5,8 +5,8 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
-    Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs, Variable,
-    VariableSubsSlice,
+    Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs, SubsIndex,
+    Variable, VariableSubsSlice,
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{Alias, Category, ErrorType, PatternCategory};
@@ -746,11 +746,12 @@ fn type_to_variable(
             };
             debug_assert!(ext_tag_vec.is_empty());
 
-            let content = Content::Structure(FlatType::FunctionOrTagUnion(
-                Box::new(tag_name.clone()),
-                *symbol,
-                new_ext_var,
-            ));
+            let start = subs.tag_names.len() as u32;
+            subs.tag_names.push(tag_name.clone());
+            let slice = SubsIndex::new(start);
+
+            let content =
+                Content::Structure(FlatType::FunctionOrTagUnion(slice, *symbol, new_ext_var));
 
             register(subs, rank, pools, content)
         }

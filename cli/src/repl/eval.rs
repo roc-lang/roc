@@ -168,13 +168,21 @@ fn jit_to_ast_help<'a>(
                         env,
                         ptr,
                         field_layouts,
-                        tag_name.clone(),
+                        tag_name,
                         payload_vars,
                     ))
                 }
-                Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => Ok(
-                    single_tag_union_to_ast(env, ptr, field_layouts, *tag_name.clone(), &[]),
-                ),
+                Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
+                    let tag_name = &env.subs[*tag_name];
+
+                    Ok(single_tag_union_to_ast(
+                        env,
+                        ptr,
+                        field_layouts,
+                        tag_name,
+                        &[],
+                    ))
+                }
                 Content::Structure(FlatType::Func(_, _, _)) => {
                     // a function with a struct as the closure environment
                     Err(ToAstProblem::FunctionLayout)
@@ -432,10 +440,11 @@ fn ptr_to_ast<'a>(
                 debug_assert_eq!(tags.len(), 1);
 
                 let (tag_name, payload_vars) = tags.iter().next().unwrap();
-                single_tag_union_to_ast(env, ptr, field_layouts, tag_name.clone(), payload_vars)
+                single_tag_union_to_ast(env, ptr, field_layouts, tag_name, payload_vars)
             }
             Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
-                single_tag_union_to_ast(env, ptr, field_layouts, *tag_name.clone(), &[])
+                let tag_name = &env.subs[*tag_name];
+                single_tag_union_to_ast(env, ptr, field_layouts, tag_name, &[])
             }
             Content::Structure(FlatType::EmptyRecord) => {
                 struct_to_ast(env, ptr, &[], RecordFields::empty())
@@ -506,14 +515,14 @@ fn single_tag_union_to_ast<'a>(
     env: &Env<'a, '_>,
     ptr: *const u8,
     field_layouts: &'a [Layout<'a>],
-    tag_name: TagName,
+    tag_name: &TagName,
     payload_vars: &[Variable],
 ) -> Expr<'a> {
     debug_assert_eq!(field_layouts.len(), payload_vars.len());
 
     let arena = env.arena;
 
-    let tag_expr = tag_name_to_expr(env, &tag_name);
+    let tag_expr = tag_name_to_expr(env, tag_name);
 
     let loc_tag_expr = &*arena.alloc(Located::at_zero(tag_expr));
 

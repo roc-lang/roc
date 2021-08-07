@@ -3,8 +3,8 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
-    Descriptor, FlatType, GetSubsSlice, Mark, OptVariable, RecordFields, Subs, SubsSlice, Variable,
-    VariableSubsSlice,
+    Descriptor, FlatType, GetSubsSlice, Mark, OptVariable, RecordFields, Subs, SubsIndex,
+    SubsSlice, Variable, VariableSubsSlice,
 };
 use roc_types::types::{ErrorType, Mismatch, RecordField};
 
@@ -1252,6 +1252,9 @@ fn unify_flat_type(
             )
         }
         (FunctionOrTagUnion(tag_name_1, _, ext_1), FunctionOrTagUnion(tag_name_2, _, ext_2)) => {
+            let tag_name_1 = subs[*tag_name_1].clone();
+            let tag_name_2 = subs[*tag_name_2].clone();
+
             if tag_name_1 == tag_name_2 {
                 let problems = unify_pool(subs, pool, *ext_1, *ext_2);
                 if problems.is_empty() {
@@ -1262,28 +1265,30 @@ fn unify_flat_type(
                 }
             } else {
                 let mut tags1 = MutMap::default();
-                tags1.insert(*tag_name_1.clone(), vec![]);
+                tags1.insert(tag_name_1.clone(), vec![]);
                 let union1 = gather_tags(subs, tags1, *ext_1);
 
                 let mut tags2 = MutMap::default();
-                tags2.insert(*tag_name_2.clone(), vec![]);
+                tags2.insert(tag_name_2.clone(), vec![]);
                 let union2 = gather_tags(subs, tags2, *ext_2);
 
                 unify_tag_union(subs, pool, ctx, union1, union2, (None, None))
             }
         }
         (TagUnion(tags1, ext1), FunctionOrTagUnion(tag_name, _, ext2)) => {
+            let tag_name = subs[*tag_name].clone();
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
 
             let mut tags2 = MutMap::default();
-            tags2.insert(*tag_name.clone(), vec![]);
+            tags2.insert(tag_name.clone(), vec![]);
             let union2 = gather_tags(subs, tags2, *ext2);
 
             unify_tag_union(subs, pool, ctx, union1, union2, (None, None))
         }
         (FunctionOrTagUnion(tag_name, _, ext1), TagUnion(tags2, ext2)) => {
+            let tag_name = subs[*tag_name].clone();
             let mut tags1 = MutMap::default();
-            tags1.insert(*tag_name.clone(), vec![]);
+            tags1.insert(tag_name.clone(), vec![]);
             let union1 = gather_tags(subs, tags1, *ext1);
 
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
@@ -1295,8 +1300,10 @@ fn unify_flat_type(
             // this never happens in type-correct programs, but may happen if there is a type error
             debug_assert!(is_recursion_var(subs, *recursion_var));
 
+            let tag_name = subs[*tag_name].clone();
+
             let mut tags2 = MutMap::default();
-            tags2.insert(*tag_name.clone(), vec![]);
+            tags2.insert(tag_name.clone(), vec![]);
 
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
             let union2 = gather_tags(subs, tags2, *ext2);
@@ -1314,8 +1321,10 @@ fn unify_flat_type(
         (FunctionOrTagUnion(tag_name, _, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
             debug_assert!(is_recursion_var(subs, *recursion_var));
 
+            let tag_name = subs[*tag_name].clone();
+
             let mut tags1 = MutMap::default();
-            tags1.insert(*tag_name.clone(), vec![]);
+            tags1.insert(tag_name.clone(), vec![]);
 
             let union1 = gather_tags(subs, tags1, *ext1);
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
@@ -1536,7 +1545,7 @@ fn unify_function_or_tag_union_and_func(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    tag_name: &TagName,
+    tag_name_index: &SubsIndex<TagName>,
     tag_symbol: Symbol,
     tag_ext: Variable,
     function_arguments: VariableSubsSlice,
@@ -1545,6 +1554,8 @@ fn unify_function_or_tag_union_and_func(
     left: bool,
 ) -> Outcome {
     use FlatType::*;
+
+    let tag_name = subs[*tag_name_index].clone();
 
     let mut new_tags = MutMap::with_capacity_and_hasher(1, default_hasher());
 
