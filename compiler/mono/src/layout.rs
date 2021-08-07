@@ -1210,21 +1210,34 @@ fn layout_from_flat_type<'a>(
         Record(fields, ext_var) => {
             // extract any values from the ext_var
 
-            let variables = fields
-                .sorted_iterator(subs, ext_var)
-                .filter_map(|(_, field)| {
+            let pairs_it = fields
+                .unsorted_iterator(subs, ext_var)
+                .filter_map(|(label, field)| {
                     // drop optional fields
-                    match field {
-                        RecordField::Optional(_) => None,
-                        RecordField::Required(var) => Some(var),
-                        RecordField::Demanded(var) => Some(var),
-                    }
+                    let var = match field {
+                        RecordField::Optional(_) => return None,
+                        RecordField::Required(var) => var,
+                        RecordField::Demanded(var) => var,
+                    };
+
+                    Some((
+                        label,
+                        Layout::from_var(env, var).expect("invalid layout from var"),
+                    ))
                 });
 
-            let layouts_it =
-                variables.map(|var| Layout::from_var(env, var).expect("invalid layout from var"));
+            let mut pairs = Vec::from_iter_in(pairs_it, arena);
 
-            let mut layouts = Vec::from_iter_in(layouts_it, arena);
+            pairs.sort_by(|(label1, layout1), (label2, layout2)| {
+                let ptr_bytes = 8;
+
+                let size1 = layout1.alignment_bytes(ptr_bytes);
+                let size2 = layout2.alignment_bytes(ptr_bytes);
+
+                size2.cmp(&size1).then(label1.cmp(label2))
+            });
+
+            let mut layouts = Vec::from_iter_in(pairs.into_iter().map(|t| t.1), arena);
 
             if layouts.len() == 1 {
                 // If the record has only one field that isn't zero-sized,

@@ -926,6 +926,16 @@ impl RecordFields {
             field_types_start,
         }
     }
+    #[inline(always)]
+    pub fn unsorted_iterator<'a>(
+        &'a self,
+        subs: &'a Subs,
+        ext: Variable,
+    ) -> impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + 'a {
+        let (it, _) = crate::types::gather_fields_unsorted_iter(subs, *self, ext);
+
+        it
+    }
 
     /// Get a sorted iterator over the fields of this record type
     ///
