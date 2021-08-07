@@ -293,7 +293,8 @@ pub fn rebuild_host(host_input_path: &Path) {
 
 fn nixos_path() -> String {
     env::var("NIXOS_GLIBC_PATH").unwrap_or_else(|_| {
-        panic!("We couldn't find glibc! We tried looking for NIXOS_GLIBC_PATH
+        panic!(
+            "We couldn't find glibc! We tried looking for NIXOS_GLIBC_PATH
 to find it via Nix, but that didn't work either. Please file a bug report.
 
 This will only be an issue until we implement surgical linking.",
