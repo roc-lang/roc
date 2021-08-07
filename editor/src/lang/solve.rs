@@ -10,7 +10,8 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
-    Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs, SubsSlice, Variable,
+    Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs, Variable,
+    VariableSubsSlice,
 };
 use roc_types::types::{Alias, Category, ErrorType, PatternCategory, RecordField};
 use roc_unify::unify::unify;
@@ -871,11 +872,7 @@ fn type_to_variable<'a>(
                 new_arg_vars.push(var)
             }
 
-            let start = subs.variables.len() as u32;
-            let length = arg_vars.len() as u16;
-            let arg_vars = SubsSlice::new(start, length);
-
-            subs.variables.extend(new_arg_vars);
+            let arg_vars = VariableSubsSlice::insert_into_subs(subs, new_arg_vars);
 
             let ret_var = type_to_variable(arena, mempool, subs, rank, pools, cached, ret_type);
             let closure_var =
@@ -1507,11 +1504,7 @@ fn deep_copy_var_help(
                         new_arg_vars.push(copy_var);
                     }
 
-                    let start = subs.variables.len() as u32;
-                    let length = arg_vars.len() as u16;
-                    let arg_vars = SubsSlice::new(start, length);
-
-                    subs.variables.extend(new_arg_vars);
+                    let arg_vars = VariableSubsSlice::insert_into_subs(subs, new_arg_vars);
 
                     Func(arg_vars, new_closure_var, new_ret_var)
                 }

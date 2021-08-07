@@ -829,7 +829,7 @@ impl Content {
 #[derive(Clone, Debug)]
 pub enum FlatType {
     Apply(Symbol, Vec<Variable>),
-    Func(SubsSlice<Variable>, Variable, Variable),
+    Func(VariableSubsSlice, Variable, Variable),
     Record(RecordFields, Variable),
     TagUnion(MutMap<TagName, Vec<Variable>>, Variable),
     FunctionOrTagUnion(Box<TagName>, Symbol, Variable),
@@ -845,6 +845,54 @@ pub enum Builtin {
     Int,
     Float,
     EmptyRecord,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct VariableSubsSlice {
+    slice: SubsSlice<Variable>,
+}
+
+impl VariableSubsSlice {
+    pub fn len(&self) -> usize {
+        self.slice.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn as_subs_slice(&self) -> &SubsSlice<Variable> {
+        &self.slice
+    }
+
+    pub fn new(start: u32, length: u16) -> Self {
+        Self {
+            slice: SubsSlice::new(start, length),
+        }
+    }
+
+    pub fn insert_into_subs<I>(subs: &mut Subs, input: I) -> Self
+    where
+        I: IntoIterator<Item = Variable>,
+    {
+        let start = subs.variables.len() as u32;
+
+        subs.variables.extend(input.into_iter());
+
+        let length = (subs.variables.len() as u32 - start) as u16;
+
+        Self::new(start, length)
+    }
+}
+
+impl IntoIterator for VariableSubsSlice {
+    type Item = SubsIndex<Variable>;
+
+    type IntoIter = <SubsSlice<Variable> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.slice.into_iter()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -907,8 +955,15 @@ impl RecordFields {
         let variables_start = subs.variables.len() as u32;
         let field_types_start = subs.record_fields.len() as u32;
 
+        let it = input.into_iter();
+        let size_hint = it.size_hint().0;
+
+        subs.variables.reserve(size_hint);
+        subs.field_names.reserve(size_hint);
+        subs.record_fields.reserve(size_hint);
+
         let mut length = 0;
-        for (k, v) in input {
+        for (k, v) in it {
             let var = *v.as_inner();
             let record_field = v.map(|_| ());
 
@@ -1049,7 +1104,7 @@ fn occurs(
                     Func(arg_vars, closure_var, ret_var) => {
                         let it = once(ret_var)
                             .chain(once(closure_var))
-                            .chain(subs.get_subs_slice(*arg_vars).iter());
+                            .chain(subs.get_subs_slice(*arg_vars.as_subs_slice()).iter());
                         short_circuit(subs, root_var, &new_seen, it)
                     }
                     Record(vars_by_field, ext_var) => {

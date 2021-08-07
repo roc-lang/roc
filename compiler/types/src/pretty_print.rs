@@ -409,9 +409,14 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
         Apply(symbol, args) => write_apply(env, *symbol, args, subs, buf, parens),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
-        Func(args, _closure, ret) => {
-            write_fn(env, subs.get_subs_slice(*args), *ret, subs, buf, parens)
-        }
+        Func(args, _closure, ret) => write_fn(
+            env,
+            subs.get_subs_slice(*args.as_subs_slice()),
+            *ret,
+            subs,
+            buf,
+            parens,
+        ),
         Record(fields, ext_var) => {
             use crate::types::{gather_fields, RecordStructure};
 

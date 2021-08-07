@@ -4,6 +4,7 @@ use roc_module::symbol::Symbol;
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
     Descriptor, FlatType, GetSubsSlice, Mark, OptVariable, RecordFields, Subs, SubsSlice, Variable,
+    VariableSubsSlice,
 };
 use roc_types::types::{ErrorType, Mismatch, RecordField};
 
@@ -1206,7 +1207,8 @@ fn unify_flat_type(
         (Func(l_args, l_closure, l_ret), Func(r_args, r_closure, r_ret))
             if l_args.len() == r_args.len() =>
         {
-            let arg_problems = unify_zip_slices(subs, pool, *l_args, *r_args);
+            let arg_problems =
+                unify_zip_slices(subs, pool, *l_args.as_subs_slice(), *r_args.as_subs_slice());
             let ret_problems = unify_pool(subs, pool, *l_ret, *r_ret);
             let closure_problems = unify_pool(subs, pool, *l_closure, *r_closure);
 
@@ -1537,7 +1539,7 @@ fn unify_function_or_tag_union_and_func(
     tag_name: &TagName,
     tag_symbol: Symbol,
     tag_ext: Variable,
-    function_arguments: SubsSlice<Variable>,
+    function_arguments: VariableSubsSlice,
     function_return: Variable,
     function_lambda_set: Variable,
     left: bool,
@@ -1548,7 +1550,8 @@ fn unify_function_or_tag_union_and_func(
 
     new_tags.insert(
         tag_name.clone(),
-        subs.get_subs_slice(function_arguments).to_owned(),
+        subs.get_subs_slice(*function_arguments.as_subs_slice())
+            .to_owned(),
     );
 
     let content = Structure(TagUnion(new_tags, tag_ext));
