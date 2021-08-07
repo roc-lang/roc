@@ -291,6 +291,16 @@ pub fn rebuild_host(host_input_path: &Path) {
     }
 }
 
+fn env_glibc_path() -> PathBuf {
+    let glibc_env = env::var("GLIBC_PATH").unwrap_or_else(|_| panic!("We couldn't find glibc!"));
+    let glibc_path = Path::new(&glibc_env).to_path_buf();
+    if glibc_path.exists() {
+        glibc_path
+    } else {
+        panic!("We couldn't find glibc!")
+    }
+}
+
 fn link_linux(
     target: &Triple,
     output_path: PathBuf,
@@ -298,13 +308,19 @@ fn link_linux(
     link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
     let usr_lib_path = Path::new("/usr/lib").to_path_buf();
-    let usr_lib_gnu_path = usr_lib_path.join(format!("{}-linux-gnu", target.architecture));
+    let link_root = if usr_lib_path.exists() {
+        usr_lib_path
+    } else {
+        env_glibc_path()
+    };
+
+    let usr_lib_gnu_path = link_root.join(format!("{}-linux-gnu", target.architecture));
     let lib_gnu_path = Path::new("/lib/").join(format!("{}-linux-gnu", target.architecture));
 
     let libcrt_path = if usr_lib_gnu_path.exists() {
         &usr_lib_gnu_path
     } else {
-        &usr_lib_path
+        &link_root
     };
 
     let libgcc_name = "libgcc_s.so.1";
@@ -313,8 +329,9 @@ fn link_linux(
     } else if usr_lib_gnu_path.join(libgcc_name).exists() {
         usr_lib_gnu_path.join(libgcc_name)
     } else {
-        usr_lib_path.join(libgcc_name)
+        link_root.join(libgcc_name)
     };
+
     let ld_linux = match target.architecture {
         Architecture::X86_64 => "/lib64/ld-linux-x86-64.so.2",
         Architecture::Aarch64(_) => "/lib/ld-linux-aarch64.so.1",

@@ -48,6 +48,7 @@ let
     zig
 
     # lib deps
+    glibc_multi
     llvmPkgs.libcxx
     llvmPkgs.libcxxabi
     libffi
@@ -70,6 +71,7 @@ in pkgs.mkShell {
 
   # Additional Env vars
   LLVM_SYS_120_PREFIX = "${llvmPkgs.llvm.dev}";
+  GLIBC_PATH = "${pkgs.glibc_multi.out}/lib";
   LD_LIBRARY_PATH = with pkgs;
     lib.makeLibraryPath ([
       pkg-config
