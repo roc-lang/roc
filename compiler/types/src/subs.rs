@@ -56,6 +56,7 @@ pub struct Subs {
     pub tag_names: Vec<TagName>,
     pub field_names: Vec<Lowercase>,
     pub record_fields: Vec<RecordField<()>>,
+    pub variable_slices: Vec<VariableSubsSlice>,
 }
 
 /// A slice into the Vec<T> of subs
@@ -892,6 +893,43 @@ impl IntoIterator for VariableSubsSlice {
 
     fn into_iter(self) -> Self::IntoIter {
         self.slice.into_iter()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct UnionTags {
+    pub tag_names: SubsSlice<TagName>,
+    pub variables: SubsSlice<VariableSubsSlice>,
+}
+
+impl UnionTags {
+    pub fn insert_into_subs<'a, I>(subs: &mut Subs, input: I) -> Self
+    where
+        I: IntoIterator<Item = (TagName, &'a [Variable])>,
+    {
+        let tag_names_start = subs.tag_names.len() as u32;
+        let variables_start = subs.variable_slices.len() as u32;
+
+        let it = input.into_iter();
+        let size_hint = it.size_hint().0;
+
+        subs.tag_names.reserve(size_hint);
+        subs.variable_slices.reserve(size_hint);
+
+        let mut length = 0;
+        for (k, v) in it {
+            let variables = VariableSubsSlice::insert_into_subs(subs, v.iter().copied());
+
+            subs.tag_names.push(k);
+            subs.variable_slices.push(variables);
+
+            length += 1;
+        }
+
+        UnionTags {
+            variables: SubsSlice::new(variables_start, length),
+            tag_names: SubsSlice::new(tag_names_start, length),
+        }
     }
 }
 
