@@ -6,8 +6,7 @@ use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::util::first_last_index_of;
 use crate::editor::util::index_of;
-use crate::lang::ast::Expr2;
-use crate::lang::pool::NodeId;
+use crate::lang::ast::ExprId;
 use crate::ui::text::selection::Selection;
 use crate::ui::text::text_pos::TextPos;
 use crate::ui::ui_error::UIResult;
@@ -139,7 +138,7 @@ impl GridNodeMap {
         &self,
         caret_pos: TextPos,
         ed_model: &EdModel,
-    ) -> EdResult<(TextPos, TextPos, NodeId<Expr2>, MarkNodeId)> {
+    ) -> EdResult<(TextPos, TextPos, ExprId, MarkNodeId)> {
         let line = slice_get(caret_pos.line, &self.lines)?;
         let node_id = slice_get(caret_pos.column, line)?;
         let node = ed_model.markup_node_pool.get(*node_id);
