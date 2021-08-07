@@ -6,7 +6,7 @@
 To build the compiler, you need these installed:
 
 * `libunwind` (macOS should already have this one installed)
-* `libc++-dev`
+* `libc++-dev` and `libc++abi-dev`
 * Python 2.7 (Windows only), `python-is-python3` (Ubuntu)
 * [Zig](https://ziglang.org/), see below for version
 * LLVM, see below for version
@@ -21,7 +21,7 @@ For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir).
 ### libunwind & libc++-dev
 
 MacOS systems should already have `libunwind`, but other systems will need to install it (On Ubuntu, this can be done with `sudo apt-get install libunwind-dev`).
-Some systems may already have `libc++-dev` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `sudo apt-get install libc++-dev`.)
+Some systems may already have `libc++-dev` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `sudo apt-get install libc++-dev libc++abi-dev`.)
 
 ### libcxb libraries
 
@@ -151,6 +151,8 @@ That will help us improve this document for everyone who reads it in the future!
 
 ### LLVM installation on Linux
 
+For a current list of all dependency versions and their names in apt, see the Earthfile.
+
 On some Linux systems we've seen the error "failed to run custom build command for x11".
 On Ubuntu, running `sudo apt install pkg-config cmake libx11-dev` fixed this.
 
@@ -205,8 +207,8 @@ Create `~/.cargo/config.toml` if it does not exist and add this to it:
 rustflags = ["-C", "link-arg=-fuse-ld=lld", "-C", "target-cpu=native"]
 ```
 
-Then install `lld` version 9 (e.g. with `$ sudo apt-get install lld-9`)
+Then install `lld` version 12 (e.g. with `$ sudo apt-get install lld-12`)
 and add make sure there's a `ld.lld` executable on your `PATH` which
-is symlinked to `lld-9`.
+is symlinked to `lld-12`.
 
 That's it! Enjoy the faster builds.

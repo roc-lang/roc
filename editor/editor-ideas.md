@@ -280,3 +280,4 @@ Thoughts and ideas possibly taken from above inspirations or separate.
 * "Error mode" where the editor jumps you to the next error
     * Similar in theory to diff tools that jump you to the next merge conflict
 * dependency recommendation
+* Command to change the file to put all exposed functions at the top of the file, private functions below. Other alternative; ability to show a "file explorer" that shows exposed functions first, followed by private functions.
