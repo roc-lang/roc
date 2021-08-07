@@ -630,7 +630,7 @@ impl Subs {
         self.utable.is_redirect(var)
     }
 
-    pub fn occurs(&self, var: Variable) -> Option<(Variable, Vec<Variable>)> {
+    pub fn occurs(&self, var: Variable) -> Result<(), (Variable, Vec<Variable>)> {
         occurs(self, &ImSet::default(), var)
     }
 
@@ -1134,17 +1134,17 @@ fn occurs(
     subs: &Subs,
     seen: &ImSet<Variable>,
     input_var: Variable,
-) -> Option<(Variable, Vec<Variable>)> {
+) -> Result<(), (Variable, Vec<Variable>)> {
     use self::Content::*;
     use self::FlatType::*;
 
     let root_var = subs.get_root_key_without_compacting(input_var);
 
     if seen.contains(&root_var) {
-        Some((root_var, vec![]))
+        Err((root_var, vec![]))
     } else {
         match subs.get_content_without_compacting(root_var) {
-            FlexVar(_) | RigidVar(_) | RecursionVar { .. } | Error => None,
+            FlexVar(_) | RigidVar(_) | RecursionVar { .. } | Error => Ok(()),
 
             Structure(flat_type) => {
                 let mut new_seen = seen.clone();
@@ -1178,7 +1178,7 @@ fn occurs(
                         let it = once(ext_var).chain(tags.values().flatten());
                         short_circuit(subs, root_var, &new_seen, it)
                     }
-                    EmptyRecord | EmptyTagUnion | Erroneous(_) => None,
+                    EmptyRecord | EmptyTagUnion | Erroneous(_) => Ok(()),
                 }
             }
             Alias(_, args, _) => {
@@ -1196,17 +1196,18 @@ fn short_circuit<'a, T>(
     root_key: Variable,
     seen: &ImSet<Variable>,
     iter: T,
-) -> Option<(Variable, Vec<Variable>)>
+) -> Result<(), (Variable, Vec<Variable>)>
 where
     T: Iterator<Item = &'a Variable>,
 {
     for var in iter {
-        if let Some((v, mut vec)) = occurs(subs, seen, *var) {
+        if let Err((v, mut vec)) = occurs(subs, seen, *var) {
             vec.push(root_key);
-            return Some((v, vec));
+            return Err((v, vec));
         }
     }
-    None
+
+    Ok(())
 }
 
 fn explicit_substitute(

@@ -978,7 +978,7 @@ fn check_for_infinite_type(
 ) {
     let var = loc_var.value;
 
-    while let Some((recursive, _chain)) = subs.occurs(var) {
+    while let Err((recursive, _chain)) = subs.occurs(var) {
         let description = subs.get(recursive);
         let content = description.content;
 

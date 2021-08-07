@@ -76,7 +76,7 @@ fn find_names_needed(
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
-    while let Some((recursive, _chain)) = subs.occurs(variable) {
+    while let Err((recursive, _chain)) = subs.occurs(variable) {
         let rec_var = subs.fresh_unnamed_flex_var();
         let content = subs.get_content_without_compacting(recursive);
 
