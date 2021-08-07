@@ -1,5 +1,5 @@
 use crate::types::{name_type_var, ErrorType, Problem, RecordField, TypeExt};
-use roc_collections::all::{ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use std::fmt;
@@ -9,9 +9,9 @@ use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
-static_assertions::assert_eq_size!([u8; 72], Descriptor);
-static_assertions::assert_eq_size!([u8; 56], Content);
-static_assertions::assert_eq_size!([u8; 48], FlatType);
+static_assertions::assert_eq_size!([u8; 64], Descriptor);
+static_assertions::assert_eq_size!([u8; 48], Content);
+static_assertions::assert_eq_size!([u8; 40], FlatType);
 static_assertions::assert_eq_size!([u8; 48], Problem);
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
@@ -131,6 +131,20 @@ impl std::ops::Index<SubsIndex<RecordField<()>>> for Subs {
 impl std::ops::IndexMut<SubsIndex<RecordField<()>>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<RecordField<()>>) -> &mut Self::Output {
         &mut self.record_fields[index.start as usize]
+    }
+}
+
+impl std::ops::Index<SubsIndex<VariableSubsSlice>> for Subs {
+    type Output = VariableSubsSlice;
+
+    fn index(&self, index: SubsIndex<VariableSubsSlice>) -> &Self::Output {
+        &self.variable_slices[index.start as usize]
+    }
+}
+
+impl std::ops::IndexMut<SubsIndex<VariableSubsSlice>> for Subs {
+    fn index_mut(&mut self, index: SubsIndex<VariableSubsSlice>) -> &mut Self::Output {
+        &mut self.variable_slices[index.start as usize]
     }
 }
 
@@ -498,12 +512,19 @@ impl Subs {
             Content::Structure(FlatType::EmptyTagUnion),
         );
 
-        subs.set_content(Variable::BOOL_ENUM, {
-            let mut tags = MutMap::default();
-            tags.insert(TagName::Global("False".into()), vec![]);
-            tags.insert(TagName::Global("True".into()), vec![]);
+        let bool_union_tags = UnionTags::insert_into_subs(
+            &mut subs,
+            [
+                (TagName::Global("False".into()), []),
+                (TagName::Global("True".into()), []),
+            ],
+        );
 
-            Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
+        subs.set_content(Variable::BOOL_ENUM, {
+            Content::Structure(FlatType::TagUnion(
+                bool_union_tags,
+                Variable::EMPTY_TAG_UNION,
+            ))
         });
 
         subs.set_content(Variable::BOOL, {
@@ -846,9 +867,9 @@ pub enum FlatType {
     Apply(Symbol, Vec<Variable>),
     Func(VariableSubsSlice, Variable, Variable),
     Record(RecordFields, Variable),
-    TagUnion(MutMap<TagName, Vec<Variable>>, Variable),
+    TagUnion(UnionTags, Variable),
     FunctionOrTagUnion(SubsIndex<TagName>, Symbol, Variable),
-    RecursiveTagUnion(Variable, MutMap<TagName, Vec<Variable>>, Variable),
+    RecursiveTagUnion(Variable, UnionTags, Variable),
     Erroneous(Box<Problem>),
     EmptyRecord,
     EmptyTagUnion,
@@ -916,10 +937,31 @@ pub struct UnionTags {
     pub variables: SubsSlice<VariableSubsSlice>,
 }
 
+impl From<SubsIndex<TagName>> for UnionTags {
+    fn from(input: SubsIndex<TagName>) -> Self {
+        let tag_names = SubsSlice::new(input.start, 1);
+        let variables = SubsSlice::default();
+
+        Self {
+            tag_names,
+            variables,
+        }
+    }
+}
+
 impl UnionTags {
-    pub fn insert_into_subs<'a, I>(subs: &mut Subs, input: I) -> Self
+    pub fn len(&self) -> usize {
+        self.tag_names.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn insert_into_subs<'a, I, I2>(subs: &mut Subs, input: I) -> Self
     where
-        I: IntoIterator<Item = (TagName, &'a [Variable])>,
+        I: IntoIterator<Item = (TagName, I2)>,
+        I2: IntoIterator<Item = Variable>,
     {
         let tag_names_start = subs.tag_names.len() as u32;
         let variables_start = subs.variable_slices.len() as u32;
@@ -932,7 +974,7 @@ impl UnionTags {
 
         let mut length = 0;
         for (k, v) in it {
-            let variables = VariableSubsSlice::insert_into_subs(subs, v.iter().copied());
+            let variables = VariableSubsSlice::insert_into_subs(subs, v.into_iter());
 
             subs.tag_names.push(k);
             subs.variable_slices.push(variables);
@@ -943,6 +985,71 @@ impl UnionTags {
         UnionTags {
             variables: SubsSlice::new(variables_start, length),
             tag_names: SubsSlice::new(tag_names_start, length),
+        }
+    }
+
+    pub fn iter_all(
+        &self,
+    ) -> impl Iterator<Item = (SubsIndex<TagName>, SubsIndex<VariableSubsSlice>)> {
+        self.tag_names.into_iter().zip(self.variables.into_iter())
+    }
+
+    #[inline(always)]
+    pub fn unsorted_iterator<'a>(
+        &'a self,
+        subs: &'a Subs,
+        ext: Variable,
+    ) -> impl Iterator<Item = (&TagName, &[Variable])> + 'a {
+        let (it, _) = crate::types::gather_tags_unsorted_iter(subs, *self, ext);
+
+        it
+    }
+
+    pub fn unsorted_iterator_and_ext<'a>(
+        &'a self,
+        subs: &'a Subs,
+        ext: Variable,
+    ) -> (impl Iterator<Item = (&TagName, &[Variable])> + 'a, Variable) {
+        crate::types::gather_tags_unsorted_iter(subs, *self, ext)
+    }
+
+    /// Get a sorted iterator over the tags of this tag union type
+    ///
+    /// Implementation: When the tag union has an `ext` variable that is the empty record, then
+    /// we read the (assumed sorted) fields directly from Subs. Otherwise we have to chase the
+    /// ext var, then sort the tags.
+    ///
+    /// Hopefully the inline will get rid of the Box in practice
+    #[inline(always)]
+    pub fn sorted_iterator<'a>(&'_ self, subs: &'a Subs, ext: Variable) -> SortedTagsIterator<'a> {
+        self.sorted_iterator_and_ext(subs, ext).0
+    }
+
+    #[inline(always)]
+    pub fn sorted_iterator_and_ext<'a>(
+        &'_ self,
+        subs: &'a Subs,
+        ext: Variable,
+    ) -> (SortedTagsIterator<'a>, Variable) {
+        if is_empty_tag_union(subs, ext) {
+            (
+                Box::new(self.iter_all().map(move |(i1, i2)| {
+                    let tag_name: &TagName = &subs[i1];
+                    let subs_slice = subs[i2];
+
+                    let slice = subs.get_subs_slice(*subs_slice.as_subs_slice());
+
+                    (tag_name.clone(), slice)
+                })),
+                ext,
+            )
+        } else {
+            let union_structure = crate::types::gather_tags(subs, *self, ext);
+
+            (
+                Box::new(union_structure.fields.into_iter()),
+                union_structure.ext,
+            )
         }
     }
 }
@@ -959,7 +1066,10 @@ fn first<K: Ord, V>(x: &(K, V), y: &(K, V)) -> std::cmp::Ordering {
     x.0.cmp(&y.0)
 }
 
-pub type SortedIterator<'a> = Box<dyn Iterator<Item = (Lowercase, RecordField<Variable>)> + 'a>;
+pub type SortedFieldsIterator<'a> =
+    Box<dyn Iterator<Item = (Lowercase, RecordField<Variable>)> + 'a>;
+
+pub type SortedTagsIterator<'a> = Box<dyn Iterator<Item = (TagName, &'a [Variable])> + 'a>;
 
 impl RecordFields {
     pub fn len(&self) -> usize {
@@ -1033,6 +1143,7 @@ impl RecordFields {
             field_types_start,
         }
     }
+
     #[inline(always)]
     pub fn unsorted_iterator<'a>(
         &'a self,
@@ -1052,7 +1163,11 @@ impl RecordFields {
     ///
     /// Hopefully the inline will get rid of the Box in practice
     #[inline(always)]
-    pub fn sorted_iterator<'a>(&'_ self, subs: &'a Subs, ext: Variable) -> SortedIterator<'a> {
+    pub fn sorted_iterator<'a>(
+        &'_ self,
+        subs: &'a Subs,
+        ext: Variable,
+    ) -> SortedFieldsIterator<'a> {
         self.sorted_iterator_and_ext(subs, ext).0
     }
 
@@ -1061,7 +1176,7 @@ impl RecordFields {
         &'_ self,
         subs: &'a Subs,
         ext: Variable,
-    ) -> (SortedIterator<'a>, Variable) {
+    ) -> (SortedFieldsIterator<'a>, Variable) {
         if is_empty_record(subs, ext) {
             (
                 Box::new(self.iter_all().map(move |(i1, i2, i3)| {
@@ -1130,6 +1245,33 @@ fn is_empty_record(subs: &Subs, mut var: Variable) -> bool {
     }
 }
 
+fn is_empty_tag_union(subs: &Subs, mut var: Variable) -> bool {
+    use crate::subs::Content::*;
+    use crate::subs::FlatType::*;
+
+    loop {
+        match subs.get_content_without_compacting(var) {
+            Structure(EmptyTagUnion) => return true,
+            Structure(
+                TagUnion(sub_fields, sub_ext) | RecursiveTagUnion(_, sub_fields, sub_ext),
+            ) => {
+                if !sub_fields.is_empty() {
+                    return false;
+                }
+
+                var = *sub_ext;
+            }
+
+            Alias(_, _, actual_var) => {
+                // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
+                var = *actual_var;
+            }
+
+            _ => return false,
+        }
+    }
+}
+
 fn occurs(
     subs: &Subs,
     seen: &ImSet<Variable>,
@@ -1166,8 +1308,15 @@ fn occurs(
                         short_circuit(subs, root_var, &new_seen, it)
                     }
                     TagUnion(tags, ext_var) => {
-                        let it = once(ext_var).chain(tags.values().flatten());
-                        short_circuit(subs, root_var, &new_seen, it)
+                        for slice_index in tags.variables {
+                            let slice = subs[slice_index];
+                            for var_index in slice {
+                                let var = subs[var_index];
+                                short_circuit_help(subs, root_var, &new_seen, var)?;
+                            }
+                        }
+
+                        short_circuit_help(subs, root_var, &new_seen, *ext_var)
                     }
                     FunctionOrTagUnion(_, _, ext_var) => {
                         let it = once(ext_var);
@@ -1175,8 +1324,16 @@ fn occurs(
                     }
                     RecursiveTagUnion(_rec_var, tags, ext_var) => {
                         // TODO rec_var is excluded here, verify that this is correct
-                        let it = once(ext_var).chain(tags.values().flatten());
-                        short_circuit(subs, root_var, &new_seen, it)
+
+                        for slice_index in tags.variables {
+                            let slice = subs[slice_index];
+                            for var_index in slice {
+                                let var = subs[var_index];
+                                short_circuit_help(subs, root_var, &new_seen, var)?;
+                            }
+                        }
+
+                        short_circuit_help(subs, root_var, &new_seen, *ext_var)
                     }
                     EmptyRecord | EmptyTagUnion | Erroneous(_) => Ok(()),
                 }
@@ -1201,10 +1358,21 @@ where
     T: Iterator<Item = &'a Variable>,
 {
     for var in iter {
-        if let Err((v, mut vec)) = occurs(subs, seen, *var) {
-            vec.push(root_key);
-            return Err((v, vec));
-        }
+        short_circuit_help(subs, root_key, seen, *var)?;
+    }
+
+    Ok(())
+}
+
+fn short_circuit_help(
+    subs: &Subs,
+    root_key: Variable,
+    seen: &ImSet<Variable>,
+    var: Variable,
+) -> Result<(), (Variable, Vec<Variable>)> {
+    if let Err((v, mut vec)) = occurs(subs, seen, var) {
+        vec.push(root_key);
+        return Err((v, vec));
     }
 
     Ok(())
@@ -1257,13 +1425,18 @@ fn explicit_substitute(
                                 Structure(Func(arg_vars, new_closure_var, new_ret_var)),
                             );
                         }
-                        TagUnion(mut tags, ext_var) => {
+                        TagUnion(tags, ext_var) => {
                             let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
-                            for (_, variables) in tags.iter_mut() {
-                                for var in variables.iter_mut() {
-                                    *var = explicit_substitute(subs, from, to, *var, seen);
+
+                            for slice_index in tags.variables {
+                                let slice = subs[slice_index];
+                                for var_index in slice {
+                                    let var = subs[var_index];
+                                    let new_var = explicit_substitute(subs, from, to, var, seen);
+                                    subs[var_index] = new_var;
                                 }
                             }
+
                             subs.set_content(in_var, Structure(TagUnion(tags, new_ext_var)));
                         }
                         FunctionOrTagUnion(tag_name, symbol, ext_var) => {
@@ -1276,11 +1449,16 @@ fn explicit_substitute(
                         RecursiveTagUnion(rec_var, mut tags, ext_var) => {
                             // NOTE rec_var is not substituted, verify that this is correct!
                             let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
-                            for (_, variables) in tags.iter_mut() {
-                                for var in variables.iter_mut() {
-                                    *var = explicit_substitute(subs, from, to, *var, seen);
+
+                            for slice_index in tags.variables {
+                                let slice = subs[slice_index];
+                                for var_index in slice {
+                                    let var = subs[var_index];
+                                    let new_var = explicit_substitute(subs, from, to, var, seen);
+                                    subs[var_index] = new_var;
                                 }
                             }
+
                             subs.set_content(
                                 in_var,
                                 Structure(RecursiveTagUnion(rec_var, tags, new_ext_var)),
@@ -1402,9 +1580,11 @@ fn get_var_names(
                 FlatType::TagUnion(tags, ext_var) => {
                     let mut taken_names = get_var_names(subs, ext_var, taken_names);
 
-                    for vars in tags.values() {
-                        for arg_var in vars {
-                            taken_names = get_var_names(subs, *arg_var, taken_names)
+                    for slice_index in tags.variables {
+                        let slice = subs[slice_index];
+                        for var_index in slice {
+                            let var = subs[var_index];
+                            taken_names = get_var_names(subs, var, taken_names)
                         }
                     }
 
@@ -1419,9 +1599,11 @@ fn get_var_names(
                     let taken_names = get_var_names(subs, ext_var, taken_names);
                     let mut taken_names = get_var_names(subs, rec_var, taken_names);
 
-                    for vars in tags.values() {
-                        for arg_var in vars {
-                            taken_names = get_var_names(subs, *arg_var, taken_names)
+                    for slice_index in tags.variables {
+                        let slice = subs[slice_index];
+                        for var_index in slice {
+                            let var = subs[var_index];
+                            taken_names = get_var_names(subs, var, taken_names)
                         }
                     }
 
@@ -1644,13 +1826,16 @@ fn flat_type_to_err_type(
         TagUnion(tags, ext_var) => {
             let mut err_tags = SendMap::default();
 
-            for (tag, vars) in tags.into_iter() {
-                let mut err_vars = Vec::with_capacity(vars.len());
+            for (name_index, slice_index) in tags.iter_all() {
+                let mut err_vars = Vec::with_capacity(tags.len());
 
-                for var in vars {
+                let slice = subs[slice_index];
+                for var_index in slice {
+                    let var = subs[var_index];
                     err_vars.push(var_to_err_type(subs, state, var));
                 }
 
+                let tag = subs[name_index].clone();
                 err_tags.insert(tag, err_vars);
             }
 
@@ -1706,13 +1891,16 @@ fn flat_type_to_err_type(
         RecursiveTagUnion(rec_var, tags, ext_var) => {
             let mut err_tags = SendMap::default();
 
-            for (tag, vars) in tags.into_iter() {
-                let mut err_vars = Vec::with_capacity(vars.len());
+            for (name_index, slice_index) in tags.iter_all() {
+                let mut err_vars = Vec::with_capacity(tags.len());
 
-                for var in vars {
+                let slice = subs[slice_index];
+                for var_index in slice {
+                    let var = subs[var_index];
                     err_vars.push(var_to_err_type(subs, state, var));
                 }
 
+                let tag = subs[name_index].clone();
                 err_tags.insert(tag, err_vars);
             }
 
@@ -1793,8 +1981,12 @@ fn restore_content(subs: &mut Subs, content: &Content) {
                 subs.restore(*ext_var);
             }
             TagUnion(tags, ext_var) => {
-                for var in tags.values().flatten() {
-                    subs.restore(*var);
+                for slice_index in tags.variables {
+                    let slice = subs[slice_index];
+                    for var_index in slice {
+                        let var = subs[var_index];
+                        subs.restore(var);
+                    }
                 }
 
                 subs.restore(*ext_var);
@@ -1804,8 +1996,12 @@ fn restore_content(subs: &mut Subs, content: &Content) {
             }
 
             RecursiveTagUnion(rec_var, tags, ext_var) => {
-                for var in tags.values().flatten() {
-                    subs.restore(*var);
+                for slice_index in tags.variables {
+                    let slice = subs[slice_index];
+                    for var_index in slice {
+                        let var = subs[var_index];
+                        subs.restore(var);
+                    }
                 }
 
                 subs.restore(*ext_var);

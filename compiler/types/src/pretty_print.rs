@@ -1,4 +1,4 @@
-use crate::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
+use crate::subs::{Content, FlatType, GetSubsSlice, Subs, UnionTags, Variable};
 use crate::types::{name_type_var, RecordField};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
@@ -82,19 +82,25 @@ fn find_names_needed(
 
         match content {
             Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                let mut new_tags = MutMap::default();
+                let mut new_tags = Vec::new();
 
-                for (label, args) in tags {
-                    let new_args = args
-                        .clone()
-                        .into_iter()
-                        .map(|var| if var == recursive { rec_var } else { var })
-                        .collect();
+                let ext_var = *ext_var;
 
-                    new_tags.insert(label.clone(), new_args);
+                for (name_index, slice_index) in tags.iter_all() {
+                    let slice = subs[slice_index];
+
+                    let mut new_vars = Vec::new();
+                    for var_index in slice {
+                        let var = subs[var_index];
+                        new_vars.push(if var == recursive { rec_var } else { var });
+                    }
+
+                    new_tags.push((subs[name_index].clone(), new_vars));
                 }
 
-                let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, *ext_var);
+                let new_tags = UnionTags::insert_into_subs(subs, new_tags);
+
+                let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, ext_var);
                 subs.set_content(recursive, Content::Structure(flat_type));
             }
             _ => panic!(
@@ -162,11 +168,12 @@ fn find_names_needed(
             find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
         }
         Structure(TagUnion(tags, ext_var)) => {
-            let mut sorted_tags: Vec<_> = tags.iter().collect();
-            sorted_tags.sort();
-
-            for var in sorted_tags.into_iter().map(|(_, v)| v).flatten() {
-                find_names_needed(*var, subs, roots, root_appearances, names_taken);
+            for slice_index in tags.variables {
+                let slice = subs[slice_index];
+                for var_index in slice {
+                    let var = subs[var_index];
+                    find_names_needed(var, subs, roots, root_appearances, names_taken);
+                }
             }
 
             find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
@@ -175,11 +182,12 @@ fn find_names_needed(
             find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
         }
         Structure(RecursiveTagUnion(rec_var, tags, ext_var)) => {
-            let mut sorted_tags: Vec<_> = tags.iter().collect();
-            sorted_tags.sort();
-
-            for var in sorted_tags.into_iter().map(|(_, v)| v).flatten() {
-                find_names_needed(*var, subs, roots, root_appearances, names_taken);
+            for slice_index in tags.variables {
+                let slice = subs[slice_index];
+                for var_index in slice {
+                    let var = subs[var_index];
+                    find_names_needed(var, subs, roots, root_appearances, names_taken);
+                }
             }
 
             find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
@@ -345,28 +353,52 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
     }
 }
 
+enum ExtContent<'a> {
+    Empty,
+    Content(Variable, &'a Content),
+}
+
+impl<'a> ExtContent<'a> {
+    fn from_var(subs: &'a Subs, ext: Variable) -> Self {
+        let content = subs.get_content_without_compacting(ext);
+        match content {
+            Content::Structure(EmptyTagUnion) => ExtContent::Empty,
+            Content::Structure(EmptyRecord) => ExtContent::Empty,
+
+            Content::FlexVar(_) | Content::RigidVar(_) => ExtContent::Content(ext, content),
+
+            other => unreachable!("something weird ended up in an ext var: {:?}", other),
+        }
+    }
+}
+
+fn write_ext_content<'a>(
+    env: &Env,
+    subs: &'a Subs,
+    buf: &mut String,
+    ext_content: ExtContent<'a>,
+    parens: Parens,
+) {
+    if let ExtContent::Content(_, content) = ext_content {
+        // This is an open record or tag union, so print the variable
+        // right after the '}' or ']'
+        //
+        // e.g. the "*" at the end of `{ x: I64 }*`
+        // or the "r" at the end of `{ x: I64 }r`
+        write_content(env, content, subs, buf, parens)
+    }
+}
+
 fn write_sorted_tags<'a>(
     env: &Env,
     subs: &'a Subs,
     buf: &mut String,
-    tags: &MutMap<TagName, Vec<Variable>>,
+    tags: &UnionTags,
     ext_var: Variable,
-) -> Result<(), (Variable, &'a Content)> {
+) -> ExtContent<'a> {
     // Sort the fields so they always end up in the same order.
-    let mut sorted_fields = Vec::with_capacity(tags.len());
-
-    for (label, vars) in tags {
-        sorted_fields.push((label, vars));
-    }
-
-    // If the `ext` contains tags, merge them into the list of tags.
-    // this can occur when inferring mutually recursive tags
-    let mut from_ext = Default::default();
-    let ext_content = chase_ext_tag_union(subs, ext_var, &mut from_ext);
-
-    for (tag_name, arguments) in from_ext.iter() {
-        sorted_fields.push((tag_name, arguments));
-    }
+    let (it, new_ext_var) = tags.unsorted_iterator_and_ext(subs, ext_var);
+    let mut sorted_fields: Vec<_> = it.collect();
 
     let interns = &env.interns;
     let home = env.home;
@@ -399,7 +431,7 @@ fn write_sorted_tags<'a>(
         }
     }
 
-    ext_content
+    ExtContent::from_var(subs, new_ext_var)
 }
 
 fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut String, parens: Parens) {
@@ -485,33 +517,17 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
 
             buf.push_str(" ]");
 
-            if let Err((_, content)) = ext_content {
-                // This is an open tag union, so print the variable
-                // right after the ']'
-                //
-                // e.g. the "*" at the end of `{ x: I64 }*`
-                // or the "r" at the end of `{ x: I64 }r`
-                write_content(env, content, subs, buf, parens)
-            }
+            write_ext_content(env, subs, buf, ext_content, parens);
         }
 
         FunctionOrTagUnion(tag_name, _, ext_var) => {
             buf.push_str("[ ");
 
-            let mut tags: MutMap<TagName, _> = MutMap::default();
-            tags.insert(subs[*tag_name].clone(), vec![]);
-            let ext_content = write_sorted_tags(env, subs, buf, &tags, *ext_var);
+            let ext_content = write_sorted_tags(env, subs, buf, &(*tag_name).into(), *ext_var);
 
             buf.push_str(" ]");
 
-            if let Err((_, content)) = ext_content {
-                // This is an open tag union, so print the variable
-                // right after the ']'
-                //
-                // e.g. the "*" at the end of `{ x: I64 }*`
-                // or the "r" at the end of `{ x: I64 }r`
-                write_content(env, content, subs, buf, parens)
-            }
+            write_ext_content(env, subs, buf, ext_content, parens);
         }
 
         RecursiveTagUnion(rec_var, tags, ext_var) => {
@@ -521,14 +537,7 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
 
             buf.push_str(" ]");
 
-            if let Err((_, content)) = ext_content {
-                // This is an open tag union, so print the variable
-                // right after the ']'
-                //
-                // e.g. the "*" at the end of `{ x: I64 }*`
-                // or the "r" at the end of `{ x: I64 }r`
-                write_content(env, content, subs, buf, parens)
-            }
+            write_ext_content(env, subs, buf, ext_content, parens);
 
             buf.push_str(" as ");
             write_content(
@@ -545,32 +554,32 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
     }
 }
 
-pub fn chase_ext_tag_union<'a>(
-    subs: &'a Subs,
-    var: Variable,
-    fields: &mut Vec<(TagName, Vec<Variable>)>,
-) -> Result<(), (Variable, &'a Content)> {
-    use FlatType::*;
-    match subs.get_content_without_compacting(var) {
-        Content::Structure(EmptyTagUnion) => Ok(()),
-        Content::Structure(TagUnion(tags, ext_var))
-        | Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
-            for (label, vars) in tags {
-                fields.push((label.clone(), vars.to_vec()));
-            }
-
-            chase_ext_tag_union(subs, *ext_var, fields)
-        }
-        Content::Structure(FunctionOrTagUnion(tag_name, _, ext_var)) => {
-            fields.push((subs[*tag_name].clone(), vec![]));
-
-            chase_ext_tag_union(subs, *ext_var, fields)
-        }
-        Content::Alias(_, _, var) => chase_ext_tag_union(subs, *var, fields),
-
-        content => Err((var, content)),
-    }
-}
+// pub fn chase_ext_tag_union<'a>(
+//     subs: &'a Subs,
+//     var: Variable,
+//     fields: &mut Vec<(TagName, Vec<Variable>)>,
+// ) -> Result<(), (Variable, &'a Content)> {
+//     use FlatType::*;
+//     match subs.get_content_without_compacting(var) {
+//         Content::Structure(EmptyTagUnion) => Ok(()),
+//         Content::Structure(TagUnion(tags, ext_var))
+//         | Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
+//             for (label, vars) in tags {
+//                 fields.push((label.clone(), vars.to_vec()));
+//             }
+//
+//             chase_ext_tag_union(subs, *ext_var, fields)
+//         }
+//         Content::Structure(FunctionOrTagUnion(tag_name, _, ext_var)) => {
+//             fields.push((subs[*tag_name].clone(), vec![]));
+//
+//             chase_ext_tag_union(subs, *ext_var, fields)
+//         }
+//         Content::Alias(_, _, var) => chase_ext_tag_union(subs, *var, fields),
+//
+//         content => Err((var, content)),
+//     }
+// }
 
 fn write_apply(
     env: &Env,
