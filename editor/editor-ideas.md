@@ -52,6 +52,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 ### Cool regular editors
 
 * [Helix](https://github.com/helix-editor/helix) modal (terminal, for now) editor in rust. Good UX.
+* [Kakoune](https://kakoune.org/) editor with advanced text selection and manipulation features.
 
 
 ### Structured Editing
