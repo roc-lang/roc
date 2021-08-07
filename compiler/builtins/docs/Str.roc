@@ -140,7 +140,7 @@ num : Float *, Nat -> Str
 ##
 ## >>> Str.split "1,2,3" ""
 ##
-## To split a string into its individual graphemes, use [Str.graphemes]
+## To split a string into its individual graphemes, use `Str.graphemes`
 split : Str, Str -> List Str
 
 ## Split a string around newlines.
@@ -372,7 +372,7 @@ fromUtf8 : List U8 -> Result Str [ BadUtf8 ]*
 
 ## Return a [List] of the string's #U8 UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a [List] of smaller [Str] values instead of #U8 values,
-## see [Str.split] and [Str.graphemes].)
+## see [Str.split] and `Str.graphemes`.)
 ##
 ## >>> Str.toUtf8 "👩‍👩‍👦‍👦"
 ##
