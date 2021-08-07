@@ -423,12 +423,12 @@ fn str_starts_with() {
 #[test]
 fn str_starts_with_code_point() {
     assert_evals_to!(
-        &format!(r#"Str.startsWithCodePoint "foobar" {}"#, 'f' as u32),
+        &format!(r#"Str.startsWithCodePt "foobar" {}"#, 'f' as u32),
         true,
         bool
     );
     assert_evals_to!(
-        &format!(r#"Str.startsWithCodePoint "zoobar" {}"#, 'f' as u32),
+        &format!(r#"Str.startsWithCodePt "zoobar" {}"#, 'f' as u32),
         false,
         bool
     );

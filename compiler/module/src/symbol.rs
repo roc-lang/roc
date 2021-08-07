@@ -919,7 +919,7 @@ define_builtins! {
         13 STR_UT8_PROBLEM: "Utf8Problem" // the Utf8Problem type alias
         14 STR_UT8_BYTE_PROBLEM: "Utf8ByteProblem" // the Utf8ByteProblem type alias
         15 STR_TO_BYTES: "toBytes"
-        16 STR_STARTS_WITH_CODE_POINT: "startsWithCodePoint"
+        16 STR_STARTS_WITH_CODE_PT: "startsWithCodePt"
         17 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
     }
     4 LIST: "List" => {

@@ -563,9 +563,9 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(bool_type())
     );
 
-    // startsWithCodePoint : Str, U32 -> Bool
+    // startsWithCodePt : Str, U32 -> Bool
     add_top_level_function_type!(
-        Symbol::STR_STARTS_WITH_CODE_POINT,
+        Symbol::STR_STARTS_WITH_CODE_PT,
         vec![str_type(), u32_type()],
         Box::new(bool_type())
     );

@@ -194,13 +194,13 @@ startsWith : Str, Str -> Bool
 ##
 ## **Performance Note:** This runs slightly faster than [Str.startsWith], so
 ## if you want to check whether a string begins with something that's representable
-## in a single code point, you can use (for example) `Str.startsWithCodePoint '鹏'`
-## instead of `Str.startsWithCodePoint "鹏"`. ('鹏' evaluates to the [U32]
+## in a single code point, you can use (for example) `Str.startsWithCodePt '鹏'`
+## instead of `Str.startsWithCodePt "鹏"`. ('鹏' evaluates to the [U32]
 ## value `40527`.) This will not work for graphemes which take up multiple code
-## points, however; `Str.startsWithCodePoint '👩‍👩‍👦‍👦'` would be a compiler error
+## points, however; `Str.startsWithCodePt '👩‍👩‍👦‍👦'` would be a compiler error
 ## because 👩‍👩‍👦‍👦 takes up multiple code points and cannot be represented as a
-## single [U32]. You'd need to use `Str.startsWithCodePoint "🕊"` instead.
-startsWithCodePoint : Str, U32 -> Bool
+## single [U32]. You'd need to use `Str.startsWithCodePt "🕊"` instead.
+startsWithCodePt : Str, U32 -> Bool
 
 endsWith : Str, Str -> Bool
 
@@ -360,7 +360,7 @@ trim : Str -> Str
 ## If the given [U32] is a valid [Unicode Scalar Value](http://www.unicode.org/glossary/#unicode_scalar_value),
 ## return a [Str] containing only that scalar.
 fromScalar : U32 -> Result Str [ BadScalar ]*
-fromCodePoints : List U32 -> Result Str [ BadCodePoint U32 ]*
+fromCodePts : List U32 -> Result Str [ BadCodePt U32 ]*
 fromUtf8 : List U8 -> Result Str [ BadUtf8 ]*
 
 ## Create a [Str] from bytes encoded as [UTF-16LE](https://en.wikipedia.org/wiki/UTF-16#Byte-order_encoding_schemes).
@@ -423,7 +423,7 @@ parseGrapheme : Str -> Result { val : Str, rest : Str } [ Expected [ Grapheme ]*
 ##
 ## If the string does not begin with a valid code point, for example because it was
 ## empty, return `Err`.
-parseCodePoint : Str -> Result { val : U32, rest : Str } [ Expected [ CodePoint ]* Str ]*
+parseCodePt : Str -> Result { val : U32, rest : Str } [ Expected [ CodePt ]* Str ]*
 
 ## If the first string begins with the second, return whatever comes
 ## after the second.
@@ -431,7 +431,7 @@ chomp : Str, Str -> Result Str [ Expected [ ExactStr Str ]* Str ]*
 
 ## If the string begins with a [Unicode code point](http://www.unicode.org/glossary/#code_point)
 ## equal to the given [U32], return whatever comes after that code point.
-chompCodePoint : Str, U32 -> Result Str [ Expected [ ExactCodePoint U32 ]* Str ]*
+chompCodePt : Str, U32 -> Result Str [ Expected [ ExactCodePt U32 ]* Str ]*
 
 ## If the string represents a valid #U8 number, return that number.
 ##
