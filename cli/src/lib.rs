@@ -1,6 +1,9 @@
 #[macro_use]
 extern crate clap;
 
+#[macro_use]
+extern crate const_format;
+
 use build::{BuildOutcome, BuiltFile};
 use bumpalo::Bump;
 use clap::{App, AppSettings, Arg, ArgMatches};
@@ -32,9 +35,10 @@ pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
 pub fn build_app<'a>() -> App<'a> {
     let app = App::new("roc")
-        .version(crate_version!())
+        .version(concatcp!(crate_version!(), "\n"))
+        .about("Runs the given .roc file. Use one of the SUBCOMMANDS below to do something else!")
         .subcommand(App::new(CMD_BUILD)
-            .about("Build a program")
+            .about("Build a binary from the given .roc file, but don't run it")
             .arg(
                 Arg::with_name(ROC_FILE)
                     .help("The .roc file to build")
@@ -43,7 +47,7 @@ pub fn build_app<'a>() -> App<'a> {
             .arg(
                 Arg::with_name(FLAG_OPTIMIZE)
                     .long(FLAG_OPTIMIZE)
-                    .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+                    .help("Optimize your compiled Roc program to run faster. (Optimization takes time to complete.)")
                     .required(false),
             )
             .arg(
@@ -60,7 +64,7 @@ pub fn build_app<'a>() -> App<'a> {
             )
         )
         .subcommand(App::new(CMD_RUN)
-            .about("Build and run a program")
+            .about("DEPRECATED - now use `roc [FILE]` instead of `roc run [FILE]`")
             .setting(AppSettings::TrailingVarArg)
             .arg(
                 Arg::with_name(FLAG_OPTIMIZE)
@@ -76,7 +80,7 @@ pub fn build_app<'a>() -> App<'a> {
             )
             .arg(
                 Arg::with_name(ROC_FILE)
-                    .help("The .roc file of an app to build and run")
+                    .help("The .roc file of an app to run")
                     .required(true),
             )
             .arg(
@@ -98,6 +102,32 @@ pub fn build_app<'a>() -> App<'a> {
                     .help("The directory or files to build documentation for")
 
                 )
+        )
+        .setting(AppSettings::TrailingVarArg)
+        .arg(
+            Arg::with_name(FLAG_OPTIMIZE)
+                .long(FLAG_OPTIMIZE)
+                .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+                .requires(ROC_FILE)
+                .required(false),
+        )
+        .arg(
+            Arg::with_name(FLAG_DEBUG)
+                .long(FLAG_DEBUG)
+                .help("Store LLVM debug information in the generated program")
+                .requires(ROC_FILE)
+                .required(false),
+        )
+        .arg(
+            Arg::with_name(ROC_FILE)
+                .help("The .roc file of an app to build and run")
+                .required(false),
+        )
+        .arg(
+            Arg::with_name(ARGS_FOR_APP)
+                .help("Arguments to pass into the app being run")
+                .requires(ROC_FILE)
+                .multiple(true),
         );
 
     if cfg!(feature = "editor") {
@@ -215,7 +245,7 @@ pub fn build(target: &Triple, matches: &ArgMatches, config: BuildConfig) -> io::
                     // Forward all the arguments after the .roc file argument
                     // to the new process. This way, you can do things like:
                     //
-                    // roc run app.roc foo bar baz
+                    // roc app.roc foo bar baz
                     //
                     // ...and have it so that app.roc will receive only `foo`,
                     // `bar`, and `baz` as its arguments.
@@ -263,16 +293,16 @@ fn roc_run(cmd: &mut Command) -> io::Result<i32> {
                         .spawn()
                         .unwrap_or_else(|err| panic!("Failed to run app after building it: {:?}", err))
                         .wait()
-                        .expect("TODO gracefully handle block_on failing when roc run spawns a subprocess for the compiled app");
+                        .expect("TODO gracefully handle block_on failing when `roc` spawns a subprocess for the compiled app");
 
-    // `roc run` exits with the same status code as the app it ran.
+    // `roc [FILE]` exits with the same status code as the app it ran.
     //
     // If you want to know whether there were compilation problems
     // via status code, use either `roc build` or `roc check` instead!
     match exit_status.code() {
         Some(code) => Ok(code),
         None => {
-            todo!("TODO gracefully handle the roc run subprocess terminating with a signal.");
+            todo!("TODO gracefully handle the `roc [FILE]` subprocess terminating with a signal.");
         }
     }
 }
