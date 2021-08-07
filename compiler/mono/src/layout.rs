@@ -1209,15 +1209,35 @@ fn layout_from_flat_type<'a>(
         }
         Record(fields, ext_var) => {
             // extract any values from the ext_var
-            let mut fields_map = MutMap::default();
-            fields_map.extend(fields);
-            match roc_types::pretty_print::chase_ext_record(subs, ext_var, &mut fields_map) {
-                Ok(()) | Err((_, Content::FlexVar(_))) => {}
-                Err(_) => unreachable!("this would have been a type error"),
-            }
 
-            // discard optional fields
-            let mut layouts = sort_stored_record_fields(env, fields_map);
+            let pairs_it = fields
+                .unsorted_iterator(subs, ext_var)
+                .filter_map(|(label, field)| {
+                    // drop optional fields
+                    let var = match field {
+                        RecordField::Optional(_) => return None,
+                        RecordField::Required(var) => var,
+                        RecordField::Demanded(var) => var,
+                    };
+
+                    Some((
+                        label,
+                        Layout::from_var(env, var).expect("invalid layout from var"),
+                    ))
+                });
+
+            let mut pairs = Vec::from_iter_in(pairs_it, arena);
+
+            pairs.sort_by(|(label1, layout1), (label2, layout2)| {
+                let ptr_bytes = 8;
+
+                let size1 = layout1.alignment_bytes(ptr_bytes);
+                let size2 = layout2.alignment_bytes(ptr_bytes);
+
+                size2.cmp(&size1).then(label1.cmp(label2))
+            });
+
+            let mut layouts = Vec::from_iter_in(pairs.into_iter().map(|t| t.1), arena);
 
             if layouts.len() == 1 {
                 // If the record has only one field that isn't zero-sized,
@@ -1394,43 +1414,6 @@ fn sort_record_fields_help<'a>(
     );
 
     sorted_fields
-}
-
-// drops optional fields
-fn sort_stored_record_fields<'a>(
-    env: &mut Env<'a, '_>,
-    fields_map: MutMap<Lowercase, RecordField<Variable>>,
-) -> Vec<'a, Layout<'a>> {
-    // Sort the fields by label
-    let mut sorted_fields = Vec::with_capacity_in(fields_map.len(), env.arena);
-
-    for (label, field) in fields_map {
-        let var = match field {
-            RecordField::Demanded(v) => v,
-            RecordField::Required(v) => v,
-            RecordField::Optional(_) => {
-                continue;
-            }
-        };
-
-        let layout = Layout::from_var(env, var).expect("invalid layout from var");
-
-        sorted_fields.push((label, layout));
-    }
-
-    sorted_fields.sort_by(|(label1, layout1), (label2, layout2)| {
-        let ptr_bytes = 8;
-
-        let size1 = layout1.alignment_bytes(ptr_bytes);
-        let size2 = layout2.alignment_bytes(ptr_bytes);
-
-        size2.cmp(&size1).then(label1.cmp(label2))
-    });
-
-    let mut result = Vec::with_capacity_in(sorted_fields.len(), env.arena);
-    result.extend(sorted_fields.into_iter().map(|t| t.1));
-
-    result
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
