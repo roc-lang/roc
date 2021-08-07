@@ -133,8 +133,14 @@ impl Pool {
     }
 
     pub fn add<T>(&mut self, node: T) -> NodeId<T> {
-        // It's only safe to store this if T is the same size as S.
-        debug_assert_eq!(size_of::<T>(), NODE_BYTES);
+        // It's only safe to store this if T fits in S.
+        debug_assert!(
+            size_of::<T>() <= NODE_BYTES,
+            "{} has a size of {}, but it needs to be at most {}",
+            type_name::<T>(),
+            size_of::<T>(),
+            NODE_BYTES
+        );
 
         let node_id = self.reserve(1);
         let node_ptr = unsafe { self.nodes.offset(node_id.index as isize) } as *mut T;
