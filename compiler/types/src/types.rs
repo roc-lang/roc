@@ -1,5 +1,7 @@
 use crate::pretty_print::Parens;
-use crate::subs::{GetSubsSlice, LambdaSet, RecordFields, Subs, UnionTags, VarStore, Variable};
+use crate::subs::{
+    GetSubsSlice, LambdaSet, RecordFields, Subs, UnionTags, VarStore, Variable, VariableSubsSlice,
+};
 use roc_collections::all::{ImMap, ImSet, Index, MutSet, SendMap};
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -1532,7 +1534,10 @@ pub fn gather_tags_unsorted_iter(
     subs: &Subs,
     other_fields: UnionTags,
     mut var: Variable,
-) -> (impl Iterator<Item = (&TagName, &[Variable])> + '_, Variable) {
+) -> (
+    impl Iterator<Item = (&TagName, VariableSubsSlice)> + '_,
+    Variable,
+) {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
@@ -1582,19 +1587,38 @@ pub fn gather_tags_unsorted_iter(
             let tag_name: &TagName = &subs[i1];
             let subs_slice = subs[i2];
 
-            let slice = subs.get_subs_slice(*subs_slice.as_subs_slice());
-
-            (tag_name, slice)
+            (tag_name, subs_slice)
         });
 
     (it, var)
+}
+
+pub fn gather_tags_slices(
+    subs: &Subs,
+    other_fields: UnionTags,
+    var: Variable,
+) -> (Vec<(TagName, VariableSubsSlice)>, Variable) {
+    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var);
+
+    let mut result: Vec<_> = it
+        .map(|(ref_label, field)| (ref_label.clone(), field))
+        .collect();
+
+    result.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    (result, ext)
 }
 
 pub fn gather_tags(subs: &Subs, other_fields: UnionTags, var: Variable) -> TagUnionStructure {
     let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var);
 
     let mut result: Vec<_> = it
-        .map(|(ref_label, field)| (ref_label.clone(), field))
+        .map(|(ref_label, field)| {
+            (
+                ref_label.clone(),
+                subs.get_subs_slice(*field.as_subs_slice()),
+            )
+        })
         .collect();
 
     result.sort_by(|(a, _), (b, _)| a.cmp(b));

@@ -362,8 +362,8 @@ impl<'a> ExtContent<'a> {
     fn from_var(subs: &'a Subs, ext: Variable) -> Self {
         let content = subs.get_content_without_compacting(ext);
         match content {
-            Content::Structure(EmptyTagUnion) => ExtContent::Empty,
-            Content::Structure(EmptyRecord) => ExtContent::Empty,
+            Content::Structure(FlatType::EmptyTagUnion) => ExtContent::Empty,
+            Content::Structure(FlatType::EmptyRecord) => ExtContent::Empty,
 
             Content::FlexVar(_) | Content::RigidVar(_) => ExtContent::Content(ext, content),
 

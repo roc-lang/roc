@@ -931,7 +931,7 @@ impl IntoIterator for VariableSubsSlice {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct UnionTags {
     pub tag_names: SubsSlice<TagName>,
     pub variables: SubsSlice<VariableSubsSlice>,
@@ -958,7 +958,34 @@ impl UnionTags {
         self.len() == 0
     }
 
-    pub fn insert_into_subs<'a, I, I2>(subs: &mut Subs, input: I) -> Self
+    pub fn insert_slices_into_subs<I>(subs: &mut Subs, input: I) -> Self
+    where
+        I: IntoIterator<Item = (TagName, VariableSubsSlice)>,
+    {
+        let tag_names_start = subs.tag_names.len() as u32;
+        let variables_start = subs.variable_slices.len() as u32;
+
+        let it = input.into_iter();
+        let size_hint = it.size_hint().0;
+
+        subs.tag_names.reserve(size_hint);
+        subs.variable_slices.reserve(size_hint);
+
+        let mut length = 0;
+        for (k, variables) in it {
+            subs.tag_names.push(k);
+            subs.variable_slices.push(variables);
+
+            length += 1;
+        }
+
+        UnionTags {
+            variables: SubsSlice::new(variables_start, length),
+            tag_names: SubsSlice::new(tag_names_start, length),
+        }
+    }
+
+    pub fn insert_into_subs<I, I2>(subs: &mut Subs, input: I) -> Self
     where
         I: IntoIterator<Item = (TagName, I2)>,
         I2: IntoIterator<Item = Variable>,
@@ -1002,7 +1029,7 @@ impl UnionTags {
     ) -> impl Iterator<Item = (&TagName, &[Variable])> + 'a {
         let (it, _) = crate::types::gather_tags_unsorted_iter(subs, *self, ext);
 
-        it
+        it.map(move |(label, slice)| (label, subs.get_subs_slice(*slice.as_subs_slice())))
     }
 
     pub fn unsorted_iterator_and_ext<'a>(
@@ -1010,7 +1037,12 @@ impl UnionTags {
         subs: &'a Subs,
         ext: Variable,
     ) -> (impl Iterator<Item = (&TagName, &[Variable])> + 'a, Variable) {
-        crate::types::gather_tags_unsorted_iter(subs, *self, ext)
+        let (it, ext) = crate::types::gather_tags_unsorted_iter(subs, *self, ext);
+
+        (
+            it.map(move |(label, slice)| (label, subs.get_subs_slice(*slice.as_subs_slice()))),
+            ext,
+        )
     }
 
     /// Get a sorted iterator over the tags of this tag union type
@@ -1052,6 +1084,29 @@ impl UnionTags {
             )
         }
     }
+
+    #[inline(always)]
+    pub fn sorted_slices_iterator_and_ext<'a>(
+        &'_ self,
+        subs: &'a Subs,
+        ext: Variable,
+    ) -> (SortedTagsSlicesIterator<'a>, Variable) {
+        if is_empty_tag_union(subs, ext) {
+            (
+                Box::new(self.iter_all().map(move |(i1, i2)| {
+                    let tag_name: &TagName = &subs[i1];
+                    let subs_slice = subs[i2];
+
+                    (tag_name.clone(), subs_slice)
+                })),
+                ext,
+            )
+        } else {
+            let (fields, ext) = crate::types::gather_tags_slices(subs, *self, ext);
+
+            (Box::new(fields.into_iter()), ext)
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1070,6 +1125,7 @@ pub type SortedFieldsIterator<'a> =
     Box<dyn Iterator<Item = (Lowercase, RecordField<Variable>)> + 'a>;
 
 pub type SortedTagsIterator<'a> = Box<dyn Iterator<Item = (TagName, &'a [Variable])> + 'a>;
+pub type SortedTagsSlicesIterator<'a> = Box<dyn Iterator<Item = (TagName, VariableSubsSlice)> + 'a>;
 
 impl RecordFields {
     pub fn len(&self) -> usize {
