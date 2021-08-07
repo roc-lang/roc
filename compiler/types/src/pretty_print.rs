@@ -154,8 +154,9 @@ fn find_names_needed(
             find_names_needed(*ret_var, subs, roots, root_appearances, names_taken);
         }
         Structure(Record(sorted_fields, ext_var)) => {
-            for var in sorted_fields.iter_variables() {
-                find_names_needed(*var, subs, roots, root_appearances, names_taken);
+            for index in sorted_fields.iter_variables() {
+                let var = subs[index];
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
 
             find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
@@ -418,7 +419,7 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
             let RecordStructure {
                 fields: sorted_fields,
                 ext,
-            } = gather_fields(subs, fields.clone(), *ext_var);
+            } = gather_fields(subs, *fields, *ext_var);
             let ext_var = ext;
 
             if fields.is_empty() {
@@ -428,8 +429,10 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
 
                 let mut any_written_yet = false;
 
-                for (label, field_var) in sorted_fields {
+                for (label, record_field) in sorted_fields {
                     use RecordField::*;
+
+                    let var = *record_field.as_inner();
 
                     if any_written_yet {
                         buf.push_str(", ");
@@ -438,19 +441,10 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
                     }
                     buf.push_str(label.as_str());
 
-                    let var = match field_var {
-                        Optional(var) => {
-                            buf.push_str(" ? ");
-                            var
-                        }
-                        Required(var) => {
-                            buf.push_str(" : ");
-                            var
-                        }
-                        Demanded(var) => {
-                            buf.push_str(" : ");
-                            var
-                        }
+                    match record_field {
+                        Optional(_) => buf.push_str(" ? "),
+                        Required(_) => buf.push_str(" : "),
+                        Demanded(_) => buf.push_str(" : "),
                     };
 
                     write_content(
@@ -583,8 +577,12 @@ pub fn chase_ext_record(
 
     match subs.get_content_without_compacting(var) {
         Structure(Record(sub_fields, sub_ext)) => {
-            for (field_name, record_field) in sub_fields {
-                fields.insert(field_name.clone(), record_field);
+            for (i1, i2, i3) in sub_fields.iter_all() {
+                let label = &subs[i1];
+                let var = subs[i2];
+                let record_field = subs[i3].map(|_| var);
+
+                fields.insert(label.clone(), record_field);
             }
 
             chase_ext_record(subs, *sub_ext, fields)

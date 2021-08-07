@@ -399,11 +399,15 @@ impl SolvedType {
             Record(fields, ext_var) => {
                 let mut new_fields = Vec::with_capacity(fields.len());
 
-                for (label, field) in fields {
-                    let solved_type =
-                        field.map(|var| Self::from_var_help(subs, recursion_vars, *var));
+                for (i1, i2, i3) in fields.iter_all() {
+                    let field_name: Lowercase = subs[i1].clone();
+                    let variable: Variable = subs[i2];
+                    let record_field: RecordField<()> = subs[i3];
 
-                    new_fields.push((label.clone(), solved_type));
+                    let solved_type =
+                        record_field.map(|_| Self::from_var_help(subs, recursion_vars, variable));
+
+                    new_fields.push((field_name, solved_type));
                 }
 
                 let ext = Self::from_var_help(subs, recursion_vars, *ext_var);
