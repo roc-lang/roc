@@ -291,38 +291,60 @@ pub fn rebuild_host(host_input_path: &Path) {
     }
 }
 
+fn nixos_path() -> String {
+    env::var("NIXOS_GLIBC_PATH").unwrap_or_else(|_| {
+        panic!(
+            "We couldn't find glibc! We tried looking for NIXOS_GLIBC_PATH
+to find it via Nix, but that didn't work either. Please file a bug report.
+
+This will only be an issue until we implement surgical linking.",
+        )
+    })
+}
+
+fn library_path<const N: usize>(segments: [&str; N]) -> Option<PathBuf> {
+    let mut guess_path = PathBuf::new();
+    for s in segments {
+        guess_path.push(s);
+    }
+    if guess_path.exists() {
+        Some(guess_path)
+    } else {
+        None
+    }
+}
+
 fn link_linux(
     target: &Triple,
     output_path: PathBuf,
     input_paths: &[&str],
     link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    let usr_lib_path = Path::new("/usr/lib").to_path_buf();
-    let usr_lib_gnu_path = usr_lib_path.join(format!("{}-linux-gnu", target.architecture));
-    let lib_gnu_path = Path::new("/lib/").join(format!("{}-linux-gnu", target.architecture));
+    let architecture = format!("{}-linux-gnu", target.architecture);
 
-    let libcrt_path = if usr_lib_gnu_path.exists() {
-        &usr_lib_gnu_path
-    } else {
-        &usr_lib_path
-    };
+    let libcrt_path = library_path(["/usr", "lib", &architecture])
+        .or_else(|| library_path(["/usr", "lib"]))
+        .or_else(|| library_path([&nixos_path()]))
+        .unwrap();
 
     let libgcc_name = "libgcc_s.so.1";
-    let libgcc_path = if lib_gnu_path.join(libgcc_name).exists() {
-        lib_gnu_path.join(libgcc_name)
-    } else if usr_lib_gnu_path.join(libgcc_name).exists() {
-        usr_lib_gnu_path.join(libgcc_name)
-    } else {
-        usr_lib_path.join(libgcc_name)
-    };
+    let libgcc_path = library_path(["/lib", &architecture, libgcc_name])
+        .or_else(|| library_path(["/usr", "lib", &architecture, libgcc_name]))
+        .or_else(|| library_path(["/usr", "lib", libgcc_name]))
+        .or_else(|| library_path([&nixos_path(), libgcc_name]))
+        .unwrap();
+
     let ld_linux = match target.architecture {
-        Architecture::X86_64 => "/lib64/ld-linux-x86-64.so.2",
-        Architecture::Aarch64(_) => "/lib/ld-linux-aarch64.so.1",
+        Architecture::X86_64 => library_path(["/lib64", "ld-linux-x86-64.so.2"])
+            .or_else(|| library_path([&nixos_path(), "ld-linux-x86-64.so.2"])),
+        Architecture::Aarch64(_) => library_path(["/lib", "ld-linux-aarch64.so.1"]),
         _ => panic!(
             "TODO gracefully handle unsupported linux architecture: {:?}",
             target.architecture
         ),
     };
+    let ld_linux = ld_linux.unwrap();
+    let ld_linux = ld_linux.to_str().unwrap();
 
     let mut soname;
     let (base_args, output_path) = match link_type {
