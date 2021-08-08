@@ -958,6 +958,10 @@ impl UnionTags {
         self.len() == 0
     }
 
+    pub fn compare<T>(x: &(TagName, T), y: &(TagName, T)) -> std::cmp::Ordering {
+        first(x, y)
+    }
+
     pub fn insert_slices_into_subs<I>(subs: &mut Subs, input: I) -> Self
     where
         I: IntoIterator<Item = (TagName, VariableSubsSlice)>,
@@ -1301,17 +1305,19 @@ fn is_empty_record(subs: &Subs, mut var: Variable) -> bool {
     }
 }
 
-fn is_empty_tag_union(subs: &Subs, mut var: Variable) -> bool {
+pub fn is_empty_tag_union(subs: &Subs, mut var: Variable) -> bool {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
     loop {
         match subs.get_content_without_compacting(var) {
+            FlexVar(_) => return true,
             Structure(EmptyTagUnion) => return true,
             Structure(
                 TagUnion(sub_fields, sub_ext) | RecursiveTagUnion(_, sub_fields, sub_ext),
             ) => {
                 if !sub_fields.is_empty() {
+                    dbg!(&sub_fields);
                     return false;
                 }
 
@@ -1323,7 +1329,10 @@ fn is_empty_tag_union(subs: &Subs, mut var: Variable) -> bool {
                 var = *actual_var;
             }
 
-            _ => return false,
+            other => {
+                dbg!(&other);
+                return false;
+            }
         }
     }
 }
