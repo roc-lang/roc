@@ -830,3 +830,15 @@ fn str_to_bytes() {
         &[u8]
     );
 }
+
+#[test]
+fn str_from_utf8_range() {
+    assert_evals_to!(
+        r#"
+        bytes = Str.toBytes "hello"
+        Str.fromUtf8Range bytes { start: 0, count: 5 }
+        "#,
+        RocStr::from("hello"),
+        RocStr
+    );
+}

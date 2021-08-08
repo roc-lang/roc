@@ -7,6 +7,7 @@ use roc_types::builtin_aliases::{
     ordering_type, result_type, set_type, str_type, str_utf8_byte_problem_type, u32_type, u64_type,
     u8_type,
 };
+use roc_types::types::RecordField; 
 use roc_types::solved_types::SolvedType;
 use roc_types::subs::VarId;
 use std::collections::HashMap;
@@ -604,6 +605,21 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     add_top_level_function_type!(
         Symbol::STR_FROM_UTF8,
         vec![list_type(u8_type())],
+        Box::new(result_type(str_type(), bad_utf8.clone())),
+    );
+
+    add_top_level_function_type!(
+        Symbol::STR_FROM_UTF8_RANGE,
+        vec![
+            list_type(u8_type()),
+            SolvedType::Record {
+                fields: vec![
+                    ("start".into(), RecordField::Required(nat_type())),
+                    ("count".into(), RecordField::Required(nat_type())),
+                ],
+                ext: Box::new(SolvedType::EmptyRecord),
+            }
+        ],
         Box::new(result_type(str_type(), bad_utf8)),
     );
 

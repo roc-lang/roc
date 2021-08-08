@@ -14,7 +14,7 @@ use crate::llvm::build_list::{
 };
 use crate::llvm::build_str::{
     empty_str, str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int,
-    str_from_utf8, str_join_with, str_number_of_bytes, str_split, str_starts_with,
+    str_from_utf8, str_from_utf8_range, str_join_with, str_number_of_bytes, str_split, str_starts_with,
     str_starts_with_code_point, str_to_bytes,
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
@@ -4443,6 +4443,15 @@ fn run_low_level<'a, 'ctx, 'env>(
             let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
 
             str_from_utf8(env, parent, original_wrapper)
+        }
+        StrFromUtf8Range => {
+            // Str.fromUtf8 : List U8 -> Result Str Utf8Problem
+            debug_assert_eq!(args.len(), 2);
+
+            let list_wrapper = load_symbol(scope, &args[0]).into_struct_value();
+            let count_and_start = load_symbol(scope, &args[1]).into_struct_value();
+
+            str_from_utf8_range(env, parent, list_wrapper, count_and_start)
         }
         StrToBytes => {
             // Str.fromInt : Str -> List U8

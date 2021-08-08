@@ -250,6 +250,64 @@ pub fn str_to_bytes<'a, 'ctx, 'env>(
     call_bitcode_fn_returns_list(env, &[string], bitcode::STR_TO_BYTES)
 }
 
+/// Str.fromUtf8 : List U8, { count : Nat, start : Nat } -> { a : Bool, b : Str, c : Nat, d : I8 }
+pub fn str_from_utf8_range<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    _parent: FunctionValue<'ctx>,
+    list_wrapper: StructValue<'ctx>,
+    count_and_start: StructValue<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let result_type = env.module.get_struct_type("str.FromUtf8Result").unwrap();
+    let result_ptr = builder.build_alloca(result_type, "alloca_utf8_validate_bytes_result");
+
+    call_void_bitcode_fn(
+        env,
+        &[
+            complex_bitcast(
+                env.builder,
+                list_wrapper.into(),
+                env.context.i128_type().into(),
+                "to_i128",
+            ),
+            // TODO: This won't work for 32 bit targets!
+            complex_bitcast(
+                env.builder,
+                count_and_start.into(),
+                env.context.i128_type().into(),
+                "to_i128",
+            ),
+            result_ptr.into(),
+        ],
+        bitcode::STR_FROM_UTF8_RANGE,
+    );
+
+    let record_type = env.context.struct_type(
+        &[
+            env.ptr_int().into(),
+            super::convert::zig_str_type(env).into(),
+            env.context.bool_type().into(),
+            ctx.i8_type().into(),
+        ],
+        false,
+    );
+
+    let result_ptr_cast = env
+        .builder
+        .build_bitcast(
+            result_ptr,
+            record_type.ptr_type(AddressSpace::Generic),
+            "to_unnamed",
+        )
+        .into_pointer_value();
+
+    builder.build_load(result_ptr_cast, "load_utf8_validate_bytes_result")
+}
+
+
+
 /// Str.fromUtf8 : List U8 -> { a : Bool, b : Str, c : Nat, d : I8 }
 pub fn str_from_utf8<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

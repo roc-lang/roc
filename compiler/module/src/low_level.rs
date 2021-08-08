@@ -13,6 +13,7 @@ pub enum LowLevel {
     StrCountGraphemes,
     StrFromInt,
     StrFromUtf8,
+    StrFromUtf8Range,
     StrToBytes,
     StrFromFloat,
     ListLen,
@@ -119,6 +120,7 @@ impl LowLevel {
             | StrCountGraphemes
             | StrFromInt
             | StrFromUtf8
+            | StrFromUtf8Range
             | StrToBytes
             | StrFromFloat
             | ListLen
