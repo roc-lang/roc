@@ -6,5 +6,5 @@ app "parseap"
 main : Task.Task {} []
 main =
     Task.after Task.getInt \n ->
-        MiniParsec.test1 n
+        MiniParsec.test2 n
             |> Task.putLine
