@@ -1129,8 +1129,8 @@ test "RocStr.joinWith: result is big" {
     try expect(roc_result.eq(result));
 }
 
-// Str.toBytes
-pub fn strToBytesC(arg: RocStr) callconv(.C) RocList {
+// Str.toUtf8
+pub fn strToUtf8C(arg: RocStr) callconv(.C) RocList {
     return @call(.{ .modifier = always_inline }, strToBytes, .{arg});
 }
 

@@ -918,7 +918,7 @@ define_builtins! {
         12 STR_FROM_UTF8: "fromUtf8"
         13 STR_UT8_PROBLEM: "Utf8Problem" // the Utf8Problem type alias
         14 STR_UT8_BYTE_PROBLEM: "Utf8ByteProblem" // the Utf8ByteProblem type alias
-        15 STR_TO_BYTES: "toBytes"
+        15 STR_TO_UTF8: "toUtf8"
         16 STR_STARTS_WITH_CODE_PT: "startsWithCodePt"
         17 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
     }

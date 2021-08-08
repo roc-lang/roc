@@ -13,7 +13,7 @@ pub enum LowLevel {
     StrCountGraphemes,
     StrFromInt,
     StrFromUtf8,
-    StrToBytes,
+    StrToUtf8,
     StrFromFloat,
     ListLen,
     ListGetUnsafe,
@@ -110,11 +110,11 @@ impl LowLevel {
 
         match self {
             StrConcat | StrJoinWith | StrIsEmpty | StrStartsWith | StrStartsWithCodePt
-            | StrEndsWith | StrSplit | StrCountGraphemes | StrFromInt | StrFromUtf8
-            | StrToBytes | StrFromFloat | ListLen | ListGetUnsafe | ListSet | ListDrop
-            | ListSingle | ListRepeat | ListReverse | ListConcat | ListContains | ListAppend
-            | ListPrepend | ListJoin | ListRange | ListSwap | DictSize | DictEmpty | DictInsert
-            | DictRemove | DictContains | DictGetUnsafe | DictKeys | DictValues | DictUnion
+            | StrEndsWith | StrSplit | StrCountGraphemes | StrFromInt | StrFromUtf8 | StrToUtf8
+            | StrFromFloat | ListLen | ListGetUnsafe | ListSet | ListDrop | ListSingle
+            | ListRepeat | ListReverse | ListConcat | ListContains | ListAppend | ListPrepend
+            | ListJoin | ListRange | ListSwap | DictSize | DictEmpty | DictInsert | DictRemove
+            | DictContains | DictGetUnsafe | DictKeys | DictValues | DictUnion
             | DictIntersection | DictDifference | SetFromList | NumAdd | NumAddWrap
             | NumAddChecked | NumSub | NumSubWrap | NumSubChecked | NumMul | NumMulWrap
             | NumMulChecked | NumGt | NumGte | NumLt | NumLte | NumCompare | NumDivUnchecked

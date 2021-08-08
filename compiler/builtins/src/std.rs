@@ -607,9 +607,9 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(result_type(str_type(), bad_utf8)),
     );
 
-    // toBytes : Str -> List U8
+    // toUtf8 : Str -> List U8
     add_top_level_function_type!(
-        Symbol::STR_TO_BYTES,
+        Symbol::STR_TO_UTF8,
         vec![str_type()],
         Box::new(list_type(u8_type()))
     );
