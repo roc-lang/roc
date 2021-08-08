@@ -819,10 +819,10 @@ fn str_from_float() {
 }
 
 #[test]
-fn str_to_bytes() {
-    assert_evals_to!(r#"Str.toBytes "hello""#, &[104, 101, 108, 108, 111], &[u8]);
+fn str_to_utf8() {
+    assert_evals_to!(r#"Str.toUtf8 "hello""#, &[104, 101, 108, 108, 111], &[u8]);
     assert_evals_to!(
-        r#"Str.toBytes "this is a long string""#,
+        r#"Str.toUtf8 "this is a long string""#,
         &[
             116, 104, 105, 115, 32, 105, 115, 32, 97, 32, 108, 111, 110, 103, 32, 115, 116, 114,
             105, 110, 103

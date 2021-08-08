@@ -96,7 +96,7 @@ comptime {
     exportStrFn(str.strFromIntC, "from_int");
     exportStrFn(str.strFromFloatC, "from_float");
     exportStrFn(str.strEqual, "equal");
-    exportStrFn(str.strToBytesC, "to_bytes");
+    exportStrFn(str.strToUtf8C, "to_utf8");
     exportStrFn(str.fromUtf8C, "from_utf8");
 }
 

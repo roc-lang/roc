@@ -15,7 +15,7 @@ interface Str
             fromUtf8,
             Utf8Problem,
             Utf8ByteProblem,
-            toBytes,
+            toUtf8,
             startsWithCodePt
         ]
     imports []
