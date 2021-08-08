@@ -23,5 +23,6 @@ rustc --version
 # because when building without "the" llvm feature (which is only ever done
 # for this exact use case), the result is lots of "unused" warnings!
 RUSTFLAGS=-Awarnings cargo run -p roc_cli --no-default-features docs compiler/builtins/docs/Bool.roc
+RUSTFLAGS=-Awarnings cargo run -p roc_cli --no-default-features docs compiler/builtins/docs/Str.roc
 mv generated-docs/ www/build/builtins
 popd
