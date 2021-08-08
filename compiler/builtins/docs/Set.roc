@@ -1,8 +1,21 @@
 interface Set
-    exposes [ Set, empty, isEmpty, len, add, drop, map ]
+    exposes
+        [
+            Set,
+            empty,
+            single,
+            len,
+            insert,
+            remove,
+            union,
+            difference,
+            intersection,
+            toList,
+            fromList,
+            walk,
+            contains
+        ]
     imports []
-
-## Set
 
 ## A Set is an unordered collection of unique elements.
 Set elem : [ @Set elem ]
