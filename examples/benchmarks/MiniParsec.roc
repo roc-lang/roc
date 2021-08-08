@@ -1,11 +1,4 @@
-interface MiniParsec exposes [ result, test1, test2, showPair] imports []
-
-# » \(Pair a b) -> Str.concat (Str.concat a "::") b
-# <function> : [ Pair Str Str ]* -> Str
-#
-# » (\(Pair a b) -> Str.concat (Str.concat a "::") b) (Pair "x" "y")
-# "x::y" : Str
-# 
+interface MiniParsec exposes [ result, testResult, showPair] imports []
 
 showPair : [Pair Str Str] -> Str
 showPair = \(Pair a b) -> Str.concat (Str.concat a "::") b
@@ -19,14 +12,11 @@ showPair = \(Pair a b) -> Str.concat (Str.concat a "::") b
 result : a -> (b -> List [ Pair a b ]*)
 result = \v -> (\inp -> [Pair v inp])
 
-test1 : I64 -> Str
-test1 = \n -> 
-    (result "a") n |> List.len |> Str.fromInt
 
-test2 : I64 -> Str
-test2 = \n -> 
-    when ((result "a") n |> List.len) == 1 is
-        True -> "Ok"
-        False -> "Error!"
+testResult =  \a, input -> 
+    when ((result a) input |> List.first) is
+                        Ok pair -> showPair pair
+                        _ -> "Error"
+
 
 
