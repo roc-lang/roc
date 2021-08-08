@@ -842,3 +842,39 @@ fn str_from_utf8_range() {
         RocStr
     );
 }
+
+#[test]
+fn str_from_utf8_range_slice() {
+    assert_evals_to!(
+        r#"
+        bytes = Str.toBytes "hello"
+        Str.fromUtf8Range bytes { start: 1, count: 4 }
+        "#,
+        RocStr::from("ello"),
+        RocStr
+    );
+}
+
+#[test]
+fn str_from_utf8_range_slice_not_end() {
+    assert_evals_to!(
+        r#"
+        bytes = Str.toBytes "hello"
+        Str.fromUtf8Range bytes { start: 1, count: 3 }
+        "#,
+        RocStr::from("ell"),
+        RocStr
+    );
+}
+
+// #[test]
+// fn str_from_utf8_range_slice() {
+//     assert_evals_to!(
+//         r#"
+//         bytes = Str.toBytes "hello"
+//         Str.fromUtf8Range bytes { start: 6, count: 5 }
+//         "#,
+//         RocStr::from("ello"),
+//         RocStr
+//     );
+// }

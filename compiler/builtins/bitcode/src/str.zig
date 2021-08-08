@@ -1198,30 +1198,17 @@ fn fromUtf8(arg: RocList) FromUtf8Result {
 }
 
 pub fn fromUtf8RangeC(arg: RocList, countAndStart: CountAndStart, output: *FromUtf8Result) callconv(.C) void {
-    output.* = @call(.{ .modifier = always_inline }, fromUtf8Range, .{arg, countAndStart});
+    output.* = @call(.{ .modifier = always_inline }, fromUtf8Range, .{ arg, countAndStart });
 }
 
 fn fromUtf8Range(arg: RocList, countAndStart: CountAndStart) FromUtf8Result {
-    const bytes = @ptrCast([*]const u8, arg.bytes)[0..arg.length];
+    const bytes = @ptrCast([*]const u8, arg.bytes)[countAndStart.start..countAndStart.count];
 
     if (unicode.utf8ValidateSlice(bytes)) {
-        // the output will be correct. Now we need to take ownership of the input
-        if (arg.len() <= SMALL_STR_MAX_LENGTH) {
-            // turn the bytes into a small string
-            const string = RocStr.init(@ptrCast([*]u8, arg.bytes), arg.len());
+        // the output will be correct. Now we need to clone the input
+        const string = RocStr.init(@ptrCast([*]const u8, bytes), countAndStart.count);
 
-            // then decrement the input list
-            const data_bytes = arg.len();
-            utils.decref(arg.bytes, data_bytes, RocStr.alignment);
-
-            return FromUtf8Result{ .is_ok = true, .string = string, .byte_index = 0, .problem_code = Utf8ByteProblem.InvalidStartByte };
-        } else {
-            const byte_list = arg.makeUnique(RocStr.alignment, @sizeOf(u8));
-
-            const string = RocStr{ .str_bytes = byte_list.bytes, .str_len = byte_list.length };
-
-            return FromUtf8Result{ .is_ok = true, .string = string, .byte_index = 0, .problem_code = Utf8ByteProblem.InvalidStartByte };
-        }
+        return FromUtf8Result{ .is_ok = true, .string = string, .byte_index = 0, .problem_code = Utf8ByteProblem.InvalidStartByte };
     } else {
         const temp = errorToProblem(@ptrCast([*]u8, arg.bytes), arg.length);
 
@@ -1232,7 +1219,6 @@ fn fromUtf8Range(arg: RocList, countAndStart: CountAndStart) FromUtf8Result {
         return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = temp.index, .problem_code = temp.problem };
     }
 }
-
 
 fn errorToProblem(bytes: [*]u8, length: usize) struct { index: usize, problem: Utf8ByteProblem } {
     var index: usize = 0;
