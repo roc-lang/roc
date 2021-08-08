@@ -1,79 +1,64 @@
-interface List2
+interface List
     exposes
-        [ List
-        , single
-        , empty
-        , repeat
-        , range
-        , reverse
-        , sort
-        , map
-        , mapWithIndex
-        , mapOrCancel
-        , mapOks
-        , update
-        , updater
-        , allOks
-        , append
-        , prepend
-        , concat
-        , join
-        , joinMap
-        , oks
-        , zip
-        , zipMap
-        , keepIf
-        , dropIf
-        , first
-        , last
-        , get
-        , max
-        , min
-        , put
-        , drop
-        , append
-        , prepend
-        , dropLast
-        , dropFirst
-        , takeFirst
-        , takeLast
-        , split
-        , sublist
-        , walk
-        , walkBackwards
-        , walkUntil
-        , walkBackwardsUntil
-        , len
-        , isEmpty
-        , contains
-        , all
-        , any
+        [
+            List,
+            isEmpty,
+            get,
+            set,
+            append,
+            map,
+            len,
+            walkBackwards,
+            concat,
+            first,
+            single,
+            repeat,
+            reverse,
+            prepend,
+            join,
+            keepIf,
+            contains,
+            sum,
+            walk,
+            last,
+            keepOks,
+            keepErrs,
+            mapWithIndex,
+            map2,
+            map3,
+            product,
+            walkUntil,
+            range,
+            sortWith,
+            drop,
+            swap
         ]
     imports []
 
 ## Types
 
 ## A sequential list of values.
-## # >>> [ 1, 2, 3 ] # a list of numbers # # >>> [ "a", "b", "c" ] # a list of strings
 ##
-## >>> [ [ 1.1 ], [], [ 2.2, 3.3 ] ] # a list of lists of floats
+## >>> [ 1, 2, 3 ] # a list of numbers
+## >>> [ "a", "b", "c" ] # a list of strings
+## >>> [ [ 1.1 ], [], [ 2.2, 3.3 ] ] # a list of lists of numbers
 ##
-## The list [ 1, "a" ] gives an error, because each element in a list must have
-## the same type. If you want to put a mix of #Int and #Str values into a list, try this:
+## The list `[ 1, "a" ]` gives an error, because each element in a list must have
+## the same type. If you want to put a mix of [I64] and [Str] values into a list, try this:
 ##
 ## ```
 ## mixedList : List [ IntElem I64, StrElem Str ]*
 ## mixedList = [ IntElem 1, IntElem 2, StrElem "a", StrElem "b" ]
 ## ```
 ##
-## The maximum size of a #List is limited by the amount of heap memory available
+## The maximum size of a [List] is limited by the amount of heap memory available
 ## to the current process. If there is not enough memory available, attempting to
 ## create the list could crash. (On Linux, where [overcommit](https://www.etalabs.net/overcommit.html)
 ## is normally enabled, not having enough memory could result in the list appearing
 ## to be created just fine, but then crashing later.)
 ##
-## > The theoretical maximum length for a list created in Roc is
-## > #Int.maxNat divided by 2. Attempting to create a list bigger than that
+## > The theoretical maximum length for a list created in Roc is half of
+## > `Num.maxNat`. Attempting to create a list bigger than that
 ## > in Roc code will always fail, although in practice it is likely to fail
 ## > at much smaller lengths due to insufficient memory being available.
 ##
@@ -147,13 +132,13 @@ interface List2
 ##
 ##     List.first (getRatings 5).bar
 ##
-## This call to #List.first means that even the list in the `bar` field has become
+## This call to [List.first] means that even the list in the `bar` field has become
 ## inaccessible. As such, this line will cause the list's refcount to get
 ## decremented all the way to 0. At that point, nothing is referencing the list
 ## anymore, and its memory will get freed.
 ##
 ## Things are different if this is a list of lists instead of a list of numbers.
-## Let's look at a simpler example using #List.first - first with a list of numbers,
+## Let's look at a simpler example using [List.first] - first with a list of numbers,
 ## and then with a list of lists, to see how they differ.
 ##
 ## Here's the example using a list of numbers.
@@ -165,7 +150,7 @@ interface List2
 ##
 ##     first
 ##
-## It makes a list, calls #List.first and #List.last on it, and then returns `first`.
+## It makes a list, calls [List.first] and [List.last] on it, and then returns `first`.
 ##
 ## Here's the equivalent code with a list of lists:
 ##
@@ -189,12 +174,12 @@ interface List2
 ## their own refcounts - to go inside that list. (The empty list at the end
 ## does not use heap memory, and thus has no refcount.)
 ##
-## At the end, we once again call #List.first on the list, but this time
+## At the end, we once again call [List.first] on the list, but this time
 ##
 ## * Copying small lists (64 elements or fewer) is typically slightly faster than copying small persistent data structures. This is because, at small sizes, persistent data structures tend to be thin wrappers around flat arrays anyway. They don't have any copying advantage until crossing a certain minimum size threshold.
-## * Even when copying is faster, other list operations may still be slightly slower with persistent data structures. For example, even if it were a persistent data structure, #List.map, #List.fold, and #List.keepIf would all need to traverse every element in the list and build up the result from scratch. These operations are all
-## * Roc's compiler optimizes many list operations into in-place mutations behind the scenes, depending on how the list is being used. For example, #List.map, #List.keepIf, and #List.set can all be optimized to perform in-place mutations.
-## * If possible, it is usually best for performance to use large lists in a way where the optimizer can turn them into in-place mutations. If this is not possible, a persistent data structure might be faster - but this is a rare enough scenario that it would not be good for the average Roc program's performance if this were the way #List worked by default. Instead, you can look outside Roc's standard modules for an implementation of a persistent data structure - likely built using #List under the hood!
+## * Even when copying is faster, other list operations may still be slightly slower with persistent data structures. For example, even if it were a persistent data structure, [List.map], [List.walk], and [List.keepIf] would all need to traverse every element in the list and build up the result from scratch. These operations are all
+## * Roc's compiler optimizes many list operations into in-place mutations behind the scenes, depending on how the list is being used. For example, [List.map], [List.keepIf], and [List.set] can all be optimized to perform in-place mutations.
+## * If possible, it is usually best for performance to use large lists in a way where the optimizer can turn them into in-place mutations. If this is not possible, a persistent data structure might be faster - but this is a rare enough scenario that it would not be good for the average Roc program's performance if this were the way [List] worked by default. Instead, you can look outside Roc's standard modules for an implementation of a persistent data structure - likely built using [List] under the hood!
 List elem : [ @List elem ]
 
 ## Initialize
@@ -265,15 +250,15 @@ sortDesc : List elem, (elem -> Num *) -> List elem
 ## See for example #Result.map, #Set.map, and #Map.map.
 map : List before, (before -> after) -> List after
 
-## This works like #List.map, except it also passes the index
+## This works like [List.map], except it also passes the index
 ## of the element to the conversion function.
 mapWithIndex : List before, (before, Nat -> after) -> List after
 
-## This works like #List.map, except at any time you can return `Err` to
+## This works like [List.map], except at any time you can return `Err` to
 ## cancel the entire operation immediately, and return that #Err.
 mapOrCancel : List before, (before -> Result after err) -> Result (List after) err
 
-## This works like #List.map, except only the transformed values that are
+## This works like [List.map], except only the transformed values that are
 ## wrapped in `Ok` are kept. Any that are wrapped in `Err` are dropped.
 ##
 ## >>> List.mapOks [ [ "a", "b" ], [], [], [ "c", "d", "e" ] ] List.last
@@ -287,16 +272,16 @@ mapOks : List before, (before -> Result after *) -> List after
 ## the given function.
 ##
 ## For a version of this which gives you more control over when to perform
-## the transformation, see #List.updater
+## the transformation, see `List.updater`
 ##
 ## ## Performance notes
 ##
 ## In particular when updating nested collections, this is potentially much more
-## efficient than using #List.get to obtain the element, transforming it,
+## efficient than using [List.get] to obtain the element, transforming it,
 ## and then putting it back in the same place.
 update : List elem, Nat, (elem -> elem) -> List elem
 
-## A more flexible version of #List.update, which returns an "updater" function
+## A more flexible version of `List.update`, which returns an "updater" function
 ## that lets you delay performing the update until later.
 updater : List elem, Nat -> { elem, new : (elem -> List elem) }
 
@@ -337,15 +322,15 @@ concat : List elem, List elem -> List elem
 ## >>> List.join []
 join : List (List elem) -> List elem
 
-## Like #List.map, except the transformation function wraps the return value
+## Like [List.map], except the transformation function wraps the return value
 ## in a list. At the end, all the lists get joined together into one list.
 joinMap : List before, (before -> List after) -> List after
 
-## Like #List.join, but only keeps elements tagged with `Ok`. Elements
+## Like [List.join], but only keeps elements tagged with `Ok`. Elements
 ## tagged with `Err` are dropped.
 ##
 ## This can be useful after using an operation that returns a #Result
-## on each element of a list, for example #List.first:
+## on each element of a list, for example [List.first]:
 ##
 ## >>> [ [ 1, 2, 3 ], [], [], [ 4, 5 ] ]
 ## >>>     |> List.map List.first
@@ -387,16 +372,16 @@ zipMap : List a, List b, (a, b -> c) -> List c
 ##
 ## ## Performance Details
 ##
-## #List.keepIf always returns a list that takes up exactly the same amount
+## [List.keepIf] always returns a list that takes up exactly the same amount
 ## of memory as the original, even if its length decreases. This is becase it
 ## can't know in advance exactly how much space it will need, and if it guesses a
 ## length that's too low, it would have to re-allocate.
 ##
 ## (If you want to do an operation like this which reduces the memory footprint
-## of the resulting list, you can do two passes over the lis with #List.fold - one
+## of the resulting list, you can do two passes over the lis with [List.walk] - one
 ## to calculate the precise new size, and another to populate the new list.)
 ##
-## If given a unique list, #List.keepIf will mutate it in place to assemble the appropriate list.
+## If given a unique list, [List.keepIf] will mutate it in place to assemble the appropriate list.
 ## If that happens, this function will not allocate any new memory on the heap.
 ## If all elements in the list end up being kept, Roc will return the original
 ## list unaltered.
@@ -410,7 +395,7 @@ keepIf : List elem, (elem -> Bool) -> List elem
 ##
 ## ## Performance Details
 ##
-## #List.dropIf has the same performance characteristics as #List.keepIf.
+## `List.dropIf` has the same performance characteristics as [List.keepIf].
 ## See its documentation for details on those characteristics!
 dropIf : List elem, (elem -> Bool) -> List elem
 
@@ -437,14 +422,14 @@ min : List (Num a) -> Result (Num a) [ ListWasEmpty ]*
 ## If the given index is outside the bounds of the list, returns the original
 ## list unmodified.
 ##
-## To drop the element at a given index, instead of replacing it, see #List.drop.
+## To drop the element at a given index, instead of replacing it, see [List.drop].
 set : List elem, Nat, elem -> List elem
 
 ## Drops the element at the given index from the list.
 ##
 ## This has no effect if the given index is outside the bounds of the list.
 ##
-## To replace the element at a given index, instead of dropping it, see #List.set.
+## To replace the element at a given index, instead of dropping it, see [List.set].
 drop : List elem, Nat -> List elem
 
 ## Adds a new element to the end of the list.
@@ -466,12 +451,12 @@ append : List elem, elem -> List elem
 ## ## Performance Details
 ##
 ## This always clones the entire list, even when given a Unique list. That means
-## it runs about as fast as #List.addLast when both are given a Shared list.
+## it runs about as fast as `List.addLast` when both are given a Shared list.
 ##
-## If you have a Unique list instead, #List.append will run much faster than
-## #List.prepend except in the specific case where the list has no excess capacity,
-## and needs to *clone and grow*. In that uncommon case, both #List.append and
-## #List.prepend will run at about the same speed—since #List.prepend always
+## If you have a Unique list instead, [List.append] will run much faster than
+## [List.append] except in the specific case where the list has no excess capacity,
+## and needs to *clone and grow*. In that uncommon case, both [List.append] and
+## [List.append] will run at about the same speed—since [List.append] always
 ## has to clone and grow.
 ##
 ##         | Unique list                    | Shared list    |
@@ -493,11 +478,11 @@ prepend : List elem, elem -> List elem
 ##
 ## ## Performance Details
 ##
-## Calling #List.pop on a Unique list runs extremely fast. It's essentially
-## the same as a #List.last except it also returns the #List it was given,
+## Calling `List.pop` on a Unique list runs extremely fast. It's essentially
+## the same as a [List.last] except it also returns the [List] it was given,
 ## with its length decreased by 1.
 ##
-## In contrast, calling #List.pop on a Shared list creates a new list, then
+## In contrast, calling `List.pop` on a Shared list creates a new list, then
 ## copies over every element in the original list except the last one. This
 ## takes much longer.
 dropLast : List elem -> Result { others : List elem, last : elem } [ ListWasEmpty ]*
@@ -511,8 +496,8 @@ dropLast : List elem -> Result { others : List elem, last : elem } [ ListWasEmpt
 ##
 ## ## Performance Details
 ##
-## When calling either #List.dropFirst or #List.dropLast on a Unique list, #List.dropLast
-## runs *much* faster. This is because for #List.dropLast, removing the last element
+## When calling either `List.dropFirst` or `List.dropLast` on a Unique list, `List.dropLast`
+## runs *much* faster. This is because for `List.dropLast`, removing the last element
 ## in-place is as easy as reducing the length of the list by 1. In contrast,
 ## removing the first element from the list involves copying every other element
 ## in the list into the index before it - which is massively more costly.
@@ -521,8 +506,8 @@ dropLast : List elem -> Result { others : List elem, last : elem } [ ListWasEmpt
 ##
 ##           | Unique list                      | Shared list                     |
 ##-----------+----------------------------------+---------------------------------+
-## dropFirst | #List.last + length change       | #List.last + clone rest of list |
-## dropLast  | #List.last + clone rest of list  | #List.last + clone rest of list |
+## dropFirst | [List.last] + length change       | [List.last] + clone rest of list |
+## dropLast  | [List.last] + clone rest of list  | [List.last] + clone rest of list |
 dropFirst : List elem -> Result { first: elem, others : List elem } [ ListWasEmpty ]*
 
 ## Returns the given number of elements from the beginning of the list.
@@ -534,21 +519,21 @@ dropFirst : List elem -> Result { first: elem, others : List elem } [ ListWasEmp
 ##
 ## >>> List.takeFirst 5 [ 1, 2 ]
 ##
-## To *remove* elements from the beginning of the list, use #List.takeLast.
+## To *remove* elements from the beginning of the list, use `List.takeLast`.
 ##
 ## To remove elements from both the beginning and end of the list,
-## use #List.sublist.
+## use `List.sublist`.
 ##
-## To split the list into two lists, use #List.split.
+## To split the list into two lists, use `List.split`.
 ##
 ## ## Performance Details
 ##
 ## When given a Unique list, this runs extremely fast. It sets the list's length
 ## to the given length value, and frees the leftover elements. This runs very
-## slightly faster than #List.takeLast.
+## slightly faster than `List.takeLast`.
 ##
 ## In fact, `List.takeFirst 1 list` runs faster than `List.first list` when given
-## a Unique list, because #List.first returns the first element as well -
+## a Unique list, because [List.first] returns the first element as well -
 ## which introduces a conditional bounds check as well as a memory load.
 takeFirst : List elem, Nat -> List elem
 
@@ -561,22 +546,22 @@ takeFirst : List elem, Nat -> List elem
 ##
 ## >>> List.takeLast 5 [ 1, 2 ]
 ##
-## To *remove* elements from the end of the list, use #List.takeFirst.
+## To *remove* elements from the end of the list, use `List.takeFirst`.
 ##
 ## To remove elements from both the beginning and end of the list,
-## use #List.sublist.
+## use `List.sublist`.
 ##
-## To split the list into two lists, use #List.split.
+## To split the list into two lists, use `List.split`.
 ##
 ## ## Performance Details
 ##
 ## When given a Unique list, this runs extremely fast. It moves the list's
 ## pointer to the index at the given length value, updates its length,
 ## and frees the leftover elements. This runs very nearly as fast as
-## #List.takeFirst on a Unique list.
+## `List.takeFirst` on a Unique list.
 ##
 ## In fact, `List.takeLast 1 list` runs faster than `List.first list` when given
-## a Unique list, because #List.first returns the first element as well -
+## a Unique list, because [List.first] returns the first element as well -
 ## which introduces a conditional bounds check as well as a memory load.
 takeLast : List elem, Nat -> List elem
 
@@ -603,7 +588,7 @@ split : List elem, Nat -> { before: List elem, others: List elem }
 ## >>> List.sublist { start: 2, len: 10 } [ 1, 2, 3, 4, 5 ]
 ##
 ## > If you want a sublist which goes all the way to the end of the list, no
-## > matter how long the list is, #List.takeLast can do that more efficiently.
+## > matter how long the list is, `List.takeLast` can do that more efficiently.
 ##
 ## Some languages have a function called **`slice`** which works similarly to this.
 sublist : List elem, { start : Nat, len : Nat } -> List elem
@@ -623,7 +608,7 @@ sublist : List elem, { start : Nat, len : Nat } -> List elem
 ## * `state` starts at 0 (because of `start: 0`)
 ## * Each `step` runs `Num.add state elem`, and the return value becomes the new `state`.
 ##
-## Here is a table of how `state` changes as #List.walk walks over the elements
+## Here is a table of how `state` changes as [List.walk] walks over the elements
 ## `[ 2, 4, 8 ]` using #Num.add as its `step` function to determine the next `state`.
 ##
 ## `state` | `elem` | `step state elem` (`Num.add state elem`)
@@ -650,27 +635,27 @@ walk : List elem, { start : state, step : (state, elem -> state) } -> state
 ## `fold`, `foldRight`, or `foldr`.
 walkBackwards : List elem, { start : state, step : (state, elem -> state) } -> state
 
-## Same as #List.walk, except you can stop walking early.
+## Same as [List.walk], except you can stop walking early.
 ##
 ## ## Performance Details
 ##
-## Compared to #List.walk, this can potentially visit fewer elements (which can
+## Compared to [List.walk], this can potentially visit fewer elements (which can
 ## improve performance) at the cost of making each step take longer.
 ## However, the added cost to each step is extremely small, and can easily
 ## be outweighed if it results in skipping even a small number of elements.
 ##
-## As such, it is typically better for performance to use this over #List.walk
+## As such, it is typically better for performance to use this over [List.walk]
 ## if returning `Done` earlier than the last element is expected to be common.
 walkUntil : List elem, { start : state, step : (state, elem -> [ Continue state, Done state ]) } -> state
 
-# Same as #List.walkBackwards, except you can stop walking early.
+# Same as [List.walk]Backwards, except you can stop walking early.
 walkBackwardsUntil : List elem, { start : state, step : (state, elem -> [ Continue state, Done state ]) } -> state
 
 ## Check
 
 ## Returns the length of the list - the number of elements it contains.
 ##
-## One #List can store up to 2,147,483,648 elements (just over 2 billion), which
+## One [List] can store up to 2,147,483,648 elements (just over 2 billion), which
 ## is exactly equal to the highest valid #I32 value. This means the #U32 this function
 ## returns can always be safely converted to an #I32 without losing any data.
 len : List * -> Nat
