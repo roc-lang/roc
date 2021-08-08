@@ -4412,8 +4412,8 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             str_starts_with(env, scope, args[0], args[1])
         }
-        StrStartsWithCodePoint => {
-            // Str.startsWithCodePoint : Str, U32 -> Bool
+        StrStartsWithCodePt => {
+            // Str.startsWithCodePt : Str, U32 -> Bool
             debug_assert_eq!(args.len(), 2);
 
             str_starts_with_code_point(env, scope, args[0], args[1])

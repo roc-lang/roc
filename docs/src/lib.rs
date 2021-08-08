@@ -686,8 +686,8 @@ fn doc_url<'a>(
                     if !exposed_values.contains(&ident) {
                         // TODO return Err here
                         panic!(
-                            "Tried to generate an automatic link in docs for `{}.{}`, but `{}` is not declared in `{}`.",
-                            module_name, ident, ident, module_name);
+                            "Tried to generate an automatic link in docs for `{}.{}`, but `{}` does not expose `{}`.",
+                            module_name, ident, module_name, ident);
                     }
                 } else {
                     // This is not the home module

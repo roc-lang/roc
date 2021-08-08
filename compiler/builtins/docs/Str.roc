@@ -2,36 +2,21 @@ interface Str
     exposes
         [
             Str,
-            decimal,
-            split,
             isEmpty,
+            append,
+            concat,
+            joinWith,
+            split,
+            countGraphemes,
             startsWith,
             endsWith,
-            contains,
-            anyGraphemes,
-            allGraphemes,
-            join,
-            joinWith,
-            padGraphemesStart,
-            padGraphemesEnd,
-            graphemes,
-            reverseGraphemes,
-            isCaseInsensitiveEq,
-            isCaseInsensitiveNeq,
-            walkGraphemes,
-            isCapitalized,
-            isAllUppercase,
-            isAllLowercase,
-            toUtf8,
-            toUtf16,
-            toUtf32,
-            trim,
-            walkUtf8,
-            walkUtf16,
-            walkUtf32,
-            walkRevUtf8,
-            walkRevUtf16,
-            walkRevUtf32
+            fromInt,
+            fromFloat,
+            fromUtf8,
+            Utf8Problem,
+            Utf8ByteProblem,
+            toBytes,
+            startsWithCodePt
         ]
     imports []
 
@@ -63,7 +48,7 @@ interface Str
 ## programming, and "extended grapheme cluster" is a mouthful, in Roc we use the
 ## term "grapheme" as a shorthand for the more precise "extended grapheme cluster."
 ##
-## You can get the number of graphemes in a string by calling #Str.countGraphemes on it:
+## You can get the number of graphemes in a string by calling [Str.countGraphemes] on it:
 ##
 ##     Str.countGraphemes "Roc!"
 ##     Str.countGraphemes "折り紙"
@@ -126,7 +111,7 @@ interface Str
 ## potentially change it without breaking existing Roc applications. (UTF-8
 ## seems pretty great today, but so did UTF-16 at an earlier point in history.)
 ##
-## This module has functions to can convert a #Str to a #List of raw [code unit](https://unicode.org/glossary/#code_unit)
+## This module has functions to can convert a [Str] to a [List] of raw [code unit](https://unicode.org/glossary/#code_unit)
 ## integers (not to be confused with the [code points](https://unicode.org/glossary/#code_point)
 ## mentioned earlier) in a particular encoding. If you need encoding-specific functions,
 ## you should take a look at the [roc/unicode](roc/unicode) package.
@@ -137,14 +122,14 @@ Str : [ @Str ]
 
 ## Convert
 
-## Convert a #Float to a decimal string, rounding off to the given number of decimal places.
+## Convert a [Float] to a decimal string, rounding off to the given number of decimal places.
 ##
-## Since #Float values are imprecise, it's usually best to limit this to the lowest
-## number you can choose that will make sense for what you want to display.
-##
-## If you want to keep all the digits, passing the same float to #Str.num
-## will do that.
+## If you want to keep all the digits, use [Str.num] instead.
 decimal : Float *, Nat -> Str
+
+
+## Convert a [Num] to a string.
+num : Float *, Nat -> Str
 
 ## Split a string around a separator.
 ##
@@ -155,13 +140,13 @@ decimal : Float *, Nat -> Str
 ##
 ## >>> Str.split "1,2,3" ""
 ##
-## To split a string into its individual graphemes, use #Str.graphemes
+## To split a string into its individual graphemes, use `Str.graphemes`
 split : Str, Str -> List Str
 
 ## Split a string around newlines.
 ##
 ## On strings that use `"\n"` for their line endings, this gives the same answer
-## as passing `"\n"` to #Str.split. However, on strings that use `"\n\r"` (such
+## as passing `"\n"` to [Str.split]. However, on strings that use `"\n\r"` (such
 ## as [in Windows files](https://en.wikipedia.org/wiki/Newline#History)), this
 ## will consume the entire `"\n\r"` instead of just the `"\n"`.
 ##
@@ -169,7 +154,7 @@ split : Str, Str -> List Str
 ##
 ## >>> Str.lines "Hello, World!\n\rNice to meet you!"
 ##
-## To split a string using a custom separator, use #Str.split. For more advanced
+## To split a string using a custom separator, use [Str.split]. For more advanced
 ## string splitting, use a #Parser.
 lines : Str, Str -> List Str
 
@@ -192,13 +177,13 @@ startsWith : Str, Str -> Bool
 ##
 ## **Performance Note:** This runs slightly faster than [Str.startsWith], so
 ## if you want to check whether a string begins with something that's representable
-## in a single code point, you can use (for example) `Str.startsWithCodePoint '鹏'`
-## instead of `Str.startsWithCodePoint "鹏"`. ('鹏' evaluates to the [U32]
+## in a single code point, you can use (for example) `Str.startsWithCodePt '鹏'`
+## instead of `Str.startsWithCodePt "鹏"`. ('鹏' evaluates to the [U32]
 ## value `40527`.) This will not work for graphemes which take up multiple code
-## points, however; `Str.startsWithCodePoint '👩‍👩‍👦‍👦'` would be a compiler error
+## points, however; `Str.startsWithCodePt '👩‍👩‍👦‍👦'` would be a compiler error
 ## because 👩‍👩‍👦‍👦 takes up multiple code points and cannot be represented as a
-## single [U32]. You'd need to use `Str.startsWithCodePoint "🕊"` instead.
-startsWithCodePoint : Str, U32 -> Bool
+## single [U32]. You'd need to use `Str.startsWithCodePt "🕊"` instead.
+startsWithCodePt : Str, U32 -> Bool
 
 endsWith : Str, Str -> Bool
 
@@ -255,9 +240,13 @@ padGraphemesEnd : Str, Nat, Str -> Str
 ##
 graphemes : Str -> List Str
 
+## Count the number of [extended grapheme clusters](http://www.unicode.org/glossary/#extended_grapheme_cluster)
+## in the string.
+##
 ##     Str.countGraphemes "Roc!"   # 4
 ##     Str.countGraphemes "七巧板" # 3
 ##     Str.countGraphemes "🕊"     # 1
+countGraphemes : Str -> Nat
 
 ## Reverse the order of the string's individual graphemes.
 ##
@@ -354,36 +343,36 @@ trim : Str -> Str
 ## If the given [U32] is a valid [Unicode Scalar Value](http://www.unicode.org/glossary/#unicode_scalar_value),
 ## return a [Str] containing only that scalar.
 fromScalar : U32 -> Result Str [ BadScalar ]*
-fromCodePoints : List U32 -> Result Str [ BadCodePoint U32 ]*
+fromCodePts : List U32 -> Result Str [ BadCodePt U32 ]*
 fromUtf8 : List U8 -> Result Str [ BadUtf8 ]*
 
 ## Create a [Str] from bytes encoded as [UTF-16LE](https://en.wikipedia.org/wiki/UTF-16#Byte-order_encoding_schemes).
-fromUtf16Le : List U8 -> Result Str [ BadUtf16Le Endi ]*
+# fromUtf16Le : List U8 -> Result Str [ BadUtf16Le Endi ]*
 
-## Create a [Str] from bytes encoded as [UTF-16BE](https://en.wikipedia.org/wiki/UTF-16#Byte-order_encoding_schemes).
-fromUtf16Be : List U8 -> Result Str [ BadUtf16Be Endi ]*
+# ## Create a [Str] from bytes encoded as [UTF-16BE](https://en.wikipedia.org/wiki/UTF-16#Byte-order_encoding_schemes).
+# fromUtf16Be : List U8 -> Result Str [ BadUtf16Be Endi ]*
 
-## Create a [Str] from bytes encoded as UTF-16 with a [Byte Order Mark](https://en.wikipedia.org/wiki/Byte_order_mark).
-fromUtf16Bom : List U8 -> Result Str [ BadUtf16 Endi, NoBom ]*
+# ## Create a [Str] from bytes encoded as UTF-16 with a [Byte Order Mark](https://en.wikipedia.org/wiki/Byte_order_mark).
+# fromUtf16Bom : List U8 -> Result Str [ BadUtf16 Endi, NoBom ]*
 
-## Create a [Str] from bytes encoded as [UTF-32LE](https://web.archive.org/web/20120322145307/http://mail.apps.ietf.org/ietf/charsets/msg01095.html)
-fromUtf32Le : List U8 -> Result Str [ BadUtf32Le Endi ]*
+# ## Create a [Str] from bytes encoded as [UTF-32LE](https://web.archive.org/web/20120322145307/http://mail.apps.ietf.org/ietf/charsets/msg01095.html)
+# fromUtf32Le : List U8 -> Result Str [ BadUtf32Le Endi ]*
 
-## Create a [Str] from bytes encoded as [UTF-32BE](https://web.archive.org/web/20120322145307/http://mail.apps.ietf.org/ietf/charsets/msg01095.html)
-fromUtf32Be : List U8 -> Result Str [ BadUtf32Be Endi ]*
+# ## Create a [Str] from bytes encoded as [UTF-32BE](https://web.archive.org/web/20120322145307/http://mail.apps.ietf.org/ietf/charsets/msg01095.html)
+# fromUtf32Be : List U8 -> Result Str [ BadUtf32Be Endi ]*
 
-## Create a [Str] from bytes encoded as UTF-32 with a [Byte Order Mark](https://en.wikipedia.org/wiki/Byte_order_mark).
-fromUtf32Bom : List U8 -> Result Str [ BadUtf32 Endi, NoBom ]*
+# ## Create a [Str] from bytes encoded as UTF-32 with a [Byte Order Mark](https://en.wikipedia.org/wiki/Byte_order_mark).
+# fromUtf32Bom : List U8 -> Result Str [ BadUtf32 Endi, NoBom ]*
 
-## Convert from UTF-8, substituting the replacement character ("�") for any
-## invalid sequences encountered.
-fromUtf8Sub : List U8 -> Str
-fromUtf16Sub : List U8, Endi -> Str
-fromUtf16BomSub : List U8 -> Result Str [ NoBom ]*
+# ## Convert from UTF-8, substituting the replacement character ("�") for any
+# ## invalid sequences encountered.
+# fromUtf8Sub : List U8 -> Str
+# fromUtf16Sub : List U8, Endi -> Str
+# fromUtf16BomSub : List U8 -> Result Str [ NoBom ]*
 
-## Return a #List of the string's #U8 UTF-8 [code units](https://unicode.org/glossary/#code_unit).
-## (To split the string into a #List of smaller #Str values instead of #U8 values,
-## see #Str.split and #Str.graphemes.)
+## Return a [List] of the string's #U8 UTF-8 [code units](https://unicode.org/glossary/#code_unit).
+## (To split the string into a [List] of smaller [Str] values instead of #U8 values,
+## see [Str.split] and `Str.graphemes`.)
 ##
 ## >>> Str.toUtf8 "👩‍👩‍👦‍👦"
 ##
@@ -393,15 +382,15 @@ fromUtf16BomSub : List U8 -> Result Str [ NoBom ]*
 ##
 ## >>> Str.toUtf8 "🐦"
 ##
-## For a more flexible function that walks through each of these #U8 code units
-## without creating a #List, see #Str.walkUtf8 and #Str.walkRevUtf8.
+## For a more flexible function that walks through each of these [U8] code units
+## without creating a [List], see [Str.walkUtf8] and [Str.walkRevUtf8].
 toUtf8 : Str -> List U8
 toUtf16Be : Str -> List U8
 toUtf16Le : Str -> List U8
-toUtf16Bom : Str, Endi -> List U8
+# toUtf16Bom : Str, Endi -> List U8
 toUtf32Be : Str -> List U8
 toUtf32Le : Str -> List U8
-toUtf32Bom : Str, Endi -> List U8
+# toUtf32Bom : Str, Endi -> List U8
 
 # Parsing
 
@@ -417,7 +406,7 @@ parseGrapheme : Str -> Result { val : Str, rest : Str } [ Expected [ Grapheme ]*
 ##
 ## If the string does not begin with a valid code point, for example because it was
 ## empty, return `Err`.
-parseCodePoint : Str -> Result { val : U32, rest : Str } [ Expected [ CodePoint ]* Str ]*
+parseCodePt : Str -> Result { val : U32, rest : Str } [ Expected [ CodePt ]* Str ]*
 
 ## If the first string begins with the second, return whatever comes
 ## after the second.
@@ -425,7 +414,7 @@ chomp : Str, Str -> Result Str [ Expected [ ExactStr Str ]* Str ]*
 
 ## If the string begins with a [Unicode code point](http://www.unicode.org/glossary/#code_point)
 ## equal to the given [U32], return whatever comes after that code point.
-chompCodePoint : Str, U32 -> Result Str [ Expected [ ExactCodePoint U32 ]* Str ]*
+chompCodePt : Str, U32 -> Result Str [ Expected [ ExactCodePt U32 ]* Str ]*
 
 ## If the string represents a valid #U8 number, return that number.
 ##
@@ -475,20 +464,20 @@ toNum : Str -> Result (Num a) [ ExpectedNum a ]*
 ## If the string begins with `"NaN"`, `"∞"`, and `"-∞"` (which do not represent
 ## [finite](Num.isFinite) numbers), they will be accepted only when parsing
 ## [F64] or [F32] numbers, and translated accordingly.
-parseNum : Str, NumParseConfig -> Result { val : Num a, rest : Str } [ ExpectedNum a ]*
+# parseNum : Str, NumParseConfig -> Result { val : Num a, rest : Str } [ ExpectedNum a ]*
 
 ## Notes:
 ## * You can allow a decimal mark for integers; they'll only parse if the numbers after it are all 0.
 ## * For `wholeSep`, `Required` has a payload for how many digits (e.g. "required every 3 digits")
 ## * For `wholeSep`, `Allowed` allows the separator to appear anywhere.
-NumParseConfig :
-    {
-        base ? [ Decimal, Hexadecimal, Octal, Binary ],
-        notation ? [ Standard, Scientific, Any ],
-        decimalMark ? [ Allowed Str, Required Str, Disallowed ],
-        decimalDigits ? [ Any, AtLeast U16, Exactly U16 ],
-        wholeDigits ? [ Any, AtLeast U16, Exactly U16 ],
-        leadingZeroes ? [ Allowed, Disallowed ],
-        trailingZeroes ? [ Allowed, Disallowed ],
-        wholeSep ? { mark : Str, policy : [ Allowed, Required U64 ] }
-    }
+# NumParseConfig :
+#     {
+#         base ? [ Decimal, Hexadecimal, Octal, Binary ],
+#         notation ? [ Standard, Scientific, Any ],
+#         decimalMark ? [ Allowed Str, Required Str, Disallowed ],
+#         decimalDigits ? [ Any, AtLeast U16, Exactly U16 ],
+#         wholeDigits ? [ Any, AtLeast U16, Exactly U16 ],
+#         leadingZeroes ? [ Allowed, Disallowed ],
+#         trailingZeroes ? [ Allowed, Disallowed ],
+#         wholeSep ? { mark : Str, policy : [ Allowed, Required U64 ] }
+#     }

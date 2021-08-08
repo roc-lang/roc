@@ -175,7 +175,7 @@ pub fn str_starts_with<'a, 'ctx, 'env>(
     )
 }
 
-/// Str.startsWithCodePoint : Str, U32 -> Bool
+/// Str.startsWithCodePt : Str, U32 -> Bool
 pub fn str_starts_with_code_point<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
@@ -188,7 +188,7 @@ pub fn str_starts_with_code_point<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[str_i128.into(), prefix],
-        bitcode::STR_STARTS_WITH_CODE_POINT,
+        bitcode::STR_STARTS_WITH_CODE_PT,
     )
 }
 

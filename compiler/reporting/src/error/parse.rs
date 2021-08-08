@@ -826,7 +826,7 @@ fn to_str_report<'a>(
                 title: "WEIRD ESCAPE".to_string(),
             }
         }
-        EString::CodePointOpen(row, col) | EString::CodePointEnd(row, col) => {
+        EString::CodePtOpen(row, col) | EString::CodePtEnd(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
             let region = Region::from_row_col(row, col);
 
