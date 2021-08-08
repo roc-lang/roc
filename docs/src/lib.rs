@@ -791,7 +791,7 @@ fn markdown_to_html(
                 let state = State::new(link.reference.as_bytes());
 
                 // Reset the bump arena so we aren't constantly reallocating
-                // more memory.
+                // more memory as we iterate through these.
                 arena.reset();
 
                 match parse_ident(&arena, state) {
