@@ -15,7 +15,7 @@ use crate::llvm::build_list::{
 use crate::llvm::build_str::{
     empty_str, str_concat, str_count_graphemes, str_ends_with, str_from_float, str_from_int,
     str_from_utf8, str_join_with, str_number_of_bytes, str_split, str_starts_with,
-    str_starts_with_code_point, str_to_bytes,
+    str_starts_with_code_point, str_to_utf8,
 };
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
@@ -4412,8 +4412,8 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             str_starts_with(env, scope, args[0], args[1])
         }
-        StrStartsWithCodePoint => {
-            // Str.startsWithCodePoint : Str, U32 -> Bool
+        StrStartsWithCodePt => {
+            // Str.startsWithCodePt : Str, U32 -> Bool
             debug_assert_eq!(args.len(), 2);
 
             str_starts_with_code_point(env, scope, args[0], args[1])
@@ -4444,7 +4444,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             str_from_utf8(env, parent, original_wrapper)
         }
-        StrToBytes => {
+        StrToUtf8 => {
             // Str.fromInt : Str -> List U8
             debug_assert_eq!(args.len(), 1);
 
@@ -4452,7 +4452,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             // we just implement it here to subvert the type system
             let string = load_symbol(scope, &args[0]);
 
-            str_to_bytes(env, string.into_struct_value())
+            str_to_utf8(env, string.into_struct_value())
         }
         StrSplit => {
             // Str.split : Str, Str -> List Str

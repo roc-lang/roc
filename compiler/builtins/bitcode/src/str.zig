@@ -865,8 +865,8 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
     return true;
 }
 
-// Str.startsWithCodePoint
-pub fn startsWithCodePoint(string: RocStr, prefix: u32) callconv(.C) bool {
+// Str.startsWithCodePt
+pub fn startsWithCodePt(string: RocStr, prefix: u32) callconv(.C) bool {
     const bytes_len = string.len();
     const bytes_ptr = string.asU8ptr();
 
@@ -886,18 +886,18 @@ pub fn startsWithCodePoint(string: RocStr, prefix: u32) callconv(.C) bool {
     return true;
 }
 
-test "startsWithCodePoint: ascii char" {
+test "startsWithCodePt: ascii char" {
     const whole = RocStr.init("foobar", 6);
     const prefix = 'f';
-    try expect(startsWithCodePoint(whole, prefix));
+    try expect(startsWithCodePt(whole, prefix));
 }
 
-test "startsWithCodePoint: emoji" {
+test "startsWithCodePt: emoji" {
     const yes = RocStr.init("💖foobar", 10);
     const no = RocStr.init("foobar", 6);
     const prefix = '💖';
-    try expect(startsWithCodePoint(yes, prefix));
-    try expect(!startsWithCodePoint(no, prefix));
+    try expect(startsWithCodePt(yes, prefix));
+    try expect(!startsWithCodePt(no, prefix));
 }
 
 test "startsWith: foo starts with fo" {
@@ -1129,8 +1129,8 @@ test "RocStr.joinWith: result is big" {
     try expect(roc_result.eq(result));
 }
 
-// Str.toBytes
-pub fn strToBytesC(arg: RocStr) callconv(.C) RocList {
+// Str.toUtf8
+pub fn strToUtf8C(arg: RocStr) callconv(.C) RocList {
     return @call(.{ .modifier = always_inline }, strToBytes, .{arg});
 }
 

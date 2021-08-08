@@ -77,7 +77,7 @@ pub enum Problem {
     },
     InvalidInterpolation(Region),
     InvalidHexadecimal(Region),
-    InvalidUnicodeCodePoint(Region),
+    InvalidUnicodeCodePt(Region),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -160,7 +160,7 @@ pub enum RuntimeError {
 
     InvalidInterpolation(Region),
     InvalidHexadecimal(Region),
-    InvalidUnicodeCodePoint(Region),
+    InvalidUnicodeCodePt(Region),
 
     /// When the author specifies a type annotation but no implementation
     NoImplementationNamed {
