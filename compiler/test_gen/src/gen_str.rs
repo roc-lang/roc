@@ -834,10 +834,14 @@ fn str_to_bytes() {
 #[test]
 fn str_from_utf8_range() {
     assert_evals_to!(
-        r#"
-        bytes = Str.toBytes "hello"
-        Str.fromUtf8Range bytes { start: 0, count: 5 }
-        "#,
+        indoc!(
+            r#"
+            bytes = Str.toBytes "hello"
+            when Str.fromUtf8Range bytes { count: 5,  start: 0 }  is
+                   Ok utf8String -> utf8String
+                   _ -> ""
+            "#
+        ),
         RocStr::from("hello"),
         RocStr
     );
@@ -846,10 +850,14 @@ fn str_from_utf8_range() {
 #[test]
 fn str_from_utf8_range_slice() {
     assert_evals_to!(
-        r#"
-        bytes = Str.toBytes "hello"
-        Str.fromUtf8Range bytes { start: 1, count: 4 }
-        "#,
+        indoc!(
+            r#"
+            bytes = Str.toBytes "hello"
+            when Str.fromUtf8Range bytes { count: 4,  start: 1 }  is
+                   Ok utf8String -> utf8String
+                   _ -> ""
+            "#
+        ),
         RocStr::from("ello"),
         RocStr
     );
@@ -858,23 +866,47 @@ fn str_from_utf8_range_slice() {
 #[test]
 fn str_from_utf8_range_slice_not_end() {
     assert_evals_to!(
-        r#"
-        bytes = Str.toBytes "hello"
-        Str.fromUtf8Range bytes { start: 1, count: 3 }
-        "#,
+       indoc!(
+            r#"
+            bytes = Str.toBytes "hello"
+            when Str.fromUtf8Range bytes { count: 3,  start: 1 }  is
+                   Ok utf8String -> utf8String
+                   _ -> ""
+            "#
+        ),
         RocStr::from("ell"),
         RocStr
     );
 }
 
-// #[test]
-// fn str_from_utf8_range_slice() {
-//     assert_evals_to!(
-//         r#"
-//         bytes = Str.toBytes "hello"
-//         Str.fromUtf8Range bytes { start: 6, count: 5 }
-//         "#,
-//         RocStr::from("ello"),
-//         RocStr
-//     );
-// }
+#[test]
+fn str_from_utf8_range_order_does_not_matter() {
+    assert_evals_to!(
+       indoc!(
+            r#"
+            bytes = Str.toBytes "hello"
+            when Str.fromUtf8Range bytes { start: 1,  count: 3 }  is
+                   Ok utf8String -> utf8String
+                   _ -> ""
+            "#
+        ),
+        RocStr::from("ell"),
+        RocStr
+    );
+}
+
+#[test]
+fn str_from_utf8_range_out_of_bounds() {
+    assert_evals_to!(
+       indoc!(
+            r#"
+            bytes = Str.toBytes "hello"
+            when Str.fromUtf8Range bytes { start: 7,  count: 3 }  is
+                   Ok _ -> ""
+                   Err OutOfBounds -> "out of bounds"
+            "#
+        ),
+        RocStr::from("out of bounds"),
+        RocStr
+    );
+}
