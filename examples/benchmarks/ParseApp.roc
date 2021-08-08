@@ -5,6 +5,6 @@ app "parseap"
 
 main : Task.Task {} []
 main =
-    Task.after Task.getInt \n ->
-        MiniParsec.test2 n
-            |> Task.putLine
+    showPair (Pair "foo" "bar")
+    |> Task.putLine
+
