@@ -383,7 +383,7 @@ fromUtf8 : List U8 -> Result Str [ BadUtf8 ]*
 ## >>> Str.toUtf8 "🐦"
 ##
 ## For a more flexible function that walks through each of these [U8] code units
-## without creating a [List], see [Str.walkUtf8] and [Str.walkRevUtf8].
+## without creating a [List], see `Str.walkUtf8` and `Str.walkRevUtf8`.
 toUtf8 : Str -> List U8
 toUtf16Be : Str -> List U8
 toUtf16Le : Str -> List U8
