@@ -52,21 +52,28 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
     )
     .expect("TODO gracefully handle failing to make the favicon");
 
-    let template_html = include_str!("./static/index.html").replace(
-        "<!-- Module links -->",
-        render_sidebar(package.modules.iter().flat_map(|loaded_module| {
-            loaded_module.documentation.values().map(move |d| {
-                let exposed_values = loaded_module
-                    .exposed_values
-                    .iter()
-                    .map(|symbol| symbol.ident_str(&loaded_module.interns).to_string())
-                    .collect::<Vec<String>>();
+    let template_html = include_str!("./static/index.html")
+        .replace("<!-- search.js -->", &format!("{}search.js", base_href()))
+        .replace("<!-- styles.css -->", &format!("{}styles.css", base_href()))
+        .replace(
+            "<!-- favicon.svg -->",
+            &format!("{}favicon.svg", base_href()),
+        )
+        .replace(
+            "<!-- Module links -->",
+            render_sidebar(package.modules.iter().flat_map(|loaded_module| {
+                loaded_module.documentation.values().map(move |d| {
+                    let exposed_values = loaded_module
+                        .exposed_values
+                        .iter()
+                        .map(|symbol| symbol.ident_str(&loaded_module.interns).to_string())
+                        .collect::<Vec<String>>();
 
-                (exposed_values, d)
-            })
-        }))
-        .as_str(),
-    );
+                    (exposed_values, d)
+                })
+            }))
+            .as_str(),
+        );
 
     // Write each package's module docs html file
     for loaded_module in package.modules.iter_mut() {
