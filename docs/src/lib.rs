@@ -143,7 +143,7 @@ fn render_main_content(
         if should_render_entry {
             match entry {
                 DocEntry::DocDef(doc_def) => {
-                    let mut href = String::new();
+                    let mut href = base_href();
                     href.push('#');
                     href.push_str(doc_def.name.as_str());
 
@@ -239,11 +239,40 @@ fn html_node(tag_name: &str, attrs: Vec<(&str, &str)>, content: &str) -> String 
     buf
 }
 
+fn base_href() -> String {
+    // e.g. "builtins/" in "https://roc-lang.org/builtins/Str"
+    //
+    // TODO make this a CLI flag to the `docs` subcommand instead of an env var
+    match std::env::var("ROC_DOCS_URL_ROOT") {
+        Ok(root_builtins_path) => {
+            let mut href = String::with_capacity(root_builtins_path.len() + 64);
+
+            if !root_builtins_path.starts_with('/') {
+                href.push('/');
+            }
+
+            href.push_str(&root_builtins_path);
+
+            if !root_builtins_path.ends_with('/') {
+                href.push('/');
+            }
+
+            href
+        }
+        _ => {
+            let mut href = String::with_capacity(64);
+
+            href.push('/');
+
+            href
+        }
+    }
+}
+
 fn render_name_and_version(name: &str, version: &str) -> String {
     let mut buf = String::new();
+    let mut href = base_href();
 
-    let mut href = String::new();
-    href.push('/');
     href.push_str(name);
 
     buf.push_str(
@@ -255,7 +284,7 @@ fn render_name_and_version(name: &str, version: &str) -> String {
         .as_str(),
     );
 
-    let mut versions_href = String::new();
+    let mut versions_href = base_href();
 
     versions_href.push('/');
     versions_href.push_str(name);
@@ -285,8 +314,7 @@ fn render_sidebar<'a, I: Iterator<Item = (Vec<String>, &'a ModuleDocumentation)>
         let name = module.name.as_str();
 
         let href = {
-            let mut href_buf = String::new();
-            href_buf.push('/');
+            let mut href_buf = base_href();
             href_buf.push_str(name);
             href_buf
         };
@@ -718,12 +746,11 @@ fn doc_url<'a>(
         }
     }
 
-    let mut url = String::new();
+    let mut url = base_href();
 
     // Example:
     //
     // module_name: "Str", ident: "join" => "/Str#join"
-    url.push('/');
     url.push_str(module_name);
     url.push('#');
     url.push_str(ident);
