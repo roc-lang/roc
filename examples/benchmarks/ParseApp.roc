@@ -6,6 +6,5 @@ app "parseap"
 main : Task.Task {} []
 main =
     Task.after Task.getInt \n ->
-        MiniParsec.idI64 n
-            |> Str.fromInt
+        MiniParsec.test1 n
             |> Task.putLine
