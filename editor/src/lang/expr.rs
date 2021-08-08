@@ -405,8 +405,7 @@ pub fn to_expr2<'a>(
             let mut output = Output::default();
             let output_ref = &mut output;
 
-            let elems: PoolVec<NodeId<Expr2>> =
-                PoolVec::with_capacity(items.len() as u32, env.pool);
+            let elems: PoolVec<ExprId> = PoolVec::with_capacity(items.len() as u32, env.pool);
 
             for (node_id, item) in elems.iter_node_ids().zip(items.iter()) {
                 let (expr, sub_output) = to_expr2(env, scope, &item.value, item.region);

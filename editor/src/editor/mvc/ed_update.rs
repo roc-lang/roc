@@ -25,9 +25,8 @@ use crate::editor::mvc::string_update::update_string;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
-use crate::lang::ast::Expr2;
+use crate::lang::ast::{Expr2, ExprId};
 use crate::lang::constrain::constrain_expr;
-use crate::lang::pool::NodeId;
 use crate::lang::pool::Pool;
 use crate::lang::pool::PoolStr;
 use crate::lang::types::Type2;
@@ -176,7 +175,7 @@ impl<'a> EdModel<'a> {
         &mut self,
         expr_start_pos: TextPos,
         expr_end_pos: TextPos,
-        ast_node_id: NodeId<Expr2>,
+        ast_node_id: ExprId,
         mark_node_id: MarkNodeId,
     ) -> EdResult<()> {
         self.set_raw_sel(RawSelection {
@@ -239,7 +238,7 @@ impl<'a> EdModel<'a> {
         Ok(())
     }
 
-    fn expr2_to_type(&mut self, expr2_id: NodeId<Expr2>) -> PoolStr {
+    fn expr2_to_type(&mut self, expr2_id: ExprId) -> PoolStr {
         let var = self.module.env.var_store.fresh();
         let expr = self.module.env.pool.get(expr2_id);
         let arena = Bump::new();
@@ -528,7 +527,7 @@ pub struct NodeContext<'a> {
     pub curr_mark_node_id: MarkNodeId,
     pub curr_mark_node: &'a MarkupNode,
     pub parent_id_opt: Option<MarkNodeId>,
-    pub ast_node_id: NodeId<Expr2>,
+    pub ast_node_id: ExprId,
 }
 
 pub fn get_node_context<'a>(ed_model: &'a EdModel) -> EdResult<NodeContext<'a>> {
