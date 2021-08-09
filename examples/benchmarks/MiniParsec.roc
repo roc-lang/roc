@@ -1,5 +1,6 @@
 interface MiniParsec exposes [  showPair, makePair, testPair,
    Parser, result, testResult,
+   item, 
    zero,  testZero] imports []
 
 
@@ -23,6 +24,9 @@ testPair  =
 
 Parser a : List U8 -> List ([Pair a (List U8)])
 
+
+## RESULT 
+
 # result: succeed without consuming input
 result : a -> Parser a
 result = \v -> (\inp -> [Pair v inp])
@@ -35,6 +39,8 @@ testResult =
         _ -> "Oops, something happened"
 
 
+## ZERO
+
 # zero: always fail
 #
 zero = \_ -> [ ]
@@ -44,9 +50,18 @@ testZero = \s ->
     when zero s == [] is 
         True -> "Ok"
         False -> "Error"
-   
+
+## ITEM 
+
 # The item parser, which successfully consumes one character, and which otherwise fails. In Haskell:
 # item = \inp  -> case inp of 
 #  [ ] -> [ ]
 #  (x:xs) -> [(x, xs)]
+
+item: Parser U8
+item = \inp -> 
+   when List.first inp is 
+     Ok u -> [Pair u (List.drop inp 1)]
+     _ -> [ ]
+
 
