@@ -1,4 +1,4 @@
-interface MiniParsec exposes [ showPair, showPair2, 
+interface MiniParsec exposes [ showPair, showPair2, makePair2,
    result, zero, testResult, testZero] imports []
 
 showPair : [Pair Str Str] -> Str
@@ -10,6 +10,9 @@ showPair2 = \(Pair a b) ->
         Ok bb -> Str.concat (Str.concat a "::") bb
         _ -> "Could not convert (List U8)"
 
+makePair2 : Str, Str -> [Pair Str (List U8)]
+makePair2 = 
+   \a, b -> Pair a (Str.toUtf8 b)
 
 # result: succeed without consuming input
 #
