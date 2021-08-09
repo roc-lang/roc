@@ -1,6 +1,6 @@
 interface MiniParsec exposes [  showPair, makePair, testPair,
    Parser, result, testResult,
-   item, 
+   item, testItem,
    zero,  testZero] imports []
 
 
@@ -10,6 +10,19 @@ showPair : [Pair Str (List U8)] -> Str
 showPair = \(Pair a b) -> 
     when Str.fromUtf8 b is 
         Ok bb -> Str.concat (Str.concat a "::") bb
+        _ -> "Could not convert (List U8)"
+
+showU8 : U8 -> Str
+showU8 = 
+   \u -> when Str.fromUtf8 [u] is 
+      Ok str -> str
+      _ -> "Oops, could not convert U8"
+
+showPair2 : [Pair U8 (List U8)] -> Str
+showPair2 = \(Pair a b) -> 
+    when Str.fromUtf8 b is 
+        Ok bb -> 
+            Str.concat (Str.concat (showU8 a) "::") bb
         _ -> "Could not convert (List U8)"
 
 makePair : Str, Str -> [Pair Str (List U8)]
@@ -65,3 +78,9 @@ item = \inp ->
      _ -> [ ]
 
 
+testItem: Str -> Str 
+testItem = 
+  \input -> when item (Str.toUtf8 input) |> List.map showPair2 |> List.first is
+        Ok str -> str
+        _ -> "Oops, something went wrong"
+    
