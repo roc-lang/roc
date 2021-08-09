@@ -1,5 +1,5 @@
 interface MiniParsec exposes [ showPair, showPair2, makePair2, testPair2,
-   Parser, result2,
+   Parser, result2, testResult2,
    result, zero, testResult, testZero] imports []
 
 
