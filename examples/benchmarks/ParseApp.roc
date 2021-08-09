@@ -1,10 +1,10 @@
 app "parseapp"
     packages { base: "platform" }
-    imports [base.Task, MiniParsec]
+    imports [base.Task, MiniParsec, Pair]
     provides [ main ] to base
 
 main : Task.Task {} []
 main =
-    MiniParsec.testItem "xyz"
+    Pair.testSecond 0 0
        |> Task.putLine
 
