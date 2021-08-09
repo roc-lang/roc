@@ -247,7 +247,7 @@ sortDesc : List elem, (elem -> Num *) -> List elem
 ## > List.map [ "", "a", "bc" ] Str.isEmpty
 ##
 ## `map` functions like this are common in Roc, and they all work similarly.
-## See for example #Result.map, #Set.map, and #Map.map.
+## See for example `Set.map`, `Dict.map`, and [Result.map].
 map : List before, (before -> after) -> List after
 
 ## This works like [List.map], except it also passes the index

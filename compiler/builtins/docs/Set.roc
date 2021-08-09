@@ -49,7 +49,7 @@ drop : Set elem, elem -> Set elem
 ## >>> Set.map {: "", "a", "bc" :} Str.isEmpty
 ##
 ## `map` functions like this are common in Roc, and they all work similarly.
-## See for example #Result.map, #List.map, and #Map.map.
+## See for example [List.map], `Dict.map`, and [Result.map].
 # TODO: removed `'` from signature because parser does not support it yet
 # Original signature: `map : Set 'elem, ('before -> 'after) -> Set 'after`
 map : Set elem, (before -> after) -> Set after
