@@ -29,6 +29,13 @@ Parser a : List U8 -> List ([Pair a (List U8)])
 result2 : a -> Parser a
 result2 = \v -> (\inp -> [Pair v inp])
 
+testResult2 : Str, Str -> Str
+testResult2 = 
+   \a, b -> 
+      when (result2 a) (Str.toUtf8 b) |> List.map showPair2 |> List.first is
+        Ok str -> str
+        _ -> "Oops, something happened"
+
 # result: succeed without consuming input
 #
 # » ((\v -> (\inp -> [Pair v inp])) "a") "xyz"
