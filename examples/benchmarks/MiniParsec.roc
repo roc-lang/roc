@@ -1,46 +1,38 @@
-interface MiniParsec exposes [ showPair, showPair2, makePair2, testPair2,
+interface MiniParsec exposes [  showPair, makePair, testPair,
    Parser, result, testResult,
    zero,  testZero] imports []
 
 
 ## PAIRS
 
-showPair : [Pair Str Str] -> Str
-showPair = \(Pair a b) -> Str.concat (Str.concat a "::") b
-
-showPair2 : [Pair Str (List U8)] -> Str
-showPair2 = \(Pair a b) -> 
+showPair : [Pair Str (List U8)] -> Str
+showPair = \(Pair a b) -> 
     when Str.fromUtf8 b is 
         Ok bb -> Str.concat (Str.concat a "::") bb
         _ -> "Could not convert (List U8)"
 
-makePair2 : Str, Str -> [Pair Str (List U8)]
-makePair2 = 
+makePair : Str, Str -> [Pair Str (List U8)]
+makePair = 
    \a, b -> Pair a (Str.toUtf8 b)
 
-testPair2 : Str, Str -> Str
-testPair2  = 
-  \a, b -> makePair2 a b |> showPair2
+testPair : Str, Str -> Str
+testPair  = 
+  \a, b -> makePair a b |> showPair
 
 ## PARSERS
 
 Parser a : List U8 -> List ([Pair a (List U8)])
 
+# result: succeed without consuming input
 result : a -> Parser a
 result = \v -> (\inp -> [Pair v inp])
 
 testResult : Str, Str -> Str
 testResult = 
    \a, b -> 
-      when (result a) (Str.toUtf8 b) |> List.map showPair2 |> List.first is
+      when (result a) (Str.toUtf8 b) |> List.map showPair |> List.first is
         Ok str -> str
         _ -> "Oops, something happened"
-
-# result: succeed without consuming input
-#
-# » ((\v -> (\inp -> [Pair v inp])) "a") "xyz"
-# [ Pair "a" "xyz" ] : List [ Pair Str Str ]*
-#
 
 
 # zero: always fail
