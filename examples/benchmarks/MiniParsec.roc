@@ -1,4 +1,4 @@
-interface MiniParsec exposes [  showPair, makePair, testPair,
+interface MiniParsec exposes [  showPair, makePair, testPair, mapFirst, mapSecond,
    Parser, result, testResult,
    item, testItem,
    zero,  testZero] imports []
@@ -32,6 +32,14 @@ makePair =
 testPair : Str, Str -> Str
 testPair  = 
   \a, b -> makePair a b |> showPair
+
+mapFirst : [Pair a x], (a -> b) -> [Pair b x]
+mapFirst = 
+  \(Pair a b), f -> (Pair (f a) b)
+
+mapSecond : [Pair a x], (x -> y) -> [Pair a y]
+mapSecond = 
+  \(Pair a b), f -> (Pair a (f b))
 
 ## PARSERS
 

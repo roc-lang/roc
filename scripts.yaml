@@ -1,0 +1,4 @@
+scripts:
+
+  parser: cargo run examples/benchmarks/ParseApp.roc
+
