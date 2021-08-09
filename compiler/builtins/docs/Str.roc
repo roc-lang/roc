@@ -160,7 +160,7 @@ lines : Str, Str -> List Str
 
 ## Check
 
-## Returns #True if the string is empty, and #False otherwise.
+## Returns `True` if the string is empty, and `False` otherwise.
 ##
 ## >>> Str.isEmpty "hi!"
 ##
@@ -257,7 +257,7 @@ countGraphemes : Str -> Nat
 ## >>> Str.reversegraphemes "Crème Brûlée"
 reverseGraphemes : Str -> Str
 
-## Returns #True if the two strings are equal when ignoring case.
+## Returns `True` if the two strings are equal when ignoring case.
 ##
 ## >>> Str.caseInsensitiveEq "hi" "Hi"
 isCaseInsensitiveEq : Str, Str -> Bool
@@ -269,7 +269,7 @@ walkGraphemesUntil : Str, { start: state, step: (state, Str -> [ Continue state,
 walkGraphemesBackwards : Str, { start: state, step: (state, Str -> state) } -> state
 walkGraphemesBackwardsUntil : Str, { start: state, step: (state, Str -> [ Continue state, Done state ]) } -> state
 
-## Returns #True if the string begins with an uppercase letter.
+## Returns `True` if the string begins with an uppercase letter.
 ##
 ## >>> Str.isCapitalized "Hi"
 ##
@@ -294,7 +294,7 @@ walkGraphemesBackwardsUntil : Str, { start: state, step: (state, Str -> [ Contin
 ## package for functions which capitalize strings.
 isCapitalized : Str -> Bool
 
-## Returns #True if the string consists entirely of uppercase letters.
+## Returns `True` if the string consists entirely of uppercase letters.
 ##
 ## >>> Str.isAllUppercase "hi"
 ##
@@ -315,7 +315,7 @@ isCapitalized : Str -> Bool
 ## >>> Str.isAllUppercase ""
 isAllUppercase : Str -> Bool
 
-## Returns #True if the string consists entirely of lowercase letters.
+## Returns `True` if the string consists entirely of lowercase letters.
 ##
 ## >>> Str.isAllLowercase "hi"
 ##
@@ -370,8 +370,8 @@ fromUtf8 : List U8 -> Result Str [ BadUtf8 ]*
 # fromUtf16Sub : List U8, Endi -> Str
 # fromUtf16BomSub : List U8 -> Result Str [ NoBom ]*
 
-## Return a [List] of the string's #U8 UTF-8 [code units](https://unicode.org/glossary/#code_unit).
-## (To split the string into a [List] of smaller [Str] values instead of #U8 values,
+## Return a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
+## (To split the string into a [List] of smaller [Str] values instead of [U8] values,
 ## see [Str.split] and `Str.graphemes`.)
 ##
 ## >>> Str.toUtf8 "👩‍👩‍👦‍👦"
@@ -416,7 +416,7 @@ chomp : Str, Str -> Result Str [ Expected [ ExactStr Str ]* Str ]*
 ## equal to the given [U32], return whatever comes after that code point.
 chompCodePt : Str, U32 -> Result Str [ Expected [ ExactCodePt U32 ]* Str ]*
 
-## If the string represents a valid #U8 number, return that number.
+## If the string represents a valid [U8] number, return that number.
 ##
 ## For more advanced options, see [parseU8].
 toU8 : Str -> Result U8 [ InvalidU8 ]*
