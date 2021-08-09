@@ -14,6 +14,10 @@ makePair2 : Str, Str -> [Pair Str (List U8)]
 makePair2 = 
    \a, b -> Pair a (Str.toUtf8 b)
 
+testPair2 : Str, Str -> Str
+testPair2  = 
+  \a, b -> makePair2 a b |> showPair2
+
 # result: succeed without consuming input
 #
 # » ((\v -> (\inp -> [Pair v inp])) "a") "xyz"
