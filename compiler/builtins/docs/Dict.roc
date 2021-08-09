@@ -1,5 +1,21 @@
 interface Dict
-    exposes [ isEmpty, map ]
+    exposes
+        [
+            Dict,
+            empty,
+            single,
+            get,
+            walk,
+            insert,
+            len,
+            remove,
+            contains,
+            keys,
+            values,
+            union,
+            intersection,
+            difference
+        ]
     imports []
 
 size : Dict * * -> Nat

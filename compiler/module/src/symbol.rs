@@ -988,8 +988,6 @@ define_builtins! {
         14 DICT_UNION: "union"
         15 DICT_INTERSECTION: "intersection"
         16 DICT_DIFFERENCE: "difference"
-
-
     }
     7 SET: "Set" => {
         0 SET_SET: "Set" imported // the Set.Set type alias
