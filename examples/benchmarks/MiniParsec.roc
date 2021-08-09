@@ -1,5 +1,6 @@
 interface MiniParsec exposes [  showPair, makePair, testPair, 
-   Parser, result, testResult,
+   Parser, map, andThen,
+   result, testResult,
    item, testItem,
    zero,  testZero] imports [Pair]
 
@@ -38,6 +39,10 @@ testPair  =
 ## PARSERS
 
 Parser a : List U8 -> List ([Pair a (List U8)])
+
+run : Str, Parser a -> Result a [ListWasEmpty]
+run = 
+  \str, parser -> parser (String.toUtf8) |> List.map Pair.first  |> List.first
 
 
 ## RESULT 
@@ -86,3 +91,15 @@ testItem =
         Ok str -> str
         _ -> "Oops, something went wrong"
     
+
+## map
+
+map : Parser a, (a -> b) -> Parser b  
+map = 
+  \p, f -> \input -> p input |> List.map (\pair -> Pair.mapFirst pair f) 
+
+
+andThen : Parser a, (a -> Parser b) -> Parser b 
+andThen = \p, f ->
+            \input -> p input |> List.map (\(Pair a list) -> (f a) list) |> List.join
+

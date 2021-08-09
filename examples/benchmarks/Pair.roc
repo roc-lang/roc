@@ -1,5 +1,15 @@
-interface Pair exposes [  mapFirst, mapSecond, showIntPair, testFirst,testSecond ] imports []
+interface Pair exposes [  
+      first, second, 
+      mapFirst, mapSecond, 
+      showIntPair, testFirst,testSecond ] imports []
 
+
+first : [Pair a b] -> a 
+first = \(Pair a _) -> a 
+
+second : [Pair a b] -> b  
+second = \(Pair _ b) -> b
+ 
 
 mapFirst : [Pair a x], (a -> b) -> [Pair b x]
 mapFirst = 
