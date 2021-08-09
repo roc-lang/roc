@@ -1,5 +1,5 @@
 interface MiniParsec exposes [ showPair, showPair2, makePair2, testPair2,
-   Parser, 
+   Parser, result2,
    result, zero, testResult, testZero] imports []
 
 
@@ -25,6 +25,9 @@ testPair2  =
 ## PARSERS
 
 Parser a : List U8 -> List ([Pair a (List U8)])
+
+result2 : a -> Parser a
+result2 = \v -> (\inp -> [Pair v inp])
 
 # result: succeed without consuming input
 #
