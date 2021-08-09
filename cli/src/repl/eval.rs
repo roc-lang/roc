@@ -385,8 +385,8 @@ fn ptr_to_ast<'a>(
 
             num_to_ast(env, number_literal_to_ast(env.arena, num), content)
         }
-        Layout::Builtin(Builtin::Usize) => {
-            let num = unsafe { *(ptr as *const usize) };
+        Layout::Builtin(Builtin::Int8) => {
+            let num = unsafe { *(ptr as *const i8) };
 
             num_to_ast(env, number_literal_to_ast(env.arena, num), content)
         }
@@ -396,6 +396,11 @@ fn ptr_to_ast<'a>(
             let num = unsafe { *(ptr as *const bool) };
 
             bool_to_ast(env, num, content)
+        }
+        Layout::Builtin(Builtin::Usize) => {
+            let num = unsafe { *(ptr as *const usize) };
+
+            num_to_ast(env, number_literal_to_ast(env.arena, num), content)
         }
         Layout::Builtin(Builtin::Float64) => {
             let num = unsafe { *(ptr as *const f64) };
