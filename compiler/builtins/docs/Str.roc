@@ -160,7 +160,7 @@ lines : Str, Str -> List Str
 
 ## Check
 
-## Returns #True if the string is empty, and #False otherwise.
+## Returns `True` if the string is empty, and `False` otherwise.
 ##
 ## >>> Str.isEmpty "hi!"
 ##
@@ -257,7 +257,7 @@ countGraphemes : Str -> Nat
 ## >>> Str.reversegraphemes "Crème Brûlée"
 reverseGraphemes : Str -> Str
 
-## Returns #True if the two strings are equal when ignoring case.
+## Returns `True` if the two strings are equal when ignoring case.
 ##
 ## >>> Str.caseInsensitiveEq "hi" "Hi"
 isCaseInsensitiveEq : Str, Str -> Bool
@@ -269,7 +269,7 @@ walkGraphemesUntil : Str, { start: state, step: (state, Str -> [ Continue state,
 walkGraphemesBackwards : Str, { start: state, step: (state, Str -> state) } -> state
 walkGraphemesBackwardsUntil : Str, { start: state, step: (state, Str -> [ Continue state, Done state ]) } -> state
 
-## Returns #True if the string begins with an uppercase letter.
+## Returns `True` if the string begins with an uppercase letter.
 ##
 ## >>> Str.isCapitalized "Hi"
 ##
@@ -294,7 +294,7 @@ walkGraphemesBackwardsUntil : Str, { start: state, step: (state, Str -> [ Contin
 ## package for functions which capitalize strings.
 isCapitalized : Str -> Bool
 
-## Returns #True if the string consists entirely of uppercase letters.
+## Returns `True` if the string consists entirely of uppercase letters.
 ##
 ## >>> Str.isAllUppercase "hi"
 ##
@@ -315,7 +315,7 @@ isCapitalized : Str -> Bool
 ## >>> Str.isAllUppercase ""
 isAllUppercase : Str -> Bool
 
-## Returns #True if the string consists entirely of lowercase letters.
+## Returns `True` if the string consists entirely of lowercase letters.
 ##
 ## >>> Str.isAllLowercase "hi"
 ##
