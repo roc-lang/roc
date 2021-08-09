@@ -1,4 +1,4 @@
-interface MiniParsec exposes [ showPair, showPair2, makePair2,
+interface MiniParsec exposes [ showPair, showPair2, makePair2, testPair2,
    result, zero, testResult, testZero] imports []
 
 showPair : [Pair Str Str] -> Str
