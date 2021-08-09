@@ -1,5 +1,9 @@
 interface MiniParsec exposes [ showPair, showPair2, makePair2, testPair2,
+   Parser, 
    result, zero, testResult, testZero] imports []
+
+
+## PAIRS
 
 showPair : [Pair Str Str] -> Str
 showPair = \(Pair a b) -> Str.concat (Str.concat a "::") b
@@ -17,6 +21,10 @@ makePair2 =
 testPair2 : Str, Str -> Str
 testPair2  = 
   \a, b -> makePair2 a b |> showPair2
+
+## PARSERS
+
+Parser a : List U8 -> List ([Pair a (List U8)])
 
 # result: succeed without consuming input
 #

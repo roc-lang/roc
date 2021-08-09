@@ -1,4 +1,4 @@
-app "parseap"
+app "parseapp"
     packages { base: "platform" }
     imports [base.Task, MiniParsec]
     provides [ main ] to base

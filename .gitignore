@@ -33,3 +33,4 @@ bench-folder*
 
 # earthly
 earthly_log.txt
+examples/benchmarks/parseapp
