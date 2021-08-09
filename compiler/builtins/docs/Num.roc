@@ -996,9 +996,8 @@ shr : Int a, Int a -> Int a
 ## the beginning. (In contrast, [shr] replaces discarded bits with zeroes.)
 shrWrap : Int a, Int a -> Int a
 
-
 ## [Endianness](https://en.wikipedia.org/wiki/Endianness)
-# Endi : [ Big, Little ]
+# Endi : [ Big, Little, Native ]
 
 ## The `Endi` argument does not matter for [U8] and [I8], since they have
 ## only one byte.

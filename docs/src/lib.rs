@@ -150,7 +150,7 @@ fn render_main_content(
         if should_render_entry {
             match entry {
                 DocEntry::DocDef(doc_def) => {
-                    let mut href = base_href();
+                    let mut href = String::new();
                     href.push('#');
                     href.push_str(doc_def.name.as_str());
 
@@ -850,7 +850,7 @@ fn markdown_to_html(
         Some(&mut broken_link_callback),
     )
     .fold((0, 0), |(start_quote_count, end_quote_count), event| {
-        match event {
+        match &event {
             // Replace this sequence (`>>>` syntax):
             //     Start(BlockQuote)
             //     Start(BlockQuote)
@@ -897,6 +897,23 @@ fn markdown_to_html(
                     docs_parser.push(event);
                     (0, end_quote_count + 1)
                 }
+            }
+            Event::End(Link(LinkType::ShortcutUnknown, _url, _title)) => {
+                // Replace the preceding Text node with a Code node, so it
+                // renders as the equivalent of [`List.len`] instead of [List.len]
+                match docs_parser.pop() {
+                    Some(Event::Text(string)) => {
+                        docs_parser.push(Event::Code(string));
+                    }
+                    Some(first) => {
+                        docs_parser.push(first);
+                    }
+                    None => {}
+                }
+
+                docs_parser.push(event);
+
+                (start_quote_count, end_quote_count)
             }
             _ => {
                 docs_parser.push(event);
