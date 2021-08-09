@@ -27,5 +27,8 @@ testResult =  \a, input ->
         Ok pair -> showPair pair
         _ -> "Error"
 
-
+# The item parser, which successfully consumes one character, and which otherwise fails. In Haskell:
+# item = \inp  -> case inp of 
+#  [ ] -> [ ]
+#  (x:xs) -> [(x, xs)]
 
