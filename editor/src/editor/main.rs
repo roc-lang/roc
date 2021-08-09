@@ -1,4 +1,5 @@
 use super::keyboard_input;
+use super::mvc::ed_model::init_model_refs;
 use super::style::CODE_TXT_XY;
 use crate::editor::ed_error::print_ui_err;
 use crate::editor::mvc::ed_view;
@@ -29,7 +30,10 @@ use pipelines::RectResources;
 use roc_module::symbol::Interns;
 use roc_module::symbol::{IdentIds, ModuleIds};
 use roc_types::subs::VarStore;
+use std::fs::File;
+use std::os::unix::fs;
 use std::{error::Error, io, path::Path};
+use std::io::{Write};
 use wgpu::{CommandEncoder, RenderPass, TextureView};
 use wgpu_glyph::GlyphBrush;
 use winit::{
@@ -130,55 +134,17 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
     let is_animating = true;
 
-    let mut env_pool = Pool::with_capacity(1024);
-    let env_arena = Bump::new();
-    let code_arena = Bump::new();
+    let mut ed_model_refs = init_model_refs();
 
-    let mut var_store = VarStore::default();
-    let dep_idents = IdentIds::exposed_builtins(8);
-
-    let exposed_ident_ids = IdentIds::default();
-    let mut module_ids = ModuleIds::default();
-    let mod_id = module_ids.get_or_insert(&"ModId123".into());
-
-    let interns = Interns {
-        module_ids,
-        all_ident_ids: IdentIds::exposed_builtins(8),
-    };
-
-    let env = Env::new(
-        mod_id,
-        &env_arena,
-        &mut env_pool,
-        &mut var_store,
-        dep_idents,
-        &interns.module_ids,
-        exposed_ident_ids,
-    );
-
-    let mut code_str = BumpString::from_str_in("", &code_arena);
-
-    let file_path = if let Some(file_path) = file_path_opt {
-        match std::fs::read_to_string(file_path) {
-            Ok(file_as_str) => {
-                code_str = BumpString::from_str_in(&file_as_str, &code_arena);
-                file_path
-            }
-
-            Err(e) => {
-                print_ui_err(&FileOpenFailed {
-                    path_str: file_path.to_string_lossy().to_string(),
-                    err_msg: e.to_string(),
-                });
-                Path::new("")
-            }
-        }
-    } else {
-        Path::new("")
-    };
+    let (file_path, code_bump_str) = read_file(file_path_opt, &ed_model_refs.code_arena);
 
     let ed_model_opt = {
-        let ed_model_res = ed_model::init_model(&code_str, file_path, env, &interns, &code_arena);
+        let ed_model_res =
+            ed_model::init_model_and_env(
+                &code_bump_str,
+                file_path,
+                "HelloApp".to_owned(), 
+                &mut ed_model_refs);
 
         match ed_model_res {
             Ok(mut ed_model) => {
@@ -415,6 +381,56 @@ fn begin_render_pass<'a>(
         depth_stencil_attachment: None,
         label: None,
     })
+}
+
+fn read_file<'a>(file_path_opt: Option<&'a Path>, code_arena: &'a Bump) -> (&'a Path, BumpString<'a>) {
+
+    if let Some(file_path) = file_path_opt {
+
+        let file_as_str =
+            std::fs::read_to_string(file_path)
+                .expect(
+                    &format!("Failed to read from provided file path: {:?}", file_path)
+                );
+
+        let code_str = BumpString::from_str_in(&file_as_str, code_arena);
+        
+        (file_path, code_str)
+    } else {
+        let untitled_path = Path::new("UntitledApp.roc");
+
+        let code_str = 
+            if !untitled_path.exists() {
+                let mut untitled_file = 
+                    File::create(untitled_path)
+                        .expect(
+                            &format!("I wanted to create {:?}, but it failed.", untitled_path)
+                        );
+
+                let hello_world_roc = r#"
+app "untitled-app"
+packages { base: "platform" }
+imports []
+provides [ main ] to base
+
+main = "Hello, world!"
+"#;
+
+                write!(untitled_file, "{}", hello_world_roc)?;
+                
+                BumpString::from_str_in(hello_world_roc, code_arena)
+            } else {
+                let file_as_str = 
+                    std::fs::read_to_string(untitled_path)
+                        .expect(
+                            &format!("I detected an existing {:?}, but I failed to read from it.", untitled_path)
+                        );
+
+                BumpString::from_str_in(&file_as_str, code_arena)
+            };
+
+        (untitled_path, code_str)
+    }
 }
 
 fn queue_no_file_text(

@@ -305,7 +305,7 @@ impl<'a> EdModel<'a> {
         let content = subs.get(var).content;
 
         PoolStr::new(
-            &content_to_string(content, &subs, self.module.env.home, self.interns),
+            &content_to_string(content, &subs, self.module.env.home, &self.interns),
             self.module.env.pool,
         )
     }
@@ -871,7 +871,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 pub mod test_ed_update {
     use crate::editor::mvc::ed_model::test_ed_model::ed_model_from_dsl;
     use crate::editor::mvc::ed_model::test_ed_model::ed_model_to_dsl;
-    use crate::editor::mvc::ed_model::test_ed_model::init_model_refs;
+    use crate::editor::mvc::ed_model::init_model_refs;
     use crate::editor::mvc::ed_update::handle_new_char;
     use crate::editor::mvc::ed_update::EdModel;
     use crate::editor::mvc::ed_update::EdResult;

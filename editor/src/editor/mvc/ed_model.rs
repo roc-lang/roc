@@ -10,7 +10,7 @@ use crate::editor::{
 use crate::graphics::primitives::rect::Rect;
 use crate::lang::ast::Expr2;
 use crate::lang::expr::{str_to_expr2, Env};
-use crate::lang::pool::NodeId;
+use crate::lang::pool::{NodeId, Pool};
 use crate::lang::pool::PoolStr;
 use crate::lang::scope::Scope;
 use crate::ui::text::caret_w_select::CaretWSelect;
@@ -20,8 +20,10 @@ use crate::ui::ui_error::UIResult;
 use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
 use nonempty::NonEmpty;
-use roc_module::symbol::Interns;
+use roc_collections::all::MutMap;
+use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
 use roc_region::all::Region;
+use roc_types::subs::VarStore;
 use std::path::Path;
 
 #[derive(Debug)]
@@ -38,7 +40,7 @@ pub struct EdModel<'a> {
     pub has_focus: bool,
     pub caret_w_select_vec: NonEmpty<(CaretWSelect, Option<MarkNodeId>)>,
     pub selected_expr_opt: Option<SelectedExpression>,
-    pub interns: &'a Interns, // this should eventually come from LoadedModule, see #1442
+    pub interns: Interns, // this should eventually come from LoadedModule, see #1442
     pub show_debug_view: bool,
     // EdModel is dirty if it has changed since the previous render.
     pub dirty: bool,
@@ -51,14 +53,37 @@ pub struct SelectedExpression {
     pub type_str: PoolStr,
 }
 
-pub fn init_model<'a>(
+pub fn init_model_and_env<'a>(
     code_str: &'a BumpString,
     file_path: &'a Path,
-    env: Env<'a>,
-    interns: &'a Interns,
-    code_arena: &'a Bump,
+    module_name: String,
+    ed_model_refs: &'a mut EdModelRefs,
 ) -> EdResult<EdModel<'a>> {
-    let mut module = EdModule::new(&code_str, env, code_arena)?;
+
+    let dep_idents = IdentIds::exposed_builtins(8);
+    let exposed_ident_ids = IdentIds::default();
+
+    let mut interns =  Interns {
+        module_ids: ModuleIds::default(),
+        all_ident_ids: IdentIds::exposed_builtins(8),
+    };
+
+    let mod_id = 
+        interns
+        .module_ids
+        .get_or_insert(&module_name.into());
+
+    let env = Env::new(
+        mod_id,
+        &ed_model_refs.env_arena,
+        &mut ed_model_refs.env_pool,
+        &mut ed_model_refs.var_store,
+        dep_idents,
+        &interns.module_ids,
+        exposed_ident_ids,
+    );
+
+    let mut module = EdModule::new(&code_str, env, &mut interns.all_ident_ids, &ed_model_refs.code_arena)?;
 
     let ast_root_id = module.ast_root_id;
     let mut markup_node_pool = SlowPool::new();
@@ -72,12 +97,12 @@ pub fn init_model<'a>(
         let ast_root = &module.env.pool.get(ast_root_id);
 
         let temp_markup_root_id = expr2_to_markup(
-            code_arena,
+            &ed_model_refs.code_arena,
             &mut module.env,
             ast_root,
             ast_root_id,
             &mut markup_node_pool,
-            interns
+            &interns
         )?;
         set_parent_for_all(temp_markup_root_id, &mut markup_node_pool);
 
@@ -155,6 +180,22 @@ impl<'a> EdModel<'a> {
     }
 }
 
+pub struct EdModelRefs {
+    pub code_arena: Bump,
+    pub env_arena: Bump,
+    pub env_pool: Pool,
+    pub var_store: VarStore,
+}
+
+pub fn init_model_refs() -> EdModelRefs {
+    EdModelRefs {
+        code_arena: Bump::new(),
+        env_arena: Bump::new(),
+        env_pool: Pool::with_capacity(1024),
+        var_store: VarStore::default(),
+    }
+}
+
 #[derive(Debug)]
 pub struct EdModule<'a> {
     pub env: Env<'a>,
@@ -165,7 +206,7 @@ pub struct EdModule<'a> {
 use crate::lang::ast::expr2_to_string;
 
 impl<'a> EdModule<'a> {
-    pub fn new(code_str: &'a str, mut env: Env<'a>, ast_arena: &'a Bump) -> EdResult<EdModule<'a>> {
+    pub fn new(code_str: &'a str, mut env: Env<'a>, all_ident_ids: &mut MutMap<ModuleId, IdentIds>, ast_arena: &'a Bump) -> EdResult<EdModule<'a>> {
         if !code_str.is_empty() {
             let mut scope = Scope::new(env.home, env.pool, env.var_store);
 
@@ -174,7 +215,26 @@ impl<'a> EdModule<'a> {
             let expr2_result = str_to_expr2(&ast_arena, &code_str, &mut env, &mut scope, region);
 
             match expr2_result {
-                Ok((expr2, _output)) => {
+                Ok((expr2, output)) => {
+
+                    let bound_symbols = output.references.bound_symbols;
+
+                    let mut module_ident_ids =
+                        all_ident_ids
+                            .get_mut(&env.home)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "Could not find env.home (ModuleId: {:?}) in interns.all_ident_ids.keys: {:?}",
+                                    &env.home,
+                                    all_ident_ids.keys()
+                                )
+                            });
+
+                    
+                    all_ident_ids
+                        .insert(env.home, env.ident_ids);
+                
+
                     let ast_root_id = env.pool.add(expr2);
 
                     // for debugging
@@ -198,18 +258,15 @@ impl<'a> EdModule<'a> {
 pub mod test_ed_model {
     use crate::editor::ed_error::EdResult;
     use crate::editor::mvc::ed_model;
-    use crate::lang::expr::Env;
-    use crate::lang::pool::Pool;
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_dsl_to_selection;
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_selection_to_dsl;
     use crate::ui::text::lines::SelectableLines;
     use crate::ui::ui_error::UIResult;
     use bumpalo::collections::String as BumpString;
-    use bumpalo::Bump;
     use ed_model::EdModel;
-    use roc_module::symbol::{IdentIds, Interns, ModuleIds};
-    use roc_types::subs::VarStore;
     use std::path::Path;
+
+    use super::EdModelRefs;
 
     pub fn init_dummy_model<'a>(
         code_str: &'a BumpString,
@@ -217,51 +274,12 @@ pub mod test_ed_model {
     ) -> EdResult<EdModel<'a>> {
         let file_path = Path::new("");
 
-        let dep_idents = IdentIds::exposed_builtins(8);
-        let exposed_ident_ids = IdentIds::default();
-        let mod_id = ed_model_refs
-            .interns
-            .module_ids
-            .get_or_insert(&"ModId123".into());
-
-        let env = Env::new(
-            mod_id,
-            &ed_model_refs.env_arena,
-            &mut ed_model_refs.env_pool,
-            &mut ed_model_refs.var_store,
-            dep_idents,
-            &ed_model_refs.interns.module_ids,
-            exposed_ident_ids,
-        );
-
-        ed_model::init_model(
+        ed_model::init_model_and_env(
             &code_str,
             file_path,
-            env,
-            &ed_model_refs.interns,
-            &ed_model_refs.code_arena,
+            "TestApp".to_owned(),
+            ed_model_refs,
         )
-    }
-
-    pub struct EdModelRefs {
-        code_arena: Bump,
-        env_arena: Bump,
-        env_pool: Pool,
-        var_store: VarStore,
-        interns: Interns,
-    }
-
-    pub fn init_model_refs() -> EdModelRefs {
-        EdModelRefs {
-            code_arena: Bump::new(),
-            env_arena: Bump::new(),
-            env_pool: Pool::with_capacity(1024),
-            var_store: VarStore::default(),
-            interns: Interns {
-                module_ids: ModuleIds::default(),
-                all_ident_ids: IdentIds::exposed_builtins(8),
-            },
-        }
     }
 
     pub fn ed_model_from_dsl<'a>(
