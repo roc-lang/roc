@@ -514,7 +514,7 @@ fn canonicalize_pending_def<'a>(
                             // parent commit for the bug this fixed!
                             let refs = References::new();
 
-                            let arguments: PoolVec<(Pattern2, Type2)> =
+                            let arguments: PoolVec<(PatternId, Type2)> =
                                 PoolVec::with_capacity(closure_args.len() as u32, env.pool);
 
                             let return_type: TypeId;
@@ -551,9 +551,7 @@ fn canonicalize_pending_def<'a>(
                                     for (node_id, ((_, pattern_id), typ)) in
                                         arguments.iter_node_ids().zip(it.into_iter())
                                     {
-                                        let pattern = &env.pool[pattern_id];
-
-                                        env.pool[node_id] = (pattern.shallow_clone(), typ);
+                                        env.pool[node_id] = (pattern_id, typ);
                                     }
 
                                     return_type = return_type_id;
@@ -683,16 +681,14 @@ fn canonicalize_pending_def<'a>(
                     // parent commit for the bug this fixed!
                     let refs = References::new();
 
-                    let arguments: PoolVec<(Pattern2, Variable)> =
+                    let arguments: PoolVec<(PatternId, Variable)> =
                         PoolVec::with_capacity(closure_args.len() as u32, env.pool);
 
                     let it: Vec<_> = closure_args.iter(env.pool).map(|(x, y)| (*x, *y)).collect();
 
                     for (node_id, (_, pattern_id)) in arguments.iter_node_ids().zip(it.into_iter())
                     {
-                        let pattern = &env.pool[pattern_id];
-
-                        env.pool[node_id] = (pattern.shallow_clone(), env.var_store.fresh());
+                        env.pool[node_id] = (pattern_id, env.var_store.fresh());
                     }
 
                     let function_def = FunctionDef::NoAnnotation {

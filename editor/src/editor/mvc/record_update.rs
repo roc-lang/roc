@@ -11,9 +11,8 @@ use crate::editor::mvc::ed_update::NodeContext;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::editor::util::index_of;
-use crate::lang::ast::Expr2;
-use crate::lang::ast::RecordField;
-use crate::lang::pool::{NodeId, PoolStr, PoolVec};
+use crate::lang::ast::{Expr2, ExprId, RecordField};
+use crate::lang::pool::{PoolStr, PoolVec};
 use crate::ui::text::text_pos::TextPos;
 use snafu::OptionExt;
 
@@ -174,7 +173,7 @@ pub fn update_empty_record(
 
 pub fn update_record_colon(
     ed_model: &mut EdModel,
-    record_ast_node_id: NodeId<Expr2>,
+    record_ast_node_id: ExprId,
 ) -> EdResult<InputOutcome> {
     let NodeContext {
         old_caret_pos,

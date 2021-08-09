@@ -55,7 +55,7 @@ and : Bool, Bool -> Bool
 ##
 ## In some languages, `&&` and `||` are special-cased in the compiler to skip
 ## evaluating the expression after the operator under certain circumstances.
-## # In Roc, this is not the case. See the performance notes for [Bool.and] for details.
+## In Roc, this is not the case. See the performance notes for [Bool.and] for details.
 or : Bool, Bool -> Bool
 
 ## Exclusive or

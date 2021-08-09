@@ -1392,24 +1392,39 @@ fn deep_copy_var_help(
                 same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
 
                 Record(fields, ext_var) => {
-                    let mut new_vars = Vec::with_capacity(fields.len());
-                    for index in fields.iter_variables() {
-                        let var = subs[index];
-                        let copy_var = deep_copy_var_help(subs, max_rank, pools, var);
-                        new_vars.push(copy_var);
-                    }
+                    let record_fields = {
+                        let mut new_vars = Vec::with_capacity(fields.len());
 
-                    let it = fields.iter_all().zip(new_vars).map(|((i1, _, i3), var)| {
-                        let label = subs[i1].clone();
-                        let record_field = subs[i3].map(|_| var);
+                        for index in fields.iter_variables() {
+                            let var = subs[index];
+                            let copy_var = deep_copy_var_help(subs, max_rank, pools, var);
 
-                        (label, record_field)
-                    });
+                            new_vars.push(copy_var);
+                        }
 
-                    // lifetime troubles
-                    let vec: Vec<_> = it.collect();
+                        let field_names_start = subs.field_names.len() as u32;
+                        let variables_start = subs.variables.len() as u32;
+                        let field_types_start = subs.record_fields.len() as u32;
 
-                    let record_fields = RecordFields::insert_into_subs(subs, vec);
+                        let mut length = 0;
+
+                        for ((i1, _, i3), var) in fields.iter_all().zip(new_vars) {
+                            let record_field = subs[i3].map(|_| var);
+
+                            subs.field_names.push(subs[i1].clone());
+                            subs.record_fields.push(record_field.map(|_| ()));
+                            subs.variables.push(*record_field.as_inner());
+
+                            length += 1;
+                        }
+
+                        RecordFields {
+                            length,
+                            field_names_start,
+                            variables_start,
+                            field_types_start,
+                        }
+                    };
 
                     Record(
                         record_fields,

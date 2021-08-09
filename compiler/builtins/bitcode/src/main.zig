@@ -88,7 +88,7 @@ comptime {
     exportStrFn(str.countSegments, "count_segments");
     exportStrFn(str.countGraphemeClusters, "count_grapheme_clusters");
     exportStrFn(str.startsWith, "starts_with");
-    exportStrFn(str.startsWithCodePoint, "starts_with_code_point");
+    exportStrFn(str.startsWithCodePt, "starts_with_code_point");
     exportStrFn(str.endsWith, "ends_with");
     exportStrFn(str.strConcatC, "concat");
     exportStrFn(str.strJoinWithC, "joinWith");
@@ -96,7 +96,7 @@ comptime {
     exportStrFn(str.strFromIntC, "from_int");
     exportStrFn(str.strFromFloatC, "from_float");
     exportStrFn(str.strEqual, "equal");
-    exportStrFn(str.strToBytesC, "to_bytes");
+    exportStrFn(str.strToUtf8C, "to_utf8");
     exportStrFn(str.fromUtf8C, "from_utf8");
     exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
 }
