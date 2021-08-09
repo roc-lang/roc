@@ -5,6 +5,6 @@ app "parseapp"
 
 main : Task.Task {} []
 main =
-    MiniParsec.testResult2 "UUU" "xyz"
+    MiniParsec.testResult "UUU" "xyz"
        |> Task.putLine
 
