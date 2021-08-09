@@ -866,7 +866,7 @@ fn str_from_utf8_range_slice() {
 #[test]
 fn str_from_utf8_range_slice_not_end() {
     assert_evals_to!(
-       indoc!(
+        indoc!(
             r#"
             bytes = Str.toUtf8 "hello"
             when Str.fromUtf8Range bytes { count: 3,  start: 1 }  is
@@ -882,7 +882,7 @@ fn str_from_utf8_range_slice_not_end() {
 #[test]
 fn str_from_utf8_range_order_does_not_matter() {
     assert_evals_to!(
-       indoc!(
+        indoc!(
             r#"
             bytes = Str.toUtf8 "hello"
             when Str.fromUtf8Range bytes { start: 1,  count: 3 }  is

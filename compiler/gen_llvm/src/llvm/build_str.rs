@@ -306,8 +306,6 @@ pub fn str_from_utf8_range<'a, 'ctx, 'env>(
     builder.build_load(result_ptr_cast, "load_utf8_validate_bytes_result")
 }
 
-
-
 /// Str.fromUtf8 : List U8 -> { a : Bool, b : Str, c : Nat, d : I8 }
 pub fn str_from_utf8<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

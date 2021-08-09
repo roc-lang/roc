@@ -1484,7 +1484,10 @@ fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
         loc_pattern: no_region(Pattern::Identifier(Symbol::ARG_3)),
         loc_expr: no_region(RunLowLevel {
             op: LowLevel::StrFromUtf8Range,
-            args: vec![(bytes_var, Var(Symbol::ARG_1)), (arg_record_var, Var(Symbol::ARG_2))],
+            args: vec![
+                (bytes_var, Var(Symbol::ARG_1)),
+                (arg_record_var, Var(Symbol::ARG_2)),
+            ],
             ret_var: ll_record_var,
         }),
         expr_var: ll_record_var,
@@ -1560,7 +1563,6 @@ fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
         ret_var,
     )
 }
-            
 
 /// Str.toUtf8 : Str -> List U8
 fn str_to_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
