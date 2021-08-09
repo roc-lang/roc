@@ -150,7 +150,7 @@ fn render_main_content(
         if should_render_entry {
             match entry {
                 DocEntry::DocDef(doc_def) => {
-                    let mut href = base_href();
+                    let mut href = String::new();
                     href.push('#');
                     href.push_str(doc_def.name.as_str());
 
