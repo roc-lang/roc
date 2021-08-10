@@ -1464,18 +1464,18 @@ fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let ll_record_var = var_store.fresh();
     let ret_var = var_store.fresh();
 
-    // let arg_2 = RunLowLevel FromUtf8 arg_1
+    // let arg_3 = RunLowLevel FromUtf8Range arg_1 arg_2
     //
-    // arg_2 :
+    // arg_3 :
     //   { a : Bool   -- isOk
     //   , b : String -- result_str
     //   , c : Nat    -- problem_byte_index
     //   , d : I8     -- problem_code
     //   }
     //
-    // if arg_2.a then
+    // if arg_3.a then
     //  # all is well
-    //  Ok arg_2.str
+    //  Ok arg_3.str
     // else
     //  # problem
     //  Err (BadUtf8 { byteIndex: arg_2.byteIndex, problem : arg_2.problem })
