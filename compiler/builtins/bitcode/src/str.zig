@@ -1211,11 +1211,6 @@ fn fromUtf8Range(arg: RocList, countAndStart: CountAndStart) FromUtf8Result {
         return FromUtf8Result{ .is_ok = true, .string = string, .byte_index = 0, .problem_code = Utf8ByteProblem.InvalidStartByte };
     } else {
         const temp = errorToProblem(@ptrCast([*]u8, arg.bytes), arg.length);
-
-        // consume the input list
-        const data_bytes = arg.len();
-        utils.decref(arg.bytes, data_bytes, RocStr.alignment);
-
         return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = temp.index, .problem_code = temp.problem };
     }
 }
