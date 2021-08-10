@@ -101,7 +101,7 @@ second =
   \p, q ->  Parser.andThen p (\_ -> q)
 
 # Run p, then q, returning output of p and ignoring that of q
-first : Parser a, Parser b -> Parser b
+first : Parser a, Parser b -> Parser a
 first = 
   \p, q ->  Parser.andThen p (\out -> Parser.map q (\_ -> out))
 
