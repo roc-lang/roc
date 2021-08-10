@@ -2,3 +2,5 @@ scripts:
 
   parser: cargo run examples/benchmarks/ParseApp.roc
 
+  test: cargo run examples/benchmarks/JimTest.roc
+

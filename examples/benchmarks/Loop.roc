@@ -38,6 +38,6 @@ test2 =
 test3 : Str
 test3 = 
   out = loop updateCounter { counter : 4, value : 0}
-  if out == Done (10:I64) then "Ok" else "Fail"
+  if out == Done 10 then "Ok" else "Fail"
 
        
