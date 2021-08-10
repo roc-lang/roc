@@ -1,9 +1,8 @@
 interface Parser exposes [  showPair, makePair, testPair, 
    run, runToString, showU8,
    Parser, map, andThen,
-   succeed, testSucceed,
-   any, testAny, satisfy,
-   fail,  testFail] imports [Pair]
+   succeed, any,  satisfy, fail, 
+   testAny,testSucceed, testFail] imports [Pair]
 
 
 ## PAIRS
