@@ -1,6 +1,6 @@
 app "parseapp"
     packages { base: "platform" }
-    imports [base.Task, Parser, Pair]
+    imports [base.Task, Parser]
     provides [ main ] to base
 
 main : Task.Task {} []
