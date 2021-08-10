@@ -96,9 +96,9 @@ andThen = \p, f ->
 
 
 # Run p, then q, returning output of q and ignoring that of p
-Parser.second : Parser a, Parser b -> Parser b
-Parser.second = 
-  \p, q ->  Parser.andThen p q
+second : Parser a, Parser b -> Parser b
+second = 
+  \p, q ->  Parser.andThen p (\_ -> q)
 
 ## TESTS  
 
