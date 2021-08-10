@@ -1,7 +1,7 @@
 interface Loop exposes [  
       Step, loop, 
       Counter, updateCounter,
-      test1, test2 ] imports []
+      test1, test2, test3 ] imports []
 
 
 # Reference: last part of https://jxxcarlson.medium.com/?p=63cd104a192a
@@ -34,4 +34,10 @@ test2 : Str
 test2 = 
      c = { counter : 4, value : 0}
      if updateCounter c == Loop { counter : 3, value : 4} then "Ok" else "Fail"
+
+test3 : Str
+test3 = 
+  out = loop updateCounter { counter : 4, value : 0}
+  if out == Done (10:I64) then "Ok" else "Fail"
+
        

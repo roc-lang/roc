@@ -17,6 +17,6 @@ main =
     # TEST Parser.andThen
     # Recognize strings beginning with "aa"
     # Parser.runToString Parser.showU8 "aaxyz" (  Parser.andThen (Parser.satisfy (\u -> u == 97)) (\u2 -> Parser.satisfy (\u3 -> u3 == u2))  )
-    Loop.test2
+    Loop.test3
        |> Task.putLine
 
