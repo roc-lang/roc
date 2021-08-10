@@ -624,7 +624,7 @@ fn should_be_multiline(type_ann: &TypeAnnotation) -> bool {
             is_multiline
         }
         TypeAnnotation::Function { args, output } => {
-            let mut is_multiline = should_be_multiline(output) || args.len() > 1;
+            let mut is_multiline = should_be_multiline(output) || args.len() > 2;
 
             for arg in args {
                 if is_multiline {
