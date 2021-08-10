@@ -1564,7 +1564,7 @@ fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
         branch_var: ret_var,
         branches: vec![(
             no_region(RunLowLevel {
-                op: LowLevel::NumLt,
+                op: LowLevel::NumLte,
                 args: vec![
                     (
                         bounds_var,
