@@ -44,7 +44,7 @@ runToString =
   \toString, str, parser -> 
     when run str parser is
       Ok a -> toString a 
-      _ -> "Parse error"
+      _ -> "Parse error (runToString)"
 
 
 ## SUCCEED 
@@ -91,8 +91,8 @@ map =
 ## AND_THEN  
 
 andThen : Parser a, (a -> Parser b) -> Parser b 
-andThen = \p, f ->
-            \input -> p input |> List.map (\(Pair a list) -> (f a) list) |> List.join
+andThen = \p, q ->
+            \input -> p input |> List.map (\(Pair a input2) -> (q a) input2) |> List.join
 
 
 # Run p, then q, returning output of q and ignoring that of p
