@@ -5,6 +5,6 @@ app "parseapp"
 
 main : Task.Task {} []
 main =
-    Parser.runToString Parser.showU8 "abcd" Parser.item
+    Parser.runToString Parser.showU8 "abcd" Parser.any
        |> Task.putLine
 

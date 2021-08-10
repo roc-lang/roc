@@ -2,7 +2,7 @@ interface Parser exposes [  showPair, makePair, testPair,
    run, runToString, showU8,
    Parser, map, andThen,
    succeed, testSucceed,
-   item, testItem,
+   any, testAny,
    fail,  testFail] imports [Pair]
 
 
@@ -64,10 +64,10 @@ fail = \_ -> [ ]
 
 ## ITEM 
 
-# If succcessful, the item parser consumes one character
+# If succcessful, the any parser consumes one character
 
-item: Parser U8
-item = \inp -> 
+any: Parser U8
+any = \inp -> 
    when List.first inp is 
      Ok u -> [Pair u (List.drop inp 1)]
      _ -> [ ]
@@ -96,9 +96,9 @@ testSucceed =
         _ -> "Oops, something happened"
 
 
-testItem: Str -> Str 
-testItem = 
-  \input -> when item (Str.toUtf8 input) |> List.map showPair2 |> List.first is
+testAny: Str -> Str 
+testAny = 
+  \input -> when any (Str.toUtf8 input) |> List.map showPair2 |> List.first is
         Ok str -> str
         _ -> "Oops, something went wrong"
   
