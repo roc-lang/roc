@@ -165,13 +165,14 @@ fn generate_entry_doc<'a>(
             (new_acc, Some(comments_or_new_lines))
         }
 
-        Def::Annotation(loc_pattern, _loc_ann) => match loc_pattern.value {
+        Def::Annotation(loc_pattern, loc_ann) => match loc_pattern.value {
             Pattern::Identifier(identifier) => {
                 // Check if the definition is exposed
                 if ident_ids.get_id(&identifier.into()).is_some() {
+                    let name = identifier.to_string();
                     let doc_def = DocDef {
-                        name: identifier.to_string(),
-                        type_annotation: NoTypeAnn,
+                        name,
+                        type_annotation: type_to_docs(false, loc_ann.value),
                         type_vars: Vec::new(),
                         docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
                     };
