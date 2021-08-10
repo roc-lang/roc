@@ -1551,13 +1551,13 @@ fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
         ),
     };
 
-    let arg3 = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
 
     defn(
         symbol,
         vec![(bytes_var, Symbol::ARG_1), (arg_record_var, Symbol::ARG_2)],
         var_store,
-        arg3,
+        body,
         ret_var,
     )
 }
