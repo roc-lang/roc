@@ -23,7 +23,6 @@ ven_graph = { path = "../vendor/pathfinding" }
 im = "15" # im and im-rc should always have the same version!
 im-rc = "15" # im and im-rc should always have the same version!
 bumpalo = { version = "3.6.1", features = ["collections"] }
-inlinable_string = "0.1"
 arraystring = "0.3.0"
 libc = "0.2"
 page_size = "0.4"

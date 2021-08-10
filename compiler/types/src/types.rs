@@ -1,7 +1,6 @@
 use crate::pretty_print::Parens;
-use crate::subs::{LambdaSet, Subs, VarStore, Variable};
-use inlinable_string::InlinableString;
-use roc_collections::all::{ImMap, ImSet, Index, MutMap, MutSet, SendMap};
+use crate::subs::{LambdaSet, RecordFields, Subs, VarStore, Variable};
+use roc_collections::all::{ImMap, ImSet, Index, MutSet, SendMap};
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -979,8 +978,10 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
     }
 }
 
+#[derive(Debug)]
 pub struct RecordStructure {
-    pub fields: MutMap<Lowercase, RecordField<Variable>>,
+    /// Invariant: these should be sorted!
+    pub fields: Vec<(Lowercase, RecordField<Variable>)>,
     pub ext: Variable,
 }
 
@@ -1116,9 +1117,9 @@ pub struct Alias {
 #[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub enum Problem {
     CanonicalizationProblem,
-    CircularType(Symbol, ErrorType, Region),
+    CircularType(Symbol, Box<ErrorType>, Region),
     CyclicAlias(Symbol, Region, Vec<Symbol>),
-    UnrecognizedIdent(InlinableString),
+    UnrecognizedIdent(Ident),
     Shadowed(Region, Located<Ident>),
     BadTypeArguments {
         symbol: Symbol,
@@ -1196,7 +1197,7 @@ fn write_error_type_help(
             if write_parens {
                 buf.push('(');
             }
-            buf.push_str(symbol.ident_string(interns));
+            buf.push_str(symbol.ident_str(interns).as_str());
 
             for arg in arguments {
                 buf.push(' ');
@@ -1520,22 +1521,23 @@ pub fn name_type_var(letters_used: u32, taken: &mut MutSet<Lowercase>) -> (Lower
     }
 }
 
-pub fn gather_fields(
+pub fn gather_fields_unsorted_iter(
     subs: &Subs,
-    other_fields: &MutMap<Lowercase, RecordField<Variable>>,
+    other_fields: RecordFields,
     mut var: Variable,
-) -> RecordStructure {
+) -> (
+    impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + '_,
+    Variable,
+) {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
-    let mut result = other_fields.clone();
+    let mut stack = vec![other_fields];
 
     loop {
         match subs.get_content_without_compacting(var) {
             Structure(Record(sub_fields, sub_ext)) => {
-                for (lowercase, record_field) in sub_fields {
-                    result.insert(lowercase.clone(), *record_field);
-                }
+                stack.push(*sub_fields);
 
                 var = *sub_ext;
             }
@@ -1549,8 +1551,32 @@ pub fn gather_fields(
         }
     }
 
+    let it = stack
+        .into_iter()
+        .map(|fields| fields.iter_all())
+        .flatten()
+        .map(move |(i1, i2, i3)| {
+            let field_name: &Lowercase = &subs[i1];
+            let variable = subs[i2];
+            let record_field: RecordField<Variable> = subs[i3].map(|_| variable);
+
+            (field_name, record_field)
+        });
+
+    (it, var)
+}
+
+pub fn gather_fields(subs: &Subs, other_fields: RecordFields, var: Variable) -> RecordStructure {
+    let (it, ext) = gather_fields_unsorted_iter(subs, other_fields, var);
+
+    let mut result: Vec<_> = it
+        .map(|(ref_label, field)| (ref_label.clone(), field))
+        .collect();
+
+    result.sort_by(|(a, _), (b, _)| a.cmp(b));
+
     RecordStructure {
         fields: result,
-        ext: var,
+        ext,
     }
 }

@@ -1882,7 +1882,7 @@ fn hof_conditional() {
 
 #[test]
 #[should_panic(
-    expected = "Roc failed with message: \"Shadowing { original_region: |L 3-3, C 4-5|, shadow: |L 6-6, C 8-9| Ident(\\\"x\\\") }\""
+    expected = "Roc failed with message: \"Shadowing { original_region: |L 3-3, C 4-5|, shadow: |L 6-6, C 8-9| Ident"
 )]
 fn pattern_shadowing() {
     assert_evals_to!(
@@ -2361,7 +2361,7 @@ fn backpassing_result() {
 
 #[test]
 #[should_panic(
-    expected = "Shadowing { original_region: |L 3-3, C 4-5|, shadow: |L 5-5, C 6-7| Ident(\\\"x\\\") }"
+    expected = "Shadowing { original_region: |L 3-3, C 4-5|, shadow: |L 5-5, C 6-7| Ident"
 )]
 fn function_malformed_pattern() {
     assert_evals_to!(

@@ -2,8 +2,10 @@ use roc_collections::all::{default_hasher, get_shared, relative_complement, unio
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::subs::Content::{self, *};
-use roc_types::subs::{Descriptor, FlatType, Mark, OptVariable, Subs, Variable};
-use roc_types::types::{gather_fields, ErrorType, Mismatch, RecordField, RecordStructure};
+use roc_types::subs::{
+    Descriptor, FlatType, GetSubsSlice, Mark, OptVariable, RecordFields, Subs, SubsSlice, Variable,
+};
+use roc_types::types::{ErrorType, Mismatch, RecordField};
 
 macro_rules! mismatch {
     () => {{
@@ -257,80 +259,94 @@ fn unify_record(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    rec1: RecordStructure,
-    rec2: RecordStructure,
+    fields1: RecordFields,
+    ext1: Variable,
+    fields2: RecordFields,
+    ext2: Variable,
 ) -> Outcome {
-    let fields1 = rec1.fields;
-    let fields2 = rec2.fields;
-    let shared_fields = get_shared(&fields1, &fields2);
-    // NOTE: don't use `difference` here. In contrast to Haskell, im's `difference` is symmetric
-    let unique_fields1 = relative_complement(&fields1, &fields2);
-    let unique_fields2 = relative_complement(&fields2, &fields1);
+    let (separate, ext1, ext2) = separate_record_fields(subs, fields1, ext1, fields2, ext2);
 
-    if unique_fields1.is_empty() {
-        if unique_fields2.is_empty() {
-            let ext_problems = unify_pool(subs, pool, rec1.ext, rec2.ext);
+    let shared_fields = separate.in_both;
+
+    if separate.only_in_1.is_empty() {
+        if separate.only_in_2.is_empty() {
+            // these variable will be the empty record, but we must still unify them
+            let ext_problems = unify_pool(subs, pool, ext1, ext2);
 
             if !ext_problems.is_empty() {
                 return ext_problems;
             }
 
-            let other_fields = MutMap::default();
             let mut field_problems =
-                unify_shared_fields(subs, pool, ctx, shared_fields, other_fields, rec1.ext);
+                unify_shared_fields(subs, pool, ctx, shared_fields, OtherFields::None, ext1);
 
             field_problems.extend(ext_problems);
 
             field_problems
         } else {
-            let flat_type = FlatType::Record(unique_fields2, rec2.ext);
+            let only_in_2 = RecordFields::insert_into_subs(subs, separate.only_in_2);
+            let flat_type = FlatType::Record(only_in_2, ext2);
             let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
-            let ext_problems = unify_pool(subs, pool, rec1.ext, sub_record);
+            let ext_problems = unify_pool(subs, pool, ext1, sub_record);
 
             if !ext_problems.is_empty() {
                 return ext_problems;
             }
 
-            let other_fields = MutMap::default();
-            let mut field_problems =
-                unify_shared_fields(subs, pool, ctx, shared_fields, other_fields, sub_record);
+            let mut field_problems = unify_shared_fields(
+                subs,
+                pool,
+                ctx,
+                shared_fields,
+                OtherFields::None,
+                sub_record,
+            );
 
             field_problems.extend(ext_problems);
 
             field_problems
         }
-    } else if unique_fields2.is_empty() {
-        let flat_type = FlatType::Record(unique_fields1, rec1.ext);
+    } else if separate.only_in_2.is_empty() {
+        let only_in_1 = RecordFields::insert_into_subs(subs, separate.only_in_1);
+        let flat_type = FlatType::Record(only_in_1, ext1);
         let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
-        let ext_problems = unify_pool(subs, pool, sub_record, rec2.ext);
+        let ext_problems = unify_pool(subs, pool, sub_record, ext2);
 
         if !ext_problems.is_empty() {
             return ext_problems;
         }
 
-        let other_fields = MutMap::default();
-        let mut field_problems =
-            unify_shared_fields(subs, pool, ctx, shared_fields, other_fields, sub_record);
+        let mut field_problems = unify_shared_fields(
+            subs,
+            pool,
+            ctx,
+            shared_fields,
+            OtherFields::None,
+            sub_record,
+        );
 
         field_problems.extend(ext_problems);
 
         field_problems
     } else {
-        let other_fields = union(unique_fields1.clone(), &unique_fields2);
+        let only_in_1 = RecordFields::insert_into_subs(subs, separate.only_in_1);
+        let only_in_2 = RecordFields::insert_into_subs(subs, separate.only_in_2);
+
+        let other_fields = OtherFields::Other(only_in_1, only_in_2);
 
         let ext = fresh(subs, pool, ctx, Content::FlexVar(None));
-        let flat_type1 = FlatType::Record(unique_fields1, ext);
-        let flat_type2 = FlatType::Record(unique_fields2, ext);
+        let flat_type1 = FlatType::Record(only_in_1, ext);
+        let flat_type2 = FlatType::Record(only_in_2, ext);
 
         let sub1 = fresh(subs, pool, ctx, Structure(flat_type1));
         let sub2 = fresh(subs, pool, ctx, Structure(flat_type2));
 
-        let rec1_problems = unify_pool(subs, pool, rec1.ext, sub2);
+        let rec1_problems = unify_pool(subs, pool, ext1, sub2);
         if !rec1_problems.is_empty() {
             return rec1_problems;
         }
 
-        let rec2_problems = unify_pool(subs, pool, sub1, rec2.ext);
+        let rec2_problems = unify_pool(subs, pool, sub1, ext2);
         if !rec2_problems.is_empty() {
             return rec2_problems;
         }
@@ -346,15 +362,22 @@ fn unify_record(
     }
 }
 
+enum OtherFields {
+    None,
+    Other(RecordFields, RecordFields),
+}
+
+type SharedFields = Vec<(Lowercase, (RecordField<Variable>, RecordField<Variable>))>;
+
 fn unify_shared_fields(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
-    shared_fields: MutMap<Lowercase, (RecordField<Variable>, RecordField<Variable>)>,
-    other_fields: MutMap<Lowercase, RecordField<Variable>>,
+    shared_fields: SharedFields,
+    other_fields: OtherFields,
     ext: Variable,
 ) -> Outcome {
-    let mut matching_fields = MutMap::default();
+    let mut matching_fields = Vec::with_capacity(shared_fields.len());
     let num_shared_fields = shared_fields.len();
 
     for (name, (actual, expected)) in shared_fields {
@@ -383,18 +406,58 @@ fn unify_shared_fields(
                 (Optional(val), Optional(_)) => Optional(val),
             };
 
-            let existing = matching_fields.insert(name, actual);
-            debug_assert_eq!(existing, None);
+            matching_fields.push((name, actual));
         }
     }
 
     if num_shared_fields == matching_fields.len() {
         // pull fields in from the ext_var
-        let mut fields = union(matching_fields, &other_fields);
 
-        let new_ext_var = match roc_types::pretty_print::chase_ext_record(subs, ext, &mut fields) {
-            Ok(()) => Variable::EMPTY_RECORD,
-            Err((new, _)) => new,
+        let mut ext_fields = MutMap::default();
+        let new_ext_var =
+            match roc_types::pretty_print::chase_ext_record(subs, ext, &mut ext_fields) {
+                Ok(()) => Variable::EMPTY_RECORD,
+                Err((new, _)) => new,
+            };
+
+        let mut ext_fields: Vec<_> = ext_fields.into_iter().collect();
+        ext_fields.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
+
+        let fields: RecordFields = match other_fields {
+            OtherFields::None => {
+                if ext_fields.is_empty() {
+                    RecordFields::insert_into_subs(subs, matching_fields)
+                } else {
+                    let all_fields = merge_sorted(matching_fields, ext_fields);
+                    RecordFields::insert_into_subs(subs, all_fields)
+                }
+            }
+            OtherFields::Other(other1, other2) => {
+                let mut all_fields = merge_sorted(matching_fields, ext_fields);
+                all_fields = merge_sorted(
+                    all_fields,
+                    other1.iter_all().map(|(i1, i2, i3)| {
+                        let field_name: Lowercase = subs[i1].clone();
+                        let variable = subs[i2];
+                        let record_field: RecordField<Variable> = subs[i3].map(|_| variable);
+
+                        (field_name, record_field)
+                    }),
+                );
+
+                all_fields = merge_sorted(
+                    all_fields,
+                    other2.iter_all().map(|(i1, i2, i3)| {
+                        let field_name: Lowercase = subs[i1].clone();
+                        let variable = subs[i2];
+                        let record_field: RecordField<Variable> = subs[i3].map(|_| variable);
+
+                        (field_name, record_field)
+                    }),
+                );
+
+                RecordFields::insert_into_subs(subs, all_fields)
+            }
         };
 
         let flat_type = FlatType::Record(fields, new_ext_var);
@@ -405,13 +468,132 @@ fn unify_shared_fields(
     }
 }
 
+fn separate_record_fields(
+    subs: &Subs,
+    fields1: RecordFields,
+    ext1: Variable,
+    fields2: RecordFields,
+    ext2: Variable,
+) -> (
+    Separate<Lowercase, RecordField<Variable>>,
+    Variable,
+    Variable,
+) {
+    let (it1, new_ext1) = fields1.sorted_iterator_and_ext(subs, ext1);
+    let (it2, new_ext2) = fields2.sorted_iterator_and_ext(subs, ext2);
+
+    let it1 = it1.collect::<Vec<_>>();
+    let it2 = it2.collect::<Vec<_>>();
+
+    (separate(it1, it2), new_ext1, new_ext2)
+}
+
+#[derive(Debug)]
 struct Separate<K, V> {
+    only_in_1: Vec<(K, V)>,
+    only_in_2: Vec<(K, V)>,
+    in_both: Vec<(K, (V, V))>,
+}
+
+fn merge_sorted<K, V, I1, I2>(input1: I1, input2: I2) -> Vec<(K, V)>
+where
+    K: Ord,
+    I1: IntoIterator<Item = (K, V)>,
+    I2: IntoIterator<Item = (K, V)>,
+{
+    use std::cmp::Ordering;
+
+    let mut it1 = input1.into_iter().peekable();
+    let mut it2 = input2.into_iter().peekable();
+
+    let input1_len = it1.size_hint().0;
+    let input2_len = it2.size_hint().0;
+
+    let mut result = Vec::with_capacity(input1_len + input2_len);
+
+    loop {
+        let which = match (it1.peek(), it2.peek()) {
+            (Some((l, _)), Some((r, _))) => Some(l.cmp(r)),
+            (Some(_), None) => Some(Ordering::Less),
+            (None, Some(_)) => Some(Ordering::Greater),
+            (None, None) => None,
+        };
+
+        match which {
+            Some(Ordering::Less) => {
+                result.push(it1.next().unwrap());
+            }
+            Some(Ordering::Equal) => {
+                let (k, v) = it1.next().unwrap();
+                let (_, _) = it2.next().unwrap();
+                result.push((k, v));
+            }
+            Some(Ordering::Greater) => {
+                result.push(it2.next().unwrap());
+            }
+            None => break,
+        }
+    }
+
+    result
+}
+
+fn separate<K, V, I1, I2>(input1: I1, input2: I2) -> Separate<K, V>
+where
+    K: Ord,
+    I1: IntoIterator<Item = (K, V)>,
+    I2: IntoIterator<Item = (K, V)>,
+{
+    use std::cmp::Ordering;
+
+    let mut it1 = input1.into_iter().peekable();
+    let mut it2 = input2.into_iter().peekable();
+
+    let input1_len = it1.size_hint().0;
+    let input2_len = it2.size_hint().0;
+
+    let max_common = input1_len.min(input2_len);
+
+    let mut result = Separate {
+        only_in_1: Vec::with_capacity(input1_len),
+        only_in_2: Vec::with_capacity(input2_len),
+        in_both: Vec::with_capacity(max_common),
+    };
+
+    loop {
+        let which = match (it1.peek(), it2.peek()) {
+            (Some((l, _)), Some((r, _))) => Some(l.cmp(r)),
+            (Some(_), None) => Some(Ordering::Less),
+            (None, Some(_)) => Some(Ordering::Greater),
+            (None, None) => None,
+        };
+
+        match which {
+            Some(Ordering::Less) => {
+                result.only_in_1.push(it1.next().unwrap());
+            }
+            Some(Ordering::Equal) => {
+                let (k, v1) = it1.next().unwrap();
+                let (_, v2) = it2.next().unwrap();
+                result.in_both.push((k, (v1, v2)));
+            }
+            Some(Ordering::Greater) => {
+                result.only_in_2.push(it2.next().unwrap());
+            }
+            None => break,
+        }
+    }
+
+    result
+}
+
+struct SeparateTags<K, V> {
     only_in_1: MutMap<K, V>,
     only_in_2: MutMap<K, V>,
     in_both: MutMap<K, (V, V)>,
 }
 
-fn separate<K, V>(tags1: MutMap<K, V>, mut tags2: MutMap<K, V>) -> Separate<K, V>
+fn separate_tags<K, V>(tags1: MutMap<K, V>, mut tags2: MutMap<K, V>) -> SeparateTags<K, V>
 where
     K: Ord + std::hash::Hash,
 {
@@ -431,7 +613,7 @@ where
         }
     }
 
-    Separate {
+    SeparateTags {
         only_in_1,
         only_in_2: tags2,
         in_both,
@@ -460,17 +642,17 @@ fn unify_tag_union(
     if tags1.len() == 1
         && tags2.len() == 1
         && tags1 == tags2
-        && subs.get_content_without_compacting(rec1.ext)
-            == subs.get_content_without_compacting(rec2.ext)
+        && subs.get_root_key_without_compacting(rec1.ext)
+            == subs.get_root_key_without_compacting(rec2.ext)
     {
         return unify_shared_tags_merge(subs, ctx, tags1, rec1.ext, recursion_var);
     }
 
-    let Separate {
+    let SeparateTags {
         only_in_1: unique_tags1,
         only_in_2: unique_tags2,
         in_both: shared_tags,
-    } = separate(tags1, tags2);
+    } = separate_tags(tags1, tags2);
 
     if unique_tags1.is_empty() {
         if unique_tags2.is_empty() {
@@ -933,18 +1115,6 @@ fn unify_shared_tags_merge(
     merge(subs, ctx, Structure(flat_type))
 }
 
-fn has_only_optional_fields<'a, I, T>(fields: &mut I) -> bool
-where
-    I: Iterator<Item = &'a RecordField<T>>,
-    T: 'a,
-{
-    fields.all(|field| match field {
-        RecordField::Required(_) => false,
-        RecordField::Demanded(_) => false,
-        RecordField::Optional(_) => true,
-    })
-}
-
 #[inline(always)]
 fn unify_flat_type(
     subs: &mut Subs,
@@ -958,19 +1128,16 @@ fn unify_flat_type(
     match (left, right) {
         (EmptyRecord, EmptyRecord) => merge(subs, ctx, Structure(left.clone())),
 
-        (Record(fields, ext), EmptyRecord) if has_only_optional_fields(&mut fields.values()) => {
+        (Record(fields, ext), EmptyRecord) if fields.has_only_optional_fields(subs) => {
             unify_pool(subs, pool, *ext, ctx.second)
         }
 
-        (EmptyRecord, Record(fields, ext)) if has_only_optional_fields(&mut fields.values()) => {
+        (EmptyRecord, Record(fields, ext)) if fields.has_only_optional_fields(subs) => {
             unify_pool(subs, pool, ctx.first, *ext)
         }
 
         (Record(fields1, ext1), Record(fields2, ext2)) => {
-            let rec1 = gather_fields(subs, fields1, *ext1);
-            let rec2 = gather_fields(subs, fields2, *ext2);
-
-            unify_record(subs, pool, ctx, rec1, rec2)
+            unify_record(subs, pool, ctx, *fields1, *ext1, *fields2, *ext2)
         }
 
         (EmptyTagUnion, EmptyTagUnion) => merge(subs, ctx, Structure(left.clone())),
@@ -1039,16 +1206,12 @@ fn unify_flat_type(
         (Func(l_args, l_closure, l_ret), Func(r_args, r_closure, r_ret))
             if l_args.len() == r_args.len() =>
         {
-            let arg_problems = unify_zip(subs, pool, l_args.iter(), r_args.iter());
+            let arg_problems = unify_zip_slices(subs, pool, *l_args, *r_args);
             let ret_problems = unify_pool(subs, pool, *l_ret, *r_ret);
             let closure_problems = unify_pool(subs, pool, *l_closure, *r_closure);
 
             if arg_problems.is_empty() && closure_problems.is_empty() && ret_problems.is_empty() {
-                merge(
-                    subs,
-                    ctx,
-                    Structure(Func((*r_args).clone(), *r_closure, *r_ret)),
-                )
+                merge(subs, ctx, Structure(Func(*r_args, *r_closure, *r_ret)))
             } else {
                 let mut problems = ret_problems;
 
@@ -1066,7 +1229,7 @@ fn unify_flat_type(
                 tag_name,
                 *tag_symbol,
                 *ext,
-                args,
+                *args,
                 *ret,
                 *closure,
                 true,
@@ -1080,7 +1243,7 @@ fn unify_flat_type(
                 tag_name,
                 *tag_symbol,
                 *ext,
-                args,
+                *args,
                 *ret,
                 *closure,
                 false,
@@ -1097,11 +1260,11 @@ fn unify_flat_type(
                 }
             } else {
                 let mut tags1 = MutMap::default();
-                tags1.insert(tag_name_1.clone(), vec![]);
+                tags1.insert(*tag_name_1.clone(), vec![]);
                 let union1 = gather_tags(subs, tags1, *ext_1);
 
                 let mut tags2 = MutMap::default();
-                tags2.insert(tag_name_2.clone(), vec![]);
+                tags2.insert(*tag_name_2.clone(), vec![]);
                 let union2 = gather_tags(subs, tags2, *ext_2);
 
                 unify_tag_union(subs, pool, ctx, union1, union2, (None, None))
@@ -1111,14 +1274,14 @@ fn unify_flat_type(
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
 
             let mut tags2 = MutMap::default();
-            tags2.insert(tag_name.clone(), vec![]);
+            tags2.insert(*tag_name.clone(), vec![]);
             let union2 = gather_tags(subs, tags2, *ext2);
 
             unify_tag_union(subs, pool, ctx, union1, union2, (None, None))
         }
         (FunctionOrTagUnion(tag_name, _, ext1), TagUnion(tags2, ext2)) => {
             let mut tags1 = MutMap::default();
-            tags1.insert(tag_name.clone(), vec![]);
+            tags1.insert(*tag_name.clone(), vec![]);
             let union1 = gather_tags(subs, tags1, *ext1);
 
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
@@ -1131,7 +1294,7 @@ fn unify_flat_type(
             debug_assert!(is_recursion_var(subs, *recursion_var));
 
             let mut tags2 = MutMap::default();
-            tags2.insert(tag_name.clone(), vec![]);
+            tags2.insert(*tag_name.clone(), vec![]);
 
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
             let union2 = gather_tags(subs, tags2, *ext2);
@@ -1150,7 +1313,7 @@ fn unify_flat_type(
             debug_assert!(is_recursion_var(subs, *recursion_var));
 
             let mut tags1 = MutMap::default();
-            tags1.insert(tag_name.clone(), vec![]);
+            tags1.insert(*tag_name.clone(), vec![]);
 
             let union1 = gather_tags(subs, tags1, *ext1);
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
@@ -1164,6 +1327,26 @@ fn unify_flat_type(
             other2
         ),
     }
+}
+
+fn unify_zip_slices(
+    subs: &mut Subs,
+    pool: &mut Pool,
+    left: SubsSlice<Variable>,
+    right: SubsSlice<Variable>,
+) -> Outcome {
+    let mut problems = Vec::new();
+
+    let it = left.into_iter().zip(right.into_iter());
+
+    for (l_index, r_index) in it {
+        let l_var = subs[l_index];
+        let r_var = subs[r_index];
+
+        problems.extend(unify_pool(subs, pool, l_var, r_var));
+    }
+
+    problems
 }
 
 fn unify_zip<'a, I>(subs: &mut Subs, pool: &mut Pool, left_iter: I, right_iter: I) -> Outcome
@@ -1354,7 +1537,7 @@ fn unify_function_or_tag_union_and_func(
     tag_name: &TagName,
     tag_symbol: Symbol,
     tag_ext: Variable,
-    function_arguments: &[Variable],
+    function_arguments: SubsSlice<Variable>,
     function_return: Variable,
     function_lambda_set: Variable,
     left: bool,
@@ -1363,7 +1546,10 @@ fn unify_function_or_tag_union_and_func(
 
     let mut new_tags = MutMap::with_capacity_and_hasher(1, default_hasher());
 
-    new_tags.insert(tag_name.clone(), function_arguments.to_owned());
+    new_tags.insert(
+        tag_name.clone(),
+        subs.get_subs_slice(function_arguments).to_owned(),
+    );
 
     let content = Structure(TagUnion(new_tags, tag_ext));
 

@@ -9,7 +9,6 @@ use crate::num::{
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
-use inlinable_string::InlinableString;
 use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -58,7 +57,7 @@ pub enum Expr {
     // Int and Float store a variable to generate better error messages
     Int(Variable, Variable, i128),
     Float(Variable, Variable, f64),
-    Str(InlinableString),
+    Str(Box<str>),
     List {
         elem_var: Variable,
         loc_elems: Vec<Located<Expr>>,
@@ -1574,7 +1573,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
 
 enum StrSegment {
     Interpolation(Located<Expr>),
-    Plaintext(InlinableString),
+    Plaintext(Box<str>),
 }
 
 fn flatten_str_lines<'a>(
@@ -1601,10 +1600,10 @@ fn flatten_str_lines<'a>(
                             buf.push(ch);
                         }
                         None => {
-                            env.problem(Problem::InvalidUnicodeCodePoint(loc_hex_digits.region));
+                            env.problem(Problem::InvalidUnicodeCodePt(loc_hex_digits.region));
 
                             return (
-                                Expr::RuntimeError(RuntimeError::InvalidUnicodeCodePoint(
+                                Expr::RuntimeError(RuntimeError::InvalidUnicodeCodePt(
                                     loc_hex_digits.region,
                                 )),
                                 output,

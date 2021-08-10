@@ -1,4 +1,4 @@
-use crate::subs::{Content, FlatType, Subs, Variable};
+use crate::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
 use crate::types::{name_type_var, RecordField};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
@@ -146,25 +146,17 @@ fn find_names_needed(
             }
         }
         Structure(Func(arg_vars, _closure_var, ret_var)) => {
-            for var in arg_vars {
-                find_names_needed(*var, subs, roots, root_appearances, names_taken);
+            for index in arg_vars.into_iter() {
+                let var = subs[index];
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
 
             find_names_needed(*ret_var, subs, roots, root_appearances, names_taken);
         }
-        Structure(Record(fields, ext_var)) => {
-            let mut sorted_fields: Vec<_> = fields.iter().collect();
-
-            sorted_fields.sort_by(|(label1, _), (label2, _)| label1.cmp(label2));
-
-            for (_, field) in sorted_fields {
-                find_names_needed(
-                    field.into_inner(),
-                    subs,
-                    roots,
-                    root_appearances,
-                    names_taken,
-                );
+        Structure(Record(sorted_fields, ext_var)) => {
+            for index in sorted_fields.iter_variables() {
+                let var = subs[index];
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
 
             find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
@@ -379,8 +371,10 @@ fn write_sorted_tags<'a>(
     let interns = &env.interns;
     let home = env.home;
 
-    sorted_fields
-        .sort_by(|(a, _), (b, _)| a.as_string(interns, home).cmp(&b.as_string(interns, home)));
+    sorted_fields.sort_by(|(a, _), (b, _)| {
+        a.as_ident_str(interns, home)
+            .cmp(&b.as_ident_str(interns, home))
+    });
 
     let mut any_written_yet = false;
 
@@ -391,7 +385,7 @@ fn write_sorted_tags<'a>(
             any_written_yet = true;
         }
 
-        buf.push_str(&label.as_string(interns, home));
+        buf.push_str(label.as_ident_str(interns, home).as_str());
 
         for var in vars {
             buf.push(' ');
@@ -415,12 +409,17 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
         Apply(symbol, args) => write_apply(env, *symbol, args, subs, buf, parens),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
-        Func(args, _closure, ret) => write_fn(env, args, *ret, subs, buf, parens),
+        Func(args, _closure, ret) => {
+            write_fn(env, subs.get_subs_slice(*args), *ret, subs, buf, parens)
+        }
         Record(fields, ext_var) => {
             use crate::types::{gather_fields, RecordStructure};
 
             // If the `ext` has concrete fields (e.g. { foo : I64}{ bar : Bool }), merge them
-            let RecordStructure { fields, ext } = gather_fields(subs, fields, *ext_var);
+            let RecordStructure {
+                fields: sorted_fields,
+                ext,
+            } = gather_fields(subs, *fields, *ext_var);
             let ext_var = ext;
 
             if fields.is_empty() {
@@ -428,16 +427,12 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
             } else {
                 buf.push_str("{ ");
 
-                // Sort the fields so they always end up in the same order.
-                let mut sorted_fields = Vec::with_capacity(fields.len());
-
-                sorted_fields.extend(fields);
-                sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
-
                 let mut any_written_yet = false;
 
-                for (label, field_var) in sorted_fields {
+                for (label, record_field) in sorted_fields {
                     use RecordField::*;
+
+                    let var = *record_field.as_inner();
 
                     if any_written_yet {
                         buf.push_str(", ");
@@ -446,19 +441,10 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
                     }
                     buf.push_str(label.as_str());
 
-                    let var = match field_var {
-                        Optional(var) => {
-                            buf.push_str(" ? ");
-                            var
-                        }
-                        Required(var) => {
-                            buf.push_str(" : ");
-                            var
-                        }
-                        Demanded(var) => {
-                            buf.push_str(" : ");
-                            var
-                        }
+                    match record_field {
+                        Optional(_) => buf.push_str(" ? "),
+                        Required(_) => buf.push_str(" : "),
+                        Demanded(_) => buf.push_str(" : "),
                     };
 
                     write_content(
@@ -507,8 +493,8 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
         FunctionOrTagUnion(tag_name, _, ext_var) => {
             buf.push_str("[ ");
 
-            let mut tags = MutMap::default();
-            tags.insert(tag_name.clone(), vec![]);
+            let mut tags: MutMap<TagName, _> = MutMap::default();
+            tags.insert(*tag_name.clone(), vec![]);
             let ext_content = write_sorted_tags(env, subs, buf, &tags, *ext_var);
 
             buf.push_str(" ]");
@@ -571,7 +557,7 @@ pub fn chase_ext_tag_union<'a>(
             chase_ext_tag_union(subs, *ext_var, fields)
         }
         Content::Structure(FunctionOrTagUnion(tag_name, _, ext_var)) => {
-            fields.push((tag_name.clone(), vec![]));
+            fields.push((*tag_name.clone(), vec![]));
 
             chase_ext_tag_union(subs, *ext_var, fields)
         }
@@ -591,8 +577,12 @@ pub fn chase_ext_record(
 
     match subs.get_content_without_compacting(var) {
         Structure(Record(sub_fields, sub_ext)) => {
-            for (field_name, record_field) in sub_fields {
-                fields.insert(field_name.clone(), *record_field);
+            for (i1, i2, i3) in sub_fields.iter_all() {
+                let label = &subs[i1];
+                let var = subs[i2];
+                let record_field = subs[i3].map(|_| var);
+
+                fields.insert(label.clone(), record_field);
             }
 
             chase_ext_record(subs, *sub_ext, fields)
@@ -728,15 +718,15 @@ fn write_fn(
 
 fn write_symbol(env: &Env, symbol: Symbol, buf: &mut String) {
     let interns = &env.interns;
-    let ident = symbol.ident_string(interns);
+    let ident = symbol.ident_str(interns);
     let module_id = symbol.module_id();
 
     // Don't qualify the symbol if it's in our home module,
     // or if it's a builtin (since all their types are always in scope)
     if module_id != env.home && !module_id.is_builtin() {
-        buf.push_str(module_id.to_string(interns));
+        buf.push_str(module_id.to_ident_str(interns).as_str());
         buf.push('.');
     }
 
-    buf.push_str(ident);
+    buf.push_str(ident.as_str());
 }

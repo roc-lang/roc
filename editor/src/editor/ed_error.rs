@@ -73,7 +73,7 @@ pub enum EdError {
     },
 
     #[snafu(display(
-        "MissingSelection: ed_model.selected_expr2_id was Some(NodeId<Expr2>) but ed_model.caret_w_sel_vec did not contain any Some(Selection)."
+        "MissingSelection: ed_model.selected_expr2_id was Some(ExprId) but ed_model.caret_w_sel_vec did not contain any Some(Selection)."
     ))]
     MissingSelection { backtrace: Backtrace },
 

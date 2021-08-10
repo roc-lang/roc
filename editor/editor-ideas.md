@@ -52,6 +52,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 ### Cool regular editors
 
 * [Helix](https://github.com/helix-editor/helix) modal (terminal, for now) editor in rust. Good UX.
+* [Kakoune](https://kakoune.org/) editor with advanced text selection and manipulation features.
 
 
 ### Structured Editing
@@ -199,6 +200,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Fuzzy natural language based setting adjustment in search bar or with voice input: increase font size, enable autosave, switch to light theme...
 * Detect deviation of best practices, example case: alert developer when they are defining a color inline (rgb(30,30,30)) while all colors have been previously imported from a single file. See also [Codota](https://www.codota.com).
 * It would be valuable to record the user's interactions with the editor when debugging as well as the AST. On enough data we could train a model to perform a bunch of debugging steps and show values of the most important variables in relation to the bug. Having assistance in finding the exact code that causes the problem could be super valuable. There could be sensitive data, so it should only be recorded and or shared for open source codebases with permissive licenses and with explicit user permission.
+* To allow for more privacy; data gathering can be kept only local or only shared within a team/company. Say we offer the ability to save the changes made after an error occurred. Another developer in the company who encounters this error could be notified someone has previously encountered this error along with their changes made after the error. Optionally, the first developer's name can be shown (only within team/company) so the second developer can quickly ask for help.
 
 
 ## Testing
@@ -227,6 +229,10 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 
 ## General Plugin Ideas
 
+### Ideas
+
+* Plugin to translate linux commands like curl to Roc code
+
 ### Inspiration
 
 - [Boop](https://github.com/IvanMathy/Boop) scriptable scratchpad for developers. Contains collection of useful conversions: json formatting, url encoding, encode to base64...
@@ -253,6 +259,7 @@ Thoughts and ideas possibly taken from above inspirations or separate.
       Imagine if everytime for the user doesnt want to rely on shining rendered pixels on the screen for a feedback from machine, we make a acoustic room simulation, where with moving the "stick", either with mouse or with key arrows, we bump into one of the objects and that produces certain contextually appropriate sound (clean)*ding*
       
       On the each level of abstraction they can make sounds more deeper, so then when you type letters you feel like you are playing with the sand (soft)*shh*. We would need help from some sound engineer about it, but imagine moving down, which can be voice trigered command for motion impaired, you hear (soft)*pup* and the name of the module, and then you have options and commands appropriate for the module, they could map to those  basic 4 buttons that we trained user on, and he would shortcut all the soft talk with click of a button. Think of the satisfaction when you can skip the dialog of the game and get straight into action. (X) Open functions! each function would make a sound and say its name, unless you press search and start searching for a specific function inside module, if you want one you select or move to next.
+      - Related idea: Playing sounds in rapid succession for different expressions in your program might be a high throughput alternative to stepping through your code line by line. I'd bet you quickly learn what your porgram should sound like. The difference in throughput would be even larger for those who need to rely on voice transcription.
       
    * Motor impariments
       [rant]BACKS OF CODERS ARE NOT HEALTHY! We need to change that![/neverstop]
@@ -276,3 +283,5 @@ Thoughts and ideas possibly taken from above inspirations or separate.
 * "Error mode" where the editor jumps you to the next error
     * Similar in theory to diff tools that jump you to the next merge conflict
 * dependency recommendation
+* Command to change the file to put all exposed functions at the top of the file, private functions below. Other alternative; ability to show a "file explorer" that shows exposed functions first, followed by private functions.
+* We could provide a more expansive explanation in errors that can benefit from it. This explanation could be folded(shown on click) by default in the editor.

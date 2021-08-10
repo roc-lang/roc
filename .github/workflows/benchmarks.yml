@@ -34,5 +34,12 @@ jobs:
       - name: on current branch; prepare a self-contained benchmark folder
         run: ./ci/safe-earthly.sh +prep-bench-folder
 
-      - name: execute benchmarks with regression check
-        run: ./ci/bench-runner.sh
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: build benchmark runner
+        run: cd ci/bench-runner && cargo build --release && cd ../..
+
+      - name: run benchmarks with regression check
+        run: ./ci/bench-runner/target/release/bench-runner --check-executables-changed

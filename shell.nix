@@ -32,6 +32,7 @@ let
   llvmPkgs = pkgs.llvmPackages_12;
 
   zig = import ./nix/zig.nix { inherit pkgs; };
+  debugir = import ./nix/debugir.nix { inherit pkgs; };
 
   inputs = with pkgs; [
     # build libraries
@@ -48,6 +49,7 @@ let
     zig
 
     # lib deps
+    glibc_multi
     llvmPkgs.libcxx
     llvmPkgs.libcxxabi
     libffi
@@ -59,6 +61,7 @@ let
 
     # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
     llvmPkgs.lld
+    debugir
 
     # meta-tools
     # note: niv manages its own nixpkgs so it doesn't need pkgs.callPackage. Do
@@ -70,6 +73,7 @@ in pkgs.mkShell {
 
   # Additional Env vars
   LLVM_SYS_120_PREFIX = "${llvmPkgs.llvm.dev}";
+  NIXOS_GLIBC_PATH = "${pkgs.glibc_multi.out}/lib";
   LD_LIBRARY_PATH = with pkgs;
     lib.makeLibraryPath ([
       pkg-config

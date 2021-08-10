@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "compiler/ident",
     "compiler/region",
     "compiler/collections",
     "compiler/module",
@@ -32,6 +33,7 @@ members = [
     "roc_std",
     "docs",
 ]
+exclude = [ "ci/bench-runner" ]
 # Needed to be able to run `cargo run -p roc_cli --no-default-features` -
 # see www/build.sh for more.
 #

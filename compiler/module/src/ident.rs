@@ -1,13 +1,13 @@
 use crate::symbol::{Interns, ModuleId, Symbol};
-use inlinable_string::InlinableString;
+pub use roc_ident::IdentStr;
 use std::fmt;
 
 /// This could be uppercase or lowercase, qualified or unqualified.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Ident(InlinableString);
+pub struct Ident(IdentStr);
 
 impl Ident {
-    pub fn as_inline_str(&self) -> &InlinableString {
+    pub fn as_inline_str(&self) -> &IdentStr {
         &self.0
     }
 }
@@ -18,24 +18,32 @@ pub struct QualifiedModuleName<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ModuleName(InlinableString);
+pub struct ModuleName(IdentStr);
+
+impl std::ops::Deref for ModuleName {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_str()
+    }
+}
 
 /// An uncapitalized identifier, such as a field name or local variable
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Lowercase(InlinableString);
+pub struct Lowercase(IdentStr);
 
 /// A capitalized identifier, such as a tag name or module name
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Uppercase(InlinableString);
+pub struct Uppercase(IdentStr);
 
 /// A string representing a foreign (linked-in) symbol
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
-pub struct ForeignSymbol(InlinableString);
+pub struct ForeignSymbol(IdentStr);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TagName {
     /// Global tags have no module, but tend to be short strings (since they're
-    /// never qualified), so we store them as inlinable strings.
+    /// never qualified), so we store them as ident strings.
     ///
     /// This is allows canonicalization to happen in parallel without locks.
     /// If global tags had a Symbol representation, then each module would have to
@@ -51,12 +59,18 @@ pub enum TagName {
     Closure(Symbol),
 }
 
+static_assertions::assert_eq_size!([u8; 24], TagName);
+
 impl TagName {
-    pub fn as_string(&self, interns: &Interns, home: ModuleId) -> InlinableString {
+    pub fn as_ident_str(&self, interns: &Interns, home: ModuleId) -> IdentStr {
         match self {
-            TagName::Global(uppercase) => uppercase.as_inline_str().clone(),
-            TagName::Private(symbol) => symbol.fully_qualified(interns, home),
-            TagName::Closure(symbol) => symbol.fully_qualified(interns, home),
+            TagName::Global(uppercase) => uppercase.as_ident_str().clone(),
+            TagName::Private(symbol) => {
+                symbol.fully_qualified(interns, home).as_ident_str().clone()
+            }
+            TagName::Closure(symbol) => {
+                symbol.fully_qualified(interns, home).as_ident_str().clone()
+            }
         }
     }
 }
@@ -74,10 +88,10 @@ impl ModuleName {
     pub const RESULT: &'static str = "Result";
 
     pub fn as_str(&self) -> &str {
-        &*self.0
+        self.0.as_str()
     }
 
-    pub fn as_inline_str(&self) -> &InlinableString {
+    pub fn as_ident_str(&self) -> &IdentStr {
         &self.0
     }
 
@@ -99,6 +113,12 @@ impl<'a> From<&'a str> for ModuleName {
     }
 }
 
+impl<'a> From<IdentStr> for ModuleName {
+    fn from(string: IdentStr) -> Self {
+        Self(string.as_str().into())
+    }
+}
+
 impl From<Box<str>> for ModuleName {
     fn from(string: Box<str>) -> Self {
         Self((string.as_ref()).into())
@@ -111,36 +131,24 @@ impl From<String> for ModuleName {
     }
 }
 
-impl From<InlinableString> for ModuleName {
-    fn from(string: InlinableString) -> Self {
-        Self(string)
-    }
-}
-
-impl From<ModuleName> for InlinableString {
-    fn from(name: ModuleName) -> Self {
-        name.0
-    }
-}
-
-impl<'a> From<&'a ModuleName> for &'a InlinableString {
-    fn from(name: &'a ModuleName) -> Self {
-        &name.0
-    }
-}
-
 impl From<ModuleName> for Box<str> {
     fn from(name: ModuleName) -> Self {
         name.0.to_string().into()
     }
 }
 
+impl fmt::Display for ModuleName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 impl ForeignSymbol {
     pub fn as_str(&self) -> &str {
-        &*self.0
+        self.0.as_str()
     }
 
-    pub fn as_inline_str(&self) -> &InlinableString {
+    pub fn as_inline_str(&self) -> &IdentStr {
         &self.0
     }
 }
@@ -159,10 +167,10 @@ impl<'a> From<String> for ForeignSymbol {
 
 impl Uppercase {
     pub fn as_str(&self) -> &str {
-        &*self.0
+        self.0.as_str()
     }
 
-    pub fn as_inline_str(&self) -> &InlinableString {
+    pub fn as_ident_str(&self) -> &IdentStr {
         &self.0
     }
 }
@@ -181,7 +189,7 @@ impl<'a> From<String> for Uppercase {
 
 impl Lowercase {
     pub fn as_str(&self) -> &str {
-        &*self.0
+        self.0.as_str()
     }
 }
 
@@ -197,16 +205,10 @@ impl<'a> From<String> for Lowercase {
     }
 }
 
-impl From<Lowercase> for InlinableString {
-    fn from(lowercase: Lowercase) -> Self {
-        lowercase.0
-    }
-}
-
 impl AsRef<str> for Ident {
     #[inline(always)]
     fn as_ref(&self) -> &str {
-        self.0.as_ref()
+        self.0.as_str()
     }
 }
 
@@ -228,19 +230,19 @@ impl From<String> for Ident {
     }
 }
 
-impl From<InlinableString> for Ident {
-    fn from(string: InlinableString) -> Self {
+impl From<IdentStr> for Ident {
+    fn from(string: IdentStr) -> Self {
         Self(string)
     }
 }
 
-impl From<Ident> for InlinableString {
+impl From<Ident> for IdentStr {
     fn from(ident: Ident) -> Self {
         ident.0
     }
 }
 
-impl<'a> From<&'a Ident> for &'a InlinableString {
+impl<'a> From<&'a Ident> for &'a IdentStr {
     fn from(ident: &'a Ident) -> Self {
         &ident.0
     }
@@ -249,6 +251,12 @@ impl<'a> From<&'a Ident> for &'a InlinableString {
 impl From<Ident> for Box<str> {
     fn from(ident: Ident) -> Self {
         ident.0.to_string().into()
+    }
+}
+
+impl fmt::Display for Ident {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 

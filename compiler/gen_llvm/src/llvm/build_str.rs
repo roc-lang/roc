@@ -175,7 +175,7 @@ pub fn str_starts_with<'a, 'ctx, 'env>(
     )
 }
 
-/// Str.startsWithCodePoint : Str, U32 -> Bool
+/// Str.startsWithCodePt : Str, U32 -> Bool
 pub fn str_starts_with_code_point<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
@@ -188,7 +188,7 @@ pub fn str_starts_with_code_point<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[str_i128.into(), prefix],
-        bitcode::STR_STARTS_WITH_CODE_POINT,
+        bitcode::STR_STARTS_WITH_CODE_PT,
     )
 }
 
@@ -235,8 +235,8 @@ pub fn str_from_int<'a, 'ctx, 'env>(
     call_bitcode_fn(env, &[int], bitcode::STR_FROM_INT)
 }
 
-/// Str.toBytes : Str -> List U8
-pub fn str_to_bytes<'a, 'ctx, 'env>(
+/// Str.toUtf8 : Str -> List U8
+pub fn str_to_utf8<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     original_wrapper: StructValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
@@ -244,10 +244,10 @@ pub fn str_to_bytes<'a, 'ctx, 'env>(
         env.builder,
         original_wrapper.into(),
         env.context.i128_type().into(),
-        "to_bytes",
+        "to_utf8",
     );
 
-    call_bitcode_fn_returns_list(env, &[string], bitcode::STR_TO_BYTES)
+    call_bitcode_fn_returns_list(env, &[string], bitcode::STR_TO_UTF8)
 }
 
 /// Str.fromUtf8 : List U8 -> { a : Bool, b : Str, c : Nat, d : I8 }

@@ -58,12 +58,12 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_SPLIT => str_split,
         STR_IS_EMPTY => str_is_empty,
         STR_STARTS_WITH => str_starts_with,
-        STR_STARTS_WITH_CODE_POINT => str_starts_with_code_point,
+        STR_STARTS_WITH_CODE_PT => str_starts_with_code_point,
         STR_ENDS_WITH => str_ends_with,
         STR_COUNT_GRAPHEMES => str_count_graphemes,
         STR_FROM_INT => str_from_int,
         STR_FROM_UTF8 => str_from_utf8,
-        STR_TO_BYTES => str_to_bytes,
+        STR_TO_UTF8 => str_to_utf8,
         STR_FROM_FLOAT=> str_from_float,
         LIST_LEN => list_len,
         LIST_GET => list_get,
@@ -1287,9 +1287,9 @@ fn str_starts_with(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::StrStartsWith, var_store)
 }
 
-/// Str.startsWithCodePoint : Str, U32 -> Bool
+/// Str.startsWithCodePt : Str, U32 -> Bool
 fn str_starts_with_code_point(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_2(symbol, LowLevel::StrStartsWithCodePoint, var_store)
+    lowlevel_2(symbol, LowLevel::StrStartsWithCodePt, var_store)
 }
 
 /// Str.endsWith : Str, Str -> Bool
@@ -1456,9 +1456,9 @@ fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Str.toBytes : Str -> List U8
-fn str_to_bytes(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_1(symbol, LowLevel::StrToBytes, var_store)
+/// Str.toUtf8 : Str -> List U8
+fn str_to_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::StrToUtf8, var_store)
 }
 
 /// Str.fromFloat : Float * -> Str
