@@ -2660,7 +2660,7 @@ fn cast_tag_to_block_of_memory<'a, 'ctx, 'env>(
     from_value: StructValue<'ctx>,
     to_type: BasicTypeEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    complex_bitcast_complexer(env, from_value.into(), to_type, "tag_to_block_of_memory")
+    complex_bitcast_check_size(env, from_value.into(), to_type, "tag_to_block_of_memory")
 }
 
 pub fn cast_block_of_memory_to_tag<'ctx>(
@@ -2696,7 +2696,9 @@ pub fn complex_bitcast<'ctx>(
     complex_bitcast_from_bigger_than_to(builder, from_value, to_type, name)
 }
 
-fn complex_bitcast_complexer<'a, 'ctx, 'env>(
+/// Check the size of the input and output types. Pretending we have more bytes at a pointer than
+/// we actually do can lead to faulty optimizations and weird segfaults/crashes
+fn complex_bitcast_check_size<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     from_value: BasicValueEnum<'ctx>,
     to_type: BasicTypeEnum<'ctx>,

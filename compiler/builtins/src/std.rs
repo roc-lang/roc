@@ -597,7 +597,6 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         let bad_utf8 = SolvedType::TagUnion(
             vec![(
                 TagName::Global("BadUtf8".into()),
-                // vec![str_utf8_problem_type()],
                 vec![str_utf8_byte_problem_type(), nat_type()],
             )],
             Box::new(SolvedType::Wildcard),
