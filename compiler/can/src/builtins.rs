@@ -1474,11 +1474,9 @@ fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
     //   }
     //
     // if arg_3.a then
-    //  # all is well
     //  Ok arg_3.str
     // else
-    //  # problem
-    //  Err (BadUtf8 { byteIndex: arg_2.byteIndex, problem : arg_2.problem })
+    //  Err (BadUtf8 { byteIndex: arg_3.byteIndex, problem : arg_3.problem })
 
     let def = crate::def::Def {
         loc_pattern: no_region(Pattern::Identifier(Symbol::ARG_3)),
@@ -1553,13 +1551,13 @@ fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
         ),
     };
 
-    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+    let arg3 = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
 
     defn(
         symbol,
         vec![(bytes_var, Symbol::ARG_1), (arg_record_var, Symbol::ARG_2)],
         var_store,
-        body,
+        arg3,
         ret_var,
     )
 }
