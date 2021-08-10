@@ -1363,7 +1363,6 @@ pub fn build_tag<'a, 'ctx, 'env>(
             debug_assert!(union_size > 1);
 
             let ctx = env.context;
-            let builder = env.builder;
 
             // Determine types
             let num_fields = arguments.len() + 1;
@@ -1428,7 +1427,7 @@ pub fn build_tag<'a, 'ctx, 'env>(
 
             let internal_type = block_of_memory_slices(env.context, tags, env.ptr_bytes);
 
-            let data = cast_tag_to_block_of_memory(builder, struct_val, internal_type);
+            let data = cast_tag_to_block_of_memory(env, struct_val, internal_type);
             let tag_id_type = basic_type_from_layout(env, &tag_id_layout).into_int_type();
             let wrapper_type = env
                 .context
@@ -2656,17 +2655,12 @@ pub fn complex_bitcast_struct_struct<'ctx>(
     complex_bitcast(builder, from_value.into(), to_type.into(), name).into_struct_value()
 }
 
-fn cast_tag_to_block_of_memory<'ctx>(
-    builder: &Builder<'ctx>,
+fn cast_tag_to_block_of_memory<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
     from_value: StructValue<'ctx>,
     to_type: BasicTypeEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    complex_bitcast(
-        builder,
-        from_value.into(),
-        to_type,
-        "tag_to_block_of_memory",
-    )
+    complex_bitcast_complexer(env, from_value.into(), to_type, "tag_to_block_of_memory")
 }
 
 pub fn cast_block_of_memory_to_tag<'ctx>(
@@ -2690,34 +2684,124 @@ pub fn complex_bitcast<'ctx>(
     to_type: BasicTypeEnum<'ctx>,
     name: &str,
 ) -> BasicValueEnum<'ctx> {
-    // builder.build_bitcast(from_value, to_type, "cast_basic_basic")
-    // because this does not allow some (valid) bitcasts
-
     use BasicTypeEnum::*;
-    match (from_value.get_type(), to_type) {
-        (PointerType(_), PointerType(_)) => {
-            // we can't use the more straightforward bitcast in all cases
-            // it seems like a bitcast only works on integers and pointers
-            // and crucially does not work not on arrays
-            builder.build_bitcast(from_value, to_type, name)
-        }
-        _ => {
-            // store the value in memory
-            let argument_pointer = builder.build_alloca(from_value.get_type(), "cast_alloca");
-            builder.build_store(argument_pointer, from_value);
 
-            // then read it back as a different type
-            let to_type_pointer = builder
-                .build_bitcast(
-                    argument_pointer,
-                    to_type.ptr_type(inkwell::AddressSpace::Generic),
-                    name,
-                )
-                .into_pointer_value();
-
-            builder.build_load(to_type_pointer, "cast_value")
-        }
+    if let (PointerType(_), PointerType(_)) = (from_value.get_type(), to_type) {
+        // we can't use the more straightforward bitcast in all cases
+        // it seems like a bitcast only works on integers and pointers
+        // and crucially does not work not on arrays
+        return builder.build_bitcast(from_value, to_type, name);
     }
+
+    complex_bitcast_from_bigger_than_to(builder, from_value, to_type, name)
+}
+
+fn complex_bitcast_complexer<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    from_value: BasicValueEnum<'ctx>,
+    to_type: BasicTypeEnum<'ctx>,
+    name: &str,
+) -> BasicValueEnum<'ctx> {
+    use BasicTypeEnum::*;
+
+    if let (PointerType(_), PointerType(_)) = (from_value.get_type(), to_type) {
+        // we can't use the more straightforward bitcast in all cases
+        // it seems like a bitcast only works on integers and pointers
+        // and crucially does not work not on arrays
+        return env.builder.build_bitcast(from_value, to_type, name);
+    }
+
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let parent = block.get_parent().expect("to be in a function");
+    let then_block = env.context.append_basic_block(parent, "then");
+    let else_block = env.context.append_basic_block(parent, "else");
+    let cont_block = env.context.append_basic_block(parent, "cont");
+
+    let from_size = from_value.get_type().size_of().unwrap();
+    let to_size = to_type.size_of().unwrap();
+
+    let condition = env.builder.build_int_compare(
+        IntPredicate::UGT,
+        from_size,
+        to_size,
+        "from_size >= to_size",
+    );
+
+    env.builder
+        .build_conditional_branch(condition, then_block, else_block);
+
+    let then_answer = {
+        env.builder.position_at_end(then_block);
+        let result = complex_bitcast_from_bigger_than_to(env.builder, from_value, to_type, name);
+        env.builder.build_unconditional_branch(cont_block);
+        result
+    };
+
+    let else_answer = {
+        env.builder.position_at_end(else_block);
+        let result = complex_bitcast_to_bigger_than_from(env.builder, from_value, to_type, name);
+        env.builder.build_unconditional_branch(cont_block);
+        result
+    };
+
+    env.builder.position_at_end(cont_block);
+
+    let result = env.builder.build_phi(then_answer.get_type(), "answer");
+
+    result.add_incoming(&[(&then_answer, then_block), (&else_answer, else_block)]);
+
+    result.as_basic_value()
+}
+
+fn complex_bitcast_from_bigger_than_to<'ctx>(
+    builder: &Builder<'ctx>,
+    from_value: BasicValueEnum<'ctx>,
+    to_type: BasicTypeEnum<'ctx>,
+    name: &str,
+) -> BasicValueEnum<'ctx> {
+    // store the value in memory
+    let argument_pointer = builder.build_alloca(from_value.get_type(), "cast_alloca");
+    builder.build_store(argument_pointer, from_value);
+
+    // then read it back as a different type
+    let to_type_pointer = builder
+        .build_bitcast(
+            argument_pointer,
+            to_type.ptr_type(inkwell::AddressSpace::Generic),
+            name,
+        )
+        .into_pointer_value();
+
+    builder.build_load(to_type_pointer, "cast_value")
+}
+
+fn complex_bitcast_to_bigger_than_from<'ctx>(
+    builder: &Builder<'ctx>,
+    from_value: BasicValueEnum<'ctx>,
+    to_type: BasicTypeEnum<'ctx>,
+    name: &str,
+) -> BasicValueEnum<'ctx> {
+    // reserve space in memory with the return type. This way, if the return type is bigger
+    // than the input type, we don't access invalid memory when later taking a pointer to
+    // the cast value
+    let storage = builder.build_alloca(to_type, "cast_alloca");
+
+    // then cast the pointer to our desired type
+    let from_type_pointer = builder
+        .build_bitcast(
+            storage,
+            from_value
+                .get_type()
+                .ptr_type(inkwell::AddressSpace::Generic),
+            name,
+        )
+        .into_pointer_value();
+
+    // store the value in memory
+    builder.build_store(from_type_pointer, from_value);
+
+    // then read it back as a different type
+    builder.build_load(storage, "cast_value")
 }
 
 /// get the tag id out of a pointer to a wrapped (i.e. stores the tag id at runtime) layout
