@@ -895,18 +895,19 @@ fn str_from_utf8_range_order_does_not_matter() {
     );
 }
 
-// #[test]
-// fn str_from_utf8_range_out_of_bounds() {
-//     assert_evals_to!(
-//        indoc!(
-//             r#"
-//             bytes = Str.toUtf8 "hello"
-//             when Str.fromUtf8Range bytes { start: 7,  count: 3 }  is
-//                    Ok _ -> ""
-//                    Err OutOfBounds -> "out of bounds"
-//             "#
-//         ),
-//         RocStr::from("out of bounds"),
-//         RocStr
-//     );
-// }
+#[test]
+fn str_from_utf8_range_out_of_bounds() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            bytes = Str.toUtf8 "hello"
+            when Str.fromUtf8Range bytes { start: 7,  count: 3 }  is
+                   Ok _ -> ""
+                   Err (BadUtf8 _ _) -> ""
+                   Err OutOfBounds -> "out of bounds"
+            "#
+        ),
+        RocStr::from("out of bounds"),
+        RocStr
+    );
+}

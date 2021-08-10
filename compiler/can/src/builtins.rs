@@ -1551,7 +1551,55 @@ fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
         ),
     };
 
-    let body = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+    let roc_result = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+
+    // Only do the business with the let if we're in bounds!
+
+    let start_var = var_store.fresh();
+    let start_bool = var_store.fresh();
+
+    let body = If {
+        cond_var: start_bool,
+        branch_var: ret_var,
+        branches: vec![(
+            no_region(RunLowLevel {
+                op: LowLevel::NumLt,
+                args: vec![
+                    (
+                        start_var,
+                        Access {
+                            record_var: arg_record_var,
+                            ext_var: var_store.fresh(),
+                            field: "start".into(),
+                            field_var: var_store.fresh(),
+                            loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                        },
+                    ),
+                    (
+                        start_var,
+                        RunLowLevel {
+                            op: LowLevel::ListLen,
+                            args: vec![(bytes_var, Var(Symbol::ARG_1))],
+                            ret_var: start_var,
+                        },
+                    ),
+                ],
+                ret_var: start_bool,
+            }),
+            no_region(roc_result),
+        )],
+        final_else: Box::new(
+            // else-branch
+            no_region(
+                // Err
+                tag(
+                    "Err",
+                    vec![tag("OutOfBounds", Vec::new(), var_store)],
+                    var_store,
+                ),
+            ),
+        ),
+    };
 
     defn(
         symbol,
