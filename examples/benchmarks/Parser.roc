@@ -1,6 +1,6 @@
 interface Parser exposes [  showPair, makePair, testPair, 
    run, runToString, showU8,
-   Parser, map, andThen,
+   Parser, map, andThen, second,
    succeed, any,  satisfy, fail, 
    testAny,testSucceed, testFail] imports [Pair]
 
@@ -80,18 +80,25 @@ satisfy = \predicate ->
         Ok (Pair u rest) ->  if predicate u then List.single (Pair u rest) else []
         _ -> [ ]
 
-## map
+## MAP
 
 map : Parser a, (a -> b) -> Parser b  
 map = 
   \p, f -> \input -> p input |> List.map (\pair -> Pair.mapFirst pair f) 
 
 
+
+## AND_THEN  
+
 andThen : Parser a, (a -> Parser b) -> Parser b 
 andThen = \p, f ->
             \input -> p input |> List.map (\(Pair a list) -> (f a) list) |> List.join
 
 
+# Run p, then q, returning output of q and ignoring that of p
+Parser.second : Parser a, Parser b -> Parser b
+Parser.second = 
+  \p, q ->  Parser.andThen p q
 
 ## TESTS  
 
