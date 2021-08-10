@@ -5,6 +5,7 @@ app "parseapp"
 
 main : Task.Task {} []
 main =
-    Parser.runToString Parser.showU8 "abcd" Parser.any
+    # Parser.runToString Parser.showU8 "abcd" Parser.any
+    Parser.runToString Parser.showU8 "abcd" (Parser.satisfy (\_ -> True)) 
        |> Task.putLine
 
