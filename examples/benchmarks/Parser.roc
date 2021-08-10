@@ -2,7 +2,7 @@ interface Parser exposes [  showPair, makePair, testPair,
    run, runToString, showU8,
    Parser, map, andThen,
    succeed, testSucceed,
-   any, testAny,
+   any, testAny, satisfy,
    fail,  testFail] imports [Pair]
 
 
@@ -72,6 +72,14 @@ any = \inp ->
      Ok u -> [Pair u (List.drop inp 1)]
      _ -> [ ]
 
+
+## SATISFY  
+
+satisfy : (U8 -> Bool) -> Parser U8  
+satisfy = \predicate -> 
+    \input -> when List.first (any input) is
+        Ok (Pair u rest) ->  if predicate u then List.single (Pair u rest) else []
+        _ -> [ ]
 
 ## map
 
