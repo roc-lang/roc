@@ -14,6 +14,7 @@ use roc_collections::all::MutMap;
 use roc_load::docs::DocEntry::DocDef;
 use roc_region::all::Region;
 use std::path::{Path, PathBuf};
+use std::str::Split;
 
 pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
     let files_docs = files_to_documentations(filenames, std_lib);
@@ -75,7 +76,7 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
             fs::create_dir_all(&module_dir)
                 .expect("TODO gracefully handle not being able to create the module dir");
 
-            let rendered_module = template_html
+            let mut rendered_module = template_html
                 .replace(
                     "<!-- Package Name and Version -->",
                     render_name_and_version(package.name.as_str(), package.version.as_str())
@@ -86,12 +87,54 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
                     render_main_content(&loaded_module.interns, &exports, module).as_str(),
                 );
 
-            fs::write(module_dir.join("index.html"), rendered_module)
-                .expect("TODO gracefully handle failing to write html");
+            fs::write(
+                module_dir.join("index.html"),
+                syntax_highlight_code(rendered_module),
+            )
+            .expect("TODO gracefully handle failing to write html");
         }
     }
 
     println!("🎉 Docs generated in {}", build_dir.display());
+}
+
+pub fn syntax_highlight_code(mut html: String) -> String {
+    let mut result = html.clone();
+
+    if let Some(start_index) = html.find("<code>") {
+        let (before_open_tag, after_open_tag_str) = html.split_at(start_index);
+
+        let mut after_open_tag = after_open_tag_str.to_string();
+        drop_letters(&mut after_open_tag, 6);
+
+        if let Some(end_index) = after_open_tag.find("</code>") {
+            let (code_str, after_close_tag_str) = after_open_tag.split_at(end_index);
+
+            // TODO change code html
+            let new_code_string = code_str.to_string();
+
+            result = [
+                before_open_tag,
+                "<code>",
+                new_code_string.as_str(),
+                after_close_tag_str,
+            ]
+            .concat()
+        }
+    }
+
+    result
+}
+
+fn drop_letters(s: &mut String, pos: usize) {
+    match s.char_indices().nth(pos) {
+        Some((pos, _)) => {
+            s.drain(..pos);
+        }
+        None => {
+            s.clear();
+        }
+    }
 }
 
 fn render_main_content(
