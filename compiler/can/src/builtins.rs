@@ -1557,6 +1557,7 @@ fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     let start_var = var_store.fresh();
     let start_bool = var_store.fresh();
+    let add_var = var_store.fresh();
 
     let body = If {
         cond_var: start_bool,
@@ -1567,12 +1568,31 @@ fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 args: vec![
                     (
                         start_var,
-                        Access {
-                            record_var: arg_record_var,
-                            ext_var: var_store.fresh(),
-                            field: "start".into(),
-                            field_var: var_store.fresh(),
-                            loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                        RunLowLevel {
+                            op: LowLevel::NumAdd,
+                            args: vec![
+                                (
+                                    add_var,
+                                    Access {
+                                        record_var: arg_record_var,
+                                        ext_var: var_store.fresh(),
+                                        field: "start".into(),
+                                        field_var: var_store.fresh(),
+                                        loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                                    },
+                                ),
+                                (
+                                    add_var,
+                                    Access {
+                                        record_var: arg_record_var,
+                                        ext_var: var_store.fresh(),
+                                        field: "count".into(),
+                                        field_var: var_store.fresh(),
+                                        loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                                    },
+                                ),
+                            ],
+                            ret_var: add_var,
                         },
                     ),
                     (

@@ -896,12 +896,46 @@ fn str_from_utf8_range_order_does_not_matter() {
 }
 
 #[test]
-fn str_from_utf8_range_out_of_bounds() {
+fn str_from_utf8_range_out_of_bounds_start_value() {
     assert_evals_to!(
         indoc!(
             r#"
             bytes = Str.toUtf8 "hello"
             when Str.fromUtf8Range bytes { start: 7,  count: 3 }  is
+                   Ok _ -> ""
+                   Err (BadUtf8 _ _) -> ""
+                   Err OutOfBounds -> "out of bounds"
+            "#
+        ),
+        RocStr::from("out of bounds"),
+        RocStr
+    );
+}
+
+#[test]
+fn str_from_utf8_range_count_too_high() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            bytes = Str.toUtf8 "hello"
+            when Str.fromUtf8Range bytes { start: 0,  count: 6 }  is
+                   Ok _ -> ""
+                   Err (BadUtf8 _ _) -> ""
+                   Err OutOfBounds -> "out of bounds"
+            "#
+        ),
+        RocStr::from("out of bounds"),
+        RocStr
+    );
+}
+
+#[test]
+fn str_from_utf8_range_count_too_high_for_start() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            bytes = Str.toUtf8 "hello"
+            when Str.fromUtf8Range bytes { start: 4,  count: 3 }  is
                    Ok _ -> ""
                    Err (BadUtf8 _ _) -> ""
                    Err OutOfBounds -> "out of bounds"
