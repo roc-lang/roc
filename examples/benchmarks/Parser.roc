@@ -1,4 +1,5 @@
 interface Parser exposes [  showPair, makePair, testPair, 
+   run, runToString, showU8,
    Parser, map, andThen,
    succeed, testSucceed,
    item, testItem,
@@ -30,11 +31,6 @@ makePair : Str, Str -> [Pair Str (List U8)]
 makePair = 
    \a, b -> Pair a (Str.toUtf8 b)
 
-testPair : Str, Str -> Str
-testPair  = 
-  \a, b -> makePair a b |> showPair
-
-
 
 ## PARSERS
 
@@ -42,41 +38,33 @@ Parser a : List U8 -> List ([Pair a (List U8)])
 
 run : Str, Parser a -> Result a [ListWasEmpty]
 run = 
-  \str, parser -> parser (String.toUtf8) |> List.map Pair.first  |> List.first
+  \str, parser -> parser (Str.toUtf8 str) |> List.map Pair.first  |> List.first
+
+runToString : (a -> Str), Str, Parser a -> Str
+runToString = 
+  \toString, str, parser -> 
+    when run str parser is
+      Ok a -> toString a 
+      _ -> "Parse error"
 
 
-## RESULT 
+## SUCCEED 
 
 # succeed: succeed without consuming input
 succeed : a -> Parser a
 succeed = \v -> (\inp -> [Pair v inp])
 
-testSucceed : Str, Str -> Str
-testSucceed = 
-   \a, b -> 
-      when (succeed a) (Str.toUtf8 b) |> List.map showPair |> List.first is
-        Ok str -> str
-        _ -> "Oops, something happened"
 
-
-## ZERO
+## FAIL
 
 # fail: always fail
 #
 fail = \_ -> [ ]
 
 
-testFail = \s -> 
-    when fail s == [] is 
-        True -> "Ok"
-        False -> "Error"
-
 ## ITEM 
 
-# The item parser, which successfully consumes one character, and which otherwise fails. In Haskell:
-# item = \inp  -> case inp of 
-#  [ ] -> [ ]
-#  (x:xs) -> [(x, xs)]
+# If succcessful, the item parser consumes one character
 
 item: Parser U8
 item = \inp -> 
@@ -84,13 +72,6 @@ item = \inp ->
      Ok u -> [Pair u (List.drop inp 1)]
      _ -> [ ]
 
-
-testItem: Str -> Str 
-testItem = 
-  \input -> when item (Str.toUtf8 input) |> List.map showPair2 |> List.first is
-        Ok str -> str
-        _ -> "Oops, something went wrong"
-    
 
 ## map
 
@@ -103,3 +84,29 @@ andThen : Parser a, (a -> Parser b) -> Parser b
 andThen = \p, f ->
             \input -> p input |> List.map (\(Pair a list) -> (f a) list) |> List.join
 
+
+
+## TESTS  
+
+testSucceed : Str, Str -> Str
+testSucceed = 
+   \a, b -> 
+      when (succeed a) (Str.toUtf8 b) |> List.map showPair |> List.first is
+        Ok str -> str
+        _ -> "Oops, something happened"
+
+
+testItem: Str -> Str 
+testItem = 
+  \input -> when item (Str.toUtf8 input) |> List.map showPair2 |> List.first is
+        Ok str -> str
+        _ -> "Oops, something went wrong"
+  
+testFail = \s -> 
+    when fail s == [] is 
+        True -> "Ok"
+        False -> "Error"  
+
+testPair : Str, Str -> Str
+testPair  = 
+  \a, b -> makePair a b |> showPair
