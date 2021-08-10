@@ -35,9 +35,11 @@ test2 =
      c = { counter : 4, value : 0}
      if updateCounter c == Loop { counter : 3, value : 4} then "Ok" else "Fail"
 
+
+## Haha! Let's compute the sum 1 +  2 + 3 + 4 + 5:
 test3 : Str
 test3 = 
-  out = loop updateCounter { counter : 4, value : 0}
-  if out == 10 then "Ok" else "Fail"
+  out = loop updateCounter { counter : 5, value : 0}
+  if out == 15 then "Ok" else "Fail"
 
        

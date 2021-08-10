@@ -35,3 +35,4 @@ bench-folder*
 earthly_log.txt
 examples/benchmarks/parseapp
 examples/benchmarks/JimTest
+examples/benchmarks/Tester
