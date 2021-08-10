@@ -1,6 +1,6 @@
 interface Parser exposes [  showPair, makePair, testPair, 
    run, runToString, showU8,
-   Parser, map, andThen, second,
+   Parser, map, andThen, first, second,
    succeed, any,  satisfy, fail, 
    testAny,testSucceed, testFail] imports [Pair]
 
@@ -99,6 +99,11 @@ andThen = \p, f ->
 second : Parser a, Parser b -> Parser b
 second = 
   \p, q ->  Parser.andThen p (\_ -> q)
+
+# Run p, then q, returning output of p and ignoring that of q
+first : Parser a, Parser b -> Parser b
+first = 
+  \p, q ->  Parser.andThen p (\out -> Parser.map q (\_ -> out))
 
 ## TESTS  
 
