@@ -15,6 +15,7 @@ main =
     # TEST Parser.map
     # Parser.runToString Parser.showU8 "ABCD" (Parser.map Parser.any (\u -> 99))
     # TEST Parser.andThen
-    Parser.runToString Parser.showU8 "abcd" (  Parser.andThen (Parser.satisfy (\u -> u == 97)) (\u2 -> Parser.satisfy (\u3 -> u3 == u2))  )
+    # Recognize strings beginning with "aa"
+    Parser.runToString Parser.showU8 "aaxyz" (  Parser.andThen (Parser.satisfy (\u -> u == 97)) (\u2 -> Parser.satisfy (\u3 -> u3 == u2))  )
        |> Task.putLine
 
