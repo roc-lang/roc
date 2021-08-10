@@ -1555,19 +1555,19 @@ fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     // Only do the business with the let if we're in bounds!
 
-    let start_var = var_store.fresh();
-    let start_bool = var_store.fresh();
+    let bounds_var = var_store.fresh();
+    let bounds_bool = var_store.fresh();
     let add_var = var_store.fresh();
 
     let body = If {
-        cond_var: start_bool,
+        cond_var: bounds_bool,
         branch_var: ret_var,
         branches: vec![(
             no_region(RunLowLevel {
                 op: LowLevel::NumLt,
                 args: vec![
                     (
-                        start_var,
+                        bounds_var,
                         RunLowLevel {
                             op: LowLevel::NumAdd,
                             args: vec![
@@ -1596,15 +1596,15 @@ fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         },
                     ),
                     (
-                        start_var,
+                        bounds_var,
                         RunLowLevel {
                             op: LowLevel::ListLen,
                             args: vec![(bytes_var, Var(Symbol::ARG_1))],
-                            ret_var: start_var,
+                            ret_var: bounds_var,
                         },
                     ),
                 ],
-                ret_var: start_bool,
+                ret_var: bounds_bool,
             }),
             no_region(roc_result),
         )],
