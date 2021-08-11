@@ -134,6 +134,20 @@ impl std::ops::IndexMut<SubsIndex<RecordField<()>>> for Subs {
     }
 }
 
+impl std::ops::Index<SubsIndex<VariableSubsSlice>> for Subs {
+    type Output = VariableSubsSlice;
+
+    fn index(&self, index: SubsIndex<VariableSubsSlice>) -> &Self::Output {
+        &self.variable_slices[index.start as usize]
+    }
+}
+
+impl std::ops::IndexMut<SubsIndex<VariableSubsSlice>> for Subs {
+    fn index_mut(&mut self, index: SubsIndex<VariableSubsSlice>) -> &mut Self::Output {
+        &mut self.variable_slices[index.start as usize]
+    }
+}
+
 // custom debug
 
 impl<T> std::fmt::Debug for SubsIndex<T> {
