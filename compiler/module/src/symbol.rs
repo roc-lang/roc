@@ -921,6 +921,7 @@ define_builtins! {
         15 STR_TO_UTF8: "toUtf8"
         16 STR_STARTS_WITH_CODE_PT: "startsWithCodePt"
         17 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
+        18 STR_FROM_UTF8_RANGE: "fromUtf8Range"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
