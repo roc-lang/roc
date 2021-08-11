@@ -1,22 +1,29 @@
 app "parseapp"
     packages { base: "platform" }
-    imports [base.Task, Parser]
+    imports [base.Task,
+      Parser.{ runToString, showU8, any, satisfy, first, second, map, andThen },
+      Test]
     provides [ main ] to base
 
 main : Task.Task {} []
 main =
-    # Parser.runToString Parser.showU8 "abcd" Parser.any
-    # Parser.runToString Parser.showU8 "abcd" (Parser.satisfy (\_ -> True))
-    # Parser.runToString Parser.showU8 "abcd" (Parser.satisfy (\u -> u == 97))
-    # Recognize "a" followed by "b", returning "b"
-    # Parser.runToString Parser.showU8 "abcd" (  Parser.second  (Parser.satisfy (\u -> u == 97)) (Parser.satisfy (\u -> u == 98))  )
-    # Recognize "a" followed by "b", returning "a"
-    # Parser.runToString Parser.showU8 "abcd" (  Parser.first  (Parser.satisfy (\u -> u == 97)) (Parser.satisfy (\u -> u == 98))  )
-    # TEST Parser.map
-    # Parser.runToString Parser.showU8 "ABCD" (Parser.map Parser.any (\u -> 99))
-    # TEST Parser.andThen
-    # Recognize strings beginning with "aa"
-    # Parser.runToString Parser.showU8 "aaxyz" (  Parser.andThen (Parser.satisfy (\u -> u == 97)) (\u2 -> Parser.satisfy (\u3 -> u3 == u2))  )
-    Loop.test3
+    run = \input, parser -> runToString showU8 input parser 
+
+    p1 = {name : "run \"abcd any => \"a\"", test: run "abcd" any == "a" }
+
+    satisfyA = satisfy (\u -> u == 97)
+    satisfyB = satisfy (\u -> u == 98)
+    satisfyWhatCameBefore = \u2 -> Parser.satisfy (\u3 -> u3 == u2)
+
+    p2 = {name : "run \"abcd\" satisfy (\\u -> u == 97)) => \"a\"", test : run "abcd" satisfyA == "a" }
+    p3 = {name : "Use 'second' to recognize \"a\" then \"b\" returning \"b\"", test : run "abcd" (second  satisfyA satisfyB) == "b"}
+    p4 = {name : "Use 'first' to recognize \"a\" then \"b\" returning \"a\"", test : run "abcd" (first  satisfyA satisfyB) == "a"}
+    p5 = {name : "Use map to shift output of parser: run \"abcd\" (map any (\\u -> u + 25)) == \"z\"", test : run "abcd" (map any (\u -> u + 25)) == "z"  }
+    p6 = {name: "Use andThen to recognize strings beginning with two repeated letters (succeed on input \"aaxyz\")", test: run "aaxyz" (andThen any satisfyWhatCameBefore) == "a"}
+
+    [Test.eval p1, Test.eval p2, Test.eval p3, Test.eval p4, Test.eval p5, Test.eval p6] 
+    # List.map [p1, p2, p3, p4, p5, p6] 
+    # |> Test.eval
+    |> Test.strListToStr "\n"
        |> Task.putLine
 
