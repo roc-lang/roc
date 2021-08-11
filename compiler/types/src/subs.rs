@@ -1215,10 +1215,21 @@ where
     T: Iterator<Item = &'a Variable>,
 {
     for var in iter {
-        if let Err((v, mut vec)) = occurs(subs, seen, *var) {
-            vec.push(root_key);
-            return Err((v, vec));
-        }
+        short_circuit_help(subs, root_key, seen, *var)?;
+    }
+
+    Ok(())
+}
+
+fn short_circuit_help(
+    subs: &Subs,
+    root_key: Variable,
+    seen: &ImSet<Variable>,
+    var: Variable,
+) -> Result<(), (Variable, Vec<Variable>)> {
+    if let Err((v, mut vec)) = occurs(subs, seen, var) {
+        vec.push(root_key);
+        return Err((v, vec));
     }
 
     Ok(())
