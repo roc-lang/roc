@@ -856,7 +856,8 @@ fn type_to_variable<'a>(
             };
             tag_vars.extend(ext_tag_vec.into_iter());
 
-            let content = Content::Structure(FlatType::TagUnion(tag_vars, new_ext_var));
+            let content =
+                Content::Structure(roc_unify::unify::from_mutmap(subs, tag_vars, new_ext_var));
 
             register(subs, rank, pools, content)
         }
@@ -998,13 +999,16 @@ fn check_for_infinite_type(
 
                 let mut new_tags = MutMap::default();
 
-                for (label, args) in &tags {
-                    let new_args: Vec<_> = args
-                        .iter()
-                        .map(|var| subs.explicit_substitute(recursive, rec_var, *var))
-                        .collect();
+                for (name_index, slice_index) in tags.iter_all() {
+                    let slice = subs[slice_index];
 
-                    new_tags.insert(label.clone(), new_args);
+                    let mut new_vars = Vec::new();
+                    for var_index in slice {
+                        let var = subs[var_index];
+                        new_vars.push(subs.explicit_substitute(recursive, rec_var, var));
+                    }
+
+                    new_tags.insert(subs[name_index].clone(), new_vars);
                 }
 
                 let new_ext_var = subs.explicit_substitute(recursive, rec_var, ext_var);
@@ -1229,9 +1233,13 @@ fn adjust_rank_content(
                 TagUnion(tags, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
 
-                    for var in tags.values().flatten() {
-                        rank =
-                            rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
+                    for (_, index) in tags.iter_all() {
+                        let slice = subs[index];
+                        for var_index in slice {
+                            let var = subs[var_index];
+                            rank = rank
+                                .max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                        }
                     }
 
                     rank
@@ -1377,8 +1385,10 @@ fn instantiate_rigids_help(
                 }
 
                 TagUnion(tags, ext_var) => {
-                    for (_, vars) in tags {
-                        for var in vars.into_iter() {
+                    for (_, index) in tags.iter_all() {
+                        let slice = subs[index];
+                        for var_index in slice {
+                            let var = subs[var_index];
                             instantiate_rigids_help(subs, max_rank, pools, var);
                         }
                     }
@@ -1556,15 +1566,21 @@ fn deep_copy_var_help(
                 TagUnion(tags, ext_var) => {
                     let mut new_tags = MutMap::default();
 
-                    for (tag, vars) in tags {
-                        let new_vars: Vec<Variable> = vars
-                            .into_iter()
-                            .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
-                            .collect();
+                    for (tag_index, index) in tags.iter_all() {
+                        let tag = subs[tag_index].clone();
+                        let slice = subs[index];
+                        let mut new_vars = Vec::new();
+                        for var_index in slice {
+                            let var = subs[var_index];
+                            let new_var = deep_copy_var_help(subs, max_rank, pools, var);
+                            new_vars.push(new_var);
+                        }
+
                         new_tags.insert(tag, new_vars);
                     }
 
-                    TagUnion(new_tags, deep_copy_var_help(subs, max_rank, pools, ext_var))
+                    let new_ext = deep_copy_var_help(subs, max_rank, pools, ext_var);
+                    roc_unify::unify::from_mutmap(subs, new_tags, new_ext)
                 }
 
                 FunctionOrTagUnion(tag_name, symbol, ext_var) => FunctionOrTagUnion(
