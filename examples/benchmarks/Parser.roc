@@ -40,6 +40,9 @@ run =
   \input, parser -> parser input
 
 
+
+## FOR STRING OUTPUT 
+
 runAux : Str, Parser a -> Result a [ListWasEmpty]
 runAux = 
   \str, parser -> parser (Str.toUtf8 str) |> List.map Pair.first  |> List.first
