@@ -1,8 +1,7 @@
 interface Parser exposes [  showPair, makePair, testPair, 
    run, runToString, showU8,
    Parser, map, andThen, first, second,
-   succeed, any,  satisfy, fail, 
-   testAny,testSucceed, testFail] imports [Pair]
+   succeed, any,  satisfy, fail] imports [Pair]
 
 
 ## PAIRS
@@ -106,25 +105,7 @@ first =
   \p, q ->  Parser.andThen p (\out -> Parser.map q (\_ -> out))
 
 ## TESTS  
-
-testSucceed : Str, Str -> Str
-testSucceed = 
-   \a, b -> 
-      when (succeed a) (Str.toUtf8 b) |> List.map showPair |> List.first is
-        Ok str -> str
-        _ -> "Oops, something happened"
-
-
-testAny: Str -> Str 
-testAny = 
-  \input -> when any (Str.toUtf8 input) |> List.map showPair2 |> List.first is
-        Ok str -> str
-        _ -> "Oops, something went wrong"
   
-testFail = \s -> 
-    when fail s == [] is 
-        True -> "Ok"
-        False -> "Error"  
 
 testPair : Str, Str -> Str
 testPair  = 
