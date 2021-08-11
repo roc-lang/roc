@@ -477,7 +477,7 @@ fn if_guard_vanilla() {
             r#"
                 when "fooz" is
                     s if s == "foo" -> 0
-                    s -> List.len (Str.toBytes s)
+                    s -> List.len (Str.toUtf8 s)
                 "#
         ),
         4,

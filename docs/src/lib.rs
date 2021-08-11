@@ -52,21 +52,28 @@ pub fn generate(filenames: Vec<PathBuf>, std_lib: StdLib, build_dir: &Path) {
     )
     .expect("TODO gracefully handle failing to make the favicon");
 
-    let template_html = include_str!("./static/index.html").replace(
-        "<!-- Module links -->",
-        render_sidebar(package.modules.iter().flat_map(|loaded_module| {
-            loaded_module.documentation.values().map(move |d| {
-                let exposed_values = loaded_module
-                    .exposed_values
-                    .iter()
-                    .map(|symbol| symbol.ident_str(&loaded_module.interns).to_string())
-                    .collect::<Vec<String>>();
+    let template_html = include_str!("./static/index.html")
+        .replace("<!-- search.js -->", &format!("{}search.js", base_href()))
+        .replace("<!-- styles.css -->", &format!("{}styles.css", base_href()))
+        .replace(
+            "<!-- favicon.svg -->",
+            &format!("{}favicon.svg", base_href()),
+        )
+        .replace(
+            "<!-- Module links -->",
+            render_sidebar(package.modules.iter().flat_map(|loaded_module| {
+                loaded_module.documentation.values().map(move |d| {
+                    let exposed_values = loaded_module
+                        .exposed_values
+                        .iter()
+                        .map(|symbol| symbol.ident_str(&loaded_module.interns).to_string())
+                        .collect::<Vec<String>>();
 
-                (exposed_values, d)
-            })
-        }))
-        .as_str(),
-    );
+                    (exposed_values, d)
+                })
+            }))
+            .as_str(),
+        );
 
     // Write each package's module docs html file
     for loaded_module in package.modules.iter_mut() {
@@ -239,11 +246,40 @@ fn html_node(tag_name: &str, attrs: Vec<(&str, &str)>, content: &str) -> String 
     buf
 }
 
+fn base_href() -> String {
+    // e.g. "builtins/" in "https://roc-lang.org/builtins/Str"
+    //
+    // TODO make this a CLI flag to the `docs` subcommand instead of an env var
+    match std::env::var("ROC_DOCS_URL_ROOT") {
+        Ok(root_builtins_path) => {
+            let mut href = String::with_capacity(root_builtins_path.len() + 64);
+
+            if !root_builtins_path.starts_with('/') {
+                href.push('/');
+            }
+
+            href.push_str(&root_builtins_path);
+
+            if !root_builtins_path.ends_with('/') {
+                href.push('/');
+            }
+
+            href
+        }
+        _ => {
+            let mut href = String::with_capacity(64);
+
+            href.push('/');
+
+            href
+        }
+    }
+}
+
 fn render_name_and_version(name: &str, version: &str) -> String {
     let mut buf = String::new();
+    let mut href = base_href();
 
-    let mut href = String::new();
-    href.push('/');
     href.push_str(name);
 
     buf.push_str(
@@ -255,7 +291,7 @@ fn render_name_and_version(name: &str, version: &str) -> String {
         .as_str(),
     );
 
-    let mut versions_href = String::new();
+    let mut versions_href = base_href();
 
     versions_href.push('/');
     versions_href.push_str(name);
@@ -285,8 +321,7 @@ fn render_sidebar<'a, I: Iterator<Item = (Vec<String>, &'a ModuleDocumentation)>
         let name = module.name.as_str();
 
         let href = {
-            let mut href_buf = String::new();
-            href_buf.push('/');
+            let mut href_buf = base_href();
             href_buf.push_str(name);
             href_buf
         };
@@ -589,7 +624,7 @@ fn should_be_multiline(type_ann: &TypeAnnotation) -> bool {
             is_multiline
         }
         TypeAnnotation::Function { args, output } => {
-            let mut is_multiline = should_be_multiline(output) || args.len() > 1;
+            let mut is_multiline = should_be_multiline(output) || args.len() > 2;
 
             for arg in args {
                 if is_multiline {
@@ -686,8 +721,8 @@ fn doc_url<'a>(
                     if !exposed_values.contains(&ident) {
                         // TODO return Err here
                         panic!(
-                            "Tried to generate an automatic link in docs for `{}.{}`, but `{}` is not declared in `{}`.",
-                            module_name, ident, ident, module_name);
+                            "Tried to generate an automatic link in docs for `{}.{}`, but `{}` does not expose `{}`.",
+                            module_name, ident, module_name, ident);
                     }
                 } else {
                     // This is not the home module
@@ -718,12 +753,11 @@ fn doc_url<'a>(
         }
     }
 
-    let mut url = String::new();
+    let mut url = base_href();
 
     // Example:
     //
     // module_name: "Str", ident: "join" => "/Str#join"
-    url.push('/');
     url.push_str(module_name);
     url.push('#');
     url.push_str(ident);
@@ -757,7 +791,7 @@ fn markdown_to_html(
                 let state = State::new(link.reference.as_bytes());
 
                 // Reset the bump arena so we aren't constantly reallocating
-                // more memory.
+                // more memory as we iterate through these.
                 arena.reset();
 
                 match parse_ident(&arena, state) {
@@ -816,7 +850,7 @@ fn markdown_to_html(
         Some(&mut broken_link_callback),
     )
     .fold((0, 0), |(start_quote_count, end_quote_count), event| {
-        match event {
+        match &event {
             // Replace this sequence (`>>>` syntax):
             //     Start(BlockQuote)
             //     Start(BlockQuote)
@@ -863,6 +897,23 @@ fn markdown_to_html(
                     docs_parser.push(event);
                     (0, end_quote_count + 1)
                 }
+            }
+            Event::End(Link(LinkType::ShortcutUnknown, _url, _title)) => {
+                // Replace the preceding Text node with a Code node, so it
+                // renders as the equivalent of [`List.len`] instead of [List.len]
+                match docs_parser.pop() {
+                    Some(Event::Text(string)) => {
+                        docs_parser.push(Event::Code(string));
+                    }
+                    Some(first) => {
+                        docs_parser.push(first);
+                    }
+                    None => {}
+                }
+
+                docs_parser.push(event);
+
+                (start_quote_count, end_quote_count)
             }
             _ => {
                 docs_parser.push(event);

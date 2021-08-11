@@ -10,7 +10,7 @@ fromBytes = \bytes ->
 # base 64 encoding from a string 
 fromStr : Str -> Result Str [ InvalidInput ]*
 fromStr = \str ->
-    fromBytes (Str.toBytes str)
+    fromBytes (Str.toUtf8 str)
 
 # base64-encode bytes to the original 
 toBytes : Str -> Result (List U8) [ InvalidInput ]*

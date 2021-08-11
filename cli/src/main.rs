@@ -46,7 +46,12 @@ fn main() -> io::Result<()> {
         )?),
         Some(CMD_RUN) => {
             // TODO remove CMD_RUN altogether if it is currently September 2021 or later.
-            println!("`roc run` is deprecated! (You no longer need the `run` - just do `roc [FILE]` instead of `roc run [FILE]` like before.");
+            println!(
+                r#"`roc run` is deprecated!
+If you're using a prebuilt binary, you no longer need the `run` - just do `roc [FILE]` instead of `roc run [FILE]`.
+If you're building the compiler from source you'll want to do `cargo run [FILE]` instead of `cargo run run [FILE]`.
+"#
+            );
 
             Ok(1)
         }
