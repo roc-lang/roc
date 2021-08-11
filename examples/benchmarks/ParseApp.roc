@@ -8,7 +8,6 @@ app "parseapp"
 main : Task.Task {} []
 main =
     run = \input, parser -> runToString showU8 input parser 
-    # foo = Parser.run "abcd" satisfyA 
 
     p1 = {name : "run \"abcd any => \"a\"", test: run "abcd" any == "a" }
 
@@ -21,8 +20,8 @@ main =
     p4 = {name : "Use 'first' to recognize \"a\" then \"b\" returning \"a\"", test : run "abcd" (first  satisfyA satisfyB) == "a"}
     p5 = {name : "Use map to shift output of parser: run \"abcd\" (map any (\\u -> u + 25)) == \"z\"", test : run "abcd" (map any (\u -> u + 25)) == "z"  }
     p6 = {name: "Use andThen to recognize strings beginning with two repeated letters (succeed on input \"aaxyz\")", test: run "aaxyz" (andThen any satisfyWhatCameBefore) == "a"}
-    p7 = {name: "is successful (positive)", test: List.len (Parser.run "abcd" satisfyA) == 1}
-    p8 = {name: "is successful (negative)", test: List.len (Parser.run "xbcd" satisfyA) != 1}
+    p7 = {name: "is successful (positive)", test: List.len ( satisfyA [97, 98, 99, 100] ) == 1}
+    p8 = {name: "is successful (negative)", test: List.len ( satisfyA [100, 98, 99, 100] ) != 1}
     # p7 = {name: "is successful (simple, positive)", test: successful []}
     
     [Test.eval p1, Test.eval p2, Test.eval p3, Test.eval p4, Test.eval p5, Test.eval p6, Test.eval p7, Test.eval p8] 

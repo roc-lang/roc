@@ -1,6 +1,6 @@
 interface Parser exposes [  showPair, makePair, testPair, 
-   run, runToString, showU8,
-   Parser, successful, map, andThen, first, second,
+   runToString, showU8,
+   Parser, run, successful, map, andThen, first, second,
    succeed, any,  satisfy, fail] imports [Pair]
 
 
@@ -35,9 +35,9 @@ makePair =
 Parser a : List U8 -> List ([Pair a (List U8)])
 
 
-run : Str, Parser a -> List ([Pair a (List U8)])
+run : (List U8), Parser a -> List ([Pair a (List U8)])
 run = 
-  \str, parser -> parser (Str.toUtf8 str)
+  \input, parser -> parser input
 
 
 runAux : Str, Parser a -> Result a [ListWasEmpty]
