@@ -12,10 +12,10 @@ main =
     # Loop.test3
     #
     # The first three lines below succeed, the last one fails: emitted runtime error ...
-    # Test.evalTest t1
-    # Test.evalTest t2
+    # Test.eval t1
+    # Test.eval t2
     # Test.strListToStr ["a", "b", "c"] ","
-    # List.map [t1,t2] Test.evalTest |> Test.strListToStr ","
+    # List.map [t1,t2] Test.eval |> Test.strListToStr ","
     #
     # ATTEMPTS TO DIAGNOSE THE PROBLEM
     # List.map [t1,t2] (\t -> t.name) |> Test.strListToStr "," # FAIL (THIS IS THE ONE TO SOLVE)

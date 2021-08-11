@@ -1,18 +1,18 @@
-interface Test exposes [  Test, passFail, evalTest, evalTests, eval, strListToStr ] imports [ ]
+interface Test exposes [  Test, passFail, eval, evalList, evalListToString, strListToStr ] imports [ ]
 
 Test : { name : Str, test: Bool }
 
 passFail : Bool -> Str 
 passFail = \pass -> if pass then "Pass :: " else "Fail :: "
 
-evalTest : Test -> Str
-evalTest = \{ name, test } -> Str.concat (passFail test) name
+eval : Test -> Str
+eval = \{ name, test } -> Str.concat (passFail test) name
 
-evalTests : List Test -> List Str 
-evalTests = \tests -> List.map tests evalTest
+evalList : List Test -> List Str 
+evalList = \tests -> List.map tests eval
 
-eval : List Test -> Str
-eval = \tests -> evalTests tests |> strListToStr "; "
+evalListToString : List Test -> Str
+evalListToString = \tests -> evalList tests |> strListToStr "; "
 
 strListToStr : List Str, Str -> Str 
 strListToStr = \list, separator -> 
