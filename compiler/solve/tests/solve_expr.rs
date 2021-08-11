@@ -115,10 +115,10 @@ mod solve_expr {
         let content = {
             debug_assert!(exposed_to_host.len() == 1);
             let (_symbol, variable) = exposed_to_host.into_iter().next().unwrap();
-            subs.get(variable).content
+            subs.get_content_without_compacting(variable)
         };
 
-        let actual_str = content_to_string(content, &subs, home, &interns);
+        let actual_str = content_to_string(content, subs, home, &interns);
 
         // Disregard UnusedDef problems, because those are unavoidable when
         // returning a function from the test expression.
@@ -3820,7 +3820,7 @@ mod solve_expr {
     }
 
     #[test]
-    fn recursive_functon_with_rigid() {
+    fn recursive_function_with_rigid() {
         infer_eq_without_problem(
             indoc!(
                 r#"

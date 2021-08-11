@@ -22,7 +22,7 @@ pub fn update_small_string(
         curr_mark_node: _,
         parent_id_opt: _,
         ast_node_id,
-    } = get_node_context(&ed_model)?;
+    } = get_node_context(ed_model)?;
 
     let new_input = &new_char.to_string();
 
@@ -84,7 +84,7 @@ pub fn update_string(
         curr_mark_node: _,
         parent_id_opt: _,
         ast_node_id,
-    } = get_node_context(&ed_model)?;
+    } = get_node_context(ed_model)?;
 
     // update markup
     let curr_mark_node_mut = ed_model.markup_node_pool.get_mut(curr_mark_node_id);
@@ -129,7 +129,7 @@ pub fn start_new_string(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
         curr_mark_node,
         parent_id_opt,
         ast_node_id,
-    } = get_node_context(&ed_model)?;
+    } = get_node_context(ed_model)?;
 
     if curr_mark_node.is_blank() {
         let new_expr2_node = Expr2::SmallStr(arraystring::ArrayString::new());

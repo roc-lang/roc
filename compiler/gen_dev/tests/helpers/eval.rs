@@ -49,7 +49,7 @@ pub fn helper<'a>(
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
         filename,
-        &module_src,
+        module_src,
         &stdlib,
         src_dir,
         exposed_types,

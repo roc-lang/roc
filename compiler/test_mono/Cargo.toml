@@ -25,7 +25,6 @@ test_mono_macros = { path = "../test_mono_macros" }
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.6.1", features = ["collections"] }
-inlinable_string = "0.1"
 either = "1.6.1"
 indoc = "0.3.3"
 libc = "0.2"

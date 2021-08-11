@@ -1,5 +1,21 @@
 interface Dict
-    exposes [ isEmpty, map ]
+    exposes
+        [
+            Dict,
+            empty,
+            single,
+            get,
+            walk,
+            insert,
+            len,
+            remove,
+            contains,
+            keys,
+            values,
+            union,
+            intersection,
+            difference
+        ]
     imports []
 
 size : Dict * * -> Nat
@@ -14,7 +30,7 @@ isEmpty : Dict * * -> Bool
 ## >>> Dict.map {[ "", "a", "bc" ]} Str.isEmpty
 ##
 ## `map` functions like this are common in Roc, and they all work similarly.
-## See for example #Result.map, #List.map, and #Set.map.
+## See for example [List.map], [Result.map], and `Set.map`.
 map :
     Dict beforeKey beforeValue,
     ({ key: beforeKey, value: beforeValue } -> { key: afterKey, value: afterValue })

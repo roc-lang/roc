@@ -64,7 +64,7 @@ pub enum FloatVal {
 pub enum RecordField {
     InvalidLabelOnly(PoolStr, Variable),
     LabelOnly(PoolStr, Variable, Symbol),
-    LabeledValue(PoolStr, Variable, NodeId<Expr2>),
+    LabeledValue(PoolStr, Variable, ExprId),
 }
 
 #[test]
@@ -85,6 +85,7 @@ pub enum Expr2 {
         style: IntStyle, // 1B
         text: PoolStr,   // 8B
     },
+    // TODO(rvcas): rename this eventually
     /// A large (over 64-bit) negative number literal without a dot.
     /// This variant can't use IntVal because if IntVal stored 128-bit
     /// integers, it would be 32B on its own because of alignment.
@@ -94,6 +95,7 @@ pub enum Expr2 {
         style: IntStyle, // 1B
         text: PoolStr,   // 8B
     },
+    // TODO(rvcas): rename this eventually
     /// A large (over 64-bit) nonnegative number literal without a dot
     /// This variant can't use IntVal because if IntVal stored 128-bit
     /// integers, it would be 32B on its own because of alignment.
@@ -122,49 +124,49 @@ pub enum Expr2 {
         elems: PoolVec<ExprId>, // 8B
     },
     If {
-        cond_var: Variable,                                // 4B
-        expr_var: Variable,                                // 4B
-        branches: PoolVec<(NodeId<Expr2>, NodeId<Expr2>)>, // 8B
-        final_else: NodeId<Expr2>,                         // 4B
+        cond_var: Variable,                  // 4B
+        expr_var: Variable,                  // 4B
+        branches: PoolVec<(ExprId, ExprId)>, // 8B
+        final_else: ExprId,                  // 4B
     },
     When {
         cond_var: Variable,            // 4B
         expr_var: Variable,            // 4B
         branches: PoolVec<WhenBranch>, // 8B
-        cond: NodeId<Expr2>,           // 4B
+        cond: ExprId,                  // 4B
     },
     LetRec {
         defs: PoolVec<FunctionDef>, // 8B
         body_var: Variable,         // 8B
-        body_id: NodeId<Expr2>,     // 4B
+        body_id: ExprId,            // 4B
     },
     LetFunction {
         def_id: NodeId<FunctionDef>, // 4B
         body_var: Variable,          // 8B
-        body_id: NodeId<Expr2>,      // 4B
+        body_id: ExprId,             // 4B
     },
     LetValue {
         def_id: NodeId<ValueDef>, // 4B
-        body_id: NodeId<Expr2>,   // 4B
+        body_id: ExprId,          // 4B
         body_var: Variable,       // 4B
     },
     Call {
-        args: PoolVec<(Variable, NodeId<Expr2>)>, // 8B
-        expr: NodeId<Expr2>,                      // 4B
-        expr_var: Variable,                       // 4B
-        fn_var: Variable,                         // 4B
-        closure_var: Variable,                    // 4B
-        called_via: CalledVia,                    // 2B
+        args: PoolVec<(Variable, ExprId)>, // 8B
+        expr: ExprId,                      // 4B
+        expr_var: Variable,                // 4B
+        fn_var: Variable,                  // 4B
+        closure_var: Variable,             // 4B
+        called_via: CalledVia,             // 2B
     },
     RunLowLevel {
-        op: LowLevel,                             // 1B
-        args: PoolVec<(Variable, NodeId<Expr2>)>, // 8B
-        ret_var: Variable,                        // 4B
+        op: LowLevel,                      // 1B
+        args: PoolVec<(Variable, ExprId)>, // 8B
+        ret_var: Variable,                 // 4B
     },
     Closure {
         args: PoolVec<(Variable, NodeId<Pattern2>)>, // 8B
         name: Symbol,                                // 8B
-        body: NodeId<Expr2>,                         // 4B
+        body: ExprId,                                // 4B
         function_type: Variable,                     // 4B
         recursive: Recursive,                        // 1B
         extra: NodeId<ClosureExtra>,                 // 4B
@@ -179,7 +181,7 @@ pub enum Expr2 {
     /// Look up exactly one field on a record, e.g. (expr).foo.
     Access {
         field: PoolStr,       // 4B
-        expr: NodeId<Expr2>,  // 4B
+        expr: ExprId,         // 4B
         record_var: Variable, // 4B
         ext_var: Variable,    // 4B
         field_var: Variable,  // 4B
@@ -203,16 +205,16 @@ pub enum Expr2 {
 
     // Sum Types
     GlobalTag {
-        name: PoolStr,                                 // 4B
-        variant_var: Variable,                         // 4B
-        ext_var: Variable,                             // 4B
-        arguments: PoolVec<(Variable, NodeId<Expr2>)>, // 8B
+        name: PoolStr,                          // 4B
+        variant_var: Variable,                  // 4B
+        ext_var: Variable,                      // 4B
+        arguments: PoolVec<(Variable, ExprId)>, // 8B
     },
     PrivateTag {
-        name: Symbol,                                  // 8B
-        variant_var: Variable,                         // 4B
-        ext_var: Variable,                             // 4B
-        arguments: PoolVec<(Variable, NodeId<Expr2>)>, // 8B
+        name: Symbol,                           // 8B
+        variant_var: Variable,                  // 4B
+        ext_var: Variable,                      // 4B
+        arguments: PoolVec<(Variable, ExprId)>, // 8B
     },
     Blank, // Rendered as empty box in editor
 
@@ -268,17 +270,17 @@ impl ShallowClone for ValueDef {
 #[derive(Debug)]
 pub enum FunctionDef {
     WithAnnotation {
-        name: Symbol,                          // 8B
-        arguments: PoolVec<(Pattern2, Type2)>, // 8B
-        rigids: NodeId<Rigids>,                // 4B
-        return_type: TypeId,                   // 4B
-        body: ExprId,                          // 4B
+        name: Symbol,                           // 8B
+        arguments: PoolVec<(PatternId, Type2)>, // 8B
+        rigids: NodeId<Rigids>,                 // 4B
+        return_type: TypeId,                    // 4B
+        body: ExprId,                           // 4B
     },
     NoAnnotation {
-        name: Symbol,                             // 8B
-        arguments: PoolVec<(Pattern2, Variable)>, // 8B
-        return_var: Variable,                     // 4B
-        body: ExprId,                             // 4B
+        name: Symbol,                              // 8B
+        arguments: PoolVec<(PatternId, Variable)>, // 8B
+        return_var: Variable,                      // 4B
+        body: ExprId,                              // 4B
     },
 }
 
@@ -392,11 +394,12 @@ pub struct ClosureExtra {
 
 #[derive(Debug)]
 pub struct WhenBranch {
-    pub patterns: PoolVec<Pattern2>,  // 4B
-    pub body: NodeId<Expr2>,          // 3B
-    pub guard: Option<NodeId<Expr2>>, // 4B
+    pub patterns: PoolVec<Pattern2>, // 4B
+    pub body: ExprId,                // 3B
+    pub guard: Option<ExprId>,       // 4B
 }
 
+// TODO make the inner types private?
 pub type ExprId = NodeId<Expr2>;
 
 use RecordField::*;
@@ -425,7 +428,7 @@ impl RecordField {
         }
     }
 
-    pub fn get_record_field_val_node_id(&self) -> Option<NodeId<Expr2>> {
+    pub fn get_record_field_val_node_id(&self) -> Option<ExprId> {
         match self {
             InvalidLabelOnly(_, _) => None,
             LabelOnly(_, _, _) => None,
@@ -434,7 +437,7 @@ impl RecordField {
     }
 }
 
-pub fn expr2_to_string(node_id: NodeId<Expr2>, pool: &Pool) -> String {
+pub fn expr2_to_string(node_id: ExprId, pool: &Pool) -> String {
     let mut full_string = String::new();
     let expr2 = pool.get(node_id);
 
@@ -472,7 +475,7 @@ fn expr2_to_string_helper(
         Expr2::EmptyRecord => out_string.push_str("EmptyRecord"),
         Expr2::Record { record_var, fields } => {
             out_string.push_str("Record:\n");
-            out_string.push_str(&var_to_string(&record_var, indent_level + 1));
+            out_string.push_str(&var_to_string(record_var, indent_level + 1));
 
             out_string.push_str(&format!("{}fields: [\n", get_spacing(indent_level + 1)));
 

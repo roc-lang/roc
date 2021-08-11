@@ -9,9 +9,8 @@ use crate::editor::{
     markup::nodes::{expr2_to_markup, set_parent_for_all, MarkupNode},
 };
 use crate::graphics::primitives::rect::Rect;
-use crate::lang::ast::Expr2;
+use crate::lang::ast::{Expr2, ExprId};
 use crate::lang::expr::{str_to_expr2, Env};
-use crate::lang::pool::NodeId;
 use crate::lang::pool::PoolStr;
 use crate::lang::scope::Scope;
 use crate::ui::text::caret_w_select::CaretWSelect;
@@ -47,7 +46,7 @@ pub struct EdModel<'a> {
 
 #[derive(Debug, Copy, Clone)]
 pub struct SelectedExpression {
-    pub ast_node_id: NodeId<Expr2>,
+    pub ast_node_id: ExprId,
     pub mark_node_id: MarkNodeId,
     pub type_str: PoolStr,
 }
@@ -59,7 +58,7 @@ pub fn init_model<'a>(
     interns: &'a Interns,
     code_arena: &'a Bump,
 ) -> EdResult<EdModel<'a>> {
-    let mut module = EdModule::new(&code_str, env, code_arena)?;
+    let mut module = EdModule::new(code_str, env, code_arena)?;
 
     let ast_root_id = module.ast_root_id;
     let mut markup_node_pool = SlowPool::new();
@@ -162,7 +161,7 @@ impl<'a> EdModel<'a> {
 #[derive(Debug)]
 pub struct EdModule<'a> {
     pub env: Env<'a>,
-    pub ast_root_id: NodeId<Expr2>,
+    pub ast_root_id: ExprId,
 }
 
 // for debugging
@@ -175,7 +174,7 @@ impl<'a> EdModule<'a> {
 
             let region = Region::new(0, 0, 0, 0);
 
-            let expr2_result = str_to_expr2(&ast_arena, &code_str, &mut env, &mut scope, region);
+            let expr2_result = str_to_expr2(ast_arena, code_str, &mut env, &mut scope, region);
 
             match expr2_result {
                 Ok((expr2, _output)) => {
@@ -239,7 +238,7 @@ pub mod test_ed_model {
         );
 
         ed_model::init_model(
-            &code_str,
+            code_str,
             file_path,
             env,
             &ed_model_refs.interns,

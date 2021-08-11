@@ -4,9 +4,11 @@ use roc_collections::all::{default_hasher, MutMap};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::solved_types::Solved;
-use roc_types::subs::{Content, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, Variable};
+use roc_types::subs::{
+    Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs, SubsSlice, Variable,
+};
 use roc_types::types::Type::{self, *};
-use roc_types::types::{Alias, Category, ErrorType, PatternCategory, RecordField};
+use roc_types::types::{Alias, Category, ErrorType, PatternCategory};
 use roc_unify::unify::unify;
 use roc_unify::unify::Unified::*;
 
@@ -114,7 +116,7 @@ impl Pools {
     pub fn split_last(&self) -> (&Vec<Variable>, &[Vec<Variable>]) {
         self.0
             .split_last()
-            .unwrap_or_else(|| panic!("Attempted to split_last() on non-empy Pools"))
+            .unwrap_or_else(|| panic!("Attempted to split_last() on non-empty Pools"))
     }
 
     pub fn extend_to(&mut self, n: usize) {
@@ -257,7 +259,7 @@ fn solve(
             }
         }
         Lookup(symbol, expectation, region) => {
-            match env.vars_by_symbol.get(&symbol) {
+            match env.vars_by_symbol.get(symbol) {
                 Some(var) => {
                     // Deep copy the vars associated with this symbol before unifying them.
                     // Otherwise, suppose we have this:
@@ -390,7 +392,7 @@ fn solve(
                     // If the return expression is guaranteed to solve,
                     // solve the assignments themselves and move on.
                     solve(
-                        &env,
+                        env,
                         state,
                         rank,
                         pools,
@@ -508,7 +510,7 @@ fn solve(
                         env: saved_env,
                         mark,
                     } = solve(
-                        &env,
+                        env,
                         state,
                         next_rank,
                         next_pools,
@@ -528,11 +530,10 @@ fn solve(
                                 .get(next_rank)
                                 .iter()
                                 .filter(|var| {
-                                    let current = subs.get_without_compacting(
-                                        roc_types::subs::Variable::clone(var),
-                                    );
+                                    let current_rank =
+                                        subs.get_rank(roc_types::subs::Variable::clone(var));
 
-                                    current.rank.into_usize() > next_rank.into_usize()
+                                    current_rank.into_usize() > next_rank.into_usize()
                                 })
                                 .collect::<Vec<_>>();
 
@@ -561,8 +562,7 @@ fn solve(
                         let failing: Vec<_> = rigid_vars
                             .iter()
                             .filter(|&var| {
-                                !subs.redundant(*var)
-                                    && subs.get_without_compacting(*var).rank != Rank::NONE
+                                !subs.redundant(*var) && subs.get_rank(*var) != Rank::NONE
                             })
                             .collect();
 
@@ -577,7 +577,7 @@ fn solve(
                     let mut new_env = env.clone();
                     for (symbol, loc_var) in local_def_vars.iter() {
                         // when there are duplicates, keep the one from `env`
-                        if !new_env.vars_by_symbol.contains_key(&symbol) {
+                        if !new_env.vars_by_symbol.contains_key(symbol) {
                             new_env.vars_by_symbol.insert(*symbol, loc_var.value);
                         }
                     }
@@ -599,7 +599,7 @@ fn solve(
                         problems,
                         cached_aliases,
                         subs,
-                        &ret_con,
+                        ret_con,
                     );
 
                     for (symbol, loc_var) in local_def_vars {
@@ -658,12 +658,19 @@ fn type_to_variable(
         EmptyTagUnion => Variable::EMPTY_TAG_UNION,
 
         // This case is important for the rank of boolean variables
-        Function(args, closure_type, ret_type) => {
-            let mut arg_vars = Vec::with_capacity(args.len());
+        Function(arg_vars, closure_type, ret_type) => {
+            let mut new_arg_vars = Vec::with_capacity(arg_vars.len());
 
-            for arg in args {
-                arg_vars.push(type_to_variable(subs, rank, pools, cached, arg))
+            for arg in arg_vars {
+                let var = type_to_variable(subs, rank, pools, cached, arg);
+                new_arg_vars.push(var);
             }
+
+            let start = subs.variables.len() as u32;
+            let length = arg_vars.len() as u16;
+            let arg_vars = SubsSlice::new(start, length);
+
+            subs.variables.extend(new_arg_vars);
 
             let ret_var = type_to_variable(subs, rank, pools, cached, ret_type);
             let closure_var = type_to_variable(subs, rank, pools, cached, closure_type);
@@ -675,13 +682,8 @@ fn type_to_variable(
             let mut field_vars = MutMap::with_capacity_and_hasher(fields.len(), default_hasher());
 
             for (field, field_type) in fields {
-                use RecordField::*;
-
-                let field_var = match field_type {
-                    Required(typ) => Required(type_to_variable(subs, rank, pools, cached, typ)),
-                    Optional(typ) => Optional(type_to_variable(subs, rank, pools, cached, typ)),
-                    Demanded(typ) => Demanded(type_to_variable(subs, rank, pools, cached, typ)),
-                };
+                let field_var =
+                    field_type.map(|typ| type_to_variable(subs, rank, pools, cached, typ));
 
                 field_vars.insert(field.clone(), field_var);
             }
@@ -696,7 +698,12 @@ fn type_to_variable(
                 Err((new, _)) => new,
             };
 
-            let content = Content::Structure(FlatType::Record(field_vars, new_ext_var));
+            let mut all_fields: Vec<_> = field_vars.into_iter().collect();
+            all_fields.sort_unstable_by(RecordFields::compare);
+
+            let record_fields = RecordFields::insert_into_subs(subs, all_fields);
+
+            let content = Content::Structure(FlatType::Record(record_fields, new_ext_var));
 
             register(subs, rank, pools, content)
         }
@@ -743,7 +750,7 @@ fn type_to_variable(
             debug_assert!(ext_tag_vec.is_empty());
 
             let content = Content::Structure(FlatType::FunctionOrTagUnion(
-                tag_name.clone(),
+                Box::new(tag_name.clone()),
                 *symbol,
                 new_ext_var,
             ));
@@ -843,7 +850,7 @@ fn type_to_variable(
             result
         }
         Erroneous(problem) => {
-            let content = Content::Structure(FlatType::Erroneous(problem.clone()));
+            let content = Content::Structure(FlatType::Erroneous(Box::new(problem.clone())));
 
             register(subs, rank, pools, content)
         }
@@ -1004,7 +1011,7 @@ fn adjust_rank(
             unsafe { &*ptr }
         };
 
-        let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, &content);
+        let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, content);
 
         subs.set_rank_mark(var, max_rank, visit_mark);
 
@@ -1068,9 +1075,9 @@ fn adjust_rank_content(
                         ));
                     }
 
-                    for var in arg_vars {
-                        rank =
-                            rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
+                    for index in arg_vars.into_iter() {
+                        let var = subs[index];
+                        rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
                     }
 
                     rank
@@ -1086,14 +1093,9 @@ fn adjust_rank_content(
                 Record(fields, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
 
-                    for var in fields.values() {
-                        rank = rank.max(adjust_rank(
-                            subs,
-                            young_mark,
-                            visit_mark,
-                            group_rank,
-                            var.into_inner(),
-                        ));
+                    for index in fields.iter_variables() {
+                        let var = subs[index];
+                        rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
                     }
 
                     rank
@@ -1221,144 +1223,83 @@ fn instantiate_rigids_help(
     // will not repeat this work or crawl this variable again.
     match content {
         Structure(flat_type) => {
-            let new_flat_type = match flat_type {
-                Apply(symbol, args) => {
-                    let args = args
-                        .into_iter()
-                        .map(|var| instantiate_rigids_help(subs, max_rank, pools, var))
-                        .collect();
-
-                    Apply(symbol, args)
+            match flat_type {
+                Apply(_, args) => {
+                    for var in args.into_iter() {
+                        instantiate_rigids_help(subs, max_rank, pools, var);
+                    }
                 }
 
                 Func(arg_vars, closure_var, ret_var) => {
-                    let new_ret_var = instantiate_rigids_help(subs, max_rank, pools, ret_var);
-                    let new_closure_var =
-                        instantiate_rigids_help(subs, max_rank, pools, closure_var);
-                    let arg_vars = arg_vars
-                        .into_iter()
-                        .map(|var| instantiate_rigids_help(subs, max_rank, pools, var))
-                        .collect();
+                    instantiate_rigids_help(subs, max_rank, pools, ret_var);
+                    instantiate_rigids_help(subs, max_rank, pools, closure_var);
 
-                    Func(arg_vars, new_closure_var, new_ret_var)
+                    for index in arg_vars.into_iter() {
+                        let var = subs[index];
+                        instantiate_rigids_help(subs, max_rank, pools, var);
+                    }
                 }
 
-                same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
+                EmptyRecord | EmptyTagUnion | Erroneous(_) => {}
 
                 Record(fields, ext_var) => {
-                    let mut new_fields = MutMap::default();
-
-                    for (label, field) in fields {
-                        use RecordField::*;
-
-                        let new_field = match field {
-                            Demanded(var) => {
-                                Demanded(instantiate_rigids_help(subs, max_rank, pools, var))
-                            }
-                            Required(var) => {
-                                Required(instantiate_rigids_help(subs, max_rank, pools, var))
-                            }
-                            Optional(var) => {
-                                Optional(instantiate_rigids_help(subs, max_rank, pools, var))
-                            }
-                        };
-
-                        new_fields.insert(label, new_field);
+                    for index in fields.iter_variables() {
+                        let var = subs[index];
+                        instantiate_rigids_help(subs, max_rank, pools, var);
                     }
 
-                    Record(
-                        new_fields,
-                        instantiate_rigids_help(subs, max_rank, pools, ext_var),
-                    )
+                    instantiate_rigids_help(subs, max_rank, pools, ext_var);
                 }
 
                 TagUnion(tags, ext_var) => {
-                    let mut new_tags = MutMap::default();
-
-                    for (tag, vars) in tags {
-                        let new_vars: Vec<Variable> = vars
-                            .into_iter()
-                            .map(|var| instantiate_rigids_help(subs, max_rank, pools, var))
-                            .collect();
-                        new_tags.insert(tag, new_vars);
+                    for (_, vars) in tags {
+                        for var in vars.into_iter() {
+                            instantiate_rigids_help(subs, max_rank, pools, var);
+                        }
                     }
 
-                    TagUnion(
-                        new_tags,
-                        instantiate_rigids_help(subs, max_rank, pools, ext_var),
-                    )
+                    instantiate_rigids_help(subs, max_rank, pools, ext_var);
                 }
 
-                FunctionOrTagUnion(tag_name, symbol, ext_var) => FunctionOrTagUnion(
-                    tag_name,
-                    symbol,
-                    instantiate_rigids_help(subs, max_rank, pools, ext_var),
-                ),
+                FunctionOrTagUnion(_tag_name, _symbol, ext_var) => {
+                    instantiate_rigids_help(subs, max_rank, pools, ext_var);
+                }
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    let mut new_tags = MutMap::default();
+                    instantiate_rigids_help(subs, max_rank, pools, rec_var);
 
-                    let new_rec_var = instantiate_rigids_help(subs, max_rank, pools, rec_var);
-
-                    for (tag, vars) in tags {
-                        let new_vars: Vec<Variable> = vars
-                            .into_iter()
-                            .map(|var| instantiate_rigids_help(subs, max_rank, pools, var))
-                            .collect();
-                        new_tags.insert(tag, new_vars);
+                    for (_, vars) in tags {
+                        for var in vars.into_iter() {
+                            instantiate_rigids_help(subs, max_rank, pools, var);
+                        }
                     }
 
-                    RecursiveTagUnion(
-                        new_rec_var,
-                        new_tags,
-                        instantiate_rigids_help(subs, max_rank, pools, ext_var),
-                    )
+                    instantiate_rigids_help(subs, max_rank, pools, ext_var);
                 }
             };
-
-            subs.set(copy, make_descriptor(Structure(new_flat_type)));
-
-            copy
         }
 
-        FlexVar(_) | Error => copy,
+        FlexVar(_) | Error => {}
 
-        RecursionVar {
-            opt_name,
-            structure,
-        } => {
-            let new_structure = instantiate_rigids_help(subs, max_rank, pools, structure);
-
-            subs.set(
-                copy,
-                make_descriptor(RecursionVar {
-                    opt_name,
-                    structure: new_structure,
-                }),
-            );
-
-            copy
+        RecursionVar { structure, .. } => {
+            instantiate_rigids_help(subs, max_rank, pools, structure);
         }
 
         RigidVar(name) => {
+            // what it's all about: convert the rigid var into a flex var
             subs.set(copy, make_descriptor(FlexVar(Some(name))));
-
-            copy
         }
 
-        Alias(symbol, args, real_type_var) => {
-            let new_args = args
-                .into_iter()
-                .map(|(name, var)| (name, instantiate_rigids_help(subs, max_rank, pools, var)))
-                .collect();
-            let new_real_type_var = instantiate_rigids_help(subs, max_rank, pools, real_type_var);
-            let new_content = Alias(symbol, new_args, new_real_type_var);
+        Alias(_, args, real_type_var) => {
+            for (_, var) in args.into_iter() {
+                instantiate_rigids_help(subs, max_rank, pools, var);
+            }
 
-            subs.set(copy, make_descriptor(new_content));
-
-            copy
+            instantiate_rigids_help(subs, max_rank, pools, real_type_var);
         }
     }
+
+    var
 }
 
 fn deep_copy_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) -> Variable {
@@ -1430,10 +1371,20 @@ fn deep_copy_var_help(
                 Func(arg_vars, closure_var, ret_var) => {
                     let new_ret_var = deep_copy_var_help(subs, max_rank, pools, ret_var);
                     let new_closure_var = deep_copy_var_help(subs, max_rank, pools, closure_var);
-                    let arg_vars = arg_vars
-                        .into_iter()
-                        .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
-                        .collect();
+
+                    let mut new_arg_vars = Vec::with_capacity(arg_vars.len());
+
+                    for index in arg_vars.into_iter() {
+                        let var = subs[index];
+                        let copy_var = deep_copy_var_help(subs, max_rank, pools, var);
+                        new_arg_vars.push(copy_var);
+                    }
+
+                    let start = subs.variables.len() as u32;
+                    let length = arg_vars.len() as u16;
+                    let arg_vars = SubsSlice::new(start, length);
+
+                    subs.variables.extend(new_arg_vars);
 
                     Func(arg_vars, new_closure_var, new_ret_var)
                 }
@@ -1441,28 +1392,42 @@ fn deep_copy_var_help(
                 same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
 
                 Record(fields, ext_var) => {
-                    let mut new_fields = MutMap::default();
+                    let record_fields = {
+                        let mut new_vars = Vec::with_capacity(fields.len());
 
-                    for (label, field) in fields {
-                        use RecordField::*;
+                        for index in fields.iter_variables() {
+                            let var = subs[index];
+                            let copy_var = deep_copy_var_help(subs, max_rank, pools, var);
 
-                        let new_field = match field {
-                            Demanded(var) => {
-                                Demanded(deep_copy_var_help(subs, max_rank, pools, var))
-                            }
-                            Required(var) => {
-                                Required(deep_copy_var_help(subs, max_rank, pools, var))
-                            }
-                            Optional(var) => {
-                                Optional(deep_copy_var_help(subs, max_rank, pools, var))
-                            }
-                        };
+                            new_vars.push(copy_var);
+                        }
 
-                        new_fields.insert(label, new_field);
-                    }
+                        let field_names_start = subs.field_names.len() as u32;
+                        let variables_start = subs.variables.len() as u32;
+                        let field_types_start = subs.record_fields.len() as u32;
+
+                        let mut length = 0;
+
+                        for ((i1, _, i3), var) in fields.iter_all().zip(new_vars) {
+                            let record_field = subs[i3].map(|_| var);
+
+                            subs.field_names.push(subs[i1].clone());
+                            subs.record_fields.push(record_field.map(|_| ()));
+                            subs.variables.push(*record_field.as_inner());
+
+                            length += 1;
+                        }
+
+                        RecordFields {
+                            length,
+                            field_names_start,
+                            variables_start,
+                            field_types_start,
+                        }
+                    };
 
                     Record(
-                        new_fields,
+                        record_fields,
                         deep_copy_var_help(subs, max_rank, pools, ext_var),
                     )
                 }

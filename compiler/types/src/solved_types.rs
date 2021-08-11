@@ -1,4 +1,4 @@
-use crate::subs::{FlatType, Subs, VarId, VarStore, Variable};
+use crate::subs::{FlatType, GetSubsSlice, Subs, VarId, VarStore, Variable};
 use crate::types::{Problem, RecordField, Type};
 use roc_collections::all::{ImMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
@@ -387,7 +387,7 @@ impl SolvedType {
             Func(args, closure, ret) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for var in args {
+                for var in subs.get_subs_slice(*args) {
                     new_args.push(Self::from_var_help(subs, recursion_vars, *var));
                 }
 
@@ -399,16 +399,15 @@ impl SolvedType {
             Record(fields, ext_var) => {
                 let mut new_fields = Vec::with_capacity(fields.len());
 
-                for (label, field) in fields {
-                    use RecordField::*;
+                for (i1, i2, i3) in fields.iter_all() {
+                    let field_name: Lowercase = subs[i1].clone();
+                    let variable: Variable = subs[i2];
+                    let record_field: RecordField<()> = subs[i3];
 
-                    let solved_type = match field {
-                        Optional(var) => Optional(Self::from_var_help(subs, recursion_vars, *var)),
-                        Required(var) => Required(Self::from_var_help(subs, recursion_vars, *var)),
-                        Demanded(var) => Demanded(Self::from_var_help(subs, recursion_vars, *var)),
-                    };
+                    let solved_type =
+                        record_field.map(|_| Self::from_var_help(subs, recursion_vars, variable));
 
-                    new_fields.push((label.clone(), solved_type));
+                    new_fields.push((field_name, solved_type));
                 }
 
                 let ext = Self::from_var_help(subs, recursion_vars, *ext_var);
@@ -438,7 +437,7 @@ impl SolvedType {
             FunctionOrTagUnion(tag_name, symbol, ext_var) => {
                 let ext = Self::from_var_help(subs, recursion_vars, *ext_var);
 
-                SolvedType::FunctionOrTagUnion(tag_name.clone(), *symbol, Box::new(ext))
+                SolvedType::FunctionOrTagUnion(*tag_name.clone(), *symbol, Box::new(ext))
             }
             RecursiveTagUnion(rec_var, tags, ext_var) => {
                 recursion_vars.insert(subs, *rec_var);
@@ -465,7 +464,7 @@ impl SolvedType {
             }
             EmptyRecord => SolvedType::EmptyRecord,
             EmptyTagUnion => SolvedType::EmptyTagUnion,
-            Erroneous(problem) => SolvedType::Erroneous(problem.clone()),
+            Erroneous(problem) => SolvedType::Erroneous(*problem.clone()),
         }
     }
 }
@@ -513,11 +512,11 @@ pub fn to_type(
             let mut new_args = Vec::with_capacity(args.len());
 
             for arg in args {
-                new_args.push(to_type(&arg, free_vars, var_store));
+                new_args.push(to_type(arg, free_vars, var_store));
             }
 
-            let new_ret = to_type(&ret, free_vars, var_store);
-            let new_closure = to_type(&closure, free_vars, var_store);
+            let new_ret = to_type(ret, free_vars, var_store);
+            let new_closure = to_type(closure, free_vars, var_store);
 
             Type::Function(new_args, Box::new(new_closure), Box::new(new_ret))
         }
@@ -525,13 +524,13 @@ pub fn to_type(
             let mut new_args = Vec::with_capacity(args.len());
 
             for arg in args {
-                new_args.push(to_type(&arg, free_vars, var_store));
+                new_args.push(to_type(arg, free_vars, var_store));
             }
 
             Type::Apply(*symbol, new_args)
         }
         Rigid(lowercase) => {
-            if let Some(var) = free_vars.named_vars.get(&lowercase) {
+            if let Some(var) = free_vars.named_vars.get(lowercase) {
                 Type::Variable(*var)
             } else {
                 let var = var_store.fresh();
@@ -552,9 +551,9 @@ pub fn to_type(
 
             for (label, field) in fields {
                 let field_val = match field {
-                    Required(typ) => Required(to_type(&typ, free_vars, var_store)),
-                    Optional(typ) => Optional(to_type(&typ, free_vars, var_store)),
-                    Demanded(typ) => Demanded(to_type(&typ, free_vars, var_store)),
+                    Required(typ) => Required(to_type(typ, free_vars, var_store)),
+                    Optional(typ) => Optional(to_type(typ, free_vars, var_store)),
+                    Demanded(typ) => Demanded(to_type(typ, free_vars, var_store)),
                 };
 
                 new_fields.insert(label.clone(), field_val);

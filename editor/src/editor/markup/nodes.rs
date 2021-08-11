@@ -7,13 +7,8 @@ use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::editor::util::index_of;
-use crate::lang::ast::ExprId;
-use crate::lang::ast::RecordField;
-use crate::lang::{
-    ast::Expr2,
-    expr::Env,
-    pool::{NodeId, PoolStr},
-};
+use crate::lang::ast::{Expr2, ExprId, RecordField};
+use crate::lang::{expr::Env, pool::PoolStr};
 use crate::ui::util::slice_get;
 use bumpalo::Bump;
 use std::fmt;
@@ -21,19 +16,19 @@ use std::fmt;
 #[derive(Debug)]
 pub enum MarkupNode {
     Nested {
-        ast_node_id: NodeId<Expr2>,
+        ast_node_id: ExprId,
         children_ids: Vec<MarkNodeId>,
         parent_id_opt: Option<MarkNodeId>,
     },
     Text {
         content: String,
-        ast_node_id: NodeId<Expr2>,
+        ast_node_id: ExprId,
         syn_high_style: HighlightStyle,
         attributes: Attributes,
         parent_id_opt: Option<MarkNodeId>,
     },
     Blank {
-        ast_node_id: NodeId<Expr2>,
+        ast_node_id: ExprId,
         attributes: Attributes,
         syn_high_style: HighlightStyle, // TODO remove HighlightStyle, this is always HighlightStyle::Blank
         parent_id_opt: Option<MarkNodeId>,
@@ -41,7 +36,7 @@ pub enum MarkupNode {
 }
 
 impl MarkupNode {
-    pub fn get_ast_node_id(&self) -> NodeId<Expr2> {
+    pub fn get_ast_node_id(&self) -> ExprId {
         match self {
             MarkupNode::Nested { ast_node_id, .. } => *ast_node_id,
             MarkupNode::Text { ast_node_id, .. } => *ast_node_id,
@@ -129,7 +124,7 @@ impl MarkupNode {
                             }
                         }
 
-                        let closest_ast_child = slice_get(best_index, &children_ids)?;
+                        let closest_ast_child = slice_get(best_index, children_ids)?;
 
                         let closest_ast_child_index =
                             index_of(*closest_ast_child, &child_ids_with_ast)?;
@@ -231,7 +226,7 @@ pub const STRING_QUOTES: &str = "\"\"";
 
 fn new_markup_node(
     text: String,
-    node_id: NodeId<Expr2>,
+    node_id: ExprId,
     highlight_style: HighlightStyle,
     markup_node_pool: &mut SlowPool,
 ) -> MarkNodeId {
@@ -251,7 +246,7 @@ pub fn expr2_to_markup<'a, 'b>(
     arena: &'a Bump,
     env: &mut Env<'b>,
     expr2: &Expr2,
-    expr2_node_id: NodeId<Expr2>,
+    expr2_node_id: ExprId,
     markup_node_pool: &mut SlowPool,
 ) -> MarkNodeId {
     match expr2 {
@@ -259,7 +254,7 @@ pub fn expr2_to_markup<'a, 'b>(
         | Expr2::I128 { text, .. }
         | Expr2::U128 { text, .. }
         | Expr2::Float { text, .. } => {
-            let num_str = get_string(env, &text);
+            let num_str = get_string(env, text);
 
             new_markup_node(
                 num_str,
@@ -275,7 +270,7 @@ pub fn expr2_to_markup<'a, 'b>(
             markup_node_pool,
         ),
         Expr2::GlobalTag { name, .. } => new_markup_node(
-            get_string(env, &name),
+            get_string(env, name),
             expr2_node_id,
             HighlightStyle::Type,
             markup_node_pool,

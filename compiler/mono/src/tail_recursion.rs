@@ -35,9 +35,9 @@ pub fn make_tail_recursive<'a>(
     stmt: Stmt<'a>,
     args: &'a [(Layout<'a>, Symbol)],
 ) -> Stmt<'a> {
-    let alloced = arena.alloc(stmt);
-    match insert_jumps(arena, alloced, id, needle) {
-        None => alloced.clone(),
+    let allocated = arena.alloc(stmt);
+    match insert_jumps(arena, allocated, id, needle) {
+        None => allocated.clone(),
         Some(new) => {
             // jumps were inserted, we must now add a join point
 

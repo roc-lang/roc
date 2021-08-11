@@ -1,15 +1,28 @@
+use std::time::Duration;
+
 use cli_utils::bench_utils::{
     bench_cfold, bench_deriv, bench_nqueens, bench_quicksort, bench_rbtree_ck, bench_rbtree_delete,
 };
-use criterion::{
-    criterion_group, criterion_main, measurement::WallTime, BenchmarkGroup, Criterion, SamplingMode,
-};
+use criterion::{measurement::WallTime, BenchmarkGroup, Criterion, SamplingMode};
 
 fn bench_group_wall_time(c: &mut Criterion) {
     let mut group = c.benchmark_group("bench-group_wall-time");
-    // calculate statistics based on a fixed(flat) 200 runs
+    // calculate statistics based on a fixed(flat) x runs
     group.sampling_mode(SamplingMode::Flat);
-    group.sample_size(200);
+
+    let default_nr_of_runs = 200;
+    let nr_of_runs = match std::env::var("BENCH_DRY_RUN") {
+        Ok(val) => {
+            if val == "1" {
+                10 // minimum value allowed by criterion
+            } else {
+                default_nr_of_runs
+            }
+        }
+        Err(_) => default_nr_of_runs,
+    };
+
+    group.sample_size(nr_of_runs);
 
     let bench_funcs: Vec<fn(Option<&mut BenchmarkGroup<WallTime>>) -> ()> = vec![
         bench_nqueens,       // queens 11
@@ -27,5 +40,32 @@ fn bench_group_wall_time(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_group_wall_time);
-criterion_main!(benches);
+// use short warm up and measurement time on dry run
+fn make_config() -> Criterion {
+    let default_config = Criterion::default();
+
+    match std::env::var("BENCH_DRY_RUN") {
+        Ok(val) => {
+            if val == "1" {
+                default_config
+                    .warm_up_time(Duration::new(1, 0))
+                    .measurement_time(Duration::new(1, 0))
+            } else {
+                default_config
+            }
+        }
+        Err(_) => default_config,
+    }
+}
+
+fn all_benches() {
+    let mut criterion: Criterion<_> = make_config().configure_from_args();
+
+    bench_group_wall_time(&mut criterion);
+}
+
+fn main() {
+    all_benches();
+
+    Criterion::default().configure_from_args().final_summary();
+}

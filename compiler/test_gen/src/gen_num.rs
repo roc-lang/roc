@@ -339,7 +339,7 @@ mod gen_num {
                     x
                 "#
             ),
-            RocDec::from_str_to_i128_unsafe(&"2.1"),
+            RocDec::from_str_to_i128_unsafe("2.1"),
             i128
         );
     }
@@ -576,7 +576,7 @@ mod gen_num {
                     z
                 "#
             ),
-            RocDec::from_str_to_i128_unsafe(&"5.2"),
+            RocDec::from_str_to_i128_unsafe("5.2"),
             i128
         );
     }
@@ -639,7 +639,7 @@ mod gen_num {
                         Err _ -> -1
                 "#
             ),
-            RocDec::from_str_to_i128_unsafe(&"3.333333333333333333"),
+            RocDec::from_str_to_i128_unsafe("3.333333333333333333"),
             i128
         );
     }
@@ -755,7 +755,7 @@ mod gen_num {
                     (x - y) - z
                 "#
             ),
-            RocDec::from_str_to_i128_unsafe(&"-3.9"),
+            RocDec::from_str_to_i128_unsafe("-3.9"),
             i128
         );
     }
@@ -803,7 +803,7 @@ mod gen_num {
                     x * y * z
                 "#
             ),
-            RocDec::from_str_to_i128_unsafe(&"48.0"),
+            RocDec::from_str_to_i128_unsafe("48.0"),
             i128
         );
     }

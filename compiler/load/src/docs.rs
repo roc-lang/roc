@@ -3,7 +3,6 @@ use crate::docs::TypeAnnotation::{
     Apply, BoundVariable, Function, NoTypeAnn, ObscuredRecord, ObscuredTagUnion, Record, TagUnion,
 };
 use crate::file::LoadedModule;
-use inlinable_string::InlinableString;
 use roc_can::scope::Scope;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::IdentIds;
@@ -148,7 +147,7 @@ fn generate_entry_doc<'a>(
 
     match def {
         Def::SpaceBefore(sub_def, comments_or_new_lines) => {
-            // Comments before a definition are attached to the current defition
+            // Comments before a definition are attached to the current definition
 
             for detached_doc in detached_docs_from_comments_and_new_lines(comments_or_new_lines) {
                 acc.push(DetachedDoc(detached_doc));
@@ -166,16 +165,14 @@ fn generate_entry_doc<'a>(
             (new_acc, Some(comments_or_new_lines))
         }
 
-        Def::Annotation(loc_pattern, _loc_ann) => match loc_pattern.value {
+        Def::Annotation(loc_pattern, loc_ann) => match loc_pattern.value {
             Pattern::Identifier(identifier) => {
                 // Check if the definition is exposed
-                if ident_ids
-                    .get_id(&InlinableString::from(identifier))
-                    .is_some()
-                {
+                if ident_ids.get_id(&identifier.into()).is_some() {
+                    let name = identifier.to_string();
                     let doc_def = DocDef {
-                        name: identifier.to_string(),
-                        type_annotation: NoTypeAnn,
+                        name,
+                        type_annotation: type_to_docs(false, loc_ann.value),
                         type_vars: Vec::new(),
                         docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
                     };
@@ -193,10 +190,7 @@ fn generate_entry_doc<'a>(
         } => match ann_pattern.value {
             Pattern::Identifier(identifier) => {
                 // Check if the definition is exposed
-                if ident_ids
-                    .get_id(&InlinableString::from(identifier))
-                    .is_some()
-                {
+                if ident_ids.get_id(&identifier.into()).is_some() {
                     let doc_def = DocDef {
                         name: identifier.to_string(),
                         type_annotation: type_to_docs(false, ann_type.value),

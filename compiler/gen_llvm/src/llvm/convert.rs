@@ -58,8 +58,7 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
                     }
                 }
                 NullableUnwrapped { other_fields, .. } => {
-                    let block =
-                        block_of_memory_slices(env.context, &[&other_fields], env.ptr_bytes);
+                    let block = block_of_memory_slices(env.context, &[other_fields], env.ptr_bytes);
                     block.ptr_type(AddressSpace::Generic).into()
                 }
                 NonNullableUnwrapped(fields) => {

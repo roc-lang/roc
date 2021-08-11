@@ -11,9 +11,8 @@ use crate::editor::mvc::ed_update::NodeContext;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::syntax_highlight::HighlightStyle;
 use crate::editor::util::index_of;
-use crate::lang::ast::Expr2;
-use crate::lang::ast::RecordField;
-use crate::lang::pool::{NodeId, PoolStr, PoolVec};
+use crate::lang::ast::{Expr2, ExprId, RecordField};
+use crate::lang::pool::{PoolStr, PoolVec};
 use crate::ui::text::text_pos::TextPos;
 use snafu::OptionExt;
 
@@ -24,7 +23,7 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
         curr_mark_node,
         parent_id_opt,
         ast_node_id,
-    } = get_node_context(&ed_model)?;
+    } = get_node_context(ed_model)?;
 
     let is_blank_node = curr_mark_node.is_blank();
 
@@ -109,7 +108,7 @@ pub fn update_empty_record(
             curr_mark_node,
             parent_id_opt,
             ast_node_id,
-        } = get_node_context(&ed_model)?;
+        } = get_node_context(ed_model)?;
 
         if prev_mark_node.get_content()? == nodes::LEFT_ACCOLADE
             && curr_mark_node.get_content()? == nodes::RIGHT_ACCOLADE
@@ -174,7 +173,7 @@ pub fn update_empty_record(
 
 pub fn update_record_colon(
     ed_model: &mut EdModel,
-    record_ast_node_id: NodeId<Expr2>,
+    record_ast_node_id: ExprId,
 ) -> EdResult<InputOutcome> {
     let NodeContext {
         old_caret_pos,
@@ -182,7 +181,7 @@ pub fn update_record_colon(
         curr_mark_node,
         parent_id_opt,
         ast_node_id,
-    } = get_node_context(&ed_model)?;
+    } = get_node_context(ed_model)?;
     if let Some(parent_id) = parent_id_opt {
         let curr_ast_node = ed_model.module.env.pool.get(ast_node_id);
 

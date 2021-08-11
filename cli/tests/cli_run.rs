@@ -2,7 +2,6 @@
 extern crate pretty_assertions;
 
 extern crate bumpalo;
-extern crate inlinable_string;
 extern crate roc_collections;
 extern crate roc_load;
 extern crate roc_module;
@@ -14,10 +13,10 @@ mod cli_run {
         run_with_valgrind, ValgrindError, ValgrindErrorXWhat,
     };
     use serial_test::serial;
-    use std::collections::HashMap;
-    use std::fs::{self, File};
-    use std::io::Read;
     use std::path::Path;
+
+    #[cfg(not(debug_assertions))]
+    use roc_collections::all::MutMap;
 
     #[cfg(not(target_os = "macos"))]
     const ALLOW_VALGRIND: bool = true;
@@ -151,8 +150,9 @@ mod cli_run {
             )*
 
             #[test]
+            #[cfg(not(debug_assertions))]
             fn all_examples_have_tests() {
-                let mut all_examples: HashMap<&str, Example<'_>> = HashMap::default();
+                let mut all_examples: MutMap<&str, Example<'_>> = MutMap::default();
 
                 $(
                     all_examples.insert($name, $example);
@@ -250,7 +250,7 @@ mod cli_run {
         ($($test_name:ident => $benchmark:expr,)+) => {
             $(
                 #[test]
-                #[serial(benchmark)]
+                #[cfg_attr(not(debug_assertions), serial(benchmark))]
                 fn $test_name() {
                     let benchmark = $benchmark;
                     let file_name = examples_dir("benchmarks").join(benchmark.filename);
@@ -286,8 +286,9 @@ mod cli_run {
             )*
 
             #[test]
+            #[cfg(not(debug_assertions))]
             fn all_benchmarks_have_tests() {
-                let mut all_benchmarks: HashMap<&str, Example<'_>> = HashMap::default();
+                let mut all_benchmarks: MutMap<&str, Example<'_>> = MutMap::default();
 
                 $(
                     let benchmark = $benchmark;
@@ -373,8 +374,9 @@ mod cli_run {
         },
     }
 
-    fn check_for_tests(examples_dir: &str, all_examples: &mut HashMap<&str, Example<'_>>) {
-        let entries = fs::read_dir(examples_dir).unwrap_or_else(|err| {
+    #[cfg(not(debug_assertions))]
+    fn check_for_tests(examples_dir: &str, all_examples: &mut MutMap<&str, Example<'_>>) {
+        let entries = std::fs::read_dir(examples_dir).unwrap_or_else(|err| {
             panic!(
                 "Error trying to read {} as an examples directory: {}",
                 examples_dir, err
@@ -396,13 +398,16 @@ mod cli_run {
             }
         }
 
-        assert_eq!(all_examples, &mut HashMap::default());
+        assert_eq!(all_examples, &mut MutMap::default());
     }
 
-    fn check_for_benchmarks(benchmarks_dir: &str, all_benchmarks: &mut HashMap<&str, Example<'_>>) {
+    #[cfg(not(debug_assertions))]
+    fn check_for_benchmarks(benchmarks_dir: &str, all_benchmarks: &mut MutMap<&str, Example<'_>>) {
         use std::ffi::OsStr;
+        use std::fs::File;
+        use std::io::Read;
 
-        let entries = fs::read_dir(benchmarks_dir).unwrap_or_else(|err| {
+        let entries = std::fs::read_dir(benchmarks_dir).unwrap_or_else(|err| {
             panic!(
                 "Error trying to read {} as a benchmark directory: {}",
                 benchmarks_dir, err
@@ -432,7 +437,7 @@ mod cli_run {
             }
         }
 
-        assert_eq!(all_benchmarks, &mut HashMap::default());
+        assert_eq!(all_benchmarks, &mut MutMap::default());
     }
 
     #[test]

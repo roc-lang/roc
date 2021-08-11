@@ -924,7 +924,7 @@ fn pick_path<'a>(branches: &'a [Branch]) -> &'a Vec<PathInstruction> {
         for (path, pattern) in &branch.patterns {
             // NOTE we no longer check for the guard here
             // if !branch.guard.is_none() || needs_tests(&pattern) {
-            if needs_tests(&pattern) {
+            if needs_tests(pattern) {
                 all_paths.push(path);
             } else {
                 // do nothing
@@ -996,7 +996,7 @@ where
             let mut min_paths = vec![first_path];
 
             for path in all_paths {
-                let weight = small_defaults(branches, &path);
+                let weight = small_defaults(branches, path);
 
                 use std::cmp::Ordering;
                 match weight.cmp(&min_weight) {
@@ -1219,7 +1219,7 @@ fn test_to_equality<'a>(
     test: Test<'a>,
 ) -> (StoresVec<'a>, Symbol, Symbol, Option<ConstructorKnown<'a>>) {
     let (rhs_symbol, mut stores, test_layout) =
-        path_to_expr_help(env, cond_symbol, &path, *cond_layout);
+        path_to_expr_help(env, cond_symbol, path, *cond_layout);
 
     match test {
         Test::IsCtor { tag_id, union, .. } => {
@@ -1325,13 +1325,7 @@ fn stores_and_condition<'a>(
 
     // Assumption: there is at most 1 guard, and it is the outer layer.
     for (path, test) in test_chain {
-        tests.push(test_to_equality(
-            env,
-            cond_symbol,
-            &cond_layout,
-            &path,
-            test,
-        ))
+        tests.push(test_to_equality(env, cond_symbol, cond_layout, &path, test))
     }
 
     tests
@@ -1540,7 +1534,7 @@ fn decide_to_branching<'a>(
     match decider {
         Leaf(Jump(label)) => {
             let index = jumps
-                .binary_search_by_key(&label, |ref r| r.0)
+                .binary_search_by_key(&label, |r| r.0)
                 .expect("jump not in list of jumps");
 
             Stmt::Jump(jumps[index].1, &[])
