@@ -1,6 +1,6 @@
 interface Parser exposes [  showPair, makePair, testPair, 
    run, runToString, showU8,
-   Parser, map, andThen, first, second,
+   Parser, successful, map, andThen, first, second,
    succeed, any,  satisfy, fail] imports [Pair]
 
 
@@ -34,16 +34,28 @@ makePair =
 
 Parser a : List U8 -> List ([Pair a (List U8)])
 
-run : Str, Parser a -> Result a [ListWasEmpty]
+
+run : Str, Parser a -> List ([Pair a (List U8)])
 run = 
+  \str, parser -> parser (Str.toUtf8 str)
+
+
+runAux : Str, Parser a -> Result a [ListWasEmpty]
+runAux = 
   \str, parser -> parser (Str.toUtf8 str) |> List.map Pair.first  |> List.first
 
 runToString : (a -> Str), Str, Parser a -> Str
 runToString = 
   \toString, str, parser -> 
-    when run str parser is
+    when runAux str parser is
       Ok a -> toString a 
       _ -> "Parse error (runToString)"
+
+
+## SUCCESSFUL (Test for successful parse)
+
+# successful : List ([Pair a (List U8)]) -> Bool
+successful = \results -> List.len results == 1
 
 
 ## SUCCEED 
@@ -103,6 +115,9 @@ second =
 first : Parser a, Parser b -> Parser a
 first = 
   \p, q ->  Parser.andThen p (\out -> Parser.map q (\_ -> out))
+
+
+
 
 ## TESTS  
   
