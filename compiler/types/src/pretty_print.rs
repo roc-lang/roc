@@ -345,13 +345,49 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
     }
 }
 
+enum ExtContent<'a> {
+    Empty,
+    Content(Variable, &'a Content),
+}
+
+impl<'a> ExtContent<'a> {
+    fn from_var(subs: &'a Subs, ext: Variable) -> Self {
+        let content = subs.get_content_without_compacting(ext);
+        match content {
+            Content::Structure(FlatType::EmptyTagUnion) => ExtContent::Empty,
+            Content::Structure(FlatType::EmptyRecord) => ExtContent::Empty,
+
+            Content::FlexVar(_) | Content::RigidVar(_) => ExtContent::Content(ext, content),
+
+            other => unreachable!("something weird ended up in an ext var: {:?}", other),
+        }
+    }
+}
+
+fn write_ext_content<'a>(
+    env: &Env,
+    subs: &'a Subs,
+    buf: &mut String,
+    ext_content: ExtContent<'a>,
+    parens: Parens,
+) {
+    if let ExtContent::Content(_, content) = ext_content {
+        // This is an open record or tag union, so print the variable
+        // right after the '}' or ']'
+        //
+        // e.g. the "*" at the end of `{ x: I64 }*`
+        // or the "r" at the end of `{ x: I64 }r`
+        write_content(env, content, subs, buf, parens)
+    }
+}
+
 fn write_sorted_tags<'a>(
     env: &Env,
     subs: &'a Subs,
     buf: &mut String,
     tags: &MutMap<TagName, Vec<Variable>>,
     ext_var: Variable,
-) -> Result<(), (Variable, &'a Content)> {
+) -> ExtContent<'a> {
     // Sort the fields so they always end up in the same order.
     let mut sorted_fields = Vec::with_capacity(tags.len());
 
@@ -399,7 +435,7 @@ fn write_sorted_tags<'a>(
         }
     }
 
-    ext_content
+    ExtContent::from_var(subs, ext_var)
 }
 
 fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut String, parens: Parens) {
@@ -485,14 +521,7 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
 
             buf.push_str(" ]");
 
-            if let Err((_, content)) = ext_content {
-                // This is an open tag union, so print the variable
-                // right after the ']'
-                //
-                // e.g. the "*" at the end of `{ x: I64 }*`
-                // or the "r" at the end of `{ x: I64 }r`
-                write_content(env, content, subs, buf, parens)
-            }
+            write_ext_content(env, subs, buf, ext_content, parens)
         }
 
         FunctionOrTagUnion(tag_name, _, ext_var) => {
@@ -504,14 +533,7 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
 
             buf.push_str(" ]");
 
-            if let Err((_, content)) = ext_content {
-                // This is an open tag union, so print the variable
-                // right after the ']'
-                //
-                // e.g. the "*" at the end of `{ x: I64 }*`
-                // or the "r" at the end of `{ x: I64 }r`
-                write_content(env, content, subs, buf, parens)
-            }
+            write_ext_content(env, subs, buf, ext_content, parens)
         }
 
         RecursiveTagUnion(rec_var, tags, ext_var) => {
@@ -521,14 +543,7 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
 
             buf.push_str(" ]");
 
-            if let Err((_, content)) = ext_content {
-                // This is an open tag union, so print the variable
-                // right after the ']'
-                //
-                // e.g. the "*" at the end of `{ x: I64 }*`
-                // or the "r" at the end of `{ x: I64 }r`
-                write_content(env, content, subs, buf, parens)
-            }
+            write_ext_content(env, subs, buf, ext_content, parens);
 
             buf.push_str(" as ");
             write_content(
