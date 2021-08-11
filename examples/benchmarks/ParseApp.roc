@@ -1,9 +1,9 @@
 app "parseapp"
-    packages { base: "platform" }
-    imports [base.Task,
-      Parser.{ runToString, showU8, any, satisfy, first, second, map, andThen },
-      Test]
-    provides [ main ] to base
+     packages { base: "platform" }
+     imports [base.Task,
+        Parser.{ runToString, showU8, any, satisfy, first, second, map, andThen },
+        Test]
+     provides [ main ] to base
 
 main : Task.Task {} []
 main =
@@ -22,8 +22,11 @@ main =
     p6 = {name: "Use andThen to recognize strings beginning with two repeated letters (succeed on input \"aaxyz\")", test: run "aaxyz" (andThen any satisfyWhatCameBefore) == "a"}
 
     [Test.eval p1, Test.eval p2, Test.eval p3, Test.eval p4, Test.eval p5, Test.eval p6] 
-    # List.map [p1, p2, p3, p4, p5, p6] 
-    # |> Test.eval
-    |> Test.strListToStr "\n"
+       |> Test.strListToStr "\n"
        |> Task.putLine
 
+#    The below does not work:
+#
+#    List.map [p1, p2, p3, p4, p5, p6] Test.eval
+#       |> Test.strListToStr "\n"
+#       |> Task.putLine
