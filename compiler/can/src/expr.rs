@@ -1600,10 +1600,10 @@ fn flatten_str_lines<'a>(
                             buf.push(ch);
                         }
                         None => {
-                            env.problem(Problem::InvalidUnicodeCodePoint(loc_hex_digits.region));
+                            env.problem(Problem::InvalidUnicodeCodePt(loc_hex_digits.region));
 
                             return (
-                                Expr::RuntimeError(RuntimeError::InvalidUnicodeCodePoint(
+                                Expr::RuntimeError(RuntimeError::InvalidUnicodeCodePt(
                                     loc_hex_digits.region,
                                 )),
                                 output,

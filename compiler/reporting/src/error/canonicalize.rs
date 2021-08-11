@@ -313,7 +313,7 @@ pub fn can_problem<'b>(
             ]),
             alloc.reflow(r"Learn more about working with unicode in roc at TODO"),
         ]),
-        Problem::InvalidUnicodeCodePoint(region) => alloc.stack(vec![
+        Problem::InvalidUnicodeCodePt(region) => alloc.stack(vec![
             alloc.reflow("This unicode code point is invalid:"),
             alloc.region(region),
             alloc.reflow("Learn more about working with unicode in roc at TODO"),
@@ -931,7 +931,7 @@ fn pretty_runtime_error<'b>(
                 region
             );
         }
-        RuntimeError::InvalidUnicodeCodePoint(region) => {
+        RuntimeError::InvalidUnicodeCodePt(region) => {
             todo!(
                 "TODO runtime error for an invalid \\u(...) code point at region {:?}",
                 region

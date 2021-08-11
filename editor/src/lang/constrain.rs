@@ -1,7 +1,7 @@
 use bumpalo::{collections::Vec as BumpVec, Bump};
 
 use crate::lang::{
-    ast::{Expr2, ExprId, RecordField, ValueDef, WhenBranch},
+    ast::{ClosureExtra, Expr2, ExprId, RecordField, ValueDef, WhenBranch},
     expr::Env,
     pattern::{DestructType, Pattern2, PatternId, PatternState2, RecordDestruct},
     pool::{Pool, PoolStr, PoolVec, ShallowClone},
@@ -934,7 +934,94 @@ pub fn constrain_expr<'a>(
 
             exists(arena, vars, And(and_constraints))
         }
-        Expr2::Closure { .. } => todo!(),
+        Expr2::Closure {
+            args,
+            name,
+            body: body_id,
+            function_type: fn_var,
+            extra,
+            ..
+        } => {
+            // NOTE defs are treated somewhere else!
+            let body = env.pool.get(*body_id);
+
+            let ClosureExtra {
+                captured_symbols,
+                return_type: ret_var,
+                closure_type: closure_var,
+                closure_ext_var,
+            } = env.pool.get(*extra);
+
+            let closure_type = Type2::Variable(*closure_var);
+            let return_type = Type2::Variable(*ret_var);
+
+            let (mut vars, pattern_state, function_type) =
+                constrain_untyped_args(arena, env, args, closure_type, return_type.shallow_clone());
+
+            vars.push(*ret_var);
+            vars.push(*closure_var);
+            vars.push(*closure_ext_var);
+            vars.push(*fn_var);
+
+            let expected_body_type = Expected::NoExpectation(return_type);
+            // Region here should come from body expr
+            let ret_constraint = constrain_expr(arena, env, body, expected_body_type, region);
+
+            let captured_symbols_as_vec = captured_symbols
+                .iter(env.pool)
+                .copied()
+                .collect::<Vec<(Symbol, Variable)>>();
+
+            // make sure the captured symbols are sorted!
+            debug_assert_eq!(captured_symbols_as_vec, {
+                let mut copy: Vec<(Symbol, Variable)> = captured_symbols_as_vec.clone();
+
+                copy.sort();
+
+                copy
+            });
+
+            let closure_constraint = constrain_closure_size(
+                arena,
+                env,
+                *name,
+                region,
+                captured_symbols,
+                *closure_var,
+                *closure_ext_var,
+                &mut vars,
+            );
+
+            let mut and_constraints = BumpVec::with_capacity_in(4, arena);
+
+            and_constraints.push(Let(arena.alloc(LetConstraint {
+                rigid_vars: BumpVec::new_in(arena),
+                flex_vars: pattern_state.vars,
+                def_types: pattern_state.headers,
+                defs_constraint: And(pattern_state.constraints),
+                ret_constraint,
+            })));
+
+            // "the closure's type is equal to expected type"
+            and_constraints.push(Eq(
+                function_type.shallow_clone(),
+                expected,
+                Category::Lambda,
+                region,
+            ));
+
+            // "fn_var is equal to the closure's type" - fn_var is used in code gen
+            and_constraints.push(Eq(
+                Type2::Variable(*fn_var),
+                Expected::NoExpectation(function_type),
+                Category::Storage(std::file!(), std::line!()),
+                region,
+            ));
+
+            and_constraints.push(closure_constraint);
+
+            exists(arena, vars, And(and_constraints))
+        }
         Expr2::LetRec { .. } => todo!(),
         Expr2::LetFunction { .. } => todo!(),
     }
@@ -1404,6 +1491,115 @@ fn constrain_tag_pattern<'a>(
     state.vars.push(ext_var);
     state.constraints.push(whole_con);
     state.constraints.push(tag_con);
+}
+
+fn constrain_untyped_args<'a>(
+    arena: &'a Bump,
+    env: &mut Env,
+    arguments: &PoolVec<(Variable, PatternId)>,
+    closure_type: Type2,
+    return_type: Type2,
+) -> (BumpVec<'a, Variable>, PatternState2<'a>, Type2) {
+    let mut vars = BumpVec::with_capacity_in(arguments.len(), arena);
+
+    let pattern_types = PoolVec::with_capacity(arguments.len() as u32, env.pool);
+
+    let mut pattern_state = PatternState2 {
+        headers: BumpMap::new_in(arena),
+        vars: BumpVec::with_capacity_in(1, arena),
+        constraints: BumpVec::with_capacity_in(1, arena),
+    };
+
+    for (arg_node_id, pattern_type_id) in
+        arguments.iter_node_ids().zip(pattern_types.iter_node_ids())
+    {
+        let (pattern_var, pattern_id) = env.pool.get(arg_node_id);
+        let pattern = env.pool.get(*pattern_id);
+
+        let pattern_type = Type2::Variable(*pattern_var);
+        let pattern_expected = PExpected::NoExpectation(pattern_type.shallow_clone());
+
+        env.pool[pattern_type_id] = pattern_type;
+
+        constrain_pattern(
+            arena,
+            env,
+            pattern,
+            // TODO needs to come from pattern
+            Region::zero(),
+            pattern_expected,
+            &mut pattern_state,
+        );
+
+        vars.push(*pattern_var);
+    }
+
+    let function_type = Type2::Function(
+        pattern_types,
+        env.pool.add(closure_type),
+        env.pool.add(return_type),
+    );
+
+    (vars, pattern_state, function_type)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn constrain_closure_size<'a>(
+    arena: &'a Bump,
+    env: &mut Env,
+    name: Symbol,
+    region: Region,
+    captured_symbols: &PoolVec<(Symbol, Variable)>,
+    closure_var: Variable,
+    closure_ext_var: Variable,
+    variables: &mut BumpVec<'a, Variable>,
+) -> Constraint<'a> {
+    use Constraint::*;
+
+    debug_assert!(variables.iter().any(|s| *s == closure_var));
+    debug_assert!(variables.iter().any(|s| *s == closure_ext_var));
+
+    let tag_arguments = PoolVec::with_capacity(captured_symbols.len() as u32, env.pool);
+    let mut captured_symbols_constraints = BumpVec::with_capacity_in(captured_symbols.len(), arena);
+
+    for (captured_symbol_id, tag_arg_id) in captured_symbols
+        .iter_node_ids()
+        .zip(tag_arguments.iter_node_ids())
+    {
+        let (symbol, var) = env.pool.get(captured_symbol_id);
+
+        // make sure the variable is registered
+        variables.push(*var);
+
+        let tag_arg_type = Type2::Variable(*var);
+
+        // this symbol is captured, so it must be part of the closure type
+        env.pool[tag_arg_id] = tag_arg_type.shallow_clone();
+
+        // make the variable equal to the looked-up type of symbol
+        captured_symbols_constraints.push(Lookup(
+            *symbol,
+            Expected::NoExpectation(tag_arg_type),
+            Region::zero(),
+        ));
+    }
+
+    let tag_name = TagName::Closure(name);
+    let closure_type = Type2::TagUnion(
+        PoolVec::new(vec![(tag_name, tag_arguments)].into_iter(), env.pool),
+        env.pool.add(Type2::Variable(closure_ext_var)),
+    );
+
+    let finalizer = Eq(
+        Type2::Variable(closure_var),
+        Expected::NoExpectation(closure_type),
+        Category::ClosureSize,
+        region,
+    );
+
+    captured_symbols_constraints.push(finalizer);
+
+    And(captured_symbols_constraints)
 }
 
 #[inline(always)]

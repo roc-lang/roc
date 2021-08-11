@@ -1590,7 +1590,7 @@ mod test_can {
     //         // (Rust has this restriction. I assume it's a good idea.)
     //         assert_malformed_str(
     //             r#""abc\u{110000}def""#,
-    //             vec![Located::new(0, 7, 0, 12, Problem::UnicodeCodePointTooLarge)],
+    //             vec![Located::new(0, 7, 0, 12, Problem::UnicodeCodePtTooLarge)],
     //         );
     //     }
 
