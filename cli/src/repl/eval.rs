@@ -162,8 +162,7 @@ fn jit_to_ast_help<'a>(
                 Content::Structure(FlatType::TagUnion(tags, _)) => {
                     debug_assert_eq!(tags.len(), 1);
 
-                    let (tag_name, payload_vars) =
-                        unpack_single_element_tag_union(&env.subs, *tags);
+                    let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
 
                     Ok(single_tag_union_to_ast(
                         env,
@@ -216,7 +215,7 @@ fn jit_to_ast_help<'a>(
                     debug_assert_eq!(union_layouts.len(), tags.len());
 
                     let tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)> = tags
-                        .unsorted_iterator(&env.subs, Variable::EMPTY_TAG_UNION)
+                        .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
                         .map(|(a, b)| (a.clone(), b.to_vec()))
                         .collect();
 
@@ -450,7 +449,7 @@ fn ptr_to_ast<'a>(
             Content::Structure(FlatType::TagUnion(tags, _)) => {
                 debug_assert_eq!(tags.len(), 1);
 
-                let (tag_name, payload_vars) = unpack_single_element_tag_union(&env.subs, *tags);
+                let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
                 single_tag_union_to_ast(env, ptr, field_layouts, tag_name, payload_vars)
             }
             Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
@@ -681,7 +680,7 @@ fn unpack_two_element_tag_union(
     let subs_slice = subs[payload_vars_index].as_subs_slice();
     let payload_vars2 = subs.get_subs_slice(*subs_slice);
 
-    (tag_name1, payload_vars2, tag_name2, payload_vars2)
+    (tag_name1, payload_vars1, tag_name2, payload_vars2)
 }
 
 fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a> {
@@ -730,8 +729,7 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                     }
                 }
                 FlatType::TagUnion(tags, _) if tags.len() == 1 => {
-                    let (tag_name, payload_vars) =
-                        unpack_single_element_tag_union(&env.subs, *tags);
+                    let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
 
                     let loc_tag_expr = {
                         let tag_name = &tag_name.as_ident_str(env.interns, env.home);
@@ -767,7 +765,7 @@ fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a
                 }
                 FlatType::TagUnion(tags, _) if tags.len() == 2 => {
                     let (tag_name_1, payload_vars_1, tag_name_2, payload_vars_2) =
-                        unpack_two_element_tag_union(&env.subs, *tags);
+                        unpack_two_element_tag_union(env.subs, *tags);
 
                     debug_assert!(payload_vars_1.is_empty());
                     debug_assert!(payload_vars_2.is_empty());
@@ -846,8 +844,7 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                     }
                 }
                 FlatType::TagUnion(tags, _) if tags.len() == 1 => {
-                    let (tag_name, payload_vars) =
-                        unpack_single_element_tag_union(&env.subs, *tags);
+                    let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
 
                     let loc_tag_expr = {
                         let tag_name = &tag_name.as_ident_str(env.interns, env.home);
@@ -886,7 +883,7 @@ fn byte_to_ast<'a>(env: &Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> 
                     debug_assert!(tags.len() > 2);
 
                     let tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)> = tags
-                        .unsorted_iterator(&env.subs, Variable::EMPTY_TAG_UNION)
+                        .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
                         .map(|(a, b)| (a.clone(), b.to_vec()))
                         .collect();
 
@@ -971,8 +968,7 @@ fn num_to_ast<'a>(env: &Env<'a, '_>, num_expr: Expr<'a>, content: &Content) -> E
                     // This was a single-tag union that got unwrapped at runtime.
                     debug_assert_eq!(tags.len(), 1);
 
-                    let (tag_name, payload_vars) =
-                        unpack_single_element_tag_union(&env.subs, *tags);
+                    let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
 
                     // If this tag union represents a number, skip right to
                     // returning tis as an Expr::Num

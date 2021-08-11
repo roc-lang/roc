@@ -446,7 +446,7 @@ fn write_sorted_tags<'a>(
     // If the `ext` contains tags, merge them into the list of tags.
     // this can occur when inferring mutually recursive tags
     let mut from_ext = Default::default();
-    let ext_content = chase_ext_tag_union(subs, ext_var, &mut from_ext);
+    let _ext_content = chase_ext_tag_union(subs, ext_var, &mut from_ext);
 
     for (tag_name, arguments) in from_ext.iter() {
         sorted_fields.push((tag_name, arguments));

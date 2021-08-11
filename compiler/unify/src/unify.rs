@@ -630,6 +630,7 @@ fn separate_union_tags(
     (separate(it1, it2), new_ext1, new_ext2)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn unify_tag_union_new(
     subs: &mut Subs,
     pool: &mut Pool,
@@ -1458,7 +1459,7 @@ fn unify_flat_type(
             debug_assert!(is_recursion_var(subs, *recursion_var));
             // this never happens in type-correct programs, but may happen if there is a type error
             let union1 = gather_tags(subs, tags1.clone(), *ext1);
-            let union2 = gather_tags_new(subs, tags2.clone(), *ext2);
+            let union2 = gather_tags_new(subs, *tags2, *ext2);
 
             unify_tag_union(
                 subs,
@@ -1472,7 +1473,7 @@ fn unify_flat_type(
 
         (TagUnion(tags1, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
             debug_assert!(is_recursion_var(subs, *recursion_var));
-            let union1 = gather_tags_new(subs, tags1.clone(), *ext1);
+            let union1 = gather_tags_new(subs, *tags1, *ext1);
             let union2 = gather_tags(subs, tags2.clone(), *ext2);
 
             unify_tag_union_not_recursive_recursive(subs, pool, ctx, union1, union2, *recursion_var)
@@ -1573,7 +1574,7 @@ fn unify_flat_type(
         }
         (TagUnion(tags1, ext1), FunctionOrTagUnion(tag_name, _, ext2)) => {
             let tag_name = subs[*tag_name].clone();
-            let union1 = gather_tags_new(subs, tags1.clone(), *ext1);
+            let union1 = gather_tags_new(subs, *tags1, *ext1);
 
             let mut tags2 = MutMap::default();
             tags2.insert(tag_name, vec![]);
@@ -1587,7 +1588,7 @@ fn unify_flat_type(
             tags1.insert(tag_name, vec![]);
 
             let union1 = gather_tags(subs, tags1, *ext1);
-            let union2 = gather_tags_new(subs, tags2.clone(), *ext2);
+            let union2 = gather_tags_new(subs, *tags2, *ext2);
 
             unify_tag_union(subs, pool, ctx, union1, union2, (None, None))
         }
@@ -1906,8 +1907,6 @@ fn unify_function_or_tag_union_and_func(
     function_lambda_set: Variable,
     left: bool,
 ) -> Outcome {
-    use FlatType::*;
-
     let tag_name = subs[*tag_name_index].clone();
 
     let mut new_tags = MutMap::with_capacity_and_hasher(1, default_hasher());

@@ -1617,16 +1617,16 @@ pub fn gather_tags_unsorted_iter(
                 var = *sub_ext;
             }
 
-            Structure(FunctionOrTagUnion(tag_name_index, _, sub_ext)) => {
-                todo!()
+            Structure(FunctionOrTagUnion(_tag_name_index, _, _sub_ext)) => {
+                todo!("this variant does not use SOA yet, and therefore this case is unreachable right now")
                 //                let sub_fields: UnionTags = (*tag_name_index).into();
                 //                stack.push(sub_fields);
                 //
                 //                var = *sub_ext;
             }
 
-            Structure(RecursiveTagUnion(_, sub_fields, sub_ext)) => {
-                todo!()
+            Structure(RecursiveTagUnion(_, _sub_fields, _sub_ext)) => {
+                todo!("this variant does not use SOA yet, and therefore this case is unreachable right now")
                 //                stack.push(*sub_fields);
                 //
                 //                var = *sub_ext;

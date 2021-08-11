@@ -1119,7 +1119,7 @@ pub fn is_empty_tag_union(subs: &Subs, mut var: Variable) -> bool {
                 var = *actual_var;
             }
 
-            other => {
+            _other => {
                 return false;
             }
         }
@@ -1454,7 +1454,7 @@ fn explicit_substitute(
                                 Structure(Func(arg_vars, new_closure_var, new_ret_var)),
                             );
                         }
-                        TagUnion(mut tags, ext_var) => {
+                        TagUnion(tags, ext_var) => {
                             let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
 
                             let mut new_slices = Vec::new();
