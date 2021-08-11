@@ -971,6 +971,36 @@ impl UnionTags {
             tag_names: SubsSlice::new(tag_names_start, length),
         }
     }
+
+    pub fn iter_all(
+        &self,
+    ) -> impl Iterator<Item = (SubsIndex<TagName>, SubsIndex<VariableSubsSlice>)> {
+        self.tag_names.into_iter().zip(self.variables.into_iter())
+    }
+
+    #[inline(always)]
+    pub fn unsorted_iterator<'a>(
+        &'a self,
+        subs: &'a Subs,
+        ext: Variable,
+    ) -> impl Iterator<Item = (&TagName, &[Variable])> + 'a {
+        let (it, _) = crate::types::gather_tags_unsorted_iter(subs, *self, ext);
+
+        it.map(move |(label, slice)| (label, subs.get_subs_slice(*slice.as_subs_slice())))
+    }
+
+    pub fn unsorted_iterator_and_ext<'a>(
+        &'a self,
+        subs: &'a Subs,
+        ext: Variable,
+    ) -> (impl Iterator<Item = (&TagName, &[Variable])> + 'a, Variable) {
+        let (it, ext) = crate::types::gather_tags_unsorted_iter(subs, *self, ext);
+
+        (
+            it.map(move |(label, slice)| (label, subs.get_subs_slice(*slice.as_subs_slice()))),
+            ext,
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
