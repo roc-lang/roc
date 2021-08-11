@@ -1166,7 +1166,6 @@ fn applied_tag_function_linked_list() {
 }
 
 #[test]
-#[ignore]
 #[should_panic(expected = "")]
 fn tag_must_be_its_own_type() {
     assert_evals_to!(
