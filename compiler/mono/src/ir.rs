@@ -7804,7 +7804,11 @@ fn match_on_lambda_set<'a>(
                 env.arena.alloc(result),
             )
         }
+
         Layout::Struct(fields) => {
+            dbg!(&env.subs);
+            panic!();
+
             let function_symbol = lambda_set.set[0].0;
 
             union_lambda_set_branch_help(

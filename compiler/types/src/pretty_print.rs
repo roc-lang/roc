@@ -1,7 +1,7 @@
 use crate::subs::{Content, FlatType, GetSubsSlice, Subs, UnionTags, Variable};
 use crate::types::{name_type_var, RecordField};
 use roc_collections::all::{MutMap, MutSet};
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::ident::Lowercase;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 
 static WILDCARD: &str = "*";
@@ -399,6 +399,7 @@ fn write_sorted_tags<'a>(
     // Sort the fields so they always end up in the same order.
     let (it, new_ext_var) = tags.unsorted_iterator_and_ext(subs, ext_var);
     let mut sorted_fields: Vec<_> = it.collect();
+    dbg!(&sorted_fields);
 
     let interns = &env.interns;
     let home = env.home;

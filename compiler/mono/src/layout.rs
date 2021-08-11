@@ -1278,7 +1278,7 @@ fn layout_from_flat_type<'a>(
             let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
 
             // VERY IMPORTANT: sort the tags
-            let mut tags_vec: std::vec::Vec<_> = tags.sorted_iterator(subs, ext_var).collect();
+            let tags_vec: std::vec::Vec<_> = tags.sorted_iterator(subs, ext_var).collect();
 
             let mut nullable = None;
 
@@ -2029,7 +2029,7 @@ fn layout_from_tag_union<'a>(arena: &'a Bump, tags: UnionTags, subs: &Subs) -> L
                 BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
                 ByteUnion(_) => Layout::Builtin(Builtin::Int8),
                 Newtype {
-                    arguments: mut field_layouts,
+                    arguments: field_layouts,
                     ..
                 } => {
                     let field_layouts = Vec::from_iter_in(field_layouts, arena).into_bump_slice();

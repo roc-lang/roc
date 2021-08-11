@@ -1127,6 +1127,28 @@ fn applied_tag_function() {
 }
 
 #[test]
+fn foobar() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            y : Result Str {}
+            y = Ok "foo"
+
+            z : Result Str {}
+            z = Err {} 
+
+            f = \a, b -> if True then a else b
+            when f y z is
+                Ok _ -> "bar"
+                Err _ -> "baz"
+            "#
+        ),
+        RocStr::from_slice(b"bar"),
+        RocStr
+    );
+}
+
+#[test]
 fn applied_tag_function_result() {
     assert_evals_to!(
         indoc!(

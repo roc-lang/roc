@@ -751,7 +751,7 @@ fn type_to_variable(
             let (it, new_ext_var) = gather_tags_unsorted_iter(subs, union_tags, temp_ext_var);
 
             if cfg!(debug_assertions) {
-                assert_eq!(it.count(), 0);
+                assert_eq!(it.count(), 1);
             } else {
                 drop(it);
             }
@@ -878,6 +878,8 @@ fn check_for_infinite_type(
         let description = subs.get(recursive);
         let content = description.content;
 
+        dbg!(recursive, &_chain, &subs);
+
         // try to make a tag union recursive, see if that helps
         match content {
             Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
@@ -913,7 +915,10 @@ fn check_for_infinite_type(
                 subs.set_content(recursive, Content::Structure(flat_type));
             }
 
-            _other => circular_error(subs, problems, symbol, &loc_var),
+            other => {
+                dbg!(&other, loc_var, &_chain, &subs);
+                circular_error(subs, problems, symbol, &loc_var)
+            }
         }
     }
 }
@@ -924,6 +929,7 @@ fn circular_error(
     symbol: Symbol,
     loc_var: &Located<Variable>,
 ) {
+    panic!();
     let var = loc_var.value;
     let (error_type, _) = subs.var_to_error_type(var);
     let problem = TypeError::CircularType(loc_var.region, symbol, error_type);

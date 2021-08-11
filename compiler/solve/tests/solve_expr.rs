@@ -90,6 +90,8 @@ mod solve_expr {
 
         let mut subs = solved.inner_mut();
 
+        dbg!(&subs);
+
         //        assert!(can_problems.is_empty());
         //        assert!(type_problems.is_empty());
         //        let CanExprOut {
@@ -2924,7 +2926,7 @@ mod solve_expr {
     }
 
     #[test]
-    fn peano_map_infer() {
+    fn peano_map_infer_not_nested() {
         infer_eq(
             indoc!(
                 r#"

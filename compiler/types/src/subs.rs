@@ -49,7 +49,7 @@ struct ErrorTypeState {
     problems: Vec<crate::types::Problem>,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>,
     pub variables: Vec<Variable>,
@@ -57,6 +57,19 @@ pub struct Subs {
     pub field_names: Vec<Lowercase>,
     pub record_fields: Vec<RecordField<()>>,
     pub variable_slices: Vec<VariableSubsSlice>,
+}
+
+impl Default for Subs {
+    fn default() -> Self {
+        Self {
+            utable: Default::default(),
+            variables: Default::default(),
+            tag_names: Default::default(),
+            field_names: Default::default(),
+            record_fields: Default::default(),
+            variable_slices: vec![VariableSubsSlice::default()],
+        }
+    }
 }
 
 /// A slice into the Vec<T> of subs
@@ -283,7 +296,83 @@ impl GetSubsSlice<Lowercase> for Subs {
 
 impl fmt::Debug for Subs {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.utable.fmt(f)
+        writeln!(f)?;
+        for i in 0..self.len() {
+            let var = Variable(i as u32);
+            let desc = self.get_without_compacting(var);
+
+            let root = self.get_root_key_without_compacting(var);
+
+            if var == root {
+                write!(f, "{} => ", i)?;
+
+                subs_fmt_desc(&desc, self, f)?;
+            } else {
+                write!(f, "{} => <{:?}>", i, root)?;
+            }
+
+            writeln!(f)?;
+        }
+
+        Ok(())
+    }
+}
+
+fn subs_fmt_desc(this: &Descriptor, subs: &Subs, f: &mut fmt::Formatter) -> fmt::Result {
+    subs_fmt_content(&this.content, subs, f)?;
+
+    write!(f, " r: {:?}", &this.rank)?;
+    write!(f, " m: {:?}", &this.mark)
+}
+
+fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt::Result {
+    match this {
+        Content::FlexVar(name) => write!(f, "Flex({:?})", name),
+        Content::RigidVar(name) => write!(f, "Rigid({:?})", name),
+        Content::RecursionVar {
+            structure,
+            opt_name,
+        } => write!(f, "Recursion({:?}, {:?})", structure, opt_name),
+        Content::Structure(flat_type) => subs_fmt_flat_type(flat_type, subs, f),
+        Content::Alias(name, arguments, actual) => {
+            write!(f, "Alias({:?}, {:?}, {:?})", name, arguments, actual)
+        }
+        Content::Error => write!(f, "Error"),
+    }
+}
+
+fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> fmt::Result {
+    match this {
+        FlatType::Apply(name, arguments) => write!(f, "Apply({:?}, {:?})", name, arguments,),
+        FlatType::Func(arguments, lambda_set, result) => {
+            let slice = subs.get_subs_slice(*arguments.as_subs_slice());
+            write!(f, "Func({:?}, {:?}, {:?})", slice, lambda_set, result)
+        }
+        FlatType::Record(_, _) => todo!(),
+        FlatType::TagUnion(tags, ext) => {
+            write!(f, "[ ")?;
+
+            let (it, new_ext) = tags.sorted_iterator_and_ext(subs, *ext);
+            for (name, slice) in it {
+                write!(f, "{:?} {:?}, ", name, slice)?;
+            }
+
+            write!(f, "]<{:?}>", new_ext)
+        }
+        FlatType::FunctionOrTagUnion(_, _, _) => todo!(),
+        FlatType::RecursiveTagUnion(rec, tags, ext) => {
+            write!(f, "[ ")?;
+
+            let (it, new_ext) = tags.sorted_iterator_and_ext(subs, *ext);
+            for (name, slice) in it {
+                write!(f, "{:?} {:?}, ", name, slice)?;
+            }
+
+            write!(f, "]<{:?}> as <{:?}>", new_ext, rec)
+        }
+        FlatType::Erroneous(e) => write!(f, "Erroneous({:?})", e),
+        FlatType::EmptyRecord => write!(f, "EmptyRecord"),
+        FlatType::EmptyTagUnion => write!(f, "EmptyTagUnion"),
     }
 }
 
@@ -883,7 +972,7 @@ pub enum Builtin {
     EmptyRecord,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct VariableSubsSlice {
     slice: SubsSlice<Variable>,
 }
@@ -940,7 +1029,7 @@ pub struct UnionTags {
 impl From<SubsIndex<TagName>> for UnionTags {
     fn from(input: SubsIndex<TagName>) -> Self {
         let tag_names = SubsSlice::new(input.start, 1);
-        let variables = SubsSlice::default();
+        let variables = SubsSlice::new(0, 1);
 
         Self {
             tag_names,
@@ -1493,16 +1582,35 @@ fn explicit_substitute(
                         TagUnion(tags, ext_var) => {
                             let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
 
+                            let mut new_slices = Vec::new();
                             for slice_index in tags.variables {
                                 let slice = subs[slice_index];
+
+                                let mut new_variables = Vec::new();
                                 for var_index in slice {
                                     let var = subs[var_index];
                                     let new_var = explicit_substitute(subs, from, to, var, seen);
-                                    subs[var_index] = new_var;
+                                    new_variables.push(new_var);
+                                    // subs[var_index] = new_var;
                                 }
+
+                                let start = subs.variables.len() as u32;
+                                let length = new_variables.len() as u16;
+
+                                subs.variables.extend(new_variables);
+
+                                new_slices.push(VariableSubsSlice::new(start, length));
                             }
 
-                            subs.set_content(in_var, Structure(TagUnion(tags, new_ext_var)));
+                            let start = subs.variable_slices.len() as u32;
+                            let length = new_slices.len() as u16;
+
+                            subs.variable_slices.extend(new_slices);
+
+                            let mut union_tags = tags;
+                            union_tags.variables = SubsSlice::new(start, length);
+
+                            subs.set_content(in_var, Structure(TagUnion(union_tags, new_ext_var)));
                         }
                         FunctionOrTagUnion(tag_name, symbol, ext_var) => {
                             let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
@@ -1511,18 +1619,37 @@ fn explicit_substitute(
                                 Structure(FunctionOrTagUnion(tag_name, symbol, new_ext_var)),
                             );
                         }
-                        RecursiveTagUnion(rec_var, mut tags, ext_var) => {
+                        RecursiveTagUnion(rec_var, tags, ext_var) => {
                             // NOTE rec_var is not substituted, verify that this is correct!
                             let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
 
+                            let mut new_slices = Vec::new();
                             for slice_index in tags.variables {
                                 let slice = subs[slice_index];
+
+                                let mut new_variables = Vec::new();
                                 for var_index in slice {
                                     let var = subs[var_index];
                                     let new_var = explicit_substitute(subs, from, to, var, seen);
-                                    subs[var_index] = new_var;
+                                    new_variables.push(new_var);
+                                    // subs[var_index] = new_var;
                                 }
+
+                                let start = subs.variables.len() as u32;
+                                let length = new_variables.len() as u16;
+
+                                subs.variables.extend(new_variables);
+
+                                new_slices.push(VariableSubsSlice::new(start, length));
                             }
+
+                            let start = subs.variable_slices.len() as u32;
+                            let length = new_slices.len() as u16;
+
+                            subs.variable_slices.extend(new_slices);
+
+                            let mut union_tags = tags;
+                            union_tags.variables = SubsSlice::new(start, length);
 
                             subs.set_content(
                                 in_var,

@@ -1544,7 +1544,7 @@ pub fn gather_tags_unsorted_iter(
     let mut stack = vec![other_fields];
 
     loop {
-        match subs.get_content_without_compacting(var) {
+        match dbg!(subs.get_content_without_compacting(var)) {
             Structure(TagUnion(sub_fields, sub_ext)) => {
                 stack.push(*sub_fields);
 
@@ -1578,6 +1578,8 @@ pub fn gather_tags_unsorted_iter(
             other => unreachable!("something weird ended up in a tag union type: {:?}", other),
         }
     }
+
+    dbg!(&stack);
 
     let it = stack
         .into_iter()

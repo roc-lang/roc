@@ -1,4 +1,4 @@
-use roc_collections::all::{default_hasher, get_shared, relative_complement, union, MutMap};
+use roc_collections::all::{default_hasher, MutMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::subs::Content::{self, *};
@@ -783,6 +783,7 @@ fn unify_tag_union_not_recursive_recursive(
     initial_ext2: Variable,
     recursion_var: Variable,
 ) -> Outcome {
+    panic!();
     let (separate, ext1, ext2) =
         separate_union_tags(subs, tags1, initial_ext1, tags2, initial_ext2);
 
@@ -1590,7 +1591,15 @@ fn unify_function_or_tag_union_and_func(
 ) -> Outcome {
     use FlatType::*;
 
-    let new_tags: UnionTags = (*tag_name_index).into();
+    let new_tags: UnionTags = {
+        let mut temp: UnionTags = (*tag_name_index).into();
+        let start = subs.variable_slices.len();
+        subs.variable_slices.push(function_arguments);
+
+        temp.variables = SubsSlice::new(start as u32, 1);
+
+        temp
+    };
 
     let content = Structure(TagUnion(new_tags, tag_ext));
 
