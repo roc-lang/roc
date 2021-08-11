@@ -1101,7 +1101,6 @@ pub fn is_empty_tag_union(subs: &Subs, mut var: Variable) -> bool {
             Structure(EmptyTagUnion) => return true,
             Structure(TagUnion(sub_fields, sub_ext)) => {
                 if !sub_fields.is_empty() {
-                    dbg!(&sub_fields);
                     return false;
                 }
 
@@ -1109,7 +1108,6 @@ pub fn is_empty_tag_union(subs: &Subs, mut var: Variable) -> bool {
             }
             Structure(RecursiveTagUnion(_, sub_fields, sub_ext)) => {
                 if !sub_fields.is_empty() {
-                    dbg!(&sub_fields);
                     return false;
                 }
 
@@ -1122,7 +1120,6 @@ pub fn is_empty_tag_union(subs: &Subs, mut var: Variable) -> bool {
             }
 
             other => {
-                dbg!(&other);
                 return false;
             }
         }

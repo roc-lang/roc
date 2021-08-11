@@ -120,7 +120,7 @@ pub fn unify_pool(subs: &mut Subs, pool: &mut Pool, var1: Variable, var2: Variab
 }
 
 fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
-    if true {
+    if false {
         // if true, print the types that are unified.
         //
         // NOTE: names are generated here (when creating an error type) and that modifies names
@@ -1588,8 +1588,6 @@ fn unify_flat_type(
 
             let union1 = gather_tags(subs, tags1, *ext1);
             let union2 = gather_tags_new(subs, tags2.clone(), *ext2);
-
-            dbg!(&union1, &union2, tags2);
 
             unify_tag_union(subs, pool, ctx, union1, union2, (None, None))
         }
