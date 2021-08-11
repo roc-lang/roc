@@ -931,9 +931,21 @@ pub struct UnionTags {
 }
 
 impl UnionTags {
-    pub fn insert_into_subs<'a, I>(subs: &mut Subs, input: I) -> Self
+    pub fn len(&self) -> usize {
+        self.tag_names.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn compare<T>(x: &(TagName, T), y: &(TagName, T)) -> std::cmp::Ordering {
+        first(x, y)
+    }
+    pub fn insert_into_subs<I, I2>(subs: &mut Subs, input: I) -> Self
     where
-        I: IntoIterator<Item = (TagName, &'a [Variable])>,
+        I: IntoIterator<Item = (TagName, I2)>,
+        I2: IntoIterator<Item = Variable>,
     {
         let tag_names_start = subs.tag_names.len() as u32;
         let variables_start = subs.variable_slices.len() as u32;
@@ -946,7 +958,7 @@ impl UnionTags {
 
         let mut length = 0;
         for (k, v) in it {
-            let variables = VariableSubsSlice::insert_into_subs(subs, v.iter().copied());
+            let variables = VariableSubsSlice::insert_into_subs(subs, v.into_iter());
 
             subs.tag_names.push(k);
             subs.variable_slices.push(variables);
