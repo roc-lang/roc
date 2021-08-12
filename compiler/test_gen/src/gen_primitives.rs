@@ -2529,3 +2529,25 @@ fn pattern_match_unit_tag() {
         i64
     );
 }
+
+#[test]
+fn mirror_llvm_alignment_padding() {
+    // see https://github.com/rtfeldman/roc/issues/1569
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                main : Str
+                main =
+                    p1 = {name : "test1", test: 1 == 1 }
+
+                    List.map [p1, p1 ] (\{ test } -> if test  then "pass" else "fail")
+                       |> Str.joinWith "\n"
+
+            "#
+        ),
+        RocStr::from_slice(b"pass\npass"),
+        RocStr
+    );
+}

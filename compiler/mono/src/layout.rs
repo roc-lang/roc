@@ -636,6 +636,17 @@ impl<'a> Layout<'a> {
     }
 
     pub fn stack_size(&self, pointer_size: u32) -> u32 {
+        let width = self.stack_size_without_alignment(pointer_size);
+        let alignment = self.alignment_bytes(pointer_size);
+
+        if alignment != 0 && width % alignment > 0 {
+            width + alignment - (width % alignment)
+        } else {
+            width
+        }
+    }
+
+    fn stack_size_without_alignment(&self, pointer_size: u32) -> u32 {
         use Layout::*;
 
         match self {
