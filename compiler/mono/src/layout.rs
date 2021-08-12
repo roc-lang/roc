@@ -639,9 +639,7 @@ impl<'a> Layout<'a> {
         let width = self.stack_size_without_alignment(pointer_size);
         let alignment = self.alignment_bytes(pointer_size);
 
-        if alignment == 0 {
-            width
-        } else if width % alignment > 0 {
+        if alignment != 0 && width % alignment > 0 {
             width + alignment - (width % alignment)
         } else {
             width
