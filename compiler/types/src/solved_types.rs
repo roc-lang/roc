@@ -447,13 +447,16 @@ impl SolvedType {
 
                 let mut new_tags = Vec::with_capacity(tags.len());
 
-                for (tag_name, args) in tags {
-                    let mut new_args = Vec::with_capacity(args.len());
+                for (name_index, slice_index) in tags.iter_all() {
+                    let slice = subs[slice_index];
 
-                    for var in args {
-                        new_args.push(Self::from_var_help(subs, recursion_vars, *var));
+                    let mut new_args = Vec::with_capacity(slice.len());
+
+                    for var_index in slice {
+                        let var = subs[var_index];
+                        new_args.push(Self::from_var_help(subs, recursion_vars, var));
                     }
-
+                    let tag_name = subs[name_index].clone();
                     new_tags.push((tag_name.clone(), new_args));
                 }
 

@@ -82,6 +82,8 @@ fn find_names_needed(
 
         match content {
             Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+                let ext_var = *ext_var;
+
                 let mut new_tags = MutMap::default();
 
                 for (name_index, slice_index) in tags.iter_all() {
@@ -96,7 +98,12 @@ fn find_names_needed(
                     new_tags.insert(subs[name_index].clone(), new_vars);
                 }
 
-                let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, *ext_var);
+                let mut x: Vec<_> = new_tags.into_iter().collect();
+                x.sort();
+
+                let union_tags = UnionTags::insert_into_subs(subs, x);
+
+                let flat_type = FlatType::RecursiveTagUnion(rec_var, union_tags, ext_var);
                 subs.set_content(recursive, Content::Structure(flat_type));
             }
             _ => panic!(
@@ -178,11 +185,12 @@ fn find_names_needed(
             find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
         }
         Structure(RecursiveTagUnion(rec_var, tags, ext_var)) => {
-            let mut sorted_tags: Vec<_> = tags.iter().collect();
-            sorted_tags.sort();
-
-            for var in sorted_tags.into_iter().map(|(_, v)| v).flatten() {
-                find_names_needed(*var, subs, roots, root_appearances, names_taken);
+            for slice_index in tags.variables {
+                let slice = subs[slice_index];
+                for var_index in slice {
+                    let var = subs[var_index];
+                    find_names_needed(var, subs, roots, root_appearances, names_taken);
+                }
             }
 
             find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
@@ -587,7 +595,7 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
         RecursiveTagUnion(rec_var, tags, ext_var) => {
             buf.push_str("[ ");
 
-            let ext_content = write_sorted_tags(env, subs, buf, tags, *ext_var);
+            let ext_content = write_sorted_tags2(env, subs, buf, tags, *ext_var);
 
             buf.push_str(" ]");
 
@@ -629,8 +637,12 @@ pub fn chase_ext_tag_union<'a>(
         }
 
         Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
-            for (label, vars) in tags {
-                fields.push((label.clone(), vars.to_vec()));
+            for (name_index, slice_index) in tags.iter_all() {
+                let subs_slice = subs[slice_index];
+                let slice = subs.get_subs_slice(*subs_slice.as_subs_slice());
+                let tag_name = subs[name_index].clone();
+
+                fields.push((tag_name, slice.to_vec()));
             }
 
             chase_ext_tag_union(subs, *ext_var, fields)

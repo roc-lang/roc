@@ -902,18 +902,7 @@ fn unify_shared_tags_merge_new(
 ) -> Outcome {
     let flat_type = if let Some(rec) = recursion_var {
         debug_assert!(is_recursion_var(subs, rec));
-
-        let mut tags = MutMap::default();
-
-        for (name_index, slice_index) in new_tags.iter_all() {
-            let subs_slice = subs[slice_index];
-            let slice = subs.get_subs_slice(*subs_slice.as_subs_slice());
-            let tag = subs[name_index].clone();
-
-            tags.insert(tag, slice.to_vec());
-        }
-
-        FlatType::RecursiveTagUnion(rec, tags, new_ext_var)
+        FlatType::RecursiveTagUnion(rec, new_tags, new_ext_var)
     } else {
         FlatType::TagUnion(new_tags, new_ext_var)
     };
@@ -1296,7 +1285,7 @@ fn unify_shared_tags_recursive_not_recursive(
         let mut new_tags = union(matching_tags, &other_tags);
         new_tags.extend(fields.into_iter());
 
-        let flat_type = FlatType::RecursiveTagUnion(recursion_var, new_tags, new_ext_var);
+        let flat_type = from_mutmap_rec(subs, recursion_var, new_tags, new_ext_var);
 
         merge(subs, ctx, Structure(flat_type))
     } else {
@@ -1408,7 +1397,7 @@ fn unify_shared_tags_merge(
 ) -> Outcome {
     let flat_type = if let Some(rec) = recursion_var {
         debug_assert!(is_recursion_var(subs, rec));
-        FlatType::RecursiveTagUnion(rec, new_tags, new_ext_var)
+        from_mutmap_rec(subs, rec, new_tags, new_ext_var)
     } else {
         from_mutmap(subs, new_tags, new_ext_var)
     };
@@ -1458,7 +1447,7 @@ fn unify_flat_type(
         (RecursiveTagUnion(recursion_var, tags1, ext1), TagUnion(tags2, ext2)) => {
             debug_assert!(is_recursion_var(subs, *recursion_var));
             // this never happens in type-correct programs, but may happen if there is a type error
-            let union1 = gather_tags(subs, tags1.clone(), *ext1);
+            let union1 = gather_tags_new(subs, *tags1, *ext1);
             let union2 = gather_tags_new(subs, *tags2, *ext2);
 
             unify_tag_union(
@@ -1474,7 +1463,7 @@ fn unify_flat_type(
         (TagUnion(tags1, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
             debug_assert!(is_recursion_var(subs, *recursion_var));
             let union1 = gather_tags_new(subs, *tags1, *ext1);
-            let union2 = gather_tags(subs, tags2.clone(), *ext2);
+            let union2 = gather_tags_new(subs, *tags2, *ext2);
 
             unify_tag_union_not_recursive_recursive(subs, pool, ctx, union1, union2, *recursion_var)
         }
@@ -1482,8 +1471,8 @@ fn unify_flat_type(
         (RecursiveTagUnion(rec1, tags1, ext1), RecursiveTagUnion(rec2, tags2, ext2)) => {
             debug_assert!(is_recursion_var(subs, *rec1));
             debug_assert!(is_recursion_var(subs, *rec2));
-            let union1 = gather_tags(subs, tags1.clone(), *ext1);
-            let union2 = gather_tags(subs, tags2.clone(), *ext2);
+            let union1 = gather_tags_new(subs, *tags1, *ext1);
+            let union2 = gather_tags_new(subs, *tags2, *ext2);
 
             let mut problems =
                 unify_tag_union(subs, pool, ctx, union1, union2, (Some(*rec1), Some(*rec2)));
@@ -1602,7 +1591,7 @@ fn unify_flat_type(
             let mut tags2 = MutMap::default();
             tags2.insert(tag_name, vec![]);
 
-            let union1 = gather_tags(subs, tags1.clone(), *ext1);
+            let union1 = gather_tags_new(subs, *tags1, *ext1);
             let union2 = gather_tags(subs, tags2, *ext2);
 
             unify_tag_union(
@@ -1624,7 +1613,7 @@ fn unify_flat_type(
             tags1.insert(tag_name, vec![]);
 
             let union1 = gather_tags(subs, tags1, *ext1);
-            let union2 = gather_tags(subs, tags2.clone(), *ext2);
+            let union2 = gather_tags_new(subs, *tags2, *ext2);
 
             unify_tag_union_not_recursive_recursive(subs, pool, ctx, union1, union2, *recursion_var)
         }
@@ -1892,6 +1881,21 @@ pub fn from_mutmap(
     let union_tags = UnionTags::insert_into_subs(subs, vec);
 
     FlatType::TagUnion(union_tags, ext)
+}
+
+pub fn from_mutmap_rec(
+    subs: &mut Subs,
+    rec: Variable,
+    tags: MutMap<TagName, Vec<Variable>>,
+    ext: Variable,
+) -> FlatType {
+    let mut vec: Vec<_> = tags.into_iter().collect();
+
+    vec.sort();
+
+    let union_tags = UnionTags::insert_into_subs(subs, vec);
+
+    FlatType::RecursiveTagUnion(rec, union_tags, ext)
 }
 
 #[allow(clippy::too_many_arguments)]

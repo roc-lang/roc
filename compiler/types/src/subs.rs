@@ -1,5 +1,5 @@
 use crate::types::{name_type_var, ErrorType, Problem, RecordField, TypeExt};
-use roc_collections::all::{ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use std::fmt;
@@ -9,9 +9,9 @@ use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
-static_assertions::assert_eq_size!([u8; 72], Descriptor);
-static_assertions::assert_eq_size!([u8; 56], Content);
-static_assertions::assert_eq_size!([u8; 48], FlatType);
+static_assertions::assert_eq_size!([u8; 64], Descriptor);
+static_assertions::assert_eq_size!([u8; 48], Content);
+static_assertions::assert_eq_size!([u8; 40], FlatType);
 static_assertions::assert_eq_size!([u8; 48], Problem);
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
@@ -884,7 +884,7 @@ pub enum FlatType {
     Record(RecordFields, Variable),
     TagUnion(UnionTags, Variable),
     FunctionOrTagUnion(SubsIndex<TagName>, Symbol, Variable),
-    RecursiveTagUnion(Variable, MutMap<TagName, Vec<Variable>>, Variable),
+    RecursiveTagUnion(Variable, UnionTags, Variable),
     Erroneous(Box<Problem>),
     EmptyRecord,
     EmptyTagUnion,
@@ -1376,8 +1376,15 @@ fn occurs(
                     }
                     RecursiveTagUnion(_rec_var, tags, ext_var) => {
                         // TODO rec_var is excluded here, verify that this is correct
-                        let it = once(ext_var).chain(tags.values().flatten());
-                        short_circuit(subs, root_var, &new_seen, it)
+                        for slice_index in tags.variables {
+                            let slice = subs[slice_index];
+                            for var_index in slice {
+                                let var = subs[var_index];
+                                short_circuit_help(subs, root_var, &new_seen, var)?;
+                            }
+                        }
+
+                        short_circuit_help(subs, root_var, &new_seen, *ext_var)
                     }
                     EmptyRecord | EmptyTagUnion | Erroneous(_) => Ok(()),
                 }
@@ -1481,7 +1488,6 @@ fn explicit_substitute(
                                     let var = subs[var_index];
                                     let new_var = explicit_substitute(subs, from, to, var, seen);
                                     new_variables.push(new_var);
-                                    // subs[var_index] = new_var;
                                 }
 
                                 let start = subs.variables.len() as u32;
@@ -1509,17 +1515,40 @@ fn explicit_substitute(
                                 Structure(FunctionOrTagUnion(tag_name, symbol, new_ext_var)),
                             );
                         }
-                        RecursiveTagUnion(rec_var, mut tags, ext_var) => {
+                        RecursiveTagUnion(rec_var, tags, ext_var) => {
                             // NOTE rec_var is not substituted, verify that this is correct!
                             let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
-                            for (_, variables) in tags.iter_mut() {
-                                for var in variables.iter_mut() {
-                                    *var = explicit_substitute(subs, from, to, *var, seen);
+
+                            let mut new_slices = Vec::new();
+                            for slice_index in tags.variables {
+                                let slice = subs[slice_index];
+
+                                let mut new_variables = Vec::new();
+                                for var_index in slice {
+                                    let var = subs[var_index];
+                                    let new_var = explicit_substitute(subs, from, to, var, seen);
+                                    new_variables.push(new_var);
                                 }
+
+                                let start = subs.variables.len() as u32;
+                                let length = new_variables.len() as u16;
+
+                                subs.variables.extend(new_variables);
+
+                                new_slices.push(VariableSubsSlice::new(start, length));
                             }
+
+                            let start = subs.variable_slices.len() as u32;
+                            let length = new_slices.len() as u16;
+
+                            subs.variable_slices.extend(new_slices);
+
+                            let mut union_tags = tags;
+                            union_tags.variables = SubsSlice::new(start, length);
+
                             subs.set_content(
                                 in_var,
-                                Structure(RecursiveTagUnion(rec_var, tags, new_ext_var)),
+                                Structure(RecursiveTagUnion(rec_var, union_tags, new_ext_var)),
                             );
                         }
                         Record(vars_by_field, ext_var) => {
@@ -1657,9 +1686,11 @@ fn get_var_names(
                     let taken_names = get_var_names(subs, ext_var, taken_names);
                     let mut taken_names = get_var_names(subs, rec_var, taken_names);
 
-                    for vars in tags.values() {
-                        for arg_var in vars {
-                            taken_names = get_var_names(subs, *arg_var, taken_names)
+                    for slice_index in tags.variables {
+                        let slice = subs[slice_index];
+                        for var_index in slice {
+                            let arg_var = subs[var_index];
+                            taken_names = get_var_names(subs, arg_var, taken_names)
                         }
                     }
 
@@ -1947,13 +1978,16 @@ fn flat_type_to_err_type(
         RecursiveTagUnion(rec_var, tags, ext_var) => {
             let mut err_tags = SendMap::default();
 
-            for (tag, vars) in tags.into_iter() {
-                let mut err_vars = Vec::with_capacity(vars.len());
+            for (name_index, slice_index) in tags.iter_all() {
+                let mut err_vars = Vec::with_capacity(tags.len());
 
-                for var in vars {
+                let slice = subs[slice_index];
+                for var_index in slice {
+                    let var = subs[var_index];
                     err_vars.push(var_to_err_type(subs, state, var));
                 }
 
+                let tag = subs[name_index].clone();
                 err_tags.insert(tag, err_vars);
             }
 
@@ -2049,8 +2083,12 @@ fn restore_content(subs: &mut Subs, content: &Content) {
             }
 
             RecursiveTagUnion(rec_var, tags, ext_var) => {
-                for var in tags.values().flatten() {
-                    subs.restore(*var);
+                for slice_index in tags.variables {
+                    let slice = subs[slice_index];
+                    for var_index in slice {
+                        let var = subs[var_index];
+                        subs.restore(var);
+                    }
                 }
 
                 subs.restore(*ext_var);

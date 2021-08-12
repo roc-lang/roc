@@ -1299,8 +1299,22 @@ fn layout_from_flat_type<'a>(
             let rec_var = subs.get_root_key_without_compacting(rec_var);
             let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
 
+            let mut new_tags = MutMap::default();
+
+            for (tag_index, index) in tags.iter_all() {
+                let tag = subs[tag_index].clone();
+                let slice = subs[index];
+                let mut new_vars = std::vec::Vec::new();
+                for var_index in slice {
+                    let var = subs[var_index];
+                    new_vars.push(var);
+                }
+
+                new_tags.insert(tag, new_vars);
+            }
+
             // VERY IMPORTANT: sort the tags
-            let mut tags_vec: std::vec::Vec<_> = tags.into_iter().collect();
+            let mut tags_vec: std::vec::Vec<_> = new_tags.into_iter().collect();
             tags_vec.sort();
 
             let mut nullable = None;
