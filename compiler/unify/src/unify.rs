@@ -961,10 +961,11 @@ fn unify_flat_type(
         }
 
         (Apply(l_symbol, l_args), Apply(r_symbol, r_args)) if l_symbol == r_symbol => {
-            let problems = unify_zip(subs, pool, l_args.iter(), r_args.iter());
+            let problems =
+                unify_zip_slices(subs, pool, *l_args.as_subs_slice(), *r_args.as_subs_slice());
 
             if problems.is_empty() {
-                merge(subs, ctx, Structure(Apply(*r_symbol, (*r_args).clone())))
+                merge(subs, ctx, Structure(Apply(*r_symbol, *r_args)))
             } else {
                 problems
             }
@@ -1088,21 +1089,6 @@ fn unify_zip_slices(
         let l_var = subs[l_index];
         let r_var = subs[r_index];
 
-        problems.extend(unify_pool(subs, pool, l_var, r_var));
-    }
-
-    problems
-}
-
-fn unify_zip<'a, I>(subs: &mut Subs, pool: &mut Pool, left_iter: I, right_iter: I) -> Outcome
-where
-    I: Iterator<Item = &'a Variable>,
-{
-    let mut problems = Vec::new();
-
-    let it = left_iter.zip(right_iter);
-
-    for (&l_var, &r_var) in it {
         problems.extend(unify_pool(subs, pool, l_var, r_var));
     }
 

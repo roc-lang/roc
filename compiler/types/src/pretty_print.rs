@@ -150,8 +150,9 @@ fn find_names_needed(
             names_taken.insert(name.clone());
         }
         Structure(Apply(_, args)) => {
-            for var in args {
-                find_names_needed(*var, subs, roots, root_appearances, names_taken);
+            for index in args.into_iter() {
+                let var = subs[index];
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
         }
         Structure(Func(arg_vars, _closure_var, ret_var)) => {
@@ -498,7 +499,14 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
     use crate::subs::FlatType::*;
 
     match flat_type {
-        Apply(symbol, args) => write_apply(env, *symbol, args, subs, buf, parens),
+        Apply(symbol, args) => write_apply(
+            env,
+            *symbol,
+            subs.get_subs_slice(*args.as_subs_slice()),
+            subs,
+            buf,
+            parens,
+        ),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
         Func(args, _closure, ret) => write_fn(

@@ -9,9 +9,9 @@ use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
-static_assertions::assert_eq_size!([u8; 64], Descriptor);
-static_assertions::assert_eq_size!([u8; 48], Content);
-static_assertions::assert_eq_size!([u8; 40], FlatType);
+static_assertions::assert_eq_size!([u8; 56], Descriptor);
+static_assertions::assert_eq_size!([u8; 40], Content);
+static_assertions::assert_eq_size!([u8; 32], FlatType);
 static_assertions::assert_eq_size!([u8; 48], Problem);
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
@@ -879,7 +879,7 @@ impl Content {
 
 #[derive(Clone, Debug)]
 pub enum FlatType {
-    Apply(Symbol, Vec<Variable>),
+    Apply(Symbol, VariableSubsSlice),
     Func(VariableSubsSlice, Variable, Variable),
     Record(RecordFields, Variable),
     TagUnion(UnionTags, Variable),
@@ -1352,7 +1352,12 @@ fn occurs(
                 new_seen.insert(root_var);
 
                 match flat_type {
-                    Apply(_, args) => short_circuit(subs, root_var, &new_seen, args.iter()),
+                    Apply(_, args) => short_circuit(
+                        subs,
+                        root_var,
+                        &new_seen,
+                        subs.get_subs_slice(*args.as_subs_slice()).iter(),
+                    ),
                     Func(arg_vars, closure_var, ret_var) => {
                         let it = once(ret_var)
                             .chain(once(closure_var))
@@ -1459,12 +1464,13 @@ fn explicit_substitute(
                 Structure(flat_type) => {
                     match flat_type {
                         Apply(symbol, args) => {
-                            let new_args = args
-                                .iter()
-                                .map(|var| explicit_substitute(subs, from, to, *var, seen))
-                                .collect();
+                            for var_index in args.into_iter() {
+                                let var = subs[var_index];
+                                let answer = explicit_substitute(subs, from, to, var, seen);
+                                subs[var_index] = answer;
+                            }
 
-                            subs.set_content(in_var, Structure(Apply(symbol, new_args)));
+                            subs.set_content(in_var, Structure(Apply(symbol, args)));
                         }
                         Func(arg_vars, closure_var, ret_var) => {
                             for var_index in arg_vars.into_iter() {
@@ -1636,7 +1642,7 @@ fn get_var_names(
             Structure(flat_type) => match flat_type {
                 FlatType::Apply(_, args) => {
                     args.into_iter().fold(taken_names, |answer, arg_var| {
-                        get_var_names(subs, arg_var, answer)
+                        get_var_names(subs, subs[arg_var], answer)
                     })
                 }
 
@@ -1854,7 +1860,10 @@ fn flat_type_to_err_type(
         Apply(symbol, args) => {
             let arg_types = args
                 .into_iter()
-                .map(|var| var_to_err_type(subs, state, var))
+                .map(|index| {
+                    let arg_var = subs[index];
+                    var_to_err_type(subs, state, arg_var)
+                })
                 .collect();
 
             ErrorType::Type(symbol, arg_types)
@@ -2047,7 +2056,8 @@ fn restore_content(subs: &mut Subs, content: &Content) {
 
         Structure(flat_type) => match flat_type {
             Apply(_, args) => {
-                for &var in args {
+                for index in args.into_iter() {
+                    let var = subs[index];
                     subs.restore(var);
                 }
             }

@@ -644,12 +644,14 @@ fn type_to_variable(
     match typ {
         Variable(var) => *var,
         Apply(symbol, args) => {
-            let mut arg_vars = Vec::with_capacity(args.len());
+            let mut new_arg_vars = Vec::with_capacity(args.len());
 
             for arg in args {
-                arg_vars.push(type_to_variable(subs, rank, pools, cached, arg))
+                let var = type_to_variable(subs, rank, pools, cached, arg);
+                new_arg_vars.push(var);
             }
 
+            let arg_vars = VariableSubsSlice::insert_into_subs(subs, new_arg_vars);
             let flat_type = FlatType::Apply(*symbol, arg_vars);
             let content = Content::Structure(flat_type);
 
@@ -1055,9 +1057,9 @@ fn adjust_rank_content(
                 Apply(_, args) => {
                     let mut rank = Rank::toplevel();
 
-                    for var in args {
-                        rank =
-                            rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
+                    for var_index in args.into_iter() {
+                        let var = subs[var_index];
+                        rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
                     }
 
                     rank
@@ -1239,7 +1241,8 @@ fn instantiate_rigids_help(
         Structure(flat_type) => {
             match flat_type {
                 Apply(_, args) => {
-                    for var in args.into_iter() {
+                    for var_index in args.into_iter() {
+                        let var = subs[var_index];
                         instantiate_rigids_help(subs, max_rank, pools, var);
                     }
                 }
@@ -1378,12 +1381,17 @@ fn deep_copy_var_help(
         Structure(flat_type) => {
             let new_flat_type = match flat_type {
                 Apply(symbol, args) => {
-                    let args = args
-                        .into_iter()
-                        .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
-                        .collect();
+                    let mut new_arg_vars = Vec::with_capacity(args.len());
 
-                    Apply(symbol, args)
+                    for index in args.into_iter() {
+                        let var = subs[index];
+                        let copy_var = deep_copy_var_help(subs, max_rank, pools, var);
+                        new_arg_vars.push(copy_var);
+                    }
+
+                    let arg_vars = VariableSubsSlice::insert_into_subs(subs, new_arg_vars);
+
+                    Apply(symbol, arg_vars)
                 }
 
                 Func(arg_vars, closure_var, ret_var) => {

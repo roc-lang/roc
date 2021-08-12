@@ -1121,6 +1121,8 @@ fn layout_from_flat_type<'a>(
 
     match flat_type {
         Apply(symbol, args) => {
+            let args = Vec::from_iter_in(args.into_iter().map(|index| subs[index]), arena);
+
             match symbol {
                 // Ints
                 Symbol::NUM_NAT => {
@@ -1188,8 +1190,8 @@ fn layout_from_flat_type<'a>(
                     // Num.Num should only ever have 1 argument, e.g. Num.Num Int.Integer
                     debug_assert_eq!(args.len(), 1);
 
-                    let var = args.first().unwrap();
-                    let content = subs.get_content_without_compacting(*var);
+                    let var = args[0];
+                    let content = subs.get_content_without_compacting(var);
 
                     layout_from_num_content(content)
                 }
@@ -1199,7 +1201,10 @@ fn layout_from_flat_type<'a>(
                 Symbol::DICT_DICT => dict_layout_from_key_value(env, args[0], args[1]),
                 Symbol::SET_SET => dict_layout_from_key_value(env, args[0], Variable::EMPTY_RECORD),
                 _ => {
-                    panic!("TODO layout_from_flat_type for {:?}", Apply(symbol, args));
+                    panic!(
+                        "TODO layout_from_flat_type for Apply({:?}, {:?})",
+                        symbol, args
+                    );
                 }
             }
         }
