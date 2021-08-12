@@ -1261,7 +1261,7 @@ fn layout_from_flat_type<'a>(
         TagUnion(tags, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
-            let mut new_tags = MutMap::default();
+            let mut new_tags = std::vec::Vec::with_capacity(tags.len());
 
             for (tag_index, index) in tags.iter_all() {
                 let tag = subs[tag_index].clone();
@@ -1272,7 +1272,7 @@ fn layout_from_flat_type<'a>(
                     new_vars.push(var);
                 }
 
-                new_tags.insert(tag, new_vars);
+                new_tags.push((tag, new_vars));
             }
 
             Ok(layout_from_tag_union(arena, new_tags, subs))
@@ -1280,8 +1280,7 @@ fn layout_from_flat_type<'a>(
         FunctionOrTagUnion(tag_name, _, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
-            let mut tags = MutMap::default();
-            tags.insert(subs[tag_name].clone(), vec![]);
+            let tags = std::vec![(subs[tag_name].clone(), std::vec::Vec::new())];
 
             Ok(layout_from_tag_union(arena, tags, subs))
         }
@@ -1624,7 +1623,7 @@ pub fn union_sorted_tags_help<'a>(
     subs: &Subs,
 ) -> UnionVariant<'a> {
     // sort up front; make sure the ordering stays intact!
-    tags_vec.sort();
+    tags_vec.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
     let mut env = Env {
         arena,
@@ -1831,7 +1830,7 @@ pub fn union_sorted_tags_help<'a>(
 
 pub fn layout_from_tag_union<'a>(
     arena: &'a Bump,
-    tags: MutMap<TagName, std::vec::Vec<Variable>>,
+    tags: std::vec::Vec<(TagName, std::vec::Vec<Variable>)>,
     subs: &Subs,
 ) -> Layout<'a> {
     use UnionVariant::*;
