@@ -1,13 +1,13 @@
 app "parseapp"
      packages { base: "platform" }
      imports [base.Task, 
-        Parser.{succesful, runToString, showU8, any, satisfy, first, second, map, andThen, oneOf },
-        Test]
+        Parser.{succesful, runToString, any, satisfy, first, second, map, andThen, oneOf },
+        Test, Utility]
      provides [ main ] to base
 
 main : Task.Task {} []
 main =
-    run = \input, parser -> runToString showU8 input parser 
+    run = \input, parser -> runToString Utility.showU8 input parser 
 
     p1 = {name : "run \"abcd any => \"a\"", test: run "abcd" any == "a" }
 
@@ -15,7 +15,7 @@ main =
     satisfyB = satisfy (\u -> u == 98)
     satisfyWhatCameBefore = \u2 -> Parser.satisfy (\u3 -> u3 == u2)
 
-    satisfyResult = satisfyA [97, 98, 99, 100]
+    # satisfyResult = satisfyA [97, 98, 99, 100]
 
     # oneOfResult = (oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]
 

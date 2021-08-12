@@ -9,7 +9,7 @@ eval : Test -> Str
 eval = \{ name, test } -> Str.concat (passFail test) name
 
 run : List Test -> Str
-run = \tests -> List.map tests eval |> Utility.strListToStr "\n"
+run = \tests -> List.map tests eval |> Utility.concatStrListWithSeparator "\n" |> Utility.spaceAboveBelow
 
 
 

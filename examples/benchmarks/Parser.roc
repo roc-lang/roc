@@ -1,5 +1,5 @@
 interface Parser exposes [  showPair, makePair, testPair, 
-   runToString, showU8,
+   runToString,
    Parser, run, successful, map, andThen, oneOf, first, second,
    succeed, any,  satisfy, fail] imports [Pair]
 
@@ -12,18 +12,6 @@ showPair = \(Pair a b) ->
         Ok bb -> Str.concat (Str.concat a "::") bb
         _ -> "Could not convert (List U8)"
 
-showU8 : U8 -> Str
-showU8 = 
-   \u -> when Str.fromUtf8 [u] is 
-      Ok str -> str
-      _ -> "Oops, could not convert U8"
-
-showPair2 : [Pair U8 (List U8)] -> Str
-showPair2 = \(Pair a b) -> 
-    when Str.fromUtf8 b is 
-        Ok bb -> 
-            Str.concat (Str.concat (showU8 a) "::") bb
-        _ -> "Could not convert (List U8)"
 
 makePair : Str, Str -> [Pair Str (List U8)]
 makePair = 
