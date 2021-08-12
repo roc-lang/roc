@@ -1,4 +1,4 @@
-interface Test exposes [  Test, eval, run, strListToStr ] imports [ Utility]
+interface Test exposes [  Test, eval, run ] imports [ Utility]
 
 Test : { name : Str, test: Bool }
 
