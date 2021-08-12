@@ -953,6 +953,12 @@ pub struct UnionTags {
 }
 
 impl UnionTags {
+    pub fn from_tag_name_index(index: SubsIndex<TagName>) -> Self {
+        Self {
+            tag_names: SubsSlice::new(index.start, 1),
+            variables: SubsSlice::new(0, 1), // the first variablesubsslice is the empty slice
+        }
+    }
     pub fn len(&self) -> usize {
         self.tag_names.len()
     }
