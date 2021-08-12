@@ -1,4 +1,33 @@
-interface Utility exposes [ concatStrList, concatStrListWithSeparator, spaceAboveBelow , showPair, showU8] imports [ ]
+interface Utility exposes [ concatStrList, concatStrListWithSeparator, 
+   isEven, filterList,
+   spaceAboveBelow , showPair, showU8] imports [ ]
+
+
+
+## For testings
+
+isEven : I64 -> Bool
+isEven = \n -> 
+   when n % 2 is
+      Ok 0 -> True
+      Ok 1 -> False 
+      Ok _ -> False
+      Err _ -> False
+
+## Lists  
+
+filterList : List a, (a -> Bool) -> List a 
+filterList = \list, predicate ->
+   when List.first list is 
+      Ok a -> if predicate a 
+         then 
+            List.prepend (filterList (List.drop list 1) predicate) a 
+         else 
+            filterList (List.drop list 1) predicate
+      Err _ -> [ ]      
+
+
+## Strings
 
 
 spaceAboveBelow: Str -> Str
@@ -13,6 +42,7 @@ concatStrList = \list ->
        Err _ -> "" 
 
 
+
 concatStrListWithSeparator : List Str, Str -> Str 
 concatStrListWithSeparator = \list, separator -> 
     when List.first list is 
@@ -25,6 +55,9 @@ concatStrListWithSeparator = \list, separator ->
                 Str.concat head (concatStrListWithSeparator rest separator)
        Err _ -> "" 
 
+
+
+## Pairs / U8
 
 showPair : [Pair U8 (List U8)] -> Str
 showPair = \(Pair a b) -> 

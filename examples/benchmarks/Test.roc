@@ -11,6 +11,9 @@ eval = \{ name, test } -> Str.concat (passFail test) name
 run : List Test -> Str
 run = \tests -> List.map tests eval |> Utility.concatStrListWithSeparator "\n" |> Utility.spaceAboveBelow
 
+# showFailures : List Test -> Str
+# showFailures = \tests -> List.map tests eval |> Utility.concatStrListWithSeparator "\n" |> Utility.spaceAboveBelow
+
 
 
 
