@@ -172,7 +172,7 @@ fn find_names_needed(
             find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
         }
         Structure(TagUnion(tags, ext_var)) => {
-            for slice_index in tags.variables {
+            for slice_index in tags.variables() {
                 let slice = subs[slice_index];
                 for var_index in slice {
                     let var = subs[var_index];
@@ -186,7 +186,7 @@ fn find_names_needed(
             find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
         }
         Structure(RecursiveTagUnion(rec_var, tags, ext_var)) => {
-            for slice_index in tags.variables {
+            for slice_index in tags.variables() {
                 let slice = subs[slice_index];
                 for var_index in slice {
                     let var = subs[var_index];
