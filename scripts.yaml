@@ -1,8 +1,8 @@
 scripts:
 
-  parser: cargo run examples/benchmarks/ParseApp.roc
+  parser: cargo run examples/parser/ParserTest.roc
 
-  test: cargo run examples/benchmarks/Tester.roc
+  test: cargo run examples/parser/Tester.roc
 
-  bad: cargo run examples/benchmarks/BadAss.roc
+  bad: cargo run examples/parser/BadAss.roc
 

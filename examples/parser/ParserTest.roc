@@ -17,7 +17,7 @@ main =
 
     satisfyResult = satisfyA [97, 98, 99, 100]
 
-    oneOfResult = (oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]
+    # oneOfResult = (oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]
 
     p2 = {name : "run \"abcd\" satisfy (\\u -> u == 97)) => \"a\"", test : run "abcd" satisfyA == "a" }
     p3 = {name : "Use 'second' to recognize \"a\" then \"b\" returning \"b\"", test : run "abcd" (second  satisfyA satisfyB) == "b"}
@@ -28,5 +28,5 @@ main =
     p8 = {name: "is successful (negative)", test: List.len ( satisfyA [100, 98, 99, 100] ) != 1}
     p9 = {name: "test of oneOf combinator", test: List.len satisfyResult == 1}
     
-    Test.run [p1, p2, p3, p4, p5, p6, p7, p8] 
+    Test.run [p1, p2, p3, p4, p5, p6, p7, p8, p9] 
       |> Task.putLine
