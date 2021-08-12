@@ -1,4 +1,4 @@
-use crate::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
+use crate::subs::{Content, FlatType, GetSubsSlice, Subs, UnionTags, Variable};
 use crate::types::{name_type_var, RecordField};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
@@ -76,7 +76,7 @@ fn find_names_needed(
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
-    while let Some((recursive, _chain)) = subs.occurs(variable) {
+    while let Err((recursive, _chain)) = subs.occurs(variable) {
         let rec_var = subs.fresh_unnamed_flex_var();
         let content = subs.get_content_without_compacting(recursive);
 
@@ -84,14 +84,16 @@ fn find_names_needed(
             Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
                 let mut new_tags = MutMap::default();
 
-                for (label, args) in tags {
-                    let new_args = args
-                        .clone()
-                        .into_iter()
-                        .map(|var| if var == recursive { rec_var } else { var })
-                        .collect();
+                for (name_index, slice_index) in tags.iter_all() {
+                    let slice = subs[slice_index];
 
-                    new_tags.insert(label.clone(), new_args);
+                    let mut new_vars = Vec::new();
+                    for var_index in slice {
+                        let var = subs[var_index];
+                        new_vars.push(if var == recursive { rec_var } else { var });
+                    }
+
+                    new_tags.insert(subs[name_index].clone(), new_vars);
                 }
 
                 let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, *ext_var);
@@ -162,11 +164,12 @@ fn find_names_needed(
             find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
         }
         Structure(TagUnion(tags, ext_var)) => {
-            let mut sorted_tags: Vec<_> = tags.iter().collect();
-            sorted_tags.sort();
-
-            for var in sorted_tags.into_iter().map(|(_, v)| v).flatten() {
-                find_names_needed(*var, subs, roots, root_appearances, names_taken);
+            for slice_index in tags.variables {
+                let slice = subs[slice_index];
+                for var_index in slice {
+                    let var = subs[var_index];
+                    find_names_needed(var, subs, roots, root_appearances, names_taken);
+                }
             }
 
             find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
@@ -345,13 +348,94 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
     }
 }
 
+enum ExtContent<'a> {
+    Empty,
+    Content(Variable, &'a Content),
+}
+
+impl<'a> ExtContent<'a> {
+    fn from_var(subs: &'a Subs, ext: Variable) -> Self {
+        let content = subs.get_content_without_compacting(ext);
+        match content {
+            Content::Structure(FlatType::EmptyTagUnion) => ExtContent::Empty,
+            Content::Structure(FlatType::EmptyRecord) => ExtContent::Empty,
+
+            Content::FlexVar(_) | Content::RigidVar(_) => ExtContent::Content(ext, content),
+
+            other => unreachable!("something weird ended up in an ext var: {:?}", other),
+        }
+    }
+}
+
+fn write_ext_content<'a>(
+    env: &Env,
+    subs: &'a Subs,
+    buf: &mut String,
+    ext_content: ExtContent<'a>,
+    parens: Parens,
+) {
+    if let ExtContent::Content(_, content) = ext_content {
+        // This is an open record or tag union, so print the variable
+        // right after the '}' or ']'
+        //
+        // e.g. the "*" at the end of `{ x: I64 }*`
+        // or the "r" at the end of `{ x: I64 }r`
+        write_content(env, content, subs, buf, parens)
+    }
+}
+
+fn write_sorted_tags2<'a>(
+    env: &Env,
+    subs: &'a Subs,
+    buf: &mut String,
+    tags: &UnionTags,
+    ext_var: Variable,
+) -> ExtContent<'a> {
+    // Sort the fields so they always end up in the same order.
+    let (it, new_ext_var) = tags.unsorted_iterator_and_ext(subs, ext_var);
+    let mut sorted_fields: Vec<_> = it.collect();
+
+    let interns = &env.interns;
+    let home = env.home;
+
+    sorted_fields.sort_by(|(a, _), (b, _)| {
+        a.as_ident_str(interns, home)
+            .cmp(&b.as_ident_str(interns, home))
+    });
+
+    let mut any_written_yet = false;
+
+    for (label, vars) in sorted_fields {
+        if any_written_yet {
+            buf.push_str(", ");
+        } else {
+            any_written_yet = true;
+        }
+
+        buf.push_str(label.as_ident_str(interns, home).as_str());
+
+        for var in vars {
+            buf.push(' ');
+            write_content(
+                env,
+                subs.get_content_without_compacting(*var),
+                subs,
+                buf,
+                Parens::InTypeParam,
+            );
+        }
+    }
+
+    ExtContent::from_var(subs, new_ext_var)
+}
+
 fn write_sorted_tags<'a>(
     env: &Env,
     subs: &'a Subs,
     buf: &mut String,
     tags: &MutMap<TagName, Vec<Variable>>,
     ext_var: Variable,
-) -> Result<(), (Variable, &'a Content)> {
+) -> ExtContent<'a> {
     // Sort the fields so they always end up in the same order.
     let mut sorted_fields = Vec::with_capacity(tags.len());
 
@@ -362,7 +446,7 @@ fn write_sorted_tags<'a>(
     // If the `ext` contains tags, merge them into the list of tags.
     // this can occur when inferring mutually recursive tags
     let mut from_ext = Default::default();
-    let ext_content = chase_ext_tag_union(subs, ext_var, &mut from_ext);
+    let _ext_content = chase_ext_tag_union(subs, ext_var, &mut from_ext);
 
     for (tag_name, arguments) in from_ext.iter() {
         sorted_fields.push((tag_name, arguments));
@@ -399,7 +483,7 @@ fn write_sorted_tags<'a>(
         }
     }
 
-    ext_content
+    ExtContent::from_var(subs, ext_var)
 }
 
 fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut String, parens: Parens) {
@@ -409,9 +493,14 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
         Apply(symbol, args) => write_apply(env, *symbol, args, subs, buf, parens),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
-        Func(args, _closure, ret) => {
-            write_fn(env, subs.get_subs_slice(*args), *ret, subs, buf, parens)
-        }
+        Func(args, _closure, ret) => write_fn(
+            env,
+            subs.get_subs_slice(*args.as_subs_slice()),
+            *ret,
+            subs,
+            buf,
+            parens,
+        ),
         Record(fields, ext_var) => {
             use crate::types::{gather_fields, RecordStructure};
 
@@ -476,37 +565,23 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
         TagUnion(tags, ext_var) => {
             buf.push_str("[ ");
 
-            let ext_content = write_sorted_tags(env, subs, buf, tags, *ext_var);
+            let ext_content = write_sorted_tags2(env, subs, buf, tags, *ext_var);
 
             buf.push_str(" ]");
 
-            if let Err((_, content)) = ext_content {
-                // This is an open tag union, so print the variable
-                // right after the ']'
-                //
-                // e.g. the "*" at the end of `{ x: I64 }*`
-                // or the "r" at the end of `{ x: I64 }r`
-                write_content(env, content, subs, buf, parens)
-            }
+            write_ext_content(env, subs, buf, ext_content, parens)
         }
 
         FunctionOrTagUnion(tag_name, _, ext_var) => {
             buf.push_str("[ ");
 
             let mut tags: MutMap<TagName, _> = MutMap::default();
-            tags.insert(*tag_name.clone(), vec![]);
+            tags.insert(subs[*tag_name].clone(), vec![]);
             let ext_content = write_sorted_tags(env, subs, buf, &tags, *ext_var);
 
             buf.push_str(" ]");
 
-            if let Err((_, content)) = ext_content {
-                // This is an open tag union, so print the variable
-                // right after the ']'
-                //
-                // e.g. the "*" at the end of `{ x: I64 }*`
-                // or the "r" at the end of `{ x: I64 }r`
-                write_content(env, content, subs, buf, parens)
-            }
+            write_ext_content(env, subs, buf, ext_content, parens)
         }
 
         RecursiveTagUnion(rec_var, tags, ext_var) => {
@@ -516,14 +591,7 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
 
             buf.push_str(" ]");
 
-            if let Err((_, content)) = ext_content {
-                // This is an open tag union, so print the variable
-                // right after the ']'
-                //
-                // e.g. the "*" at the end of `{ x: I64 }*`
-                // or the "r" at the end of `{ x: I64 }r`
-                write_content(env, content, subs, buf, parens)
-            }
+            write_ext_content(env, subs, buf, ext_content, parens);
 
             buf.push_str(" as ");
             write_content(
@@ -548,8 +616,19 @@ pub fn chase_ext_tag_union<'a>(
     use FlatType::*;
     match subs.get_content_without_compacting(var) {
         Content::Structure(EmptyTagUnion) => Ok(()),
-        Content::Structure(TagUnion(tags, ext_var))
-        | Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
+        Content::Structure(TagUnion(tags, ext_var)) => {
+            for (name_index, slice_index) in tags.iter_all() {
+                let subs_slice = subs[slice_index];
+                let slice = subs.get_subs_slice(*subs_slice.as_subs_slice());
+                let tag_name = subs[name_index].clone();
+
+                fields.push((tag_name, slice.to_vec()));
+            }
+
+            chase_ext_tag_union(subs, *ext_var, fields)
+        }
+
+        Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
             for (label, vars) in tags {
                 fields.push((label.clone(), vars.to_vec()));
             }
@@ -557,42 +636,13 @@ pub fn chase_ext_tag_union<'a>(
             chase_ext_tag_union(subs, *ext_var, fields)
         }
         Content::Structure(FunctionOrTagUnion(tag_name, _, ext_var)) => {
-            fields.push((*tag_name.clone(), vec![]));
+            fields.push((subs[*tag_name].clone(), vec![]));
 
             chase_ext_tag_union(subs, *ext_var, fields)
         }
         Content::Alias(_, _, var) => chase_ext_tag_union(subs, *var, fields),
 
         content => Err((var, content)),
-    }
-}
-
-pub fn chase_ext_record(
-    subs: &Subs,
-    var: Variable,
-    fields: &mut MutMap<Lowercase, RecordField<Variable>>,
-) -> Result<(), (Variable, Content)> {
-    use crate::subs::Content::*;
-    use crate::subs::FlatType::*;
-
-    match subs.get_content_without_compacting(var) {
-        Structure(Record(sub_fields, sub_ext)) => {
-            for (i1, i2, i3) in sub_fields.iter_all() {
-                let label = &subs[i1];
-                let var = subs[i2];
-                let record_field = subs[i3].map(|_| var);
-
-                fields.insert(label.clone(), record_field);
-            }
-
-            chase_ext_record(subs, *sub_ext, fields)
-        }
-
-        Structure(EmptyRecord) => Ok(()),
-
-        Alias(_, _, var) => chase_ext_record(subs, *var, fields),
-
-        content => Err((var, content.clone())),
     }
 }
 

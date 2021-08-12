@@ -15,7 +15,7 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Located, Region};
 use roc_types::solved_types::SolvedType;
-use roc_types::subs::{Content, FlatType, Subs, SubsSlice, Variable};
+use roc_types::subs::{Content, FlatType, Subs, Variable, VariableSubsSlice};
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
@@ -4346,7 +4346,7 @@ fn convert_tag_union<'a>(
 #[allow(clippy::too_many_arguments)]
 fn tag_union_to_function<'a>(
     env: &mut Env<'a, '_>,
-    argument_variables: SubsSlice<Variable>,
+    argument_variables: VariableSubsSlice,
     return_variable: Variable,
     tag_name: TagName,
     proc_symbol: Symbol,
