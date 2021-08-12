@@ -21,7 +21,7 @@ filterList = \list, predicate ->
    when List.first list is 
       Ok a -> if predicate a 
          then 
-            List.prepend (filterList (List.drop list 1) predicate) a 
+            filterList (List.drop list 1) predicate |> List.prepend a 
          else 
             filterList (List.drop list 1) predicate
       Err _ -> [ ]      
