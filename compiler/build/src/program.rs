@@ -16,6 +16,10 @@ pub struct CodeGenTiming {
     pub emit_o_file: Duration,
 }
 
+// TODO: If modules besides this one start needing to know which version of
+// llvm we're using, consider moving me somwhere else.
+const LLVM_VERSION: &str = "12";
+
 // TODO how should imported modules factor into this? What if those use builtins too?
 // TODO this should probably use more helper functions
 // TODO make this polymorphic in the llvm functions so it can be reused for another backend.
@@ -232,13 +236,14 @@ pub fn gen_from_mono_module(
         //
         // different systems name this executable differently, so we shotgun for
         // the most common ones and then give up.
-        let _: Result<std::process::Output, std::io::Error> = Command::new("llc-12")
-            .args(llc_args)
-            .output()
-            .or_else(|_| Command::new("llc").args(llc_args).output())
-            .or_else(|_| {
-                panic!("We couldn't find llc-12 on your machine!");
-            });
+        let _: Result<std::process::Output, std::io::Error> =
+            Command::new(format!("llc-{}", LLVM_VERSION))
+                .args(llc_args)
+                .output()
+                .or_else(|_| Command::new("llc").args(llc_args).output())
+                .map_err(|_| {
+                    panic!("We couldn't find llc-{} on your machine!", LLVM_VERSION);
+                });
     } else {
         // Emit the .o file
 
