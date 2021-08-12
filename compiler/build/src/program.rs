@@ -17,7 +17,7 @@ pub struct CodeGenTiming {
 }
 
 // TODO: If modules besides this one start needing to know which version of
-// llvm we're using, consider moving me somwhere else.
+// llvm we're using, consider moving me somewhere else.
 const LLVM_VERSION: &str = "12";
 
 // TODO how should imported modules factor into this? What if those use builtins too?
