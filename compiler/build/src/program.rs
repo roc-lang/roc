@@ -16,6 +16,10 @@ pub struct CodeGenTiming {
     pub emit_o_file: Duration,
 }
 
+// TODO: If modules besides this one start needing to know which version of
+// llvm we're using, consider moving me somewhere else.
+const LLVM_VERSION: &str = "12";
+
 // TODO how should imported modules factor into this? What if those use builtins too?
 // TODO this should probably use more helper functions
 // TODO make this polymorphic in the llvm functions so it can be reused for another backend.
@@ -195,7 +199,6 @@ pub fn gen_from_mono_module(
 
         // run the debugir https://github.com/vaivaswatha/debugir tool
         match Command::new("debugir")
-            .env_clear()
             .args(&["-instnamer", app_ll_file.to_str().unwrap()])
             .output()
         {
@@ -213,7 +216,6 @@ pub fn gen_from_mono_module(
 
         // assemble the .ll into a .bc
         let _ = Command::new("llvm-as")
-            .env_clear()
             .args(&[
                 app_ll_dbg_file.to_str().unwrap(),
                 "-o",
@@ -222,18 +224,26 @@ pub fn gen_from_mono_module(
             .output()
             .unwrap();
 
+        let llc_args = &[
+            "-filetype=obj",
+            app_bc_file.to_str().unwrap(),
+            "-o",
+            app_o_file.to_str().unwrap(),
+        ];
+
         // write the .o file. Note that this builds the .o for the local machine,
         // and ignores the `target_machine` entirely.
-        let _ = Command::new("llc-12")
-            .env_clear()
-            .args(&[
-                "-filetype=obj",
-                app_bc_file.to_str().unwrap(),
-                "-o",
-                app_o_file.to_str().unwrap(),
-            ])
-            .output()
-            .unwrap();
+        //
+        // different systems name this executable differently, so we shotgun for
+        // the most common ones and then give up.
+        let _: Result<std::process::Output, std::io::Error> =
+            Command::new(format!("llc-{}", LLVM_VERSION))
+                .args(llc_args)
+                .output()
+                .or_else(|_| Command::new("llc").args(llc_args).output())
+                .map_err(|_| {
+                    panic!("We couldn't find llc-{} on your machine!", LLVM_VERSION);
+                });
     } else {
         // Emit the .o file
 

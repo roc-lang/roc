@@ -387,7 +387,7 @@ impl SolvedType {
             Func(args, closure, ret) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for var in subs.get_subs_slice(*args) {
+                for var in subs.get_subs_slice(*args.as_subs_slice()) {
                     new_args.push(Self::from_var_help(subs, recursion_vars, *var));
                 }
 
@@ -420,13 +420,16 @@ impl SolvedType {
             TagUnion(tags, ext_var) => {
                 let mut new_tags = Vec::with_capacity(tags.len());
 
-                for (tag_name, args) in tags {
-                    let mut new_args = Vec::with_capacity(args.len());
+                for (name_index, slice_index) in tags.iter_all() {
+                    let slice = subs[slice_index];
 
-                    for var in args {
-                        new_args.push(Self::from_var_help(subs, recursion_vars, *var));
+                    let mut new_args = Vec::with_capacity(slice.len());
+
+                    for var_index in slice {
+                        let var = subs[var_index];
+                        new_args.push(Self::from_var_help(subs, recursion_vars, var));
                     }
-
+                    let tag_name = subs[name_index].clone();
                     new_tags.push((tag_name.clone(), new_args));
                 }
 
@@ -437,7 +440,7 @@ impl SolvedType {
             FunctionOrTagUnion(tag_name, symbol, ext_var) => {
                 let ext = Self::from_var_help(subs, recursion_vars, *ext_var);
 
-                SolvedType::FunctionOrTagUnion(*tag_name.clone(), *symbol, Box::new(ext))
+                SolvedType::FunctionOrTagUnion(subs[*tag_name].clone(), *symbol, Box::new(ext))
             }
             RecursiveTagUnion(rec_var, tags, ext_var) => {
                 recursion_vars.insert(subs, *rec_var);

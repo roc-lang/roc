@@ -32,6 +32,7 @@ let
   llvmPkgs = pkgs.llvmPackages_12;
 
   zig = import ./nix/zig.nix { inherit pkgs; };
+  debugir = import ./nix/debugir.nix { inherit pkgs; };
 
   inputs = with pkgs; [
     # build libraries
@@ -60,6 +61,7 @@ let
 
     # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
     llvmPkgs.lld
+    debugir
 
     # meta-tools
     # note: niv manages its own nixpkgs so it doesn't need pkgs.callPackage. Do

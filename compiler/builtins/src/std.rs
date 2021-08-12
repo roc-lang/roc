@@ -9,6 +9,7 @@ use roc_types::builtin_aliases::{
 };
 use roc_types::solved_types::SolvedType;
 use roc_types::subs::VarId;
+use roc_types::types::RecordField;
 use std::collections::HashMap;
 
 /// Example:
@@ -592,20 +593,50 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     );
 
     // fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8Problem ]*
-    let bad_utf8 = SolvedType::TagUnion(
-        vec![(
-            TagName::Global("BadUtf8".into()),
-            // vec![str_utf8_problem_type()],
-            vec![str_utf8_byte_problem_type(), nat_type()],
-        )],
-        Box::new(SolvedType::Wildcard),
-    );
+    {
+        let bad_utf8 = SolvedType::TagUnion(
+            vec![(
+                TagName::Global("BadUtf8".into()),
+                vec![str_utf8_byte_problem_type(), nat_type()],
+            )],
+            Box::new(SolvedType::Wildcard),
+        );
 
-    add_top_level_function_type!(
-        Symbol::STR_FROM_UTF8,
-        vec![list_type(u8_type())],
-        Box::new(result_type(str_type(), bad_utf8)),
-    );
+        add_top_level_function_type!(
+            Symbol::STR_FROM_UTF8,
+            vec![list_type(u8_type())],
+            Box::new(result_type(str_type(), bad_utf8)),
+        );
+    }
+
+    // fromUtf8Range : List U8 -> Result Str [ BadUtf8 Utf8Problem, OutOfBounds ]*
+    {
+        let bad_utf8 = SolvedType::TagUnion(
+            vec![
+                (
+                    TagName::Global("BadUtf8".into()),
+                    vec![str_utf8_byte_problem_type(), nat_type()],
+                ),
+                (TagName::Global("OutOfBounds".into()), vec![]),
+            ],
+            Box::new(SolvedType::Wildcard),
+        );
+
+        add_top_level_function_type!(
+            Symbol::STR_FROM_UTF8_RANGE,
+            vec![
+                list_type(u8_type()),
+                SolvedType::Record {
+                    fields: vec![
+                        ("start".into(), RecordField::Required(nat_type())),
+                        ("count".into(), RecordField::Required(nat_type())),
+                    ],
+                    ext: Box::new(SolvedType::EmptyRecord),
+                }
+            ],
+            Box::new(result_type(str_type(), bad_utf8)),
+        );
+    }
 
     // toUtf8 : Str -> List U8
     add_top_level_function_type!(

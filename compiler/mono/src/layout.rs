@@ -4,8 +4,8 @@ use bumpalo::Bump;
 use roc_collections::all::{default_hasher, MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
-use roc_types::subs::{Content, FlatType, Subs, Variable};
-use roc_types::types::RecordField;
+use roc_types::subs::{Content, FlatType, RecordFields, Subs, Variable};
+use roc_types::types::{gather_fields_unsorted_iter, RecordField};
 use std::collections::HashMap;
 use ven_pretty::{DocAllocator, DocBuilder};
 
@@ -636,6 +636,17 @@ impl<'a> Layout<'a> {
     }
 
     pub fn stack_size(&self, pointer_size: u32) -> u32 {
+        let width = self.stack_size_without_alignment(pointer_size);
+        let alignment = self.alignment_bytes(pointer_size);
+
+        if alignment != 0 && width % alignment > 0 {
+            width + alignment - (width % alignment)
+        } else {
+            width
+        }
+    }
+
+    fn stack_size_without_alignment(&self, pointer_size: u32) -> u32 {
         use Layout::*;
 
         match self {
@@ -1250,13 +1261,27 @@ fn layout_from_flat_type<'a>(
         TagUnion(tags, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
-            Ok(layout_from_tag_union(arena, tags, subs))
+            let mut new_tags = MutMap::default();
+
+            for (tag_index, index) in tags.iter_all() {
+                let tag = subs[tag_index].clone();
+                let slice = subs[index];
+                let mut new_vars = std::vec::Vec::new();
+                for var_index in slice {
+                    let var = subs[var_index];
+                    new_vars.push(var);
+                }
+
+                new_tags.insert(tag, new_vars);
+            }
+
+            Ok(layout_from_tag_union(arena, new_tags, subs))
         }
         FunctionOrTagUnion(tag_name, _, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
             let mut tags = MutMap::default();
-            tags.insert(*tag_name, vec![]);
+            tags.insert(subs[tag_name].clone(), vec![]);
 
             Ok(layout_from_tag_union(arena, tags, subs))
         }
@@ -1358,26 +1383,27 @@ pub fn sort_record_fields<'a>(
     var: Variable,
     subs: &Subs,
 ) -> Vec<'a, (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>)> {
-    let mut fields_map = MutMap::default();
-
     let mut env = Env {
         arena,
         subs,
         seen: MutSet::default(),
     };
 
-    match roc_types::pretty_print::chase_ext_record(subs, var, &mut fields_map) {
-        Ok(()) | Err((_, Content::FlexVar(_))) => sort_record_fields_help(&mut env, fields_map),
-        Err(other) => panic!("invalid content in record variable: {:?}", other),
-    }
+    let (it, _) = gather_fields_unsorted_iter(subs, RecordFields::empty(), var);
+
+    let it = it
+        .into_iter()
+        .map(|(field, field_type)| (field.clone(), field_type));
+
+    sort_record_fields_help(&mut env, it)
 }
 
 fn sort_record_fields_help<'a>(
     env: &mut Env<'a, '_>,
-    fields_map: MutMap<Lowercase, RecordField<Variable>>,
+    fields_map: impl Iterator<Item = (Lowercase, RecordField<Variable>)>,
 ) -> Vec<'a, (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>)> {
     // Sort the fields by label
-    let mut sorted_fields = Vec::with_capacity_in(fields_map.len(), env.arena);
+    let mut sorted_fields = Vec::with_capacity_in(fields_map.size_hint().0, env.arena);
 
     for (label, field) in fields_map {
         let var = match field {
@@ -1392,10 +1418,7 @@ fn sort_record_fields_help<'a>(
 
         let layout = Layout::from_var(env, var).expect("invalid layout from var");
 
-        // Drop any zero-sized fields like {}
-        if !layout.is_dropped_because_empty() {
-            sorted_fields.push((label, var, Ok(layout)));
-        }
+        sorted_fields.push((label, var, Ok(layout)));
     }
 
     sorted_fields.sort_by(
