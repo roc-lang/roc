@@ -1471,11 +1471,10 @@ fn unify_flat_type(
         (RecursiveTagUnion(rec1, tags1, ext1), RecursiveTagUnion(rec2, tags2, ext2)) => {
             debug_assert!(is_recursion_var(subs, *rec1));
             debug_assert!(is_recursion_var(subs, *rec2));
-            let union1 = gather_tags_new(subs, *tags1, *ext1);
-            let union2 = gather_tags_new(subs, *tags2, *ext2);
 
+            let rec = (Some(*rec1), Some(*rec2));
             let mut problems =
-                unify_tag_union(subs, pool, ctx, union1, union2, (Some(*rec1), Some(*rec2)));
+                unify_tag_union_new(subs, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec);
             problems.extend(unify_pool(subs, pool, *rec1, *rec2));
 
             problems
