@@ -1250,7 +1250,21 @@ fn layout_from_flat_type<'a>(
         TagUnion(tags, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
-            Ok(layout_from_tag_union(arena, tags, subs))
+            let mut new_tags = MutMap::default();
+
+            for (tag_index, index) in tags.iter_all() {
+                let tag = subs[tag_index].clone();
+                let slice = subs[index];
+                let mut new_vars = std::vec::Vec::new();
+                for var_index in slice {
+                    let var = subs[var_index];
+                    new_vars.push(var);
+                }
+
+                new_tags.insert(tag, new_vars);
+            }
+
+            Ok(layout_from_tag_union(arena, new_tags, subs))
         }
         FunctionOrTagUnion(tag_name, _, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
