@@ -1,21 +1,10 @@
-interface Parser exposes [  showPair, makePair, testPair, 
-   runToString,
-   Parser, run, successful, map, andThen, oneOf, first, second,
-   succeed, any,  satisfy, fail] imports [Pair]
-
-
-## PAIRS
-
-showPair : [Pair Str (List U8)] -> Str
-showPair = \(Pair a b) -> 
-    when Str.fromUtf8 b is 
-        Ok bb -> Str.concat (Str.concat a "::") bb
-        _ -> "Could not convert (List U8)"
-
-
-makePair : Str, Str -> [Pair Str (List U8)]
-makePair = 
-   \a, b -> Pair a (Str.toUtf8 b)
+interface Parser exposes [ 
+    Parser, run,  successful, 
+    succeed, any,  satisfy, fail,
+    map, andThen, oneOf, 
+    first, second,
+    runToString
+  ] imports [Pair]
 
 
 ## PARSERS
@@ -119,9 +108,3 @@ first =
 
 
 
-## TESTS  
-  
-
-testPair : Str, Str -> Str
-testPair  = 
-  \a, b -> makePair a b |> showPair

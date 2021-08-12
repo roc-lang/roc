@@ -16,6 +16,7 @@ isEven = \n ->
 
 ## Lists  
 
+# NOTE: panic in 
 filterList : List a, (a -> Bool) -> List a 
 filterList = \list, predicate ->
    when List.first list is 
