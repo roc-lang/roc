@@ -195,7 +195,6 @@ pub fn gen_from_mono_module(
 
         // run the debugir https://github.com/vaivaswatha/debugir tool
         match Command::new("debugir")
-            .env_clear()
             .args(&["-instnamer", app_ll_file.to_str().unwrap()])
             .output()
         {
@@ -213,7 +212,6 @@ pub fn gen_from_mono_module(
 
         // assemble the .ll into a .bc
         let _ = Command::new("llvm-as")
-            .env_clear()
             .args(&[
                 app_ll_dbg_file.to_str().unwrap(),
                 "-o",
@@ -222,18 +220,25 @@ pub fn gen_from_mono_module(
             .output()
             .unwrap();
 
+        let llc_args = &[
+            "-filetype=obj",
+            app_bc_file.to_str().unwrap(),
+            "-o",
+            app_o_file.to_str().unwrap(),
+        ];
+
         // write the .o file. Note that this builds the .o for the local machine,
         // and ignores the `target_machine` entirely.
-        let _ = Command::new("llc-12")
-            .env_clear()
-            .args(&[
-                "-filetype=obj",
-                app_bc_file.to_str().unwrap(),
-                "-o",
-                app_o_file.to_str().unwrap(),
-            ])
+        //
+        // different systems name this executable differently, so we shotgun for
+        // the most common ones and then give up.
+        let _: Result<std::process::Output, std::io::Error> = Command::new("llc-12")
+            .args(llc_args)
             .output()
-            .unwrap();
+            .or_else(|_| Command::new("llc").args(llc_args).output())
+            .or_else(|_| {
+                panic!("We couldn't find llc-12 on your machine!");
+            });
     } else {
         // Emit the .o file
 
