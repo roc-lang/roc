@@ -1,7 +1,7 @@
 app "parseapp"
      packages { base: "platform" }
      imports [base.Task, 
-        Parser.{succesful, runToString, any, satisfy, first, second, map, andThen, oneOf },
+        Parser.{succesful, runToString, any, satisfy, first, second, map, andThen, oneOf, oneOfResult },
         Test, Utility]
      provides [ main ] to base
 
@@ -17,7 +17,7 @@ main =
 
     satisfyResult = satisfyA [97, 98, 99, 100]
 
-    oneOfResult = (oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]
+ 
 
     p2 = {name : "run \"abcd\" satisfy (\\u -> u == 97)) => \"a\"", test : run "abcd" satisfyA == "a" }
     p3 = {name : "Use 'second' to recognize \"a\" then \"b\" returning \"b\"", test : run "abcd" (second  satisfyA satisfyB) == "b"}

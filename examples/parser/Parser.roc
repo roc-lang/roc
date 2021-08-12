@@ -1,7 +1,7 @@
 interface Parser exposes [ 
     Parser, run,  successful, 
     succeed, any,  satisfy, fail,
-    map, andThen, oneOf, 
+    map, andThen, oneOf, oneOfResult,
     first, second,
     runToString
   ] imports [Pair]
@@ -25,7 +25,9 @@ oneOf = \parserList ->
                 if List.len output == 1 then output else (oneOf (List.drop parserList 1)) input 
               Err _ -> [ ]
 
-        
+satisfyA = satisfy (\u -> u == 97)
+satisfyB = satisfy (\u -> u == 98)
+oneOfResult = (oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]     
 
 ## FOR STRING OUTPUT 
 
