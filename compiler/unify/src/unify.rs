@@ -630,6 +630,14 @@ fn separate_union_tags(
     (separate(it1, it2), new_ext1, new_ext2)
 }
 
+#[derive(Debug, Copy, Clone)]
+enum Rec {
+    None,
+    Left(Variable),
+    Right(Variable),
+    Both(Variable, Variable),
+}
+
 #[allow(clippy::too_many_arguments)]
 fn unify_tag_union_new(
     subs: &mut Subs,
@@ -639,16 +647,10 @@ fn unify_tag_union_new(
     initial_ext1: Variable,
     tags2: UnionTags,
     initial_ext2: Variable,
-    recursion: (Option<Variable>, Option<Variable>),
+    recursion_var: Rec,
 ) -> Outcome {
     let (separate, ext1, ext2) =
         separate_union_tags(subs, tags1, initial_ext1, tags2, initial_ext2);
-
-    let recursion_var = match recursion {
-        (None, None) => None,
-        (Some(v), None) | (None, Some(v)) => Some(v),
-        (Some(v1), Some(_v2)) => Some(v1),
-    };
 
     let shared_tags = separate.in_both;
 
@@ -789,7 +791,7 @@ fn unify_shared_tags_new(
     shared_tags: Vec<(TagName, (VariableSubsSlice, VariableSubsSlice))>,
     other_tags: OtherTags2,
     ext: Variable,
-    recursion_var: Option<Variable>,
+    recursion_var: Rec,
 ) -> Outcome {
     let mut matching_tags = Vec::default();
     let num_shared_tags = shared_tags.len();
@@ -826,11 +828,15 @@ fn unify_shared_tags_new(
             // and so on until the whole non-recursive tag union can be unified with it.
             let mut problems = Vec::new();
 
-            {
-                problems.extend(unify_pool(subs, pool, actual, expected));
-            }
+            problems.extend(unify_pool(subs, pool, actual, expected));
 
-            if problems.is_empty() {
+            // clearly, this is very suspicious: these variables have just been unified. And yet,
+            // not doing this leads to stack overflows
+            if let Rec::Right(_) = recursion_var {
+                if problems.is_empty() {
+                    matching_vars.push(expected);
+                }
+            } else if problems.is_empty() {
                 matching_vars.push(actual);
             }
         }
@@ -898,13 +904,14 @@ fn unify_shared_tags_merge_new(
     ctx: &Context,
     new_tags: UnionTags,
     new_ext_var: Variable,
-    recursion_var: Option<Variable>,
+    recursion_var: Rec,
 ) -> Outcome {
-    let flat_type = if let Some(rec) = recursion_var {
-        debug_assert!(is_recursion_var(subs, rec));
-        FlatType::RecursiveTagUnion(rec, new_tags, new_ext_var)
-    } else {
-        FlatType::TagUnion(new_tags, new_ext_var)
+    let flat_type = match recursion_var {
+        Rec::None => FlatType::TagUnion(new_tags, new_ext_var),
+        Rec::Left(rec) | Rec::Right(rec) | Rec::Both(rec, _) => {
+            debug_assert!(is_recursion_var(subs, rec));
+            FlatType::RecursiveTagUnion(rec, new_tags, new_ext_var)
+        }
     };
 
     merge(subs, ctx, Structure(flat_type))
@@ -1441,38 +1448,31 @@ fn unify_flat_type(
         }
 
         (TagUnion(tags1, ext1), TagUnion(tags2, ext2)) => {
-            unify_tag_union_new(subs, pool, ctx, *tags1, *ext1, *tags2, *ext2, (None, None))
+            unify_tag_union_new(subs, pool, ctx, *tags1, *ext1, *tags2, *ext2, Rec::None)
         }
 
         (RecursiveTagUnion(recursion_var, tags1, ext1), TagUnion(tags2, ext2)) => {
             debug_assert!(is_recursion_var(subs, *recursion_var));
             // this never happens in type-correct programs, but may happen if there is a type error
-            let union1 = gather_tags_new(subs, *tags1, *ext1);
-            let union2 = gather_tags_new(subs, *tags2, *ext2);
 
-            unify_tag_union(
-                subs,
-                pool,
-                ctx,
-                union1,
-                union2,
-                (Some(*recursion_var), None),
-            )
+            let rec = Rec::Left(*recursion_var);
+
+            unify_tag_union_new(subs, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec)
         }
 
         (TagUnion(tags1, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
             debug_assert!(is_recursion_var(subs, *recursion_var));
-            let union1 = gather_tags_new(subs, *tags1, *ext1);
-            let union2 = gather_tags_new(subs, *tags2, *ext2);
 
-            unify_tag_union_not_recursive_recursive(subs, pool, ctx, union1, union2, *recursion_var)
+            let rec = Rec::Right(*recursion_var);
+
+            unify_tag_union_new(subs, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec)
         }
 
         (RecursiveTagUnion(rec1, tags1, ext1), RecursiveTagUnion(rec2, tags2, ext2)) => {
             debug_assert!(is_recursion_var(subs, *rec1));
             debug_assert!(is_recursion_var(subs, *rec2));
 
-            let rec = (Some(*rec1), Some(*rec2));
+            let rec = Rec::Both(*rec1, *rec2);
             let mut problems =
                 unify_tag_union_new(subs, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec);
             problems.extend(unify_pool(subs, pool, *rec1, *rec2));
@@ -1536,12 +1536,12 @@ fn unify_flat_type(
                 false,
             )
         }
-        (FunctionOrTagUnion(tag_name_1, _, ext_1), FunctionOrTagUnion(tag_name_2, _, ext_2)) => {
-            let tag_name_1 = subs[*tag_name_1].clone();
-            let tag_name_2 = subs[*tag_name_2].clone();
+        (FunctionOrTagUnion(tag_name_1, _, ext1), FunctionOrTagUnion(tag_name_2, _, ext2)) => {
+            let tag_name_1_ref = &subs[*tag_name_1];
+            let tag_name_2_ref = &subs[*tag_name_2];
 
-            if tag_name_1 == tag_name_2 {
-                let problems = unify_pool(subs, pool, *ext_1, *ext_2);
+            if tag_name_1_ref == tag_name_2_ref {
+                let problems = unify_pool(subs, pool, *ext1, *ext2);
                 if problems.is_empty() {
                     let content = subs.get_content_without_compacting(ctx.second).clone();
                     merge(subs, ctx, content)
@@ -1549,72 +1549,41 @@ fn unify_flat_type(
                     problems
                 }
             } else {
-                let mut tags1 = MutMap::default();
-                tags1.insert(tag_name_1, vec![]);
-                let union1 = gather_tags(subs, tags1, *ext_1);
+                let tags1 = UnionTags::from_tag_name_index(*tag_name_1);
+                let tags2 = UnionTags::from_tag_name_index(*tag_name_2);
 
-                let mut tags2 = MutMap::default();
-                tags2.insert(tag_name_2, vec![]);
-                let union2 = gather_tags(subs, tags2, *ext_2);
-
-                unify_tag_union(subs, pool, ctx, union1, union2, (None, None))
+                unify_tag_union_new(subs, pool, ctx, tags1, *ext1, tags2, *ext2, Rec::None)
             }
         }
         (TagUnion(tags1, ext1), FunctionOrTagUnion(tag_name, _, ext2)) => {
-            let tag_name = subs[*tag_name].clone();
-            let union1 = gather_tags_new(subs, *tags1, *ext1);
+            let tags2 = UnionTags::from_tag_name_index(*tag_name);
 
-            let mut tags2 = MutMap::default();
-            tags2.insert(tag_name, vec![]);
-            let union2 = gather_tags(subs, tags2, *ext2);
-
-            unify_tag_union(subs, pool, ctx, union1, union2, (None, None))
+            unify_tag_union_new(subs, pool, ctx, *tags1, *ext1, tags2, *ext2, Rec::None)
         }
         (FunctionOrTagUnion(tag_name, _, ext1), TagUnion(tags2, ext2)) => {
-            let tag_name = subs[*tag_name].clone();
-            let mut tags1 = MutMap::default();
-            tags1.insert(tag_name, vec![]);
+            let tags1 = UnionTags::from_tag_name_index(*tag_name);
 
-            let union1 = gather_tags(subs, tags1, *ext1);
-            let union2 = gather_tags_new(subs, *tags2, *ext2);
-
-            unify_tag_union(subs, pool, ctx, union1, union2, (None, None))
+            unify_tag_union_new(subs, pool, ctx, tags1, *ext1, *tags2, *ext2, Rec::None)
         }
 
         (RecursiveTagUnion(recursion_var, tags1, ext1), FunctionOrTagUnion(tag_name, _, ext2)) => {
             // this never happens in type-correct programs, but may happen if there is a type error
             debug_assert!(is_recursion_var(subs, *recursion_var));
 
-            let tag_name = subs[*tag_name].clone();
+            let tags2 = UnionTags::from_tag_name_index(*tag_name);
+            let rec = Rec::Left(*recursion_var);
 
-            let mut tags2 = MutMap::default();
-            tags2.insert(tag_name, vec![]);
-
-            let union1 = gather_tags_new(subs, *tags1, *ext1);
-            let union2 = gather_tags(subs, tags2, *ext2);
-
-            unify_tag_union(
-                subs,
-                pool,
-                ctx,
-                union1,
-                union2,
-                (Some(*recursion_var), None),
-            )
+            unify_tag_union_new(subs, pool, ctx, *tags1, *ext1, tags2, *ext2, rec)
         }
 
         (FunctionOrTagUnion(tag_name, _, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
             debug_assert!(is_recursion_var(subs, *recursion_var));
 
-            let tag_name = subs[*tag_name].clone();
+            let tags1 = UnionTags::from_tag_name_index(*tag_name);
+            let rec = Rec::Right(*recursion_var);
 
-            let mut tags1 = MutMap::default();
-            tags1.insert(tag_name, vec![]);
-
-            let union1 = gather_tags(subs, tags1, *ext1);
-            let union2 = gather_tags_new(subs, *tags2, *ext2);
-
-            unify_tag_union_not_recursive_recursive(subs, pool, ctx, union1, union2, *recursion_var)
+            // NOTE arguments are flipped by design
+            unify_tag_union_new(subs, pool, ctx, tags1, *ext1, *tags2, *ext2, rec)
         }
 
         (other1, other2) => mismatch!(
