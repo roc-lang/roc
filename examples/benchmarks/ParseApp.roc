@@ -1,7 +1,7 @@
 app "parseapp"
      packages { base: "platform" }
-     imports [base.Task,
-        Parser.{succesful, runToString, showU8, any, satisfy, first, second, map, andThen },
+     imports [base.Task, 
+        Parser.{succesful, runToString, showU8, any, satisfy, first, second, map, andThen, oneOf },
         Test]
      provides [ main ] to base
 

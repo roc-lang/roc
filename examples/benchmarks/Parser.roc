@@ -1,6 +1,6 @@
 interface Parser exposes [  showPair, makePair, testPair, 
    runToString, showU8,
-   Parser, run, successful, map, andThen, first, second,
+   Parser, run, successful, map, andThen, oneOf, first, second,
    succeed, any,  satisfy, fail] imports [Pair]
 
 
@@ -40,7 +40,13 @@ run =
   \input, parser -> parser input
 
 
-
+oneOf : List (Parser a) -> Parser a 
+oneOf = \parserList -> 
+          \input -> when List.first parserList is 
+              Ok p -> 
+                output = p input 
+                if List.len output == 1 then output else (oneOf (List.drop parserList 1)) input 
+              Err _ -> [ ]
 
         
 
