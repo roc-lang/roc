@@ -49,7 +49,7 @@ struct ErrorTypeState {
     problems: Vec<crate::types::Problem>,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct Subs {
     utable: UnificationTable<InPlace<Variable>>,
     pub variables: Vec<Variable>,
@@ -57,6 +57,21 @@ pub struct Subs {
     pub field_names: Vec<Lowercase>,
     pub record_fields: Vec<RecordField<()>>,
     pub variable_slices: Vec<VariableSubsSlice>,
+}
+
+impl Default for Subs {
+    fn default() -> Self {
+        Subs {
+            utable: Default::default(),
+            variables: Default::default(),
+            tag_names: Default::default(),
+            field_names: Default::default(),
+            record_fields: Default::default(),
+            // store an empty slice at the first position
+            // used for "TagOrFunction"
+            variable_slices: vec![VariableSubsSlice::default()],
+        }
+    }
 }
 
 /// A slice into the Vec<T> of subs
@@ -883,7 +898,7 @@ pub enum Builtin {
     EmptyRecord,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct VariableSubsSlice {
     slice: SubsSlice<Variable>,
 }
