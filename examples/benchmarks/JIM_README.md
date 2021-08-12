@@ -2,6 +2,20 @@
 
 These are notes on some roc things I am working on.
 
+## Files
+
+JIM_README.md
+
+```
+Loop.roc
+Pair.roc
+ParseApp.roc
+Parser.roc
+Test.roc
+Tester.roc
+Utility.roc
+```
+
 
 ## Parser.roc
 
