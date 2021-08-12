@@ -4,3 +4,5 @@ scripts:
 
   test: cargo run examples/benchmarks/Tester.roc
 
+  bad: cargo run examples/benchmarks/BadAss.roc
+

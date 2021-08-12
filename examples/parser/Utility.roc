@@ -4,7 +4,7 @@ interface Utility exposes [ concatStrList, concatStrListWithSeparator,
 
 
 
-## For testings
+## For testing
 
 isEven : I64 -> Bool
 isEven = \n -> 
