@@ -591,9 +591,6 @@ fn separate_union_tags(
     let (it1, new_ext1) = fields1.sorted_slices_iterator_and_ext(subs, ext1);
     let (it2, new_ext2) = fields2.sorted_slices_iterator_and_ext(subs, ext2);
 
-    let it1 = it1.collect::<Vec<_>>();
-    let it2 = it2.collect::<Vec<_>>();
-
     (separate(it1, it2), new_ext1, new_ext2)
 }
 
