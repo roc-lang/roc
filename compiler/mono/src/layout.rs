@@ -1286,23 +1286,7 @@ fn layout_from_flat_type<'a>(
             let rec_var = subs.get_root_key_without_compacting(rec_var);
             let mut tag_layouts = Vec::with_capacity_in(tags.len(), arena);
 
-            let mut new_tags = MutMap::default();
-
-            for (tag_index, index) in tags.iter_all() {
-                let tag = subs[tag_index].clone();
-                let slice = subs[index];
-                let mut new_vars = std::vec::Vec::new();
-                for var_index in slice {
-                    let var = subs[var_index];
-                    new_vars.push(var);
-                }
-
-                new_tags.insert(tag, new_vars);
-            }
-
-            // VERY IMPORTANT: sort the tags
-            let mut tags_vec: std::vec::Vec<_> = new_tags.into_iter().collect();
-            tags_vec.sort();
+            let tags_vec = cheap_sort_tags(arena, tags, subs);
 
             let mut nullable = None;
 
@@ -1324,7 +1308,8 @@ fn layout_from_flat_type<'a>(
 
                 let mut tag_layout = Vec::with_capacity_in(variables.len() + 1, arena);
 
-                for var in variables {
+                for var_index in variables {
+                    let var = subs[var_index];
                     // TODO does this cause problems with mutually recursive unions?
                     if rec_var == subs.get_root_key_without_compacting(var) {
                         tag_layout.push(Layout::RecursivePointer);
@@ -2032,22 +2017,12 @@ pub fn union_sorted_tags_help<'a>(
     }
 }
 
-pub fn layout_from_tag_union<'a>(arena: &'a Bump, tags: UnionTags, subs: &Subs) -> Layout<'a> {
-    use UnionVariant::*;
-
+fn cheap_sort_tags<'a, 'b>(
+    arena: &'a Bump,
+    tags: UnionTags,
+    subs: &'b Subs,
+) -> Vec<'a, (&'b TagName, VariableSubsSlice)> {
     let mut tags_vec = Vec::with_capacity_in(tags.len(), arena);
-
-    //     for (tag_index, index) in tags.iter_all() {
-    //         let tag = subs[tag_index].clone();
-    //         let slice = subs[index];
-    //         let mut new_vars = std::vec::Vec::new();
-    //         for var_index in slice {
-    //             let var = subs[var_index];
-    //             new_vars.push(var);
-    //         }
-    //
-    //         tags_vec.push((tag, new_vars));
-    //     }
 
     for (tag_index, index) in tags.iter_all() {
         let tag = &subs[tag_index];
@@ -2055,6 +2030,14 @@ pub fn layout_from_tag_union<'a>(arena: &'a Bump, tags: UnionTags, subs: &Subs) 
 
         tags_vec.push((tag, slice));
     }
+
+    tags_vec
+}
+
+pub fn layout_from_tag_union<'a>(arena: &'a Bump, tags: UnionTags, subs: &Subs) -> Layout<'a> {
+    use UnionVariant::*;
+
+    let tags_vec = cheap_sort_tags(arena, tags, subs);
 
     match tags_vec.get(0) {
         Some((tag_name, arguments)) if *tag_name == &TagName::Private(Symbol::NUM_AT_NUM) => {
@@ -2078,13 +2061,10 @@ pub fn layout_from_tag_union<'a>(arena: &'a Bump, tags: UnionTags, subs: &Subs) 
                     arguments: field_layouts,
                     ..
                 } => {
-                    // work around a lifetime issue
-                    let field_layouts =
-                        Vec::from_iter_in(field_layouts.into_iter(), arena).into_bump_slice();
                     if field_layouts.len() == 1 {
                         field_layouts[0]
                     } else {
-                        Layout::Struct(field_layouts)
+                        Layout::Struct(field_layouts.into_bump_slice())
                     }
                 }
                 Wrapped(variant) => {
