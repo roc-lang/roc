@@ -17,13 +17,27 @@ run =
   \input, parser -> parser input
 
 
-oneOf : List (Parser a) -> Parser a 
-oneOf = \parserList -> 
+# for educational purposes
+oneOfOLD : List (Parser a) -> Parser a 
+oneOfOLD = \parserList -> 
           \input -> when List.first parserList is 
               Ok p -> 
                 output = p input 
-                if List.len output == 1 then output else (oneOf (List.drop parserList 1)) input 
+                if List.len output == 1 then output else (oneOfOLD (List.drop parserList 1)) input 
               Err _ -> [ ]
+              
+oneOf = \parserList ->
+    \input ->
+        List.walkUntil parserList
+            (\p, accum ->
+                output = p input
+                if List.len output == 1 then
+                    Stop output
+
+                else
+                    Continue accum
+            )
+            []
 
 satisfyA = satisfy (\u -> u == 97)
 satisfyB = satisfy (\u -> u == 98)

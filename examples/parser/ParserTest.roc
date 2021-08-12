@@ -27,7 +27,8 @@ main =
     p7 = {name: "is successful (positive)", test: List.len satisfyResult == 1}
     p8 = {name: "is successful (negative)", test: List.len ( satisfyA [100, 98, 99, 100] ) != 1}
     p9 = {name: "test of oneOf combinator", test: List.len oneOfResult == 1}
+    p10 = {name: "test (2) of oneOf combinator", test: List.len ((oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]) == 1}
  
     
-    Test.run [p1, p2, p3, p4, p5, p6, p7, p8, p9] 
+    Test.run [p1, p2, p3, p4, p5, p6, p7, p8, p9, p10] 
       |> Task.putLine
