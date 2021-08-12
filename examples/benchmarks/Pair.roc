@@ -1,6 +1,6 @@
 interface Pair exposes [  
       first, second, 
-      mapFirst, mapSecond, 
+      mapFirst, mapSecond, map2,
       showIntPair, testFirst,testSecond ] imports []
 
 
@@ -18,6 +18,10 @@ mapFirst =
 mapSecond : [Pair a x], (x -> y) -> [Pair a y]
 mapSecond = 
   \(Pair a b), f -> (Pair a (f b))
+
+map2 : [Pair a b], (a -> x), (b -> y) -> [Pair x y]
+map2 = 
+  \(Pair a b), f, g -> (Pair (f a) (g b))
 
 
 ## TEST 
