@@ -41,6 +41,9 @@ run =
 
 
 
+
+        
+
 ## FOR STRING OUTPUT 
 
 runAux : Str, Parser a -> Result a [ListWasEmpty]

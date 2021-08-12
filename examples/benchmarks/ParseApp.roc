@@ -22,7 +22,6 @@ main =
     p6 = {name: "Use andThen to recognize strings beginning with two repeated letters (succeed on input \"aaxyz\")", test: run "aaxyz" (andThen any satisfyWhatCameBefore) == "a"}
     p7 = {name: "is successful (positive)", test: List.len ( satisfyA [97, 98, 99, 100] ) == 1}
     p8 = {name: "is successful (negative)", test: List.len ( satisfyA [100, 98, 99, 100] ) != 1}
-    # p7 = {name: "is successful (simple, positive)", test: successful []}
     
     [Test.eval p1, Test.eval p2, Test.eval p3, Test.eval p4, Test.eval p5, Test.eval p6, Test.eval p7, Test.eval p8] 
        |> Test.strListToStr "\n"
