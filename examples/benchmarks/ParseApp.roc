@@ -28,6 +28,5 @@ main =
     p8 = {name: "is successful (negative)", test: List.len ( satisfyA [100, 98, 99, 100] ) != 1}
     # p9 = {name: "test of oneOf combinator", test: List.len satisfyResult == 1}
     
-    List.map [p1, p2, p3, p4, p5, p6, p7, p8] Test.eval
-      |> Test.strListToStr "\n"
+    Test.run [p1, p2, p3, p4, p5, p6, p7, p8] 
       |> Task.putLine
