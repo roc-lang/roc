@@ -3,9 +3,9 @@ interface Parser exposes [
     succeed, any,  satisfy, fail,
     map, andThen, oneOf, oneOfResult,
     first, second,
-    lowerCase, 
+    lowerCase, manyAux, q2,
     runToString
-  ] imports [Pair]
+  ] imports [Pair, Loop.{Step, loop}]
 
 
 ## PARSERS
@@ -48,15 +48,7 @@ oneOfResult = (oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]
 
 ## MANY
 
-Step state a : [ Loop state, Done a ]
 
-
-loop : (state -> Step state a), state -> a
-loop = \nextState, s ->
-    when nextState s is
-        Loop ss ->
-            loop nextState ss
-        Done aa -> aa
 
  
 # many : Parser a -> Parser (List a)
@@ -76,12 +68,12 @@ manyAux = \p, list ->
               then 
                 succeed (Done (List.reverse list))
               else 
-                p1 = succeed (Done (List.reverse list)) # andThen p (succeed (\a -> Loop (List.prepend list a)))
+                p1 = andThen p ( \a -> succeed (Loop (List.prepend list a))) # succeed (Done (List.reverse list)) #
                 p2 = succeed (Done (List.reverse list))
                 (oneOf [ p1, p2 ])) input
 
 
-# q2 = {name: "run [97,98,99] (manyAux lowerCase [ ]) => Pair (Loop [97] [98,99])", test: run [97,98,99] (manyAux lowerCase [ ]) == Pair (Loop [97] [98,99])}
+q2 = {name: "Parser.run [97,98,99] (manyAux lowerCase [ ]) => Pair ((Loop [97]) [98,99])", test: Parser.run [97,98,99] (manyAux lowerCase [ ]) == [Pair (Loop [97]) [98,99]]}
 
 isLowerCaseAlpha : U8 -> Bool
 isLowerCaseAlpha = \u -> u >= 97 && u <= 122

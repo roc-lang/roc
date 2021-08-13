@@ -1,7 +1,7 @@
 app "parseapp"
      packages { base: "platform" }
      imports [base.Task, 
-        Parser.{succesful, runToString, any, satisfy, first, second, map, andThen, oneOf, oneOfResult, isLowerCaseAlpha },
+        Parser.{succesful, runToString, any, satisfy, first, second, map, andThen, oneOf, oneOfResult, isLowerCaseAlpha, manyAux },
         Test, Utility]
      provides [ main ] to base
 
@@ -28,11 +28,7 @@ main =
     p9 = {name: "test of lowerCase parser with u = 97", test: run "abcd" Parser.lowerCase == "a" } 
 
     q1 = {name: "test of oneOf combinator", test: List.len oneOfResult == 1 }
-    
-
-    # p10 = {name: "test (2) of oneOf combinator", test: List.len ((oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]) == 1}
-   
-     
+      
  
     Test.run [p1, p2, p3, p4, p5, p6, p7, p8, p9, q1] 
       |> Task.putLine
