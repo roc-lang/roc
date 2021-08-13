@@ -4,7 +4,7 @@ interface Parser exposes [
     map, andThen, oneOf, oneOfResult,
     first, second,
     runToString
-  ] imports [Pair]
+  ] imports [Pair, Loop]
 
 
 ## PARSERS
@@ -39,9 +39,37 @@ oneOf = \parserList ->
             )
             []
 
+
+
 satisfyA = satisfy (\u -> u == 97)
 satisfyB = satisfy (\u -> u == 98)
-oneOfResult = (oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]     
+oneOfResult = (oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]  
+
+
+## MANY
+
+# many : Parser a -> Parser (List a)
+# many p =
+#     Parser.loop [] (manyHelp p)
+
+
+# manySeparatedBy : Parser () -> Parser a -> Parser (List a)
+# manySeparatedBy sep p =
+#     manyNonEmpty_ p (second sep p)
+
+
+# manyHelp : Parser a -> List a -> Parser (Parser.Step (List a) (List a))
+# manyHelp p vs =
+#     Parser.oneOf
+#         [ Parser.end EndOfInput |> Parser.map (\_ -> Parser.Done (List.reverse vs))
+#         , Parser.succeed (\v -> Parser.Loop (v :: vs))
+#             |= p
+#         , Parser.succeed ()
+#             |> Parser.map (\_ -> Parser.Done (List.reverse vs))
+#         ]
+
+manyAux : Parser a, List a -> Parser (Loop.Step (List a) (List a))
+
 
 ## FOR STRING OUTPUT 
 
