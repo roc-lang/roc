@@ -1,9 +1,12 @@
 app "testPair"
      packages { base: "platform" }
-     imports [base.Task, Test]
+     imports [base.Task, Test, Pair] 
      provides [ main ] to base
 
 main : Task.Task {} []
 main =
    
-    Task.putLine "Hello!"
+
+    Test.run Pair.tests
+    |> 
+      Task.putLine 
