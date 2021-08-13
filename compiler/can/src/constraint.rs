@@ -60,6 +60,22 @@ impl Constraint {
 
         true
     }
+
+    pub fn contains_save_the_environment(&self) -> bool {
+        match self {
+            Constraint::Eq(_, _, _, _) => false,
+            Constraint::Store(_, _, _, _) => false,
+            Constraint::Lookup(_, _, _) => false,
+            Constraint::Pattern(_, _, _, _) => false,
+            Constraint::True => false,
+            Constraint::SaveTheEnvironment => true,
+            Constraint::Let(boxed) => {
+                boxed.ret_constraint.contains_save_the_environment()
+                    || boxed.defs_constraint.contains_save_the_environment()
+            }
+            Constraint::And(cs) => cs.iter().any(|c| c.contains_save_the_environment()),
+        }
+    }
 }
 
 fn subtract(declared: &Declared, detail: &VariableDetail, accum: &mut VariableDetail) {
@@ -71,12 +87,12 @@ fn subtract(declared: &Declared, detail: &VariableDetail, accum: &mut VariableDe
 
     // lambda set variables are always flex
     for var in &detail.lambda_set_variables {
-        if declared.rigid_vars.contains(&var.into_inner()) {
+        if declared.rigid_vars.contains(var) {
             panic!("lambda set variable {:?} is declared as rigid", var);
         }
 
-        if !declared.flex_vars.contains(&var.into_inner()) {
-            accum.lambda_set_variables.insert(*var);
+        if !declared.flex_vars.contains(var) {
+            accum.lambda_set_variables.push(*var);
         }
     }
 

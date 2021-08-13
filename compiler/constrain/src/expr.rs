@@ -1121,7 +1121,7 @@ pub fn constrain_decls(home: ModuleId, decls: &[Declaration]) -> Constraint {
     }
 
     // this assert make the "root" of the constraint wasn't dropped
-    debug_assert!(format!("{:?}", &constraint).contains("SaveTheEnvironment"));
+    debug_assert!(constraint.contains_save_the_environment());
 
     constraint
 }

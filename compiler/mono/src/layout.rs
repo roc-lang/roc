@@ -1,7 +1,7 @@
 use crate::ir::Parens;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::all::{default_hasher, MutMap, MutSet};
+use roc_collections::all::{default_hasher, MutMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
 use roc_types::subs::{
@@ -368,7 +368,7 @@ impl<'a> LambdaSet<'a> {
                 let mut env = Env {
                     arena,
                     subs,
-                    seen: MutSet::default(),
+                    seen: Vec::new_in(arena),
                 };
 
                 for (tag_name, variables) in tags.iter() {
@@ -488,7 +488,7 @@ pub enum Builtin<'a> {
 
 pub struct Env<'a, 'b> {
     arena: &'a Bump,
-    seen: MutSet<Variable>,
+    seen: Vec<'a, Variable>,
     subs: &'b Subs,
 }
 
@@ -496,19 +496,24 @@ impl<'a, 'b> Env<'a, 'b> {
     fn is_seen(&self, var: Variable) -> bool {
         let var = self.subs.get_root_key_without_compacting(var);
 
-        self.seen.contains(&var)
+        self.seen.iter().rev().any(|x| x == &var)
     }
 
-    fn insert_seen(&mut self, var: Variable) -> bool {
+    fn insert_seen(&mut self, var: Variable) {
         let var = self.subs.get_root_key_without_compacting(var);
 
-        self.seen.insert(var)
+        self.seen.push(var);
     }
 
     fn remove_seen(&mut self, var: Variable) -> bool {
         let var = self.subs.get_root_key_without_compacting(var);
 
-        self.seen.remove(&var)
+        if let Some(index) = self.seen.iter().rposition(|x| x == &var) {
+            self.seen.remove(index);
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -886,7 +891,7 @@ impl<'a> LayoutCache<'a> {
                 let mut env = Env {
                     arena,
                     subs,
-                    seen: MutSet::default(),
+                    seen: Vec::new_in(arena),
                 };
 
                 let result = Layout::from_var(&mut env, var);
@@ -929,7 +934,7 @@ impl<'a> LayoutCache<'a> {
                 let mut env = Env {
                     arena,
                     subs,
-                    seen: MutSet::default(),
+                    seen: Vec::new_in(arena),
                 };
 
                 Layout::from_var(&mut env, var).map(|l| match l {
@@ -1377,7 +1382,7 @@ pub fn sort_record_fields<'a>(
     let mut env = Env {
         arena,
         subs,
-        seen: MutSet::default(),
+        seen: Vec::new_in(arena),
     };
 
     let (it, _) = gather_fields_unsorted_iter(subs, RecordFields::empty(), var);
@@ -1606,7 +1611,7 @@ fn union_sorted_tags_help_new<'a>(
     let mut env = Env {
         arena,
         subs,
-        seen: MutSet::default(),
+        seen: Vec::new_in(arena),
     };
 
     match tags_vec.len() {
@@ -1822,7 +1827,7 @@ pub fn union_sorted_tags_help<'a>(
     let mut env = Env {
         arena,
         subs,
-        seen: MutSet::default(),
+        seen: Vec::new_in(arena),
     };
 
     match tags_vec.len() {
@@ -2039,8 +2044,49 @@ fn cheap_sort_tags<'a, 'b>(
     tags_vec
 }
 
-pub fn layout_from_tag_union<'a>(arena: &'a Bump, tags: UnionTags, subs: &Subs) -> Layout<'a> {
+fn layout_from_newtype<'a>(arena: &'a Bump, tags: UnionTags, subs: &Subs) -> Layout<'a> {
+    debug_assert!(tags.is_newtype_wrapper(subs));
+
+    let slice_index = tags.variables().into_iter().next().unwrap();
+    let slice = subs[slice_index];
+    let var_index = slice.into_iter().next().unwrap();
+    let var = subs[var_index];
+
+    let tag_name_index = tags.tag_names().into_iter().next().unwrap();
+    let tag_name = &subs[tag_name_index];
+
+    if tag_name == &TagName::Private(Symbol::NUM_AT_NUM) {
+        unwrap_num_tag(subs, var).expect("invalid Num argument")
+    } else {
+        let mut env = Env {
+            arena,
+            subs,
+            seen: Vec::new_in(arena),
+        };
+
+        match Layout::from_var(&mut env, var) {
+            Ok(layout) => layout,
+            Err(LayoutProblem::UnresolvedTypeVar(_)) => {
+                // If we encounter an unbound type var (e.g. `Ok *`)
+                // then it's zero-sized; In the future we may drop this argument
+                // completely, but for now we represent it with the empty struct
+                Layout::Struct(&[])
+            }
+            Err(LayoutProblem::Erroneous) => {
+                // An erroneous type var will code gen to a runtime
+                // error, so we don't need to store any data for it.
+                todo!()
+            }
+        }
+    }
+}
+
+fn layout_from_tag_union<'a>(arena: &'a Bump, tags: UnionTags, subs: &Subs) -> Layout<'a> {
     use UnionVariant::*;
+
+    if tags.is_newtype_wrapper(subs) {
+        return layout_from_newtype(arena, tags, subs);
+    }
 
     let tags_vec = cheap_sort_tags(arena, tags, subs);
 
@@ -2066,11 +2112,13 @@ pub fn layout_from_tag_union<'a>(arena: &'a Bump, tags: UnionTags, subs: &Subs) 
                     arguments: field_layouts,
                     ..
                 } => {
-                    if field_layouts.len() == 1 {
+                    let answer1 = if field_layouts.len() == 1 {
                         field_layouts[0]
                     } else {
                         Layout::Struct(field_layouts.into_bump_slice())
-                    }
+                    };
+
+                    answer1
                 }
                 Wrapped(variant) => {
                     use WrappedVariant::*;
@@ -2192,7 +2240,7 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
         Content::Alias(Symbol::NUM_INTEGER, args, _) => {
             debug_assert!(args.len() == 1);
 
-            let (_, precision_var) = args[0];
+            let precision_var = subs[args.variables().into_iter().next().unwrap()];
 
             let precision = subs.get_content_without_compacting(precision_var);
 
@@ -2227,7 +2275,7 @@ fn unwrap_num_tag<'a>(subs: &Subs, var: Variable) -> Result<Layout<'a>, LayoutPr
         Content::Alias(Symbol::NUM_FLOATINGPOINT, args, _) => {
             debug_assert!(args.len() == 1);
 
-            let (_, precision_var) = args[0];
+            let precision_var = subs[args.variables().into_iter().next().unwrap()];
 
             let precision = subs.get_content_without_compacting(precision_var);
 
