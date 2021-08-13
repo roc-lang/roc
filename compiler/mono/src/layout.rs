@@ -885,9 +885,7 @@ impl<'a> LayoutCache<'a> {
     pub fn rollback_to(&mut self, _snapshot: SnapshotKeyPlaceholder) {}
 }
 
-/// placeholder for the type
-///
-///      ven_ena::unify::Snapshot<ven_ena::unify::InPlace<CachedVariable<'a>>>
+// placeholder for the type ven_ena::unify::Snapshot<ven_ena::unify::InPlace<CachedVariable<'a>>>
 pub struct SnapshotKeyPlaceholder;
 
 impl<'a> Builtin<'a> {
