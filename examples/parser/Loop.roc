@@ -1,12 +1,26 @@
 interface Loop exposes [  
-      Step, loop, 
+      Step, loop,
       Counter, updateCounter,
-      test1, test2, test3 ] imports []
+      tests ] imports []
 
 
 # Reference: last part of https://jxxcarlson.medium.com/?p=63cd104a192a
 
 Step state a : [ Loop state, Done a ]
+
+doneBranch : Step state a -> Result a Str
+doneBranch  =  \step -> 
+   when step is 
+      Done a -> Ok a 
+      Loop _ -> Err "You applied this to a Loop value"
+
+
+loopBranch : Step state a -> Result state Str
+loopBranch  = \step -> 
+  when step is 
+      Loop x -> Ok x 
+      Done _ -> Err "You applied this to a Done value"      
+
 
 loop : (state -> Step state a), state -> a
 loop = \nextState, s ->
@@ -25,21 +39,18 @@ updateCounter = \state ->
             _ ->
                 Loop { state & counter : state.counter - 1, value : state.value + state.counter }
 
-test1 : Str 
-test1 = 
-     c = { counter : 0, value : 4}
-     if updateCounter c == Done 4 then "Ok" else "Fail"
-
-test2 : Str 
-test2 = 
-     c = { counter : 4, value : 0}
-     if updateCounter c == Loop { counter : 3, value : 4} then "Ok" else "Fail"
 
 
-## Haha! Let's compute the sum 1 +  2 + 3 + 4 + 5:
-test3 : Str
-test3 = 
-  out = loop updateCounter { counter : 5, value : 0}
-  if out == 15 then "Ok" else "Fail"
+t1 = {name: "updateCounter { counter : 0, value : 4} => Done 4", test : updateCounter { counter : 0, value : 4} == Done 4}
+t2 = {name: "updateCounter { counter : 4, value : 0} => Loop { counter : 3, value : 4} ", test : updateCounter { counter : 4, value : 0} == Loop { counter : 3, value : 4}}
+t3 = {name: "loop updateCounter { counter : 5, value : 0} =>  15", test : loop updateCounter { counter : 5, value : 0} == 15}
+t4 = {name: "doneBranch (updateCounter { counter : 0, value : 4}) => Ok 4", test : doneBranch (updateCounter { counter : 0, value : 4}) == Ok 4}
+t5 = {name: "doneBranch (updateCounter { counter : 4, value : 0}) => Err \"You applied this to a Loop value\"", test : doneBranch (updateCounter { counter : 4, value : 0}) == Err "You applied this to a Loop value" }
+t6 = {name: "loopBranch (updateCounter { counter : 4, value : 0}) => Ok { counter : 3, value : 4}", test : loopBranch (updateCounter { counter : 4, value :0}) == Ok { counter : 3, value : 4} }
+t7 = {name: "loopBranch (updateCounter { counter : 0, value : 4}) => Err \"You applied this to a Done value\"", test : loopBranch (updateCounter { counter : 0, value :4}) == Err "You applied this to a Done value" }
+
+tests = [t1,t2,t3, t4, t5, t6, t7]
+
+
 
        

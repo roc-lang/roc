@@ -3,7 +3,7 @@ interface Parser exposes [
     succeed, any,  satisfy, fail,
     map, andThen, oneOf, oneOfResult,
     first, second,
-    isLowerCaseAlpha,
+    lowerCase,
     runToString
   ] imports [Pair]
 
@@ -50,6 +50,7 @@ oneOfResult = (oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]
 
 Step state a : [ Loop state, Done a ]
 
+
 loop : (state -> Step state a), state -> a
 loop = \nextState, s ->
     when nextState s is
@@ -80,8 +81,11 @@ manyAux = \p, list ->
                 (oneOf [ p1, p2 ])) input
 
 
+
 isLowerCaseAlpha : U8 -> Bool
 isLowerCaseAlpha = \u -> u >= 97 && u <= 122
+
+lowerCase = satisfy isLowerCaseAlpha
 
 ## FOR STRING OUTPUT 
 
