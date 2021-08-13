@@ -234,7 +234,7 @@ impl<T> SubsSlice<T> {
         self.length as usize
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
