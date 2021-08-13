@@ -5,5 +5,5 @@ app "testRunner"
 
 main : Task.Task {} []
 main =
-    Test.run Test.validate
+    Test.run Test.validate2
     |> Task.putLine 
