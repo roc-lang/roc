@@ -95,7 +95,7 @@ fn infer_eq(actual: &str, expected_str: &str) {
             let Env {
                 pool,
                 var_store: ref_var_store,
-                dep_idents,
+                mut dep_idents,
                 ..
             } = env;
 
@@ -115,6 +115,9 @@ fn infer_eq(actual: &str, expected_str: &str) {
             let subs = solved.inner_mut();
 
             let content = subs.get_content_without_compacting(var);
+
+            // Connect the ModuleId to it's IdentIds
+            dep_idents.insert(mod_id, env.ident_ids);
 
             let interns = Interns {
                 module_ids: env.module_ids.clone(),
@@ -252,6 +255,18 @@ fn constrain_global_tag() {
 }
 
 #[test]
+fn constrain_private_tag() {
+    infer_eq(
+        indoc!(
+            r#"
+            @Foo
+            "#
+        ),
+        "[ @Foo ]*",
+    )
+}
+
+#[test]
 fn constrain_call_and_accessor() {
     infer_eq(
         indoc!(
@@ -339,5 +354,19 @@ fn constrain_run_low_level() {
             "#
         ),
         "List Str",
+    )
+}
+
+#[test]
+fn constrain_closure() {
+    infer_eq(
+        indoc!(
+            r#"
+            x = 1
+
+            \{} -> x
+            "#
+        ),
+        "{}* -> Num *",
     )
 }

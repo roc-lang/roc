@@ -58,12 +58,13 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_SPLIT => str_split,
         STR_IS_EMPTY => str_is_empty,
         STR_STARTS_WITH => str_starts_with,
-        STR_STARTS_WITH_CODE_POINT => str_starts_with_code_point,
+        STR_STARTS_WITH_CODE_PT => str_starts_with_code_point,
         STR_ENDS_WITH => str_ends_with,
         STR_COUNT_GRAPHEMES => str_count_graphemes,
         STR_FROM_INT => str_from_int,
         STR_FROM_UTF8 => str_from_utf8,
-        STR_TO_BYTES => str_to_bytes,
+        STR_FROM_UTF8_RANGE => str_from_utf8_range,
+        STR_TO_UTF8 => str_to_utf8,
         STR_FROM_FLOAT=> str_from_float,
         LIST_LEN => list_len,
         LIST_GET => list_get,
@@ -1287,9 +1288,9 @@ fn str_starts_with(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::StrStartsWith, var_store)
 }
 
-/// Str.startsWithCodePoint : Str, U32 -> Bool
+/// Str.startsWithCodePt : Str, U32 -> Bool
 fn str_starts_with_code_point(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_2(symbol, LowLevel::StrStartsWithCodePoint, var_store)
+    lowlevel_2(symbol, LowLevel::StrStartsWithCodePt, var_store)
 }
 
 /// Str.endsWith : Str, Str -> Bool
@@ -1352,7 +1353,7 @@ fn str_from_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Str.fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8Problem ]*
+/// Str.fromUtf8 : List U8 -> Result Str [ BadUtf8 { byteIndex : Nat, problem : Utf8Problem  } } ]*
 fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bytes_var = var_store.fresh();
     let bool_var = var_store.fresh();
@@ -1455,10 +1456,183 @@ fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
         ret_var,
     )
 }
+/// Str.fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [ BadUtf8 { byteIndex : Nat, problem : Utf8Problem  } } ]*
+fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let bytes_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+    let arg_record_var = var_store.fresh();
+    let ll_record_var = var_store.fresh();
+    let ret_var = var_store.fresh();
 
-/// Str.toBytes : Str -> List U8
-fn str_to_bytes(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_1(symbol, LowLevel::StrToBytes, var_store)
+    // let arg_3 = RunLowLevel FromUtf8Range arg_1 arg_2
+    //
+    // arg_3 :
+    //   { a : Bool   -- isOk
+    //   , b : String -- result_str
+    //   , c : Nat    -- problem_byte_index
+    //   , d : I8     -- problem_code
+    //   }
+    //
+    // if arg_3.a then
+    //  Ok arg_3.str
+    // else
+    //  Err (BadUtf8 { byteIndex: arg_3.byteIndex, problem : arg_3.problem })
+
+    let def = crate::def::Def {
+        loc_pattern: no_region(Pattern::Identifier(Symbol::ARG_3)),
+        loc_expr: no_region(RunLowLevel {
+            op: LowLevel::StrFromUtf8Range,
+            args: vec![
+                (bytes_var, Var(Symbol::ARG_1)),
+                (arg_record_var, Var(Symbol::ARG_2)),
+            ],
+            ret_var: ll_record_var,
+        }),
+        expr_var: ll_record_var,
+        pattern_vars: SendMap::default(),
+        annotation: None,
+    };
+
+    let cont = If {
+        branch_var: ret_var,
+        cond_var: bool_var,
+        branches: vec![(
+            // if-condition
+            no_region(
+                // arg_2.c -> Bool
+                Access {
+                    record_var: ll_record_var,
+                    ext_var: var_store.fresh(),
+                    field: "c_isOk".into(),
+                    field_var: var_store.fresh(),
+                    loc_expr: Box::new(no_region(Var(Symbol::ARG_3))),
+                },
+            ),
+            // all is good
+            no_region(tag(
+                "Ok",
+                // arg_2.a -> Str
+                vec![Access {
+                    record_var: ll_record_var,
+                    ext_var: var_store.fresh(),
+                    field: "b_str".into(),
+                    field_var: var_store.fresh(),
+                    loc_expr: Box::new(no_region(Var(Symbol::ARG_3))),
+                }],
+                var_store,
+            )),
+        )],
+        final_else: Box::new(
+            // bad!!
+            no_region(tag(
+                "Err",
+                vec![tag(
+                    "BadUtf8",
+                    vec![
+                        Access {
+                            record_var: ll_record_var,
+                            ext_var: var_store.fresh(),
+                            field: "d_problem".into(),
+                            field_var: var_store.fresh(),
+                            loc_expr: Box::new(no_region(Var(Symbol::ARG_3))),
+                        },
+                        Access {
+                            record_var: ll_record_var,
+                            ext_var: var_store.fresh(),
+                            field: "a_byteIndex".into(),
+                            field_var: var_store.fresh(),
+                            loc_expr: Box::new(no_region(Var(Symbol::ARG_3))),
+                        },
+                    ],
+                    var_store,
+                )],
+                var_store,
+            )),
+        ),
+    };
+
+    let roc_result = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+
+    // Only do the business with the let if we're in bounds!
+
+    let bounds_var = var_store.fresh();
+    let bounds_bool = var_store.fresh();
+    let add_var = var_store.fresh();
+
+    let body = If {
+        cond_var: bounds_bool,
+        branch_var: ret_var,
+        branches: vec![(
+            no_region(RunLowLevel {
+                op: LowLevel::NumLte,
+                args: vec![
+                    (
+                        bounds_var,
+                        RunLowLevel {
+                            op: LowLevel::NumAdd,
+                            args: vec![
+                                (
+                                    add_var,
+                                    Access {
+                                        record_var: arg_record_var,
+                                        ext_var: var_store.fresh(),
+                                        field: "start".into(),
+                                        field_var: var_store.fresh(),
+                                        loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                                    },
+                                ),
+                                (
+                                    add_var,
+                                    Access {
+                                        record_var: arg_record_var,
+                                        ext_var: var_store.fresh(),
+                                        field: "count".into(),
+                                        field_var: var_store.fresh(),
+                                        loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                                    },
+                                ),
+                            ],
+                            ret_var: add_var,
+                        },
+                    ),
+                    (
+                        bounds_var,
+                        RunLowLevel {
+                            op: LowLevel::ListLen,
+                            args: vec![(bytes_var, Var(Symbol::ARG_1))],
+                            ret_var: bounds_var,
+                        },
+                    ),
+                ],
+                ret_var: bounds_bool,
+            }),
+            no_region(roc_result),
+        )],
+        final_else: Box::new(
+            // else-branch
+            no_region(
+                // Err
+                tag(
+                    "Err",
+                    vec![tag("OutOfBounds", Vec::new(), var_store)],
+                    var_store,
+                ),
+            ),
+        ),
+    };
+
+    defn(
+        symbol,
+        vec![(bytes_var, Symbol::ARG_1), (arg_record_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+/// Str.toUtf8 : Str -> List U8
+fn str_to_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::StrToUtf8, var_store)
 }
 
 /// Str.fromFloat : Float * -> Str

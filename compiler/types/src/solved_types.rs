@@ -1,4 +1,4 @@
-use crate::subs::{FlatType, Subs, VarId, VarStore, Variable};
+use crate::subs::{FlatType, GetSubsSlice, Subs, VarId, VarStore, Variable};
 use crate::types::{Problem, RecordField, Type};
 use roc_collections::all::{ImMap, MutSet, SendMap};
 use roc_module::ident::{Lowercase, TagName};
@@ -394,22 +394,26 @@ impl SolvedType {
             }
             RigidVar(name) => SolvedType::Rigid(name.clone()),
             Structure(flat_type) => Self::from_flat_type(subs, recursion_vars, flat_type),
-            Alias(symbol, args, lambda_set_variables, actual_var) => {
+            Alias(symbol, args, actual_var) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for (arg_name, arg_var) in args {
+                for (name_index, var_index) in args.named_type_arguments() {
+                    let arg_var = subs[var_index];
+
                     new_args.push((
-                        arg_name.clone(),
-                        Self::from_var_help(subs, recursion_vars, *arg_var),
+                        subs[name_index].clone(),
+                        Self::from_var_help(subs, recursion_vars, arg_var),
                     ));
                 }
 
-                let mut solved_lambda_sets = Vec::with_capacity(lambda_set_variables.len());
-                for var in lambda_set_variables {
+                let mut solved_lambda_sets = Vec::with_capacity(0);
+                for var_index in args.unnamed_type_arguments() {
+                    let var = subs[var_index];
+
                     solved_lambda_sets.push(SolvedLambdaSet(Self::from_var_help(
                         subs,
                         recursion_vars,
-                        var.into_inner(),
+                        var,
                     )));
                 }
 
@@ -432,8 +436,8 @@ impl SolvedType {
             Apply(symbol, args) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for var in args.iter().copied() {
-                    new_args.push(Self::from_var_help(subs, recursion_vars, var));
+                for var in subs.get_subs_slice(*args.as_subs_slice()) {
+                    new_args.push(Self::from_var_help(subs, recursion_vars, *var));
                 }
 
                 SolvedType::Apply(*symbol, new_args)
@@ -441,7 +445,7 @@ impl SolvedType {
             Func(args, closure, ret) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for var in args {
+                for var in subs.get_subs_slice(*args.as_subs_slice()) {
                     new_args.push(Self::from_var_help(subs, recursion_vars, *var));
                 }
 
@@ -453,16 +457,15 @@ impl SolvedType {
             Record(fields, ext_var) => {
                 let mut new_fields = Vec::with_capacity(fields.len());
 
-                for (label, field) in fields {
-                    use RecordField::*;
+                for (i1, i2, i3) in fields.iter_all() {
+                    let field_name: Lowercase = subs[i1].clone();
+                    let variable: Variable = subs[i2];
+                    let record_field: RecordField<()> = subs[i3];
 
-                    let solved_type = match field {
-                        Optional(var) => Optional(Self::from_var_help(subs, recursion_vars, *var)),
-                        Required(var) => Required(Self::from_var_help(subs, recursion_vars, *var)),
-                        Demanded(var) => Demanded(Self::from_var_help(subs, recursion_vars, *var)),
-                    };
+                    let solved_type =
+                        record_field.map(|_| Self::from_var_help(subs, recursion_vars, variable));
 
-                    new_fields.push((label.clone(), solved_type));
+                    new_fields.push((field_name, solved_type));
                 }
 
                 let ext = Self::from_var_help(subs, recursion_vars, *ext_var);
@@ -475,13 +478,16 @@ impl SolvedType {
             TagUnion(tags, ext_var) => {
                 let mut new_tags = Vec::with_capacity(tags.len());
 
-                for (tag_name, args) in tags {
-                    let mut new_args = Vec::with_capacity(args.len());
+                for (name_index, slice_index) in tags.iter_all() {
+                    let slice = subs[slice_index];
 
-                    for var in args {
-                        new_args.push(Self::from_var_help(subs, recursion_vars, *var));
+                    let mut new_args = Vec::with_capacity(slice.len());
+
+                    for var_index in slice {
+                        let var = subs[var_index];
+                        new_args.push(Self::from_var_help(subs, recursion_vars, var));
                     }
-
+                    let tag_name = subs[name_index].clone();
                     new_tags.push((tag_name.clone(), new_args));
                 }
 
@@ -492,20 +498,23 @@ impl SolvedType {
             FunctionOrTagUnion(tag_name, symbol, ext_var) => {
                 let ext = Self::from_var_help(subs, recursion_vars, *ext_var);
 
-                SolvedType::FunctionOrTagUnion(tag_name.clone(), *symbol, Box::new(ext))
+                SolvedType::FunctionOrTagUnion(subs[*tag_name].clone(), *symbol, Box::new(ext))
             }
             RecursiveTagUnion(rec_var, tags, ext_var) => {
                 recursion_vars.insert(subs, *rec_var);
 
                 let mut new_tags = Vec::with_capacity(tags.len());
 
-                for (tag_name, args) in tags {
-                    let mut new_args = Vec::with_capacity(args.len());
+                for (name_index, slice_index) in tags.iter_all() {
+                    let slice = subs[slice_index];
 
-                    for var in args {
-                        new_args.push(Self::from_var_help(subs, recursion_vars, *var));
+                    let mut new_args = Vec::with_capacity(slice.len());
+
+                    for var_index in slice {
+                        let var = subs[var_index];
+                        new_args.push(Self::from_var_help(subs, recursion_vars, var));
                     }
-
+                    let tag_name = subs[name_index].clone();
                     new_tags.push((tag_name.clone(), new_args));
                 }
 
@@ -519,7 +528,7 @@ impl SolvedType {
             }
             EmptyRecord => SolvedType::EmptyRecord,
             EmptyTagUnion => SolvedType::EmptyTagUnion,
-            Erroneous(problem) => SolvedType::Erroneous(problem.clone()),
+            Erroneous(problem) => SolvedType::Erroneous(*problem.clone()),
         }
     }
 }

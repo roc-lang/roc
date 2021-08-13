@@ -1,7 +1,8 @@
 use crate::pretty_print::Parens;
-use crate::subs::{Subs, VarStore, Variable};
-use inlinable_string::InlinableString;
-use roc_collections::all::{ImMap, ImSet, Index, MutMap, MutSet, SendMap};
+use crate::subs::{
+    GetSubsSlice, RecordFields, Subs, UnionTags, VarStore, Variable, VariableSubsSlice,
+};
+use roc_collections::all::{ImMap, ImSet, Index, MutSet, SendMap};
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -1052,8 +1053,17 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
     }
 }
 
+#[derive(Debug)]
 pub struct RecordStructure {
-    pub fields: MutMap<Lowercase, RecordField<Variable>>,
+    /// Invariant: these should be sorted!
+    pub fields: Vec<(Lowercase, RecordField<Variable>)>,
+    pub ext: Variable,
+}
+
+#[derive(Debug)]
+pub struct TagUnionStructure<'a> {
+    /// Invariant: these should be sorted!
+    pub fields: Vec<(TagName, &'a [Variable])>,
     pub ext: Variable,
 }
 
@@ -1189,9 +1199,9 @@ pub struct Alias {
 #[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub enum Problem {
     CanonicalizationProblem,
-    CircularType(Symbol, ErrorType, Region),
+    CircularType(Symbol, Box<ErrorType>, Region),
     CyclicAlias(Symbol, Region, Vec<Symbol>),
-    UnrecognizedIdent(InlinableString),
+    UnrecognizedIdent(Ident),
     Shadowed(Region, Located<Ident>),
     BadTypeArguments {
         symbol: Symbol,
@@ -1269,7 +1279,7 @@ fn write_error_type_help(
             if write_parens {
                 buf.push('(');
             }
-            buf.push_str(symbol.ident_string(interns));
+            buf.push_str(symbol.ident_str(interns).as_str());
 
             for arg in arguments {
                 buf.push(' ');
@@ -1593,37 +1603,169 @@ pub fn name_type_var(letters_used: u32, taken: &mut MutSet<Lowercase>) -> (Lower
     }
 }
 
-pub fn gather_fields(
+pub fn gather_fields_unsorted_iter(
     subs: &Subs,
-    other_fields: &MutMap<Lowercase, RecordField<Variable>>,
+    other_fields: RecordFields,
     mut var: Variable,
-) -> RecordStructure {
+) -> (
+    impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + '_,
+    Variable,
+) {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
-    let mut result = other_fields.clone();
+    let mut stack = vec![other_fields];
 
     loop {
         match subs.get_content_without_compacting(var) {
             Structure(Record(sub_fields, sub_ext)) => {
-                for (lowercase, record_field) in sub_fields {
-                    result.insert(lowercase.clone(), *record_field);
-                }
+                stack.push(*sub_fields);
 
                 var = *sub_ext;
             }
 
-            Alias(_, _, _, actual_var) => {
+            Alias(_, _, actual_var) => {
                 // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
                 var = *actual_var;
             }
 
-            _ => break,
+            Structure(EmptyRecord) => break,
+            FlexVar(_) => break,
+
+            // TODO investigate apparently this one pops up in the reporting tests!
+            RigidVar(_) => break,
+
+            other => unreachable!("something weird ended up in a record type: {:?}", other),
         }
     }
 
+    let it = stack
+        .into_iter()
+        .map(|fields| fields.iter_all())
+        .flatten()
+        .map(move |(i1, i2, i3)| {
+            let field_name: &Lowercase = &subs[i1];
+            let variable = subs[i2];
+            let record_field: RecordField<Variable> = subs[i3].map(|_| variable);
+
+            (field_name, record_field)
+        });
+
+    (it, var)
+}
+
+pub fn gather_fields(subs: &Subs, other_fields: RecordFields, var: Variable) -> RecordStructure {
+    let (it, ext) = gather_fields_unsorted_iter(subs, other_fields, var);
+
+    let mut result: Vec<_> = it
+        .map(|(ref_label, field)| (ref_label.clone(), field))
+        .collect();
+
+    result.sort_by(|(a, _), (b, _)| a.cmp(b));
+
     RecordStructure {
         fields: result,
-        ext: var,
+        ext,
+    }
+}
+
+pub fn gather_tags_unsorted_iter(
+    subs: &Subs,
+    other_fields: UnionTags,
+    mut var: Variable,
+) -> (
+    impl Iterator<Item = (&TagName, VariableSubsSlice)> + '_,
+    Variable,
+) {
+    use crate::subs::Content::*;
+    use crate::subs::FlatType::*;
+
+    let mut stack = vec![other_fields];
+
+    loop {
+        match subs.get_content_without_compacting(var) {
+            Structure(TagUnion(sub_fields, sub_ext)) => {
+                stack.push(*sub_fields);
+
+                var = *sub_ext;
+            }
+
+            Structure(FunctionOrTagUnion(_tag_name_index, _, _sub_ext)) => {
+                todo!("this variant does not use SOA yet, and therefore this case is unreachable right now")
+                //                let sub_fields: UnionTags = (*tag_name_index).into();
+                //                stack.push(sub_fields);
+                //
+                //                var = *sub_ext;
+            }
+
+            Structure(RecursiveTagUnion(_, _sub_fields, _sub_ext)) => {
+                todo!("this variant does not use SOA yet, and therefore this case is unreachable right now")
+                //                stack.push(*sub_fields);
+                //
+                //                var = *sub_ext;
+            }
+
+            Alias(_, _, actual_var) => {
+                // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
+                var = *actual_var;
+            }
+
+            Structure(EmptyTagUnion) => break,
+            FlexVar(_) => break,
+
+            // TODO investigate this likely can happen when there is a type error
+            RigidVar(_) => break,
+
+            other => unreachable!("something weird ended up in a tag union type: {:?}", other),
+        }
+    }
+
+    let it = stack
+        .into_iter()
+        .map(|union_tags| union_tags.iter_all())
+        .flatten()
+        .map(move |(i1, i2)| {
+            let tag_name: &TagName = &subs[i1];
+            let subs_slice = subs[i2];
+
+            (tag_name, subs_slice)
+        });
+
+    (it, var)
+}
+
+pub fn gather_tags_slices(
+    subs: &Subs,
+    other_fields: UnionTags,
+    var: Variable,
+) -> (Vec<(TagName, VariableSubsSlice)>, Variable) {
+    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var);
+
+    let mut result: Vec<_> = it
+        .map(|(ref_label, field)| (ref_label.clone(), field))
+        .collect();
+
+    result.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    (result, ext)
+}
+
+pub fn gather_tags(subs: &Subs, other_fields: UnionTags, var: Variable) -> TagUnionStructure {
+    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var);
+
+    let mut result: Vec<_> = it
+        .map(|(ref_label, field)| {
+            (
+                ref_label.clone(),
+                subs.get_subs_slice(*field.as_subs_slice()),
+            )
+        })
+        .collect();
+
+    result.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    TagUnionStructure {
+        fields: result,
+        ext,
     }
 }

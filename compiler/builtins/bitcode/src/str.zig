@@ -865,8 +865,8 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
     return true;
 }
 
-// Str.startsWithCodePoint
-pub fn startsWithCodePoint(string: RocStr, prefix: u32) callconv(.C) bool {
+// Str.startsWithCodePt
+pub fn startsWithCodePt(string: RocStr, prefix: u32) callconv(.C) bool {
     const bytes_len = string.len();
     const bytes_ptr = string.asU8ptr();
 
@@ -886,18 +886,18 @@ pub fn startsWithCodePoint(string: RocStr, prefix: u32) callconv(.C) bool {
     return true;
 }
 
-test "startsWithCodePoint: ascii char" {
+test "startsWithCodePt: ascii char" {
     const whole = RocStr.init("foobar", 6);
     const prefix = 'f';
-    try expect(startsWithCodePoint(whole, prefix));
+    try expect(startsWithCodePt(whole, prefix));
 }
 
-test "startsWithCodePoint: emoji" {
+test "startsWithCodePt: emoji" {
     const yes = RocStr.init("💖foobar", 10);
     const no = RocStr.init("foobar", 6);
     const prefix = '💖';
-    try expect(startsWithCodePoint(yes, prefix));
-    try expect(!startsWithCodePoint(no, prefix));
+    try expect(startsWithCodePt(yes, prefix));
+    try expect(!startsWithCodePt(no, prefix));
 }
 
 test "startsWith: foo starts with fo" {
@@ -1129,8 +1129,8 @@ test "RocStr.joinWith: result is big" {
     try expect(roc_result.eq(result));
 }
 
-// Str.toBytes
-pub fn strToBytesC(arg: RocStr) callconv(.C) RocList {
+// Str.toUtf8
+pub fn strToUtf8C(arg: RocStr) callconv(.C) RocList {
     return @call(.{ .modifier = always_inline }, strToBytes, .{arg});
 }
 
@@ -1154,6 +1154,11 @@ const FromUtf8Result = extern struct {
     string: RocStr,
     is_ok: bool,
     problem_code: Utf8ByteProblem,
+};
+
+const CountAndStart = extern struct {
+    count: usize,
+    start: usize,
 };
 
 pub fn fromUtf8C(arg: RocList, output: *FromUtf8Result) callconv(.C) void {
@@ -1188,6 +1193,24 @@ fn fromUtf8(arg: RocList) FromUtf8Result {
         const data_bytes = arg.len();
         utils.decref(arg.bytes, data_bytes, RocStr.alignment);
 
+        return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = temp.index, .problem_code = temp.problem };
+    }
+}
+
+pub fn fromUtf8RangeC(arg: RocList, countAndStart: CountAndStart, output: *FromUtf8Result) callconv(.C) void {
+    output.* = @call(.{ .modifier = always_inline }, fromUtf8Range, .{ arg, countAndStart });
+}
+
+fn fromUtf8Range(arg: RocList, countAndStart: CountAndStart) FromUtf8Result {
+    const bytes = @ptrCast([*]const u8, arg.bytes)[countAndStart.start..countAndStart.count];
+
+    if (unicode.utf8ValidateSlice(bytes)) {
+        // the output will be correct. Now we need to clone the input
+        const string = RocStr.init(@ptrCast([*]const u8, bytes), countAndStart.count);
+
+        return FromUtf8Result{ .is_ok = true, .string = string, .byte_index = 0, .problem_code = Utf8ByteProblem.InvalidStartByte };
+    } else {
+        const temp = errorToProblem(@ptrCast([*]u8, arg.bytes), arg.length);
         return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = temp.index, .problem_code = temp.problem };
     }
 }

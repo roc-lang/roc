@@ -71,11 +71,11 @@ fn subtract(declared: &Declared, detail: &VariableDetail, accum: &mut VariableDe
 
     // lambda set variables are always flex
     for var in &detail.lambda_set_variables {
-        if declared.rigid_vars.contains(&var) {
+        if declared.rigid_vars.contains(var) {
             panic!("lambda set variable {:?} is declared as rigid", var);
         }
 
-        if !declared.flex_vars.contains(&var) {
+        if !declared.flex_vars.contains(var) {
             accum.lambda_set_variables.push(*var);
         }
     }

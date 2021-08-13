@@ -1,7 +1,6 @@
 use crate::procedure::References;
-use inlinable_string::InlinableString;
 use roc_collections::all::{MutMap, MutSet};
-use roc_module::ident::ModuleName;
+use roc_module::ident::{Ident, ModuleName};
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Located, Region};
@@ -12,7 +11,7 @@ pub struct Env<'a> {
     /// are assumed to be relative to this path.
     pub home: ModuleId,
 
-    pub dep_idents: MutMap<ModuleId, IdentIds>,
+    pub dep_idents: &'a MutMap<ModuleId, IdentIds>,
 
     pub module_ids: &'a ModuleIds,
 
@@ -40,7 +39,7 @@ pub struct Env<'a> {
 impl<'a> Env<'a> {
     pub fn new(
         home: ModuleId,
-        dep_idents: MutMap<ModuleId, IdentIds>,
+        dep_idents: &'a MutMap<ModuleId, IdentIds>,
         module_ids: &'a ModuleIds,
         exposed_ident_ids: IdentIds,
     ) -> Env<'a> {
@@ -62,22 +61,21 @@ impl<'a> Env<'a> {
     /// Returns Err if the symbol resolved, but it was not exposed by the given module
     pub fn qualified_lookup(
         &mut self,
-        module_name: &str,
+        module_name_str: &str,
         ident: &str,
         region: Region,
     ) -> Result<Symbol, RuntimeError> {
         debug_assert!(
-            !module_name.is_empty(),
+            !module_name_str.is_empty(),
             "Called env.qualified_lookup with an unqualified ident: {:?}",
             ident
         );
 
-        let module_name: InlinableString = module_name.into();
+        let module_name = ModuleName::from(module_name_str);
+        let ident = Ident::from(ident);
 
         match self.module_ids.get_id(&module_name) {
             Some(&module_id) => {
-                let ident: InlinableString = ident.into();
-
                 // You can do qualified lookups on your own module, e.g.
                 // if I'm in the Foo module, I can do a `Foo.bar` lookup.
                 if module_id == self.home {
@@ -114,7 +112,7 @@ impl<'a> Env<'a> {
                             Ok(symbol)
                         }
                         None => Err(RuntimeError::ValueNotExposed {
-                            module_name: ModuleName::from(module_name),
+                            module_name,
                             ident,
                             region,
                         }),

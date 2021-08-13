@@ -21,10 +21,23 @@ fn main() -> io::Result<()> {
 
     let exit_code = match matches.subcommand_name() {
         None => {
-            launch_editor(&[])?;
+            match matches.index_of(ROC_FILE) {
+                Some(arg_index) => {
+                    let roc_file_arg_index = arg_index + 1; // Not sure why this +1 is necessary, but it is!
 
-            // rustc couldn't infer the error type here
-            Result::<i32, io::Error>::Ok(0)
+                    build(
+                        &Triple::host(),
+                        &matches,
+                        BuildConfig::BuildAndRun { roc_file_arg_index },
+                    )
+                }
+
+                None => {
+                    launch_editor(&[])?;
+
+                    Ok(0)
+                }
+            }
         }
         Some(CMD_BUILD) => Ok(build(
             &Triple::host(),
@@ -32,14 +45,15 @@ fn main() -> io::Result<()> {
             BuildConfig::BuildOnly,
         )?),
         Some(CMD_RUN) => {
-            let subcmd_matches = matches.subcommand_matches(CMD_RUN).unwrap();
-            let roc_file_arg_index = subcmd_matches.index_of(ROC_FILE).unwrap() + 1; // Not sure why this +1 is necessary, but it is!
+            // TODO remove CMD_RUN altogether if it is currently September 2021 or later.
+            println!(
+                r#"`roc run` is deprecated!
+If you're using a prebuilt binary, you no longer need the `run` - just do `roc [FILE]` instead of `roc run [FILE]`.
+If you're building the compiler from source you'll want to do `cargo run [FILE]` instead of `cargo run run [FILE]`.
+"#
+            );
 
-            Ok(build(
-                &Triple::host(),
-                subcmd_matches,
-                BuildConfig::BuildAndRun { roc_file_arg_index },
-            )?)
+            Ok(1)
         }
         Some(CMD_REPL) => {
             repl::main()?;

@@ -2,7 +2,6 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 use bumpalo::{collections::Vec as BumpVec, Bump};
-use inlinable_string::InlinableString;
 use std::collections::HashMap;
 
 use crate::lang::ast::{
@@ -22,8 +21,7 @@ use roc_can::num::{finish_parsing_base, finish_parsing_float, finish_parsing_int
 use roc_can::operator::desugar_expr;
 use roc_collections::all::default_hasher;
 use roc_collections::all::{MutMap, MutSet};
-use roc_module::ident::Lowercase;
-use roc_module::ident::ModuleName;
+use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_module::low_level::LowLevel;
 use roc_module::operator::CalledVia;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
@@ -200,11 +198,11 @@ impl<'a> Env<'a> {
             ident
         );
 
-        let module_name: InlinableString = module_name.into();
+        let module_name: ModuleName = module_name.into();
 
         match self.module_ids.get_id(&module_name) {
             Some(&module_id) => {
-                let ident: InlinableString = ident.into();
+                let ident: Ident = ident.into();
 
                 // You can do qualified lookups on your own module, e.g.
                 // if I'm in the Foo module, I can do a `Foo.bar` lookup.
@@ -407,8 +405,7 @@ pub fn to_expr2<'a>(
             let mut output = Output::default();
             let output_ref = &mut output;
 
-            let elems: PoolVec<NodeId<Expr2>> =
-                PoolVec::with_capacity(items.len() as u32, env.pool);
+            let elems: PoolVec<ExprId> = PoolVec::with_capacity(items.len() as u32, env.pool);
 
             for (node_id, item) in elems.iter_node_ids().zip(items.iter()) {
                 let (expr, sub_output) = to_expr2(env, scope, &item.value, item.region);
@@ -1017,10 +1014,10 @@ fn flatten_str_lines<'a>(
                             buf.push(ch);
                         }
                         None => {
-                            //                            env.problem(Problem::InvalidUnicodeCodePoint(loc_hex_digits.region));
+                            //                            env.problem(Problem::InvalidUnicodeCodePt(loc_hex_digits.region));
                             //
                             //                            return (
-                            //                                Expr::RuntimeError(RuntimeError::InvalidUnicodeCodePoint(
+                            //                                Expr::RuntimeError(RuntimeError::InvalidUnicodeCodePt(
                             //                                    loc_hex_digits.region,
                             //                                )),
                             //                                output,
