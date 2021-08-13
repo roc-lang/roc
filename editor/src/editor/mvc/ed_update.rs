@@ -305,7 +305,7 @@ impl<'a> EdModel<'a> {
         let content = subs.get(var).content;
 
         PoolStr::new(
-            &content_to_string(content, &subs, self.module.env.home, &self.interns),
+            &content_to_string(content, &subs, self.module.env.home, &self.loaded_module.interns),
             self.module.env.pool,
         )
     }
@@ -871,7 +871,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
 pub mod test_ed_update {
     use crate::editor::mvc::ed_model::test_ed_model::ed_model_from_dsl;
     use crate::editor::mvc::ed_model::test_ed_model::ed_model_to_dsl;
-    use crate::editor::mvc::ed_model::init_model_refs;
+    use crate::editor::mvc::ed_model::test_ed_model::init_model_refs;
     use crate::editor::mvc::ed_update::handle_new_char;
     use crate::editor::mvc::ed_update::EdModel;
     use crate::editor::mvc::ed_update::EdResult;
@@ -880,8 +880,8 @@ pub mod test_ed_update {
     use crate::window::keyboard_input::no_mods;
     use crate::window::keyboard_input::test_modifiers::ctrl_cmd_shift;
     use crate::window::keyboard_input::Modifiers;
-    use bumpalo::collections::String as BumpString;
     use bumpalo::Bump;
+    use roc_module::symbol::ModuleIds;
     use winit::event::VirtualKeyCode::*;
 
     fn ed_res_to_res<T>(ed_res: EdResult<T>) -> Result<T, String> {
@@ -919,12 +919,14 @@ pub mod test_ed_update {
         expected_post_lines: &[&str],
         new_char_seq: &str,
     ) -> Result<(), String> {
-        let test_arena = Bump::new();
-        let code_str = BumpString::from_str_in(&pre_lines.join("\n").replace("┃", ""), &test_arena);
+
+        let mut code_str = pre_lines.join("\n").replace("┃", "");
 
         let mut model_refs = init_model_refs();
+        let code_arena = Bump::new();
+        let module_ids = ModuleIds::default();
 
-        let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
+        let mut ed_model = ed_model_from_dsl(&mut code_str, pre_lines, &mut model_refs, &module_ids, &code_arena)?;
 
         for input_char in new_char_seq.chars() {
             if input_char == '🡲' {
@@ -1808,12 +1810,14 @@ pub mod test_ed_update {
         expected_post_lines: &[&str],
         repeats: usize,
     ) -> Result<(), String> {
-        let test_arena = Bump::new();
-        let code_str = BumpString::from_str_in(&pre_lines.join("").replace("┃", ""), &test_arena);
+
+        let mut code_str = pre_lines.join("").replace("┃", "");
 
         let mut model_refs = init_model_refs();
+        let code_arena = Bump::new();
+        let module_ids = ModuleIds::default();
 
-        let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
+        let mut ed_model = ed_model_from_dsl(&mut code_str, pre_lines, &mut model_refs, &module_ids, &code_arena)?;
 
         for _ in 0..repeats {
             ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up)?;
@@ -2066,12 +2070,14 @@ pub mod test_ed_update {
         expected_tooltips: &[&str],
         new_char_seq: &str,
     ) -> Result<(), String> {
-        let test_arena = Bump::new();
-        let code_str = BumpString::from_str_in(&pre_lines.join("").replace("┃", ""), &test_arena);
+
+        let mut code_str = pre_lines.join("").replace("┃", "");
 
         let mut model_refs = init_model_refs();
+        let code_arena = Bump::new();
+        let module_ids = ModuleIds::default();
 
-        let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
+        let mut ed_model = ed_model_from_dsl(&mut code_str, pre_lines, &mut model_refs, &module_ids, &code_arena)?;
 
         for input_char in new_char_seq.chars() {
             if input_char == '🡲' {
@@ -2220,12 +2226,13 @@ pub mod test_ed_update {
         repeats: usize,
         move_caret_fun: ModelMoveCaretFun,
     ) -> Result<(), String> {
-        let test_arena = Bump::new();
-        let code_str = BumpString::from_str_in(&pre_lines.join("").replace("┃", ""), &test_arena);
+        let mut code_str = pre_lines.join("").replace("┃", "");
 
         let mut model_refs = init_model_refs();
+        let code_arena = Bump::new();
+        let module_ids = ModuleIds::default();
 
-        let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
+        let mut ed_model = ed_model_from_dsl(&mut code_str, pre_lines, &mut model_refs, &module_ids, &code_arena)?;
 
         for _ in 0..repeats {
             ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up)?;
@@ -2349,12 +2356,13 @@ pub mod test_ed_update {
         expected_post_lines: &[&str],
         repeats: usize,
     ) -> Result<(), String> {
-        let test_arena = Bump::new();
-        let code_str = BumpString::from_str_in(&pre_lines.join("").replace("┃", ""), &test_arena);
+        let mut code_str = pre_lines.join("").replace("┃", "");
 
         let mut model_refs = init_model_refs();
+        let code_arena = Bump::new();
+        let module_ids = ModuleIds::default();
 
-        let mut ed_model = ed_model_from_dsl(&code_str, pre_lines, &mut model_refs)?;
+        let mut ed_model = ed_model_from_dsl(&mut code_str, pre_lines, &mut model_refs, &module_ids, &code_arena)?;
 
         for _ in 0..repeats {
             ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up)?;

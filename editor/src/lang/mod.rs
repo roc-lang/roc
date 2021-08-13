@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod parse;
 pub mod constrain;
 mod def;
 pub mod expr;

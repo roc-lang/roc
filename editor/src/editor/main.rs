@@ -1,7 +1,5 @@
 use super::keyboard_input;
-use super::mvc::ed_model::init_model_refs;
 use super::style::CODE_TXT_XY;
-use crate::editor::ed_error::print_ui_err;
 use crate::editor::mvc::ed_view;
 use crate::editor::mvc::ed_view::RenderedWgpu;
 use crate::editor::resources::strings::NOTHING_OPENED;
@@ -21,17 +19,17 @@ use crate::graphics::{
 };
 use crate::lang::expr::Env;
 use crate::lang::pool::Pool;
-use crate::ui::ui_error::UIError::FileOpenFailed;
 use crate::ui::util::slice_get;
-use bumpalo::collections::String as BumpString;
 use bumpalo::Bump;
 use cgmath::Vector2;
 use pipelines::RectResources;
-use roc_module::symbol::Interns;
-use roc_module::symbol::{IdentIds, ModuleIds};
+use roc_can::builtins::builtin_defs_map;
+use roc_collections::all::MutMap;
+use roc_load;
+use roc_load::file::LoadedModule;
+use roc_module::symbol::IdentIds;
 use roc_types::subs::VarStore;
 use std::fs::File;
-use std::os::unix::fs;
 use std::{error::Error, io, path::Path};
 use std::io::{Write};
 use wgpu::{CommandEncoder, RenderPass, TextureView};
@@ -134,17 +132,38 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
     let is_animating = true;
 
-    let mut ed_model_refs = init_model_refs();
+    let mut env_pool = Pool::with_capacity(1024);
+    let env_arena = Bump::new();
+    let code_arena = Bump::new();
 
-    let (file_path, code_bump_str) = read_file(file_path_opt, &ed_model_refs.code_arena);
+    let (file_path, code_str) = read_file(file_path_opt);
+
+    let loaded_module = load_module(&file_path);
+
+    let mut var_store = VarStore::default();
+    let dep_idents = IdentIds::exposed_builtins(8);
+    let exposed_ident_ids = IdentIds::default();
+    let module_ids = loaded_module.interns.module_ids.clone();
+
+    let env = Env::new(
+        loaded_module.module_id,
+        &env_arena,
+        &mut env_pool,
+        &mut var_store,
+        dep_idents,
+        &module_ids,
+        exposed_ident_ids,
+    );
 
     let ed_model_opt = {
         let ed_model_res =
-            ed_model::init_model_and_env(
-                &code_bump_str,
+            ed_model::init_model(
+                &code_str,
                 file_path,
-                "HelloApp".to_owned(), 
-                &mut ed_model_refs);
+                env, 
+                loaded_module,
+                &code_arena,
+            );
 
         match ed_model_res {
             Ok(mut ed_model) => {
@@ -383,7 +402,7 @@ fn begin_render_pass<'a>(
     })
 }
 
-fn read_file<'a>(file_path_opt: Option<&'a Path>, code_arena: &'a Bump) -> (&'a Path, BumpString<'a>) {
+fn read_file(file_path_opt: Option<&Path>) -> (&Path, String) {
 
     if let Some(file_path) = file_path_opt {
 
@@ -392,10 +411,8 @@ fn read_file<'a>(file_path_opt: Option<&'a Path>, code_arena: &'a Bump) -> (&'a 
                 .expect(
                     &format!("Failed to read from provided file path: {:?}", file_path)
                 );
-
-        let code_str = BumpString::from_str_in(&file_as_str, code_arena);
         
-        (file_path, code_str)
+        (file_path, file_as_str)
     } else {
         let untitled_path = Path::new("UntitledApp.roc");
 
@@ -407,29 +424,63 @@ fn read_file<'a>(file_path_opt: Option<&'a Path>, code_arena: &'a Bump) -> (&'a 
                             &format!("I wanted to create {:?}, but it failed.", untitled_path)
                         );
 
-                let hello_world_roc = r#"
-app "untitled-app"
-packages { base: "platform" }
-imports []
-provides [ main ] to base
+                let hello_world_roc = r#"app "untitled-app"
+    packages { base: "platform" }
+    imports []
+    provides [ main ] to base
 
 main = "Hello, world!"
 "#;
 
-                write!(untitled_file, "{}", hello_world_roc)?;
-                
-                BumpString::from_str_in(hello_world_roc, code_arena)
-            } else {
-                let file_as_str = 
-                    std::fs::read_to_string(untitled_path)
-                        .expect(
-                            &format!("I detected an existing {:?}, but I failed to read from it.", untitled_path)
-                        );
+                write!(untitled_file, "{}", hello_world_roc)
+                    .expect(
+                        &format!(
+                                r#"I wanted to write:
 
-                BumpString::from_str_in(&file_as_str, code_arena)
+{:?}
+
+to file {:?}, but it failed."#
+                            , hello_world_roc
+                            , untitled_file
+                            )
+                    );
+                
+                hello_world_roc.to_string()
+            } else {
+
+                std::fs::read_to_string(untitled_path)
+                    .expect(
+                        &format!("I detected an existing {:?}, but I failed to read from it.", untitled_path)
+                    )
+
             };
 
         (untitled_path, code_str)
+    }
+}
+
+pub fn load_module(src_file: &Path) -> LoadedModule {
+    let subs_by_module = MutMap::default();
+
+    let arena = Bump::new();
+    let loaded = roc_load::file::load_and_typecheck(
+        &arena,
+        src_file.to_path_buf(),
+        arena.alloc(roc_builtins::std::standard_stdlib()),
+        src_file.parent().expect(&format!("src_file {:?} did not have a parent directory but I need to have one.", src_file)),
+        subs_by_module,
+        8,
+        builtin_defs_map,
+    );
+
+    dbg!(&loaded);
+
+    match loaded {
+        Ok(x) => x,
+        Err(roc_load::file::LoadingProblem::FormattedReport(report)) => {
+            panic!("Failed to load module from src_file {:?}. Report: {:?}", src_file,report);
+        }
+        Err(e) => panic!("Failed to load module from src_file {:?}: {:?}", src_file, e),
     }
 }
 
