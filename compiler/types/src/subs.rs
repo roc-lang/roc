@@ -1498,6 +1498,16 @@ impl UnionTags {
         )
     }
 
+    pub fn tag_without_arguments(subs: &mut Subs, tag_name: TagName) -> Self {
+        subs.tag_names.push(tag_name);
+
+        Self {
+            length: 1,
+            tag_names_start: (subs.tag_names.len() - 1) as u32,
+            variables_start: 0,
+        }
+    }
+
     pub fn insert_slices_into_subs<I>(subs: &mut Subs, input: I) -> Self
     where
         I: IntoIterator<Item = (TagName, VariableSubsSlice)>,

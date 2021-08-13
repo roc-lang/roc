@@ -1285,15 +1285,8 @@ fn unify_function_or_tag_union_and_func(
 ) -> Outcome {
     let tag_name = subs[*tag_name_index].clone();
 
-    let mut new_tags = MutMap::with_capacity_and_hasher(1, default_hasher());
-
-    new_tags.insert(
-        tag_name,
-        subs.get_subs_slice(*function_arguments.as_subs_slice())
-            .to_owned(),
-    );
-
-    let content = Content::Structure(from_mutmap(subs, new_tags, tag_ext));
+    let union_tags = UnionTags::insert_slices_into_subs(subs, [(tag_name, function_arguments)]);
+    let content = Content::Structure(FlatType::TagUnion(union_tags, tag_ext));
 
     let new_tag_union_var = fresh(subs, pool, ctx, content);
 
@@ -1304,12 +1297,11 @@ fn unify_function_or_tag_union_and_func(
     };
 
     {
+        let tag_name = TagName::Closure(tag_symbol);
+        let union_tags = UnionTags::tag_without_arguments(subs, tag_name);
+
         let lambda_set_ext = subs.fresh_unnamed_flex_var();
-
-        let mut closure_tags = MutMap::with_capacity_and_hasher(1, default_hasher());
-        closure_tags.insert(TagName::Closure(tag_symbol), vec![]);
-
-        let lambda_set_content = Structure(from_mutmap(subs, closure_tags, lambda_set_ext));
+        let lambda_set_content = Structure(FlatType::TagUnion(union_tags, lambda_set_ext));
 
         let tag_lambda_set = register(
             subs,
