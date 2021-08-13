@@ -801,8 +801,35 @@ fn type_to_variable(
 
             tag_union_var
         }
-        Alias(Symbol::BOOL_BOOL, _, _) => Variable::BOOL,
-        Alias(symbol, args, alias_type) => {
+
+        Type::Alias {
+            symbol,
+            type_arguments: args,
+            actual: alias_type,
+            lambda_set_variables,
+        } => {
+            // the rank of these variables is NONE (encoded as 0 in practice)
+            // using them for other ranks causes issues
+            if rank.is_none() {
+                // TODO replace by arithmetic?
+                match *symbol {
+                    Symbol::NUM_I128 => return Variable::I128,
+                    Symbol::NUM_I64 => return Variable::I64,
+                    Symbol::NUM_I32 => return Variable::I32,
+                    Symbol::NUM_I16 => return Variable::I16,
+                    Symbol::NUM_I8 => return Variable::I8,
+
+                    Symbol::NUM_U128 => return Variable::U128,
+                    Symbol::NUM_U64 => return Variable::U64,
+                    Symbol::NUM_U32 => return Variable::U32,
+                    Symbol::NUM_U16 => return Variable::U16,
+                    Symbol::NUM_U8 => return Variable::U8,
+
+                    // Symbol::NUM_NAT => return Variable::NAT,
+                    _ => {}
+                }
+            }
+
             let mut arg_vars = Vec::with_capacity(args.len());
 
             for (arg, arg_type) in args {
@@ -811,7 +838,12 @@ fn type_to_variable(
                 arg_vars.push((arg.clone(), arg_var));
             }
 
-            let arg_vars = AliasVariables::insert_into_subs(subs, arg_vars, []);
+            let lambda_set_variables: Vec<_> = lambda_set_variables
+                .iter()
+                .map(|ls| type_to_variable(subs, rank, pools, cached, &ls.0))
+                .collect();
+
+            let arg_vars = AliasVariables::insert_into_subs(subs, arg_vars, lambda_set_variables);
 
             let alias_var = type_to_variable(subs, rank, pools, cached, alias_type);
             let content = Content::Alias(*symbol, arg_vars, alias_var);
@@ -820,9 +852,10 @@ fn type_to_variable(
         }
         HostExposedAlias {
             name: symbol,
-            arguments: args,
+            type_arguments: args,
             actual: alias_type,
             actual_var,
+            lambda_set_variables,
             ..
         } => {
             let mut arg_vars = Vec::with_capacity(args.len());
@@ -833,7 +866,12 @@ fn type_to_variable(
                 arg_vars.push((arg.clone(), arg_var));
             }
 
-            let arg_vars = AliasVariables::insert_into_subs(subs, arg_vars, []);
+            let lambda_set_variables: Vec<_> = lambda_set_variables
+                .iter()
+                .map(|ls| type_to_variable(subs, rank, pools, cached, &ls.0))
+                .collect();
+
+            let arg_vars = AliasVariables::insert_into_subs(subs, arg_vars, lambda_set_variables);
 
             let alias_var = type_to_variable(subs, rank, pools, cached, alias_type);
 
@@ -1147,9 +1185,19 @@ fn adjust_rank_content(
                     // THEORY: the recursion var has the same rank as the tag union itself
                     // all types it uses are also in the tags already, so it cannot influence the
                     // rank
-                    debug_assert!(
-                        rank >= adjust_rank(subs, young_mark, visit_mark, group_rank, *rec_var)
-                    );
+
+                    if cfg!(debug_assertions) {
+                        let rec_var_rank =
+                            adjust_rank(subs, young_mark, visit_mark, group_rank, *rec_var);
+
+                        debug_assert!(
+                            rank >= rec_var_rank,
+                            "rank was {:?} but recursion var {:?} has higher rank {:?}",
+                            rank,
+                            rec_var,
+                            rec_var_rank
+                        );
+                    }
 
                     rank
                 }
@@ -1316,7 +1364,7 @@ fn instantiate_rigids_help(
             subs.set(copy, make_descriptor(FlexVar(Some(name))));
         }
 
-        Alias(_, args, real_type_var) => {
+        Alias(_symbol, args, real_type_var) => {
             for var_index in args.variables().into_iter() {
                 let var = subs[var_index];
                 instantiate_rigids_help(subs, max_rank, pools, var);

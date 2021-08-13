@@ -7507,14 +7507,14 @@ pub fn num_argument_to_int_or_float(
             num_argument_to_int_or_float(subs, ptr_bytes, var, false)
         }
 
-        Content::Alias(Symbol::NUM_I128, _, _)
-        | Content::Alias(Symbol::NUM_SIGNED128, _, _)
+        Content::Alias(Symbol::NUM_I128,  _, _)
+        | Content::Alias(Symbol::NUM_SIGNED128, _,  _)
         | Content::Alias(Symbol::NUM_AT_SIGNED128, _, _) => {
             IntOrFloat::SignedIntType(IntPrecision::I128)
         }
-        Content::Alias(Symbol::NUM_INT, _, _)// We default Integer to I64
-        | Content::Alias(Symbol::NUM_I64, _, _)
-        | Content::Alias(Symbol::NUM_SIGNED64, _, _)
+        Content::Alias(Symbol::NUM_INT,  _, _)// We default Integer to I64
+        | Content::Alias(Symbol::NUM_I64,  _, _)
+        | Content::Alias(Symbol::NUM_SIGNED64,  _, _)
         | Content::Alias(Symbol::NUM_AT_SIGNED64, _, _) => {
             IntOrFloat::SignedIntType(IntPrecision::I64)
         }

@@ -395,7 +395,24 @@ impl From<OptVariable> for Option<Variable> {
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Variable(u32);
 
-impl Variable {
+macro_rules! define_const_var {
+    ($($(:pub)? $name:ident),* $(,)?) => {
+        #[allow(non_camel_case_types, clippy::upper_case_acronyms)]
+        enum ConstVariables {
+            $( $name, )*
+            FINAL_CONST_VAR
+        }
+
+        impl Variable {
+            $( pub const $name: Variable = Variable(ConstVariables::$name as u32); )*
+
+            pub const NUM_RESERVED_VARS: usize = ConstVariables::FINAL_CONST_VAR as usize;
+        }
+
+    };
+}
+
+define_const_var! {
     // Reserved for indicating the absence of a variable.
     // This lets us avoid using Option<Variable> for the Descriptor's
     // copy field, which is a relevant space savings because we make
@@ -403,22 +420,146 @@ impl Variable {
     //
     // Also relevant: because this has the value 0, Descriptors can 0-initialize
     // to it in bulk - which is relevant, because Descriptors get initialized in bulk.
-    const NULL: Variable = Variable(0);
+    NULL,
 
-    pub const EMPTY_RECORD: Variable = Variable(1);
-    pub const EMPTY_TAG_UNION: Variable = Variable(2);
-    // Builtins
-    const BOOL_ENUM: Variable = Variable(3);
-    pub const BOOL: Variable = Variable(4); // Used in `if` conditions
+    :pub EMPTY_RECORD,
+    :pub EMPTY_TAG_UNION,
 
-    pub const NUM_RESERVED_VARS: usize = 5;
+    BOOL_ENUM,
+    :pub BOOL,
 
+    ORDER_ENUM,
+    :pub ORDER,
+
+    // [ @Signed8 ]
+    AT_SIGNED8,
+    AT_SIGNED16,
+    AT_SIGNED32,
+    AT_SIGNED64,
+    AT_SIGNED128,
+
+    AT_UNSIGNED8,
+    AT_UNSIGNED16,
+    AT_UNSIGNED32,
+    AT_UNSIGNED64,
+    AT_UNSIGNED128,
+
+    AT_NATURAL,
+
+    AT_BINARY32,
+    AT_BINARY64,
+
+    AT_DECIMAL,
+
+    // Signed8 : [ @Signed8 ]
+    :pub SIGNED8,
+    :pub SIGNED16,
+    :pub SIGNED32,
+    :pub SIGNED64,
+    :pub SIGNED128,
+
+    :pub UNSIGNED8,
+    :pub UNSIGNED16,
+    :pub UNSIGNED32,
+    :pub UNSIGNED64,
+    :pub UNSIGNED128,
+
+    :pub NATURAL,
+
+    :pub BINARY32,
+    :pub BINARY64,
+
+    :pub DECIMAL,
+
+    // [ @Integer Signed8 ]
+    AT_INTEGER_SIGNED8,
+    AT_INTEGER_SIGNED16,
+    AT_INTEGER_SIGNED32,
+    AT_INTEGER_SIGNED64,
+    AT_INTEGER_SIGNED128,
+
+    AT_INTEGER_UNSIGNED8,
+    AT_INTEGER_UNSIGNED16,
+    AT_INTEGER_UNSIGNED32,
+    AT_INTEGER_UNSIGNED64,
+    AT_INTEGER_UNSIGNED128,
+
+    AT_INTEGER_NATURAL,
+
+    // Integer Signed8 : [ @Integer Signed8 ]
+    INTEGER_SIGNED8,
+    INTEGER_SIGNED16,
+    INTEGER_SIGNED32,
+    INTEGER_SIGNED64,
+    INTEGER_SIGNED128,
+
+    INTEGER_UNSIGNED8,
+    INTEGER_UNSIGNED16,
+    INTEGER_UNSIGNED32,
+    INTEGER_UNSIGNED64,
+    INTEGER_UNSIGNED128,
+
+    INTEGER_NATURAL,
+
+    // [ @Num (Integer Signed8) ]
+    AT_NUM_INTEGER_SIGNED8,
+    AT_NUM_INTEGER_SIGNED16,
+    AT_NUM_INTEGER_SIGNED32,
+    AT_NUM_INTEGER_SIGNED64,
+    AT_NUM_INTEGER_SIGNED128,
+
+    AT_NUM_INTEGER_UNSIGNED8,
+    AT_NUM_INTEGER_UNSIGNED16,
+    AT_NUM_INTEGER_UNSIGNED32,
+    AT_NUM_INTEGER_UNSIGNED64,
+    AT_NUM_INTEGER_UNSIGNED128,
+
+    AT_NUM_INTEGER_NATURAL,
+
+    // Num (Integer Signed8)
+    NUM_INTEGER_SIGNED8,
+    NUM_INTEGER_SIGNED16,
+    NUM_INTEGER_SIGNED32,
+    NUM_INTEGER_SIGNED64,
+    NUM_INTEGER_SIGNED128,
+
+    NUM_INTEGER_UNSIGNED8,
+    NUM_INTEGER_UNSIGNED16,
+    NUM_INTEGER_UNSIGNED32,
+    NUM_INTEGER_UNSIGNED64,
+    NUM_INTEGER_UNSIGNED128,
+
+    NUM_INTEGER_NATURAL,
+
+    // I8 : Num (Integer Signed8)
+    :pub I8,
+    :pub I16,
+    :pub I32,
+    :pub I64,
+    :pub I128,
+
+    :pub U8,
+    :pub U16,
+    :pub U32,
+    :pub U64,
+    :pub U128,
+
+    :pub NAT,
+
+    :pub F32,
+    :pub F64,
+
+    :pub DEC,
+}
+
+impl Variable {
     const FIRST_USER_SPACE_VAR: Variable = Variable(Self::NUM_RESERVED_VARS as u32);
 
     /// # Safety
     ///
     /// This should only ever be called from tests!
     pub unsafe fn unsafe_test_debug_variable(v: u32) -> Self {
+        debug_assert!(v <= Self::NUM_RESERVED_VARS as u32);
         Variable(v)
     }
 
@@ -456,7 +597,7 @@ impl UnifyKey for Variable {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct LambdaSet(Variable);
+pub struct LambdaSet(pub Variable);
 
 impl fmt::Debug for LambdaSet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -467,6 +608,10 @@ impl fmt::Debug for LambdaSet {
 impl LambdaSet {
     pub fn into_inner(self) -> Variable {
         self.0
+    }
+
+    pub fn as_inner(&self) -> &Variable {
+        &self.0
     }
 }
 
@@ -499,6 +644,226 @@ impl fmt::Debug for VarId {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn integer_type(
+    subs: &mut Subs,
+
+    num_at_signed64: Symbol,
+    num_signed64: Symbol,
+    num_i64: Symbol,
+
+    at_signed64: Variable,
+    signed64: Variable,
+
+    at_integer_signed64: Variable,
+    integer_signed64: Variable,
+
+    at_num_integer_signed64: Variable,
+    num_integer_signed64: Variable,
+
+    var_i64: Variable,
+) {
+    let tags = UnionTags::insert_into_subs(subs, [(TagName::Private(num_at_signed64), [])]);
+
+    subs.set_content(at_signed64, {
+        Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
+    });
+
+    subs.set_content(signed64, {
+        Content::Alias(num_signed64, AliasVariables::default(), at_signed64)
+    });
+
+    // Num.Integer Num.Signed64
+
+    let tags = UnionTags::insert_into_subs(
+        subs,
+        [(TagName::Private(Symbol::NUM_AT_INTEGER), [signed64])],
+    );
+    subs.set_content(at_integer_signed64, {
+        Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
+    });
+
+    let vars = AliasVariables::insert_into_subs(subs, [("range".into(), signed64)], []);
+    subs.set_content(num_integer_signed64, {
+        Content::Alias(Symbol::NUM_INTEGER, vars, at_signed64)
+    });
+
+    // Num.Num (Num.Integer Num.Signed64)
+
+    let tags = UnionTags::insert_into_subs(
+        subs,
+        [(TagName::Private(Symbol::NUM_AT_NUM), [integer_signed64])],
+    );
+    subs.set_content(at_num_integer_signed64, {
+        Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION))
+    });
+
+    let vars = AliasVariables::insert_into_subs(subs, [("range".into(), integer_signed64)], []);
+    subs.set_content(num_integer_signed64, {
+        Content::Alias(Symbol::NUM_NUM, vars, at_num_integer_signed64)
+    });
+
+    subs.set_content(var_i64, {
+        Content::Alias(num_i64, AliasVariables::default(), num_integer_signed64)
+    });
+}
+
+fn define_integer_types(subs: &mut Subs) {
+    integer_type(
+        subs,
+        Symbol::NUM_AT_SIGNED128,
+        Symbol::NUM_SIGNED128,
+        Symbol::NUM_I128,
+        Variable::AT_SIGNED128,
+        Variable::SIGNED128,
+        Variable::AT_INTEGER_SIGNED128,
+        Variable::INTEGER_SIGNED128,
+        Variable::AT_NUM_INTEGER_SIGNED128,
+        Variable::NUM_INTEGER_SIGNED128,
+        Variable::I128,
+    );
+
+    integer_type(
+        subs,
+        Symbol::NUM_AT_SIGNED64,
+        Symbol::NUM_SIGNED64,
+        Symbol::NUM_I64,
+        Variable::AT_SIGNED64,
+        Variable::SIGNED64,
+        Variable::AT_INTEGER_SIGNED64,
+        Variable::INTEGER_SIGNED64,
+        Variable::AT_NUM_INTEGER_SIGNED64,
+        Variable::NUM_INTEGER_SIGNED64,
+        Variable::I64,
+    );
+
+    integer_type(
+        subs,
+        Symbol::NUM_AT_SIGNED32,
+        Symbol::NUM_SIGNED32,
+        Symbol::NUM_I32,
+        Variable::AT_SIGNED32,
+        Variable::SIGNED32,
+        Variable::AT_INTEGER_SIGNED32,
+        Variable::INTEGER_SIGNED32,
+        Variable::AT_NUM_INTEGER_SIGNED32,
+        Variable::NUM_INTEGER_SIGNED32,
+        Variable::I32,
+    );
+
+    integer_type(
+        subs,
+        Symbol::NUM_AT_SIGNED16,
+        Symbol::NUM_SIGNED16,
+        Symbol::NUM_I16,
+        Variable::AT_SIGNED16,
+        Variable::SIGNED16,
+        Variable::AT_INTEGER_SIGNED16,
+        Variable::INTEGER_SIGNED16,
+        Variable::AT_NUM_INTEGER_SIGNED16,
+        Variable::NUM_INTEGER_SIGNED16,
+        Variable::I16,
+    );
+
+    integer_type(
+        subs,
+        Symbol::NUM_AT_SIGNED8,
+        Symbol::NUM_SIGNED8,
+        Symbol::NUM_I8,
+        Variable::AT_SIGNED8,
+        Variable::SIGNED8,
+        Variable::AT_INTEGER_SIGNED8,
+        Variable::INTEGER_SIGNED8,
+        Variable::AT_NUM_INTEGER_SIGNED8,
+        Variable::NUM_INTEGER_SIGNED8,
+        Variable::I8,
+    );
+
+    integer_type(
+        subs,
+        Symbol::NUM_AT_UNSIGNED128,
+        Symbol::NUM_UNSIGNED128,
+        Symbol::NUM_U128,
+        Variable::AT_UNSIGNED128,
+        Variable::UNSIGNED128,
+        Variable::AT_INTEGER_UNSIGNED128,
+        Variable::INTEGER_UNSIGNED128,
+        Variable::AT_NUM_INTEGER_UNSIGNED128,
+        Variable::NUM_INTEGER_UNSIGNED128,
+        Variable::U128,
+    );
+
+    integer_type(
+        subs,
+        Symbol::NUM_AT_UNSIGNED64,
+        Symbol::NUM_UNSIGNED64,
+        Symbol::NUM_U64,
+        Variable::AT_UNSIGNED64,
+        Variable::UNSIGNED64,
+        Variable::AT_INTEGER_UNSIGNED64,
+        Variable::INTEGER_UNSIGNED64,
+        Variable::AT_NUM_INTEGER_UNSIGNED64,
+        Variable::NUM_INTEGER_UNSIGNED64,
+        Variable::U64,
+    );
+
+    integer_type(
+        subs,
+        Symbol::NUM_AT_UNSIGNED32,
+        Symbol::NUM_UNSIGNED32,
+        Symbol::NUM_U32,
+        Variable::AT_UNSIGNED32,
+        Variable::UNSIGNED32,
+        Variable::AT_INTEGER_UNSIGNED32,
+        Variable::INTEGER_UNSIGNED32,
+        Variable::AT_NUM_INTEGER_UNSIGNED32,
+        Variable::NUM_INTEGER_UNSIGNED32,
+        Variable::U32,
+    );
+
+    integer_type(
+        subs,
+        Symbol::NUM_AT_UNSIGNED16,
+        Symbol::NUM_UNSIGNED16,
+        Symbol::NUM_U16,
+        Variable::AT_UNSIGNED16,
+        Variable::UNSIGNED16,
+        Variable::AT_INTEGER_UNSIGNED16,
+        Variable::INTEGER_UNSIGNED16,
+        Variable::AT_NUM_INTEGER_UNSIGNED16,
+        Variable::NUM_INTEGER_UNSIGNED16,
+        Variable::U16,
+    );
+
+    integer_type(
+        subs,
+        Symbol::NUM_AT_UNSIGNED8,
+        Symbol::NUM_UNSIGNED8,
+        Symbol::NUM_U8,
+        Variable::AT_UNSIGNED8,
+        Variable::UNSIGNED8,
+        Variable::AT_INTEGER_UNSIGNED8,
+        Variable::INTEGER_UNSIGNED8,
+        Variable::AT_NUM_INTEGER_UNSIGNED8,
+        Variable::NUM_INTEGER_UNSIGNED8,
+        Variable::U8,
+    );
+
+    //    integer_type(
+    //        subs,
+    //        Symbol::NUM_AT_NATURAL,
+    //        Symbol::NUM_NATURAL,
+    //        Symbol::NUM_NAT,
+    //        Variable::AT_NATURAL,
+    //        Variable::NATURAL,
+    //        Variable::AT_INTEGER_NATURAL,
+    //        Variable::INTEGER_NATURAL,
+    //        Variable::AT_NUM_INTEGER_NATURAL,
+    //        Variable::NUM_INTEGER_NATURAL,
+    //        Variable::NAT,
+    //    );
+}
+
 impl Subs {
     pub fn new(var_store: VarStore) -> Self {
         let entries = var_store.next;
@@ -517,6 +882,8 @@ impl Subs {
         for _ in 0..entries {
             subs.utable.new_key(flex_var_descriptor());
         }
+
+        define_integer_types(&mut subs);
 
         subs.set_content(
             Variable::EMPTY_RECORD,
@@ -593,15 +960,15 @@ impl Subs {
         &self.utable.probe_value_ref(key).value
     }
 
-    pub fn get_rank(&mut self, key: Variable) -> Rank {
+    pub fn get_rank(&self, key: Variable) -> Rank {
         self.utable.probe_value_ref(key).value.rank
     }
 
-    pub fn get_mark(&mut self, key: Variable) -> Mark {
+    pub fn get_mark(&self, key: Variable) -> Mark {
         self.utable.probe_value_ref(key).value.mark
     }
 
-    pub fn get_rank_mark(&mut self, key: Variable) -> (Rank, Mark) {
+    pub fn get_rank_mark(&self, key: Variable) -> (Rank, Mark) {
         let desc = &self.utable.probe_value_ref(key).value;
 
         (desc.rank, desc.mark)
@@ -760,6 +1127,10 @@ pub struct Rank(u32);
 impl Rank {
     pub const NONE: Rank = Rank(0);
 
+    pub fn is_none(&self) -> bool {
+        *self == Self::NONE
+    }
+
     pub fn toplevel() -> Self {
         Rank(1)
     }
@@ -904,6 +1275,12 @@ impl AliasVariables {
         names.into_iter().zip(vars.into_iter())
     }
 
+    pub fn unnamed_type_arguments(&self) -> impl Iterator<Item = SubsIndex<Variable>> {
+        self.variables()
+            .into_iter()
+            .skip(self.lowercases_len as usize)
+    }
+
     pub fn insert_into_subs<I1, I2>(
         subs: &mut Subs,
         type_arguments: I1,
@@ -1046,6 +1423,15 @@ pub struct UnionTags {
 }
 
 impl UnionTags {
+    pub fn is_newtype_wrapper(&self, subs: &Subs) -> bool {
+        if self.length != 1 {
+            return false;
+        }
+
+        let slice = subs.variable_slices[self.variables_start as usize].slice;
+        slice.length == 1
+    }
+
     pub fn from_tag_name_index(index: SubsIndex<TagName>) -> Self {
         Self::from_slices(
             SubsSlice::new(index.start, 1),
@@ -1063,7 +1449,7 @@ impl UnionTags {
         }
     }
 
-    const fn tag_names(&self) -> SubsSlice<TagName> {
+    pub const fn tag_names(&self) -> SubsSlice<TagName> {
         SubsSlice::new(self.tag_names_start, self.length)
     }
 
@@ -1766,6 +2152,7 @@ fn get_var_names(
                 .fold(taken_names, |answer, arg_var| {
                     get_var_names(subs, subs[arg_var], answer)
                 }),
+
             Structure(flat_type) => match flat_type {
                 FlatType::Apply(_, args) => {
                     args.into_iter().fold(taken_names, |answer, arg_var| {

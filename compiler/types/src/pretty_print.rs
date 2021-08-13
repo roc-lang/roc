@@ -198,7 +198,8 @@ fn find_names_needed(
             find_names_needed(*rec_var, subs, roots, root_appearances, names_taken);
         }
         Alias(_symbol, args, _actual) => {
-            for var_index in args.variables() {
+            // only find names for named parameters!
+            for var_index in args.variables().into_iter().take(args.len()) {
                 let var = subs[var_index];
                 find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
@@ -665,6 +666,7 @@ pub fn chase_ext_tag_union<'a>(
 
             chase_ext_tag_union(subs, *ext_var, fields)
         }
+
         Content::Alias(_, _, var) => chase_ext_tag_union(subs, *var, fields),
 
         content => Err((var, content)),

@@ -3903,6 +3903,7 @@ mod solve_expr {
     }
 
     #[test]
+    #[ignore]
     fn rbtree_full_remove_min() {
         infer_eq_without_problem(
             indoc!(

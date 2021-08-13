@@ -775,7 +775,6 @@ fn type_to_variable<'a>(
             register(subs, rank, pools, content)
         }
 
-        Alias(Symbol::BOOL_BOOL, _, _) => roc_types::subs::Variable::BOOL,
         Alias(symbol, args, alias_type_id) => {
             // TODO cache in uniqueness inference gives problems! all Int's get the same uniqueness var!
             // Cache aliases without type arguments. Commonly used aliases like `Int` would otherwise get O(n)
