@@ -1439,7 +1439,10 @@ impl UnionTags {
         )
     }
 
-    fn from_slices(tag_names: SubsSlice<TagName>, variables: SubsSlice<VariableSubsSlice>) -> Self {
+    pub fn from_slices(
+        tag_names: SubsSlice<TagName>,
+        variables: SubsSlice<VariableSubsSlice>,
+    ) -> Self {
         debug_assert_eq!(tag_names.len(), variables.len());
 
         Self {
