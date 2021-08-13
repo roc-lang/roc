@@ -850,6 +850,61 @@ pub enum Content {
     Error,
 }
 
+struct AliasVariables {
+    lowercases_start: u32,
+    variables_start: u32,
+    lowercases_len: u16,
+    variables_len: u16,
+}
+impl AliasVariables {
+    pub const fn names(&self) -> SubsSlice<Lowercase> {
+        SubsSlice::new(self.variables_start, self.variables_len)
+    }
+
+    pub const fn variables(&self) -> VariableSubsSlice {
+        VariableSubsSlice {
+            slice: SubsSlice::new(self.variables_start, self.variables_len),
+        }
+    }
+
+    pub fn insert_into_subs<I1, I2>(
+        subs: &mut Subs,
+        type_arguments: I1,
+        unnamed_arguments: I2,
+    ) -> Self
+    where
+        I1: IntoIterator<Item = (Lowercase, Variable)>,
+        I2: IntoIterator<Item = Variable>,
+    {
+        let lowercases_start = subs.field_names.len() as u32;
+        let variables_start = subs.variables.len() as u32;
+
+        let it1 = type_arguments.into_iter();
+        let it2 = unnamed_arguments.into_iter();
+
+        subs.variables
+            .reserve(it1.size_hint().0 + it2.size_hint().0);
+        subs.field_names.reserve(it1.size_hint().0);
+
+        for (field_name, var) in it1 {
+            subs.field_names.push(field_name);
+            subs.variables.push(var);
+        }
+
+        subs.variables.extend(it2);
+
+        let lowercases_len = (subs.field_names.len() as u32 - lowercases_start) as u16;
+        let variables_len = (subs.variables.len() as u32 - variables_start) as u16;
+
+        Self {
+            lowercases_start,
+            variables_start,
+            lowercases_len,
+            variables_len,
+        }
+    }
+}
+
 impl Content {
     #[inline(always)]
     pub fn is_number(&self) -> bool {
