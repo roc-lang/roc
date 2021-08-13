@@ -1,6 +1,7 @@
 interface Utility exposes [ concatStrList, concatStrListWithSeparator, 
    isEven, filterList,
-   spaceAboveBelow , showPair, showU8,
+   spaceAboveBelow,
+   showU8Pair, showU8,
    tests] imports [ ]
 
 
@@ -57,8 +58,8 @@ showU8 =
       _ -> "Oops, could not convert U8"
 
 
-showPair : [Pair U8 (List U8)] -> Str
-showPair = \(Pair a b) -> 
+showU8Pair : [Pair U8 (List U8)] -> Str
+showU8Pair = \(Pair a b) -> 
     when Str.fromUtf8 b is 
         Ok bb -> 
             concatStrList ["(", showU8 a, ", ", bb, ")"]
@@ -82,6 +83,6 @@ t3 = {name: "isEven 4 == True", test: isEven 4}
 t4 = {name: "isEven 5 == False", test: isEven 5 == False}
 t5 = {name: "filterList [1,2,3,4,5,6] isEven == [2,4,6]", test: filterList [1,2,3,4,5,6] isEven == [2,4,6]}
 t6 = {name: "showU8 97 == \"a\"", test: showU8 97 == "a" }
-t7 = {name: "showPair (Pair 97 [98, 99]) == \"(a, bc)\"", test: showPair (Pair 97 [98, 99]) == "(a, bc)"}
+t7 = {name: "showU8Pair (Pair 97 [98, 99]) == \"(a, bc)\"", test: showU8Pair (Pair 97 [98, 99]) == "(a, bc)"}
 
 tests = [t1, t2, t3, t4, t5, t6, t7]
