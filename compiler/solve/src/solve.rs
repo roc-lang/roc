@@ -931,7 +931,7 @@ fn check_for_infinite_type(
                     },
                 );
 
-                let mut new_tags = MutMap::default();
+                let mut new_tags = Vec::with_capacity(tags.len());
 
                 for (name_index, slice_index) in tags.iter_all() {
                     let slice = subs[slice_index];
@@ -942,13 +942,14 @@ fn check_for_infinite_type(
                         new_vars.push(subs.explicit_substitute(recursive, rec_var, var));
                     }
 
-                    new_tags.insert(subs[name_index].clone(), new_vars);
+                    new_tags.push((subs[name_index].clone(), new_vars));
                 }
 
                 let new_ext_var = subs.explicit_substitute(recursive, rec_var, ext_var);
 
-                let flat_type =
-                    roc_unify::unify::from_mutmap_rec(subs, rec_var, new_tags, new_ext_var);
+                let new_tags = UnionTags::insert_into_subs(subs, new_tags);
+
+                let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
 
                 subs.set_content(recursive, Content::Structure(flat_type));
             }

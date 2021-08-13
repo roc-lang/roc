@@ -1240,36 +1240,6 @@ fn is_recursion_var(subs: &Subs, var: Variable) -> bool {
     )
 }
 
-// TODO remove when all tags use SOA
-pub fn from_mutmap(
-    subs: &mut Subs,
-    tags: MutMap<TagName, Vec<Variable>>,
-    ext: Variable,
-) -> FlatType {
-    let mut vec: Vec<_> = tags.into_iter().collect();
-
-    vec.sort();
-
-    let union_tags = UnionTags::insert_into_subs(subs, vec);
-
-    FlatType::TagUnion(union_tags, ext)
-}
-
-pub fn from_mutmap_rec(
-    subs: &mut Subs,
-    rec: Variable,
-    tags: MutMap<TagName, Vec<Variable>>,
-    ext: Variable,
-) -> FlatType {
-    let mut vec: Vec<_> = tags.into_iter().collect();
-
-    vec.sort();
-
-    let union_tags = UnionTags::insert_into_subs(subs, vec);
-
-    FlatType::RecursiveTagUnion(rec, union_tags, ext)
-}
-
 #[allow(clippy::too_many_arguments)]
 fn unify_function_or_tag_union_and_func(
     subs: &mut Subs,
