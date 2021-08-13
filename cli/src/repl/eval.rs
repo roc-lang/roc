@@ -486,7 +486,8 @@ fn list_to_ast<'a>(
         Content::Structure(FlatType::Apply(Symbol::LIST_LIST, vars)) => {
             debug_assert_eq!(vars.len(), 1);
 
-            let elem_var = *vars.first().unwrap();
+            let elem_var_index = vars.into_iter().next().unwrap();
+            let elem_var = env.subs[elem_var_index];
 
             env.subs.get_content_without_compacting(elem_var)
         }
