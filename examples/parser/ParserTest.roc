@@ -30,5 +30,18 @@ main =
     q1 = {name: "test of oneOf combinator", test: List.len oneOfResult == 1 }
       
  
-    Test.run [p1, p2, p3, p4, p5, p6, p7, p8, p9, q1] 
+    Test.run [p1, p2, p3, p4, p5, p6, p7, p8, p9, q1, Parser.q2]  ## <== Bug here at 'Parse.q2'  Notes below
       |> Task.putLine
+
+
+   # NOTES.  Parser.q2 is test of 'Parser.manyAux.  If 'Parser.q2` is omitted from the list [p1, p2, ...], the code runs 
+   # without incident.  Hence the code for 'q2' type-checks.  However, if 'Parser.q2' in included in the test list,
+   # the app panics:
+
+#   ➜  examples git:(dev) ✗ cargo run parser/ParserTest.roc
+#    Finished dev [unoptimized + debuginfo] target(s) in 0.90s
+#     Running `/Users/jxxcarlson/dev/roc/roc/target/debug/roc parser/ParserTest.roc`
+# thread 'main' panicked at 'internal error: entered unreachable code: symbol/layout combo must be in DeclarationToIndex', compiler/mono/src/borrow.rs:223:9
+# stack backtrace:
+
+
