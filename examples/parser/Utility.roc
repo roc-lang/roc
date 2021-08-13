@@ -1,22 +1,12 @@
 interface Utility exposes [ concatStrList, concatStrListWithSeparator, 
    isEven, filterList,
-   spaceAboveBelow , showPair, showU8] imports [ ]
+   spaceAboveBelow , showPair, showU8,
+   tests] imports [ ]
 
-
-
-## For testing
-
-isEven : I64 -> Bool
-isEven = \n -> 
-   when n % 2 is
-      Ok 0 -> True
-      Ok 1 -> False 
-      Ok _ -> False
-      Err _ -> False
 
 ## Lists  
 
-# NOTE: panic in 
+
 filterList : List a, (a -> Bool) -> List a 
 filterList = \list, predicate ->
    when List.first list is 
@@ -60,15 +50,38 @@ concatStrListWithSeparator = \list, separator ->
 
 ## Pairs / U8
 
-showPair : [Pair U8 (List U8)] -> Str
-showPair = \(Pair a b) -> 
-    when Str.fromUtf8 b is 
-        Ok bb -> 
-            Str.concat (Str.concat (showU8 a) "::") bb
-        _ -> "Could not convert (List U8)"
-
 showU8 : U8 -> Str
 showU8 = 
    \u -> when Str.fromUtf8 [u] is 
       Ok str -> str
       _ -> "Oops, could not convert U8"
+
+
+showPair : [Pair U8 (List U8)] -> Str
+showPair = \(Pair a b) -> 
+    when Str.fromUtf8 b is 
+        Ok bb -> 
+            concatStrList ["(", showU8 a, ", ", bb, ")"]
+        _ -> "Could not convert (List U8)"
+
+
+
+## TESTS
+
+isEven : I64 -> Bool
+isEven = \n -> 
+   when n % 2 is
+      Ok 0 -> True
+      Ok 1 -> False 
+      _ -> False
+   
+
+t1 = {name: "concatStrList [\"a\", \"b\", \"c\"] == \"abc\"", test: concatStrList ["a", "b", "c"] == "abc"}
+t2 = {name: "concatStrListWithSeparator [\"a\", \"b\", \"c\"] \".\" == \"a.b.c\"", test: concatStrListWithSeparator ["a", "b", "c"] "." == "a.b.c" }
+t3 = {name: "isEven 4 == True", test: isEven 4}
+t4 = {name: "isEven 5 == False", test: isEven 5 == False}
+t5 = {name: "filterList [1,2,3,4,5,6] isEven == [2,4,6]", test: filterList [1,2,3,4,5,6] isEven == [2,4,6]}
+t6 = {name: "showU8 97 == \"a\"", test: showU8 97 == "a" }
+t7 = {name: "showPair (Pair 97 [98, 99]) == \"(a, bc)\"", test: showPair (Pair 97 [98, 99]) == "(a, bc)"}
+
+tests = [t1, t2, t3, t4, t5, t6, t7]

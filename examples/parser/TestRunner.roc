@@ -1,11 +1,10 @@
 app "testRunner"
      packages { base: "platform" }
-     imports [base.Task, Test, Pair] 
+     imports [base.Task, Test, Utility] 
      provides [ main ] to base
 
 main : Task.Task {} []
 main =
    
-    Test.run Pair.tests
-    |> 
-      Task.putLine 
+    Test.run Utility.tests
+    |> Task.putLine 
