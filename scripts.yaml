@@ -6,3 +6,5 @@ scripts:
 
   bad: cargo run examples/parser/BadAss.roc
 
+  pair: cargo run examples/parser/Pair.roc
+
