@@ -1,7 +1,7 @@
 app "parseapp"
      packages { base: "platform" }
      imports [base.Task, 
-        Parser.{succesful, runToString, any, satisfy, first, second, map, andThen, oneOf, oneOfResult,isLowerCaseAlpha },
+        Parser.{succesful, runToString, any, satisfy, first, second, map, andThen, oneOf, oneOfResult, isLowerCaseAlpha },
         Test, Utility]
      provides [ main ] to base
 
@@ -26,15 +26,11 @@ main =
     p6 = {name: "Use andThen to recognize strings beginning with two repeated letters (succeed on input \"aaxyz\")", test: run "aaxyz" (andThen any satisfyWhatCameBefore) == "a"}
     p7 = {name: "is successful (positive)", test: List.len satisfyResult == 1}
     p8 = {name: "is successful (negative)", test: List.len ( satisfyA [100, 98, 99, 100] ) != 1}
-    # p9 = {name: "test of oneOf combinator", test: List.len oneOfResult == 1 }
-    p10 = {name: "test (2) of oneOf combinator", test: List.len ((oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]) == 1}
+    p9 = {name: "test of oneOf combinator", test: List.len oneOfResult == 1 }
+    # p10 = {name: "test (2) of oneOf combinator", test: List.len ((oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]) == 1}
    
  
-   q1 = {name: "test of isLowerCaseAlpha predicate with u = 97" test: isLowerCaseAlpha 97}
-   q2 = {name: "test of isLowerCaseAlpha predicate with u = 122" test: isLowerCaseAlpha 122}
-   q3 = {name: "test of isLowerCaseAlpha predicate with u = 96" test: isLowerCaseAlpha 96 == False}
-   q4 = {name: "test of isLowerCaseAlpha predicate with u = 123" test: isLowerCaseAlpha 123 == False}
-
+   
  
-    Test.run [p1, p2, p3, p4, p5, p6, p7, p8, p10, q1, q2, q3, q4] 
+    Test.run [p1, p2, p3, p4, p5, p6, p7, p8, p9] 
       |> Task.putLine

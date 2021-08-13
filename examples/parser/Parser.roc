@@ -41,7 +41,6 @@ oneOf = \parserList ->
             []
 
 
-
 satisfyA = satisfy (\u -> u == 97)
 satisfyB = satisfy (\u -> u == 98)
 oneOfResult = (oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]  
@@ -61,14 +60,13 @@ loop = \nextState, s ->
  
 # many : Parser a -> Parser (List a)
 
-manyAuxFAKE : Parser a, List a -> Parser (Step (List a) (List a))
-manyAuxFAKE = \_, _ ->
-    \input -> (succeed (Done [])) input
+# manyAuxFAKE : Parser a, List a -> Parser (Step (List a) (List a))
+# manyAuxFAKE = \_, _ ->
+#     \input -> (succeed (Done [])) input
               
-manyAuxFAKE2 : Parser a, List a -> Parser (Step (List a) (List a))
-manyAuxFAKE2 = \p, list ->
-    \input -> (andThen p (\a -> (succeed (Done list)))) input
-
+# manyAuxFAKE2 : Parser a, List a -> Parser (Step (List a) (List a))
+# manyAuxFAKE2 = \p, list ->
+#     \inpu
               
 
 manyAux : Parser a, List a -> Parser (Step (List a) (List a))
