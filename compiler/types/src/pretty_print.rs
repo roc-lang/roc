@@ -198,8 +198,9 @@ fn find_names_needed(
             find_names_needed(*rec_var, subs, roots, root_appearances, names_taken);
         }
         Alias(_symbol, args, _actual) => {
-            for (_, var) in args {
-                find_names_needed(*var, subs, roots, root_appearances, names_taken);
+            for var_index in args.variables() {
+                let var = subs[var_index];
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
             // TODO should we also look in the actual variable?
             // find_names_needed(_actual, subs, roots, root_appearances, names_taken);
@@ -306,10 +307,13 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
                 Symbol::NUM_NUM => {
                     debug_assert_eq!(args.len(), 1);
 
-                    let (_, arg_var) = args
-                        .get(0)
+                    let arg_var_index = args
+                        .variables()
+                        .into_iter()
+                        .next()
                         .expect("Num was not applied to a type argument!");
-                    let content = subs.get_content_without_compacting(*arg_var);
+                    let arg_var = subs[arg_var_index];
+                    let content = subs.get_content_without_compacting(arg_var);
 
                     match &content {
                         Alias(nested, _, _) => match *nested {
@@ -332,11 +336,12 @@ fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, pa
                 _ => write_parens!(write_parens, buf, {
                     write_symbol(env, *symbol, buf);
 
-                    for (_, var) in args {
+                    for var_index in args.variables() {
+                        let var = subs[var_index];
                         buf.push(' ');
                         write_content(
                             env,
-                            subs.get_content_without_compacting(*var),
+                            subs.get_content_without_compacting(var),
                             subs,
                             buf,
                             Parens::InTypeParam,

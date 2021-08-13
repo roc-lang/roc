@@ -7503,7 +7503,8 @@ pub fn num_argument_to_int_or_float(
             debug_assert!(args.len() == 1);
 
             // Recurse on the second argument
-            num_argument_to_int_or_float(subs, ptr_bytes, args[0].1, false)
+            let var = subs[args.variables().into_iter().next().unwrap()];
+            num_argument_to_int_or_float(subs, ptr_bytes, var, false)
         }
 
         Content::Alias(Symbol::NUM_I128, _, _)
@@ -7561,7 +7562,8 @@ pub fn num_argument_to_int_or_float(
             debug_assert!(args.len() == 1);
 
             // Recurse on the second argument
-            num_argument_to_int_or_float(subs, ptr_bytes, args[0].1, true)
+            let var = subs[args.variables().into_iter().next().unwrap()];
+            num_argument_to_int_or_float(subs, ptr_bytes, var, true)
         }
         Content::Alias(Symbol::NUM_FLOAT, _, _) // We default FloatingPoint to F64
         | Content::Alias(Symbol::NUM_F64, _, _)

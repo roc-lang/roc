@@ -5,8 +5,8 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
-    Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs, SubsIndex,
-    Variable, VariableSubsSlice,
+    AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs,
+    SubsIndex, Variable, VariableSubsSlice,
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{gather_fields_unsorted_iter, Alias, Category, ErrorType, PatternCategory};
@@ -811,6 +811,8 @@ fn type_to_variable(
                 arg_vars.push((arg.clone(), arg_var));
             }
 
+            let arg_vars = AliasVariables::insert_into_subs(subs, arg_vars, []);
+
             let alias_var = type_to_variable(subs, rank, pools, cached, alias_type);
             let content = Content::Alias(*symbol, arg_vars, alias_var);
 
@@ -830,6 +832,8 @@ fn type_to_variable(
 
                 arg_vars.push((arg.clone(), arg_var));
             }
+
+            let arg_vars = AliasVariables::insert_into_subs(subs, arg_vars, []);
 
             let alias_var = type_to_variable(subs, rank, pools, cached, alias_type);
 
@@ -1157,8 +1161,9 @@ fn adjust_rank_content(
         Alias(_, args, real_var) => {
             let mut rank = Rank::toplevel();
 
-            for (_, var) in args {
-                rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
+            for var_index in args.variables() {
+                let var = subs[var_index];
+                rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
             }
 
             // from elm-compiler: THEORY: anything in the real_var would be Rank::toplevel()
@@ -1312,7 +1317,8 @@ fn instantiate_rigids_help(
         }
 
         Alias(_, args, real_type_var) => {
-            for (_, var) in args.into_iter() {
+            for var_index in args.variables().into_iter() {
+                let var = subs[var_index];
                 instantiate_rigids_help(subs, max_rank, pools, var);
             }
 
@@ -1533,13 +1539,20 @@ fn deep_copy_var_help(
             copy
         }
 
-        Alias(symbol, args, real_type_var) => {
-            let new_args = args
-                .into_iter()
-                .map(|(name, var)| (name, deep_copy_var_help(subs, max_rank, pools, var)))
-                .collect();
+        Alias(symbol, mut args, real_type_var) => {
+            let mut new_vars = Vec::with_capacity(args.variables().len());
+
+            for var_index in args.variables() {
+                let var = subs[var_index];
+                let new_var = deep_copy_var_help(subs, max_rank, pools, var);
+
+                new_vars.push(new_var);
+            }
+
+            args.replace_variables(subs, new_vars);
+
             let new_real_type_var = deep_copy_var_help(subs, max_rank, pools, real_type_var);
-            let new_content = Alias(symbol, new_args, new_real_type_var);
+            let new_content = Alias(symbol, args, new_real_type_var);
 
             subs.set(copy, make_descriptor(new_content));
 

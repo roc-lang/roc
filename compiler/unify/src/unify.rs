@@ -3,8 +3,8 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
-    Descriptor, FlatType, GetSubsSlice, Mark, OptVariable, RecordFields, Subs, SubsIndex,
-    SubsSlice, UnionTags, Variable, VariableSubsSlice,
+    AliasVariables, Descriptor, FlatType, GetSubsSlice, Mark, OptVariable, RecordFields, Subs,
+    SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{ErrorType, Mismatch, RecordField};
 
@@ -158,7 +158,7 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
         Structure(flat_type) => {
             unify_structure(subs, pool, &ctx, flat_type, &ctx.second_desc.content)
         }
-        Alias(symbol, args, real_var) => unify_alias(subs, pool, &ctx, *symbol, args, *real_var),
+        Alias(symbol, args, real_var) => unify_alias(subs, pool, &ctx, *symbol, *args, *real_var),
         Error => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
             merge(subs, &ctx, Error)
@@ -172,7 +172,7 @@ fn unify_alias(
     pool: &mut Pool,
     ctx: &Context,
     symbol: Symbol,
-    args: &[(Lowercase, Variable)],
+    args: AliasVariables,
     real_var: Variable,
 ) -> Outcome {
     let other_content = &ctx.second_desc.content;
@@ -188,8 +188,15 @@ fn unify_alias(
             if symbol == *other_symbol {
                 if args.len() == other_args.len() {
                     let mut problems = Vec::new();
-                    for ((_, l_var), (_, r_var)) in args.iter().zip(other_args.iter()) {
-                        problems.extend(unify_pool(subs, pool, *l_var, *r_var));
+                    let it = args
+                        .variables()
+                        .into_iter()
+                        .zip(other_args.variables().into_iter());
+
+                    for (l, r) in it {
+                        let l_var = subs[l];
+                        let r_var = subs[r];
+                        problems.extend(unify_pool(subs, pool, l_var, r_var));
                     }
 
                     if problems.is_empty() {

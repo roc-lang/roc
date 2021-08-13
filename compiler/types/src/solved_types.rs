@@ -352,10 +352,12 @@ impl SolvedType {
             Alias(symbol, args, actual_var) => {
                 let mut new_args = Vec::with_capacity(args.len());
 
-                for (arg_name, arg_var) in args {
+                for (name_index, var_index) in args.named_type_arguments() {
+                    let arg_var = subs[var_index];
+
                     new_args.push((
-                        arg_name.clone(),
-                        Self::from_var_help(subs, recursion_vars, *arg_var),
+                        subs[name_index].clone(),
+                        Self::from_var_help(subs, recursion_vars, arg_var),
                     ));
                 }
 

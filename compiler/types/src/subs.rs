@@ -9,8 +9,8 @@ use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
-static_assertions::assert_eq_size!([u8; 56], Descriptor);
-static_assertions::assert_eq_size!([u8; 40], Content);
+static_assertions::assert_eq_size!([u8; 48], Descriptor);
+static_assertions::assert_eq_size!([u8; 32], Content);
 static_assertions::assert_eq_size!([u8; 24], FlatType);
 static_assertions::assert_eq_size!([u8; 48], Problem);
 
@@ -543,7 +543,11 @@ impl Subs {
         });
 
         subs.set_content(Variable::BOOL, {
-            Content::Alias(Symbol::BOOL_BOOL, vec![], Variable::BOOL_ENUM)
+            Content::Alias(
+                Symbol::BOOL_BOOL,
+                AliasVariables::default(),
+                Variable::BOOL_ENUM,
+            )
         });
 
         subs
@@ -846,25 +850,58 @@ pub enum Content {
         opt_name: Option<Lowercase>,
     },
     Structure(FlatType),
-    Alias(Symbol, Vec<(Lowercase, Variable)>, Variable),
+    Alias(Symbol, AliasVariables, Variable),
     Error,
 }
 
-struct AliasVariables {
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AliasVariables {
     lowercases_start: u32,
     variables_start: u32,
     lowercases_len: u16,
     variables_len: u16,
 }
+
 impl AliasVariables {
     pub const fn names(&self) -> SubsSlice<Lowercase> {
-        SubsSlice::new(self.variables_start, self.variables_len)
+        SubsSlice::new(self.lowercases_start, self.lowercases_len)
     }
 
     pub const fn variables(&self) -> VariableSubsSlice {
         VariableSubsSlice {
             slice: SubsSlice::new(self.variables_start, self.variables_len),
         }
+    }
+
+    pub const fn len(&self) -> usize {
+        self.lowercases_len as usize
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.lowercases_len == 0
+    }
+
+    pub fn replace_variables(
+        &mut self,
+        subs: &mut Subs,
+        variables: impl IntoIterator<Item = Variable>,
+    ) {
+        let variables_start = subs.variables.len() as u32;
+        subs.variables.extend(variables);
+        let variables_len = (subs.variables.len() - variables_start as usize) as u16;
+
+        debug_assert_eq!(variables_len, self.variables_len);
+
+        self.variables_start = variables_start;
+    }
+
+    pub fn named_type_arguments(
+        &self,
+    ) -> impl Iterator<Item = (SubsIndex<Lowercase>, SubsIndex<Variable>)> {
+        let names = self.names();
+        let vars = self.variables();
+
+        names.into_iter().zip(vars.into_iter())
     }
 
     pub fn insert_into_subs<I1, I2>(
@@ -1481,8 +1518,13 @@ fn occurs(
             Alias(_, args, _) => {
                 let mut new_seen = seen.clone();
                 new_seen.insert(root_var);
-                let it = args.iter().map(|(_, var)| var);
-                short_circuit(subs, root_var, &new_seen, it)
+
+                for var_index in args.variables().into_iter() {
+                    let var = subs[var_index];
+                    short_circuit_help(subs, root_var, &new_seen, var)?;
+                }
+
+                Ok(())
             }
         }
     }
@@ -1660,9 +1702,11 @@ fn explicit_substitute(
 
                     in_var
                 }
-                Alias(symbol, mut args, actual) => {
-                    for (_, var) in args.iter_mut() {
-                        *var = explicit_substitute(subs, from, to, *var, seen);
+                Alias(symbol, args, actual) => {
+                    for index in args.variables().into_iter() {
+                        let var = subs[index];
+                        let new_var = explicit_substitute(subs, from, to, var, seen);
+                        subs[index] = new_var;
                     }
 
                     let new_actual = explicit_substitute(subs, from, to, actual, seen);
@@ -1716,9 +1760,12 @@ fn get_var_names(
 
             RigidVar(name) => add_name(subs, 0, name, var, RigidVar, taken_names),
 
-            Alias(_, args, _) => args.into_iter().fold(taken_names, |answer, (_, arg_var)| {
-                get_var_names(subs, arg_var, answer)
-            }),
+            Alias(_, args, _) => args
+                .variables()
+                .into_iter()
+                .fold(taken_names, |answer, arg_var| {
+                    get_var_names(subs, subs[arg_var], answer)
+                }),
             Structure(flat_type) => match flat_type {
                 FlatType::Apply(_, args) => {
                     args.into_iter().fold(taken_names, |answer, arg_var| {
@@ -1916,11 +1963,18 @@ fn content_to_err_type(
         }
 
         Alias(symbol, args, aliased_to) => {
-            let err_args = args
-                .into_iter()
-                .map(|(name, var)| (name, var_to_err_type(subs, state, var)))
-                .collect();
             let err_type = var_to_err_type(subs, state, aliased_to);
+
+            let mut err_args = Vec::with_capacity(args.names().len());
+
+            for (name_index, var_index) in args.named_type_arguments() {
+                let name = subs[name_index].clone();
+                let var = subs[var_index];
+
+                let arg = var_to_err_type(subs, state, var);
+
+                err_args.push((name, arg));
+            }
 
             ErrorType::Alias(symbol, err_args, Box::new(err_type))
         }
@@ -2194,8 +2248,9 @@ fn restore_content(subs: &mut Subs, content: &Content) {
             Erroneous(_) => (),
         },
         Alias(_, args, var) => {
-            for (_, arg_var) in args {
-                subs.restore(*arg_var);
+            for var_index in args.variables().into_iter() {
+                let var = subs[var_index];
+                subs.restore(var);
             }
 
             subs.restore(*var);
