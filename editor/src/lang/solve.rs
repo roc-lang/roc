@@ -986,7 +986,7 @@ fn type_to_union_tags<'a>(
         tag_vars.extend(it.map(|(n, v)| (n.clone(), v)));
         tag_vars.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
-        // deduplicate, keeping the right-most occurence of a tag name
+        // deduplicate, keeping the right-most occurrence of a tag name
         let mut i = 0;
 
         while i < tag_vars.len() {
