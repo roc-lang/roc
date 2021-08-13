@@ -3,8 +3,9 @@ interface Parser exposes [
     succeed, any,  satisfy, fail,
     map, andThen, oneOf, oneOfResult,
     first, second,
+    isLowerCaseAlpha,
     runToString
-  ] imports [Pair, Loop]
+  ] imports [Pair]
 
 
 ## PARSERS
@@ -48,28 +49,41 @@ oneOfResult = (oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]
 
 ## MANY
 
+Step state a : [ Loop state, Done a ]
+
+loop : (state -> Step state a), state -> a
+loop = \nextState, s ->
+    when nextState s is
+        Loop ss ->
+            loop nextState ss
+        Done aa -> aa
+
+ 
 # many : Parser a -> Parser (List a)
-# many p =
-#     Parser.loop [] (manyHelp p)
+
+manyAuxFAKE : Parser a, List a -> Parser (Step (List a) (List a))
+manyAuxFAKE = \_, _ ->
+    \input -> (succeed (Done [])) input
+              
+manyAuxFAKE2 : Parser a, List a -> Parser (Step (List a) (List a))
+manyAuxFAKE2 = \p, list ->
+    \input -> (andThen p (\a -> (succeed (Done list)))) input
+
+              
+
+manyAux : Parser a, List a -> Parser (Step (List a) (List a))
+manyAux = \p, list ->
+    \input -> (if input == [] 
+              then 
+                succeed (Done (List.reverse list))
+              else 
+                p1 = succeed (Done (List.reverse list)) # andThen p (succeed (\a -> Loop (List.prepend list a)))
+                p2 = succeed (Done (List.reverse list))
+                (oneOf [ p1, p2 ])) input
 
 
-# manySeparatedBy : Parser () -> Parser a -> Parser (List a)
-# manySeparatedBy sep p =
-#     manyNonEmpty_ p (second sep p)
-
-
-# manyHelp : Parser a -> List a -> Parser (Parser.Step (List a) (List a))
-# manyHelp p vs =
-#     Parser.oneOf
-#         [ Parser.end EndOfInput |> Parser.map (\_ -> Parser.Done (List.reverse vs))
-#         , Parser.succeed (\v -> Parser.Loop (v :: vs))
-#             |= p
-#         , Parser.succeed ()
-#             |> Parser.map (\_ -> Parser.Done (List.reverse vs))
-#         ]
-
-manyAux : Parser a, List a -> Parser (Loop.Step (List a) (List a))
-
+isLowerCaseAlpha : U8 -> Bool
+isLowerCaseAlpha = \u -> u >= 97 && u <= 122
 
 ## FOR STRING OUTPUT 
 
