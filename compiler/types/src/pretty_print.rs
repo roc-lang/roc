@@ -150,8 +150,9 @@ fn find_names_needed(
             names_taken.insert(name.clone());
         }
         Structure(Apply(_, args)) => {
-            for var in args {
-                find_names_needed(*var, subs, roots, root_appearances, names_taken);
+            for index in args.into_iter() {
+                let var = subs[index];
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
         }
         Structure(Func(arg_vars, _closure_var, ret_var)) => {
@@ -171,7 +172,7 @@ fn find_names_needed(
             find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
         }
         Structure(TagUnion(tags, ext_var)) => {
-            for slice_index in tags.variables {
+            for slice_index in tags.variables() {
                 let slice = subs[slice_index];
                 for var_index in slice {
                     let var = subs[var_index];
@@ -185,7 +186,7 @@ fn find_names_needed(
             find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
         }
         Structure(RecursiveTagUnion(rec_var, tags, ext_var)) => {
-            for slice_index in tags.variables {
+            for slice_index in tags.variables() {
                 let slice = subs[slice_index];
                 for var_index in slice {
                     let var = subs[var_index];
@@ -498,7 +499,14 @@ fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut Strin
     use crate::subs::FlatType::*;
 
     match flat_type {
-        Apply(symbol, args) => write_apply(env, *symbol, args, subs, buf, parens),
+        Apply(symbol, args) => write_apply(
+            env,
+            *symbol,
+            subs.get_subs_slice(*args.as_subs_slice()),
+            subs,
+            buf,
+            parens,
+        ),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
         Func(args, _closure, ret) => write_fn(

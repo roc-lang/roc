@@ -9,9 +9,9 @@ use ven_ena::unify::{InPlace, Snapshot, UnificationTable, UnifyKey};
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
-static_assertions::assert_eq_size!([u8; 64], Descriptor);
-static_assertions::assert_eq_size!([u8; 48], Content);
-static_assertions::assert_eq_size!([u8; 40], FlatType);
+static_assertions::assert_eq_size!([u8; 56], Descriptor);
+static_assertions::assert_eq_size!([u8; 40], Content);
+static_assertions::assert_eq_size!([u8; 24], FlatType);
 static_assertions::assert_eq_size!([u8; 48], Problem);
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
@@ -230,15 +230,15 @@ impl<T> SubsSlice<T> {
         &mut slice[self.start as usize..][..self.length as usize]
     }
 
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.length as usize
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    pub fn new(start: u32, length: u16) -> Self {
+    pub const fn new(start: u32, length: u16) -> Self {
         Self {
             start,
             length,
@@ -879,7 +879,7 @@ impl Content {
 
 #[derive(Clone, Debug)]
 pub enum FlatType {
-    Apply(Symbol, Vec<Variable>),
+    Apply(Symbol, VariableSubsSlice),
     Func(VariableSubsSlice, Variable, Variable),
     Record(RecordFields, Variable),
     TagUnion(UnionTags, Variable),
@@ -948,19 +948,39 @@ impl IntoIterator for VariableSubsSlice {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UnionTags {
-    pub tag_names: SubsSlice<TagName>,
-    pub variables: SubsSlice<VariableSubsSlice>,
+    length: u16,
+    tag_names_start: u32,
+    variables_start: u32,
 }
 
 impl UnionTags {
     pub fn from_tag_name_index(index: SubsIndex<TagName>) -> Self {
+        Self::from_slices(
+            SubsSlice::new(index.start, 1),
+            SubsSlice::new(0, 1), // the first variablesubsslice is the empty slice
+        )
+    }
+
+    fn from_slices(tag_names: SubsSlice<TagName>, variables: SubsSlice<VariableSubsSlice>) -> Self {
+        debug_assert_eq!(tag_names.len(), variables.len());
+
         Self {
-            tag_names: SubsSlice::new(index.start, 1),
-            variables: SubsSlice::new(0, 1), // the first variablesubsslice is the empty slice
+            length: tag_names.len() as u16,
+            tag_names_start: tag_names.start,
+            variables_start: variables.start,
         }
     }
-    pub fn len(&self) -> usize {
-        self.tag_names.len()
+
+    const fn tag_names(&self) -> SubsSlice<TagName> {
+        SubsSlice::new(self.tag_names_start, self.length)
+    }
+
+    pub const fn variables(&self) -> SubsSlice<VariableSubsSlice> {
+        SubsSlice::new(self.variables_start, self.length)
+    }
+
+    pub const fn len(&self) -> usize {
+        self.length as usize
     }
 
     pub fn is_empty(&self) -> bool {
@@ -994,10 +1014,10 @@ impl UnionTags {
             length += 1;
         }
 
-        UnionTags {
-            variables: SubsSlice::new(variables_start, length),
-            tag_names: SubsSlice::new(tag_names_start, length),
-        }
+        Self::from_slices(
+            SubsSlice::new(tag_names_start, length),
+            SubsSlice::new(variables_start, length),
+        )
     }
 
     pub fn insert_slices_into_subs<I>(subs: &mut Subs, input: I) -> Self
@@ -1021,16 +1041,19 @@ impl UnionTags {
             length += 1;
         }
 
-        UnionTags {
-            variables: SubsSlice::new(variables_start, length),
-            tag_names: SubsSlice::new(tag_names_start, length),
+        Self {
+            length,
+            tag_names_start,
+            variables_start,
         }
     }
 
     pub fn iter_all(
         &self,
     ) -> impl Iterator<Item = (SubsIndex<TagName>, SubsIndex<VariableSubsSlice>)> {
-        self.tag_names.into_iter().zip(self.variables.into_iter())
+        self.tag_names()
+            .into_iter()
+            .zip(self.variables().into_iter())
     }
 
     #[inline(always)]
@@ -1162,7 +1185,7 @@ fn first<K: Ord, V>(x: &(K, V), y: &(K, V)) -> std::cmp::Ordering {
 pub type SortedIterator<'a> = Box<dyn Iterator<Item = (Lowercase, RecordField<Variable>)> + 'a>;
 
 impl RecordFields {
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.length as usize
     }
 
@@ -1352,7 +1375,12 @@ fn occurs(
                 new_seen.insert(root_var);
 
                 match flat_type {
-                    Apply(_, args) => short_circuit(subs, root_var, &new_seen, args.iter()),
+                    Apply(_, args) => short_circuit(
+                        subs,
+                        root_var,
+                        &new_seen,
+                        subs.get_subs_slice(*args.as_subs_slice()).iter(),
+                    ),
                     Func(arg_vars, closure_var, ret_var) => {
                         let it = once(ret_var)
                             .chain(once(closure_var))
@@ -1366,7 +1394,7 @@ fn occurs(
                         short_circuit(subs, root_var, &new_seen, it)
                     }
                     TagUnion(tags, ext_var) => {
-                        for slice_index in tags.variables {
+                        for slice_index in tags.variables() {
                             let slice = subs[slice_index];
                             for var_index in slice {
                                 let var = subs[var_index];
@@ -1382,7 +1410,7 @@ fn occurs(
                     }
                     RecursiveTagUnion(_rec_var, tags, ext_var) => {
                         // TODO rec_var is excluded here, verify that this is correct
-                        for slice_index in tags.variables {
+                        for slice_index in tags.variables() {
                             let slice = subs[slice_index];
                             for var_index in slice {
                                 let var = subs[var_index];
@@ -1459,12 +1487,13 @@ fn explicit_substitute(
                 Structure(flat_type) => {
                     match flat_type {
                         Apply(symbol, args) => {
-                            let new_args = args
-                                .iter()
-                                .map(|var| explicit_substitute(subs, from, to, *var, seen))
-                                .collect();
+                            for var_index in args.into_iter() {
+                                let var = subs[var_index];
+                                let answer = explicit_substitute(subs, from, to, var, seen);
+                                subs[var_index] = answer;
+                            }
 
-                            subs.set_content(in_var, Structure(Apply(symbol, new_args)));
+                            subs.set_content(in_var, Structure(Apply(symbol, args)));
                         }
                         Func(arg_vars, closure_var, ret_var) => {
                             for var_index in arg_vars.into_iter() {
@@ -1486,7 +1515,7 @@ fn explicit_substitute(
                             let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
 
                             let mut new_slices = Vec::new();
-                            for slice_index in tags.variables {
+                            for slice_index in tags.variables() {
                                 let slice = subs[slice_index];
 
                                 let mut new_variables = Vec::new();
@@ -1505,12 +1534,13 @@ fn explicit_substitute(
                             }
 
                             let start = subs.variable_slices.len() as u32;
-                            let length = new_slices.len() as u16;
+                            let length = new_slices.len();
 
                             subs.variable_slices.extend(new_slices);
 
                             let mut union_tags = tags;
-                            union_tags.variables = SubsSlice::new(start, length);
+                            debug_assert_eq!(length, union_tags.len());
+                            union_tags.variables_start = start;
 
                             subs.set_content(in_var, Structure(TagUnion(union_tags, new_ext_var)));
                         }
@@ -1526,7 +1556,7 @@ fn explicit_substitute(
                             let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
 
                             let mut new_slices = Vec::new();
-                            for slice_index in tags.variables {
+                            for slice_index in tags.variables() {
                                 let slice = subs[slice_index];
 
                                 let mut new_variables = Vec::new();
@@ -1545,12 +1575,13 @@ fn explicit_substitute(
                             }
 
                             let start = subs.variable_slices.len() as u32;
-                            let length = new_slices.len() as u16;
+                            let length = new_slices.len();
 
                             subs.variable_slices.extend(new_slices);
 
                             let mut union_tags = tags;
-                            union_tags.variables = SubsSlice::new(start, length);
+                            debug_assert_eq!(length, union_tags.len());
+                            union_tags.variables_start = start;
 
                             subs.set_content(
                                 in_var,
@@ -1636,7 +1667,7 @@ fn get_var_names(
             Structure(flat_type) => match flat_type {
                 FlatType::Apply(_, args) => {
                     args.into_iter().fold(taken_names, |answer, arg_var| {
-                        get_var_names(subs, arg_var, answer)
+                        get_var_names(subs, subs[arg_var], answer)
                     })
                 }
 
@@ -1673,7 +1704,7 @@ fn get_var_names(
                 FlatType::TagUnion(tags, ext_var) => {
                     let mut taken_names = get_var_names(subs, ext_var, taken_names);
 
-                    for slice_index in tags.variables {
+                    for slice_index in tags.variables() {
                         let slice = subs[slice_index];
                         for var_index in slice {
                             let var = subs[var_index];
@@ -1692,7 +1723,7 @@ fn get_var_names(
                     let taken_names = get_var_names(subs, ext_var, taken_names);
                     let mut taken_names = get_var_names(subs, rec_var, taken_names);
 
-                    for slice_index in tags.variables {
+                    for slice_index in tags.variables() {
                         let slice = subs[slice_index];
                         for var_index in slice {
                             let arg_var = subs[var_index];
@@ -1854,7 +1885,10 @@ fn flat_type_to_err_type(
         Apply(symbol, args) => {
             let arg_types = args
                 .into_iter()
-                .map(|var| var_to_err_type(subs, state, var))
+                .map(|index| {
+                    let arg_var = subs[index];
+                    var_to_err_type(subs, state, arg_var)
+                })
                 .collect();
 
             ErrorType::Type(symbol, arg_types)
@@ -2047,7 +2081,8 @@ fn restore_content(subs: &mut Subs, content: &Content) {
 
         Structure(flat_type) => match flat_type {
             Apply(_, args) => {
-                for &var in args {
+                for index in args.into_iter() {
+                    let var = subs[index];
                     subs.restore(var);
                 }
             }
@@ -2074,7 +2109,7 @@ fn restore_content(subs: &mut Subs, content: &Content) {
                 subs.restore(*ext_var);
             }
             TagUnion(tags, ext_var) => {
-                for slice_index in tags.variables {
+                for slice_index in tags.variables() {
                     let slice = subs[slice_index];
                     for var_index in slice {
                         let var = subs[var_index];
@@ -2089,7 +2124,7 @@ fn restore_content(subs: &mut Subs, content: &Content) {
             }
 
             RecursiveTagUnion(rec_var, tags, ext_var) => {
-                for slice_index in tags.variables {
+                for slice_index in tags.variables() {
                     let slice = subs[slice_index];
                     for var_index in slice {
                         let var = subs[var_index];
