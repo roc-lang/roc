@@ -3,7 +3,7 @@ interface Parser exposes [
     succeed, any,  satisfy, fail,
     map, andThen, oneOf, oneOfResult,
     first, second,
-    lowerCase,
+    lowerCase, 
     runToString
   ] imports [Pair]
 
@@ -81,6 +81,7 @@ manyAux = \p, list ->
                 (oneOf [ p1, p2 ])) input
 
 
+# q2 = {name: "run [97,98,99] (manyAux lowerCase [ ]) => Pair (Loop [97] [98,99])", test: run [97,98,99] (manyAux lowerCase [ ]) == Pair (Loop [97] [98,99])}
 
 isLowerCaseAlpha : U8 -> Bool
 isLowerCaseAlpha = \u -> u >= 97 && u <= 122
