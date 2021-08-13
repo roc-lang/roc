@@ -60,6 +60,22 @@ impl Constraint {
 
         true
     }
+
+    pub fn contains_save_the_environment(&self) -> bool {
+        match self {
+            Constraint::Eq(_, _, _, _) => false,
+            Constraint::Store(_, _, _, _) => false,
+            Constraint::Lookup(_, _, _) => false,
+            Constraint::Pattern(_, _, _, _) => false,
+            Constraint::True => false,
+            Constraint::SaveTheEnvironment => true,
+            Constraint::Let(boxed) => {
+                boxed.ret_constraint.contains_save_the_environment()
+                    || boxed.defs_constraint.contains_save_the_environment()
+            }
+            Constraint::And(cs) => cs.iter().any(|c| c.contains_save_the_environment()),
+        }
+    }
 }
 
 fn subtract(declared: &Declared, detail: &VariableDetail, accum: &mut VariableDetail) {

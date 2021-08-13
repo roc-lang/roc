@@ -1423,6 +1423,15 @@ pub struct UnionTags {
 }
 
 impl UnionTags {
+    pub fn is_newtype_wrapper(&self, subs: &Subs) -> bool {
+        if self.length != 1 {
+            return false;
+        }
+
+        let slice = subs.variable_slices[self.variables_start as usize].slice;
+        slice.length == 1
+    }
+
     pub fn from_tag_name_index(index: SubsIndex<TagName>) -> Self {
         Self::from_slices(
             SubsSlice::new(index.start, 1),
@@ -1440,7 +1449,7 @@ impl UnionTags {
         }
     }
 
-    const fn tag_names(&self) -> SubsSlice<TagName> {
+    pub const fn tag_names(&self) -> SubsSlice<TagName> {
         SubsSlice::new(self.tag_names_start, self.length)
     }
 
