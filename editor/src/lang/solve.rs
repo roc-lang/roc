@@ -704,6 +704,7 @@ fn type_to_variable<'a>(
                 ))
             }
 
+            let arg_vars = VariableSubsSlice::insert_into_subs(subs, arg_vars);
             let flat_type = FlatType::Apply(*symbol, arg_vars);
             let content = Content::Structure(flat_type);
 
@@ -1013,7 +1014,8 @@ fn check_for_infinite_type(
 
                 let new_ext_var = subs.explicit_substitute(recursive, rec_var, ext_var);
 
-                let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
+                let flat_type =
+                    roc_unify::unify::from_mutmap_rec(subs, rec_var, new_tags, new_ext_var);
 
                 subs.set_content(recursive, Content::Structure(flat_type));
             }
@@ -1178,9 +1180,9 @@ fn adjust_rank_content(
                 Apply(_, args) => {
                     let mut rank = Rank::toplevel();
 
-                    for var in args {
-                        rank =
-                            rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
+                    for var_index in args.into_iter() {
+                        let var = subs[var_index];
+                        rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
                     }
 
                     rank
@@ -1252,9 +1254,13 @@ fn adjust_rank_content(
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
 
-                    for var in tags.values().flatten() {
-                        rank =
-                            rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, *var));
+                    for (_, index) in tags.iter_all() {
+                        let slice = subs[index];
+                        for var_index in slice {
+                            let var = subs[var_index];
+                            rank = rank
+                                .max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                        }
                     }
 
                     // THEORY: the recursion var has the same rank as the tag union itself
@@ -1358,7 +1364,8 @@ fn instantiate_rigids_help(
         Structure(flat_type) => {
             match flat_type {
                 Apply(_, args) => {
-                    for var in args.into_iter() {
+                    for var_index in args.into_iter() {
+                        let var = subs[var_index];
                         instantiate_rigids_help(subs, max_rank, pools, var);
                     }
                 }
@@ -1403,8 +1410,10 @@ fn instantiate_rigids_help(
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
                     instantiate_rigids_help(subs, max_rank, pools, rec_var);
 
-                    for (_, vars) in tags {
-                        for var in vars.into_iter() {
+                    for (_, index) in tags.iter_all() {
+                        let slice = subs[index];
+                        for var_index in slice {
+                            let var = subs[var_index];
                             instantiate_rigids_help(subs, max_rank, pools, var);
                         }
                     }
@@ -1495,12 +1504,17 @@ fn deep_copy_var_help(
         Structure(flat_type) => {
             let new_flat_type = match flat_type {
                 Apply(symbol, args) => {
-                    let args = args
-                        .into_iter()
-                        .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
-                        .collect();
+                    let mut new_arg_vars = Vec::with_capacity(args.len());
 
-                    Apply(symbol, args)
+                    for index in args.into_iter() {
+                        let var = subs[index];
+                        let copy_var = deep_copy_var_help(subs, max_rank, pools, var);
+                        new_arg_vars.push(copy_var);
+                    }
+
+                    let arg_vars = VariableSubsSlice::insert_into_subs(subs, new_arg_vars);
+
+                    Apply(symbol, arg_vars)
                 }
 
                 Func(arg_vars, closure_var, ret_var) => {
@@ -1594,19 +1608,21 @@ fn deep_copy_var_help(
 
                     let new_rec_var = deep_copy_var_help(subs, max_rank, pools, rec_var);
 
-                    for (tag, vars) in tags {
-                        let new_vars: Vec<Variable> = vars
-                            .into_iter()
-                            .map(|var| deep_copy_var_help(subs, max_rank, pools, var))
-                            .collect();
+                    for (tag_index, index) in tags.iter_all() {
+                        let tag = subs[tag_index].clone();
+                        let slice = subs[index];
+                        let mut new_vars = Vec::new();
+                        for var_index in slice {
+                            let var = subs[var_index];
+                            let new_var = deep_copy_var_help(subs, max_rank, pools, var);
+                            new_vars.push(new_var);
+                        }
+
                         new_tags.insert(tag, new_vars);
                     }
 
-                    RecursiveTagUnion(
-                        new_rec_var,
-                        new_tags,
-                        deep_copy_var_help(subs, max_rank, pools, ext_var),
-                    )
+                    let new_ext = deep_copy_var_help(subs, max_rank, pools, ext_var);
+                    roc_unify::unify::from_mutmap_rec(subs, new_rec_var, new_tags, new_ext)
                 }
             };
 
