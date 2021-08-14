@@ -34,9 +34,9 @@ main =
       |> Task.putLine
 
 
-   # NOTES.  Parser.q2 is test of 'Parser.manyAux.  If 'Parser.q2` is omitted from the list [p1, p2, ...], the code runs 
-   # without incident.  Hence the code for 'q2' type-checks.  However, if 'Parser.q2' in included in the test list,
-   # the app panics:
+# NOTES.  Parser.q2 is test of 'Parser.manyAux.  If 'Parser.q2` is omitted from the list [p1, p2, ...], the code runs 
+# without incident.  Hence the code for 'q2' type-checks.  However, if 'Parser.q2' in included in the test list,
+# the app panics:
 
 #   ➜  examples git:(dev) ✗ cargo run parser/ParserTest.roc
 #    Finished dev [unoptimized + debuginfo] target(s) in 0.90s
