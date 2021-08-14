@@ -79,6 +79,7 @@ comptime {
     exportNumFn(num.powInt, "pow_int");
     exportNumFn(num.acos, "acos");
     exportNumFn(num.asin, "asin");
+    exportNumFn(num.bytesToU16C, "bytes_to_u16");
 }
 
 // Str Module

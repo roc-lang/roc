@@ -21,3 +21,9 @@ pub fn acos(num: f64) callconv(.C) f64 {
 pub fn asin(num: f64) callconv(.C) f64 {
     return @call(.{ .modifier = always_inline }, math.asin, .{num});
 }
+
+/// TODO: Obviously, this should not be an alias for arcsin(x);
+/// fix me!
+pub fn bytesToU16C(num: f64) callconv(.C) f64 {
+    return @call(.{ .modifier = always_inline }, math.asin, .{num});
+}

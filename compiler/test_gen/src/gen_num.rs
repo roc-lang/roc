@@ -1620,4 +1620,9 @@ mod gen_num {
         // overflow
         assert_evals_to!("Num.isMultipleOf -9223372036854775808 -1", true, bool);
     }
+
+    #[test]
+    fn num_bytes_to_u16_ascii() {
+        assert_evals_to!("Num.bytesToU16 0", 0.0, f64);
+    }
 }

@@ -891,7 +891,7 @@ define_builtins! {
         100 NUM_AT_DECIMAL: "@Decimal"
         101 NUM_DECIMAL: "Decimal" imported
         102 NUM_DEC: "Dec" imported // the Num.Dectype alias
-
+        103 NUM_BYTES_TO_U16: "bytesToU16"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias

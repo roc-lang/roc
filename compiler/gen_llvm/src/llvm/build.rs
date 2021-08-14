@@ -4738,6 +4738,36 @@ fn run_low_level<'a, 'ctx, 'env>(
                 }
             }
         }
+        // TODO: Obviously, this is completely wrong! Fix me!
+        NumBytesToU16 => {
+            debug_assert_eq!(args.len(), 1);
+
+            let (arg, arg_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            match arg_layout {
+                Layout::Builtin(arg_builtin) => {
+                    use roc_mono::layout::Builtin::*;
+
+                    match arg_builtin {
+                        Usize | Int128 | Int64 | Int32 | Int16 | Int8 => {
+                            build_int_unary_op(env, arg.into_int_value(), arg_builtin, op)
+                        }
+                        Float128 | Float64 | Float32 | Float16 => {
+                            build_float_unary_op(env, arg.into_float_value(), op)
+                        }
+                        _ => {
+                            unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, arg_layout);
+                        }
+                    }
+                }
+                _ => {
+                    unreachable!(
+                        "Compiler bug: tried to run numeric operation {:?} on invalid layout: {:?}",
+                        op, arg_layout
+                    );
+                }
+            }
+        }
         NumCompare => {
             use inkwell::FloatPredicate;
 

@@ -161,6 +161,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_ATAN => num_atan,
         NUM_ACOS => num_acos,
         NUM_ASIN => num_asin,
+        NUM_BYTES_TO_U16 => num_bytes_to_u16,
         NUM_MAX_INT => num_max_int,
         NUM_MIN_INT => num_min_int,
         NUM_BITWISE_AND => num_bitwise_and,
@@ -1070,6 +1071,27 @@ fn num_acos(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.asin : Float -> Float
 fn num_asin(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let arg_float_var = var_store.fresh();
+    let ret_float_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumAsin,
+        args: vec![(arg_float_var, Var(Symbol::ARG_1))],
+        ret_var: ret_float_var,
+    };
+
+    defn(
+        symbol,
+        vec![(arg_float_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_float_var,
+    )
+}
+
+/// TODO: This is obviously wrong! Fix me!
+/// Num.bytesToU16 : Float -> Float
+fn num_bytes_to_u16(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_float_var = var_store.fresh();
     let ret_float_var = var_store.fresh();
 
