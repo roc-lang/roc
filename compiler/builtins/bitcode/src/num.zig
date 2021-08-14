@@ -25,9 +25,9 @@ pub fn asin(num: f64) callconv(.C) f64 {
 /// TODO: Obviously, this should not be an alias for arcsin(x);
 /// fix me!
 pub fn bytesToU16C(num: f64) callconv(.C) f64 {
-    return @call(.{ .modifier = always_inline }, bytesToU16, .{num});
+    return num + 1;
 }
 
 fn bytesToU16(num: f64) f64 {
-    return math.asin(num);
+    return num + 1;
 }

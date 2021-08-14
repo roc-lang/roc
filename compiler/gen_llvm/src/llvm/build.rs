@@ -6061,6 +6061,7 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
         NumAtan => call_bitcode_fn(env, &[arg.into()], bitcode::NUM_ATAN),
         NumAcos => call_bitcode_fn(env, &[arg.into()], bitcode::NUM_ACOS),
         NumAsin => call_bitcode_fn(env, &[arg.into()], bitcode::NUM_ASIN),
+        NumBytesToU16 => call_bitcode_fn(env, &[arg.into()], bitcode::NUM_BYTES_TO_U16),
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
         }

@@ -1096,7 +1096,7 @@ fn num_bytes_to_u16(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let ret_float_var = var_store.fresh();
 
     let body = RunLowLevel {
-        op: LowLevel::NumAsin,
+        op: LowLevel::NumBytesToU16,
         args: vec![(arg_float_var, Var(Symbol::ARG_1))],
         ret_var: ret_float_var,
     };

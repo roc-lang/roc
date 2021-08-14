@@ -1623,6 +1623,6 @@ mod gen_num {
 
     #[test]
     fn num_bytes_to_u16_ascii() {
-        assert_evals_to!("Num.bytesToU16 0", 0.0, f64);
+        assert_evals_to!("Num.bytesToU16 1", 2.0, f64);
     }
 }
