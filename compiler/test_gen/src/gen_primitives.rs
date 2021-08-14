@@ -2601,3 +2601,62 @@ fn lambda_set_byte() {
         i64
     );
 }
+
+#[test]
+fn lambda_set_struct_byte() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+
+                main : I64
+                main =
+                    r : [ Red, Green, Blue ]
+                    r = Red
+
+                    g : [ Red, Green, Blue ]
+                    g = Green
+
+                    p1 = (\u -> r == u)
+                    oneOfResult = List.map [p1, p1] (\p -> p Green)
+
+                    when oneOfResult is
+                        _ -> 32
+
+            "#
+        ),
+        32,
+        i64
+    );
+}
+
+#[test]
+fn lambda_set_enum_byte_byte() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+
+                main : I64
+                main =
+                    r : [ Red, Green, Blue ]
+                    r = Red
+
+                    g : [ Red, Green, Blue ]
+                    g = Green
+
+                    p1 = (\u -> r == u)
+                    p2 = (\u -> g == u)
+                    oneOfResult = List.map [p1, p2] (\p -> p Green)
+
+                    when oneOfResult is
+                        _ -> 32
+
+            "#
+        ),
+        32,
+        i64
+    );
+}
