@@ -62,6 +62,10 @@ oneOfResult = (oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]
 #     \inpu
               
 
+many : Parser a -> Parser (List a)
+many = \p -> 
+    \input -> loop (\list -> ((manyAux p list) input) ) []
+
 manyAux : Parser a, List a -> Parser (Step (List a) (List a))
 manyAux = \p, list ->
     \input -> (if input == [] 
