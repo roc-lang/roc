@@ -2554,7 +2554,7 @@ fn mirror_llvm_alignment_padding() {
 }
 
 #[test]
-fn code_gen_unified_closure() {
+fn lambda_set_bool() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -2566,6 +2566,31 @@ fn code_gen_unified_closure() {
                 main : I64
                 main =
                     oneOfResult = List.map [p1, p2] (\p -> p 42)
+
+                    when oneOfResult is
+                        _ -> 32
+
+            "#
+        ),
+        32,
+        i64
+    );
+}
+
+#[test]
+fn lambda_set_byte() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                p1 = (\u -> u == 97)
+                p2 = (\u -> u == 98)
+                p3 = (\u -> u == 99)
+
+                main : I64
+                main =
+                    oneOfResult = List.map [p1, p2, p3] (\p -> p 42)
 
                     when oneOfResult is
                         _ -> 32
