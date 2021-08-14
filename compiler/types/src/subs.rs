@@ -1439,7 +1439,10 @@ impl UnionTags {
         )
     }
 
-    fn from_slices(tag_names: SubsSlice<TagName>, variables: SubsSlice<VariableSubsSlice>) -> Self {
+    pub fn from_slices(
+        tag_names: SubsSlice<TagName>,
+        variables: SubsSlice<VariableSubsSlice>,
+    ) -> Self {
         debug_assert_eq!(tag_names.len(), variables.len());
 
         Self {
@@ -1496,6 +1499,16 @@ impl UnionTags {
             SubsSlice::new(tag_names_start, length),
             SubsSlice::new(variables_start, length),
         )
+    }
+
+    pub fn tag_without_arguments(subs: &mut Subs, tag_name: TagName) -> Self {
+        subs.tag_names.push(tag_name);
+
+        Self {
+            length: 1,
+            tag_names_start: (subs.tag_names.len() - 1) as u32,
+            variables_start: 0,
+        }
     }
 
     pub fn insert_slices_into_subs<I>(subs: &mut Subs, input: I) -> Self
