@@ -121,69 +121,6 @@ pub fn list_repeat<'a, 'ctx, 'env>(
     )
 }
 
-/// List.prepend : List elem, elem -> List elem
-pub fn list_prepend<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    original_wrapper: StructValue<'ctx>,
-    elem: BasicValueEnum<'ctx>,
-    elem_layout: &Layout<'a>,
-) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
-    // Load the usize length from the wrapper.
-    let len = list_len(builder, original_wrapper);
-    let elem_type = basic_type_from_layout(env, elem_layout);
-    let ptr_type = elem_type.ptr_type(AddressSpace::Generic);
-    let list_ptr = load_list_ptr(builder, original_wrapper, ptr_type);
-
-    // The output list length, which is the old list length + 1
-    let new_list_len = env.builder.build_int_add(
-        env.ptr_int().const_int(1_u64, false),
-        len,
-        "new_list_length",
-    );
-
-    // Allocate space for the new array that we'll copy into.
-    let clone_ptr = allocate_list(env, elem_layout, new_list_len);
-
-    builder.build_store(clone_ptr, elem);
-
-    let index_1_ptr = unsafe {
-        builder.build_in_bounds_gep(
-            clone_ptr,
-            &[env.ptr_int().const_int(1_u64, false)],
-            "load_index",
-        )
-    };
-
-    // Calculate the number of bytes we'll need to allocate.
-    let elem_bytes = env
-        .ptr_int()
-        .const_int(elem_layout.stack_size(env.ptr_bytes) as u64, false);
-
-    // This is the size of the list coming in, before we have added an element
-    // to the beginning.
-    let list_size = env
-        .builder
-        .build_int_mul(elem_bytes, len, "mul_old_len_by_elem_bytes");
-
-    let ptr_bytes = env.ptr_bytes;
-
-    if elem_layout.safe_to_memcpy() {
-        // Copy the bytes from the original array into the new
-        // one we just allocated
-        //
-        // TODO how do we decide when to do the small memcpy vs the normal one?
-        builder
-            .build_memcpy(index_1_ptr, ptr_bytes, list_ptr, ptr_bytes, list_size)
-            .unwrap();
-    } else {
-        panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
-    }
-
-    store_list(env, clone_ptr, new_list_len)
-}
-
 /// List.join : List (List elem) -> List elem
 pub fn list_join<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -296,6 +233,25 @@ pub fn list_append<'a, 'ctx, 'env>(
             layout_width(env, element_layout),
         ],
         bitcode::LIST_APPEND,
+    )
+}
+
+/// List.prepend : List elem, elem -> List elem
+pub fn list_prepend<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    original_wrapper: StructValue<'ctx>,
+    element: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    call_bitcode_fn_returns_list(
+        env,
+        &[
+            pass_list_as_i128(env, original_wrapper.into()),
+            env.alignment_intvalue(element_layout),
+            pass_element_as_opaque(env, element),
+            layout_width(env, element_layout),
+        ],
+        bitcode::LIST_PREPEND,
     )
 }
 
