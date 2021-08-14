@@ -2615,9 +2615,6 @@ fn lambda_set_struct_byte() {
                     r : [ Red, Green, Blue ]
                     r = Red
 
-                    g : [ Red, Green, Blue ]
-                    g = Green
-
                     p1 = (\u -> r == u)
                     oneOfResult = List.map [p1, p1] (\p -> p Green)
 
