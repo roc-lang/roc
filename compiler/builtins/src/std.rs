@@ -505,8 +505,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // bytesToU16 : Float a -> Float a
     add_top_level_function_type!(
         Symbol::NUM_BYTES_TO_U16,
-        vec![float_type(flex(TVAR1))],
-        Box::new(float_type(flex(TVAR1))),
+        vec![nat_type()],
+        Box::new(nat_type()),
     );
 
     // Bool module

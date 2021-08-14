@@ -1090,7 +1090,7 @@ fn num_asin(symbol: Symbol, var_store: &mut VarStore) -> Def {
 }
 
 /// TODO: This is obviously wrong! Fix me!
-/// Num.bytesToU16 : Float -> Float
+/// Num.bytesToU16 : Nat -> Nat
 fn num_bytes_to_u16(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_float_var = var_store.fresh();
     let ret_float_var = var_store.fresh();
