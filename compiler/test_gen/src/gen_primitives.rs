@@ -2563,7 +2563,7 @@ fn code_gen_unified_closure() {
                 p1 = (\u -> u == 97)
                 p2 = (\u -> u == 98)
 
-                main : I64 
+                main : I64
                 main =
                     oneOfResult = List.map [p1, p2] (\p -> p 42)
 
