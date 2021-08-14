@@ -5,7 +5,7 @@ use roc_region::all::Region;
 use roc_types::builtin_aliases::{
     bool_type, dict_type, float_type, i128_type, int_type, list_type, nat_type, num_type,
     ordering_type, result_type, set_type, str_type, str_utf8_byte_problem_type, u32_type, u64_type,
-    u8_type,
+    u8_type, u16_type
 };
 use roc_types::solved_types::SolvedType;
 use roc_types::subs::VarId;
@@ -502,11 +502,11 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     );
 
     // TODO: This is obviously wrong! Fix me!
-    // bytesToU16 : Float a -> Float a
+    // bytesToU16 : Nat -> U16
     add_top_level_function_type!(
         Symbol::NUM_BYTES_TO_U16,
         vec![nat_type()],
-        Box::new(nat_type()),
+        Box::new(u16_type()),
     );
 
     // Bool module

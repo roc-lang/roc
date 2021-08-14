@@ -24,10 +24,11 @@ pub fn asin(num: f64) callconv(.C) f64 {
 
 /// TODO: Obviously, this should not be an alias for x + 1.
 /// fix me!
-pub fn bytesToU16C(num: usize) callconv(.C) usize {
+pub fn bytesToU16C(num: usize) callconv(.C) u16 {
     return @call(.{ .modifier = always_inline }, bytesToU16, .{num});
 }
 
-fn bytesToU16(num: usize) usize {
-    return num + 1;
+fn bytesToU16(num: usize) u16 {
+    const exampleAnswer: u16 = 40;
+    return 40;
 }

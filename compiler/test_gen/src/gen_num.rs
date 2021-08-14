@@ -1623,11 +1623,11 @@ mod gen_num {
 
     #[test]
     fn num_bytes_to_u16_ascii() {
-        assert_evals_to!("Num.bytesToU16 1", 2, usize);
+        assert_evals_to!("Num.bytesToU16 1", 40, u16);
     }
 
     #[test]
     fn num_bytes_to_u16_ascii_2() {
-        assert_evals_to!("Num.bytesToU16 0", 1, usize);
+        assert_evals_to!("Num.bytesToU16 0", 40, u16);
     }
 }
