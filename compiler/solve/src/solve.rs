@@ -1,12 +1,13 @@
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::expected::{Expected, PExpected};
-use roc_collections::all::{default_hasher, MutMap};
+use roc_collections::all::MutMap;
+use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Located, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
     AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs,
-    SubsIndex, Variable, VariableSubsSlice,
+    SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{gather_fields_unsorted_iter, Alias, Category, ErrorType, PatternCategory};
@@ -706,32 +707,8 @@ fn type_to_variable(
             register(subs, rank, pools, content)
         }
         TagUnion(tags, ext) => {
-            let mut tag_vars = MutMap::with_capacity_and_hasher(tags.len(), default_hasher());
-
-            for (tag, tag_argument_types) in tags {
-                let mut tag_argument_vars = Vec::with_capacity(tag_argument_types.len());
-
-                for arg_type in tag_argument_types {
-                    tag_argument_vars.push(type_to_variable(subs, rank, pools, cached, arg_type));
-                }
-
-                tag_vars.insert(tag.clone(), tag_argument_vars);
-            }
-
-            let temp_ext_var = type_to_variable(subs, rank, pools, cached, ext);
-            let mut ext_tag_vec = Vec::new();
-            let new_ext_var = match roc_types::pretty_print::chase_ext_tag_union(
-                subs,
-                temp_ext_var,
-                &mut ext_tag_vec,
-            ) {
-                Ok(()) => Variable::EMPTY_TAG_UNION,
-                Err((new, _)) => new,
-            };
-            tag_vars.extend(ext_tag_vec.into_iter());
-
-            let content =
-                Content::Structure(roc_unify::unify::from_mutmap(subs, tag_vars, new_ext_var));
+            let (union_tags, ext) = type_to_union_tags(subs, rank, pools, cached, tags, ext);
+            let content = Content::Structure(FlatType::TagUnion(union_tags, ext));
 
             register(subs, rank, pools, content)
         }
@@ -758,36 +735,9 @@ fn type_to_variable(
             register(subs, rank, pools, content)
         }
         RecursiveTagUnion(rec_var, tags, ext) => {
-            let mut tag_vars = MutMap::with_capacity_and_hasher(tags.len(), default_hasher());
-
-            for (tag, tag_argument_types) in tags {
-                let mut tag_argument_vars = Vec::with_capacity(tag_argument_types.len());
-
-                for arg_type in tag_argument_types {
-                    tag_argument_vars.push(type_to_variable(subs, rank, pools, cached, arg_type));
-                }
-
-                tag_vars.insert(tag.clone(), tag_argument_vars);
-            }
-
-            let temp_ext_var = type_to_variable(subs, rank, pools, cached, ext);
-            let mut ext_tag_vec = Vec::new();
-            let new_ext_var = match roc_types::pretty_print::chase_ext_tag_union(
-                subs,
-                temp_ext_var,
-                &mut ext_tag_vec,
-            ) {
-                Ok(()) => Variable::EMPTY_TAG_UNION,
-                Err((new, _)) => new,
-            };
-            tag_vars.extend(ext_tag_vec.into_iter());
-
-            let content = Content::Structure(roc_unify::unify::from_mutmap_rec(
-                subs,
-                *rec_var,
-                tag_vars,
-                new_ext_var,
-            ));
+            let (union_tags, ext) = type_to_union_tags(subs, rank, pools, cached, tags, ext);
+            let content =
+                Content::Structure(FlatType::RecursiveTagUnion(*rec_var, union_tags, ext));
 
             let tag_union_var = register(subs, rank, pools, content);
 
@@ -903,6 +853,59 @@ fn type_to_variable(
     }
 }
 
+fn type_to_union_tags(
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    cached: &mut MutMap<Symbol, Variable>,
+    tags: &[(TagName, Vec<Type>)],
+    ext: &Type,
+) -> (UnionTags, Variable) {
+    let mut tag_vars = Vec::with_capacity(tags.len());
+
+    let mut tag_argument_vars = Vec::new();
+    for (tag, tag_argument_types) in tags {
+        for arg_type in tag_argument_types {
+            let new_var = type_to_variable(subs, rank, pools, cached, arg_type);
+            tag_argument_vars.push(new_var);
+        }
+
+        let new_slice = VariableSubsSlice::insert_into_subs(subs, tag_argument_vars.drain(..));
+
+        tag_vars.push((tag.clone(), new_slice));
+    }
+
+    let temp_ext_var = type_to_variable(subs, rank, pools, cached, ext);
+
+    let ext = {
+        let (it, ext) =
+            roc_types::types::gather_tags_unsorted_iter(subs, UnionTags::default(), temp_ext_var);
+
+        tag_vars.extend(it.map(|(n, v)| (n.clone(), v)));
+        tag_vars.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+
+        // deduplicate, keeping the right-most occurrence of a tag name
+        let mut i = 0;
+
+        while i < tag_vars.len() {
+            match (tag_vars.get(i), tag_vars.get(i + 1)) {
+                (Some((t1, _)), Some((t2, _))) => {
+                    if t1 == t2 {
+                        tag_vars.remove(i);
+                    } else {
+                        i += 1;
+                    }
+                }
+                _ => break,
+            }
+        }
+
+        ext
+    };
+
+    (UnionTags::insert_slices_into_subs(subs, tag_vars), ext)
+}
+
 fn check_for_infinite_type(
     subs: &mut Subs,
     problems: &mut Vec<TypeError>,
@@ -928,7 +931,7 @@ fn check_for_infinite_type(
                     },
                 );
 
-                let mut new_tags = MutMap::default();
+                let mut new_tags = Vec::with_capacity(tags.len());
 
                 for (name_index, slice_index) in tags.iter_all() {
                     let slice = subs[slice_index];
@@ -939,13 +942,14 @@ fn check_for_infinite_type(
                         new_vars.push(subs.explicit_substitute(recursive, rec_var, var));
                     }
 
-                    new_tags.insert(subs[name_index].clone(), new_vars);
+                    new_tags.push((subs[name_index].clone(), new_vars));
                 }
 
                 let new_ext_var = subs.explicit_substitute(recursive, rec_var, ext_var);
 
-                let flat_type =
-                    roc_unify::unify::from_mutmap_rec(subs, rec_var, new_tags, new_ext_var);
+                let new_tags = UnionTags::insert_into_subs(subs, new_tags);
+
+                let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
 
                 subs.set_content(recursive, Content::Structure(flat_type));
             }
@@ -1509,23 +1513,35 @@ fn deep_copy_var_help(
                 }
 
                 TagUnion(tags, ext_var) => {
-                    let mut new_tags = MutMap::default();
+                    let mut new_variable_slices = Vec::with_capacity(tags.len());
 
-                    for (tag_index, index) in tags.iter_all() {
-                        let tag = subs[tag_index].clone();
+                    let mut new_variables = Vec::new();
+                    for index in tags.variables() {
                         let slice = subs[index];
-                        let mut new_vars = Vec::new();
                         for var_index in slice {
                             let var = subs[var_index];
                             let new_var = deep_copy_var_help(subs, max_rank, pools, var);
-                            new_vars.push(new_var);
+                            new_variables.push(new_var);
                         }
 
-                        new_tags.insert(tag, new_vars);
+                        let new_slice =
+                            VariableSubsSlice::insert_into_subs(subs, new_variables.drain(..));
+
+                        new_variable_slices.push(new_slice);
                     }
 
+                    let new_variables = {
+                        let start = subs.variable_slices.len() as u32;
+                        let length = new_variable_slices.len() as u16;
+                        subs.variable_slices.extend(new_variable_slices);
+
+                        SubsSlice::new(start, length)
+                    };
+
+                    let union_tags = UnionTags::from_slices(tags.tag_names(), new_variables);
+
                     let new_ext = deep_copy_var_help(subs, max_rank, pools, ext_var);
-                    roc_unify::unify::from_mutmap(subs, new_tags, new_ext)
+                    TagUnion(union_tags, new_ext)
                 }
 
                 FunctionOrTagUnion(tag_name, symbol, ext_var) => FunctionOrTagUnion(
@@ -1535,25 +1551,37 @@ fn deep_copy_var_help(
                 ),
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    let mut new_tags = MutMap::default();
+                    let mut new_variable_slices = Vec::with_capacity(tags.len());
 
-                    let new_rec_var = deep_copy_var_help(subs, max_rank, pools, rec_var);
-
-                    for (tag_index, index) in tags.iter_all() {
-                        let tag = subs[tag_index].clone();
+                    let mut new_variables = Vec::new();
+                    for index in tags.variables() {
                         let slice = subs[index];
-                        let mut new_vars = Vec::new();
                         for var_index in slice {
                             let var = subs[var_index];
                             let new_var = deep_copy_var_help(subs, max_rank, pools, var);
-                            new_vars.push(new_var);
+                            new_variables.push(new_var);
                         }
 
-                        new_tags.insert(tag, new_vars);
+                        let new_slice =
+                            VariableSubsSlice::insert_into_subs(subs, new_variables.drain(..));
+
+                        new_variable_slices.push(new_slice);
                     }
 
+                    let new_variables = {
+                        let start = subs.variable_slices.len() as u32;
+                        let length = new_variable_slices.len() as u16;
+                        subs.variable_slices.extend(new_variable_slices);
+
+                        SubsSlice::new(start, length)
+                    };
+
+                    let union_tags = UnionTags::from_slices(tags.tag_names(), new_variables);
+
                     let new_ext = deep_copy_var_help(subs, max_rank, pools, ext_var);
-                    roc_unify::unify::from_mutmap_rec(subs, new_rec_var, new_tags, new_ext)
+                    let new_rec_var = deep_copy_var_help(subs, max_rank, pools, rec_var);
+
+                    RecursiveTagUnion(new_rec_var, union_tags, new_ext)
                 }
             };
 
