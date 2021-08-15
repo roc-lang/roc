@@ -1,15 +1,20 @@
-app "Tester"
+app "app"
     packages { base: "platform" }
-    imports [base.Task,  Utility, Test]
+    imports [base.Task,  Test]
     provides [ main ] to base
 
 main : Task.Task {} []
-main =
-    t1 = {name : "isEven", test: Utility.isEven 4 }
+main = 
+    
 
-    filteredList = Utility.filterList [1,2,3,4,5,6] isEven
-    t2 = {name : "filterList", test: List.len filteredList == 3}
+    t1 = {name : "1 + 1 == 2", test: 1 + 1 == 2}
 
-    Test.run [t1, t2] 
-      |> Task.putLine
+    t2 = {name: "Bozo", test: 1 + 1 == 0} 
 
+    [t1,t2] |> Test.run "Test of test interface"  |> Task.putLine
+
+    # [t1,t2] |> Test.runF "Test of test interface, failures only"  |> Task.putLine
+
+
+
+  

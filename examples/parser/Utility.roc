@@ -1,5 +1,5 @@
 interface Utility exposes [ concatStrList, concatStrListWithSeparator, 
-   isEven, filterList,
+   isEven, filterList, strRepeat,
    spaceAboveBelow,
    showU8Pair, showU8,
    tests] imports [ ]
@@ -21,6 +21,8 @@ filterList = \list, predicate ->
 
 ## Strings
 
+strRepeat: Nat, Str -> Str
+strRepeat = \n, str -> List.repeat n str |> concatStrList
 
 spaceAboveBelow: Str -> Str
 spaceAboveBelow = \str -> concatStrList ["\n", str, "\n"]
@@ -84,5 +86,6 @@ t4 = {name: "isEven 5 == False", test: isEven 5 == False}
 t5 = {name: "filterList [1,2,3,4,5,6] isEven == [2,4,6]", test: filterList [1,2,3,4,5,6] isEven == [2,4,6]}
 t6 = {name: "showU8 97 == \"a\"", test: showU8 97 == "a" }
 t7 = {name: "showU8Pair (Pair 97 [98, 99]) == \"(a, bc)\"", test: showU8Pair (Pair 97 [98, 99]) == "(a, bc)"}
+t8 = {name: "strRepeat strRepeat 5 \"*\"  == \"*****\"", test: strRepeat 5 "*" == "*****" }
 
-tests = [t1, t2, t3, t4, t5, t6, t7]
+tests = [t1, t2, t3, t4, t5, t6, t7, t8]
