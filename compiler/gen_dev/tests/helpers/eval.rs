@@ -76,9 +76,9 @@ pub fn helper<'a>(
     // You can comment and uncomment this block out to get more useful information
     // while you're working on the dev backend!
     {
-        println!("=========== Procedures ==========");
-        println!("{:?}", procedures);
-        println!("=================================\n");
+        // println!("=========== Procedures ==========");
+        // println!("{:?}", procedures);
+        // println!("=================================\n");
 
         // println!("=========== Interns    ==========");
         // println!("{:?}", interns);
