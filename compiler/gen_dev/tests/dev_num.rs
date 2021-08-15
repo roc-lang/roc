@@ -287,7 +287,6 @@ mod dev_num {
         assert_evals_to!("Num.abs 5.8", 5.8, f64);
     }
 
-
     #[test]
     fn f64_round() {
         assert_evals_to!("Num.round 3.6", 4, i64);
@@ -312,8 +311,6 @@ mod dev_num {
     //         f64
     //     );
     // }
-
-
 
     // #[test]
     // fn gen_float_eq() {
@@ -682,7 +679,6 @@ mod dev_num {
     //         i64
     //     );
     // }
-
 
     // #[test]
     // fn int_to_float() {
