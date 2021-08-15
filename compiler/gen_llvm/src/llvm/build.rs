@@ -161,6 +161,11 @@ pub struct Env<'a, 'ctx, 'env> {
     pub exposed_to_host: MutSet<Symbol>,
 }
 
+#[repr(u32)]
+pub enum PanicTagId {
+    NullTerminatedString,
+}
+
 impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     pub fn ptr_int(&self) -> IntType<'ctx> {
         ptr_int(self.context, self.ptr_bytes)
@@ -284,6 +289,20 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
                 false_val.into(),
             ],
         )
+    }
+
+    pub fn call_panic(&self, message: PointerValue<'ctx>, tag_id: PanicTagId) {
+        let function = self.module.get_function("roc_panic").unwrap();
+        let tag_id = self
+            .context
+            .i32_type()
+            .const_int(tag_id as u32 as u64, false);
+
+        let call = self
+            .builder
+            .build_call(function, &[message.into(), tag_id.into()], "roc_panic");
+
+        call.set_call_convention(C_CALL_CONV);
     }
 
     pub fn new_debug_info(module: &Module<'ctx>) -> (DebugInfoBuilder<'ctx>, DICompileUnit<'ctx>) {
@@ -6145,6 +6164,10 @@ fn throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, message: &str) {
     let context = env.context;
     let builder = env.builder;
 
+    // define the error message as a global
+    // (a hash is used such that the same value is not defined repeatedly)
+    let error_msg_global = define_global_error_str(env, message);
+
     let info = {
         // we represented both void and char pointers with `u8*`
         let u8_ptr = context.i8_type().ptr_type(AddressSpace::Generic);
@@ -6155,10 +6178,6 @@ fn throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, message: &str) {
             .i64_type()
             .const_int(env.ptr_bytes as u64, false);
         let initial = cxa_allocate_exception(env, str_ptr_size);
-
-        // define the error message as a global
-        // (a hash is used such that the same value is not defined repeatedly)
-        let error_msg_global = define_global_error_str(env, message);
 
         // cast this to a void pointer
         let error_msg_ptr =
@@ -6181,7 +6200,17 @@ fn throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, message: &str) {
         initial
     };
 
-    cxa_throw_exception(env, info);
+    let cast = env
+        .builder
+        .build_bitcast(
+            error_msg_global.as_pointer_value(),
+            env.context.i8_type().ptr_type(AddressSpace::Generic),
+            "cast_void",
+        )
+        .into_pointer_value();
+
+    // cxa_throw_exception(env, info);
+    env.call_panic(cast, PanicTagId::NullTerminatedString);
 
     builder.build_unreachable();
 }
