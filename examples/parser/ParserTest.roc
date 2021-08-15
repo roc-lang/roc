@@ -1,7 +1,8 @@
 app "parseapp"
      packages { base: "platform" }
      imports [base.Task, 
-        Parser.{succesful, runToString, any, satisfy, first, second, map, andThen, oneOf, oneOfResult, isLowerCaseAlpha, manyAux },
+        Parser.{succesful, runToString, any, satisfy, first, second, 
+        map, andThen, oneOf, oneOfResult, isLowerCaseAlpha, manyAux },
         Test, Utility]
      provides [ main ] to base
 
@@ -30,7 +31,8 @@ main =
     q1 = {name: "test of oneOf combinator", test: List.len oneOfResult == 1 }
       
  
-    Test.run [p1, p2, p3, p4, p5, p6, p7, p8, p9, q1, Parser.q2]  ## <== Bug here at 'Parse.q2'  Notes below
+    [p1, p2, p3, p4, p5, p6, p7, p8, p9, q1]  |> Test.run "Parser test"
+    ## <== Bug above if 'Parse.q2' is used.  Notes below
       |> Task.putLine
 
 

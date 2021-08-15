@@ -10,7 +10,7 @@ interface Parser exposes [
 
 ## PARSERS
 
-Parser a : List U8 -> List ([Pair a (List U8)])
+Parser a : List U8 -> List [Pair a (List U8)]
 
 
 run : (List U8), Parser a -> List ([Pair a (List U8)])
@@ -65,6 +65,13 @@ oneOfResult = (oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]
 # many : Parser a -> Parser (List a)
 # many = \p -> 
 #    \input -> loop (\list -> ((manyAux p list) input) ) []
+
+
+# loop : (state -> Parser (Step state a)), state -> Parser a 
+# loop = \nextState, s ->
+#   when nextState s is 
+#      Loop ss -> loop nextState ss
+#      Done aa -> aa
 
 manyAux : Parser a, List a -> Parser (Step (List a) (List a))
 manyAux = \p, list ->
@@ -170,9 +177,3 @@ first =
 
 Step state a : [ Loop state, Done a ]
 
-loop : (state -> Parser (Step state a)), state -> Parser a
-loop = \nextState, s ->
-    when nextState s is
-        Loop ss ->
-            loop nextState ss
-        Done aa -> aa
