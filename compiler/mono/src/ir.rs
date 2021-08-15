@@ -4673,8 +4673,13 @@ pub fn from_can<'a>(
                                     );
                                     CapturedSymbols::None
                                 }
-                                Err(_) => {
-                                    debug_assert!(captured_symbols.is_empty());
+                                Err(e) => {
+                                    debug_assert!(
+                                        captured_symbols.is_empty(),
+                                        "{:?}, {:?}",
+                                        &captured_symbols,
+                                        e
+                                    );
                                     CapturedSymbols::None
                                 }
                             };
