@@ -1621,13 +1621,24 @@ mod gen_num {
         assert_evals_to!("Num.isMultipleOf -9223372036854775808 -1", true, bool);
     }
 
+    // TODO: Once we know what the function should do, let's give these real names!
     #[test]
-    fn num_bytes_to_u16_ascii() {
+    fn potato_1() {
         assert_evals_to!("Num.bytesToU16 [] 1", 40, u16);
     }
 
     #[test]
-    fn num_bytes_to_u16_ascii_2() {
+    fn potato_2() {
         assert_evals_to!("Num.bytesToU16 [] 0", 40, u16);
+    }
+
+    #[test]
+    fn potato_3() {
+        assert_evals_to!("Num.bytesToU32 [] 1", 41, u32);
+    }
+
+    #[test]
+    fn potato_4() {
+        assert_evals_to!("Num.bytesToU32 [] 0", 41, u32);
     }
 }

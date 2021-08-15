@@ -508,6 +508,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(u16_type()),
     );
 
+    // bytesToU32 : List U8, Nat -> U32
+    add_top_level_function_type!(
+        Symbol::NUM_BYTES_TO_U32,
+        vec![list_type(u8_type()), nat_type()],
+        Box::new(u32_type()),
+    );
+
     // Bool module
 
     // and : Bool, Bool -> Bool

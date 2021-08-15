@@ -80,6 +80,7 @@ comptime {
     exportNumFn(num.acos, "acos");
     exportNumFn(num.asin, "asin");
     exportNumFn(num.bytesToU16C, "bytes_to_u16");
+    exportNumFn(num.bytesToU32C, "bytes_to_u32");
 }
 
 // Str Module

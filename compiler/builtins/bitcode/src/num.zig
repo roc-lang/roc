@@ -23,8 +23,8 @@ pub fn asin(num: f64) callconv(.C) f64 {
     return @call(.{ .modifier = always_inline }, math.asin, .{num});
 }
 
-/// TODO: Obviously, this should not be an alias for x + 1.
-/// fix me!
+/// TODO: Obviously, this function should do something more interesting
+/// than return the number 40. Fix me!
 pub fn bytesToU16C(arg: RocList, position: usize) callconv(.C) u16 {
     return @call(.{ .modifier = always_inline }, bytesToU16, .{arg, position});
 }
@@ -32,4 +32,15 @@ pub fn bytesToU16C(arg: RocList, position: usize) callconv(.C) u16 {
 fn bytesToU16(arg: RocList, position: usize) u16 {
     const exampleAnswer: u16 = 40;
     return 40;
+}
+
+/// TODO: Obviously, this function should do something more interesting
+/// than return the number 40. Fix me!
+pub fn bytesToU32C(arg: RocList, position: usize) callconv(.C) u32 {
+    return @call(.{ .modifier = always_inline }, bytesToU32, .{arg, position});
+}
+
+fn bytesToU32(arg: RocList, position: usize) u32 {
+    const exampleAnswer: u32 = 41;
+    return 41;
 }

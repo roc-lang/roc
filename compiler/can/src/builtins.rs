@@ -162,6 +162,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_ACOS => num_acos,
         NUM_ASIN => num_asin,
         NUM_BYTES_TO_U16 => num_bytes_to_u16,
+        NUM_BYTES_TO_U32 => num_bytes_to_u32,
         NUM_MAX_INT => num_max_int,
         NUM_MIN_INT => num_min_int,
         NUM_BITWISE_AND => num_bitwise_and,
@@ -1089,7 +1090,7 @@ fn num_asin(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.bytesToU16 : List U8, Nat -> Nat
+/// Num.bytesToU16 : List U8, Nat -> U16
 fn num_bytes_to_u16(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let nat_var = var_store.fresh();
@@ -1097,6 +1098,30 @@ fn num_bytes_to_u16(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     let body = RunLowLevel {
         op: LowLevel::NumBytesToU16,
+        args: vec![
+            (list_var, Var(Symbol::ARG_1)),
+            (nat_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var,
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1), (nat_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+
+/// Num.bytesToU32 : List U8, Nat -> U32
+fn num_bytes_to_u32(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let list_var = var_store.fresh();
+    let nat_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::NumBytesToU32,
         args: vec![
             (list_var, Var(Symbol::ARG_1)),
             (nat_var, Var(Symbol::ARG_2)),
