@@ -1,5 +1,5 @@
-use crate::borrow::ParamMap;
-use crate::ir::{Expr, JoinPointId, ModifyRc, Param, Proc, Stmt};
+use crate::borrow::{ParamMap, BORROWED, OWNED};
+use crate::ir::{Expr, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -7,16 +7,16 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::Symbol;
 
 pub fn free_variables(stmt: &Stmt<'_>) -> MutSet<Symbol> {
-    let (mut occuring, bound) = occuring_variables(stmt);
+    let (mut occurring, bound) = occurring_variables(stmt);
 
     for ref s in bound {
-        occuring.remove(s);
+        occurring.remove(s);
     }
 
-    occuring
+    occurring
 }
 
-pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
+pub fn occurring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
     let mut stack = std::vec![stmt];
     let mut result = MutSet::default();
     let mut bound_variables = MutSet::default();
@@ -26,7 +26,7 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
 
         match stmt {
             Let(symbol, expr, _, cont) => {
-                occuring_variables_expr(expr, &mut result);
+                occurring_variables_expr(expr, &mut result);
                 result.insert(*symbol);
                 bound_variables.insert(*symbol);
                 stack.push(cont);
@@ -39,7 +39,7 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
                 fail,
                 ..
             } => {
-                occuring_variables_call(call, &mut result);
+                occurring_variables_call(call, &mut result);
                 result.insert(*symbol);
                 bound_variables.insert(*symbol);
                 stack.push(pass);
@@ -50,7 +50,7 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
                 result.insert(*symbol);
             }
 
-            Rethrow => {}
+            Resume(_) => {}
 
             Refcounting(modify, cont) => {
                 let symbol = modify.get_symbol();
@@ -64,7 +64,7 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
 
             Join {
                 parameters,
-                continuation,
+                body: continuation,
                 remainder,
                 ..
             } => {
@@ -93,24 +93,23 @@ pub fn occuring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) {
     (result, bound_variables)
 }
 
-fn occuring_variables_call(call: &crate::ir::Call<'_>, result: &mut MutSet<Symbol>) {
+fn occurring_variables_call(call: &crate::ir::Call<'_>, result: &mut MutSet<Symbol>) {
     // NOTE though the function name does occur, it is a static constant in the program
     // for liveness, it should not be included here.
     result.extend(call.arguments.iter().copied());
 }
 
-pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
+pub fn occurring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
     use Expr::*;
 
     match expr {
-        FunctionPointer(symbol, _)
-        | AccessAtIndex {
+        StructAtIndex {
             structure: symbol, ..
         } => {
             result.insert(*symbol);
         }
 
-        Call(call) => occuring_variables_call(call, result),
+        Call(call) => occurring_variables_call(call, result),
 
         Tag { arguments, .. }
         | Struct(arguments)
@@ -130,6 +129,18 @@ pub fn occuring_variables_expr(expr: &Expr<'_>, result: &mut MutSet<Symbol>) {
         }
 
         EmptyArray | RuntimeErrorFunction(_) | Literal(_) => {}
+
+        GetTagId {
+            structure: symbol, ..
+        } => {
+            result.insert(*symbol);
+        }
+
+        UnionAtIndex {
+            structure: symbol, ..
+        } => {
+            result.insert(*symbol);
+        }
     }
 }
 
@@ -143,11 +154,12 @@ struct VarInfo {
     reference: bool,  // true if the variable may be a reference (aka pointer) at runtime
     persistent: bool, // true if the variable is statically known to be marked a Persistent at runtime
     consume: bool,    // true if the variable RC must be "consumed"
+    reset: bool,      // true if the variable is the result of a Reset operation
 }
 
 type VarMap = MutMap<Symbol, VarInfo>;
-type LiveVarSet = MutSet<Symbol>;
-type JPLiveVarMap = MutMap<JoinPointId, LiveVarSet>;
+pub type LiveVarSet = MutSet<Symbol>;
+pub type JPLiveVarMap = MutMap<JoinPointId, LiveVarSet>;
 
 #[derive(Clone, Debug)]
 struct Context<'a> {
@@ -161,13 +173,13 @@ struct Context<'a> {
 fn update_live_vars<'a>(expr: &Expr<'a>, v: &LiveVarSet) -> LiveVarSet {
     let mut v = v.clone();
 
-    occuring_variables_expr(expr, &mut v);
+    occurring_variables_expr(expr, &mut v);
 
     v
 }
 
 /// `isFirstOcc xs x i = true` if `xs[i]` is the first occurrence of `xs[i]` in `xs`
-fn is_first_occurence(xs: &[Symbol], i: usize) -> bool {
+fn is_first_occurrence(xs: &[Symbol], i: usize) -> bool {
     match xs.get(i) {
         None => unreachable!(),
         Some(s) => i == xs.iter().position(|v| s == v).unwrap(),
@@ -214,7 +226,11 @@ fn is_borrow_param(x: Symbol, ys: &[Symbol], ps: &[Param]) -> bool {
 // We do not need to consume the projection of a variable that is not consumed
 fn consume_expr(m: &VarMap, e: &Expr<'_>) -> bool {
     match e {
-        Expr::AccessAtIndex { structure: x, .. } => match m.get(x) {
+        Expr::StructAtIndex { structure: x, .. } => match m.get(x) {
+            Some(info) => info.consume,
+            None => true,
+        },
+        Expr::UnionAtIndex { structure: x, .. } => match m.get(x) {
             Some(info) => info.consume,
             None => true,
         },
@@ -231,17 +247,16 @@ impl<'a> Context<'a> {
     pub fn new(arena: &'a Bump, param_map: &'a ParamMap<'a>) -> Self {
         let mut vars = MutMap::default();
 
-        for (key, _) in param_map.into_iter() {
-            if let crate::borrow::Key::Declaration(symbol, _) = key {
-                vars.insert(
-                    *symbol,
-                    VarInfo {
-                        reference: false, // assume function symbols are global constants
-                        persistent: true, // assume function symbols are global constants
-                        consume: false,   // no need to consume this variable
-                    },
-                );
-            }
+        for symbol in param_map.iter_symbols() {
+            vars.insert(
+                *symbol,
+                VarInfo {
+                    reference: false, // assume function symbols are global constants
+                    persistent: true, // assume function symbols are global constants
+                    consume: false,   // no need to consume this variable
+                    reset: false,     // reset symbols cannot be passed as function arguments
+                },
+            );
         }
 
         Self {
@@ -295,7 +310,12 @@ impl<'a> Context<'a> {
             return stmt;
         }
 
-        let modify = ModifyRc::Dec(symbol);
+        let modify = if info.reset {
+            ModifyRc::DecRef(symbol)
+        } else {
+            ModifyRc::Dec(symbol)
+        };
+
         self.arena.alloc(Stmt::Refcounting(modify, stmt))
     }
 
@@ -320,7 +340,7 @@ impl<'a> Context<'a> {
     {
         for (i, x) in xs.iter().enumerate() {
             let info = self.get_var_info(*x);
-            if !info.reference || !is_first_occurence(xs, i) {
+            if !info.reference || !is_first_occurrence(xs, i) {
                 // do nothing
             } else {
                 let num_consumptions = get_num_consumptions(*x, xs, consume_param_pred.clone()); // number of times the argument is used
@@ -394,11 +414,11 @@ impl<'a> Context<'a> {
             // Remark: `x` may occur multiple times in the application (e.g., `f x y x`).
             // This is why we check whether it is the first occurrence.
             if self.must_consume(*x)
-                && is_first_occurence(xs, i)
+                && is_first_occurrence(xs, i)
                 && is_borrow_param(*x, xs, ps)
                 && !b_live_vars.contains(x)
             {
-                b = self.add_dec(*x, b)
+                b = self.add_dec(*x, b);
             }
         }
 
@@ -419,7 +439,7 @@ impl<'a> Context<'a> {
             This is why we check whether it is the first occurrence. */
 
             if self.must_consume(*x)
-                && is_first_occurence(xs, i)
+                && is_first_occurrence(xs, i)
                 && *is_borrow
                 && !b_live_vars.contains(x)
             {
@@ -442,7 +462,7 @@ impl<'a> Context<'a> {
         use crate::ir::CallType::*;
 
         match &call_type {
-            LowLevel { op } => {
+            LowLevel { op, .. } => {
                 let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
                 let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);
 
@@ -452,6 +472,222 @@ impl<'a> Context<'a> {
                 });
 
                 &*self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
+
+            HigherOrderLowLevel {
+                op,
+                closure_env_layout,
+                specialization_id,
+                arg_layouts,
+                ret_layout,
+                ..
+            } => {
+                macro_rules! create_call {
+                    ($borrows:expr) => {
+                        Expr::Call(crate::ir::Call {
+                            call_type: if let Some(OWNED) = $borrows.map(|p| p.borrow) {
+                                HigherOrderLowLevel {
+                                    op: *op,
+                                    closure_env_layout: *closure_env_layout,
+                                    function_owns_closure_data: true,
+                                    specialization_id: *specialization_id,
+                                    arg_layouts,
+                                    ret_layout: *ret_layout,
+                                }
+                            } else {
+                                call_type
+                            },
+                            arguments,
+                        })
+                    };
+                }
+
+                macro_rules! decref_if_owned {
+                    ($borrows:expr, $argument:expr, $stmt:expr) => {
+                        if !$borrows {
+                            self.arena.alloc(Stmt::Refcounting(
+                                ModifyRc::DecRef($argument),
+                                self.arena.alloc($stmt),
+                            ))
+                        } else {
+                            $stmt
+                        }
+                    };
+                }
+
+                const FUNCTION: bool = BORROWED;
+                const CLOSURE_DATA: bool = BORROWED;
+
+                let function_layout = ProcLayout {
+                    arguments: arg_layouts,
+                    result: *ret_layout,
+                };
+
+                match op {
+                    roc_module::low_level::LowLevel::ListMap
+                    | roc_module::low_level::LowLevel::ListKeepIf
+                    | roc_module::low_level::LowLevel::ListKeepOks
+                    | roc_module::low_level::LowLevel::ListKeepErrs => {
+                        match self.param_map.get_symbol(arguments[1], function_layout) {
+                            Some(function_ps) => {
+                                let borrows = [function_ps[0].borrow, FUNCTION, CLOSURE_DATA];
+
+                                let b = self.add_dec_after_lowlevel(
+                                    arguments,
+                                    &borrows,
+                                    b,
+                                    b_live_vars,
+                                );
+
+                                // if the list is owned, then all elements have been consumed, but not the list itself
+                                let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
+
+                                let v = create_call!(function_ps.get(1));
+
+                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                            }
+                            None => unreachable!(),
+                        }
+                    }
+                    roc_module::low_level::LowLevel::ListMapWithIndex => {
+                        match self.param_map.get_symbol(arguments[1], function_layout) {
+                            Some(function_ps) => {
+                                let borrows = [function_ps[1].borrow, FUNCTION, CLOSURE_DATA];
+
+                                let b = self.add_dec_after_lowlevel(
+                                    arguments,
+                                    &borrows,
+                                    b,
+                                    b_live_vars,
+                                );
+
+                                let b = decref_if_owned!(function_ps[1].borrow, arguments[0], b);
+
+                                let v = create_call!(function_ps.get(2));
+
+                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                            }
+                            None => unreachable!(),
+                        }
+                    }
+                    roc_module::low_level::LowLevel::ListMap2 => {
+                        match self.param_map.get_symbol(arguments[2], function_layout) {
+                            Some(function_ps) => {
+                                let borrows = [
+                                    function_ps[0].borrow,
+                                    function_ps[1].borrow,
+                                    FUNCTION,
+                                    CLOSURE_DATA,
+                                ];
+
+                                let b = self.add_dec_after_lowlevel(
+                                    arguments,
+                                    &borrows,
+                                    b,
+                                    b_live_vars,
+                                );
+
+                                let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
+                                let b = decref_if_owned!(function_ps[1].borrow, arguments[1], b);
+
+                                let v = create_call!(function_ps.get(2));
+
+                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                            }
+                            None => unreachable!(),
+                        }
+                    }
+                    roc_module::low_level::LowLevel::ListMap3 => {
+                        match self.param_map.get_symbol(arguments[3], function_layout) {
+                            Some(function_ps) => {
+                                let borrows = [
+                                    function_ps[0].borrow,
+                                    function_ps[1].borrow,
+                                    function_ps[2].borrow,
+                                    FUNCTION,
+                                    CLOSURE_DATA,
+                                ];
+
+                                let b = self.add_dec_after_lowlevel(
+                                    arguments,
+                                    &borrows,
+                                    b,
+                                    b_live_vars,
+                                );
+
+                                let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
+                                let b = decref_if_owned!(function_ps[1].borrow, arguments[1], b);
+                                let b = decref_if_owned!(function_ps[2].borrow, arguments[2], b);
+
+                                let v = create_call!(function_ps.get(3));
+
+                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                            }
+                            None => unreachable!(),
+                        }
+                    }
+                    roc_module::low_level::LowLevel::ListSortWith => {
+                        match self.param_map.get_symbol(arguments[1], function_layout) {
+                            Some(function_ps) => {
+                                let borrows = [OWNED, FUNCTION, CLOSURE_DATA];
+
+                                let b = self.add_dec_after_lowlevel(
+                                    arguments,
+                                    &borrows,
+                                    b,
+                                    b_live_vars,
+                                );
+
+                                let v = create_call!(function_ps.get(2));
+
+                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                            }
+                            None => unreachable!(),
+                        }
+                    }
+                    roc_module::low_level::LowLevel::ListWalk
+                    | roc_module::low_level::LowLevel::ListWalkUntil
+                    | roc_module::low_level::LowLevel::ListWalkBackwards
+                    | roc_module::low_level::LowLevel::DictWalk => {
+                        match self.param_map.get_symbol(arguments[2], function_layout) {
+                            Some(function_ps) => {
+                                // borrow data structure based on first argument of the folded function
+                                // borrow the default based on second argument of the folded function
+                                let borrows = [
+                                    function_ps[0].borrow,
+                                    function_ps[1].borrow,
+                                    FUNCTION,
+                                    CLOSURE_DATA,
+                                ];
+
+                                let b = self.add_dec_after_lowlevel(
+                                    arguments,
+                                    &borrows,
+                                    b,
+                                    b_live_vars,
+                                );
+
+                                let b = decref_if_owned!(function_ps[0].borrow, arguments[0], b);
+
+                                let v = create_call!(function_ps.get(2));
+
+                                &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                            }
+                            None => unreachable!(),
+                        }
+                    }
+                    _ => {
+                        let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
+                        let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);
+
+                        let v = Expr::Call(crate::ir::Call {
+                            call_type,
+                            arguments,
+                        });
+
+                        &*self.arena.alloc(Stmt::Let(z, v, l, b))
+                    }
+                }
             }
 
             Foreign { .. } => {
@@ -467,47 +703,28 @@ impl<'a> Context<'a> {
             }
 
             ByName {
-                name, full_layout, ..
+                name,
+                ret_layout,
+                arg_layouts,
+                ..
             } => {
+                let top_level = ProcLayout::new(self.arena, arg_layouts, *ret_layout);
+
                 // get the borrow signature
-                match self.param_map.get_symbol(*name, *full_layout) {
-                    Some(ps) => {
-                        let v = Expr::Call(crate::ir::Call {
-                            call_type,
-                            arguments,
-                        });
+                let ps = self
+                    .param_map
+                    .get_symbol(*name, top_level)
+                    .expect("function is defined");
 
-                        let b = self.add_dec_after_application(arguments, ps, b, b_live_vars);
-                        let b = self.arena.alloc(Stmt::Let(z, v, l, b));
-
-                        self.add_inc_before(arguments, ps, b, b_live_vars)
-                    }
-                    None => {
-                        // an indirect call that was bound to a name
-                        let v = Expr::Call(crate::ir::Call {
-                            call_type,
-                            arguments,
-                        });
-
-                        self.add_inc_before_consume_all(
-                            arguments,
-                            self.arena.alloc(Stmt::Let(z, v, l, b)),
-                            b_live_vars,
-                        )
-                    }
-                }
-            }
-            ByPointer { .. } => {
                 let v = Expr::Call(crate::ir::Call {
                     call_type,
                     arguments,
                 });
 
-                self.add_inc_before_consume_all(
-                    arguments,
-                    self.arena.alloc(Stmt::Let(z, v, l, b)),
-                    b_live_vars,
-                )
+                let b = self.add_dec_after_application(arguments, ps, b, b_live_vars);
+                let b = self.arena.alloc(Stmt::Let(z, v, l, b));
+
+                self.add_inc_before(arguments, ps, b, b_live_vars)
             }
         }
     }
@@ -523,7 +740,7 @@ impl<'a> Context<'a> {
     ) -> (&'a Stmt<'a>, LiveVarSet) {
         use Expr::*;
 
-        let mut live_vars = update_live_vars(&v, &b_live_vars);
+        let mut live_vars = update_live_vars(&v, b_live_vars);
         live_vars.remove(&z);
 
         let new_b = match v {
@@ -533,9 +750,15 @@ impl<'a> Context<'a> {
             | Array { elems: ys, .. } => self.add_inc_before_consume_all(
                 ys,
                 self.arena.alloc(Stmt::Let(z, v, l, b)),
-                &b_live_vars,
+                b_live_vars,
             ),
-            AccessAtIndex { structure: x, .. } => {
+
+            Call(crate::ir::Call {
+                call_type,
+                arguments,
+            }) => self.visit_call(z, call_type, arguments, l, b, b_live_vars),
+
+            StructAtIndex { structure: x, .. } => {
                 let b = self.add_dec_if_needed(x, b, b_live_vars);
                 let info_x = self.get_var_info(x);
                 let b = if info_x.consume {
@@ -547,16 +770,31 @@ impl<'a> Context<'a> {
                 self.arena.alloc(Stmt::Let(z, v, l, b))
             }
 
-            Call(crate::ir::Call {
-                call_type,
-                arguments,
-            }) => self.visit_call(z, call_type, arguments, l, b, b_live_vars),
+            GetTagId { structure: x, .. } => {
+                let b = self.add_dec_if_needed(x, b, b_live_vars);
+                let info_x = self.get_var_info(x);
+                let b = if info_x.consume {
+                    self.add_inc(z, 1, b)
+                } else {
+                    b
+                };
 
-            EmptyArray
-            | FunctionPointer(_, _)
-            | Literal(_)
-            | Reset(_)
-            | RuntimeErrorFunction(_) => {
+                self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
+
+            UnionAtIndex { structure: x, .. } => {
+                let b = self.add_dec_if_needed(x, b, b_live_vars);
+                let info_x = self.get_var_info(x);
+                let b = if info_x.consume {
+                    self.add_inc(z, 1, b)
+                } else {
+                    b
+                };
+
+                self.arena.alloc(Stmt::Let(z, v, l, b))
+            }
+
+            EmptyArray | Literal(_) | Reset(_) | RuntimeErrorFunction(_) => {
                 // EmptyArray is always stack-allocated
                 // function pointers are persistent
                 self.arena.alloc(Stmt::Let(z, v, l, b))
@@ -579,21 +817,20 @@ impl<'a> Context<'a> {
         // must this value be consumed?
         let consume = consume_call(&self.vars, call);
 
-        self.update_var_info_help(symbol, layout, persistent, consume)
+        self.update_var_info_help(symbol, layout, persistent, consume, false)
     }
 
     fn update_var_info(&self, symbol: Symbol, layout: &Layout<'a>, expr: &Expr<'a>) -> Self {
         // is this value a constant?
         // TODO do function pointers also fall into this category?
-        let persistent = match expr {
-            Expr::Call(crate::ir::Call { arguments, .. }) => arguments.is_empty(),
-            _ => false,
-        };
+        let persistent = false;
 
         // must this value be consumed?
         let consume = consume_expr(&self.vars, expr);
 
-        self.update_var_info_help(symbol, layout, persistent, consume)
+        let reset = matches!(expr, Expr::Reset(_));
+
+        self.update_var_info_help(symbol, layout, persistent, consume, reset)
     }
 
     fn update_var_info_help(
@@ -602,6 +839,7 @@ impl<'a> Context<'a> {
         layout: &Layout<'a>,
         persistent: bool,
         consume: bool,
+        reset: bool,
     ) -> Self {
         // should we perform incs and decs on this value?
         let reference = layout.contains_refcounted();
@@ -610,6 +848,7 @@ impl<'a> Context<'a> {
             reference,
             persistent,
             consume,
+            reset,
         };
 
         let mut ctx = self.clone();
@@ -627,6 +866,7 @@ impl<'a> Context<'a> {
                 reference: p.layout.contains_refcounted(),
                 consume: !p.borrow,
                 persistent: false,
+                reset: false,
             };
             ctx.vars.insert(p.symbol, info);
         }
@@ -721,39 +961,24 @@ impl<'a> Context<'a> {
                 pass,
                 fail,
                 layout,
+                exception_id,
             } => {
-                // TODO this combines parts of Let and Switch. Did this happen correctly?
-                let mut case_live_vars = collect_stmt(pass, &self.jp_live_vars, MutSet::default());
-                case_live_vars.extend(collect_stmt(fail, &self.jp_live_vars, MutSet::default()));
-
-                // the result of an invoke should not be touched in the fail branch
-                // but it should be present in the pass branch (otherwise it would be dead)
-                // NOTE: we cheat a bit here to allow `invoke` when generating code for `expect`
-                let is_dead = !case_live_vars.contains(symbol);
-
-                if is_dead && layout.is_refcounted() {
-                    panic!("A variable of a reference-counted layout is dead; that's a bug!");
-                }
-
-                case_live_vars.remove(symbol);
+                // live vars of the whole expression
+                let invoke_live_vars = collect_stmt(stmt, &self.jp_live_vars, MutSet::default());
 
                 let fail = {
                     // TODO should we use ctor info like Lean?
                     let ctx = self.clone();
                     let (b, alt_live_vars) = ctx.visit_stmt(fail);
-                    ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b)
+                    ctx.add_dec_for_alt(&invoke_live_vars, &alt_live_vars, b)
                 };
-
-                if !is_dead {
-                    case_live_vars.insert(*symbol);
-                }
 
                 let pass = {
                     // TODO should we use ctor info like Lean?
                     let ctx = self.clone();
                     let ctx = ctx.update_var_info_invoke(*symbol, layout, call);
                     let (b, alt_live_vars) = ctx.visit_stmt(pass);
-                    ctx.add_dec_for_alt(&case_live_vars, &alt_live_vars, b)
+                    ctx.add_dec_for_alt(&invoke_live_vars, &alt_live_vars, b)
                 };
 
                 let invoke = Invoke {
@@ -762,15 +987,20 @@ impl<'a> Context<'a> {
                     pass,
                     fail,
                     layout: *layout,
+                    exception_id: *exception_id,
                 };
 
                 let cont = self.arena.alloc(invoke);
 
                 use crate::ir::CallType;
                 let stmt = match &call.call_type {
-                    CallType::LowLevel { op } => {
+                    CallType::LowLevel { op, .. } => {
                         let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
-                        self.add_dec_after_lowlevel(call.arguments, ps, cont, &case_live_vars)
+                        self.add_dec_after_lowlevel(call.arguments, ps, cont, &invoke_live_vars)
+                    }
+
+                    CallType::HigherOrderLowLevel { .. } => {
+                        todo!("copy the code for normal calls over to here");
                     }
 
                     CallType::Foreign { .. } => {
@@ -778,34 +1008,26 @@ impl<'a> Context<'a> {
                             self.arena,
                             call.arguments.len(),
                         );
-                        self.add_dec_after_lowlevel(call.arguments, ps, cont, &case_live_vars)
+
+                        self.add_dec_after_lowlevel(call.arguments, ps, cont, &invoke_live_vars)
                     }
 
                     CallType::ByName {
-                        name, full_layout, ..
+                        name,
+                        ret_layout,
+                        arg_layouts,
+                        ..
                     } => {
+                        let top_level = ProcLayout::new(self.arena, arg_layouts, *ret_layout);
+
                         // get the borrow signature
-                        match self.param_map.get_symbol(*name, *full_layout) {
-                            Some(ps) => self.add_dec_after_application(
-                                call.arguments,
-                                ps,
-                                cont,
-                                &case_live_vars,
-                            ),
-                            None => self.add_inc_before_consume_all(
-                                call.arguments,
-                                cont,
-                                &case_live_vars,
-                            ),
-                        }
-                    }
-                    CallType::ByPointer { .. } => {
-                        self.add_inc_before_consume_all(call.arguments, cont, &case_live_vars)
+                        let ps = self
+                            .param_map
+                            .get_symbol(*name, top_level)
+                            .expect("function is defined");
+                        self.add_dec_after_application(call.arguments, ps, cont, &invoke_live_vars)
                     }
                 };
-
-                let mut invoke_live_vars = case_live_vars;
-                occuring_variables_call(call, &mut invoke_live_vars);
 
                 (stmt, invoke_live_vars)
             }
@@ -813,7 +1035,7 @@ impl<'a> Context<'a> {
                 id: j,
                 parameters: _,
                 remainder: b,
-                continuation: v,
+                body: v,
             } => {
                 // get the parameters with borrow signature
                 let xs = self.param_map.get_join_point(*j);
@@ -835,7 +1057,7 @@ impl<'a> Context<'a> {
                         id: *j,
                         parameters: xs,
                         remainder: b,
-                        continuation: v,
+                        body: v,
                     }),
                     b_live_vars,
                 )
@@ -854,7 +1076,7 @@ impl<'a> Context<'a> {
                 }
             }
 
-            Rethrow => (stmt, MutSet::default()),
+            Resume(_) => (stmt, MutSet::default()),
 
             Jump(j, xs) => {
                 let empty = MutSet::default();
@@ -939,7 +1161,7 @@ pub fn collect_stmt(
             vars = collect_stmt(cont, jp_live_vars, vars);
             vars.remove(symbol);
             let mut result = MutSet::default();
-            occuring_variables_expr(expr, &mut result);
+            occurring_variables_expr(expr, &mut result);
             vars.extend(result);
 
             vars
@@ -957,7 +1179,7 @@ pub fn collect_stmt(
             vars.remove(symbol);
 
             let mut result = MutSet::default();
-            occuring_variables_call(call, &mut result);
+            occurring_variables_call(call, &mut result);
 
             vars.extend(result);
 
@@ -978,7 +1200,7 @@ pub fn collect_stmt(
             id: j,
             parameters,
             remainder: b,
-            continuation: v,
+            body: v,
         } => {
             let mut j_live_vars = collect_stmt(v, jp_live_vars, MutSet::default());
             for param in parameters.iter() {
@@ -1020,7 +1242,7 @@ pub fn collect_stmt(
             vars
         }
 
-        Rethrow => vars,
+        Resume(_) => vars,
 
         RuntimeError(_) => vars,
     }
@@ -1037,28 +1259,25 @@ fn update_jp_live_vars(j: JoinPointId, ys: &[Param], v: &Stmt<'_>, m: &mut JPLiv
     m.insert(j, j_live_vars);
 }
 
-/// used to process the main function in the repl
-pub fn visit_declaration<'a>(
+pub fn visit_procs<'a>(
     arena: &'a Bump,
     param_map: &'a ParamMap<'a>,
-    stmt: &'a Stmt<'a>,
-) -> &'a Stmt<'a> {
-    let ctx = Context::new(arena, param_map);
-
-    let params = &[] as &[_];
-    let ctx = ctx.update_var_info_with_params(params);
-    let (b, b_live_vars) = ctx.visit_stmt(stmt);
-    ctx.add_dec_for_dead_params(params, b, &b_live_vars)
-}
-
-pub fn visit_proc<'a>(
-    arena: &'a Bump,
-    param_map: &'a ParamMap<'a>,
-    proc: &mut Proc<'a>,
-    layout: Layout<'a>,
+    procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) {
     let ctx = Context::new(arena, param_map);
 
+    for (key, proc) in procs.iter_mut() {
+        visit_proc(arena, param_map, &ctx, proc, key.1);
+    }
+}
+
+fn visit_proc<'a>(
+    arena: &'a Bump,
+    param_map: &'a ParamMap<'a>,
+    ctx: &Context<'a>,
+    proc: &mut Proc<'a>,
+    layout: ProcLayout<'a>,
+) {
     let params = match param_map.get_symbol(proc.name, layout) {
         Some(slice) => slice,
         None => Vec::from_iter_in(

@@ -9,15 +9,15 @@ Towards the bottom of `symbol.rs` there is a `define_builtins!` macro being used
 Some of these have `#` inside their name (`first#list`, `#lt` ..). This is a trick we are doing to hide implementation details from Roc programmers. To a Roc programmer, a name with `#` in it is invalid, because `#` means everything after it is parsed to a comment. We are constructing these functions manually, so we are circumventing the parsing step and dont have such restrictions. We get to make functions and values with `#` which as a consequence are not accessible to Roc programmers. Roc programmers simply cannot reference them.
 
 But we can use these values and some of these are necessary for implementing builtins. For example, `List.get` returns tags, and it is not easy for us to create tags when composing LLVM. What is easier however, is:
-- ..writing `List.#getUnsafe` that has the dangerous signature of `List elem, Int -> elem` in LLVM
-- ..writing `List elem, Int -> Result elem [ OutOfBounds ]*` in a type safe way that uses `getUnsafe` internally, only after it checks if the `elem` at `Int` index exists.
+- ..writing `List.#getUnsafe` that has the dangerous signature of `List elem, Nat -> elem` in LLVM
+- ..writing `List elem, Nat -> Result elem [ OutOfBounds ]*` in a type safe way that uses `getUnsafe` internally, only after it checks if the `elem` at `Nat` index exists.
 
 
 ### can/src/builtins.rs
 
 Right at the top of this module is a function called `builtin_defs`. All this is doing is mapping the `Symbol` defined in `module/src/symbol.rs` to its implementation. Some of the builtins are quite complex, such as `list_get`. What makes `list_get` is that it returns tags, and in order to return tags it first has to  defer to lower-level functions via an if statement.
 
-Lets look at `List.repeat : elem, Int -> List elem`, which is more straight-forward, and points directly to its lower level implementation:
+Lets look at `List.repeat : elem, Nat -> List elem`, which is more straight-forward, and points directly to its lower level implementation:
 ```
 fn list_repeat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let elem_var = var_store.fresh();
@@ -42,7 +42,7 @@ fn list_repeat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 ```
-In these builtin definitions you will need to allocate for and list the arguments. For `List.repeat`, the arguments are the `elem_var` and the `len_var`. So in both the `body` and `defn` we list these arguments in a vector, with the `Symobl::ARG_1` adn` Symvol::ARG_2` designating which argument is which.
+In these builtin definitions you will need to allocate for and list the arguments. For `List.repeat`, the arguments are the `elem_var` and the `len_var`. So in both the `body` and `defn` we list these arguments in a vector, with the `Symobl::ARG_1` and` Symvol::ARG_2` designating which argument is which.
 
 Since `List.repeat` is implemented entirely as low level functions, its `body` is a `RunLowLevel`, and the `op` is `LowLevel::ListRepeat`. Lets talk about `LowLevel` in the next section.
 
@@ -60,7 +60,7 @@ Its one thing to actually write these functions, its _another_ thing to let the 
 
 ## Specifying how we pass args to the function
 ### builtins/mono/src/borrow.rs
-After we have all of this, we need to specify if the arguements we're passing are owned, borrowed or irrelvant. Towards the bottom of this file, add a new case for you builtin and specify each arg. Be sure to read the comment, as it explains this in more detail.
+After we have all of this, we need to specify if the arguments we're passing are owned, borrowed or irrelvant. Towards the bottom of this file, add a new case for you builtin and specify each arg. Be sure to read the comment, as it explains this in more detail.
 
 ## Specifying the uniqueness of a function
 ### builtins/src/unique.rs

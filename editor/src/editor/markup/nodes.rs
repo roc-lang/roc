@@ -2,35 +2,33 @@ use super::attribute::Attributes;
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::ExpectedTextNode;
 use crate::editor::ed_error::GetContentOnNestedNode;
-use crate::editor::ed_error::NestedNodeRequired;
+use crate::editor::ed_error::{NestedNodeMissingChild, NestedNodeRequired};
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
-use crate::lang::ast::RecordField;
-use crate::lang::{
-    ast::Expr2,
-    expr::Env,
-    pool::{NodeId, PoolStr},
-};
+use crate::editor::util::index_of;
+use crate::lang::ast::{Expr2, ExprId, RecordField};
+use crate::lang::{expr::Env, pool::PoolStr};
+use crate::ui::util::slice_get;
 use bumpalo::Bump;
 use std::fmt;
 
 #[derive(Debug)]
 pub enum MarkupNode {
     Nested {
-        ast_node_id: NodeId<Expr2>,
+        ast_node_id: ExprId,
         children_ids: Vec<MarkNodeId>,
         parent_id_opt: Option<MarkNodeId>,
     },
     Text {
         content: String,
-        ast_node_id: NodeId<Expr2>,
+        ast_node_id: ExprId,
         syn_high_style: HighlightStyle,
         attributes: Attributes,
         parent_id_opt: Option<MarkNodeId>,
     },
     Blank {
-        ast_node_id: NodeId<Expr2>,
+        ast_node_id: ExprId,
         attributes: Attributes,
         syn_high_style: HighlightStyle, // TODO remove HighlightStyle, this is always HighlightStyle::Blank
         parent_id_opt: Option<MarkNodeId>,
@@ -38,7 +36,7 @@ pub enum MarkupNode {
 }
 
 impl MarkupNode {
-    pub fn get_ast_node_id(&self) -> NodeId<Expr2> {
+    pub fn get_ast_node_id(&self) -> ExprId {
         match self {
             MarkupNode::Nested { ast_node_id, .. } => *ast_node_id,
             MarkupNode::Text { ast_node_id, .. } => *ast_node_id,
@@ -69,6 +67,83 @@ impl MarkupNode {
             parent_node.get_children_ids()
         } else {
             vec![]
+        }
+    }
+
+    // return (index of child in list of children, closest ast index of child corresponding to ast node)
+    pub fn get_child_indices(
+        &self,
+        child_id: MarkNodeId,
+        markup_node_pool: &SlowPool,
+    ) -> EdResult<(usize, usize)> {
+        match self {
+            MarkupNode::Nested { children_ids, .. } => {
+                let mut mark_child_index_opt: Option<usize> = None;
+                let mut child_ids_with_ast: Vec<MarkNodeId> = Vec::new();
+                let self_ast_id = self.get_ast_node_id();
+
+                for (indx, &mark_child_id) in children_ids.iter().enumerate() {
+                    if mark_child_id == child_id {
+                        mark_child_index_opt = Some(indx);
+                    }
+
+                    let child_mark_node = markup_node_pool.get(mark_child_id);
+                    // a node that points to the same ast_node as the parent is a ',', '[', ']'
+                    // those are not "real" ast children
+                    if child_mark_node.get_ast_node_id() != self_ast_id {
+                        child_ids_with_ast.push(mark_child_id)
+                    }
+                }
+
+                if let Some(child_index) = mark_child_index_opt {
+                    if child_index == (children_ids.len() - 1) {
+                        let ast_child_index = child_ids_with_ast.len();
+
+                        Ok((child_index, ast_child_index))
+                    } else {
+                        // we want to find the index of the closest ast mark node to child_index
+                        let indices_in_mark_res: EdResult<Vec<usize>> = child_ids_with_ast
+                            .iter()
+                            .map(|c_id| index_of(*c_id, children_ids))
+                            .collect();
+
+                        let indices_in_mark = indices_in_mark_res?;
+
+                        let mut last_diff = usize::MAX;
+                        let mut best_index = 0;
+
+                        for index in indices_in_mark.iter() {
+                            let curr_diff =
+                                isize::abs((*index as isize) - (child_index as isize)) as usize;
+
+                            if curr_diff >= last_diff {
+                                break;
+                            } else {
+                                last_diff = curr_diff;
+                                best_index = *index;
+                            }
+                        }
+
+                        let closest_ast_child = slice_get(best_index, children_ids)?;
+
+                        let closest_ast_child_index =
+                            index_of(*closest_ast_child, &child_ids_with_ast)?;
+
+                        // +1 because we want to insert after ast_child
+                        Ok((child_index, closest_ast_child_index + 1))
+                    }
+                } else {
+                    NestedNodeMissingChild {
+                        node_id: child_id,
+                        children_ids: children_ids.clone(),
+                    }
+                    .fail()
+                }
+            }
+            _ => NestedNodeRequired {
+                node_type: self.node_type_as_string(),
+            }
+            .fail(),
         }
     }
 
@@ -143,12 +218,15 @@ fn get_string<'a>(env: &Env<'a>, pool_str: &PoolStr) -> String {
 pub const BLANK_PLACEHOLDER: &str = " ";
 pub const LEFT_ACCOLADE: &str = "{ ";
 pub const RIGHT_ACCOLADE: &str = " }";
+pub const LEFT_SQUARE_BR: &str = "[ ";
+pub const RIGHT_SQUARE_BR: &str = " ]";
 pub const COLON: &str = ": ";
+pub const COMMA: &str = ", ";
 pub const STRING_QUOTES: &str = "\"\"";
 
 fn new_markup_node(
     text: String,
-    node_id: NodeId<Expr2>,
+    node_id: ExprId,
     highlight_style: HighlightStyle,
     markup_node_pool: &mut SlowPool,
 ) -> MarkNodeId {
@@ -168,19 +246,23 @@ pub fn expr2_to_markup<'a, 'b>(
     arena: &'a Bump,
     env: &mut Env<'b>,
     expr2: &Expr2,
-    expr2_node_id: NodeId<Expr2>,
+    expr2_node_id: ExprId,
     markup_node_pool: &mut SlowPool,
 ) -> MarkNodeId {
     match expr2 {
         Expr2::SmallInt { text, .. }
         | Expr2::I128 { text, .. }
         | Expr2::U128 { text, .. }
-        | Expr2::Float { text, .. } => new_markup_node(
-            get_string(env, &text),
-            expr2_node_id,
-            HighlightStyle::Number,
-            markup_node_pool,
-        ),
+        | Expr2::Float { text, .. } => {
+            let num_str = get_string(env, text);
+
+            new_markup_node(
+                num_str,
+                expr2_node_id,
+                HighlightStyle::Number,
+                markup_node_pool,
+            )
+        }
         Expr2::Str(text) => new_markup_node(
             "\"".to_owned() + text.as_str(env.pool) + "\"",
             expr2_node_id,
@@ -188,7 +270,7 @@ pub fn expr2_to_markup<'a, 'b>(
             markup_node_pool,
         ),
         Expr2::GlobalTag { name, .. } => new_markup_node(
-            get_string(env, &name),
+            get_string(env, name),
             expr2_node_id,
             HighlightStyle::Type,
             markup_node_pool,
@@ -209,34 +291,37 @@ pub fn expr2_to_markup<'a, 'b>(
         }
         Expr2::List { elems, .. } => {
             let mut children_ids = vec![new_markup_node(
-                "[ ".to_string(),
+                LEFT_SQUARE_BR.to_string(),
                 expr2_node_id,
                 HighlightStyle::Bracket,
                 markup_node_pool,
             )];
 
-            for (idx, node_id) in elems.iter_node_ids().enumerate() {
-                let sub_expr2 = env.pool.get(node_id);
+            let indexed_node_ids: Vec<(usize, ExprId)> =
+                elems.iter(env.pool).copied().enumerate().collect();
+
+            for (idx, node_id) in indexed_node_ids.iter() {
+                let sub_expr2 = env.pool.get(*node_id);
 
                 children_ids.push(expr2_to_markup(
                     arena,
                     env,
                     sub_expr2,
-                    node_id,
+                    *node_id,
                     markup_node_pool,
                 ));
 
                 if idx + 1 < elems.len() {
                     children_ids.push(new_markup_node(
                         ", ".to_string(),
-                        node_id,
+                        expr2_node_id,
                         HighlightStyle::Operator,
                         markup_node_pool,
                     ));
                 }
             }
             children_ids.push(new_markup_node(
-                "] ".to_string(),
+                RIGHT_SQUARE_BR.to_string(),
                 expr2_node_id,
                 HighlightStyle::Bracket,
                 markup_node_pool,
@@ -347,6 +432,12 @@ pub fn expr2_to_markup<'a, 'b>(
             syn_high_style: HighlightStyle::Blank,
             parent_id_opt: None,
         }),
+        Expr2::RuntimeError() => new_markup_node(
+            "RunTimeError".to_string(),
+            expr2_node_id,
+            HighlightStyle::Blank,
+            markup_node_pool,
+        ),
         rest => todo!("implement expr2_to_markup for {:?}", rest),
     }
 }

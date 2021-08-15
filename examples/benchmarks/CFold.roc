@@ -7,15 +7,16 @@ app "cfold"
 
 main : Task.Task {} []
 main =
-    e = mkExpr 3 1
-    unoptimized = eval e
-    optimized = eval (constFolding (reassoc e))
+    Task.after Task.getInt \n ->
+        e = mkExpr n 1 # original koka n = 20 (set `ulimit -s unlimited` to avoid stack overflow for n = 20)
+        unoptimized = eval e
+        optimized = eval (constFolding (reassoc e))
 
-    unoptimized
-        |> Str.fromInt
-        |> Str.concat " & "
-        |> Str.concat (Str.fromInt optimized)
-        |> Task.putLine
+        unoptimized
+            |> Str.fromInt
+            |> Str.concat " & "
+            |> Str.concat (Str.fromInt optimized)
+            |> Task.putLine
 
 Expr : [
     Add Expr Expr,
@@ -81,9 +82,9 @@ constFolding = \e ->
 
             when Pair x1 x2 is
                 Pair (Val a) (Val b) -> Val (a+b)
-                # Pair (Val a) (Add (Val b) x) -> Add (Val (a+b)) x
+                Pair (Val a) (Add (Val b) x) -> Add (Val (a+b)) x
                 Pair (Val a) (Add x (Val b)) -> Add (Val (a+b)) x
-                Pair _ _                     -> Add x1 x2
+                Pair y1 y2                   -> Add y1 y2
 
         Mul e1 e2 ->
             x1 = constFolding e1
@@ -93,7 +94,6 @@ constFolding = \e ->
                 Pair (Val a) (Val b) -> Val (a*b)
                 Pair (Val a) (Mul (Val b) x) -> Mul (Val (a*b)) x
                 Pair (Val a) (Mul x (Val b)) -> Mul (Val (a*b)) x
-                Pair _ _                     -> Mul x1 x2
+                Pair y1 y2                   -> Add y1 y2
 
         _ -> e
-

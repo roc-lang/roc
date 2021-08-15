@@ -19,7 +19,7 @@ pub fn make_rect_pipeline(
         label: Some("Rectangle pipeline layout"),
     });
     let pipeline = create_render_pipeline(
-        &gpu_device,
+        gpu_device,
         &pipeline_layout,
         swap_chain_descr.format,
         &wgpu::ShaderModuleDescriptor {
@@ -42,7 +42,7 @@ pub fn create_render_pipeline(
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Render pipeline"),
-        layout: Some(&layout),
+        layout: Some(layout),
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: "vs_main",
@@ -53,12 +53,14 @@ pub fn create_render_pipeline(
             entry_point: "fs_main",
             targets: &[wgpu::ColorTargetState {
                 format: color_format,
-                color_blend: wgpu::BlendState {
-                    operation: wgpu::BlendOperation::Add,
-                    src_factor: wgpu::BlendFactor::SrcAlpha,
-                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                },
-                alpha_blend: wgpu::BlendState::REPLACE,
+                blend: Some(wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        operation: wgpu::BlendOperation::Add,
+                        src_factor: wgpu::BlendFactor::SrcAlpha,
+                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    },
+                    alpha: wgpu::BlendComponent::REPLACE,
+                }),
                 write_mask: wgpu::ColorWrite::ALL,
             }],
         }),

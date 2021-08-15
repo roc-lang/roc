@@ -1,68 +1,40 @@
 { }:
 
 let
-  splitSystem = builtins.split "-" builtins.currentSystem;
-  currentArch = builtins.elemAt splitSystem 0;
-  currentOS = builtins.elemAt splitSystem 2;
-in with {
-  # Look here for information about how pin version of nixpkgs
-  #  → https://nixos.wiki/wiki/FAQ/Pinning_Nixpkgs
-  pkgs = import (builtins.fetchGit {
-    name = "nixpkgs-2021-04-23";
-    url = "https://github.com/nixos/nixpkgs/";
-    ref = "refs/heads/nixpkgs-unstable";
-    rev = "8d0340aee5caac3807c58ad7fa4ebdbbdd9134d6";
-  }) { };
+  sources = import nix/sources.nix { };
+  pkgs = import sources.nixpkgs { };
 
-  isMacOS = currentOS == "darwin";
-  isLinux = currentOS == "linux";
-  isAarch64 = currentArch == "aarch64";
-};
+  darwinInputs = with pkgs;
+    lib.optionals stdenv.isDarwin (with pkgs.darwin.apple_sdk.frameworks; [
+      AppKit
+      CoreFoundation
+      CoreServices
+      CoreVideo
+      Foundation
+      Metal
+      Security
+    ]);
 
-with (pkgs);
+  linuxInputs = with pkgs;
+    lib.optionals stdenv.isLinux [
+      valgrind
+      vulkan-headers
+      vulkan-loader
+      vulkan-tools
+      vulkan-validation-layers
+      xorg.libX11
+      xorg.libXcursor
+      xorg.libXrandr
+      xorg.libXi
+      xorg.libxcb
+    ];
 
-let
-  darwin-inputs =
-    if isMacOS then
-      with pkgs.darwin.apple_sdk.frameworks; [
-        AppKit
-        CoreFoundation
-        CoreServices
-        CoreVideo
-        Foundation
-        Metal
-        Security
-      ]
-    else
-      [ ];
+  llvmPkgs = pkgs.llvmPackages_12;
 
-  linux-inputs =
-    if isLinux then
-      [
-        valgrind
-        vulkan-headers
-        vulkan-loader
-        vulkan-tools
-        vulkan-validation-layers
-        xorg.libX11
-        xorg.libXcursor
-        xorg.libXrandr
-        xorg.libXi
-        xorg.libxcb
-      ]
-    else
-      [ ];
+  zig = import ./nix/zig.nix { inherit pkgs; };
+  debugir = import ./nix/debugir.nix { inherit pkgs; };
 
-  nixos-env =
-    if isLinux && builtins.pathExists /etc/nixos/configuration.nix then
-      { XDG_DATA_DIRS = "/run/opengl-driver/share:$XDG_DATA_DIRS";
-      }
-    else
-      { };
-
-  llvmPkgs = pkgs.llvmPackages_10;
-  zig = import ./nix/zig.nix { inherit pkgs isMacOS isAarch64; };
-  inputs = [
+  inputs = with pkgs; [
     # build libraries
     rustc
     cargo
@@ -71,11 +43,13 @@ let
     cmake
     git
     python3
-    llvmPkgs.llvm
+    llvmPkgs.llvm.dev
     llvmPkgs.clang
     pkg-config
     zig
+
     # lib deps
+    glibc_multi
     llvmPkgs.libcxx
     llvmPkgs.libcxxabi
     libffi
@@ -84,20 +58,24 @@ let
     ncurses
     zlib
     libiconv
+
     # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
     llvmPkgs.lld
-    # dev tools
-    # rust-analyzer
-    # (import ./nix/zls.nix { inherit pkgs zig; })
-  ];
+    debugir
 
-in mkShell (nixos-env // {
-  buildInputs = inputs ++ darwin-inputs ++ linux-inputs;
+    # meta-tools
+    # note: niv manages its own nixpkgs so it doesn't need pkgs.callPackage. Do
+    # `cachix use niv` to get cached builds!
+    (import sources.niv { }).niv
+  ];
+in pkgs.mkShell {
+  buildInputs = inputs ++ darwinInputs ++ linuxInputs;
 
   # Additional Env vars
-  LLVM_SYS_100_PREFIX = "${llvmPkgs.llvm}";
-  LD_LIBRARY_PATH = stdenv.lib.makeLibraryPath
-    ([
+  LLVM_SYS_120_PREFIX = "${llvmPkgs.llvm.dev}";
+  NIXOS_GLIBC_PATH = "${pkgs.glibc_multi.out}/lib";
+  LD_LIBRARY_PATH = with pkgs;
+    lib.makeLibraryPath ([
       pkg-config
       stdenv.cc.cc.lib
       llvmPkgs.libcxx
@@ -106,11 +84,5 @@ in mkShell (nixos-env // {
       libffi
       ncurses
       zlib
-    ] ++ linux-inputs);
-
-  # Aliases don't work cross shell, so we do this
-  shellHook = ''
-    export PATH="$PATH:$PWD/nix/bin"
-  '';
-})
-
+    ] ++ linuxInputs);
+}

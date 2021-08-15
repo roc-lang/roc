@@ -3,8 +3,8 @@ interface Unicode.Scalar
         [
             Scalar,
             toStr,
-            toCodePoint,
-            fromCodePoint,
+            toCodePt,
+            fromCodePt,
             parseUtf8,
             parseUtf16,
             chompUtf8,
@@ -12,8 +12,8 @@ interface Unicode.Scalar
         ]
     imports
         [
-            Unicode.CodePoint.Internal as Internal
-            Unicode.CodePoint.{ CodePoint },
+            Unicode.CodePt.Internal as Internal
+            Unicode.CodePt.{ CodePt },
             Bytes.{ Bytes }
         ]
 
@@ -26,20 +26,20 @@ toStr = \@Scalar u32
         Ok str -> str
         Err _ ->
             # This will quickly crash if it ever runs, but we're confident
-            # this Err branch will never run. That's becasue it only runs
+            # this Err branch will never run. That's because it only runs
             # if Str.fromScalar receives an invalid scalar value, and we've
             # already validated this!
             toStr (@Scalar (scalar * 256))
 
-toCodePoint : Scalar -> CodePoint
-toCodePoint = \@Scalar u32 -> Internal.fromU32Unchecked u32
+toCodePt : Scalar -> CodePt
+toCodePt = \@Scalar u32 -> Internal.fromU32Unchecked u32
 
-fromCodePoint : CodePoint -> Result Scalar [ PointWasSurrogate ]*
+fromCodePt : CodePt -> Result Scalar [ PointWasSurrogate ]*
 
-parseUtf8 : Bytes -> Result { val : Scalar, rest : Bytes } [ Expected [ Utf8CodePoint ]* Bytes ]*
-parseUtf16 : Bytes, Endi -> Result { val : Scalar, rest : Bytes } [ Expected [ Utf16CodePoint Endi ]* Bytes ]*
+parseUtf8 : Bytes -> Result { val : Scalar, rest : Bytes } [ Expected [ Utf8CodePt ]* Bytes ]*
+parseUtf16 : Bytes, Endi -> Result { val : Scalar, rest : Bytes } [ Expected [ Utf16CodePt Endi ]* Bytes ]*
 
-chompUtf8 : Bytes, CodePoint -> Result Str [ Expected [ ExactCodePoint CodePoint ]* Bytes ]*
-chompUtf16 : Bytes, CodePoint, Endi -> Result Str [ Expected [ ExactCodePoint CodePoint ]* Bytes ]*
+chompUtf8 : Bytes, CodePt -> Result Str [ Expected [ ExactCodePt CodePt ]* Bytes ]*
+chompUtf16 : Bytes, CodePt, Endi -> Result Str [ Expected [ ExactCodePt CodePt ]* Bytes ]*
 
-isAsciiDigit : CodePoint -> Bool
+isAsciiDigit : CodePt -> Bool

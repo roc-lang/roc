@@ -7,18 +7,18 @@ pub enum LowLevel {
     StrJoinWith,
     StrIsEmpty,
     StrStartsWith,
-    StrStartsWithCodePoint,
+    StrStartsWithCodePt,
     StrEndsWith,
     StrSplit,
     StrCountGraphemes,
     StrFromInt,
     StrFromUtf8,
-    StrToBytes,
+    StrFromUtf8Range,
+    StrToUtf8,
     StrFromFloat,
     ListLen,
     ListGetUnsafe,
     ListSet,
-    ListSetInPlace,
     ListSingle,
     ListRepeat,
     ListReverse,
@@ -39,6 +39,8 @@ pub enum LowLevel {
     ListKeepOks,
     ListKeepErrs,
     ListSortWith,
+    ListDrop,
+    ListSwap,
     DictSize,
     DictEmpty,
     DictInsert,
@@ -99,4 +101,35 @@ pub enum LowLevel {
     Not,
     Hash,
     ExpectTrue,
+}
+
+impl LowLevel {
+    /// is one of the arguments always a function?
+    /// An example is List.map.
+    pub fn is_higher_order(&self) -> bool {
+        use LowLevel::*;
+
+        match self {
+            StrConcat | StrJoinWith | StrIsEmpty | StrStartsWith | StrStartsWithCodePt
+            | StrEndsWith | StrSplit | StrCountGraphemes | StrFromInt | StrFromUtf8
+            | StrFromUtf8Range | StrToUtf8 | StrFromFloat | ListLen | ListGetUnsafe | ListSet
+            | ListDrop | ListSingle | ListRepeat | ListReverse | ListConcat | ListContains
+            | ListAppend | ListPrepend | ListJoin | ListRange | ListSwap | DictSize | DictEmpty
+            | DictInsert | DictRemove | DictContains | DictGetUnsafe | DictKeys | DictValues
+            | DictUnion | DictIntersection | DictDifference | SetFromList | NumAdd | NumAddWrap
+            | NumAddChecked | NumSub | NumSubWrap | NumSubChecked | NumMul | NumMulWrap
+            | NumMulChecked | NumGt | NumGte | NumLt | NumLte | NumCompare | NumDivUnchecked
+            | NumRemUnchecked | NumIsMultipleOf | NumAbs | NumNeg | NumSin | NumCos
+            | NumSqrtUnchecked | NumLogUnchecked | NumRound | NumToFloat | NumPow | NumCeiling
+            | NumPowInt | NumFloor | NumIsFinite | NumAtan | NumAcos | NumAsin | NumBitwiseAnd
+            | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy | NumShiftRightBy
+            | NumShiftRightZfBy | NumIntCast | Eq | NotEq | And | Or | Not | Hash | ExpectTrue => {
+                false
+            }
+
+            ListMap | ListMap2 | ListMap3 | ListMapWithIndex | ListKeepIf | ListWalk
+            | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
+            | DictWalk => true,
+        }
+    }
 }

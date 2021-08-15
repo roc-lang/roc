@@ -15,7 +15,7 @@ pub fn positive_number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, Number> 
     move |_arena, state: State<'a>| {
         match state.bytes.get(0) {
             Some(first_byte) if (*first_byte as char).is_ascii_digit() => {
-                parse_number_base(false, &state.bytes, state)
+                parse_number_base(false, state.bytes, state)
             }
             _ => {
                 // this is not a number at all
@@ -33,7 +33,7 @@ pub fn number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, Number> {
                 parse_number_base(true, &state.bytes[1..], state)
             }
             Some(first_byte) if (*first_byte as char).is_ascii_digit() => {
-                parse_number_base(false, &state.bytes, state)
+                parse_number_base(false, state.bytes, state)
             }
             _ => {
                 // this is not a number at all

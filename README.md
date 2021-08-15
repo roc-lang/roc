@@ -17,6 +17,19 @@ If you're curious about where the language's name and logo came from,
     ```
 4. Check out [these tests](https://github.com/rtfeldman/roc/blob/trunk/cli/tests/repl_eval.rs) for examples of using the REPL
 
+### Examples
+
+Took a look at the `examples` folder, `examples/benchmarks` contains some larger examples.
+
+Run examples as follows:
+1. Navigate to `/examples`
+2. Run with:
+```
+cargo run hello-world/Hello.roc
+```
+Some examples like `examples/benchmarks/NQueens.roc` require input after running.
+For NQueens, input 10 in the terminal and press enter.  
+
 ## Applications and Platforms
 
 Applications are often built on a *framework.* Typically, both application and framework are written in the same language.
@@ -46,7 +59,7 @@ By using systems-level programming languages like C and C++, platform authors sa
 Roc is designed to make the "systems-level platform, higher-level application" experience as nice as possible.
 
 * **Application** authors code exclusively in Roc. It's a language designed for nice ergonomics. The syntax resembles Ruby or CoffeeScript, and it has a fast compiler with full type inference.
-* **Platform** authors code almost exclusively in a systems-level langauge like C, C++, Rust, or [Zig](https://ziglang.org/), except for the thin Roc API they expose to application authors. Roc application code compiles to machine code, and production builds of Roc apps benefit from the same [LLVM](https://llvm.org/) optimizations that C++, Rust, and Zig do. Roc application authors do not need to know this lower-level code exists; all they have to interact with is the platform's API, which is exposed as an ordinary Roc API.
+* **Platform** authors code almost exclusively in a systems-level language like C, C++, Rust, or [Zig](https://ziglang.org/), except for the thin Roc API they expose to application authors. Roc application code compiles to machine code, and production builds of Roc apps benefit from the same [LLVM](https://llvm.org/) optimizations that C++, Rust, and Zig do. Roc application authors do not need to know this lower-level code exists; all they have to interact with is the platform's API, which is exposed as an ordinary Roc API.
 
 Every Roc application is built on top of exactly one Roc platform. There is no such thing as a Roc application that runs without a platform, and there is no default platform. You must choose one!
 

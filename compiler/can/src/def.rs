@@ -380,7 +380,7 @@ pub fn sort_can_defs(
                 //
                 // In the above example, `f` cannot reference `a`, and in the closure
                 // a call to `f` cannot cycle back to `a`.
-                let mut loc_succ = local_successors(&references, &env.closures);
+                let mut loc_succ = local_successors(references, &env.closures);
 
                 // if the current symbol is a closure, peek into its body
                 if let Some(References { lookups, .. }) = env.closures.get(symbol) {
@@ -430,7 +430,7 @@ pub fn sort_can_defs(
                 //
                 // In the above example, `f` cannot reference `a`, and in the closure
                 // a call to `f` cannot cycle back to `a`.
-                let mut loc_succ = local_successors(&references, &env.closures);
+                let mut loc_succ = local_successors(references, &env.closures);
 
                 // if the current symbol is a closure, peek into its body
                 if let Some(References { lookups, .. }) = env.closures.get(symbol) {
@@ -454,7 +454,7 @@ pub fn sort_can_defs(
     let direct_successors = |symbol: &Symbol| -> ImSet<Symbol> {
         match refs_by_symbol.get(symbol) {
             Some((_, references)) => {
-                let mut loc_succ = local_successors(&references, &env.closures);
+                let mut loc_succ = local_successors(references, &env.closures);
 
                 // NOTE: if the symbol is a closure we DONT look into its body
 
@@ -540,7 +540,7 @@ pub fn sort_can_defs(
                             ),
                             Some((region, _)) => {
                                 let expr_region =
-                                    can_defs_by_symbol.get(&symbol).unwrap().loc_expr.region;
+                                    can_defs_by_symbol.get(symbol).unwrap().loc_expr.region;
 
                                 let entry = CycleEntry {
                                     symbol: *symbol,
@@ -561,14 +561,14 @@ pub fn sort_can_defs(
                     )));
 
                     declarations.push(Declaration::InvalidCycle(entries));
-
-                    // other groups may depend on the symbols defined here, so
-                    // also push this cycle onto the groups
-                    groups.push(cycle);
-                } else {
-                    // slightly inefficient, because we know this becomes exactly one DeclareRec already
-                    groups.push(cycle);
                 }
+
+                // if it's an invalid cycle, other groups may depend on the
+                // symbols defined here, so also push this cycle onto the groups
+                //
+                // if it's not an invalid cycle, this is slightly inefficient,
+                // because we know this becomes exactly one DeclareRec already
+                groups.push(cycle);
             }
 
             // now we have a collection of groups whose dependencies are not cyclic.
@@ -662,11 +662,11 @@ fn group_to_declaration(
     // for a definition, so every definition is only inserted (thus typechecked and emitted) once
     let mut seen_pattern_regions: ImSet<Region> = ImSet::default();
 
-    for cycle in strongly_connected_components(&group, filtered_successors) {
+    for cycle in strongly_connected_components(group, filtered_successors) {
         if cycle.len() == 1 {
             let symbol = &cycle[0];
 
-            if let Some(can_def) = can_defs_by_symbol.get(&symbol) {
+            if let Some(can_def) = can_defs_by_symbol.get(symbol) {
                 let mut new_def = can_def.clone();
 
                 // Determine recursivity of closures that are not tail-recursive
@@ -678,7 +678,7 @@ fn group_to_declaration(
                     *recursive = closure_recursivity(*symbol, closures);
                 }
 
-                let is_recursive = successors(&symbol).contains(&symbol);
+                let is_recursive = successors(symbol).contains(symbol);
 
                 if !seen_pattern_regions.contains(&new_def.loc_pattern.region) {
                     if is_recursive {
@@ -854,7 +854,7 @@ fn canonicalize_pending_def<'a>(
             };
 
             for (_, (symbol, _)) in scope.idents() {
-                if !vars_by_symbol.contains_key(&symbol) {
+                if !vars_by_symbol.contains_key(symbol) {
                     continue;
                 }
 
@@ -999,7 +999,7 @@ fn canonicalize_pending_def<'a>(
             //
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
             if let (
-                &ast::Pattern::Identifier(ref _name),
+                &ast::Pattern::Identifier(_name),
                 &Pattern::Identifier(ref defined_symbol),
                 &Closure {
                     function_type,
@@ -1021,7 +1021,7 @@ fn canonicalize_pending_def<'a>(
 
                 // Since everywhere in the code it'll be referred to by its defined name,
                 // remove its generated name from the closure map. (We'll re-insert it later.)
-                let references = env.closures.remove(&symbol).unwrap_or_else(|| {
+                let references = env.closures.remove(symbol).unwrap_or_else(|| {
                     panic!(
                         "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
                         symbol, env.closures
@@ -1065,7 +1065,7 @@ fn canonicalize_pending_def<'a>(
             // Store the referenced locals in the refs_by_symbol map, so we can later figure out
             // which defined names reference each other.
             for (_, (symbol, region)) in scope.idents() {
-                if !vars_by_symbol.contains_key(&symbol) {
+                if !vars_by_symbol.contains_key(symbol) {
                     continue;
                 }
 
@@ -1110,10 +1110,8 @@ fn canonicalize_pending_def<'a>(
             // identifier (e.g. `f = \x -> ...`), then this symbol can be tail-called.
             let outer_identifier = env.tailcallable_symbol;
 
-            if let (
-                &ast::Pattern::Identifier(ref _name),
-                &Pattern::Identifier(ref defined_symbol),
-            ) = (&loc_pattern.value, &loc_can_pattern.value)
+            if let (&ast::Pattern::Identifier(_name), &Pattern::Identifier(ref defined_symbol)) =
+                (&loc_pattern.value, &loc_can_pattern.value)
             {
                 env.tailcallable_symbol = Some(*defined_symbol);
 
@@ -1144,7 +1142,7 @@ fn canonicalize_pending_def<'a>(
             //
             // Only defs of the form (foo = ...) can be closure declarations or self tail calls.
             if let (
-                &ast::Pattern::Identifier(ref _name),
+                &ast::Pattern::Identifier(_name),
                 &Pattern::Identifier(ref defined_symbol),
                 &Closure {
                     function_type,
@@ -1166,7 +1164,7 @@ fn canonicalize_pending_def<'a>(
 
                 // Since everywhere in the code it'll be referred to by its defined name,
                 // remove its generated name from the closure map. (We'll re-insert it later.)
-                let references = env.closures.remove(&symbol).unwrap_or_else(|| {
+                let references = env.closures.remove(symbol).unwrap_or_else(|| {
                     panic!(
                         "Tried to remove symbol {:?} from procedures, but it was not found: {:?}",
                         symbol, env.closures
@@ -1555,7 +1553,7 @@ fn correct_mutual_recursive_type_alias<'a>(
                 let mut loc_succ = alias.typ.symbols();
                 // remove anything that is not defined in the current block
                 loc_succ.retain(|key| symbols_introduced.contains(key));
-                loc_succ.remove(&symbol);
+                loc_succ.remove(symbol);
 
                 loc_succ
             }
@@ -1634,7 +1632,7 @@ fn make_tag_union_recursive<'a>(
             typ.substitute_alias(symbol, &Type::Variable(rec_var));
         }
         Type::RecursiveTagUnion(_, _, _) => {}
-        Type::Alias(_, _, actual) => make_tag_union_recursive(
+        Type::Alias { actual, .. } => make_tag_union_recursive(
             env,
             symbol,
             region,

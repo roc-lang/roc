@@ -295,7 +295,7 @@ impl<'a> Formattable<'a> for Expr<'a> {
                 items,
                 final_comments,
             } => {
-                fmt_list(buf, &items, final_comments, indent);
+                fmt_list(buf, items, final_comments, indent);
             }
             BinOps(lefts, right) => fmt_bin_ops(buf, lefts, right, false, parens, indent),
             UnaryOp(sub_expr, unary_op) => {
@@ -1027,7 +1027,7 @@ fn format_field_multiline<'a, T>(
             format_field_multiline(buf, sub_field, indent, separator_prefix);
         }
         AssignedField::SpaceAfter(sub_field, spaces) => {
-            // We have somethig like that:
+            // We have something like that:
             // ```
             // field # comment
             // , otherfield

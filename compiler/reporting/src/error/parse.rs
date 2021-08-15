@@ -159,17 +159,17 @@ fn to_syntax_report<'a>(
                 title: "PARSE PROBLEM".to_string(),
             }
         }
-        Type(typ) => to_type_report(alloc, filename, &typ, 0, 0),
-        Pattern(pat) => to_pattern_report(alloc, filename, &pat, 0, 0),
+        Type(typ) => to_type_report(alloc, filename, typ, 0, 0),
+        Pattern(pat) => to_pattern_report(alloc, filename, pat, 0, 0),
         Expr(expr) => to_expr_report(
             alloc,
             filename,
             Context::InDef(start_row, start_col),
-            &expr,
+            expr,
             0,
             0,
         ),
-        Header(header) => to_header_report(alloc, filename, &header, 0, 0),
+        Header(header) => to_header_report(alloc, filename, header, 0, 0),
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }
@@ -205,19 +205,17 @@ fn to_expr_report<'a>(
     use roc_parse::parser::EExpr;
 
     match parse_problem {
-        EExpr::If(if_, row, col) => to_if_report(alloc, filename, context, &if_, *row, *col),
-        EExpr::When(when, row, col) => to_when_report(alloc, filename, context, &when, *row, *col),
+        EExpr::If(if_, row, col) => to_if_report(alloc, filename, context, if_, *row, *col),
+        EExpr::When(when, row, col) => to_when_report(alloc, filename, context, when, *row, *col),
         EExpr::Lambda(lambda, row, col) => {
-            to_lambda_report(alloc, filename, context, &lambda, *row, *col)
+            to_lambda_report(alloc, filename, context, lambda, *row, *col)
         }
-        EExpr::List(list, row, col) => to_list_report(alloc, filename, context, &list, *row, *col),
-        EExpr::Str(string, row, col) => {
-            to_str_report(alloc, filename, context, &string, *row, *col)
-        }
+        EExpr::List(list, row, col) => to_list_report(alloc, filename, context, list, *row, *col),
+        EExpr::Str(string, row, col) => to_str_report(alloc, filename, context, string, *row, *col),
         EExpr::InParens(expr, row, col) => {
-            to_expr_in_parens_report(alloc, filename, context, &expr, *row, *col)
+            to_expr_in_parens_report(alloc, filename, context, expr, *row, *col)
         }
-        EExpr::Type(tipe, row, col) => to_type_report(alloc, filename, &tipe, *row, *col),
+        EExpr::Type(tipe, row, col) => to_type_report(alloc, filename, tipe, *row, *col),
         EExpr::ElmStyleFunction(region, row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, *row, *col);
             let region = *region;
@@ -529,7 +527,7 @@ fn to_expr_report<'a>(
             }
         }
 
-        EExpr::Space(error, row, col) => to_space_report(alloc, filename, &error, *row, *col),
+        EExpr::Space(error, row, col) => to_space_report(alloc, filename, error, *row, *col),
 
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
@@ -828,7 +826,7 @@ fn to_str_report<'a>(
                 title: "WEIRD ESCAPE".to_string(),
             }
         }
-        EString::CodePointOpen(row, col) | EString::CodePointEnd(row, col) => {
+        EString::CodePtOpen(row, col) | EString::CodePtEnd(row, col) => {
             let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
             let region = Region::from_row_col(row, col);
 
@@ -1557,10 +1555,10 @@ fn to_pattern_report<'a>(
             }
         }
         EPattern::Record(record, row, col) => {
-            to_precord_report(alloc, filename, &record, *row, *col)
+            to_precord_report(alloc, filename, record, *row, *col)
         }
         EPattern::PInParens(inparens, row, col) => {
-            to_pattern_in_parens_report(alloc, filename, &inparens, *row, *col)
+            to_pattern_in_parens_report(alloc, filename, inparens, *row, *col)
         }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
@@ -1958,14 +1956,14 @@ fn to_type_report<'a>(
     use roc_parse::parser::Type;
 
     match parse_problem {
-        Type::TRecord(record, row, col) => to_trecord_report(alloc, filename, &record, *row, *col),
+        Type::TRecord(record, row, col) => to_trecord_report(alloc, filename, record, *row, *col),
         Type::TTagUnion(tag_union, row, col) => {
-            to_ttag_union_report(alloc, filename, &tag_union, *row, *col)
+            to_ttag_union_report(alloc, filename, tag_union, *row, *col)
         }
         Type::TInParens(tinparens, row, col) => {
-            to_tinparens_report(alloc, filename, &tinparens, *row, *col)
+            to_tinparens_report(alloc, filename, tinparens, *row, *col)
         }
-        Type::TApply(tapply, row, col) => to_tapply_report(alloc, filename, &tapply, *row, *col),
+        Type::TApply(tapply, row, col) => to_tapply_report(alloc, filename, tapply, *row, *col),
 
         Type::TFunctionArgument(row, col) => match what_is_next(alloc.src_lines, *row, *col) {
             Next::Other(Some(',')) => {
@@ -1973,7 +1971,7 @@ fn to_type_report<'a>(
                 let region = Region::from_row_col(*row, *col);
 
                 let doc = alloc.stack(vec![
-                    alloc.reflow(r"I just started parsing a function argument type, but I encounterd two commas in a row:"),
+                    alloc.reflow(r"I just started parsing a function argument type, but I encountered two commas in a row:"),
                     alloc.region_with_subregion(surroundings, region),
                     alloc.concat(vec![alloc.reflow("Try removing one of them.")]),
                 ]);
@@ -2856,27 +2854,27 @@ fn to_header_report<'a>(
 
     match parse_problem {
         EHeader::Provides(provides, row, col) => {
-            to_provides_report(alloc, filename, &provides, *row, *col)
+            to_provides_report(alloc, filename, provides, *row, *col)
         }
 
         EHeader::Exposes(exposes, row, col) => {
-            to_exposes_report(alloc, filename, &exposes, *row, *col)
+            to_exposes_report(alloc, filename, exposes, *row, *col)
         }
 
         EHeader::Imports(imports, row, col) => {
-            to_imports_report(alloc, filename, &imports, *row, *col)
+            to_imports_report(alloc, filename, imports, *row, *col)
         }
 
         EHeader::Requires(requires, row, col) => {
-            to_requires_report(alloc, filename, &requires, *row, *col)
+            to_requires_report(alloc, filename, requires, *row, *col)
         }
 
         EHeader::Packages(packages, row, col) => {
-            to_packages_report(alloc, filename, &packages, *row, *col)
+            to_packages_report(alloc, filename, packages, *row, *col)
         }
 
         EHeader::Effects(effects, row, col) => {
-            to_effects_report(alloc, filename, &effects, *row, *col)
+            to_effects_report(alloc, filename, effects, *row, *col)
         }
 
         EHeader::IndentStart(row, col) => {
@@ -2988,7 +2986,7 @@ fn to_header_report<'a>(
             }
         }
 
-        EHeader::Space(error, row, col) => to_space_report(alloc, filename, &error, *row, *col),
+        EHeader::Space(error, row, col) => to_space_report(alloc, filename, error, *row, *col),
     }
 }
 
@@ -3239,7 +3237,6 @@ fn to_requires_report<'a>(
         ERequires::Space(error, row, col) => to_space_report(alloc, filename, &error, row, col),
 
         ERequires::ListStart(row, col) => {
-            dbg!(row, col);
             let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
             let region = Region::from_row_col(row, col);
 
@@ -3260,6 +3257,34 @@ fn to_requires_report<'a>(
                 filename,
                 doc,
                 title: "MISSING REQUIRES".to_string(),
+            }
+        }
+
+        ERequires::Rigid(row, col) => {
+            let surroundings = Region::from_rows_cols(start_row, start_col, row, col);
+            let region = Region::from_row_col(row, col);
+
+            let doc = alloc.stack(vec![
+                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
+                alloc.region_with_subregion(surroundings, region),
+                alloc.concat(vec![
+                    alloc.reflow("I am expecting a list of rigids like "),
+                    alloc.keyword("{}"),
+                    alloc.reflow(" or "),
+                    alloc.keyword("{model=>Model}"),
+                    alloc.reflow(" next. A full "),
+                    alloc.keyword("requires"),
+                    alloc.reflow(" definition looks like"),
+                ]),
+                alloc
+                    .parser_suggestion("requires {model=>Model, msg=>Msg} {main : Effect {}}")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "BAD REQUIRES RIGIDS".to_string(),
             }
         }
 
@@ -3368,6 +3393,7 @@ fn to_space_report<'a>(
                 title: "TAB CHARACTER".to_string(),
             }
         }
+
         _ => todo!("unhandled type parse error: {:?}", &parse_problem),
     }
 }

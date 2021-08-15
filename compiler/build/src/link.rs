@@ -1,21 +1,21 @@
-use crate::target;
 use crate::target::arch_str;
-use inkwell::module::Module;
-use inkwell::targets::{CodeModel, FileType, RelocMode};
+#[cfg(feature = "llvm")]
 use libloading::{Error, Library};
-use roc_gen::llvm::build::OptLevel;
+#[cfg(feature = "llvm")]
+use roc_mono::ir::OptLevel;
 use std::collections::HashMap;
 use std::env;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
-use tempfile::tempdir;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum LinkType {
-    Executable,
-    Dylib,
+    // These numbers correspond to the --lib flag; if it's present
+    // (e.g. is_present returns `1 as bool`), this will be 1 as well.
+    Executable = 0,
+    Dylib = 1,
 }
 
 /// input_paths can include the host as well as the app. e.g. &["host.o", "roc_app.o"]
@@ -56,7 +56,7 @@ fn find_zig_str_path() -> PathBuf {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn build_zig_host(
+pub fn build_zig_host(
     env_path: &str,
     env_home: &str,
     emit_bin: &str,
@@ -86,7 +86,7 @@ fn build_zig_host(
 }
 
 #[cfg(target_os = "macos")]
-fn build_zig_host(
+pub fn build_zig_host(
     env_path: &str,
     env_home: &str,
     emit_bin: &str,
@@ -140,7 +140,7 @@ fn build_zig_host(
         .args(&[
             "build-obj",
             zig_host_src,
-            &emit_bin,
+            emit_bin,
             "--pkg-begin",
             "str",
             zig_str_path,
@@ -291,38 +291,60 @@ pub fn rebuild_host(host_input_path: &Path) {
     }
 }
 
+fn nixos_path() -> String {
+    env::var("NIXOS_GLIBC_PATH").unwrap_or_else(|_| {
+        panic!(
+            "We couldn't find glibc! We tried looking for NIXOS_GLIBC_PATH
+to find it via Nix, but that didn't work either. Please file a bug report.
+
+This will only be an issue until we implement surgical linking.",
+        )
+    })
+}
+
+fn library_path<const N: usize>(segments: [&str; N]) -> Option<PathBuf> {
+    let mut guess_path = PathBuf::new();
+    for s in segments {
+        guess_path.push(s);
+    }
+    if guess_path.exists() {
+        Some(guess_path)
+    } else {
+        None
+    }
+}
+
 fn link_linux(
     target: &Triple,
     output_path: PathBuf,
     input_paths: &[&str],
     link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    let usr_lib_path = Path::new("/usr/lib").to_path_buf();
-    let usr_lib_gnu_path = usr_lib_path.join(format!("{}-linux-gnu", target.architecture));
-    let lib_gnu_path = Path::new("/lib/").join(format!("{}-linux-gnu", target.architecture));
+    let architecture = format!("{}-linux-gnu", target.architecture);
 
-    let libcrt_path = if usr_lib_gnu_path.exists() {
-        &usr_lib_gnu_path
-    } else {
-        &usr_lib_path
-    };
+    let libcrt_path = library_path(["/usr", "lib", &architecture])
+        .or_else(|| library_path(["/usr", "lib"]))
+        .or_else(|| library_path([&nixos_path()]))
+        .unwrap();
 
     let libgcc_name = "libgcc_s.so.1";
-    let libgcc_path = if lib_gnu_path.join(libgcc_name).exists() {
-        lib_gnu_path.join(libgcc_name)
-    } else if usr_lib_gnu_path.join(libgcc_name).exists() {
-        usr_lib_gnu_path.join(libgcc_name)
-    } else {
-        usr_lib_path.join(libgcc_name)
-    };
+    let libgcc_path = library_path(["/lib", &architecture, libgcc_name])
+        .or_else(|| library_path(["/usr", "lib", &architecture, libgcc_name]))
+        .or_else(|| library_path(["/usr", "lib", libgcc_name]))
+        .or_else(|| library_path([&nixos_path(), libgcc_name]))
+        .unwrap();
+
     let ld_linux = match target.architecture {
-        Architecture::X86_64 => "/lib64/ld-linux-x86-64.so.2",
-        Architecture::Aarch64(_) => "/lib/ld-linux-aarch64.so.1",
+        Architecture::X86_64 => library_path(["/lib64", "ld-linux-x86-64.so.2"])
+            .or_else(|| library_path([&nixos_path(), "ld-linux-x86-64.so.2"])),
+        Architecture::Aarch64(_) => library_path(["/lib", "ld-linux-aarch64.so.1"]),
         _ => panic!(
             "TODO gracefully handle unsupported linux architecture: {:?}",
             target.architecture
         ),
     };
+    let ld_linux = ld_linux.unwrap();
+    let ld_linux = ld_linux.to_str().unwrap();
 
     let mut soname;
     let (base_args, output_path) = match link_type {
@@ -333,7 +355,7 @@ fn link_linux(
             output_path,
         ),
         LinkType::Dylib => {
-            // TODO: do we acually need the version number on this?
+            // TODO: do we actually need the version number on this?
             // Do we even need the "-soname" argument?
             //
             // See https://software.intel.com/content/www/us/en/develop/articles/create-a-unix-including-linux-shared-library.html
@@ -360,6 +382,9 @@ fn link_linux(
     };
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
+
+    init_arch(target);
+
     // NOTE: order of arguments to `ld` matters here!
     // The `-l` flags should go after the `.o` arguments
     Ok((
@@ -429,7 +454,7 @@ fn link_macos(
     // This path only exists on macOS Big Sur, and it causes ld errors
     // on Catalina if it's specified with -L, so we replace it with a
     // redundant -lSystem if the directory isn't there.
-    let big_sur_path = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib";
+    let big_sur_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
     let big_sur_fix = if Path::new(big_sur_path).exists() {
         format!("-L{}", big_sur_path)
     } else {
@@ -466,8 +491,8 @@ fn link_macos(
                 "-lc++",
                 // "-lc++abi",
                 // "-lunwind", // TODO will eventually need this, see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
-                "-framework",
-                "Security", // This "-framework Security" arg is needed for the `rand` crate in examples/cli
+                // "-framework", // Uncomment this line & the following ro run the `rand` crate in examples/cli
+                // "Security",
                 // Output
                 "-o",
                 output_path.to_str().unwrap(), // app
@@ -477,22 +502,27 @@ fn link_macos(
     ))
 }
 
+#[cfg(feature = "llvm")]
 pub fn module_to_dylib(
-    module: &Module,
+    module: &inkwell::module::Module,
     target: &Triple,
     opt_level: OptLevel,
 ) -> Result<Library, Error> {
-    let dir = tempdir().unwrap();
+    use crate::target::{self, convert_opt_level};
+    use inkwell::targets::{CodeModel, FileType, RelocMode};
+
+    let dir = tempfile::tempdir().unwrap();
     let filename = PathBuf::from("Test.roc");
     let file_path = dir.path().join(filename);
     let mut app_o_file = file_path;
 
     app_o_file.set_file_name("app.o");
 
-    // Emit the .o file using position-indepedent code (PIC) - needed for dylibs
+    // Emit the .o file using position-independent code (PIC) - needed for dylibs
     let reloc = RelocMode::PIC;
     let model = CodeModel::Default;
-    let target_machine = target::target_machine(target, opt_level.into(), reloc, model).unwrap();
+    let target_machine =
+        target::target_machine(target, convert_opt_level(opt_level), reloc, model).unwrap();
 
     target_machine
         .write_to_file(module, FileType::Object, &app_o_file)
@@ -528,4 +558,14 @@ fn validate_output(file_name: &str, cmd_name: &str, output: Output) {
             ),
         }
     }
+}
+
+#[cfg(feature = "llvm")]
+fn init_arch(target: &Triple) {
+    crate::target::init_arch(target);
+}
+
+#[cfg(not(feature = "llvm"))]
+fn init_arch(_target: &Triple) {
+    panic!("Tried to initialize LLVM when crate was not built with `feature = \"llvm\"` enabled");
 }

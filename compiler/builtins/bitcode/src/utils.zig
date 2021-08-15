@@ -1,8 +1,64 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 
-const REFCOUNT_MAX_ISIZE: comptime isize = 0;
-const REFCOUNT_ONE_ISIZE: comptime isize = std.math.minInt(isize);
+pub fn WithOverflow(comptime T: type) type {
+    return extern struct { value: T, has_overflowed: bool };
+}
+
+// If allocation fails, this must cxa_throw - it must not return a null pointer!
+extern fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void;
+
+// This should never be passed a null pointer.
+// If allocation fails, this must cxa_throw - it must not return a null pointer!
+extern fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void;
+
+// This should never be passed a null pointer.
+extern fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void;
+
+comptime {
+    // During tetsts, use the testing allocators to satisfy these functions.
+    if (std.builtin.is_test) {
+        @export(testing_roc_alloc, .{ .name = "roc_alloc", .linkage = .Strong });
+        @export(testing_roc_realloc, .{ .name = "roc_realloc", .linkage = .Strong });
+        @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
+    }
+}
+
+fn testing_roc_alloc(size: usize, _: u32) callconv(.C) ?*c_void {
+    return @ptrCast(?*c_void, std.testing.allocator.alloc(u8, size) catch unreachable);
+}
+
+fn testing_roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, _: u32) callconv(.C) ?*c_void {
+    const ptr = @ptrCast([*]u8, @alignCast(16, c_ptr));
+    const slice = ptr[0..old_size];
+
+    return @ptrCast(?*c_void, std.testing.allocator.realloc(slice, new_size) catch unreachable);
+}
+
+fn testing_roc_dealloc(c_ptr: *c_void, _: u32) callconv(.C) void {
+    const ptr = @ptrCast([*]u8, @alignCast(16, c_ptr));
+
+    std.testing.allocator.destroy(ptr);
+}
+
+pub fn alloc(size: usize, alignment: u32) [*]u8 {
+    return @ptrCast([*]u8, @call(.{ .modifier = always_inline }, roc_alloc, .{ size, alignment }));
+}
+
+pub fn realloc(c_ptr: [*]u8, new_size: usize, old_size: usize, alignment: u32) [*]u8 {
+    return @ptrCast([*]u8, @call(.{ .modifier = always_inline }, roc_realloc, .{ c_ptr, new_size, old_size, alignment }));
+}
+
+pub fn dealloc(c_ptr: [*]u8, alignment: u32) void {
+    return @call(.{ .modifier = always_inline }, roc_dealloc, .{ c_ptr, alignment });
+}
+
+pub const Inc = fn (?[*]u8) callconv(.C) void;
+pub const IncN = fn (?[*]u8, u64) callconv(.C) void;
+pub const Dec = fn (?[*]u8) callconv(.C) void;
+
+const REFCOUNT_MAX_ISIZE: isize = 0;
+pub const REFCOUNT_ONE_ISIZE: isize = std.math.minInt(isize);
 pub const REFCOUNT_ONE: usize = @bitCast(usize, REFCOUNT_ONE_ISIZE);
 
 pub const IntWidth = enum(u8) {
@@ -19,49 +75,10 @@ pub const IntWidth = enum(u8) {
     Usize,
 };
 
-pub fn intWidth(width: IntWidth) anytype {
-    switch (width) {
-        IntWidth.U8 => {
-            return u8;
-        },
-        IntWidth.U16 => {
-            return u16;
-        },
-        IntWidth.U32 => {
-            return u32;
-        },
-        IntWidth.U64 => {
-            return u64;
-        },
-        IntWidth.U128 => {
-            return u128;
-        },
-        IntWidth.I8 => {
-            return i8;
-        },
-        IntWidth.I16 => {
-            return i16;
-        },
-        IntWidth.I32 => {
-            return i32;
-        },
-        IntWidth.I64 => {
-            return i64;
-        },
-        IntWidth.I128 => {
-            return i128;
-        },
-        IntWidth.Usize => {
-            return usize;
-        },
-    }
-}
-
 pub fn decref(
-    allocator: *Allocator,
-    alignment: usize,
     bytes_or_null: ?[*]u8,
     data_bytes: usize,
+    alignment: u32,
 ) void {
     if (data_bytes == 0) {
         return;
@@ -77,7 +94,7 @@ pub fn decref(
     switch (alignment) {
         16 => {
             if (refcount == REFCOUNT_ONE_ISIZE) {
-                allocator.free((bytes - 16)[0 .. 16 + data_bytes]);
+                dealloc(bytes - 16, alignment);
             } else if (refcount_isize < 0) {
                 (isizes - 1)[0] = refcount - 1;
             }
@@ -85,7 +102,7 @@ pub fn decref(
         else => {
             // NOTE enums can currently have an alignment of < 8
             if (refcount == REFCOUNT_ONE_ISIZE) {
-                allocator.free((bytes - 8)[0 .. 8 + data_bytes]);
+                dealloc(bytes - 8, alignment);
             } else if (refcount_isize < 0) {
                 (isizes - 1)[0] = refcount - 1;
             }
@@ -94,17 +111,16 @@ pub fn decref(
 }
 
 pub fn allocateWithRefcount(
-    allocator: *Allocator,
-    alignment: usize,
     data_bytes: usize,
+    alignment: u32,
 ) [*]u8 {
-    comptime const result_in_place = false;
+    const result_in_place = false;
 
     switch (alignment) {
         16 => {
             const length = 2 * @sizeOf(usize) + data_bytes;
 
-            var new_bytes: []align(16) u8 = allocator.alignedAlloc(u8, 16, length) catch unreachable;
+            var new_bytes: [*]align(16) u8 = @alignCast(16, alloc(length, alignment));
 
             var as_usize_array = @ptrCast([*]usize, new_bytes);
             if (result_in_place) {
@@ -123,13 +139,13 @@ pub fn allocateWithRefcount(
         else => {
             const length = @sizeOf(usize) + data_bytes;
 
-            var new_bytes: []align(8) u8 = allocator.alignedAlloc(u8, 8, length) catch unreachable;
+            var new_bytes: [*]align(8) u8 = @alignCast(8, alloc(length, alignment));
 
-            var as_usize_array = @ptrCast([*]isize, new_bytes);
+            var as_isize_array = @ptrCast([*]isize, new_bytes);
             if (result_in_place) {
-                as_usize_array[0] = @intCast(isize, number_of_slots);
+                as_isize_array[0] = @intCast(isize, number_of_slots);
             } else {
-                as_usize_array[0] = REFCOUNT_ONE_ISIZE;
+                as_isize_array[0] = REFCOUNT_ONE_ISIZE;
             }
 
             var as_u8_array = @ptrCast([*]u8, new_bytes);
@@ -142,8 +158,7 @@ pub fn allocateWithRefcount(
 
 pub fn unsafeReallocate(
     source_ptr: [*]u8,
-    allocator: *Allocator,
-    alignment: usize,
+    alignment: u32,
     old_length: usize,
     new_length: usize,
     element_width: usize,
@@ -161,8 +176,8 @@ pub fn unsafeReallocate(
 
     // TODO handle out of memory
     // NOTE realloc will dealloc the original allocation
-    const old_allocation = (source_ptr - align_width)[0..old_width];
-    const new_allocation = allocator.realloc(old_allocation, new_width) catch unreachable;
+    const old_allocation = source_ptr - align_width;
+    const new_allocation = realloc(old_allocation, new_width, old_width, alignment);
 
     const new_source = @ptrCast([*]u8, new_allocation) + align_width;
     return new_source;

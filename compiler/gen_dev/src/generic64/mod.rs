@@ -2,7 +2,7 @@ use crate::{Backend, Env, Relocation};
 use bumpalo::collections::Vec;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::symbol::Symbol;
-use roc_mono::ir::{BranchInfo, Literal, Stmt, Wrapped};
+use roc_mono::ir::{BranchInfo, Literal, Stmt};
 use roc_mono::layout::{Builtin, Layout};
 use std::marker::PhantomData;
 use target_lexicon::Triple;
@@ -85,6 +85,12 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
 /// dst should always come before sources.
 pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
     fn abs_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
+    fn abs_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        dst: FloatReg,
+        src: FloatReg,
+    );
 
     fn add_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src1: GeneralReg, imm32: i32);
     fn add_freg64_freg64_freg64(
@@ -106,6 +112,8 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
     // It should always generate the same number of bytes to enable replacement if offset changes.
     // It returns the base offset to calculate the jump from (generally the instruction after the jump).
     fn jmp_imm32(buf: &mut Vec<'_, u8>, offset: i32) -> usize;
+
+    fn tail_call(buf: &mut Vec<'_, u8>) -> u64;
 
     // Jumps by an offset of offset bytes if reg is not equal to imm.
     // It should always generate the same number of bytes to enable replacement if offset changes.
@@ -137,6 +145,13 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait> {
     fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
     fn mov_stack32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
     fn mov_stack32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
+
+    fn imul_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    );
 
     fn sub_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src1: GeneralReg, imm32: i32);
     fn sub_reg64_reg64_reg64(
@@ -202,7 +217,7 @@ pub struct Backend64Bit<
     float_used_callee_saved_regs: MutSet<FloatReg>,
 
     stack_size: u32,
-    // The ammount of stack space needed to pass args for function calling.
+    // The amount of stack space needed to pass args for function calling.
     fn_call_stack_size: u32,
 }
 
@@ -344,6 +359,14 @@ impl<
         Ok(())
     }
 
+    /// Used for generating wrappers for malloc/realloc/free
+    fn build_wrapped_jmp(&mut self) -> Result<(&'a [u8], u64), String> {
+        let mut out = bumpalo::vec![in self.env.arena];
+        let offset = ASM::tail_call(&mut out);
+
+        Ok((out.into_bump_slice(), offset))
+    }
+
     fn build_fn_call(
         &mut self,
         dst: &Symbol,
@@ -402,7 +425,7 @@ impl<
                 Ok(())
             }
             x => Err(format!(
-                "recieving return type, {:?}, is not yet implemented",
+                "receiving return type, {:?}, is not yet implemented",
                 x
             )),
         }
@@ -484,6 +507,15 @@ impl<
         Ok(())
     }
 
+    fn build_num_abs_f64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String> {
+        let dst_reg = self.claim_float_reg(dst)?;
+        let src_reg = self.load_to_float_reg(src)?;
+
+        ASM::abs_freg64_freg64(&mut self.buf, &mut self.relocs, dst_reg, src_reg);
+
+        Ok(())
+    }
+
     fn build_num_add_i64(
         &mut self,
         dst: &Symbol,
@@ -507,6 +539,19 @@ impl<
         let src1_reg = self.load_to_float_reg(src1)?;
         let src2_reg = self.load_to_float_reg(src2)?;
         ASM::add_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+        Ok(())
+    }
+
+    fn build_num_mul_i64(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+    ) -> Result<(), String> {
+        let dst_reg = self.claim_general_reg(dst)?;
+        let src1_reg = self.load_to_general_reg(src1)?;
+        let src2_reg = self.load_to_general_reg(src2)?;
+        ASM::imul_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
         Ok(())
     }
 
@@ -565,13 +610,12 @@ impl<
         }
     }
 
-    fn load_access_at_index(
+    fn load_struct_at_index(
         &mut self,
         sym: &Symbol,
         structure: &Symbol,
         index: u64,
         field_layouts: &'a [Layout<'a>],
-        _wrapped: &Wrapped,
     ) -> Result<(), String> {
         if let Some(SymbolStorage::Base(struct_offset)) = self.symbol_storage_map.get(structure) {
             let mut data_offset = *struct_offset;

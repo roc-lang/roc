@@ -1,7 +1,8 @@
 use crate::pretty_print::Parens;
-use crate::subs::{LambdaSet, Subs, VarStore, Variable};
-use inlinable_string::InlinableString;
-use roc_collections::all::{union, ImMap, ImSet, Index, MutMap, MutSet, SendMap};
+use crate::subs::{
+    GetSubsSlice, RecordFields, Subs, UnionTags, VarStore, Variable, VariableSubsSlice,
+};
+use roc_collections::all::{ImMap, ImSet, Index, MutSet, SendMap};
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -11,6 +12,11 @@ use std::fmt;
 pub const TYPE_NUM: &str = "Num";
 pub const TYPE_INTEGER: &str = "Integer";
 pub const TYPE_FLOATINGPOINT: &str = "FloatingPoint";
+
+const GREEK_LETTERS: &[char] = &[
+    'α', 'ν', 'β', 'ξ', 'γ', 'ο', 'δ', 'π', 'ε', 'ρ', 'ζ', 'σ', 'η', 'τ', 'θ', 'υ', 'ι', 'φ', 'κ',
+    'χ', 'λ', 'ψ', 'μ', 'ω', 'ς',
+];
 
 ///
 /// Intuitively
@@ -133,6 +139,26 @@ impl RecordField<Type> {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct LambdaSet(pub Type);
+
+impl LambdaSet {
+    fn substitute(&mut self, substitutions: &ImMap<Variable, Type>) {
+        self.0.substitute(substitutions);
+    }
+
+    fn instantiate_aliases(
+        &mut self,
+        region: Region,
+        aliases: &ImMap<Symbol, Alias>,
+        var_store: &mut VarStore,
+        introduced: &mut ImSet<Variable>,
+    ) {
+        self.0
+            .instantiate_aliases(region, aliases, var_store, introduced)
+    }
+}
+
 #[derive(PartialEq, Eq, Clone)]
 pub enum Type {
     EmptyRec,
@@ -141,10 +167,17 @@ pub enum Type {
     Function(Vec<Type>, Box<Type>, Box<Type>),
     Record(SendMap<Lowercase, RecordField<Type>>, Box<Type>),
     TagUnion(Vec<(TagName, Vec<Type>)>, Box<Type>),
-    Alias(Symbol, Vec<(Lowercase, Type)>, Box<Type>),
+    FunctionOrTagUnion(TagName, Symbol, Box<Type>),
+    Alias {
+        symbol: Symbol,
+        type_arguments: Vec<(Lowercase, Type)>,
+        lambda_set_variables: Vec<LambdaSet>,
+        actual: Box<Type>,
+    },
     HostExposedAlias {
         name: Symbol,
-        arguments: Vec<(Lowercase, Type)>,
+        type_arguments: Vec<(Lowercase, Type)>,
+        lambda_set_variables: Vec<LambdaSet>,
         actual_var: Variable,
         actual: Box<Type>,
     },
@@ -197,20 +230,36 @@ impl fmt::Debug for Type {
 
                 write!(f, ")")
             }
-            Type::Alias(symbol, args, _actual) => {
-                write!(f, "Alias {:?}", symbol)?;
+            Type::Alias {
+                symbol,
+                type_arguments,
+                lambda_set_variables,
+                actual: _actual,
+                ..
+            } => {
+                write!(f, "(Alias {:?}", symbol)?;
 
-                for (_, arg) in args {
+                for (_, arg) in type_arguments {
                     write!(f, " {:?}", arg)?;
                 }
 
+                for (lambda_set, greek_letter) in
+                    lambda_set_variables.iter().zip(GREEK_LETTERS.iter())
+                {
+                    write!(f, " {}@{:?}", greek_letter, lambda_set.0)?;
+                }
+
                 // Sometimes it's useful to see the expansion of the alias
-                // write!(f, "[ but actually {:?} ]", _actual)?;
+                write!(f, "[ but actually {:?} ]", _actual)?;
+
+                write!(f, ")")?;
 
                 Ok(())
             }
             Type::HostExposedAlias {
-                name, arguments, ..
+                name,
+                type_arguments: arguments,
+                ..
             } => {
                 write!(f, "HostExposedAlias {:?}", name)?;
 
@@ -308,6 +357,26 @@ impl fmt::Debug for Type {
                     }
                 }
             }
+            Type::FunctionOrTagUnion(tag_name, _, ext) => {
+                write!(f, "[")?;
+                write!(f, "{:?}", tag_name)?;
+                write!(f, "]")?;
+
+                match *ext.clone() {
+                    Type::EmptyTagUnion => {
+                        // This is a closed variant. We're done!
+                        Ok(())
+                    }
+                    other => {
+                        // This is an open tag union, so print the variable
+                        // right after the ']'
+                        //
+                        // e.g. the "*" at the end of `[ Foo ]*`
+                        // or the "r" at the end of `[ DivByZero ]r`
+                        other.fmt(f)
+                    }
+                }
+            }
             Type::RecursiveTagUnion(rec, tags, ext) => {
                 write!(f, "[")?;
 
@@ -385,7 +454,7 @@ impl Type {
 
         match self {
             Variable(v) => {
-                if let Some(replacement) = substitutions.get(&v) {
+                if let Some(replacement) = substitutions.get(v) {
                     *self = replacement.clone();
                 }
             }
@@ -404,6 +473,9 @@ impl Type {
                 }
                 ext.substitute(substitutions);
             }
+            FunctionOrTagUnion(_, _, ext) => {
+                ext.substitute(substitutions);
+            }
             RecursiveTagUnion(_, tags, ext) => {
                 for (_, args) in tags {
                     for x in args {
@@ -418,14 +490,24 @@ impl Type {
                 }
                 ext.substitute(substitutions);
             }
-            Alias(_, zipped, actual_type) => {
-                for (_, value) in zipped.iter_mut() {
+            Alias {
+                type_arguments,
+                lambda_set_variables,
+                actual,
+                ..
+            } => {
+                for (_, value) in type_arguments.iter_mut() {
                     value.substitute(substitutions);
                 }
-                actual_type.substitute(substitutions);
+
+                for lambda_set in lambda_set_variables.iter_mut() {
+                    lambda_set.substitute(substitutions);
+                }
+
+                actual.substitute(substitutions);
             }
             HostExposedAlias {
-                arguments,
+                type_arguments: arguments,
                 actual: actual_type,
                 ..
             } => {
@@ -456,6 +538,9 @@ impl Type {
                 closure.substitute_alias(rep_symbol, actual);
                 ret.substitute_alias(rep_symbol, actual);
             }
+            FunctionOrTagUnion(_, _, ext) => {
+                ext.substitute_alias(rep_symbol, actual);
+            }
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 for (_, args) in tags {
                     for x in args {
@@ -470,8 +555,11 @@ impl Type {
                 }
                 ext.substitute_alias(rep_symbol, actual);
             }
-            Alias(_, _, actual_type) => {
-                actual_type.substitute_alias(rep_symbol, actual);
+            Alias {
+                actual: alias_actual,
+                ..
+            } => {
+                alias_actual.substitute_alias(rep_symbol, actual);
             }
             HostExposedAlias {
                 actual: actual_type,
@@ -506,6 +594,7 @@ impl Type {
                     || closure.contains_symbol(rep_symbol)
                     || args.iter().any(|arg| arg.contains_symbol(rep_symbol))
             }
+            FunctionOrTagUnion(_, _, ext) => ext.contains_symbol(rep_symbol),
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 ext.contains_symbol(rep_symbol)
                     || tags
@@ -519,9 +608,11 @@ impl Type {
                 ext.contains_symbol(rep_symbol)
                     || fields.values().any(|arg| arg.contains_symbol(rep_symbol))
             }
-            Alias(alias_symbol, _, actual_type) => {
-                alias_symbol == &rep_symbol || actual_type.contains_symbol(rep_symbol)
-            }
+            Alias {
+                symbol: alias_symbol,
+                actual: actual_type,
+                ..
+            } => alias_symbol == &rep_symbol || actual_type.contains_symbol(rep_symbol),
             HostExposedAlias { name, actual, .. } => {
                 name == &rep_symbol || actual.contains_symbol(rep_symbol)
             }
@@ -541,6 +632,7 @@ impl Type {
                     || closure.contains_variable(rep_variable)
                     || args.iter().any(|arg| arg.contains_variable(rep_variable))
             }
+            FunctionOrTagUnion(_, _, ext) => ext.contains_variable(rep_variable),
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 ext.contains_variable(rep_variable)
                     || tags
@@ -556,7 +648,10 @@ impl Type {
                         .values()
                         .any(|arg| arg.contains_variable(rep_variable))
             }
-            Alias(_, _, actual_type) => actual_type.contains_variable(rep_variable),
+            Alias {
+                actual: actual_type,
+                ..
+            } => actual_type.contains_variable(rep_variable),
             HostExposedAlias { actual, .. } => actual.contains_variable(rep_variable),
             Apply(_, args) => args.iter().any(|arg| arg.contains_variable(rep_variable)),
             EmptyRec | EmptyTagUnion | Erroneous(_) => false,
@@ -573,7 +668,7 @@ impl Type {
     /// a shallow dealias, continue until the first constructor is not an alias.
     pub fn shallow_dealias(&self) -> &Self {
         match self {
-            Type::Alias(_, _, actual) => actual.shallow_dealias(),
+            Type::Alias { actual, .. } => actual.shallow_dealias(),
             _ => self,
         }
     }
@@ -595,6 +690,9 @@ impl Type {
                 closure.instantiate_aliases(region, aliases, var_store, introduced);
                 ret.instantiate_aliases(region, aliases, var_store, introduced);
             }
+            FunctionOrTagUnion(_, _, ext) => {
+                ext.instantiate_aliases(region, aliases, var_store, introduced);
+            }
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 for (_, args) in tags {
                     for x in args {
@@ -610,14 +708,24 @@ impl Type {
                 ext.instantiate_aliases(region, aliases, var_store, introduced);
             }
             HostExposedAlias {
-                arguments: type_args,
+                type_arguments: type_args,
+                lambda_set_variables,
                 actual: actual_type,
                 ..
             }
-            | Alias(_, type_args, actual_type) => {
+            | Alias {
+                type_arguments: type_args,
+                lambda_set_variables,
+                actual: actual_type,
+                ..
+            } => {
                 for arg in type_args {
                     arg.1
                         .instantiate_aliases(region, aliases, var_store, introduced);
+                }
+
+                for arg in lambda_set_variables {
+                    arg.instantiate_aliases(region, aliases, var_store, introduced);
                 }
 
                 actual_type.instantiate_aliases(region, aliases, var_store, introduced);
@@ -654,40 +762,16 @@ impl Type {
                         substitution.insert(*placeholder, filler);
                     }
 
-                    // Instantiate "hidden" uniqueness variables
-                    //
-                    // Aliases can hide uniqueness variables: e.g. in
-                    //
-                    // Model : { x : Int, y : Bool }
-                    //
-                    // Its lifted variant is
-                    //
-                    // Attr a Model
-                    //
-                    // where the `a` doesn't really mention the attributes on the fields.
-                    for variable in actual.variables() {
-                        if !substitution.contains_key(&variable) {
-                            // Leave attributes on recursion variables untouched!
-                            //
-                            // In a recursive type like
-                            //
-                            // > [ Z, S Peano ] as Peano
-                            //
-                            // By default the lifted version is
-                            //
-                            // > Attr a ([ Z, S (Attr b Peano) ] as Peano)
-                            //
-                            // But, it must be true that a = b because Peano is self-recursive.
-                            // Therefore we earlier have substituted
-                            //
-                            // > Attr a ([ Z, S (Attr a Peano) ] as Peano)
-                            //
-                            // And now we must make sure the `a`s stay the same variable, i.e.
-                            // don't re-instantiate it here.
-                            let var = var_store.fresh();
-                            substitution.insert(variable, Type::Variable(var));
+                    let mut lambda_set_variables =
+                        Vec::with_capacity(alias.lambda_set_variables.len());
+                    for lambda_set in alias.lambda_set_variables.iter() {
+                        let fresh = var_store.fresh();
+                        introduced.insert(fresh);
 
-                            introduced.insert(var);
+                        lambda_set_variables.push(LambdaSet(Type::Variable(fresh)));
+
+                        if let Type::Variable(lambda_set_var) = lambda_set.0 {
+                            substitution.insert(lambda_set_var, Type::Variable(fresh));
                         }
                     }
 
@@ -705,13 +789,19 @@ impl Type {
                         }
                         ext.substitute(&substitution);
 
-                        *self = Type::Alias(
-                            *symbol,
-                            named_args,
-                            Box::new(Type::RecursiveTagUnion(new_rec_var, tags, ext)),
-                        );
+                        *self = Type::Alias {
+                            symbol: *symbol,
+                            type_arguments: named_args,
+                            lambda_set_variables: alias.lambda_set_variables.clone(),
+                            actual: Box::new(Type::RecursiveTagUnion(new_rec_var, tags, ext)),
+                        };
                     } else {
-                        *self = Type::Alias(*symbol, named_args, Box::new(actual));
+                        *self = Type::Alias {
+                            symbol: *symbol,
+                            type_arguments: named_args,
+                            lambda_set_variables: alias.lambda_set_variables.clone(),
+                            actual: Box::new(actual),
+                        };
                     }
                 } else {
                     // one of the special-cased Apply types.
@@ -730,12 +820,15 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
 
     match tipe {
         Function(args, closure, ret) => {
-            symbols_help(&ret, accum);
-            symbols_help(&closure, accum);
+            symbols_help(ret, accum);
+            symbols_help(closure, accum);
             args.iter().for_each(|arg| symbols_help(arg, accum));
         }
+        FunctionOrTagUnion(_, _, ext) => {
+            symbols_help(ext, accum);
+        }
         RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
-            symbols_help(&ext, accum);
+            symbols_help(ext, accum);
             tags.iter()
                 .map(|v| v.1.iter())
                 .flatten()
@@ -743,7 +836,7 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
         }
 
         Record(fields, ext) => {
-            symbols_help(&ext, accum);
+            symbols_help(ext, accum);
             fields.values().for_each(|field| {
                 use RecordField::*;
 
@@ -754,13 +847,17 @@ fn symbols_help(tipe: &Type, accum: &mut ImSet<Symbol>) {
                 }
             });
         }
-        Alias(alias_symbol, _, actual_type) => {
+        Alias {
+            symbol: alias_symbol,
+            actual: actual_type,
+            ..
+        } => {
             accum.insert(*alias_symbol);
-            symbols_help(&actual_type, accum);
+            symbols_help(actual_type, accum);
         }
         HostExposedAlias { name, actual, .. } => {
             accum.insert(*name);
-            symbols_help(&actual, accum);
+            symbols_help(actual, accum);
         }
         Apply(symbol, args) => {
             accum.insert(*symbol);
@@ -807,6 +904,9 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             }
             variables_help(ext, accum);
         }
+        FunctionOrTagUnion(_, _, ext) => {
+            variables_help(ext, accum);
+        }
         RecursiveTagUnion(rec, tags, ext) => {
             for (_, args) in tags {
                 for x in args {
@@ -821,14 +921,20 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             // this rec var doesn't need to be in flex_vars or rigid_vars
             accum.remove(rec);
         }
-        Alias(_, args, actual) => {
-            for (_, arg) in args {
+        Alias {
+            type_arguments,
+            actual,
+            ..
+        } => {
+            for (_, arg) in type_arguments {
                 variables_help(arg, accum);
             }
             variables_help(actual, accum);
         }
         HostExposedAlias {
-            arguments, actual, ..
+            type_arguments: arguments,
+            actual,
+            ..
         } => {
             for (_, arg) in arguments {
                 variables_help(arg, accum);
@@ -846,7 +952,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
 #[derive(Default)]
 pub struct VariableDetail {
     pub type_variables: MutSet<Variable>,
-    pub lambda_set_variables: MutSet<LambdaSet>,
+    pub lambda_set_variables: Vec<Variable>,
     pub recursion_variables: MutSet<Variable>,
 }
 
@@ -873,7 +979,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
                 variables_help_detailed(arg, accum);
             }
             if let Type::Variable(v) = **closure {
-                accum.lambda_set_variables.insert(LambdaSet::from(v));
+                accum.lambda_set_variables.push(v);
             } else {
                 variables_help_detailed(closure, accum);
             }
@@ -900,6 +1006,9 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             }
             variables_help_detailed(ext, accum);
         }
+        FunctionOrTagUnion(_, _, ext) => {
+            variables_help_detailed(ext, accum);
+        }
         RecursiveTagUnion(rec, tags, ext) => {
             for (_, args) in tags {
                 for x in args {
@@ -916,14 +1025,20 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
 
             accum.recursion_variables.insert(*rec);
         }
-        Alias(_, args, actual) => {
-            for (_, arg) in args {
+        Alias {
+            type_arguments,
+            actual,
+            ..
+        } => {
+            for (_, arg) in type_arguments {
                 variables_help_detailed(arg, accum);
             }
             variables_help_detailed(actual, accum);
         }
         HostExposedAlias {
-            arguments, actual, ..
+            type_arguments: arguments,
+            actual,
+            ..
         } => {
             for (_, arg) in arguments {
                 variables_help_detailed(arg, accum);
@@ -938,8 +1053,17 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
     }
 }
 
+#[derive(Debug)]
 pub struct RecordStructure {
-    pub fields: MutMap<Lowercase, RecordField<Variable>>,
+    /// Invariant: these should be sorted!
+    pub fields: Vec<(Lowercase, RecordField<Variable>)>,
+    pub ext: Variable,
+}
+
+#[derive(Debug)]
+pub struct TagUnionStructure<'a> {
+    /// Invariant: these should be sorted!
+    pub fields: Vec<(TagName, &'a [Variable])>,
     pub ext: Variable,
 }
 
@@ -1065,7 +1189,7 @@ pub struct Alias {
 
     /// lambda set variables, e.g. the one annotating the arrow in
     /// a |c|-> b
-    pub lambda_set_variables: MutSet<LambdaSet>,
+    pub lambda_set_variables: Vec<LambdaSet>,
 
     pub recursion_variables: MutSet<Variable>,
 
@@ -1075,9 +1199,9 @@ pub struct Alias {
 #[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub enum Problem {
     CanonicalizationProblem,
-    CircularType(Symbol, ErrorType, Region),
+    CircularType(Symbol, Box<ErrorType>, Region),
     CyclicAlias(Symbol, Region, Vec<Symbol>),
-    UnrecognizedIdent(InlinableString),
+    UnrecognizedIdent(Ident),
     Shadowed(Region, Located<Ident>),
     BadTypeArguments {
         symbol: Symbol,
@@ -1155,7 +1279,7 @@ fn write_error_type_help(
             if write_parens {
                 buf.push('(');
             }
-            buf.push_str(symbol.ident_string(interns));
+            buf.push_str(symbol.ident_str(interns).as_str());
 
             for arg in arguments {
                 buf.push(' ');
@@ -1479,24 +1603,169 @@ pub fn name_type_var(letters_used: u32, taken: &mut MutSet<Lowercase>) -> (Lower
     }
 }
 
-pub fn gather_fields(
+pub fn gather_fields_unsorted_iter(
     subs: &Subs,
-    fields: MutMap<Lowercase, RecordField<Variable>>,
-    var: Variable,
-) -> RecordStructure {
+    other_fields: RecordFields,
+    mut var: Variable,
+) -> (
+    impl Iterator<Item = (&Lowercase, RecordField<Variable>)> + '_,
+    Variable,
+) {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
-    match subs.get_without_compacting(var).content {
-        Structure(Record(sub_fields, sub_ext)) => {
-            gather_fields(subs, union(fields, &sub_fields), sub_ext)
-        }
+    let mut stack = vec![other_fields];
 
-        Alias(_, _, var) => {
-            // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
-            gather_fields(subs, fields, var)
-        }
+    loop {
+        match subs.get_content_without_compacting(var) {
+            Structure(Record(sub_fields, sub_ext)) => {
+                stack.push(*sub_fields);
 
-        _ => RecordStructure { fields, ext: var },
+                var = *sub_ext;
+            }
+
+            Alias(_, _, actual_var) => {
+                // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
+                var = *actual_var;
+            }
+
+            Structure(EmptyRecord) => break,
+            FlexVar(_) => break,
+
+            // TODO investigate apparently this one pops up in the reporting tests!
+            RigidVar(_) => break,
+
+            other => unreachable!("something weird ended up in a record type: {:?}", other),
+        }
+    }
+
+    let it = stack
+        .into_iter()
+        .map(|fields| fields.iter_all())
+        .flatten()
+        .map(move |(i1, i2, i3)| {
+            let field_name: &Lowercase = &subs[i1];
+            let variable = subs[i2];
+            let record_field: RecordField<Variable> = subs[i3].map(|_| variable);
+
+            (field_name, record_field)
+        });
+
+    (it, var)
+}
+
+pub fn gather_fields(subs: &Subs, other_fields: RecordFields, var: Variable) -> RecordStructure {
+    let (it, ext) = gather_fields_unsorted_iter(subs, other_fields, var);
+
+    let mut result: Vec<_> = it
+        .map(|(ref_label, field)| (ref_label.clone(), field))
+        .collect();
+
+    result.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    RecordStructure {
+        fields: result,
+        ext,
+    }
+}
+
+pub fn gather_tags_unsorted_iter(
+    subs: &Subs,
+    other_fields: UnionTags,
+    mut var: Variable,
+) -> (
+    impl Iterator<Item = (&TagName, VariableSubsSlice)> + '_,
+    Variable,
+) {
+    use crate::subs::Content::*;
+    use crate::subs::FlatType::*;
+
+    let mut stack = vec![other_fields];
+
+    loop {
+        match subs.get_content_without_compacting(var) {
+            Structure(TagUnion(sub_fields, sub_ext)) => {
+                stack.push(*sub_fields);
+
+                var = *sub_ext;
+            }
+
+            Structure(FunctionOrTagUnion(_tag_name_index, _, _sub_ext)) => {
+                todo!("this variant does not use SOA yet, and therefore this case is unreachable right now")
+                //                let sub_fields: UnionTags = (*tag_name_index).into();
+                //                stack.push(sub_fields);
+                //
+                //                var = *sub_ext;
+            }
+
+            Structure(RecursiveTagUnion(_, _sub_fields, _sub_ext)) => {
+                todo!("this variant does not use SOA yet, and therefore this case is unreachable right now")
+                //                stack.push(*sub_fields);
+                //
+                //                var = *sub_ext;
+            }
+
+            Alias(_, _, actual_var) => {
+                // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
+                var = *actual_var;
+            }
+
+            Structure(EmptyTagUnion) => break,
+            FlexVar(_) => break,
+
+            // TODO investigate this likely can happen when there is a type error
+            RigidVar(_) => break,
+
+            other => unreachable!("something weird ended up in a tag union type: {:?}", other),
+        }
+    }
+
+    let it = stack
+        .into_iter()
+        .map(|union_tags| union_tags.iter_all())
+        .flatten()
+        .map(move |(i1, i2)| {
+            let tag_name: &TagName = &subs[i1];
+            let subs_slice = subs[i2];
+
+            (tag_name, subs_slice)
+        });
+
+    (it, var)
+}
+
+pub fn gather_tags_slices(
+    subs: &Subs,
+    other_fields: UnionTags,
+    var: Variable,
+) -> (Vec<(TagName, VariableSubsSlice)>, Variable) {
+    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var);
+
+    let mut result: Vec<_> = it
+        .map(|(ref_label, field)| (ref_label.clone(), field))
+        .collect();
+
+    result.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    (result, ext)
+}
+
+pub fn gather_tags(subs: &Subs, other_fields: UnionTags, var: Variable) -> TagUnionStructure {
+    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var);
+
+    let mut result: Vec<_> = it
+        .map(|(ref_label, field)| {
+            (
+                ref_label.clone(),
+                subs.get_subs_slice(*field.as_subs_slice()),
+            )
+        })
+        .collect();
+
+    result.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    TagUnionStructure {
+        fields: result,
+        ext,
     }
 }

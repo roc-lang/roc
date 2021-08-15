@@ -49,7 +49,7 @@ pub fn helper<'a>(
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
         filename,
-        &module_src,
+        module_src,
         &stdlib,
         src_dir,
         exposed_types,
@@ -61,11 +61,17 @@ pub fn helper<'a>(
 
     use roc_load::file::MonomorphizedModule;
     let MonomorphizedModule {
-        procedures,
+        procedures: top_procedures,
         interns,
         exposed_to_host,
         ..
     } = loaded;
+
+    let mut procedures = MutMap::default();
+
+    for (key, proc) in top_procedures {
+        procedures.insert(key, proc);
+    }
 
     // println!("=========== Procedures ==========");
     // println!("{:?}", procedures);
@@ -79,16 +85,12 @@ pub fn helper<'a>(
     // println!("{:?}", exposed_to_host);
     // println!("=================================\n");
     debug_assert_eq!(exposed_to_host.len(), 1);
-    let main_fn_symbol = exposed_to_host.keys().copied().next().unwrap();
+    let main_fn_symbol = loaded.entry_point.symbol;
+    let main_fn_layout = loaded.entry_point.layout;
 
-    let (_, main_fn_layout) = procedures
-        .keys()
-        .find(|(s, _)| *s == main_fn_symbol)
-        .unwrap()
-        .clone();
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
     let main_fn_name = layout_ids
-        .get(main_fn_symbol, &main_fn_layout)
+        .get_toplevel(main_fn_symbol, &main_fn_layout)
         .to_symbol_string(main_fn_symbol, &interns);
 
     let mut lines = Vec::new();
@@ -164,6 +166,7 @@ pub fn helper<'a>(
         interns,
         exposed_to_host: exposed_to_host.keys().copied().collect(),
         lazy_literals,
+        generate_allocators: true, // Needed for testing, since we don't have a platform
     };
 
     let target = target_lexicon::Triple::host();

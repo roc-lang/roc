@@ -6,7 +6,7 @@
 To build the compiler, you need these installed:
 
 * `libunwind` (macOS should already have this one installed)
-* `libc++-dev`
+* `libc++-dev` and `libc++abi-dev`
 * Python 2.7 (Windows only), `python-is-python3` (Ubuntu)
 * [Zig](https://ziglang.org/), see below for version
 * LLVM, see below for version
@@ -20,8 +20,8 @@ For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir).
 
 ### libunwind & libc++-dev
 
-MacOS systems should already have `libunwind`, but other systems will need to install it (On Ubuntu, this can be donw with `sudo apt-get install libunwind-dev`).
-Some systems may already have `libc++-dev` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `sudo apt-get install libc++-dev`.)
+MacOS systems should already have `libunwind`, but other systems will need to install it (On Ubuntu, this can be done with `sudo apt-get install libunwind-dev`).
+Some systems may already have `libc++-dev` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `sudo apt-get install libc++-dev libc++abi-dev`.)
 
 ### libcxb libraries
 
@@ -40,23 +40,43 @@ sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
 
 ### Zig
-**version: 0.7.x**
+**version: 0.8.0**
 
-If you're on MacOS, you can install with `brew install zig`
-If you're on Ubuntu and use Snap, you can install with `snap install zig --classic --beta`
-For any other OS, checkout the [Zig installation page](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
+For any OS, you can use [`zigup`](https://github.com/marler8997/zigup) to manage zig installations.
+
+If you prefer a package manager, you can try the following:
+- For MacOS, you can install with `brew install zig`
+- For, Ubuntu, you can use Snap, you can install with `snap install zig --classic --beta`
+- For other systems, checkout this [page](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
+
+If you want to install it manually, you can also download Zig directly [here](https://ziglang.org/download/). Just make sure you download the right version, the bleeding edge master build is the first download link on this page.
 
 ### LLVM
-**version: 10.0.x**
+**version: 12.0.x**
+
+For macOS, you can install LLVM 12 using `brew install llvm@12` and then adding
+`/usr/local/opt/llvm/bin` to your `PATH`. You can confirm this worked by
+running `llc --version` - it should mention "LLVM version 12.0.0" at the top.
 
 For Ubuntu and Debian, you can use the `Automatic installation script` at [apt.llvm.org](https://apt.llvm.org):
 ```
 sudo bash -c "$(wget -O - https://apt.llvm.org/llvm.sh)"
 ```
 
-For macOS, check the troubleshooting section below.
+If you use this script, you'll need to add `clang` and `llvm-as` to your `PATH`.
+By default, the script installs them as `llvm-as-12` and `clang-12`,
+respectively. You can address this with symlinks like so:
 
-There are also plenty of alternative options at http://releases.llvm.org/download.html
+```
+sudo ln -s /usr/bin/clang-12 /usr/bin/clang
+```
+```
+sudo ln -s /usr/bin/llvm-as-12 /usr/bin/llvm-as
+````
+
+There are also alternative installation options at http://releases.llvm.org/download.html
+
+[Troubleshooting](#troubleshooting)
 
 ## Using Nix
 
@@ -94,6 +114,10 @@ You should be in a shell with everything needed to build already installed. Next
 
 You should be in a repl now. Have fun!
 
+### Extra tips
+
+If you plan on using `nix-shell` regularly, check out [direnv](https://direnv.net/) and [lorri](https://github.com/target/lorri). Whenever you `cd` into `roc/`, they will automatically load the Nix dependecies into your current shell, so you never have to run nix-shell directly!
+
 ### Editor
 
 When you want to run the editor from Ubuntu inside nix you need to install [nixGL](https://github.com/guibou/nixGL) as well:
@@ -127,37 +151,30 @@ That will help us improve this document for everyone who reads it in the future!
 
 ### LLVM installation on Linux
 
+For a current list of all dependency versions and their names in apt, see the Earthfile.
+
 On some Linux systems we've seen the error "failed to run custom build command for x11".
 On Ubuntu, running `sudo apt install pkg-config cmake libx11-dev` fixed this.
 
 If you encounter `cannot find -lz` run `sudo apt install zlib1g-dev`.
 
+If you encounter:
+```
+error: No suitable version of LLVM was found system-wide or pointed
+       to by LLVM_SYS_120_PREFIX.
+```
+Add `export LLVM_SYS_120_PREFIX=/usr/lib/llvm-12` to your `~/.bashrc` or equivalent file for your shell.
+
 ### LLVM installation on macOS
 
-By default homebrew will try to install llvm 11, which is currently
-unsupported. You need to install an older version (10.0.0_3) by doing:
-
-```
-$ brew edit llvm
-
-# Replace the contents of the file with https://raw.githubusercontent.com/Homebrew/homebrew-core/6616d50fb0b24dbe30f5e975210bdad63257f517/Formula/llvm.rb
-
-# we expect llvm-as-10 to be present
-$ ln -s /usr/local/opt/llvm/bin/{llvm-as,llvm-as-10}
-
-# "pinning" ensures that homebrew doesn't update it automatically
-$ brew pin llvm
-```
+If installing LLVM fails, it might help to run `sudo xcode-select -r` before installing again.
 
 It might also be useful to add these exports to your shell:
 
 ```
-export PATH="/usr/local/opt/llvm/bin:$PATH"
 export LDFLAGS="-L/usr/local/opt/llvm/lib -Wl,-rpath,/usr/local/opt/llvm/lib"
 export CPPFLAGS="-I/usr/local/opt/llvm/include"
 ```
-
-If installing LLVM still fails, it might help to run `sudo xcode-select -r` before installing again.
 
 ### LLVM installation on Windows
 
@@ -190,8 +207,8 @@ Create `~/.cargo/config.toml` if it does not exist and add this to it:
 rustflags = ["-C", "link-arg=-fuse-ld=lld", "-C", "target-cpu=native"]
 ```
 
-Then install `lld` version 9 (e.g. with `$ sudo apt-get install lld-9`)
+Then install `lld` version 12 (e.g. with `$ sudo apt-get install lld-12`)
 and add make sure there's a `ld.lld` executable on your `PATH` which
-is symlinked to `lld-9`.
+is symlinked to `lld-12`.
 
 That's it! Enjoy the faster builds.

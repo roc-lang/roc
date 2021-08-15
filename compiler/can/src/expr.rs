@@ -9,7 +9,6 @@ use crate::num::{
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
-use inlinable_string::InlinableString;
 use roc_collections::all::{ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -58,9 +57,8 @@ pub enum Expr {
     // Int and Float store a variable to generate better error messages
     Int(Variable, Variable, i128),
     Float(Variable, Variable, f64),
-    Str(InlinableString),
+    Str(Box<str>),
     List {
-        list_var: Variable, // required for uniqueness of the list
         elem_var: Variable,
         loc_elems: Vec<Located<Expr>>,
     },
@@ -135,9 +133,12 @@ pub enum Expr {
     },
     /// field accessor as a function, e.g. (.foo) expr
     Accessor {
+        /// accessors are desugared to closures; they need to have a name
+        /// so the closure can have a correct lambda set
+        name: Symbol,
         function_var: Variable,
         record_var: Variable,
-        closure_var: Variable,
+        closure_ext_var: Variable,
         ext_var: Variable,
         field_var: Variable,
         field: Lowercase,
@@ -152,6 +153,14 @@ pub enum Expr {
 
     // Sum Types
     Tag {
+        variant_var: Variable,
+        ext_var: Variable,
+        name: TagName,
+        arguments: Vec<(Variable, Located<Expr>)>,
+    },
+
+    ZeroArgumentTag {
+        closure_name: Symbol,
         variant_var: Variable,
         ext_var: Variable,
         name: TagName,
@@ -293,7 +302,6 @@ pub fn canonicalize_expr<'a>(
             if loc_elems.is_empty() {
                 (
                     List {
-                        list_var: var_store.fresh(),
                         elem_var: var_store.fresh(),
                         loc_elems: Vec::new(),
                     },
@@ -320,7 +328,6 @@ pub fn canonicalize_expr<'a>(
 
                 (
                     List {
-                        list_var: var_store.fresh(),
                         elem_var: var_store.fresh(),
                         loc_elems: can_elems,
                     },
@@ -382,6 +389,17 @@ pub fn canonicalize_expr<'a>(
                     return (fn_expr, output);
                 }
                 Tag {
+                    variant_var,
+                    ext_var,
+                    name,
+                    ..
+                } => Tag {
+                    variant_var,
+                    ext_var,
+                    name,
+                    arguments: args,
+                },
+                ZeroArgumentTag {
                     variant_var,
                     ext_var,
                     name,
@@ -581,7 +599,7 @@ pub fn canonicalize_expr<'a>(
 
             // A "when" with no branches is a runtime error, but it will mess things up
             // if code gen mistakenly thinks this is a tail call just because its condition
-            // happend to be one. (The condition gave us our initial output value.)
+            // happened to be one. (The condition gave us our initial output value.)
             if branches.is_empty() {
                 output.tail_call = None;
             }
@@ -613,10 +631,11 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::AccessorFunction(field) => (
             Accessor {
+                name: env.gen_unique_symbol(),
                 function_var: var_store.fresh(),
                 record_var: var_store.fresh(),
                 ext_var: var_store.fresh(),
-                closure_var: var_store.fresh(),
+                closure_ext_var: var_store.fresh(),
                 field_var: var_store.fresh(),
                 field: (*field).into(),
             },
@@ -626,11 +645,14 @@ pub fn canonicalize_expr<'a>(
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
 
+            let symbol = env.gen_unique_symbol();
+
             (
-                Tag {
+                ZeroArgumentTag {
                     name: TagName::Global((*tag).into()),
                     arguments: vec![],
                     variant_var,
+                    closure_name: symbol,
                     ext_var,
                 },
                 Output::default(),
@@ -641,13 +663,15 @@ pub fn canonicalize_expr<'a>(
             let ext_var = var_store.fresh();
             let tag_ident = env.ident_ids.get_or_insert(&(*tag).into());
             let symbol = Symbol::new(env.home, tag_ident);
+            let lambda_set_symbol = env.gen_unique_symbol();
 
             (
-                Tag {
+                ZeroArgumentTag {
                     name: TagName::Private(symbol),
                     arguments: vec![],
                     variant_var,
                     ext_var,
+                    closure_name: lambda_set_symbol,
                 },
                 Output::default(),
             )
@@ -955,7 +979,7 @@ where
             visited.insert(defined_symbol);
 
             for local in refs.lookups.iter() {
-                if !visited.contains(&local) {
+                if !visited.contains(local) {
                     let other_refs: References =
                         references_from_local(*local, visited, refs_by_def, closures);
 
@@ -966,7 +990,7 @@ where
             }
 
             for call in refs.calls.iter() {
-                if !visited.contains(&call) {
+                if !visited.contains(call) {
                     let other_refs = references_from_call(*call, visited, refs_by_def, closures);
 
                     answer = answer.union(other_refs);
@@ -997,7 +1021,7 @@ where
             visited.insert(call_symbol);
 
             for closed_over_local in references.lookups.iter() {
-                if !visited.contains(&closed_over_local) {
+                if !visited.contains(closed_over_local) {
                     let other_refs =
                         references_from_local(*closed_over_local, visited, refs_by_def, closures);
 
@@ -1008,7 +1032,7 @@ where
             }
 
             for call in references.calls.iter() {
-                if !visited.contains(&call) {
+                if !visited.contains(call) {
                     let other_refs = references_from_call(*call, visited, refs_by_def, closures);
 
                     answer = answer.union(other_refs);
@@ -1206,7 +1230,6 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ ForeignCall { .. } => other,
 
         List {
-            list_var,
             elem_var,
             loc_elems,
         } => {
@@ -1222,7 +1245,6 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             }
 
             List {
-                list_var,
                 elem_var,
                 loc_elems: new_elems,
             }
@@ -1427,6 +1449,23 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             );
         }
 
+        ZeroArgumentTag {
+            closure_name,
+            variant_var,
+            ext_var,
+            name,
+            arguments,
+        } => {
+            todo!(
+                "Inlining for ZeroArgumentTag with closure_name {:?}, variant_var {:?}, ext_var {:?}, name {:?}, arguments {:?}",
+                closure_name,
+                variant_var,
+                ext_var,
+                name,
+                arguments
+            );
+        }
+
         Call(boxed_tuple, args, called_via) => {
             let (fn_var, loc_expr, closure_var, expr_var) = *boxed_tuple;
 
@@ -1534,7 +1573,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
 
 enum StrSegment {
     Interpolation(Located<Expr>),
-    Plaintext(InlinableString),
+    Plaintext(Box<str>),
 }
 
 fn flatten_str_lines<'a>(
@@ -1561,10 +1600,10 @@ fn flatten_str_lines<'a>(
                             buf.push(ch);
                         }
                         None => {
-                            env.problem(Problem::InvalidUnicodeCodePoint(loc_hex_digits.region));
+                            env.problem(Problem::InvalidUnicodeCodePt(loc_hex_digits.region));
 
                             return (
-                                Expr::RuntimeError(RuntimeError::InvalidUnicodeCodePoint(
+                                Expr::RuntimeError(RuntimeError::InvalidUnicodeCodePt(
                                     loc_hex_digits.region,
                                 )),
                                 output,

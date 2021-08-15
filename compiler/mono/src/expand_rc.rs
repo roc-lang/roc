@@ -1,4 +1,4 @@
-use crate::ir::{BranchInfo, Expr, ModifyRc, Stmt, Wrapped};
+use crate::ir::{BranchInfo, Expr, ModifyRc, Stmt};
 use crate::layout::{Layout, UnionLayout};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -50,7 +50,7 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 // Let's work through the `Cons x xx` example
 //
 // First we need to know the constructor of `xs` in the particular block. This information would
-// normally be lost when we compile pattern matches, but we keep it in the `BrachInfo` field of
+// normally be lost when we compile pattern matches, but we keep it in the `BranchInfo` field of
 // switch branches. here we also store the symbol that was switched on, and the layout of that
 // symbol.
 //
@@ -165,11 +165,10 @@ impl<'a, 'i> Env<'a, 'i> {
                 self.constructor_map.insert(symbol, 0);
                 self.layout_map.insert(symbol, Layout::Struct(fields));
             }
-            Closure(arguments, closure_layout, result) => {
-                let fpointer = Layout::FunctionPointer(arguments, result);
-                let fields = self.arena.alloc([fpointer, *closure_layout.layout]);
+            Closure(_, lambda_set, _) => {
                 self.constructor_map.insert(symbol, 0);
-                self.layout_map.insert(symbol, Layout::Struct(fields));
+                self.layout_map
+                    .insert(symbol, lambda_set.runtime_representation());
             }
             _ => {}
         }
@@ -188,22 +187,22 @@ impl<'a, 'i> Env<'a, 'i> {
     pub fn unique_symbol(&mut self) -> Symbol {
         let ident_id = self.ident_ids.gen_unique();
 
-        self.home.register_debug_idents(&self.ident_ids);
+        self.home.register_debug_idents(self.ident_ids);
 
         Symbol::new(self.home, ident_id)
     }
-
+    #[allow(dead_code)]
     fn manual_unique_symbol(home: ModuleId, ident_ids: &mut IdentIds) -> Symbol {
         let ident_id = ident_ids.gen_unique();
 
-        home.register_debug_idents(&ident_ids);
+        home.register_debug_idents(ident_ids);
 
         Symbol::new(home, ident_id)
     }
 }
 
 fn layout_for_constructor<'a>(
-    arena: &'a Bump,
+    _arena: &'a Bump,
     layout: &Layout<'a>,
     constructor: u64,
 ) -> ConstructorLayout<&'a [Layout<'a>]> {
@@ -245,10 +244,9 @@ fn layout_for_constructor<'a>(
             debug_assert_eq!(constructor, 0);
             HasFields(fields)
         }
-        Closure(arguments, closure_layout, result) => {
-            let fpointer = Layout::FunctionPointer(arguments, result);
-            let fields = arena.alloc([fpointer, *closure_layout.layout]);
-            HasFields(fields)
+        Closure(_arguments, _lambda_set, _result) => {
+            // HasFields(fields)
+            ConstructorLayout::Unknown
         }
         other => unreachable!("weird layout {:?}", other),
     }
@@ -304,11 +302,13 @@ fn work_for_constructor<'a>(
                             // we have to extract it now, but we only extract it
                             // if at least one field is aliased.
 
+                            todo!("get the tag id");
+                            /*
                             let expr = Expr::AccessAtIndex {
                                 index: i as u64,
                                 field_layouts: constructor_layout,
                                 structure: *symbol,
-                                wrapped: Wrapped::MultiTagUnion,
+                                wrapped: todo!("get the tag id"),
                             };
 
                             // create a fresh symbol for this field
@@ -322,6 +322,7 @@ fn work_for_constructor<'a>(
 
                             env.deferred.assignments.push((alias_symbol, expr, layout));
                             result.push(alias_symbol);
+                            */
                         }
                         None => {
                             // if all refcounted fields were unaliased, generate a normal decrement
@@ -342,7 +343,7 @@ fn can_push_inc_through(stmt: &Stmt) -> bool {
     match stmt {
         Let(_, expr, _, _) => {
             // we can always delay an increment/decrement until after a field access
-            matches!(expr, Expr::AccessAtIndex { .. } | Expr::Literal(_))
+            matches!(expr, Expr::StructAtIndex { .. } | Expr::Literal(_))
         }
 
         Refcounting(ModifyRc::Inc(_, _), _) => true,
@@ -373,11 +374,12 @@ pub fn expand_and_cancel_proc<'a>(
 
                 introduced.push(*symbol);
             }
-            Layout::Closure(arguments, closure_layout, result) => {
-                let fpointer = Layout::FunctionPointer(arguments, result);
-                let fields = env.arena.alloc([fpointer, *closure_layout.layout]);
-                env.insert_struct_info(*symbol, fields);
-                introduced.push(*symbol);
+            Layout::Closure(_arguments, _lambda_set, _result) => {
+                // TODO can this be improved again?
+                // let fpointer = Layout::FunctionPointer(arguments, result);
+                // let fields = env.arena.alloc([fpointer, *closure_layout.layout]);
+                // env.insert_struct_info(*symbol, fields);
+                // introduced.push(*symbol);
             }
             _ => {}
         }
@@ -395,19 +397,15 @@ pub fn expand_and_cancel_proc<'a>(
 fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a> {
     use Stmt::*;
 
-    let mut deferred_default = Deferred {
+    let mut deferred = Deferred {
         inc_dec_map: Default::default(),
         assignments: Vec::new_in(env.arena),
         decrefs: Vec::new_in(env.arena),
     };
 
-    let deferred = if can_push_inc_through(stmt) {
-        deferred_default
-    } else {
-        std::mem::swap(&mut deferred_default, &mut env.deferred);
-
-        deferred_default
-    };
+    if !can_push_inc_through(stmt) {
+        std::mem::swap(&mut deferred, &mut env.deferred);
+    }
 
     let mut result = {
         match stmt {
@@ -421,7 +419,10 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                 // prevent long chains of `Let`s from blowing the stack
                 let mut literal_stack = Vec::new_in(env.arena);
 
-                while !matches!(&expr, Expr::AccessAtIndex { .. } | Expr::Struct(_)) {
+                while !matches!(
+                    &expr,
+                    Expr::StructAtIndex { .. } | Expr::Struct(_) | Expr::Call(_)
+                ) {
                     if let Stmt::Let(symbol1, expr1, layout1, cont1) = cont {
                         literal_stack.push((symbol, expr.clone(), *layout));
 
@@ -437,11 +438,10 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                 let new_cont;
 
                 match &expr {
-                    Expr::AccessAtIndex {
+                    Expr::StructAtIndex {
                         structure,
                         index,
                         field_layouts,
-                        wrapped,
                     } => {
                         let entry = env
                             .alias_map
@@ -450,14 +450,8 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
 
                         entry.insert(*index, symbol);
 
-                        // fixes https://github.com/rtfeldman/roc/issues/1099
-                        if matches!(
-                            wrapped,
-                            Wrapped::SingleElementRecord | Wrapped::RecordOrSingleTagUnion
-                        ) {
-                            env.layout_map
-                                .insert(*structure, Layout::Struct(field_layouts));
-                        }
+                        env.layout_map
+                            .insert(*structure, Layout::Struct(field_layouts));
 
                         // if the field is a struct, we know its constructor too!
                         let field_layout = &field_layouts[*index as usize];
@@ -473,6 +467,17 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                             .and_then(|map| map.remove(index));
                     }
                     Expr::Struct(_) => {
+                        if let Layout::Struct(fields) = layout {
+                            env.insert_struct_info(symbol, fields);
+
+                            new_cont = expand_and_cancel(env, cont);
+
+                            env.remove_struct_info(symbol);
+                        } else {
+                            new_cont = expand_and_cancel(env, cont);
+                        }
+                    }
+                    Expr::Call(_) => {
                         if let Layout::Struct(fields) = layout {
                             env.insert_struct_info(symbol, fields);
 
@@ -536,7 +541,12 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
 
                 &*env.arena.alloc(stmt)
             }
-            Refcounting(ModifyRc::DecRef(_symbol), _cont) => unreachable!("not introduced yet"),
+            Refcounting(ModifyRc::DecRef(symbol), cont) => {
+                // decref the current cell
+                env.deferred.decrefs.push(*symbol);
+
+                expand_and_cancel(env, cont)
+            }
 
             Refcounting(ModifyRc::Dec(symbol), cont) => {
                 use ConstructorLayout::*;
@@ -581,6 +591,7 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                 layout,
                 pass,
                 fail,
+                exception_id,
             } => {
                 let pass = expand_and_cancel(env, pass);
                 let fail = expand_and_cancel(env, fail);
@@ -591,6 +602,7 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                     layout: *layout,
                     pass,
                     fail,
+                    exception_id: *exception_id,
                 };
 
                 env.arena.alloc(stmt)
@@ -599,7 +611,7 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
             Join {
                 id,
                 parameters,
-                continuation,
+                body: continuation,
                 remainder,
             } => {
                 let continuation = expand_and_cancel(env, continuation);
@@ -608,14 +620,14 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                 let stmt = Join {
                     id: *id,
                     parameters,
-                    continuation,
+                    body: continuation,
                     remainder,
                 };
 
                 env.arena.alloc(stmt)
             }
 
-            Rethrow | Ret(_) | Jump(_, _) | RuntimeError(_) => stmt,
+            Resume(_) | Ret(_) | Jump(_, _) | RuntimeError(_) => stmt,
         }
     };
 

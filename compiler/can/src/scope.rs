@@ -1,4 +1,4 @@
-use roc_collections::all::{ImMap, MutSet};
+use roc_collections::all::{MutSet, SendMap};
 use roc_module::ident::{Ident, Lowercase};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
@@ -10,14 +10,14 @@ use roc_types::types::{Alias, Type};
 pub struct Scope {
     /// All the identifiers in scope, mapped to were they were defined and
     /// the Symbol they resolve to.
-    idents: ImMap<Ident, (Symbol, Region)>,
+    idents: SendMap<Ident, (Symbol, Region)>,
 
     /// A cache of all the symbols in scope. This makes lookups much
     /// faster when checking for unused defs and unused arguments.
-    symbols: ImMap<Symbol, Region>,
+    symbols: SendMap<Symbol, Region>,
 
     /// The type aliases currently in scope
-    aliases: ImMap<Symbol, Alias>,
+    aliases: SendMap<Symbol, Alias>,
 
     /// The current module being processed. This will be used to turn
     /// unqualified idents into Symbols.
@@ -28,7 +28,7 @@ impl Scope {
     pub fn new(home: ModuleId, var_store: &mut VarStore) -> Scope {
         use roc_types::solved_types::{BuiltinAlias, FreeVars};
         let solved_aliases = roc_types::builtin_aliases::aliases();
-        let mut aliases = ImMap::default();
+        let mut aliases = SendMap::default();
 
         for (symbol, builtin_alias) in solved_aliases {
             let BuiltinAlias { region, vars, typ } = builtin_alias;
@@ -47,7 +47,7 @@ impl Scope {
             let alias = Alias {
                 region,
                 typ,
-                lambda_set_variables: MutSet::default(),
+                lambda_set_variables: Vec::new(),
                 recursion_variables: MutSet::default(),
                 type_variables: variables,
             };
@@ -58,7 +58,7 @@ impl Scope {
         Scope {
             home,
             idents: Symbol::default_in_scope(),
-            symbols: ImMap::default(),
+            symbols: SendMap::default(),
             aliases,
         }
     }
@@ -89,7 +89,7 @@ impl Scope {
             None => Err(RuntimeError::LookupNotInScope(
                 Located {
                     region,
-                    value: ident.clone().into(),
+                    value: ident.clone(),
                 },
                 self.idents.keys().map(|v| v.as_ref().into()).collect(),
             )),
@@ -124,9 +124,9 @@ impl Scope {
                 // If this IdentId was already added previously
                 // when the value was exposed in the module header,
                 // use that existing IdentId. Otherwise, create a fresh one.
-                let ident_id = match exposed_ident_ids.get_id(&ident.as_inline_str()) {
+                let ident_id = match exposed_ident_ids.get_id(&ident) {
                     Some(ident_id) => *ident_id,
-                    None => all_ident_ids.add(ident.clone().into()),
+                    None => all_ident_ids.add(ident.clone()),
                 };
 
                 let symbol = Symbol::new(self.home, ident_id);
@@ -143,7 +143,7 @@ impl Scope {
     ///
     /// Used for record guards like { x: Just _ }
     pub fn ignore(&mut self, ident: Ident, all_ident_ids: &mut IdentIds) -> Symbol {
-        let ident_id = all_ident_ids.add(ident.into());
+        let ident_id = all_ident_ids.add(ident);
         Symbol::new(self.home, ident_id)
     }
 
@@ -197,6 +197,11 @@ impl Scope {
 
             true
         });
+
+        let lambda_set_variables: Vec<_> = lambda_set_variables
+            .into_iter()
+            .map(|v| roc_types::types::LambdaSet(Type::Variable(v)))
+            .collect();
 
         let alias = Alias {
             region,

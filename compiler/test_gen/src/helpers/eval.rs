@@ -4,7 +4,9 @@ use roc_build::program::FunctionIterator;
 use roc_can::builtins::builtin_defs_map;
 use roc_can::def::Def;
 use roc_collections::all::{MutMap, MutSet};
+use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_module::symbol::Symbol;
+use roc_mono::ir::OptLevel;
 use roc_types::subs::VarStore;
 
 fn promote_expr_to_module(src: &str) -> String {
@@ -35,7 +37,6 @@ pub fn helper<'a>(
     ignore_problems: bool,
     context: &'a inkwell::context::Context,
 ) -> (&'static str, String, Library) {
-    use roc_gen::llvm::build::{build_proc, build_proc_header, Scope};
     use std::path::{Path, PathBuf};
 
     let filename = PathBuf::from("Test.roc");
@@ -59,7 +60,7 @@ pub fn helper<'a>(
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
         filename,
-        &module_src,
+        module_src,
         stdlib,
         src_dir,
         exposed_types,
@@ -78,14 +79,11 @@ pub fn helper<'a>(
 
     use roc_load::file::MonomorphizedModule;
     let MonomorphizedModule {
-        mut procedures,
+        procedures,
+        entry_point,
         interns,
-        exposed_to_host,
         ..
     } = loaded;
-
-    debug_assert_eq!(exposed_to_host.len(), 1);
-    let main_fn_symbol = exposed_to_host.keys().copied().next().unwrap();
 
     let mut lines = Vec::new();
     // errors whose reporting we delay (so we can see that code gen generates runtime errors)
@@ -170,32 +168,27 @@ pub fn helper<'a>(
         }
     }
 
-    let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
-        Some(found) => *found,
-        None => panic!(
-            "The main function symbol {:?} does not have a procedure in {:?}",
-            main_fn_symbol,
-            &procedures.keys()
-        ),
-    };
+    let builder = context.create_builder();
+    let module = roc_gen_llvm::llvm::build::module_from_builtins(context, "app");
 
-    let module = roc_gen::llvm::build::module_from_builtins(context, "app");
+    // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
+    // platform to provide them.
+    add_default_roc_externs(context, &module, &builder, ptr_bytes);
 
     // strip Zig debug stuff
     module.strip_debug_info();
 
-    let builder = context.create_builder();
     let opt_level = if cfg!(debug_assertions) {
-        roc_gen::llvm::build::OptLevel::Normal
+        OptLevel::Normal
     } else {
-        roc_gen::llvm::build::OptLevel::Optimize
+        OptLevel::Optimize
     };
 
     let module = arena.alloc(module);
     let (module_pass, function_pass) =
-        roc_gen::llvm::build::construct_optimization_passes(module, opt_level);
+        roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
 
-    let (dibuilder, compile_unit) = roc_gen::llvm::build::Env::new_debug_info(module);
+    let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
 
     // mark our zig-defined builtins as internal
     use inkwell::attributes::{Attribute, AttributeLoc};
@@ -217,8 +210,8 @@ pub fn helper<'a>(
     }
 
     // Compile and add all the Procs before adding main
-    let env = roc_gen::llvm::build::Env {
-        arena: &arena,
+    let env = roc_gen_llvm::llvm::build::Env {
+        arena,
         builder: &builder,
         dibuilder: &dibuilder,
         compile_unit: &compile_unit,
@@ -231,65 +224,11 @@ pub fn helper<'a>(
         exposed_to_host: MutSet::default(),
     };
 
-    let mut layout_ids = roc_mono::layout::LayoutIds::default();
-    let mut headers = Vec::with_capacity(procedures.len());
-
-    // Add all the Proc headers to the module.
-    // We have to do this in a separate pass first,
-    // because their bodies may reference each other.
-    let mut scope = Scope::default();
-    for ((symbol, layout), proc) in procedures.drain() {
-        let fn_val = build_proc_header(&env, &mut layout_ids, symbol, &layout, &proc);
-
-        if proc.args.is_empty() {
-            // this is a 0-argument thunk, i.e. a top-level constant definition
-            // it must be in-scope everywhere in the module!
-            scope.insert_top_level_thunk(symbol, layout, fn_val);
-        }
-
-        headers.push((proc, fn_val));
-    }
-
-    // Build each proc using its header info.
-    for (proc, fn_val) in headers {
-        let mut current_scope = scope.clone();
-
-        // only have top-level thunks for this proc's module in scope
-        // this retain is not needed for correctness, but will cause less confusion when debugging
-        let home = proc.name.module_id();
-        current_scope.retain_top_level_thunks_for_module(home);
-
-        build_proc(&env, &mut layout_ids, scope.clone(), proc, fn_val);
-
-        // call finalize() before any code generation/verification
-        env.dibuilder.finalize();
-
-        if fn_val.verify(true) {
-            function_pass.run_on(&fn_val);
-        } else {
-            let mode = "NON-OPTIMIZED";
-
-            eprintln!(
-                "\n\nFunction {:?} failed LLVM verification in {} build. Its content was:\n",
-                fn_val.get_name().to_str().unwrap(),
-                mode,
-            );
-
-            // fn_val.print_to_stderr();
-            // module.print_to_stderr();
-
-            panic!(
-                "The preceding code was from {:?}, which failed LLVM verification in {} build.",
-                fn_val.get_name().to_str().unwrap(),
-                mode,
-            );
-        }
-    }
-    let (main_fn_name, main_fn) = roc_gen::llvm::build::promote_to_main_function(
+    let (main_fn_name, main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
         &env,
-        &mut layout_ids,
-        main_fn_symbol,
-        &main_fn_layout,
+        opt_level,
+        procedures,
+        entry_point,
     );
 
     env.dibuilder.finalize();
@@ -307,13 +246,13 @@ pub fn helper<'a>(
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
-        panic!("Errors defining module: {:?}", errors);
+        panic!("Errors defining module:\n\n{}", errors.to_string());
     }
 
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
-    let lib = module_to_dylib(&env.module, &target, opt_level)
+    let lib = module_to_dylib(env.module, &target, opt_level)
         .expect("Error loading compiled dylib for test");
 
     (main_fn_name, delayed_errors.join("\n"), lib)
@@ -324,7 +263,7 @@ macro_rules! assert_llvm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr, $ignore_problems:expr) => {
         use bumpalo::Bump;
         use inkwell::context::Context;
-        use roc_gen::run_jit_function;
+        use roc_gen_llvm::run_jit_function;
 
         let arena = Bump::new();
         let context = Context::create();
@@ -337,6 +276,7 @@ macro_rules! assert_llvm_evals_to {
 
         let transform = |success| {
             let expected = $expected;
+            #[allow(clippy::redundant_closure_call)]
             let given = $transform(success);
             assert_eq!(&given, &expected);
         };

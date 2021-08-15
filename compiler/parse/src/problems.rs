@@ -6,10 +6,10 @@ pub type Problems = Vec<Loc<Problem>>;
 pub enum Problem {
     // UNICODE CODE POINT
     /// TODO Invalid hex code - Unicode code points must be specified using hexadecimal characters (the numbers 0-9 and letters A-F)
-    NonHexCharsInUnicodeCodePoint,
+    NonHexCharsInUnicodeCodePt,
     /// TODO Invalid Unicode code point. It must be no more than \\u{10FFFF}.
-    UnicodeCodePointTooLarge,
-    InvalidUnicodeCodePoint,
+    UnicodeCodePtTooLarge,
+    InvalidUnicodeCodePt,
     MalformedEscapedUnicode,
     NoUnicodeDigits,
 

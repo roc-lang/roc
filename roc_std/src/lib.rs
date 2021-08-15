@@ -1,15 +1,24 @@
 #![crate_type = "lib"]
 #![no_std]
-use core::fmt;
-
-pub mod alloca;
+use core::convert::From;
+use core::ffi::c_void;
+use core::{fmt, mem, ptr, slice};
 
 // A list of C functions that are being imported
 extern "C" {
     pub fn printf(format: *const u8, ...) -> i32;
+
+    pub fn roc_alloc(size: usize, alignment: u32) -> *mut c_void;
+    pub fn roc_realloc(
+        ptr: *mut c_void,
+        new_size: usize,
+        old_size: usize,
+        alignment: u32,
+    ) -> *mut c_void;
+    pub fn roc_dealloc(ptr: *mut c_void, alignment: u32);
 }
 
-const REFCOUNT_1: usize = isize::MIN as usize;
+const REFCOUNT_1: isize = isize::MIN;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,7 +31,7 @@ pub enum RocOrder {
 //#[macro_export]
 //macro_rules! roclist {
 //    () => (
-//        $crate::RocList::empty()
+//        $crate::RocList::default()
 //    );
 //    ($($x:expr),+ $(,)?) => (
 //        $crate::RocList::from_slice(&[$($x),+])
@@ -38,7 +47,7 @@ pub struct RocList<T> {
 #[derive(Clone, Copy, Debug)]
 pub enum Storage {
     ReadOnly,
-    Refcounted(usize),
+    Refcounted(isize),
     Capacity(usize),
 }
 
@@ -49,13 +58,6 @@ impl<T> RocList<T> {
 
     pub fn is_empty(&self) -> bool {
         self.length == 0
-    }
-
-    pub fn empty() -> Self {
-        RocList {
-            length: 0,
-            elements: core::ptr::null_mut(),
-        }
     }
 
     pub fn get(&self, index: usize) -> Option<&T> {
@@ -81,22 +83,26 @@ impl<T> RocList<T> {
             let value = *self.get_storage_ptr();
 
             // NOTE doesn't work with elements of 16 or more bytes
-            match isize::cmp(&(value as isize), &0) {
+            match isize::cmp(&value, &0) {
                 Equal => Some(Storage::ReadOnly),
                 Less => Some(Storage::Refcounted(value)),
-                Greater => Some(Storage::Capacity(value)),
+                Greater => Some(Storage::Capacity(value as usize)),
             }
         }
     }
 
-    fn get_storage_ptr(&self) -> *const usize {
-        let ptr = self.elements as *const usize;
+    fn get_storage_ptr(&self) -> *const isize {
+        let ptr = self.elements as *const isize;
 
         unsafe { ptr.offset(-1) }
     }
 
-    fn get_storage_ptr_mut(&mut self) -> *mut usize {
-        self.get_storage_ptr() as *mut usize
+    fn get_storage_ptr_mut(&mut self) -> *mut isize {
+        self.get_storage_ptr() as *mut isize
+    }
+
+    fn set_storage_ptr(&mut self, ptr: *const isize) {
+        self.elements = unsafe { ptr.offset(1) as *mut T };
     }
 
     fn get_element_ptr(elements: *const T) -> *const T {
@@ -105,18 +111,18 @@ impl<T> RocList<T> {
 
         unsafe {
             if elem_alignment <= core::mem::align_of::<usize>() {
-                ptr.offset(1) as *const T
+                ptr.add(1) as *const T
             } else {
                 // If elements have an alignment bigger than usize (e.g. an i128),
                 // we will have necessarily allocated two usize slots worth of
                 // space for the storage value (with the first usize slot being
                 // padding for alignment's sake), and we need to skip past both.
-                ptr.offset(2) as *const T
+                ptr.add(2) as *const T
             }
         }
     }
 
-    pub fn from_slice_with_capacity(slice: &[T], capacity: usize) -> RocList<T>
+    pub fn from_slice_with_capacity(slice: &[T], capacity: usize) -> Self
     where
         T: Clone,
     {
@@ -138,14 +144,14 @@ impl<T> RocList<T> {
         let num_bytes = core::mem::size_of::<usize>() + padding + element_bytes;
 
         let elements = unsafe {
-            let raw_ptr = libc::malloc(num_bytes) as *mut u8;
+            let raw_ptr = roc_alloc(num_bytes, core::mem::size_of::<usize>() as u32) as *mut u8;
 
             // pointer to the first element
             let raw_ptr = Self::get_element_ptr(raw_ptr as *mut T) as *mut T;
 
-            // write the capacity
-            let capacity_ptr = raw_ptr as *mut usize;
-            *(capacity_ptr.offset(-1)) = capacity;
+            // write the refcount
+            let refcount_ptr = raw_ptr as *mut isize;
+            *(refcount_ptr.offset(-1)) = isize::MIN;
 
             {
                 // NOTE: using a memcpy here causes weird issues
@@ -171,13 +177,13 @@ impl<T> RocList<T> {
             raw_ptr
         };
 
-        RocList {
+        Self {
             length: slice.len(),
             elements,
         }
     }
 
-    pub fn from_slice(slice: &[T]) -> RocList<T>
+    pub fn from_slice(slice: &[T]) -> Self
     where
         T: Clone,
     {
@@ -186,6 +192,100 @@ impl<T> RocList<T> {
 
     pub fn as_slice(&self) -> &[T] {
         unsafe { core::slice::from_raw_parts(self.elements, self.length) }
+    }
+
+    /// Copy the contents of the given slice into the end of this list,
+    /// reallocating and resizing as necessary.
+    pub fn append_slice(&mut self, slice: &[T]) {
+        let new_len = self.len() + slice.len();
+        let storage_ptr = self.get_storage_ptr_mut();
+
+        // First, ensure that there's enough storage space.
+        unsafe {
+            let storage_val = *storage_ptr as isize;
+
+            // Check if this is refcounted, readonly, or has a capcacity.
+            // (Capacity will be positive if it has a capacity.)
+            if storage_val > 0 {
+                let capacity = storage_val as usize;
+
+                // We don't have enough capacity, so we need to get some more.
+                if capacity < new_len {
+                    // Double our capacity using realloc
+                    let new_cap = 2 * capacity;
+                    let new_ptr = roc_realloc(
+                        storage_ptr as *mut c_void,
+                        new_cap,
+                        capacity,
+                        Self::align_of_storage_ptr(),
+                    ) as *mut isize;
+
+                    // Write the new capacity into the new memory
+                    *new_ptr = new_cap as isize;
+
+                    // Copy all the existing elements into the new allocation.
+                    ptr::copy_nonoverlapping(self.elements, new_ptr as *mut T, self.len());
+
+                    // Update our storage pointer to be the new one
+                    self.set_storage_ptr(new_ptr);
+                }
+            } else {
+                // If this was reference counted, decrement the refcount!
+                if storage_val < 0 {
+                    let refcount = storage_val;
+
+                    // Either deallocate or decrement.
+                    if refcount == REFCOUNT_1 {
+                        roc_dealloc(storage_ptr as *mut c_void, Self::align_of_storage_ptr());
+                    } else {
+                        *storage_ptr = refcount - 1;
+                    }
+                }
+
+                // This is either refcounted or readonly; either way, we need
+                // to clone the elements!
+
+                // Double the capacity we need, in case there are future additions.
+                let new_cap = new_len * 2;
+                let new_ptr = roc_alloc(new_cap, Self::align_of_storage_ptr()) as *mut isize;
+
+                // Write the new capacity into the new memory; this list is
+                // now unique, and gets its own capacity!
+                *new_ptr = new_cap as isize;
+
+                // Copy all the existing elements into the new allocation.
+                ptr::copy_nonoverlapping(self.elements, new_ptr as *mut T, self.len());
+
+                // Update our storage pointer to be the new one
+                self.set_storage_ptr(new_ptr);
+            }
+
+            // Since this is an append, we want to start writing new elements
+            // into the memory immediately after the current last element.
+            let dest = self.elements.add(self.len());
+
+            // There's now enough storage to append the contents of the slice
+            // in-place, so do that!
+            ptr::copy_nonoverlapping(slice.as_ptr(), dest, self.len());
+        }
+
+        self.length = new_len;
+    }
+
+    /// The alignment we need is either the alignment of T, or else
+    /// the alignment of usize, whichever is higher. That's because we need
+    /// to store both T values as well as the refcount/capacity storage slot.
+    fn align_of_storage_ptr() -> u32 {
+        mem::align_of::<T>().max(mem::align_of::<usize>()) as u32
+    }
+}
+
+impl<T> Default for RocList<T> {
+    fn default() -> Self {
+        Self {
+            length: 0,
+            elements: core::ptr::null_mut(),
+        }
     }
 }
 
@@ -205,9 +305,9 @@ impl<T: PartialEq> PartialEq for RocList<T> {
             return false;
         }
 
-        for i in 0..(self.length as isize) {
+        for i in 0..self.length {
             unsafe {
-                if *self.elements.offset(i) != *other.elements.offset(i) {
+                if *self.elements.add(i) != *other.elements.add(i) {
                     return false;
                 }
             }
@@ -221,17 +321,23 @@ impl<T: Eq> Eq for RocList<T> {}
 
 impl<T> Drop for RocList<T> {
     fn drop(&mut self) {
-        use Storage::*;
-        match self.storage() {
-            None | Some(ReadOnly) => {}
-            Some(Capacity(_)) | Some(Refcounted(REFCOUNT_1)) => unsafe {
-                libc::free(self.get_storage_ptr() as *mut libc::c_void);
-            },
-            Some(Refcounted(rc)) => {
-                let sptr = self.get_storage_ptr_mut();
-                unsafe {
-                    *sptr = rc - 1;
+        if !self.is_empty() {
+            let storage_ptr = self.get_storage_ptr_mut();
+
+            unsafe {
+                let storage_val = *storage_ptr;
+
+                if storage_val == REFCOUNT_1 || storage_val > 0 {
+                    // If we have no more references, or if this was unique,
+                    // deallocate it.
+                    roc_dealloc(storage_ptr as *mut c_void, Self::align_of_storage_ptr());
+                } else if storage_val < 0 {
+                    // If this still has more references, decrement one.
+                    *storage_ptr = storage_val - 1;
                 }
+
+                // The only remaining option is that this is in readonly memory,
+                // in which case we shouldn't attempt to do anything to it.
             }
         }
     }
@@ -247,7 +353,8 @@ impl RocStr {
     pub fn len(&self) -> usize {
         if self.is_small_str() {
             let bytes = self.length.to_ne_bytes();
-            let last_byte = bytes[bytes.len() - 1];
+            let last_byte = bytes[mem::size_of::<usize>() - 1];
+
             (last_byte ^ 0b1000_0000) as usize
         } else {
             self.length
@@ -260,14 +367,6 @@ impl RocStr {
 
     pub fn is_small_str(&self) -> bool {
         (self.length as isize) < 0
-    }
-
-    pub fn empty() -> Self {
-        RocStr {
-            // The first bit of length is 1 to specify small str.
-            length: 0,
-            elements: core::ptr::null_mut(),
-        }
     }
 
     pub fn get(&self, index: usize) -> Option<&u8> {
@@ -286,6 +385,14 @@ impl RocStr {
         }
     }
 
+    pub fn get_bytes(&self) -> *const u8 {
+        if self.is_small_str() {
+            self.get_small_str_ptr()
+        } else {
+            self.elements
+        }
+    }
+
     pub fn storage(&self) -> Option<Storage> {
         use core::cmp::Ordering::*;
 
@@ -300,19 +407,19 @@ impl RocStr {
             match isize::cmp(&(value as isize), &0) {
                 Equal => Some(Storage::ReadOnly),
                 Less => Some(Storage::Refcounted(value)),
-                Greater => Some(Storage::Capacity(value)),
+                Greater => Some(Storage::Capacity(value as usize)),
             }
         }
     }
 
-    fn get_storage_ptr(&self) -> *const usize {
-        let ptr = self.elements as *const usize;
+    fn get_storage_ptr(&self) -> *const isize {
+        let ptr = self.elements as *const isize;
 
         unsafe { ptr.offset(-1) }
     }
 
-    fn get_storage_ptr_mut(&mut self) -> *mut usize {
-        self.get_storage_ptr() as *mut usize
+    fn get_storage_ptr_mut(&mut self) -> *mut isize {
+        self.get_storage_ptr() as *mut isize
     }
 
     fn get_element_ptr(elements: *const u8) -> *const usize {
@@ -321,34 +428,34 @@ impl RocStr {
 
         unsafe {
             if elem_alignment <= core::mem::align_of::<usize>() {
-                ptr.offset(1)
+                ptr.add(1)
             } else {
                 // If elements have an alignment bigger than usize (e.g. an i128),
                 // we will have necessarily allocated two usize slots worth of
                 // space for the storage value (with the first usize slot being
                 // padding for alignment's sake), and we need to skip past both.
-                ptr.offset(2)
+                ptr.add(2)
             }
         }
     }
 
     fn get_small_str_ptr(&self) -> *const u8 {
-        (self as *const RocStr).cast()
+        (self as *const Self).cast()
     }
 
     fn get_small_str_ptr_mut(&mut self) -> *mut u8 {
-        (self as *mut RocStr).cast()
+        (self as *mut Self).cast()
     }
 
-    fn from_slice_with_capacity_str(slice: &[u8], capacity: usize) -> RocStr {
+    fn from_slice_with_capacity_str(slice: &[u8], capacity: usize) -> Self {
         assert!(
             slice.len() <= capacity,
             "RocStr::from_slice_with_capacity_str length bigger than capacity {} {}",
             slice.len(),
             capacity
         );
-        if capacity < core::mem::size_of::<RocStr>() {
-            let mut rocstr = RocStr::empty();
+        if capacity < core::mem::size_of::<Self>() {
+            let mut rocstr = Self::default();
             let target_ptr = rocstr.get_small_str_ptr_mut();
             let source_ptr = slice.as_ptr() as *const u8;
             for index in 0..slice.len() {
@@ -358,7 +465,7 @@ impl RocStr {
             }
             // Write length and small string bit to last byte of length.
             let mut bytes = rocstr.length.to_ne_bytes();
-            bytes[bytes.len() - 1] = capacity as u8 ^ 0b1000_0000;
+            bytes[mem::size_of::<usize>() - 1] = capacity as u8 ^ 0b1000_0000;
             rocstr.length = usize::from_ne_bytes(bytes);
 
             rocstr
@@ -369,8 +476,7 @@ impl RocStr {
             let num_bytes = core::mem::size_of::<usize>() + element_bytes;
 
             let elements = unsafe {
-                let raw_ptr = libc::malloc(num_bytes);
-
+                let raw_ptr = roc_alloc(num_bytes, core::mem::size_of::<usize>() as u32) as *mut u8;
                 // write the capacity
                 let capacity_ptr = raw_ptr as *mut usize;
                 *capacity_ptr = capacity;
@@ -381,23 +487,24 @@ impl RocStr {
                     // NOTE: using a memcpy here causes weird issues
                     let target_ptr = raw_ptr as *mut u8;
                     let source_ptr = ptr as *const u8;
-                    let length = slice.len() as isize;
+                    let length = slice.len();
+
                     for index in 0..length {
-                        *target_ptr.offset(index) = *source_ptr.offset(index);
+                        *target_ptr.add(index) = *source_ptr.add(index);
                     }
                 }
 
                 raw_ptr as *mut u8
             };
 
-            RocStr {
+            Self {
                 length: slice.len(),
                 elements,
             }
         }
     }
 
-    pub fn from_slice(slice: &[u8]) -> RocStr {
+    pub fn from_slice(slice: &[u8]) -> Self {
         Self::from_slice_with_capacity_str(slice, slice.len())
     }
 
@@ -408,11 +515,37 @@ impl RocStr {
             unsafe { core::slice::from_raw_parts(self.elements, self.length) }
         }
     }
-    #[allow(clippy::missing_safety_doc)]
-    pub unsafe fn as_str(&self) -> &str {
+
+    pub fn as_str(&self) -> &str {
         let slice = self.as_slice();
 
-        core::str::from_utf8_unchecked(slice)
+        unsafe { core::str::from_utf8_unchecked(slice) }
+    }
+
+    /// Write a CStr (null-terminated) representation of this RocStr into
+    /// the given buffer.
+    ///
+    /// # Safety
+    /// This assumes the given buffer has enough space, so make sure you only
+    /// pass in a pointer to an allocation that's at least as long as this Str!
+    pub unsafe fn write_c_str(&self, buf: *mut char) {
+        if self.is_small_str() {
+            ptr::copy_nonoverlapping(self.get_small_str_ptr(), buf as *mut u8, self.len());
+        } else {
+            ptr::copy_nonoverlapping(self.elements, buf as *mut u8, self.len());
+        }
+
+        // null-terminate
+        *(buf.add(self.len())) = '\0';
+    }
+}
+
+impl Default for RocStr {
+    fn default() -> Self {
+        Self {
+            length: 0,
+            elements: core::ptr::null_mut(),
+        }
     }
 }
 
@@ -452,17 +585,22 @@ impl Clone for RocStr {
             let capacity_size = core::mem::size_of::<usize>();
             let copy_length = self.length + capacity_size;
             let elements = unsafe {
-                let raw = libc::malloc(copy_length);
+                // We use *mut u8 here even though technically these are
+                // usize-aligned (due to the refcount slot).
+                // This avoids any potential edge cases around there somehow
+                // being unreadable memory after the last byte, which would
+                // potentially get read when reading <usize> bytes at a time.
+                let raw_ptr =
+                    roc_alloc(copy_length, core::mem::size_of::<usize>() as u32) as *mut u8;
+                let dest_slice = slice::from_raw_parts_mut(raw_ptr, copy_length);
+                let src_ptr = self.elements.offset(-(capacity_size as isize)) as *mut u8;
+                let src_slice = slice::from_raw_parts(src_ptr, copy_length);
 
-                libc::memcpy(
-                    raw,
-                    self.elements.offset(-(capacity_size as isize)) as *mut libc::c_void,
-                    copy_length,
-                );
+                dest_slice.copy_from_slice(src_slice);
 
-                *(raw as *mut usize) = self.length;
+                *(raw_ptr as *mut usize) = self.length;
 
-                (raw as *mut u8).add(capacity_size)
+                (raw_ptr as *mut u8).add(capacity_size)
             };
 
             Self {
@@ -476,18 +614,22 @@ impl Clone for RocStr {
 impl Drop for RocStr {
     fn drop(&mut self) {
         if !self.is_small_str() {
-            use Storage::*;
-            match self.storage() {
-                None | Some(ReadOnly) => {}
-                Some(Capacity(_)) | Some(Refcounted(REFCOUNT_1)) => unsafe {
-                    libc::free(self.get_storage_ptr() as *mut libc::c_void);
-                },
-                Some(Refcounted(rc)) => {
-                    let sptr = self.get_storage_ptr_mut();
-                    unsafe {
-                        *sptr = rc - 1;
-                    }
+            let storage_ptr = self.get_storage_ptr_mut();
+
+            unsafe {
+                let storage_val = *storage_ptr;
+
+                if storage_val == REFCOUNT_1 || storage_val > 0 {
+                    // If we have no more references, or if this was unique,
+                    // deallocate it.
+                    roc_dealloc(storage_ptr as *mut c_void, mem::align_of::<isize>() as u32);
+                } else if storage_val < 0 {
+                    // If this still has more references, decrement one.
+                    *storage_ptr = storage_val - 1;
                 }
+
+                // The only remaining option is that this is in readonly memory,
+                // in which case we shouldn't attempt to do anything to it.
             }
         }
     }
@@ -563,5 +705,74 @@ impl<'a, T: Sized + Copy> From<&'a RocCallResult<T>> for Result<T, &'a str> {
                 msg
             }),
         }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct RocDec(pub i128);
+
+impl RocDec {
+    pub const MIN: Self = Self(i128::MIN);
+    pub const MAX: Self = Self(i128::MAX);
+
+    pub const DECIMAL_PLACES: u32 = 18;
+
+    pub const ONE_POINT_ZERO: i128 = 10i128.pow(Self::DECIMAL_PLACES);
+
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(value: &str) -> Option<Self> {
+        // Split the string into the parts before and after the "."
+        let mut parts = value.split('.');
+
+        let before_point = match parts.next() {
+            Some(answer) => answer,
+            None => {
+                return None;
+            }
+        };
+
+        let after_point = match parts.next() {
+            Some(answer) if answer.len() <= Self::DECIMAL_PLACES as usize => answer,
+            _ => {
+                return None;
+            }
+        };
+
+        // There should have only been one "." in the string!
+        if parts.next().is_some() {
+            return None;
+        }
+
+        // Calculate the low digits - the ones after the decimal point.
+        let lo = match after_point.parse::<i128>() {
+            Ok(answer) => {
+                // Translate e.g. the 1 from 0.1 into 10000000000000000000
+                // by "restoring" the elided trailing zeroes to the number!
+                let trailing_zeroes = Self::DECIMAL_PLACES as usize - after_point.len();
+                let lo = answer * 10i128.pow(trailing_zeroes as u32);
+
+                if !before_point.starts_with('-') {
+                    lo
+                } else {
+                    -lo
+                }
+            }
+            Err(_) => {
+                return None;
+            }
+        };
+
+        // Calculate the high digits - the ones before the decimal point.
+        match before_point.parse::<i128>() {
+            Ok(answer) => match answer.checked_mul(10i128.pow(Self::DECIMAL_PLACES)) {
+                Some(hi) => hi.checked_add(lo).map(Self),
+                None => None,
+            },
+            Err(_) => None,
+        }
+    }
+
+    pub fn from_str_to_i128_unsafe(val: &str) -> i128 {
+        Self::from_str(val).unwrap().0
     }
 }

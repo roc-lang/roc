@@ -4,7 +4,6 @@
 use crate::lang::expr::Env;
 use crate::lang::pool::{NodeId, Pool, PoolStr, PoolVec, ShallowClone};
 use crate::lang::scope::Scope;
-use inlinable_string::InlinableString;
 // use roc_can::expr::Output;
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Ident, TagName};
@@ -30,8 +29,8 @@ pub enum Type2 {
         actual: TypeId,                        // 4B
     },
     EmptyTagUnion,
-    TagUnion(PoolVec<(PoolStr, PoolVec<Type2>)>, TypeId), // 16B = 12B + 4B
-    RecursiveTagUnion(Variable, PoolVec<(PoolStr, PoolVec<Type2>)>, TypeId), // 20B = 4B + 12B + 4B
+    TagUnion(PoolVec<(TagName, PoolVec<Type2>)>, TypeId), // 16B = 12B + 4B
+    RecursiveTagUnion(Variable, PoolVec<(TagName, PoolVec<Type2>)>, TypeId), // 20B = 4B + 12B + 4B
 
     EmptyRec,
     Record(PoolVec<(PoolStr, RecordField<TypeId>)>, TypeId), // 16B = 12B + 4B
@@ -62,9 +61,15 @@ impl ShallowClone for Type2 {
     fn shallow_clone(&self) -> Self {
         match self {
             Self::Variable(var) => Self::Variable(*var),
-            Self::Alias(symbol, pool_vec, type_id) => {
-                Self::Alias(*symbol, pool_vec.shallow_clone(), type_id.clone())
+            Self::Alias(symbol, args, alias_type_id) => {
+                Self::Alias(*symbol, args.shallow_clone(), alias_type_id.clone())
             }
+            Self::Record(fields, ext_id) => Self::Record(fields.shallow_clone(), ext_id.clone()),
+            Self::Function(args, closure_type_id, ret_type_id) => Self::Function(
+                args.shallow_clone(),
+                closure_type_id.clone(),
+                ret_type_id.clone(),
+            ),
             rest => todo!("{:?}", rest),
         }
     }
@@ -422,9 +427,8 @@ pub fn to_type2<'a>(
 
             let tag_types = PoolVec::with_capacity(tag_types_vec.len() as u32, env.pool);
 
-            for (node_id, (label, field)) in tag_types.iter_node_ids().zip(tag_types_vec) {
-                let poolstr = PoolStr::new(label, env.pool);
-                env.pool[node_id] = (poolstr, field);
+            for (node_id, (tag_name, field)) in tag_types.iter_node_ids().zip(tag_types_vec) {
+                env.pool[node_id] = (tag_name, field);
             }
 
             let ext_type = match ext {
@@ -658,7 +662,7 @@ fn can_tags<'a>(
     rigids: &mut References<'a>,
     tags: &'a [Located<roc_parse::ast::Tag<'a>>],
     region: Region,
-) -> Vec<(&'a str, PoolVec<Type2>)> {
+) -> Vec<(TagName, PoolVec<Type2>)> {
     use roc_parse::ast::Tag;
     let mut tag_types = Vec::with_capacity(tags.len());
 
@@ -681,14 +685,14 @@ fn can_tags<'a>(
                         as_type_id(env, scope, rigids, type_id, &loc_arg.value, loc_arg.region);
                     }
 
-                    let tag_name = name.value;
-                    tag_types.push((tag_name, arg_types));
+                    let tag_name = TagName::Global(name.value.into());
+                    tag_types.push((tag_name.clone(), arg_types));
 
                     break 'inner tag_name;
                 }
                 Tag::Private { name, args } => {
-                    //let ident_id = env.ident_ids.get_or_insert(&name.value.into());
-                    //let symbol = Symbol::new(env.home, ident_id);
+                    let ident_id = env.ident_ids.get_or_insert(&name.value.into());
+                    let symbol = Symbol::new(env.home, ident_id);
 
                     let arg_types = PoolVec::with_capacity(args.len() as u32, env.pool);
 
@@ -696,9 +700,8 @@ fn can_tags<'a>(
                         as_type_id(env, scope, rigids, type_id, &loc_arg.value, loc_arg.region);
                     }
 
-                    //let tag_name = TagName::Private(symbol);
-                    let tag_name = name.value;
-                    tag_types.push((tag_name, arg_types));
+                    let tag_name = TagName::Private(symbol);
+                    tag_types.push((tag_name.clone(), arg_types));
 
                     break 'inner tag_name;
                 }
@@ -718,12 +721,11 @@ fn can_tags<'a>(
         // ensure that the new name is not already in this tag union:
         // note that the right-most tag wins when there are two with the same name
         if let Some(replaced_region) = seen.insert(new_name.clone(), loc_tag.region) {
-            let tag_name = TagName::Global(new_name.into());
             env.problem(roc_problem::can::Problem::DuplicateTag {
                 tag_region: loc_tag.region,
                 tag_union_region: region,
                 replaced_region,
-                tag_name,
+                tag_name: new_name,
             });
         }
     }

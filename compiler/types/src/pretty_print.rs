@@ -1,4 +1,4 @@
-use crate::subs::{Content, FlatType, Subs, Variable};
+use crate::subs::{Content, FlatType, GetSubsSlice, Subs, UnionTags, Variable};
 use crate::types::{name_type_var, RecordField};
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{Lowercase, TagName};
@@ -76,25 +76,34 @@ fn find_names_needed(
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
-    while let Some((recursive, _chain)) = subs.occurs(variable) {
-        let content = subs.get_without_compacting(recursive).content;
+    while let Err((recursive, _chain)) = subs.occurs(variable) {
+        let rec_var = subs.fresh_unnamed_flex_var();
+        let content = subs.get_content_without_compacting(recursive);
+
         match content {
             Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                let rec_var = subs.fresh_unnamed_flex_var();
+                let ext_var = *ext_var;
 
                 let mut new_tags = MutMap::default();
 
-                for (label, args) in tags {
-                    let new_args = args
-                        .clone()
-                        .into_iter()
-                        .map(|var| if var == recursive { rec_var } else { var })
-                        .collect();
+                for (name_index, slice_index) in tags.iter_all() {
+                    let slice = subs[slice_index];
 
-                    new_tags.insert(label.clone(), new_args);
+                    let mut new_vars = Vec::new();
+                    for var_index in slice {
+                        let var = subs[var_index];
+                        new_vars.push(if var == recursive { rec_var } else { var });
+                    }
+
+                    new_tags.insert(subs[name_index].clone(), new_vars);
                 }
 
-                let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, ext_var);
+                let mut x: Vec<_> = new_tags.into_iter().collect();
+                x.sort();
+
+                let union_tags = UnionTags::insert_into_subs(subs, x);
+
+                let flat_type = FlatType::RecursiveTagUnion(rec_var, union_tags, ext_var);
                 subs.set_content(recursive, Content::Structure(flat_type));
             }
             _ => panic!(
@@ -104,7 +113,7 @@ fn find_names_needed(
         }
     }
 
-    match subs.get_without_compacting(variable).content {
+    match &subs.get_content_without_compacting(variable).clone() {
         RecursionVar { opt_name: None, .. } | FlexVar(None) => {
             let root = subs.get_root_key_without_compacting(variable);
 
@@ -133,65 +142,65 @@ fn find_names_needed(
 
             // User-defined names are already taken.
             // We must not accidentally generate names that collide with them!
-            names_taken.insert(name);
+            names_taken.insert(name.clone());
         }
         RigidVar(name) => {
             // User-defined names are already taken.
             // We must not accidentally generate names that collide with them!
-            names_taken.insert(name);
+            names_taken.insert(name.clone());
         }
         Structure(Apply(_, args)) => {
-            for var in args {
+            for index in args.into_iter() {
+                let var = subs[index];
                 find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
         }
         Structure(Func(arg_vars, _closure_var, ret_var)) => {
-            for var in arg_vars {
+            for index in arg_vars.into_iter() {
+                let var = subs[index];
                 find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
 
-            find_names_needed(ret_var, subs, roots, root_appearances, names_taken);
+            find_names_needed(*ret_var, subs, roots, root_appearances, names_taken);
         }
-        Structure(Record(fields, ext_var)) => {
-            let mut sorted_fields: Vec<_> = fields.iter().collect();
-
-            sorted_fields.sort_by(|(label1, _), (label2, _)| label1.cmp(label2));
-
-            for (_, field) in sorted_fields {
-                find_names_needed(
-                    field.into_inner(),
-                    subs,
-                    roots,
-                    root_appearances,
-                    names_taken,
-                );
+        Structure(Record(sorted_fields, ext_var)) => {
+            for index in sorted_fields.iter_variables() {
+                let var = subs[index];
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
 
-            find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
+            find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
         }
         Structure(TagUnion(tags, ext_var)) => {
-            let mut sorted_tags: Vec<_> = tags.iter().collect();
-            sorted_tags.sort();
-
-            for var in sorted_tags.into_iter().map(|(_, v)| v).flatten() {
-                find_names_needed(*var, subs, roots, root_appearances, names_taken);
+            for slice_index in tags.variables() {
+                let slice = subs[slice_index];
+                for var_index in slice {
+                    let var = subs[var_index];
+                    find_names_needed(var, subs, roots, root_appearances, names_taken);
+                }
             }
 
-            find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
+            find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
+        }
+        Structure(FunctionOrTagUnion(_, _, ext_var)) => {
+            find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
         }
         Structure(RecursiveTagUnion(rec_var, tags, ext_var)) => {
-            let mut sorted_tags: Vec<_> = tags.iter().collect();
-            sorted_tags.sort();
-
-            for var in sorted_tags.into_iter().map(|(_, v)| v).flatten() {
-                find_names_needed(*var, subs, roots, root_appearances, names_taken);
+            for slice_index in tags.variables() {
+                let slice = subs[slice_index];
+                for var_index in slice {
+                    let var = subs[var_index];
+                    find_names_needed(var, subs, roots, root_appearances, names_taken);
+                }
             }
 
-            find_names_needed(ext_var, subs, roots, root_appearances, names_taken);
-            find_names_needed(rec_var, subs, roots, root_appearances, names_taken);
+            find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
+            find_names_needed(*rec_var, subs, roots, root_appearances, names_taken);
         }
         Alias(_symbol, args, _actual) => {
-            for (_, var) in args {
+            // only find names for named parameters!
+            for var_index in args.variables().into_iter().take(args.len()) {
+                let var = subs[var_index];
                 find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
             // TODO should we also look in the actual variable?
@@ -237,22 +246,22 @@ fn name_root(
 fn set_root_name(root: Variable, name: Lowercase, subs: &mut Subs) {
     use crate::subs::Content::*;
 
-    let mut descriptor = subs.get_without_compacting(root);
+    let old_content = subs.get_content_without_compacting(root);
 
-    match descriptor.content {
+    match old_content {
         FlexVar(None) => {
-            descriptor.content = FlexVar(Some(name));
-            subs.set(root, descriptor);
+            let content = FlexVar(Some(name));
+            subs.set_content(root, content);
         }
         RecursionVar {
             opt_name: None,
             structure,
         } => {
-            descriptor.content = RecursionVar {
-                structure,
+            let content = RecursionVar {
+                structure: *structure,
                 opt_name: Some(name),
             };
-            subs.set(root, descriptor);
+            subs.set_content(root, content);
         }
         RecursionVar {
             opt_name: Some(_existing),
@@ -267,7 +276,7 @@ fn set_root_name(root: Variable, name: Lowercase, subs: &mut Subs) {
 }
 
 pub fn content_to_string(
-    content: Content,
+    content: &Content,
     subs: &Subs,
     home: ModuleId,
     interns: &Interns,
@@ -280,7 +289,7 @@ pub fn content_to_string(
     buf
 }
 
-fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, parens: Parens) {
+fn write_content(env: &Env, content: &Content, subs: &Subs, buf: &mut String, parens: Parens) {
     use crate::subs::Content::*;
 
     match content {
@@ -295,14 +304,17 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
         Alias(symbol, args, _actual) => {
             let write_parens = parens == Parens::InTypeParam && !args.is_empty();
 
-            match symbol {
+            match *symbol {
                 Symbol::NUM_NUM => {
                     debug_assert_eq!(args.len(), 1);
 
-                    let (_, arg_var) = args
-                        .get(0)
+                    let arg_var_index = args
+                        .variables()
+                        .into_iter()
+                        .next()
                         .expect("Num was not applied to a type argument!");
-                    let content = subs.get_without_compacting(*arg_var).content;
+                    let arg_var = subs[arg_var_index];
+                    let content = subs.get_content_without_compacting(arg_var);
 
                     match &content {
                         Alias(nested, _, _) => match *nested {
@@ -323,13 +335,14 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
                 }
 
                 _ => write_parens!(write_parens, buf, {
-                    write_symbol(env, symbol, buf);
+                    write_symbol(env, *symbol, buf);
 
-                    for (_, var) in args {
+                    for var_index in args.variables() {
+                        let var = subs[var_index];
                         buf.push(' ');
                         write_content(
                             env,
-                            subs.get_without_compacting(var).content,
+                            subs.get_content_without_compacting(var),
                             subs,
                             buf,
                             Parens::InTypeParam,
@@ -339,7 +352,7 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
                     // useful for debugging
                     if false {
                         buf.push_str("[[ but really ");
-                        let content = subs.get_without_compacting(_actual).content;
+                        let content = subs.get_content_without_compacting(*_actual);
                         write_content(env, content, subs, buf, parens);
                         buf.push_str("]]");
                     }
@@ -350,19 +363,174 @@ fn write_content(env: &Env, content: Content, subs: &Subs, buf: &mut String, par
     }
 }
 
-fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String, parens: Parens) {
+enum ExtContent<'a> {
+    Empty,
+    Content(Variable, &'a Content),
+}
+
+impl<'a> ExtContent<'a> {
+    fn from_var(subs: &'a Subs, ext: Variable) -> Self {
+        let content = subs.get_content_without_compacting(ext);
+        match content {
+            Content::Structure(FlatType::EmptyTagUnion) => ExtContent::Empty,
+            Content::Structure(FlatType::EmptyRecord) => ExtContent::Empty,
+
+            Content::FlexVar(_) | Content::RigidVar(_) => ExtContent::Content(ext, content),
+
+            other => unreachable!("something weird ended up in an ext var: {:?}", other),
+        }
+    }
+}
+
+fn write_ext_content<'a>(
+    env: &Env,
+    subs: &'a Subs,
+    buf: &mut String,
+    ext_content: ExtContent<'a>,
+    parens: Parens,
+) {
+    if let ExtContent::Content(_, content) = ext_content {
+        // This is an open record or tag union, so print the variable
+        // right after the '}' or ']'
+        //
+        // e.g. the "*" at the end of `{ x: I64 }*`
+        // or the "r" at the end of `{ x: I64 }r`
+        write_content(env, content, subs, buf, parens)
+    }
+}
+
+fn write_sorted_tags2<'a>(
+    env: &Env,
+    subs: &'a Subs,
+    buf: &mut String,
+    tags: &UnionTags,
+    ext_var: Variable,
+) -> ExtContent<'a> {
+    // Sort the fields so they always end up in the same order.
+    let (it, new_ext_var) = tags.unsorted_iterator_and_ext(subs, ext_var);
+    let mut sorted_fields: Vec<_> = it.collect();
+
+    let interns = &env.interns;
+    let home = env.home;
+
+    sorted_fields.sort_by(|(a, _), (b, _)| {
+        a.as_ident_str(interns, home)
+            .cmp(&b.as_ident_str(interns, home))
+    });
+
+    let mut any_written_yet = false;
+
+    for (label, vars) in sorted_fields {
+        if any_written_yet {
+            buf.push_str(", ");
+        } else {
+            any_written_yet = true;
+        }
+
+        buf.push_str(label.as_ident_str(interns, home).as_str());
+
+        for var in vars {
+            buf.push(' ');
+            write_content(
+                env,
+                subs.get_content_without_compacting(*var),
+                subs,
+                buf,
+                Parens::InTypeParam,
+            );
+        }
+    }
+
+    ExtContent::from_var(subs, new_ext_var)
+}
+
+fn write_sorted_tags<'a>(
+    env: &Env,
+    subs: &'a Subs,
+    buf: &mut String,
+    tags: &MutMap<TagName, Vec<Variable>>,
+    ext_var: Variable,
+) -> ExtContent<'a> {
+    // Sort the fields so they always end up in the same order.
+    let mut sorted_fields = Vec::with_capacity(tags.len());
+
+    for (label, vars) in tags {
+        sorted_fields.push((label, vars));
+    }
+
+    // If the `ext` contains tags, merge them into the list of tags.
+    // this can occur when inferring mutually recursive tags
+    let mut from_ext = Default::default();
+    let _ext_content = chase_ext_tag_union(subs, ext_var, &mut from_ext);
+
+    for (tag_name, arguments) in from_ext.iter() {
+        sorted_fields.push((tag_name, arguments));
+    }
+
+    let interns = &env.interns;
+    let home = env.home;
+
+    sorted_fields.sort_by(|(a, _), (b, _)| {
+        a.as_ident_str(interns, home)
+            .cmp(&b.as_ident_str(interns, home))
+    });
+
+    let mut any_written_yet = false;
+
+    for (label, vars) in sorted_fields {
+        if any_written_yet {
+            buf.push_str(", ");
+        } else {
+            any_written_yet = true;
+        }
+
+        buf.push_str(label.as_ident_str(interns, home).as_str());
+
+        for var in vars {
+            buf.push(' ');
+            write_content(
+                env,
+                subs.get_content_without_compacting(*var),
+                subs,
+                buf,
+                Parens::InTypeParam,
+            );
+        }
+    }
+
+    ExtContent::from_var(subs, ext_var)
+}
+
+fn write_flat_type(env: &Env, flat_type: &FlatType, subs: &Subs, buf: &mut String, parens: Parens) {
     use crate::subs::FlatType::*;
 
     match flat_type {
-        Apply(symbol, args) => write_apply(env, symbol, args, subs, buf, parens),
+        Apply(symbol, args) => write_apply(
+            env,
+            *symbol,
+            subs.get_subs_slice(*args.as_subs_slice()),
+            subs,
+            buf,
+            parens,
+        ),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
-        Func(args, _closure, ret) => write_fn(env, args, ret, subs, buf, parens),
+        Func(args, _closure, ret) => write_fn(
+            env,
+            subs.get_subs_slice(*args.as_subs_slice()),
+            *ret,
+            subs,
+            buf,
+            parens,
+        ),
         Record(fields, ext_var) => {
             use crate::types::{gather_fields, RecordStructure};
 
             // If the `ext` has concrete fields (e.g. { foo : I64}{ bar : Bool }), merge them
-            let RecordStructure { fields, ext } = gather_fields(subs, fields, ext_var);
+            let RecordStructure {
+                fields: sorted_fields,
+                ext,
+            } = gather_fields(subs, *fields, *ext_var);
             let ext_var = ext;
 
             if fields.is_empty() {
@@ -370,16 +538,12 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
             } else {
                 buf.push_str("{ ");
 
-                // Sort the fields so they always end up in the same order.
-                let mut sorted_fields = Vec::with_capacity(fields.len());
-
-                sorted_fields.extend(fields);
-                sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
-
                 let mut any_written_yet = false;
 
-                for (label, field_var) in sorted_fields {
+                for (label, record_field) in sorted_fields {
                     use RecordField::*;
+
+                    let var = *record_field.as_inner();
 
                     if any_written_yet {
                         buf.push_str(", ");
@@ -388,24 +552,15 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
                     }
                     buf.push_str(label.as_str());
 
-                    let var = match field_var {
-                        Optional(var) => {
-                            buf.push_str(" ? ");
-                            var
-                        }
-                        Required(var) => {
-                            buf.push_str(" : ");
-                            var
-                        }
-                        Demanded(var) => {
-                            buf.push_str(" : ");
-                            var
-                        }
+                    match record_field {
+                        Optional(_) => buf.push_str(" ? "),
+                        Required(_) => buf.push_str(" : "),
+                        Demanded(_) => buf.push_str(" : "),
                     };
 
                     write_content(
                         env,
-                        subs.get_without_compacting(var).content,
+                        subs.get_content_without_compacting(var),
                         subs,
                         buf,
                         Parens::Unnecessary,
@@ -415,7 +570,7 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
                 buf.push_str(" }");
             }
 
-            match subs.get_without_compacting(ext_var).content {
+            match subs.get_content_without_compacting(ext_var) {
                 Content::Structure(EmptyRecord) => {
                     // This is a closed record. We're done!
                 }
@@ -430,119 +585,40 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
             }
         }
         TagUnion(tags, ext_var) => {
-            let interns = &env.interns;
-            let home = env.home;
-
             buf.push_str("[ ");
 
-            // Sort the fields so they always end up in the same order.
-            let mut sorted_fields = Vec::with_capacity(tags.len());
-
-            for (label, vars) in tags {
-                sorted_fields.push((label.clone(), vars));
-            }
-
-            // If the `ext` contains tags, merge them into the list of tags.
-            // this can occur when inferring mutually recursive tags
-            let ext_content = chase_ext_tag_union(subs, ext_var, &mut sorted_fields);
-
-            sorted_fields.sort_by(|(a, _), (b, _)| {
-                a.clone()
-                    .as_string(interns, home)
-                    .cmp(&b.as_string(&interns, home))
-            });
-
-            let mut any_written_yet = false;
-
-            for (label, vars) in sorted_fields {
-                if any_written_yet {
-                    buf.push_str(", ");
-                } else {
-                    any_written_yet = true;
-                }
-
-                buf.push_str(&label.as_string(&interns, home));
-
-                for var in vars {
-                    buf.push(' ');
-                    write_content(
-                        env,
-                        subs.get_without_compacting(var).content,
-                        subs,
-                        buf,
-                        Parens::InTypeParam,
-                    );
-                }
-            }
+            let ext_content = write_sorted_tags2(env, subs, buf, tags, *ext_var);
 
             buf.push_str(" ]");
 
-            if let Err((_, content)) = ext_content {
-                // This is an open tag union, so print the variable
-                // right after the ']'
-                //
-                // e.g. the "*" at the end of `{ x: I64 }*`
-                // or the "r" at the end of `{ x: I64 }r`
-                write_content(env, content, subs, buf, parens)
-            }
+            write_ext_content(env, subs, buf, ext_content, parens)
+        }
+
+        FunctionOrTagUnion(tag_name, _, ext_var) => {
+            buf.push_str("[ ");
+
+            let mut tags: MutMap<TagName, _> = MutMap::default();
+            tags.insert(subs[*tag_name].clone(), vec![]);
+            let ext_content = write_sorted_tags(env, subs, buf, &tags, *ext_var);
+
+            buf.push_str(" ]");
+
+            write_ext_content(env, subs, buf, ext_content, parens)
         }
 
         RecursiveTagUnion(rec_var, tags, ext_var) => {
-            let interns = &env.interns;
-            let home = env.home;
-
             buf.push_str("[ ");
 
-            // Sort the fields so they always end up in the same order.
-            let mut sorted_fields = Vec::with_capacity(tags.len());
-
-            for (label, vars) in tags {
-                sorted_fields.push((label.clone(), vars));
-            }
-
-            // If the `ext` contains tags, merge them into the list of tags.
-            // this can occur when inferring mutually recursive tags
-            let ext_content = chase_ext_tag_union(subs, ext_var, &mut sorted_fields);
-
-            sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
-
-            let mut any_written_yet = false;
-
-            for (label, vars) in sorted_fields {
-                if any_written_yet {
-                    buf.push_str(", ");
-                } else {
-                    any_written_yet = true;
-                }
-                buf.push_str(&label.as_string(&interns, home));
-
-                for var in vars {
-                    buf.push(' ');
-                    write_content(
-                        env,
-                        subs.get_without_compacting(var).content,
-                        subs,
-                        buf,
-                        Parens::InTypeParam,
-                    );
-                }
-            }
+            let ext_content = write_sorted_tags2(env, subs, buf, tags, *ext_var);
 
             buf.push_str(" ]");
 
-            if let Err((_, content)) = ext_content {
-                // This is an open tag union, so print the variable
-                // right after the ']'
-                //
-                // e.g. the "*" at the end of `{ x: I64 }*`
-                // or the "r" at the end of `{ x: I64 }r`
-                write_content(env, content, subs, buf, parens)
-            }
+            write_ext_content(env, subs, buf, ext_content, parens);
 
             buf.push_str(" as ");
             write_content(
                 env,
-                subs.get_without_compacting(rec_var).content,
+                subs.get_content_without_compacting(*rec_var),
                 subs,
                 buf,
                 parens,
@@ -554,46 +630,44 @@ fn write_flat_type(env: &Env, flat_type: FlatType, subs: &Subs, buf: &mut String
     }
 }
 
-pub fn chase_ext_tag_union(
-    subs: &Subs,
+pub fn chase_ext_tag_union<'a>(
+    subs: &'a Subs,
     var: Variable,
     fields: &mut Vec<(TagName, Vec<Variable>)>,
-) -> Result<(), (Variable, Content)> {
+) -> Result<(), (Variable, &'a Content)> {
     use FlatType::*;
-    match subs.get_without_compacting(var).content {
+    match subs.get_content_without_compacting(var) {
         Content::Structure(EmptyTagUnion) => Ok(()),
-        Content::Structure(TagUnion(tags, ext_var))
-        | Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
-            for (label, vars) in tags {
-                fields.push((label.clone(), vars.to_vec()));
+        Content::Structure(TagUnion(tags, ext_var)) => {
+            for (name_index, slice_index) in tags.iter_all() {
+                let subs_slice = subs[slice_index];
+                let slice = subs.get_subs_slice(*subs_slice.as_subs_slice());
+                let tag_name = subs[name_index].clone();
+
+                fields.push((tag_name, slice.to_vec()));
             }
 
-            chase_ext_tag_union(subs, ext_var, fields)
-        }
-        Content::Alias(_, _, var) => chase_ext_tag_union(subs, var, fields),
-
-        content => Err((var, content)),
-    }
-}
-
-pub fn chase_ext_record(
-    subs: &Subs,
-    var: Variable,
-    fields: &mut MutMap<Lowercase, RecordField<Variable>>,
-) -> Result<(), (Variable, Content)> {
-    use crate::subs::Content::*;
-    use crate::subs::FlatType::*;
-
-    match subs.get_without_compacting(var).content {
-        Structure(Record(sub_fields, sub_ext)) => {
-            fields.extend(sub_fields.into_iter());
-
-            chase_ext_record(subs, sub_ext, fields)
+            chase_ext_tag_union(subs, *ext_var, fields)
         }
 
-        Structure(EmptyRecord) => Ok(()),
+        Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
+            for (name_index, slice_index) in tags.iter_all() {
+                let subs_slice = subs[slice_index];
+                let slice = subs.get_subs_slice(*subs_slice.as_subs_slice());
+                let tag_name = subs[name_index].clone();
 
-        Alias(_, _, var) => chase_ext_record(subs, var, fields),
+                fields.push((tag_name, slice.to_vec()));
+            }
+
+            chase_ext_tag_union(subs, *ext_var, fields)
+        }
+        Content::Structure(FunctionOrTagUnion(tag_name, _, ext_var)) => {
+            fields.push((subs[*tag_name].clone(), vec![]));
+
+            chase_ext_tag_union(subs, *ext_var, fields)
+        }
+
+        Content::Alias(_, _, var) => chase_ext_tag_union(subs, *var, fields),
 
         content => Err((var, content)),
     }
@@ -602,7 +676,7 @@ pub fn chase_ext_record(
 fn write_apply(
     env: &Env,
     symbol: Symbol,
-    args: Vec<Variable>,
+    args: &[Variable],
     subs: &Subs,
     buf: &mut String,
     parens: Parens,
@@ -616,10 +690,10 @@ fn write_apply(
         }
         Symbol::NUM_NUM => {
             let arg = args
-                .into_iter()
+                .iter()
                 .next()
                 .unwrap_or_else(|| panic!("Num did not have any type parameters somehow."));
-            let arg_content = subs.get_without_compacting(arg).content;
+            let arg_content = subs.get_content_without_compacting(*arg);
             let mut arg_param = String::new();
 
             let mut default_case = |subs, content| {
@@ -660,7 +734,7 @@ fn write_apply(
                 buf.push(' ');
                 write_content(
                     env,
-                    subs.get_without_compacting(arg).content,
+                    subs.get_content_without_compacting(*arg),
                     subs,
                     buf,
                     Parens::InTypeParam,
@@ -676,7 +750,7 @@ fn write_apply(
 
 fn write_fn(
     env: &Env,
-    args: Vec<Variable>,
+    args: &[Variable],
     ret: Variable,
     subs: &Subs,
     buf: &mut String,
@@ -698,7 +772,7 @@ fn write_fn(
 
         write_content(
             env,
-            subs.get_without_compacting(arg).content,
+            subs.get_content_without_compacting(*arg),
             subs,
             buf,
             Parens::InFn,
@@ -708,7 +782,7 @@ fn write_fn(
     buf.push_str(" -> ");
     write_content(
         env,
-        subs.get_without_compacting(ret).content,
+        subs.get_content_without_compacting(ret),
         subs,
         buf,
         Parens::InFn,
@@ -721,16 +795,15 @@ fn write_fn(
 
 fn write_symbol(env: &Env, symbol: Symbol, buf: &mut String) {
     let interns = &env.interns;
-    let ident = symbol.ident_string(interns);
+    let ident = symbol.ident_str(interns);
     let module_id = symbol.module_id();
 
     // Don't qualify the symbol if it's in our home module,
     // or if it's a builtin (since all their types are always in scope)
-    if module_id == env.home || module_id.is_builtin() {
-        buf.push_str(ident);
-    } else {
-        buf.push_str(module_id.to_string(&interns));
+    if module_id != env.home && !module_id.is_builtin() {
+        buf.push_str(module_id.to_ident_str(interns).as_str());
         buf.push('.');
-        buf.push_str(ident);
     }
+
+    buf.push_str(ident.as_str());
 }

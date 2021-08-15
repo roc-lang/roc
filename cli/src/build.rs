@@ -5,8 +5,8 @@ use roc_build::{
 };
 use roc_can::builtins::builtin_defs_map;
 use roc_collections::all::MutMap;
-use roc_gen::llvm::build::OptLevel;
 use roc_load::file::LoadingProblem;
+use roc_mono::ir::OptLevel;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 use target_lexicon::Triple;
@@ -26,12 +26,23 @@ pub enum BuildOutcome {
     Errors,
 }
 
+impl BuildOutcome {
+    pub fn status_code(&self) -> i32 {
+        match self {
+            Self::NoProblems => 0,
+            Self::OnlyWarnings => 1,
+            Self::Errors => 2,
+        }
+    }
+}
+
 pub struct BuiltFile {
     pub binary_path: PathBuf,
     pub outcome: BuildOutcome,
     pub total_time: Duration,
 }
 
+#[cfg(feature = "llvm")]
 pub fn build_file<'a>(
     arena: &'a Bump,
     target: &Triple,
@@ -54,7 +65,7 @@ pub fn build_file<'a>(
     };
 
     let loaded = roc_load::file::load_and_monomorphize(
-        &arena,
+        arena,
         roc_file_path.clone(),
         stdlib,
         src_dir.as_path(),
@@ -117,11 +128,11 @@ pub fn build_file<'a>(
     let cwd = roc_file_path.parent().unwrap();
     let binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
     let code_gen_timing = program::gen_from_mono_module(
-        &arena,
+        arena,
         loaded,
         &roc_file_path,
         Triple::host(),
-        &app_o_file,
+        app_o_file,
         opt_level,
         emit_debug_info,
     );
@@ -204,10 +215,14 @@ pub fn build_file<'a>(
     let total_time = compilation_start.elapsed().unwrap();
 
     // If the cmd errored out, return the Err.
-    cmd_result?;
+    let exit_status = cmd_result?;
 
     // TODO change this to report whether there were errors or warnings!
-    let outcome = BuildOutcome::NoProblems;
+    let outcome = if exit_status.success() {
+        BuildOutcome::NoProblems
+    } else {
+        BuildOutcome::Errors
+    };
 
     Ok(BuiltFile {
         binary_path,

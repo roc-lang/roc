@@ -1,4 +1,4 @@
-#![warn(clippy::all, clippy::dbg_macro)]
+#![warn(clippy::dbg_macro)]
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant, clippy::upper_case_acronyms)]
 
@@ -8,7 +8,7 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::{ModuleName, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::ir::{BranchInfo, CallType, Expr, JoinPointId, Literal, Proc, Stmt, Wrapped};
+use roc_mono::ir::{BranchInfo, CallType, Expr, JoinPointId, Literal, Proc, Stmt};
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 use target_lexicon::Triple;
 
@@ -22,6 +22,7 @@ pub struct Env<'a> {
     pub interns: Interns,
     pub exposed_to_host: MutSet<Symbol>,
     pub lazy_literals: bool,
+    pub generate_allocators: bool,
 }
 
 // These relocations likely will need a length.
@@ -71,6 +72,9 @@ where
         ret_layout: &Layout<'a>,
     ) -> Result<(), String>;
 
+    /// Used for generating wrappers for malloc/realloc/free
+    fn build_wrapped_jmp(&mut self) -> Result<(&'a [u8], u64), String>;
+
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
     fn build_proc(&mut self, proc: Proc<'a>) -> Result<(&'a [u8], &[Relocation]), String> {
         self.reset();
@@ -106,9 +110,9 @@ where
                 call,
                 pass,
                 fail: _,
+                exception_id: _,
             } => {
                 // for now, treat invoke as a normal call
-
                 let stmt = Stmt::Let(*symbol, Expr::Call(call.clone()), *layout, pass);
                 self.build_stmt(&stmt, ret_layout)
             }
@@ -144,7 +148,7 @@ where
     ) -> Result<(), String>;
 
     /// build_expr builds the expressions for the specified symbol.
-    /// The builder must keep track of the symbol because it may be refered to later.
+    /// The builder must keep track of the symbol because it may be referred to later.
     fn build_expr(
         &mut self,
         sym: &Symbol,
@@ -188,6 +192,9 @@ where
                             Symbol::NUM_ATAN => {
                                 self.build_run_low_level(sym, &LowLevel::NumAtan, arguments, layout)
                             }
+                            Symbol::NUM_MUL => {
+                                self.build_run_low_level(sym, &LowLevel::NumMul, arguments, layout)
+                            }
                             Symbol::NUM_POW_INT => self.build_run_low_level(
                                 sym,
                                 &LowLevel::NumPowInt,
@@ -215,7 +222,7 @@ where
                         }
                     }
 
-                    CallType::LowLevel { op: lowlevel } => {
+                    CallType::LowLevel { op: lowlevel, .. } => {
                         self.build_run_low_level(sym, lowlevel, arguments, layout)
                     }
                     x => Err(format!("the call type, {:?}, is not yet implemented", x)),
@@ -225,18 +232,17 @@ where
                 self.load_literal_symbols(fields)?;
                 self.create_struct(sym, layout, fields)
             }
-            Expr::AccessAtIndex {
+            Expr::StructAtIndex {
                 index,
                 field_layouts,
                 structure,
-                wrapped,
-            } => self.load_access_at_index(sym, structure, *index, field_layouts, wrapped),
+            } => self.load_struct_at_index(sym, structure, *index, field_layouts),
             x => Err(format!("the expression, {:?}, is not yet implemented", x)),
         }
     }
 
     /// build_run_low_level builds the low level opertation and outputs to the specified symbol.
-    /// The builder must keep track of the symbol because it may be refered to later.
+    /// The builder must keep track of the symbol because it may be referred to later.
     fn build_run_low_level(
         &mut self,
         sym: &Symbol,
@@ -251,6 +257,7 @@ where
                 // TODO: when this is expanded to floats. deal with typecasting here, and then call correct low level method.
                 match layout {
                     Layout::Builtin(Builtin::Int64) => self.build_num_abs_i64(sym, &args[0]),
+                    Layout::Builtin(Builtin::Float64) => self.build_num_abs_f64(sym, &args[0]),
                     x => Err(format!("layout, {:?}, not implemented yet", x)),
                 }
             }
@@ -274,6 +281,15 @@ where
             }
             LowLevel::NumAtan => {
                 self.build_fn_call(sym, bitcode::NUM_ATAN.to_string(), args, &[*layout], layout)
+            }
+            LowLevel::NumMul => {
+                // TODO: when this is expanded to floats. deal with typecasting here, and then call correct low level method.
+                match layout {
+                    Layout::Builtin(Builtin::Int64) => {
+                        self.build_num_mul_i64(sym, &args[0], &args[1])
+                    }
+                    x => Err(format!("layout, {:?}, not implemented yet", x)),
+                }
             }
             LowLevel::NumPowInt => self.build_fn_call(
                 sym,
@@ -316,6 +332,10 @@ where
     /// It only deals with inputs and outputs of i64 type.
     fn build_num_abs_i64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String>;
 
+    /// build_num_abs_f64 stores the absolute value of src into dst.
+    /// It only deals with inputs and outputs of f64 type.
+    fn build_num_abs_f64(&mut self, dst: &Symbol, src: &Symbol) -> Result<(), String>;
+
     /// build_num_add_i64 stores the sum of src1 and src2 into dst.
     /// It only deals with inputs and outputs of i64 type.
     fn build_num_add_i64(
@@ -328,6 +348,15 @@ where
     /// build_num_add_f64 stores the sum of src1 and src2 into dst.
     /// It only deals with inputs and outputs of f64 type.
     fn build_num_add_f64(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+    ) -> Result<(), String>;
+
+    /// build_num_mul_i64 stores `src1 * src2` into dst.
+    /// It only deals with inputs and outputs of i64 type.
+    fn build_num_mul_i64(
         &mut self,
         dst: &Symbol,
         src1: &Symbol,
@@ -369,14 +398,13 @@ where
         fields: &'a [Symbol],
     ) -> Result<(), String>;
 
-    /// load_access_at_index loads into `sym` the value at `index` in `structure`.
-    fn load_access_at_index(
+    /// load_struct_at_index loads into `sym` the value at `index` in `structure`.
+    fn load_struct_at_index(
         &mut self,
         sym: &Symbol,
         structure: &Symbol,
         index: u64,
         field_layouts: &'a [Layout<'a>],
-        wrapped: &Wrapped,
     ) -> Result<(), String>;
 
     /// load_literal sets a symbol to be equal to a literal.
@@ -432,7 +460,6 @@ where
                 self.set_last_seen(*sym, stmt);
                 match expr {
                     Expr::Literal(_) => {}
-                    Expr::FunctionPointer(sym, _) => self.set_last_seen(*sym, stmt),
 
                     Expr::Call(call) => self.scan_ast_call(call, stmt),
 
@@ -446,7 +473,13 @@ where
                             self.set_last_seen(*sym, stmt);
                         }
                     }
-                    Expr::AccessAtIndex { structure, .. } => {
+                    Expr::StructAtIndex { structure, .. } => {
+                        self.set_last_seen(*structure, stmt);
+                    }
+                    Expr::GetTagId { structure, .. } => {
+                        self.set_last_seen(*structure, stmt);
+                    }
+                    Expr::UnionAtIndex { structure, .. } => {
                         self.set_last_seen(*structure, stmt);
                     }
                     Expr::Array { elems, .. } => {
@@ -485,15 +518,16 @@ where
 
             Stmt::Invoke {
                 symbol,
-                layout,
+                layout: _,
                 call,
                 pass,
                 fail: _,
+                exception_id: _,
             } => {
                 // for now, treat invoke as a normal call
-
-                let stmt = Stmt::Let(*symbol, Expr::Call(call.clone()), *layout, pass);
-                self.scan_ast(&stmt);
+                self.set_last_seen(*symbol, stmt);
+                self.scan_ast_call(call, stmt);
+                self.scan_ast(pass);
             }
 
             Stmt::Switch {
@@ -511,7 +545,7 @@ where
             Stmt::Ret(sym) => {
                 self.set_last_seen(*sym, stmt);
             }
-            Stmt::Rethrow => {}
+            Stmt::Resume(_exception_id) => {}
             Stmt::Refcounting(modify, following) => {
                 let sym = modify.get_symbol();
 
@@ -520,7 +554,7 @@ where
             }
             Stmt::Join {
                 parameters,
-                continuation,
+                body: continuation,
                 remainder,
                 ..
             } => {
@@ -552,10 +586,8 @@ where
 
         match call_type {
             CallType::ByName { .. } => {}
-            CallType::ByPointer { name: sym, .. } => {
-                self.set_last_seen(*sym, stmt);
-            }
             CallType::LowLevel { .. } => {}
+            CallType::HigherOrderLowLevel { .. } => {}
             CallType::Foreign { .. } => {}
         }
     }

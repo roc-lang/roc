@@ -1,4 +1,3 @@
-use inlinable_string::InlinableString;
 use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -70,7 +69,7 @@ impl<'b> Report<'b> {
     pub fn render_ci(self, buf: &'b mut String, alloc: &'b RocDocAllocator<'b>) {
         let err_msg = "<buffer is not a utf-8 encoded string>";
 
-        self.pretty(&alloc)
+        self.pretty(alloc)
             .1
             .render_raw(70, &mut CiWrite::new(buf))
             .expect(err_msg);
@@ -85,7 +84,7 @@ impl<'b> Report<'b> {
     ) {
         let err_msg = "<buffer is not a utf-8 encoded string>";
 
-        self.pretty(&alloc)
+        self.pretty(alloc)
             .1
             .render_raw(70, &mut ColorWrite::new(palette, buf))
             .expect(err_msg);
@@ -259,19 +258,19 @@ impl<'a> RocDocAllocator<'a> {
     }
 
     pub fn symbol_unqualified(&'a self, symbol: Symbol) -> DocBuilder<'a, Self, Annotation> {
-        self.text(format!("{}", symbol.ident_string(self.interns)))
+        self.text(format!("{}", symbol.ident_str(self.interns)))
             .annotate(Annotation::Symbol)
     }
     pub fn symbol_foreign_qualified(&'a self, symbol: Symbol) -> DocBuilder<'a, Self, Annotation> {
         if symbol.module_id() == self.home || symbol.module_id().is_builtin() {
             // Render it unqualified if it's in the current module or a builtin
-            self.text(format!("{}", symbol.ident_string(self.interns)))
+            self.text(format!("{}", symbol.ident_str(self.interns)))
                 .annotate(Annotation::Symbol)
         } else {
             self.text(format!(
                 "{}.{}",
                 symbol.module_string(self.interns),
-                symbol.ident_string(self.interns),
+                symbol.ident_str(self.interns),
             ))
             .annotate(Annotation::Symbol)
         }
@@ -280,7 +279,7 @@ impl<'a> RocDocAllocator<'a> {
         self.text(format!(
             "{}.{}",
             symbol.module_string(self.interns),
-            symbol.ident_string(self.interns),
+            symbol.ident_str(self.interns),
         ))
         .annotate(Annotation::Symbol)
     }
@@ -288,13 +287,13 @@ impl<'a> RocDocAllocator<'a> {
     pub fn private_tag_name(&'a self, symbol: Symbol) -> DocBuilder<'a, Self, Annotation> {
         if symbol.module_id() == self.home {
             // Render it unqualified if it's in the current module.
-            self.text(format!("{}", symbol.ident_string(self.interns)))
+            self.text(format!("{}", symbol.ident_str(self.interns)))
                 .annotate(Annotation::PrivateTag)
         } else {
             self.text(format!(
                 "{}.{}",
                 symbol.module_string(self.interns),
-                symbol.ident_string(self.interns),
+                symbol.ident_str(self.interns),
             ))
             .annotate(Annotation::PrivateTag)
         }
@@ -331,10 +330,6 @@ impl<'a> RocDocAllocator<'a> {
         };
 
         self.text(name).annotate(Annotation::Module)
-    }
-
-    pub fn inlinable_string(&'a self, s: InlinableString) -> DocBuilder<'a, Self, Annotation> {
-        self.text(format!("{}", s)).annotate(Annotation::Module)
     }
 
     pub fn binop(
@@ -450,11 +445,11 @@ impl<'a> RocDocAllocator<'a> {
                 } else {
                     ERROR_UNDERLINE.repeat((sub_region2.end_col - sub_region2.start_col) as usize)
                 };
-                let inbetween = " "
+                let in_between = " "
                     .repeat((sub_region2.start_col.saturating_sub(sub_region1.end_col)) as usize);
 
                 self.text(highlight1)
-                    .append(self.text(inbetween))
+                    .append(self.text(in_between))
                     .append(self.text(highlight2))
             };
 

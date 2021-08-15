@@ -1,5 +1,5 @@
 
-The editor is a work in progress, only a limited subset of Roc expressions are currently supported. New features are added every week!
+The editor is a work in progress, only a limited subset of Roc expressions are currently supported.
 
 Unlike most editors, we use projectional or structural editing to edit the [Abstract Syntax Tree](https://en.wikipedia.org/wiki/Abstract_syntax_tree) directly. This will allow for cool features like excellent auto-complete and refactoring.
 

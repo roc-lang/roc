@@ -239,6 +239,16 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
         },
     );
 
+    // Decimal : [ @Decimal ]
+    add_alias(
+        Symbol::NUM_DECIMAL,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: vec![],
+            typ: decimal_alias_content(),
+        },
+    );
+
     // Binary64 : [ @Binary64 ]
     add_alias(
         Symbol::NUM_BINARY64,
@@ -266,6 +276,16 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
             region: Region::zero(),
             vars: vec![Located::at(Region::zero(), "range".into())],
             typ: floatingpoint_alias_content(flex(TVAR1)),
+        },
+    );
+
+    // Dec : Float Decimal
+    add_alias(
+        Symbol::NUM_DEC,
+        BuiltinAlias {
+            region: Region::zero(),
+            vars: Vec::new(),
+            typ: float_alias_content(decimal_type()),
         },
     );
 
@@ -345,6 +365,7 @@ pub fn num_type(range: SolvedType) -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_NUM,
         vec![("range".into(), range.clone())],
+        vec![],
         Box::new(num_alias_content(range)),
     )
 }
@@ -361,6 +382,7 @@ pub fn floatingpoint_type(range: SolvedType) -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_FLOATINGPOINT,
         vec![("range".into(), range.clone())],
+        vec![],
         Box::new(floatingpoint_alias_content(range)),
     )
 }
@@ -377,6 +399,7 @@ pub fn float_type(range: SolvedType) -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_FLOAT,
         vec![("range".into(), range.clone())],
+        vec![],
         Box::new(float_alias_content(range)),
     )
 }
@@ -390,7 +413,12 @@ fn float_alias_content(range: SolvedType) -> SolvedType {
 
 #[inline(always)]
 pub fn nat_type() -> SolvedType {
-    SolvedType::Alias(Symbol::NUM_NAT, vec![], Box::new(nat_alias_content()))
+    SolvedType::Alias(
+        Symbol::NUM_NAT,
+        vec![],
+        vec![],
+        Box::new(nat_alias_content()),
+    )
 }
 
 #[inline(always)]
@@ -402,7 +430,12 @@ fn nat_alias_content() -> SolvedType {
 
 #[inline(always)]
 pub fn u64_type() -> SolvedType {
-    SolvedType::Alias(Symbol::NUM_U64, vec![], Box::new(u64_alias_content()))
+    SolvedType::Alias(
+        Symbol::NUM_U64,
+        vec![],
+        vec![],
+        Box::new(u64_alias_content()),
+    )
 }
 
 #[inline(always)]
@@ -414,7 +447,12 @@ fn u64_alias_content() -> SolvedType {
 
 #[inline(always)]
 pub fn u32_type() -> SolvedType {
-    SolvedType::Alias(Symbol::NUM_U32, vec![], Box::new(u32_alias_content()))
+    SolvedType::Alias(
+        Symbol::NUM_U32,
+        vec![],
+        vec![],
+        Box::new(u32_alias_content()),
+    )
 }
 
 #[inline(always)]
@@ -426,7 +464,12 @@ fn u32_alias_content() -> SolvedType {
 
 #[inline(always)]
 pub fn i128_type() -> SolvedType {
-    SolvedType::Alias(Symbol::NUM_I128, vec![], Box::new(i128_alias_content()))
+    SolvedType::Alias(
+        Symbol::NUM_I128,
+        vec![],
+        vec![],
+        Box::new(i128_alias_content()),
+    )
 }
 
 #[inline(always)]
@@ -441,6 +484,7 @@ pub fn int_type(range: SolvedType) -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_INT,
         vec![("range".into(), range.clone())],
+        vec![],
         Box::new(int_alias_content(range)),
     )
 }
@@ -457,6 +501,7 @@ pub fn integer_type(range: SolvedType) -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_INTEGER,
         vec![("range".into(), range.clone())],
+        vec![],
         Box::new(integer_alias_content(range)),
     )
 }
@@ -471,6 +516,7 @@ pub fn u8_type() -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_U8,
         vec![],
+        vec![],
         Box::new(int_alias_content(unsigned8_type())),
     )
 }
@@ -479,6 +525,7 @@ pub fn u8_type() -> SolvedType {
 pub fn binary64_type() -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_BINARY64,
+        vec![],
         vec![],
         Box::new(binary64_alias_content()),
     )
@@ -494,6 +541,7 @@ pub fn binary32_type() -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_BINARY32,
         vec![],
+        vec![],
         Box::new(binary32_alias_content()),
     )
 }
@@ -507,6 +555,7 @@ fn binary32_alias_content() -> SolvedType {
 pub fn natural_type() -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_NATURAL,
+        vec![],
         vec![],
         Box::new(natural_alias_content()),
     )
@@ -522,6 +571,7 @@ pub fn signed128_type() -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_SIGNED128,
         vec![],
+        vec![],
         Box::new(signed128_alias_content()),
     )
 }
@@ -535,6 +585,7 @@ fn signed128_alias_content() -> SolvedType {
 pub fn signed64_type() -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_SIGNED64,
+        vec![],
         vec![],
         Box::new(signed64_alias_content()),
     )
@@ -550,6 +601,7 @@ pub fn signed32_type() -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_SIGNED32,
         vec![],
+        vec![],
         Box::new(signed32_alias_content()),
     )
 }
@@ -563,6 +615,7 @@ fn signed32_alias_content() -> SolvedType {
 pub fn signed16_type() -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_SIGNED16,
+        vec![],
         vec![],
         Box::new(signed16_alias_content()),
     )
@@ -578,6 +631,7 @@ pub fn signed8_type() -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_SIGNED8,
         vec![],
+        vec![],
         Box::new(signed8_alias_content()),
     )
 }
@@ -591,6 +645,7 @@ fn signed8_alias_content() -> SolvedType {
 pub fn unsigned128_type() -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_UNSIGNED128,
+        vec![],
         vec![],
         Box::new(unsigned128_alias_content()),
     )
@@ -606,6 +661,7 @@ pub fn unsigned64_type() -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_UNSIGNED64,
         vec![],
+        vec![],
         Box::new(unsigned64_alias_content()),
     )
 }
@@ -619,6 +675,7 @@ fn unsigned64_alias_content() -> SolvedType {
 pub fn unsigned32_type() -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_UNSIGNED32,
+        vec![],
         vec![],
         Box::new(unsigned32_alias_content()),
     )
@@ -634,6 +691,7 @@ pub fn unsigned16_type() -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_UNSIGNED16,
         vec![],
+        vec![],
         Box::new(unsigned16_alias_content()),
     )
 }
@@ -648,6 +706,7 @@ pub fn unsigned8_type() -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_UNSIGNED8,
         vec![],
+        vec![],
         Box::new(unsigned8_alias_content()),
     )
 }
@@ -658,10 +717,26 @@ fn unsigned8_alias_content() -> SolvedType {
 }
 
 #[inline(always)]
+fn decimal_alias_content() -> SolvedType {
+    single_private_tag(Symbol::NUM_AT_DECIMAL, vec![])
+}
+
+#[inline(always)]
+pub fn decimal_type() -> SolvedType {
+    SolvedType::Alias(
+        Symbol::NUM_DECIMAL,
+        vec![],
+        vec![],
+        Box::new(decimal_alias_content()),
+    )
+}
+
+#[inline(always)]
 pub fn bool_type() -> SolvedType {
     SolvedType::Alias(
         Symbol::BOOL_BOOL,
-        Vec::new(),
+        vec![],
+        vec![],
         Box::new(bool_alias_content()),
     )
 }
@@ -694,6 +769,7 @@ pub fn result_type(a: SolvedType, e: SolvedType) -> SolvedType {
     SolvedType::Alias(
         Symbol::RESULT_RESULT,
         vec![("ok".into(), a.clone()), ("err".into(), e.clone())],
+        vec![],
         Box::new(result_alias_content(a, e)),
     )
 }
@@ -723,7 +799,8 @@ pub fn str_type() -> SolvedType {
 pub fn str_utf8_problem_type() -> SolvedType {
     SolvedType::Alias(
         Symbol::STR_UT8_PROBLEM,
-        Vec::new(),
+        vec![],
+        vec![],
         Box::new(str_utf8_problem_alias_content()),
     )
 }
@@ -746,7 +823,8 @@ pub fn str_utf8_problem_alias_content() -> SolvedType {
 pub fn str_utf8_byte_problem_type() -> SolvedType {
     SolvedType::Alias(
         Symbol::STR_UT8_BYTE_PROBLEM,
-        Vec::new(),
+        vec![],
+        vec![],
         Box::new(str_utf8_byte_problem_alias_content()),
     )
 }

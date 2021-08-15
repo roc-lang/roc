@@ -1,5 +1,6 @@
 [package]
 name = "roc_gen_dev"
+description = "The development backend for the Roc compiler"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
@@ -20,10 +21,9 @@ roc_mono = { path = "../mono" }
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
 bumpalo = { version = "3.6.1", features = ["collections"] }
-inlinable_string = "0.1"
 target-lexicon = "0.10"
 libloading = "0.6"
-object = { version = "0.22", features = ["write"] }
+object = { version = "0.24", features = ["write"] }
 
 [dev-dependencies]
 roc_can = { path = "../can" }

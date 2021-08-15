@@ -62,7 +62,6 @@ fn infer_eq(actual: &str, expected_str: &str) {
     let mut var_store = VarStore::default();
     let var = var_store.fresh();
     let dep_idents = IdentIds::exposed_builtins(8);
-
     let exposed_ident_ids = IdentIds::default();
     let mut module_ids = ModuleIds::default();
     let mod_id = module_ids.get_or_insert(&"ModId123".into());
@@ -96,7 +95,7 @@ fn infer_eq(actual: &str, expected_str: &str) {
             let Env {
                 pool,
                 var_store: ref_var_store,
-                dep_idents,
+                mut dep_idents,
                 ..
             } = env;
 
@@ -115,13 +114,17 @@ fn infer_eq(actual: &str, expected_str: &str) {
 
             let subs = solved.inner_mut();
 
-            let content = subs.get(var).content;
+            let content = subs.get_content_without_compacting(var);
+
+            // Connect the ModuleId to it's IdentIds
+            dep_idents.insert(mod_id, env.ident_ids);
 
             let interns = Interns {
-                module_ids,
+                module_ids: env.module_ids.clone(),
                 all_ident_ids: dep_idents,
             };
-            let actual_str = content_to_string(content, &subs, mod_id, &interns);
+
+            let actual_str = content_to_string(content, subs, mod_id, &interns);
 
             assert_eq!(actual_str, expected_str);
         }
@@ -248,5 +251,122 @@ fn constrain_global_tag() {
             "#
         ),
         "[ Foo ]*",
+    )
+}
+
+#[test]
+fn constrain_private_tag() {
+    infer_eq(
+        indoc!(
+            r#"
+            @Foo
+            "#
+        ),
+        "[ @Foo ]*",
+    )
+}
+
+#[test]
+fn constrain_call_and_accessor() {
+    infer_eq(
+        indoc!(
+            r#"
+            .foo { foo: "bar" }
+            "#
+        ),
+        "Str",
+    )
+}
+
+#[test]
+fn constrain_access() {
+    infer_eq(
+        indoc!(
+            r#"
+            { foo: "bar" }.foo
+            "#
+        ),
+        "Str",
+    )
+}
+
+#[test]
+fn constrain_if() {
+    infer_eq(
+        indoc!(
+            r#"
+            if True then Green else Red
+            "#
+        ),
+        "[ Green, Red ]*",
+    )
+}
+
+#[test]
+fn constrain_when() {
+    infer_eq(
+        indoc!(
+            r#"
+            when if True then Green else Red is
+                Green -> Blue
+                Red -> Purple
+            "#
+        ),
+        "[ Blue, Purple ]*",
+    )
+}
+
+#[test]
+fn constrain_let_value() {
+    infer_eq(
+        indoc!(
+            r#"
+            person = { name: "roc" }
+
+            person
+            "#
+        ),
+        "{ name : Str }",
+    )
+}
+
+#[test]
+fn constrain_update() {
+    infer_eq(
+        indoc!(
+            r#"
+            person = { name: "roc" }
+
+            { person & name: "bird" } 
+            "#
+        ),
+        "{ name : Str }",
+    )
+}
+
+#[ignore = "TODO: implement builtins in the editor"]
+#[test]
+fn constrain_run_low_level() {
+    infer_eq(
+        indoc!(
+            r#"
+            List.map [ { name: "roc" }, { name: "bird" } ] .name
+            "#
+        ),
+        "List Str",
+    )
+}
+
+#[test]
+fn constrain_closure() {
+    infer_eq(
+        indoc!(
+            r#"
+            x = 1
+
+            \{} -> x
+            "#
+        ),
+        "{}* -> Num *",
     )
 }

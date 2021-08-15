@@ -2,6 +2,20 @@ const builtin = @import("builtin");
 const std = @import("std");
 const testing = std.testing;
 
+// Dec Module
+const dec = @import("dec.zig");
+
+comptime {
+    exportDecFn(dec.fromF64C, "from_f64");
+    exportDecFn(dec.eqC, "eq");
+    exportDecFn(dec.neqC, "neq");
+    exportDecFn(dec.negateC, "negate");
+    exportDecFn(dec.addC, "add_with_overflow");
+    exportDecFn(dec.subC, "sub_with_overflow");
+    exportDecFn(dec.mulC, "mul_with_overflow");
+    exportDecFn(dec.divC, "div");
+}
+
 // List Module
 const list = @import("list.zig");
 
@@ -19,12 +33,17 @@ comptime {
     exportListFn(list.listContains, "contains");
     exportListFn(list.listRepeat, "repeat");
     exportListFn(list.listAppend, "append");
+    exportListFn(list.listPrepend, "prepend");
     exportListFn(list.listSingle, "single");
     exportListFn(list.listJoin, "join");
     exportListFn(list.listRange, "range");
     exportListFn(list.listReverse, "reverse");
     exportListFn(list.listSortWith, "sort_with");
     exportListFn(list.listConcat, "concat");
+    exportListFn(list.listDrop, "drop");
+    exportListFn(list.listSet, "set");
+    exportListFn(list.listSetInPlace, "set_in_place");
+    exportListFn(list.listSwap, "swap");
 }
 
 // Dict Module
@@ -70,7 +89,7 @@ comptime {
     exportStrFn(str.countSegments, "count_segments");
     exportStrFn(str.countGraphemeClusters, "count_grapheme_clusters");
     exportStrFn(str.startsWith, "starts_with");
-    exportStrFn(str.startsWithCodePoint, "starts_with_code_point");
+    exportStrFn(str.startsWithCodePt, "starts_with_code_point");
     exportStrFn(str.endsWith, "ends_with");
     exportStrFn(str.strConcatC, "concat");
     exportStrFn(str.strJoinWithC, "joinWith");
@@ -78,8 +97,9 @@ comptime {
     exportStrFn(str.strFromIntC, "from_int");
     exportStrFn(str.strFromFloatC, "from_float");
     exportStrFn(str.strEqual, "equal");
-    exportStrFn(str.strToBytesC, "to_bytes");
+    exportStrFn(str.strToUtf8C, "to_utf8");
     exportStrFn(str.fromUtf8C, "from_utf8");
+    exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
 }
 
 // Export helpers - Must be run inside a comptime
@@ -95,13 +115,71 @@ fn exportStrFn(comptime func: anytype, comptime func_name: []const u8) void {
 fn exportDictFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "dict." ++ func_name);
 }
-
 fn exportListFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "list." ++ func_name);
+}
+fn exportDecFn(comptime func: anytype, comptime func_name: []const u8) void {
+    exportBuiltinFn(func, "dec." ++ func_name);
+}
+
+// Custom panic function, as builtin Zig version errors during LLVM verification
+pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace) noreturn {
+    std.debug.print("{s}: {?}", .{ message, stacktrace });
+    unreachable;
 }
 
 // Run all tests in imported modules
 // https://github.com/ziglang/zig/blob/master/lib/std/std.zig#L94
 test "" {
     testing.refAllDecls(@This());
+}
+
+// For unclear reasons, sometimes this function is not linked in on some machines.
+// Therefore we provide it as LLVM bitcode and mark it as externally linked during our LLVM codegen
+//
+// Taken from
+// https://github.com/ziglang/zig/blob/85755c51d529e7d9b406c6bdf69ce0a0f33f3353/lib/std/special/compiler_rt/muloti4.zig
+//
+// Thank you Zig Contributors!
+export fn __muloti4(a: i128, b: i128, overflow: *c_int) callconv(.C) i128 {
+    // @setRuntimeSafety(builtin.is_test);
+
+    const min = @bitCast(i128, @as(u128, 1 << (128 - 1)));
+    const max = ~min;
+    overflow.* = 0;
+
+    const r = a *% b;
+    if (a == min) {
+        if (b != 0 and b != 1) {
+            overflow.* = 1;
+        }
+        return r;
+    }
+    if (b == min) {
+        if (a != 0 and a != 1) {
+            overflow.* = 1;
+        }
+        return r;
+    }
+
+    const sa = a >> (128 - 1);
+    const abs_a = (a ^ sa) -% sa;
+    const sb = b >> (128 - 1);
+    const abs_b = (b ^ sb) -% sb;
+
+    if (abs_a < 2 or abs_b < 2) {
+        return r;
+    }
+
+    if (sa == sb) {
+        if (abs_a > @divTrunc(max, abs_b)) {
+            overflow.* = 1;
+        }
+    } else {
+        if (abs_a > @divTrunc(min, -abs_b)) {
+            overflow.* = 1;
+        }
+    }
+
+    return r;
 }

@@ -14,14 +14,14 @@ ConsList a : [ Nil, Cons a (ConsList a) ]
 
 main : Task.Task {} []
 main =
-    # benchmarks use 4_200_000
-    m = makeMap 420
+    Task.after Task.getInt \n ->
+        m = makeMap n # koka original n = 4_200_000
 
-    val = fold (\_, v, r -> if v then r + 1 else r) m 0
+        val = fold (\_, v, r -> if v then r + 1 else r) m 0
 
-    val
-        |> Str.fromInt
-        |> Task.putLine
+        val
+            |> Str.fromInt
+            |> Task.putLine
 
 boom : Str -> a
 boom = \_ -> boom ""
@@ -38,12 +38,12 @@ makeMapHelp = \total, n, m ->
             n1 = n - 1
 
             powerOf10 =
-                (n % 10 |> resultWithDefault 0) == 0
+                n |> Num.isMultipleOf 10
 
             t1 = insert m n powerOf10
 
             isFrequency =
-                (n % 4 |> resultWithDefault 0) == 0
+                n |> Num.isMultipleOf 4
 
             key = n1 + ((total - n1) // 5 |> resultWithDefault 0)
             t2 = if isFrequency then delete t1 key else t1
@@ -85,8 +85,6 @@ isRed = \tree ->
         Node Red _ _ _ _ -> True
         _ -> False
 
-lt = \x, y -> x < y
-
 ins : Tree I64 Bool, I64, Bool -> Tree I64 Bool
 ins = \tree, kx, vx ->
     when tree is
@@ -94,19 +92,24 @@ ins = \tree, kx, vx ->
             Node Red Leaf kx vx Leaf
 
         Node Red a ky vy b ->
-            if lt kx ky then
-                Node Red (ins a kx vx) ky vy b
-            else if lt ky kx then
-                Node Red a ky vy (ins b kx vx)
-            else
-                Node Red a ky vy (ins b kx vx)
+            when Num.compare kx ky is
+                LT -> Node Red (ins a kx vx) ky vy b
+                GT -> Node Red a ky vy (ins b kx vx)
+                EQ -> Node Red a ky vy (ins b kx vx)
 
         Node Black a ky vy b ->
-            if lt kx ky then
-              (if isRed a then balanceLeft (ins a kx vx) ky vy b else Node Black (ins a kx vx) ky vy b)
-            else if lt ky kx then
-              (if isRed b then balanceRight a ky vy (ins b kx vx) else Node Black a ky vy (ins b kx vx))
-            else Node Black a kx vx b
+            when Num.compare kx ky is
+                LT ->
+                    when isRed a is
+                        True -> balanceLeft (ins a kx vx) ky vy b
+                        False -> Node Black (ins a kx vx) ky vy b
+
+                GT ->
+                    when isRed b is
+                        True -> balanceRight a ky vy (ins b kx vx)
+                        False -> Node Black  a ky vy (ins b kx vx)
+                EQ ->
+                    Node Black a kx vx b
 
 balanceLeft : Tree a b, a, b, Tree a b -> Tree a b
 balanceLeft = \l, k, v, r ->

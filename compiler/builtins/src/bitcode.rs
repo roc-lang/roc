@@ -1,27 +1,7 @@
-use std::fs::File;
-use std::io::prelude::Read;
-use std::vec::Vec;
-
-const BC_PATH: &str = env!(
-    "BUILTINS_BC",
-    "Env var BUILTINS_BC not found. Is there a problem with the build script?"
-);
-
 pub const OBJ_PATH: &str = env!(
     "BUILTINS_O",
     "Env var BUILTINS_O not found. Is there a problem with the build script?"
 );
-
-pub fn get_bytes() -> Vec<u8> {
-    // In the build script for the builtins module, we compile the builtins bitcode and set
-    // BUILTINS_BC to the path to the compiled output.
-    let mut builtins_bitcode = File::open(BC_PATH).expect("Unable to find builtins bitcode source");
-    let mut buffer = Vec::new();
-    builtins_bitcode
-        .read_to_end(&mut buffer)
-        .expect("Unable to read builtins bitcode");
-    buffer
-}
 
 pub const NUM_ASIN: &str = "roc_builtins.num.asin";
 pub const NUM_ACOS: &str = "roc_builtins.num.acos";
@@ -36,14 +16,15 @@ pub const STR_JOIN_WITH: &str = "roc_builtins.str.joinWith";
 pub const STR_STR_SPLIT_IN_PLACE: &str = "roc_builtins.str.str_split_in_place";
 pub const STR_COUNT_GRAPEHEME_CLUSTERS: &str = "roc_builtins.str.count_grapheme_clusters";
 pub const STR_STARTS_WITH: &str = "roc_builtins.str.starts_with";
-pub const STR_STARTS_WITH_CODE_POINT: &str = "roc_builtins.str.starts_with_code_point";
+pub const STR_STARTS_WITH_CODE_PT: &str = "roc_builtins.str.starts_with_code_point";
 pub const STR_ENDS_WITH: &str = "roc_builtins.str.ends_with";
 pub const STR_NUMBER_OF_BYTES: &str = "roc_builtins.str.number_of_bytes";
 pub const STR_FROM_INT: &str = "roc_builtins.str.from_int";
 pub const STR_FROM_FLOAT: &str = "roc_builtins.str.from_float";
 pub const STR_EQUAL: &str = "roc_builtins.str.equal";
-pub const STR_TO_BYTES: &str = "roc_builtins.str.to_bytes";
+pub const STR_TO_UTF8: &str = "roc_builtins.str.to_utf8";
 pub const STR_FROM_UTF8: &str = "roc_builtins.str.from_utf8";
+pub const STR_FROM_UTF8_RANGE: &str = "roc_builtins.str.from_utf8_range";
 
 pub const DICT_HASH: &str = "roc_builtins.dict.hash";
 pub const DICT_HASH_STR: &str = "roc_builtins.dict.hash_str";
@@ -76,9 +57,23 @@ pub const LIST_WALK_BACKWARDS: &str = "roc_builtins.list.walk_backwards";
 pub const LIST_CONTAINS: &str = "roc_builtins.list.contains";
 pub const LIST_REPEAT: &str = "roc_builtins.list.repeat";
 pub const LIST_APPEND: &str = "roc_builtins.list.append";
+pub const LIST_PREPEND: &str = "roc_builtins.list.prepend";
+pub const LIST_DROP: &str = "roc_builtins.list.drop";
+pub const LIST_SWAP: &str = "roc_builtins.list.swap";
 pub const LIST_SINGLE: &str = "roc_builtins.list.single";
 pub const LIST_JOIN: &str = "roc_builtins.list.join";
 pub const LIST_RANGE: &str = "roc_builtins.list.range";
 pub const LIST_REVERSE: &str = "roc_builtins.list.reverse";
 pub const LIST_SORT_WITH: &str = "roc_builtins.list.sort_with";
 pub const LIST_CONCAT: &str = "roc_builtins.list.concat";
+pub const LIST_SET: &str = "roc_builtins.list.set";
+pub const LIST_SET_IN_PLACE: &str = "roc_builtins.list.set_in_place";
+
+pub const DEC_FROM_F64: &str = "roc_builtins.dec.from_f64";
+pub const DEC_EQ: &str = "roc_builtins.dec.eq";
+pub const DEC_NEQ: &str = "roc_builtins.dec.neq";
+pub const DEC_NEGATE: &str = "roc_builtins.dec.negate";
+pub const DEC_ADD_WITH_OVERFLOW: &str = "roc_builtins.dec.add_with_overflow";
+pub const DEC_SUB_WITH_OVERFLOW: &str = "roc_builtins.dec.sub_with_overflow";
+pub const DEC_MUL_WITH_OVERFLOW: &str = "roc_builtins.dec.mul_with_overflow";
+pub const DEC_DIV: &str = "roc_builtins.dec.div";

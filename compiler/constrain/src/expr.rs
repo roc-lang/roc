@@ -10,7 +10,7 @@ use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{Field, WhenBranch};
 use roc_can::pattern::Pattern;
 use roc_collections::all::{ImMap, Index, SendMap};
-use roc_module::ident::Lowercase;
+use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Located, Region};
 use roc_types::subs::Variable;
@@ -96,7 +96,7 @@ pub fn constrain_expr(
     expected: Expected<Type>,
 ) -> Constraint {
     match expr {
-        Int(var, percision, _) => int_literal(*var, *percision, expected, region),
+        Int(var, precision, _) => int_literal(*var, *precision, expected, region),
         Num(var, _) => exists(
             vec![*var],
             Eq(
@@ -106,7 +106,7 @@ pub fn constrain_expr(
                 region,
             ),
         ),
-        Float(var, percision, _) => float_literal(*var, *percision, expected, region),
+        Float(var, precision, _) => float_literal(*var, *precision, expected, region),
         EmptyRecord => constrain_empty_record(region, expected),
         Expr::Record { record_var, fields } => {
             if fields.is_empty() {
@@ -220,7 +220,6 @@ pub fn constrain_expr(
         List {
             elem_var,
             loc_elems,
-            list_var: _unused,
         } => {
             if loc_elems.is_empty() {
                 exists(
@@ -712,10 +711,11 @@ pub fn constrain_expr(
             )
         }
         Accessor {
+            name: closure_name,
             function_var,
             field,
             record_var,
-            closure_var,
+            closure_ext_var: closure_var,
             ext_var,
             field_var,
         } => {
@@ -739,9 +739,15 @@ pub fn constrain_expr(
                 region,
             );
 
+            let ext = Type::Variable(*closure_var);
+            let lambda_set = Type::TagUnion(
+                vec![(TagName::Closure(*closure_name), vec![])],
+                Box::new(ext),
+            );
+
             let function_type = Type::Function(
                 vec![record_type],
-                Box::new(Type::Variable(*closure_var)),
+                Box::new(lambda_set),
                 Box::new(field_type),
             );
 
@@ -860,6 +866,58 @@ pub fn constrain_expr(
 
             exists(vars, And(arg_cons))
         }
+        ZeroArgumentTag {
+            variant_var,
+            ext_var,
+            name,
+            arguments,
+            closure_name,
+        } => {
+            let mut vars = Vec::with_capacity(arguments.len());
+            let mut types = Vec::with_capacity(arguments.len());
+            let mut arg_cons = Vec::with_capacity(arguments.len());
+
+            for (var, loc_expr) in arguments {
+                let arg_con = constrain_expr(
+                    env,
+                    loc_expr.region,
+                    &loc_expr.value,
+                    Expected::NoExpectation(Type::Variable(*var)),
+                );
+
+                arg_cons.push(arg_con);
+                vars.push(*var);
+                types.push(Type::Variable(*var));
+            }
+
+            let union_con = Eq(
+                Type::FunctionOrTagUnion(
+                    name.clone(),
+                    *closure_name,
+                    Box::new(Type::Variable(*ext_var)),
+                ),
+                expected.clone(),
+                Category::TagApply {
+                    tag_name: name.clone(),
+                    args_count: arguments.len(),
+                },
+                region,
+            );
+            let ast_con = Eq(
+                Type::Variable(*variant_var),
+                expected,
+                Category::Storage(std::file!(), std::line!()),
+                region,
+            );
+
+            vars.push(*variant_var);
+            vars.push(*ext_var);
+            arg_cons.push(union_con);
+            arg_cons.push(ast_con);
+
+            exists(vars, And(arg_cons))
+        }
+
         RunLowLevel { args, ret_var, op } => {
             // This is a modified version of what we do for function calls.
 
@@ -1063,7 +1121,7 @@ pub fn constrain_decls(home: ModuleId, decls: &[Declaration]) -> Constraint {
     }
 
     // this assert make the "root" of the constraint wasn't dropped
-    debug_assert!(format!("{:?}", &constraint).contains("SaveTheEnvironment"));
+    debug_assert!(constraint.contains_save_the_environment());
 
     constraint
 }
@@ -1156,7 +1214,7 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                         name,
                         ..
                     },
-                    Type::Function(arg_types, _closure_type, ret_type),
+                    Type::Function(arg_types, signature_closure_type, ret_type),
                 ) => {
                     // NOTE if we ever have problems with the closure, the ignored `_closure_type`
                     // is probably a good place to start the investigation!
@@ -1261,6 +1319,19 @@ fn constrain_def(env: &Env, def: &Def, body_con: Constraint) -> Constraint {
                                 defs_constraint,
                                 ret_constraint,
                             })),
+                            Eq(
+                                Type::Variable(closure_var),
+                                Expected::FromAnnotation(
+                                    def.loc_pattern.clone(),
+                                    arity,
+                                    AnnotationSource::TypedBody {
+                                        region: annotation.region,
+                                    },
+                                    *signature_closure_type.clone(),
+                                ),
+                                Category::ClosureSize,
+                                region,
+                            ),
                             Store(signature.clone(), *fn_var, std::file!(), std::line!()),
                             Store(signature, expr_var, std::file!(), std::line!()),
                             Store(ret_type, ret_var, std::file!(), std::line!()),
@@ -1375,7 +1446,7 @@ fn instantiate_rigids(
     let mut rigid_substitution: ImMap<Variable, Type> = ImMap::default();
 
     for (name, var) in introduced_vars.var_by_name.iter() {
-        if let Some(existing_rigid) = ftv.get(&name) {
+        if let Some(existing_rigid) = ftv.get(name) {
             rigid_substitution.insert(*var, Type::Variable(*existing_rigid));
         } else {
             // It's possible to use this rigid in nested defs

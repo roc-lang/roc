@@ -276,7 +276,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             })
         }
         When(loc_cond_expr, branches) => {
-            let loc_desugared_cond = &*arena.alloc(desugar_expr(arena, &loc_cond_expr));
+            let loc_desugared_cond = &*arena.alloc(desugar_expr(arena, loc_cond_expr));
             let mut desugared_branches = Vec::with_capacity_in(branches.len(), arena);
 
             for branch in branches.iter() {
@@ -345,8 +345,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             )
         }
         If(if_thens, final_else_branch) => {
-            // If does not get desugared into `when` so we can give more targetted error messages during type checking.
-            let desugared_final_else = &*arena.alloc(desugar_expr(arena, &final_else_branch));
+            // If does not get desugared into `when` so we can give more targeted error messages during type checking.
+            let desugared_final_else = &*arena.alloc(desugar_expr(arena, final_else_branch));
 
             let mut desugared_if_thens = Vec::with_capacity_in(if_thens.len(), arena);
 
@@ -363,8 +363,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Located<Expr<'a>>) -> &'a
             })
         }
         Expect(condition, continuation) => {
-            let desugared_condition = &*arena.alloc(desugar_expr(arena, &condition));
-            let desugared_continuation = &*arena.alloc(desugar_expr(arena, &continuation));
+            let desugared_condition = &*arena.alloc(desugar_expr(arena, condition));
+            let desugared_continuation = &*arena.alloc(desugar_expr(arena, continuation));
             arena.alloc(Located {
                 value: Expect(desugared_condition, desugared_continuation),
                 region: loc_expr.region,

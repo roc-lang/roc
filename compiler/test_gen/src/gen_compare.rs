@@ -1,18 +1,8 @@
-#[macro_use]
-extern crate pretty_assertions;
-#[macro_use]
-extern crate indoc;
-
-extern crate bumpalo;
-extern crate inkwell;
-extern crate libc;
-extern crate roc_gen;
-
-#[macro_use]
-mod helpers;
-
 #[cfg(test)]
-mod gen_num {
+mod gen_compare {
+    use crate::assert_evals_to;
+    use crate::assert_llvm_evals_to;
+    use indoc::indoc;
 
     #[test]
     fn eq_i64() {
@@ -451,5 +441,68 @@ mod gen_num {
     fn list_neq_nested() {
         assert_evals_to!("[[1]] != [[1]]", false, bool);
         assert_evals_to!("[[2]] != [[1]]", true, bool);
+    }
+
+    #[test]
+    fn compare_union_same_content() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+            Foo : [ A I64, B I64 ]
+
+            a : Foo
+            a = A 42
+
+            b : Foo
+            b = B 42
+
+            a == b
+            "#
+            ),
+            false,
+            bool
+        );
+    }
+
+    #[test]
+    fn compare_recursive_union_same_content() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Expr : [ Add Expr Expr, Mul Expr Expr, Val1 I64, Val2 I64 ]
+
+                v1 : Expr 
+                v1 = Val1 42
+
+                v2 : Expr 
+                v2 = Val2 42
+
+                v1 == v2
+            "#
+            ),
+            false,
+            bool
+        );
+    }
+
+    #[test]
+    fn compare_nullable_recursive_union_same_content() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                Expr : [ Add Expr Expr, Mul Expr Expr, Val1 I64, Val2 I64, Empty ]
+
+                v1 : Expr 
+                v1 = Val1 42
+
+                v2 : Expr 
+                v2 = Val2 42
+
+                v1 == v2
+            "#
+            ),
+            false,
+            bool
+        );
     }
 }

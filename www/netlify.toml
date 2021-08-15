@@ -1,0 +1,30 @@
+# This is the file that generates and deploys https://www.roc-lang.org,
+# which is served on Netlify.
+#
+# Netlify's docs for how this configuration file works:
+# https://docs.netlify.com/routing/headers/#syntax-for-the-netlify-configuration-file
+[build]
+  publish = "build/"
+  command = "bash build.sh"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-XSS-Protection = "1; mode=block"
+    Content-Security-Policy = "default-src 'self'; img-src *;"
+    X-Content-Type-Options = "nosniff"
+
+# Redirect roc-lang.org/authors to the AUTHORS file in this repo
+#
+# This is referenced in the LICENSE file, which says to see roc-lang.org/authors
+# for a list of authors!
+[[redirects]]
+  from = "/authors"
+  to = "https://github.com/rtfeldman/roc/blob/trunk/AUTHORS"
+  force = true
+  status = 302 # TODO once the repo is public, use status = 200 and this URL:
+               # https://raw.githubusercontent.com/rtfeldman/roc/trunk/AUTHORS
+               #
+               # This way, roc-lang.org/authors will show the authors directly,
+               # proxied from the current AUTHORS file on GitHub, no redirects.

@@ -32,7 +32,7 @@ fn to_type2(
     var_store: &mut VarStore,
 ) -> Type2 {
     match solved_type {
-        SolvedType::Alias(symbol, solved_type_variables, solved_actual) => {
+        SolvedType::Alias(symbol, solved_type_variables, _todo, solved_actual) => {
             let type_variables = PoolVec::with_capacity(solved_type_variables.len() as u32, pool);
 
             for (type_variable_node_id, (lowercase, solved_arg)) in type_variables
@@ -57,7 +57,7 @@ fn to_type2(
         SolvedType::TagUnion(tags, ext) => {
             let new_tags = PoolVec::with_capacity(tags.len() as u32, pool);
 
-            for (tag_node_id, (_tag_name, args)) in new_tags.iter_node_ids().zip(tags.iter()) {
+            for (tag_node_id, (tag_name, args)) in new_tags.iter_node_ids().zip(tags.iter()) {
                 let new_args: PoolVec<Type2> = PoolVec::with_capacity(args.len() as u32, pool);
 
                 for (arg_node_id, arg) in new_args.iter_node_ids().zip(args.iter()) {
@@ -66,8 +66,7 @@ fn to_type2(
                     pool[arg_node_id] = node;
                 }
 
-                // tagname as PoolStr
-                pool[tag_node_id] = (PoolStr::new("", pool), new_args);
+                pool[tag_node_id] = (tag_name.clone(), new_args);
             }
 
             let actual_typ2 = to_type2(pool, ext, free_vars, var_store);
@@ -232,7 +231,7 @@ impl Scope {
                 // If this IdentId was already added previously
                 // when the value was exposed in the module header,
                 // use that existing IdentId. Otherwise, create a fresh one.
-                let ident_id = match exposed_ident_ids.get_id(&ident.as_inline_str()) {
+                let ident_id = match exposed_ident_ids.get_id(&ident) {
                     Some(ident_id) => *ident_id,
                     None => all_ident_ids.add(ident.clone().into()),
                 };

@@ -1,16 +1,15 @@
-const builtin = @import("builtin");
 const std = @import("std");
 const mem = std.mem;
 const Builder = std.build.Builder;
 
 pub fn build(b: *Builder) void {
-    // b.setPreferredReleaseMode(builtin.Mode.Debug);
-    b.setPreferredReleaseMode(builtin.Mode.ReleaseFast);
+    // b.setPreferredReleaseMode(builtin.Mode.Debug
+    b.setPreferredReleaseMode(.ReleaseFast);
     const mode = b.standardReleaseOptions();
 
     // Options
     const fallback_main_path = "./src/main.zig";
-    const main_path_desc = b.fmt("Override path to main.zig. Used by \"ir\" and \"test\". Defaults to \"{}\". ", .{fallback_main_path});
+    const main_path_desc = b.fmt("Override path to main.zig. Used by \"ir\" and \"test\". Defaults to \"{s}\". ", .{fallback_main_path});
     const main_path = b.option([]const u8, "main-path", main_path_desc) orelse fallback_main_path;
 
     // Tests
@@ -28,7 +27,6 @@ pub fn build(b: *Builder) void {
     llvm_obj.strip = true;
     llvm_obj.emit_llvm_ir = true;
     llvm_obj.emit_bin = false;
-    llvm_obj.bundle_compiler_rt = true;
     const ir = b.step("ir", "Build LLVM ir");
     ir.dependOn(&llvm_obj.step);
 
