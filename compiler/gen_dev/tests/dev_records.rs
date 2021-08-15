@@ -187,10 +187,10 @@ mod dev_records {
         assert_evals_to!(
             indoc!(
                 r#"
-                        rec = { y: 17, x: 15, z: 19 }
+                    rec = { y: 17, x: 15, z: 19 }
 
-                        rec.x
-                    "#
+                    rec.x
+                "#
             ),
             15,
             i64
@@ -199,10 +199,10 @@ mod dev_records {
         assert_evals_to!(
             indoc!(
                 r#"
-                        rec = { x: 15, y: 17, z: 19 }
+                    rec = { x: 15, y: 17, z: 19 }
 
-                        rec.y
-                    "#
+                    rec.y
+                "#
             ),
             17,
             i64
@@ -211,10 +211,10 @@ mod dev_records {
         assert_evals_to!(
             indoc!(
                 r#"
-                        rec = { x: 15, y: 17, z: 19 }
+                    rec = { x: 15, y: 17, z: 19 }
 
-                        rec.z
-                    "#
+                    rec.z
+                "#
             ),
             19,
             i64
@@ -228,7 +228,7 @@ mod dev_records {
                 r#"
                     when { x: 0x2 } is
                         { x } -> x + 3
-                    "#
+                "#
             ),
             5,
             i64
@@ -242,7 +242,7 @@ mod dev_records {
                 r#"
                     when { x: 0x2, y: 3.14 } is
                         { x: var } -> var + 3
-                    "#
+                "#
             ),
             5,
             i64
@@ -257,7 +257,7 @@ mod dev_records {
                     { x } = { x: 0x2, y: 3.14 }
 
                     x
-                    "#
+                "#
             ),
             2,
             i64
@@ -272,7 +272,7 @@ mod dev_records {
                     when { x: 0x2, y: 3.14 } is
                         { x: 0x4 } -> 5
                         { x } -> x + 3
-                    "#
+                "#
             ),
             5,
             i64
@@ -287,7 +287,7 @@ mod dev_records {
                     x =  {a: 0x2, b: 0x3 }
 
                     x.a + x.b
-                    "#
+                "#
             ),
             5,
             i64
@@ -301,7 +301,7 @@ mod dev_records {
                     v = {}
 
                     v
-                    "#
+                "#
             ),
             (),
             ()
@@ -314,7 +314,7 @@ mod dev_records {
             indoc!(
                 r#"
                        { x: 3 }
-                    "#
+                "#
             ),
             3,
             i64
@@ -327,7 +327,7 @@ mod dev_records {
             indoc!(
                 r#"
                        { x: 3, y: 5 }
-                    "#
+                "#
             ),
             (3, 5),
             (i64, i64)
@@ -844,7 +844,7 @@ mod dev_records {
                     rec = { foo: 42, bar: 6 }
 
                     { rec & foo: rec.foo + 1 }
-                    "#
+                "#
             ),
             (6, 43),
             (i64, i64)
@@ -859,7 +859,7 @@ mod dev_records {
                     rec = { foo: 42}
 
                     { rec & foo: rec.foo + 1 }
-                    "#
+                "#
             ),
             43,
             i64
