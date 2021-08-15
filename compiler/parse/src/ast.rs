@@ -91,6 +91,8 @@ pub enum Expr<'a> {
     Access(&'a Expr<'a>, &'a str),
     /// e.g. `.foo`
     AccessorFunction(&'a str),
+    /// eg 'b'
+    SingleQuote(char),
 
     // Collection Literals
     List {
@@ -358,6 +360,7 @@ pub enum Pattern<'a> {
     FloatLiteral(&'a str),
     StrLiteral(StrLiteral<'a>),
     Underscore(&'a str),
+    SingleQuote(char),
 
     // Space
     SpaceBefore(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),

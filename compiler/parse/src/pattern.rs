@@ -64,6 +64,7 @@ pub fn loc_pattern_help<'a>(
         )),
         loc!(number_pattern_help()),
         loc!(string_pattern_help()),
+        loc!(single_quote_pattern_help()),
     )
 }
 
@@ -112,6 +113,7 @@ fn loc_parse_tag_pattern_arg<'a>(
             crate::pattern::record_pattern_help(min_indent)
         )),
         loc!(string_pattern_help()),
+        loc!(single_quote_pattern_help()),
         loc!(number_pattern_help())
     )
     .parse(arena, state)
@@ -161,6 +163,16 @@ fn string_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
     specialize(
         |_, r, c| EPattern::Start(r, c),
         map!(crate::string_literal::parse(), Pattern::StrLiteral),
+    )
+}
+
+fn single_quote_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
+    specialize(
+        |_, r, c| EPattern::Start(r, c),
+        map!(
+            crate::string_literal::parse_single_quote(),
+            Pattern::SingleQuote
+        ),
     )
 }
 

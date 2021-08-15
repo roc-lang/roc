@@ -203,6 +203,7 @@ fn parse_loc_term_or_underscore<'a>(
     one_of!(
         loc_expr_in_parens_etc_help(min_indent),
         loc!(specialize(EExpr::Str, string_literal_help())),
+        loc!(specialize(EExpr::SingleQuote, single_quote_literal_help())),
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
         loc!(specialize(EExpr::Lambda, closure_help(min_indent, options))),
         loc!(underscore_expression()),
@@ -225,6 +226,7 @@ fn parse_loc_term<'a>(
     one_of!(
         loc_expr_in_parens_etc_help(min_indent),
         loc!(specialize(EExpr::Str, string_literal_help())),
+        loc!(specialize(EExpr::SingleQuote, single_quote_literal_help())),
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
         loc!(specialize(EExpr::Lambda, closure_help(min_indent, options))),
         loc!(record_literal_help(min_indent)),
@@ -2338,6 +2340,13 @@ fn record_literal_help<'a>(min_indent: u16) -> impl Parser<'a, Expr<'a>, EExpr<'
 
 fn string_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString<'a>> {
     map!(crate::string_literal::parse(), Expr::Str)
+}
+
+fn single_quote_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString<'a>> {
+    map!(
+        crate::string_literal::parse_single_quote(),
+        Expr::SingleQuote
+    )
 }
 
 fn positive_number_literal_help<'a>() -> impl Parser<'a, Expr<'a>, Number> {

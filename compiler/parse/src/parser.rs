@@ -419,6 +419,7 @@ pub enum EExpr<'a> {
     InParens(EInParens<'a>, Row, Col),
     Record(ERecord<'a>, Row, Col),
     Str(EString<'a>, Row, Col),
+    SingleQuote(char, Row, Col),
     Number(Number, Row, Col),
     List(List<'a>, Row, Col),
 

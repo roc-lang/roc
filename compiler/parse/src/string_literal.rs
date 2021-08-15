@@ -1,3 +1,5 @@
+use std::convert::TryInto;
+
 use crate::ast::{EscapedChar, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::Progress::*;
@@ -44,6 +46,120 @@ macro_rules! advance_state {
             EString::Space(BadInputError::LineTooLong, r, c)
         })
     };
+}
+
+pub fn parse_single_quote<'a>() -> impl Parser<'a, char, EString<'a>> {
+    move |_arena: &'a Bump, mut state: State<'a>| {
+        if state.bytes.starts_with(b"\'") {
+            // we will be parsing a single-quote-string
+        } else {
+            return Err((NoProgress, EString::Open(state.line, state.column), state));
+        }
+
+        // early return did not hit, just advance one byte
+        state = advance_state!(state, 1)?;
+
+        // Handle back slaches in byte literal
+        // - starts with a backslash and used as an escape character. ex: '\n', '\t'
+        // - single quote floating (un closed single quote) should be an error
+        match state.bytes.first() {
+            Some(b'\\') => {
+                state = advance_state!(state, 1)?;
+                match state.bytes.first() {
+                    Some(&ch) => {
+                        state = advance_state!(state, 1)?;
+                        if ch == b'n' || ch == b'r' || ch == b't' || ch == b'\'' || ch == b'\\' {
+                            if state.bytes.first() == Some(&b'\'') {
+                                state = advance_state!(state, 1)?;
+                                // since we checked the current char between the single quotes we
+                                // know they are valid UTF-8, allowing us to use 'from_u32_unchecked'
+                                return Ok((
+                                    MadeProgress,
+                                    unsafe { char::from_u32_unchecked(ch as u32) },
+                                    state,
+                                ));
+                            }
+                        }
+                        // invalid error, backslah escaping something we do not recognize
+                        return Err((
+                            NoProgress,
+                            EString::CodePtEnd(state.line, state.column),
+                            state,
+                        ));
+                    }
+                    None => {
+                        // no close quote found
+                        return Err((
+                            NoProgress,
+                            EString::CodePtEnd(state.line, state.column),
+                            state,
+                        ));
+                    }
+                }
+            }
+            Some(_) => {
+                // do nothing for other characters, handled below
+            }
+            None => {
+                return Err((
+                    NoProgress,
+                    EString::CodePtEnd(state.line, state.column),
+                    state,
+                ))
+            }
+        }
+
+        let mut bytes = state.bytes.iter();
+        let mut end_index = 1;
+
+        loop {
+            match bytes.next() {
+                Some(b'\'') => {
+                    break;
+                }
+                Some(_) => end_index += 1,
+                None => {
+                    return Err((NoProgress, EString::Open(state.line, state.column), state));
+                }
+            }
+        }
+
+        if end_index == 1 {
+            // no progress was made
+            // this case is a double single quote, ex: ''
+            // not supporting empty single quotes
+            return Err((NoProgress, EString::Open(state.line, state.column), state));
+        }
+
+        if end_index > (std::mem::size_of::<u32>() + 1) {
+            // bad case: too big to fit into u32
+            return Err((NoProgress, EString::Open(state.line, state.column), state));
+        }
+
+        // happy case -> we have some bytes that will fit into a u32
+        // ending up w/ a slice of bytes that we want to convert into an integer
+        let bytes_array: [u8; 4] = match state.bytes[1..end_index].try_into() {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                return Err((NoProgress, EString::Open(state.line, state.column), state));
+            }
+        };
+
+        state = advance_state!(state, end_index)?;
+        match char::from_u32(u32::from_ne_bytes(bytes_array)) {
+            Some(ch) => {
+                return Ok((MadeProgress, ch, state));
+            }
+            None => {
+                // invalid UTF-8
+                return Err((
+                    NoProgress,
+                    EString::CodePtEnd(state.line, state.column),
+                    state,
+                ));
+            }
+        }
+    }
 }
 
 pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
