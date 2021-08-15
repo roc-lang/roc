@@ -2552,3 +2552,108 @@ fn mirror_llvm_alignment_padding() {
         RocStr
     );
 }
+
+#[test]
+fn lambda_set_bool() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                p1 = (\u -> u == 97)
+                p2 = (\u -> u == 98)
+
+                main : I64
+                main =
+                    oneOfResult = List.map [p1, p2] (\p -> p 42)
+
+                    when oneOfResult is
+                        _ -> 32
+
+            "#
+        ),
+        32,
+        i64
+    );
+}
+
+#[test]
+fn lambda_set_byte() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                p1 = (\u -> u == 97)
+                p2 = (\u -> u == 98)
+                p3 = (\u -> u == 99)
+
+                main : I64
+                main =
+                    oneOfResult = List.map [p1, p2, p3] (\p -> p 42)
+
+                    when oneOfResult is
+                        _ -> 32
+
+            "#
+        ),
+        32,
+        i64
+    );
+}
+
+#[test]
+fn lambda_set_struct_byte() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+
+                main : I64
+                main =
+                    r : [ Red, Green, Blue ]
+                    r = Red
+
+                    p1 = (\u -> r == u)
+                    oneOfResult = List.map [p1, p1] (\p -> p Green)
+
+                    when oneOfResult is
+                        _ -> 32
+
+            "#
+        ),
+        32,
+        i64
+    );
+}
+
+#[test]
+fn lambda_set_enum_byte_byte() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+
+                main : I64
+                main =
+                    r : [ Red, Green, Blue ]
+                    r = Red
+
+                    g : [ Red, Green, Blue ]
+                    g = Green
+
+                    p1 = (\u -> r == u)
+                    p2 = (\u -> g == u)
+                    oneOfResult = List.map [p1, p2] (\p -> p Green)
+
+                    when oneOfResult is
+                        _ -> 32
+
+            "#
+        ),
+        32,
+        i64
+    );
+}

@@ -298,7 +298,87 @@ impl GetSubsSlice<Lowercase> for Subs {
 
 impl fmt::Debug for Subs {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.utable.fmt(f)
+        writeln!(f)?;
+        for i in 0..self.len() {
+            let var = Variable(i as u32);
+            let desc = self.get_without_compacting(var);
+
+            let root = self.get_root_key_without_compacting(var);
+
+            if var == root {
+                write!(f, "{} => ", i)?;
+
+                subs_fmt_desc(&desc, self, f)?;
+            } else {
+                write!(f, "{} => <{:?}>", i, root)?;
+            }
+
+            writeln!(f)?;
+        }
+
+        Ok(())
+    }
+}
+
+fn subs_fmt_desc(this: &Descriptor, subs: &Subs, f: &mut fmt::Formatter) -> fmt::Result {
+    subs_fmt_content(&this.content, subs, f)?;
+
+    write!(f, " r: {:?}", &this.rank)?;
+    write!(f, " m: {:?}", &this.mark)
+}
+
+fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt::Result {
+    match this {
+        Content::FlexVar(name) => write!(f, "Flex({:?})", name),
+        Content::RigidVar(name) => write!(f, "Rigid({:?})", name),
+        Content::RecursionVar {
+            structure,
+            opt_name,
+        } => write!(f, "Recursion({:?}, {:?})", structure, opt_name),
+        Content::Structure(flat_type) => subs_fmt_flat_type(flat_type, subs, f),
+        Content::Alias(name, arguments, actual) => {
+            write!(f, "Alias({:?}, {:?}, {:?})", name, arguments, actual)
+        }
+        Content::Error => write!(f, "Error"),
+    }
+}
+
+fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> fmt::Result {
+    match this {
+        FlatType::Apply(name, arguments) => {
+            let slice = subs.get_subs_slice(*arguments.as_subs_slice());
+
+            write!(f, "Apply({:?}, {:?})", name, slice)
+        }
+        FlatType::Func(arguments, lambda_set, result) => {
+            let slice = subs.get_subs_slice(*arguments.as_subs_slice());
+            write!(f, "Func({:?}, {:?}, {:?})", slice, lambda_set, result)
+        }
+        FlatType::Record(_, _) => todo!(),
+        FlatType::TagUnion(tags, ext) => {
+            write!(f, "[ ")?;
+
+            let (it, new_ext) = tags.sorted_iterator_and_ext(subs, *ext);
+            for (name, slice) in it {
+                write!(f, "{:?} {:?}, ", name, slice)?;
+            }
+
+            write!(f, "]<{:?}>", new_ext)
+        }
+        FlatType::FunctionOrTagUnion(_, _, _) => todo!(),
+        FlatType::RecursiveTagUnion(rec, tags, ext) => {
+            write!(f, "[ ")?;
+
+            let (it, new_ext) = tags.sorted_iterator_and_ext(subs, *ext);
+            for (name, slice) in it {
+                write!(f, "{:?} {:?}, ", name, slice)?;
+            }
+
+            write!(f, "]<{:?}> as <{:?}>", new_ext, rec)
+        }
+        FlatType::Erroneous(e) => write!(f, "Erroneous({:?})", e),
+        FlatType::EmptyRecord => write!(f, "EmptyRecord"),
+        FlatType::EmptyTagUnion => write!(f, "EmptyTagUnion"),
     }
 }
 
