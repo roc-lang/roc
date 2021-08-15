@@ -171,13 +171,6 @@ pub fn helper<'a>(
     let builder = context.create_builder();
     let module = roc_gen_llvm::llvm::build::module_from_builtins(context, "app");
 
-    // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
-    // platform to provide them.
-    add_default_roc_externs(context, &module, &builder, ptr_bytes);
-
-    // strip Zig debug stuff
-    module.strip_debug_info();
-
     let opt_level = if cfg!(debug_assertions) {
         OptLevel::Normal
     } else {
@@ -224,6 +217,13 @@ pub fn helper<'a>(
         exposed_to_host: MutSet::default(),
     };
 
+    // strip Zig debug stuff
+    module.strip_debug_info();
+
+    // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
+    // platform to provide them.
+    add_default_roc_externs(&env);
+
     let (main_fn_name, main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
         &env,
         opt_level,
@@ -232,6 +232,9 @@ pub fn helper<'a>(
     );
 
     env.dibuilder.finalize();
+
+    // strip all debug info: we don't use it at the moment and causes weird validation issues
+    module.strip_debug_info();
 
     // Uncomment this to see the module's un-optimized LLVM instruction output:
     // env.module.print_to_stderr();

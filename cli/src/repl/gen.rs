@@ -135,10 +135,6 @@ pub fn gen_and_eval<'a>(
             &context, "",
         ));
 
-        // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
-        // platform to provide them.
-        add_default_roc_externs(&context, module, &builder, ptr_bytes);
-
         // mark our zig-defined builtins as internal
         for function in FunctionIterator::from_module(module) {
             let name = function.get_name().to_str().unwrap();
@@ -187,6 +183,10 @@ pub fn gen_and_eval<'a>(
             // important! we don't want any procedures to get the C calling convention
             exposed_to_host: MutSet::default(),
         };
+
+        // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
+        // platform to provide them.
+        add_default_roc_externs(&env);
 
         let (main_fn_name, main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
             &env,

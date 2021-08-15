@@ -1,19 +1,22 @@
+use crate::debug_info_init;
+use crate::llvm::bitcode::call_void_bitcode_fn;
+use crate::llvm::build::Env;
 use crate::llvm::build::{add_func, C_CALL_CONV};
 use crate::llvm::convert::ptr_int;
-use inkwell::builder::Builder;
-use inkwell::context::Context;
-use inkwell::module::{Linkage, Module};
-use inkwell::values::BasicValue;
+use inkwell::module::Linkage;
+use inkwell::types::BasicType;
+use inkwell::values::{BasicValue, PointerValue};
 use inkwell::AddressSpace;
+use roc_builtins::bitcode;
 
 /// Define functions for roc_alloc, roc_realloc, and roc_dealloc
 /// which use libc implementations (malloc, realloc, and free)
-pub fn add_default_roc_externs<'ctx>(
-    ctx: &'ctx Context,
-    module: &Module<'ctx>,
-    builder: &Builder<'ctx>,
-    ptr_bytes: u32,
-) {
+pub fn add_default_roc_externs<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) {
+    let ctx = env.context;
+    let module = env.module;
+    let builder = env.builder;
+    let ptr_bytes = env.ptr_bytes;
+
     let usize_type = ptr_int(ctx, ptr_bytes);
     let i8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
 
@@ -134,6 +137,71 @@ pub fn add_default_roc_externs<'ctx>(
         builder.build_free(ptr_arg.into_pointer_value());
 
         builder.build_return(None);
+
+        if cfg!(debug_assertions) {
+            crate::llvm::build::verify_fn(fn_val);
+        }
+    }
+
+    add_sjlj_roc_panic(env)
+}
+
+pub fn add_sjlj_roc_panic<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) {
+    let ctx = env.context;
+    let module = env.module;
+    let builder = env.builder;
+
+    // roc_panic
+    {
+        use crate::llvm::build::LLVM_LONGJMP;
+
+        // The type of this function (but not the implementation) should have
+        // already been defined by the builtins, which rely on it.
+        let fn_val = module.get_function("roc_panic").unwrap();
+        let mut params = fn_val.get_param_iter();
+        let ptr_arg = params.next().unwrap();
+
+        // in debug mode, this is assumed to be NullTerminatedString
+        let _tag_id_arg = params.next().unwrap();
+
+        debug_assert!(params.next().is_none());
+
+        let subprogram = env.new_subprogram("roc_panic");
+        fn_val.set_subprogram(subprogram);
+
+        env.dibuilder.finalize();
+
+        // Add a basic block for the entry point
+        let entry = ctx.append_basic_block(fn_val, "entry");
+
+        builder.position_at_end(entry);
+
+        let buffer = crate::llvm::build::get_sjlj_buffer(env);
+
+        // write our error message pointer
+        let index = env.ptr_int().const_int(3 * env.ptr_bytes as u64, false);
+        let message_buffer_raw =
+            unsafe { builder.build_gep(buffer, &[index], "raw_msg_buffer_ptr") };
+        let message_buffer = builder.build_bitcast(
+            message_buffer_raw,
+            env.context
+                .i8_type()
+                .ptr_type(AddressSpace::Generic)
+                .ptr_type(AddressSpace::Generic),
+            "to **u8",
+        );
+
+        env.builder
+            .build_store(message_buffer.into_pointer_value(), ptr_arg);
+
+        let tag = env.context.i32_type().const_int(1, false);
+        if true {
+            let _call = env.build_intrinsic_call(LLVM_LONGJMP, &[buffer.into()]);
+        } else {
+            let _call = env.build_intrinsic_call(LLVM_LONGJMP, &[buffer.into(), tag.into()]);
+        }
+
+        builder.build_unreachable();
 
         if cfg!(debug_assertions) {
             crate::llvm::build::verify_fn(fn_val);
