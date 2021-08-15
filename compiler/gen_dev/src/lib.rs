@@ -201,6 +201,9 @@ where
                             Symbol::NUM_SUB => {
                                 self.build_run_low_level(sym, &LowLevel::NumSub, arguments, layout)
                             }
+                            Symbol::NUM_ROUND => {
+                                self.build_run_low_level(sym, &LowLevel::NumRound, arguments, layout)
+                            }
                             Symbol::BOOL_EQ => {
                                 self.build_run_low_level(sym, &LowLevel::Eq, arguments, layout)
                             }
@@ -300,7 +303,13 @@ where
                 // Should we panic?
                 x => Err(format!("wrong layout, {:?}, for LowLevel::Eq", x)),
             },
-
+            LowLevel::NumRound => self.build_fn_call(
+                sym,
+                bitcode::NUM_ROUND.to_string(),
+                args,
+                &[Layout::Builtin(Builtin::Float64)],
+                layout,
+            ),
             x => Err(format!("low level, {:?}. is not yet implemented", x)),
         }
     }
