@@ -1,4 +1,5 @@
 use super::markup::nodes::{MarkupNode, BLANK_PLACEHOLDER};
+use super::slow_pool::MarkNodeId;
 use crate::editor::mvc::ed_view::RenderedWgpu;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::{ed_error::EdResult, theme::EdTheme, util::map_get};
@@ -10,7 +11,7 @@ use winit::dpi::PhysicalSize;
 use crate::{editor::config::Config, graphics::colors};
 
 pub fn build_code_graphics<'a>(
-    markup_node: &'a MarkupNode,
+    markup_ids: &[MarkNodeId],
     size: &PhysicalSize<u32>,
     txt_coords: Vector2<f32>,
     config: &Config,
@@ -21,25 +22,35 @@ pub fn build_code_graphics<'a>(
     let layout = wgpu_glyph::Layout::default().h_align(wgpu_glyph::HorizontalAlign::Left);
     let mut rendered_wgpu = RenderedWgpu::new();
 
-    let (glyph_text_vec, rects) = markup_to_wgpu(
-        markup_node,
-        &CodeStyle {
-            ed_theme: &config.ed_theme,
-            font_size: config.code_font_size,
-            txt_coords,
-            glyph_dim_rect,
-        },
-        markup_node_pool,
-    )?;
+    let mut all_glyph_text_vec = vec![];
+    let mut all_rects = vec![];
+
+    for markup_id in markup_ids.iter() {
+        let mark_node = markup_node_pool.get(*markup_id);
+
+        let (mut glyph_text_vec, mut rects) = markup_to_wgpu(
+            mark_node,
+            &CodeStyle {
+                ed_theme: &config.ed_theme,
+                font_size: config.code_font_size,
+                txt_coords,
+                glyph_dim_rect,
+            },
+            markup_node_pool,
+        )?;
+
+        all_glyph_text_vec.append(&mut glyph_text_vec);
+        all_rects.append(&mut rects)
+    }
 
     let section = gr_text::owned_section_from_glyph_texts(
-        glyph_text_vec,
+        all_glyph_text_vec,
         txt_coords.into(),
         area_bounds,
         layout,
     );
 
-    rendered_wgpu.add_rects(rects);
+    rendered_wgpu.add_rects(all_rects);
     rendered_wgpu.add_text(section);
 
     Ok(rendered_wgpu)

@@ -11,13 +11,13 @@ use super::{ast::ExprId, expr::{Env, str_to_expr2}};
 #[derive(Debug)]
 pub struct AST {
     pub header: String,
-    pub expressions: Vec<ExprId>,
+    pub expression_ids: Vec<ExprId>,
 }
 
 impl AST {
-    pub fn parse_from_string<'a>(code_str: &str, mut env: Env<'a>, ast_arena: &Bump) -> Result<AST, SyntaxError<'a>> {
+    pub fn parse_from_string<'a>(code_str: &'a str, env: &mut Env<'a>, ast_arena: &'a Bump) -> Result<AST, SyntaxError<'a>> {
 
-        let mut split_string = code_str.split("\n\n");
+        let split_string = code_str.split("\n\n");
 
         let split_code_vec: Vec<&str> = split_string.collect();
 
@@ -27,24 +27,21 @@ impl AST {
 
             let region = Region::new(0, 0, 0, 0);
 
-            let expressions =
-                tail
-                    .iter()
-                    .map(|&expr_str|
-                        {
-                            let (expr2, _output) = str_to_expr2(&ast_arena, code_str, &mut env, &mut scope, region)?;
+            let mut expression_ids = Vec::<ExprId>::new();
 
-                            let expr_id = env.pool.add(expr2);
+            for &expr_str in tail.iter() {
+                let (expr2, _output) = str_to_expr2(&ast_arena, expr_str, env, &mut scope, region)?;
 
-                            expr_id
-                        }
-                    ).collect::<Vec<_>>();
+                let expr_id = env.pool.add(expr2);
+
+                expression_ids.push(expr_id);
+            }
             
 
             Ok(
                 AST { 
                     header: head.to_string(),
-                    expressions,
+                    expression_ids,
                 }
             )
         } else {

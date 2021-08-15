@@ -29,10 +29,22 @@ pub fn build_debug_graphics(
         .with_color(colors::to_slice(from_hsb(0, 49, 96)))
         .with_scale(config.code_font_size);
 
-    let mark_node_tree_text = glyph_brush::OwnedText::new(tree_as_string(
-        ed_model.markup_root_id,
-        &ed_model.markup_node_pool,
-    ))
+    let mut mark_node_trees_string = "mark node trees:\n".to_owned();
+
+    for mark_id in ed_model.markup_ids.iter() {
+
+        mark_node_trees_string.push_str(
+            &tree_as_string(
+            *mark_id,
+            &ed_model.markup_node_pool,
+        ));
+
+        mark_node_trees_string.push_str("\n");
+    }
+
+    let mark_node_tree_text = glyph_brush::OwnedText::new(
+        mark_node_trees_string
+    )
     .with_color(colors::to_slice(from_hsb(266, 31, 96)))
     .with_scale(config.code_font_size);
 
@@ -40,10 +52,18 @@ pub fn build_debug_graphics(
         .with_color(colors::to_slice(from_hsb(110, 45, 82)))
         .with_scale(config.code_font_size);
 
-    let ast_node_text = glyph_brush::OwnedText::new(format!(
-        "\n\n(ast_root)\n{}",
-        expr2_to_string(ed_model.module.ast_root_id, ed_model.module.env.pool)
-    ))
+
+    let mut ast_node_text_str = "AST:\n".to_owned();
+
+    for expr_id in ed_model.module.ast.expression_ids.iter() {
+        ast_node_text_str.push_str(
+            &expr2_to_string(*expr_id, ed_model.module.env.pool)
+        )
+    }
+
+    let ast_node_text = glyph_brush::OwnedText::new(
+        ast_node_text_str
+    )
     .with_color(colors::to_slice(from_hsb(211, 80, 100)))
     .with_scale(config.code_font_size);
 

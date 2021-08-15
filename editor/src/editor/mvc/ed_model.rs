@@ -1,10 +1,9 @@
 use crate::editor::code_lines::CodeLines;
 use crate::editor::grid_node_map::GridNodeMap;
-use crate::editor::markup::common_nodes::new_blank_mn;
 use crate::editor::slow_pool::{MarkNodeId, SlowPool};
 use crate::editor::{
     ed_error::EdError::SrcParseError,
-    ed_error::{EdResult, MissingParent, NoNodeAtCaretPosition},
+    ed_error::{EdResult, MissingParent, NoNodeAtCaretPosition, EmptyCodeString},
     markup::nodes::{expr2_to_markup, set_parent_for_all},
 };
 use crate::graphics::primitives::rect::Rect;
@@ -29,7 +28,7 @@ pub struct EdModel<'a> {
     pub code_lines: CodeLines,
     // allows us to map window coordinates to MarkNodeId's
     pub grid_node_map: GridNodeMap,
-    pub markup_root_id: MarkNodeId,
+    pub markup_ids: Vec<MarkNodeId>, // one root node for every expression
     pub markup_node_pool: SlowPool,
     // contains single char dimensions, used to calculate line height, column width...
     pub glyph_dim_rect_opt: Option<Rect>,
@@ -59,39 +58,45 @@ pub fn init_model<'a>(
 
     let mut module = EdModule::new(&code_str, env, &code_arena)?;
 
-    let ast_root_id = module.ast_root_id;
     let mut markup_node_pool = SlowPool::new();
 
-    let markup_root_id = if code_str.is_empty() {
-        markup_node_pool
-            .add(
-                new_blank_mn(ast_root_id, None)
-            )
+    let markup_ids = if code_str.is_empty() {
+
+        EmptyCodeString{}.fail()
+
     } else {
-        let ast_root = &module.env.pool.get(ast_root_id);
+        let mut temp_markup_ids = Vec::new();
 
-        let temp_markup_root_id = expr2_to_markup(
-            &code_arena,
-            &mut module.env,
-            ast_root,
-            ast_root_id,
-            &mut markup_node_pool,
-            &loaded_module.interns
-        )?;
-        set_parent_for_all(temp_markup_root_id, &mut markup_node_pool);
+        for &expr_id in module.ast.expression_ids.iter() {
+            let expr2 = module.env.pool.get(expr_id);
 
-        temp_markup_root_id
-    };
+            let temp_markup_id = expr2_to_markup(
+                &code_arena,
+                &mut module.env,
+                expr2,
+                expr_id,
+                &mut markup_node_pool,
+                &loaded_module.interns
+            )?;
 
-    let code_lines = EdModel::build_code_lines_from_markup(markup_root_id, &markup_node_pool)?;
-    let grid_node_map = EdModel::build_node_map_from_markup(markup_root_id, &markup_node_pool)?;
+            // it's easier to set the parent of the MarkupNodes afterwards
+            set_parent_for_all(temp_markup_id, &mut markup_node_pool);
+
+            temp_markup_ids.push(temp_markup_id);
+        }
+
+        Ok(temp_markup_ids)
+    }?;
+
+    let code_lines = EdModel::build_code_lines_from_markup(&markup_ids, &markup_node_pool)?;
+    let grid_node_map = EdModel::build_node_map_from_markup(&markup_ids, &markup_node_pool)?;
 
     Ok(EdModel {
         module,
         file_path,
         code_lines,
         grid_node_map,
-        markup_root_id,
+        markup_ids,
         markup_node_pool,
         glyph_dim_rect_opt: None,
         has_focus: true,
@@ -167,7 +172,7 @@ impl<'a> EdModule<'a> {
     pub fn new(code_str: &'a str, mut env: Env<'a>, ast_arena: &'a Bump) -> EdResult<EdModule<'a>> {
         if !code_str.is_empty() {
             
-            let parse_res = AST::parse_from_string(code_str, env, ast_arena);
+            let parse_res = AST::parse_from_string(code_str, &mut env, ast_arena);
 
             match parse_res {
                 Ok(ast) => {
@@ -184,17 +189,7 @@ impl<'a> EdModule<'a> {
             }
 
         } else {
-            let ast_root_id = env.pool.add(Expr2::Blank);
-
-            Ok(
-                EdModule { 
-                    env,
-                    ast: AST {
-                        header: "".to_string(),
-                        expressions: vec![ast_root_id],
-                    }
-                }
-            )
+            EmptyCodeString{}.fail()
         }
     }
 }

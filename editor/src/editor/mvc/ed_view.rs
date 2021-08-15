@@ -75,7 +75,7 @@ pub fn model_to_wgpu<'a>(
     all_rendered.add_text(start_tip_text);
 
     let rendered_code_graphics = build_code_graphics(
-        ed_model.markup_node_pool.get(ed_model.markup_root_id),
+        &ed_model.markup_ids,
         size,
         txt_coords,
         config,

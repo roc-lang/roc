@@ -43,6 +43,13 @@ pub enum EdError {
         backtrace: Backtrace,
     },
 
+    #[snafu(display(
+        "EmptyCodeString: I need to have a code string (code_str) that contains either an app, interface or Package-Config header. The code string was empty.",
+    ))]
+    EmptyCodeString {
+        backtrace: Backtrace,
+    },
+
     #[snafu(display("GetContentOnNestedNode: tried to get string content from Nested MarkupNode. Can only get content from Text or Blank nodes."))]
     GetContentOnNestedNode { backtrace: Backtrace },
 

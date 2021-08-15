@@ -93,12 +93,16 @@ impl<'a> EdModel<'a> {
     }
 
     pub fn build_node_map_from_markup(
-        markup_root_id: MarkNodeId,
+        markup_ids: &[MarkNodeId],
         markup_node_pool: &SlowPool,
     ) -> EdResult<GridNodeMap> {
         let mut grid_node_map = GridNodeMap::new();
 
-        EdModel::build_grid_node_map(markup_root_id, &mut grid_node_map, markup_node_pool)?;
+        for mark_id in markup_ids.iter() {
+            EdModel::build_grid_node_map(*mark_id, &mut grid_node_map, markup_node_pool)?;
+
+            grid_node_map.lines.push(Vec::new());
+        }
 
         Ok(grid_node_map)
     }
@@ -128,12 +132,16 @@ impl<'a> EdModel<'a> {
     }
 
     pub fn build_code_lines_from_markup(
-        markup_root_id: MarkNodeId,
+        markup_node_ids: &[MarkNodeId],
         markup_node_pool: &SlowPool,
     ) -> EdResult<CodeLines> {
         let mut all_code_string = String::new();
 
-        EdModel::build_markup_string(markup_root_id, &mut all_code_string, markup_node_pool)?;
+        for mark_node_id in markup_node_ids.iter() {
+            EdModel::build_markup_string(*mark_node_id, &mut all_code_string, markup_node_pool)?;
+
+            all_code_string.push_str("\n")
+        }
 
         let code_lines = CodeLines::from_str(&all_code_string);
 

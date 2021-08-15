@@ -296,7 +296,6 @@ pub fn str_to_expr2<'a>(
 ) -> Result<(Expr2, self::Output), SyntaxError<'a>> {
     match roc_parse::test_helpers::parse_loc_with(arena, input.trim()) {
         Ok(loc_expr) => {
-            dbg!(loc_expr);
             let desugared_loc_expr = desugar_expr(arena, arena.alloc(loc_expr));
 
             Ok(to_expr2(
