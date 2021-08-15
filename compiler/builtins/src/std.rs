@@ -501,11 +501,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(float_type(flex(TVAR1))),
     );
 
-    // TODO: This is obviously wrong! Fix me!
-    // bytesToU16 : Nat -> U16
+    // bytesToU16 : List U8, Nat -> U16
     add_top_level_function_type!(
         Symbol::NUM_BYTES_TO_U16,
-        vec![nat_type()],
+        vec![list_type(u8_type()), nat_type()],
         Box::new(u16_type()),
     );
 

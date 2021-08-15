@@ -1089,24 +1089,27 @@ fn num_asin(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// TODO: This is obviously wrong! Fix me!
-/// Num.bytesToU16 : Nat -> Nat
+/// Num.bytesToU16 : List U8, Nat -> Nat
 fn num_bytes_to_u16(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let arg_float_var = var_store.fresh();
-    let ret_float_var = var_store.fresh();
+    let list_var = var_store.fresh();
+    let nat_var = var_store.fresh();
+    let ret_var = var_store.fresh();
 
     let body = RunLowLevel {
         op: LowLevel::NumBytesToU16,
-        args: vec![(arg_float_var, Var(Symbol::ARG_1))],
-        ret_var: ret_float_var,
+        args: vec![
+            (list_var, Var(Symbol::ARG_1)),
+            (nat_var, Var(Symbol::ARG_2)),
+        ],
+        ret_var,
     };
 
     defn(
         symbol,
-        vec![(arg_float_var, Symbol::ARG_1)],
+        vec![(list_var, Symbol::ARG_1), (nat_var, Symbol::ARG_2)],
         var_store,
         body,
-        ret_float_var,
+        ret_var,
     )
 }
 
