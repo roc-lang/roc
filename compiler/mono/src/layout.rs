@@ -415,9 +415,10 @@ impl<'a> LambdaSet<'a> {
         use UnionVariant::*;
         match variant {
             Never => Layout::Union(UnionLayout::NonRecursive(&[])),
-            Unit | UnitWithArguments => Layout::Struct(&[]),
-            BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
-            ByteUnion(_) => Layout::Builtin(Builtin::Int8),
+            Unit | UnitWithArguments | BoolUnion { .. } | ByteUnion(_) => {
+                // no useful information to store
+                Layout::Struct(&[])
+            }
             Newtype {
                 arguments: layouts, ..
             } => Layout::Struct(layouts.into_bump_slice()),
