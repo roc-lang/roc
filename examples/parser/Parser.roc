@@ -5,7 +5,7 @@ interface Parser exposes [
     first, second,
     lowerCase, manyAux, q2,
     runToString
-  ] imports [Pair, Loop.{Step, loop}]
+  ] imports [Pair]
 
 
 ## PARSERS
@@ -62,9 +62,9 @@ oneOfResult = (oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]
 #     \inpu
               
 
-many : Parser a -> Parser (List a)
-many = \p -> 
-    \input -> loop (\list -> ((manyAux p list) input) ) []
+# many : Parser a -> Parser (List a)
+# many = \p -> 
+#    \input -> loop (\list -> ((manyAux p list) input) ) []
 
 manyAux : Parser a, List a -> Parser (Step (List a) (List a))
 manyAux = \p, list ->
@@ -165,3 +165,14 @@ first =
 
 
 
+
+## HELPERS
+
+Step state a : [ Loop state, Done a ]
+
+loop : (state -> Parser (Step state a)), state -> Parser a
+loop = \nextState, s ->
+    when nextState s is
+        Loop ss ->
+            loop nextState ss
+        Done aa -> aa
