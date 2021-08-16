@@ -6197,8 +6197,17 @@ fn can_throw_exception(call: &Call) -> bool {
         }
     }
 }
-
 fn build_call<'a>(
+    env: &mut Env<'a, '_>,
+    call: Call<'a>,
+    assigned: Symbol,
+    return_layout: Layout<'a>,
+    hole: &'a Stmt<'a>,
+) -> Stmt<'a> {
+    Stmt::Let(assigned, Expr::Call(call), return_layout, hole)
+}
+
+fn build_call_old<'a>(
     env: &mut Env<'a, '_>,
     call: Call<'a>,
     assigned: Symbol,
