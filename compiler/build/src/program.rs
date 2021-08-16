@@ -149,7 +149,7 @@ pub fn gen_from_mono_module(
     };
 
     // TODO remove for debug only
-    roc_gen_llvm::llvm::externs::add_sjlj_roc_panic(&env);
+    // roc_gen_llvm::llvm::externs::add_sjlj_roc_panic(&env);
 
     roc_gen_llvm::llvm::build::build_procedures(
         &env,
