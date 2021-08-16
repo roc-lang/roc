@@ -3,8 +3,8 @@ use crate::builtins::builtin_defs_map;
 use crate::def::{can_defs_with_return, Def};
 use crate::env::Env;
 use crate::num::{
-    finish_parsing_base, finish_parsing_float, finish_parsing_int, float_expr_from_result,
-    int_expr_from_result, num_expr_from_result,
+    finish_parsing_base, finish_parsing_int, float_expr_from_result, int_expr_from_result,
+    num_expr_from_result, validate_float_str,
 };
 use crate::pattern::{canonicalize_pattern, Pattern};
 use crate::procedure::References;
@@ -21,7 +21,7 @@ use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::Alias;
 use std::fmt::Debug;
-use std::{char, i64, u32};
+use std::{char, u32};
 
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct Output {
@@ -52,11 +52,11 @@ pub enum Expr {
 
     // Num stores the `a` variable in `Num a`. Not the same as the variable
     // stored in Int and Float below, which is strictly for better error messages
-    Num(Variable, i64),
+    Num(Variable, Box<str>),
 
     // Int and Float store a variable to generate better error messages
-    Int(Variable, Variable, i128),
-    Float(Variable, Variable, f64),
+    Int(Variable, Variable, Box<str>),
+    Float(Variable, Variable, Box<str>),
     Str(Box<str>),
     List {
         elem_var: Variable,
@@ -207,13 +207,22 @@ pub fn canonicalize_expr<'a>(
 
     let (expr, output) = match expr {
         ast::Expr::Num(string) => {
-            let answer = num_expr_from_result(var_store, finish_parsing_int(*string), region, env);
+            let answer = num_expr_from_result(
+                var_store,
+                finish_parsing_int(*string).map(|_| *string),
+                region,
+                env,
+            );
 
             (answer, Output::default())
         }
-        ast::Expr::Float(string) => {
-            let answer =
-                float_expr_from_result(var_store, finish_parsing_float(string), region, env);
+        ast::Expr::Float(str) => {
+            let answer = float_expr_from_result(
+                var_store,
+                validate_float_str(str).map(|()| *str),
+                region,
+                env,
+            );
 
             (answer, Output::default())
         }
@@ -795,8 +804,16 @@ pub fn canonicalize_expr<'a>(
             is_negative,
         } => {
             // the minus sign is added before parsing, to get correct overflow/underflow behavior
-            let result = finish_parsing_base(string, *base, *is_negative);
-            let answer = int_expr_from_result(var_store, result, region, *base, env);
+            let answer = match finish_parsing_base(string, *base, *is_negative) {
+                Ok(int) => {
+                    // Done in this kinda round about way with intermediate variables
+                    // to keep borrowed values around and make this compile
+                    let int_string = int.to_string();
+                    let int_str = int_string.as_str();
+                    int_expr_from_result(var_store, Ok(int_str), region, *base, env)
+                }
+                Err(e) => int_expr_from_result(var_store, Err(e), region, *base, env),
+            };
 
             (answer, Output::default())
         }

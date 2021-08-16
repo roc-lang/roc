@@ -16,12 +16,12 @@ use std::i64;
 #[inline(always)]
 pub fn num_expr_from_result(
     var_store: &mut VarStore,
-    result: Result<i64, (&str, IntErrorKind)>,
+    result: Result<&str, (&str, IntErrorKind)>,
     region: Region,
     env: &mut Env,
 ) -> Expr {
     match result {
-        Ok(int) => Expr::Num(var_store.fresh(), int),
+        Ok(str) => Expr::Num(var_store.fresh(), (*str).into()),
         Err((raw, error)) => {
             // (Num *) compiles to Int if it doesn't
             // get specialized to something else first,
@@ -38,14 +38,14 @@ pub fn num_expr_from_result(
 #[inline(always)]
 pub fn int_expr_from_result(
     var_store: &mut VarStore,
-    result: Result<i64, (&str, IntErrorKind)>,
+    result: Result<&str, (&str, IntErrorKind)>,
     region: Region,
     base: Base,
     env: &mut Env,
 ) -> Expr {
     // Int stores a variable to generate better error messages
     match result {
-        Ok(int) => Expr::Int(var_store.fresh(), var_store.fresh(), int.into()),
+        Ok(str) => Expr::Int(var_store.fresh(), var_store.fresh(), (*str).into()),
         Err((raw, error)) => {
             let runtime_error = InvalidInt(error, base, region, raw.into());
 
@@ -59,13 +59,13 @@ pub fn int_expr_from_result(
 #[inline(always)]
 pub fn float_expr_from_result(
     var_store: &mut VarStore,
-    result: Result<f64, (&str, FloatErrorKind)>,
+    result: Result<&str, (&str, FloatErrorKind)>,
     region: Region,
     env: &mut Env,
 ) -> Expr {
     // Float stores a variable to generate better error messages
     match result {
-        Ok(float) => Expr::Float(var_store.fresh(), var_store.fresh(), float),
+        Ok(str) => Expr::Float(var_store.fresh(), var_store.fresh(), (*str).into()),
         Err((raw, error)) => {
             let runtime_error = InvalidFloat(error, region, raw.into());
 
@@ -77,10 +77,12 @@ pub fn float_expr_from_result(
 }
 
 #[inline(always)]
-pub fn finish_parsing_int(raw: &str) -> Result<i64, (&str, IntErrorKind)> {
+pub fn finish_parsing_int(raw: &str) -> Result<&str, (&str, IntErrorKind)> {
     // Ignore underscores.
     let radix = 10;
-    from_str_radix::<i64>(raw.replace("_", "").as_str(), radix).map_err(|e| (raw, e.kind))
+    from_str_radix::<i64>(raw.replace("_", "").as_str(), radix)
+        .map(|_| raw)
+        .map_err(|e| (raw, e.kind))
 }
 
 #[inline(always)]
@@ -106,10 +108,10 @@ pub fn finish_parsing_base(
 }
 
 #[inline(always)]
-pub fn finish_parsing_float(raw: &str) -> Result<f64, (&str, FloatErrorKind)> {
+pub fn validate_float_str(raw: &str) -> Result<(), (&str, FloatErrorKind)> {
     // Ignore underscores.
     match raw.replace("_", "").parse::<f64>() {
-        Ok(float) if float.is_finite() => Ok(float),
+        Ok(float) if float.is_finite() => Ok(()),
         Ok(float) => {
             if float.is_sign_positive() {
                 Err((raw, FloatErrorKind::PositiveInfinity))
