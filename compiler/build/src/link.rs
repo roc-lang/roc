@@ -421,9 +421,6 @@ fn link_linux(
                 "-lrt",
                 "-lutil",
                 "-lc_nonshared",
-                "-lc++",
-                "-lc++abi",
-                "-lunwind",
                 libgcc_path.to_str().unwrap(),
                 // Output
                 "-o",
@@ -488,9 +485,6 @@ fn link_macos(
                 // "-lrt", // TODO shouldn't we need this?
                 // "-lc_nonshared", // TODO shouldn't we need this?
                 // "-lgcc", // TODO will eventually need compiler_rt from gcc or something - see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
-                "-lc++",
-                // "-lc++abi",
-                // "-lunwind", // TODO will eventually need this, see https://github.com/rtfeldman/roc/pull/554#discussion_r496370840
                 // "-framework", // Uncomment this line & the following ro run the `rand` crate in examples/cli
                 // "Security",
                 // Output
