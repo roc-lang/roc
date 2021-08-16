@@ -481,8 +481,12 @@ mod gen_num {
     }
 
     #[test]
-    fn f64_round_old() {
+    fn f64_round() {
         assert_evals_to!("Num.round 3.6", 4, i64);
+        assert_evals_to!("Num.round 3.4", 3, i64);
+        assert_evals_to!("Num.round 2.5", 3, i64);
+        assert_evals_to!("Num.round -2.3", -2, i64);
+        assert_evals_to!("Num.round -2.5", -3, i64);
     }
 
     #[test]
