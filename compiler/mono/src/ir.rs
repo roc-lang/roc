@@ -6168,16 +6168,6 @@ impl ExceptionId {
     }
 }
 
-fn build_call_new<'a>(
-    _env: &mut Env<'a, '_>,
-    call: Call<'a>,
-    assigned: Symbol,
-    return_layout: Layout<'a>,
-    hole: &'a Stmt<'a>,
-) -> Stmt<'a> {
-    Stmt::Let(assigned, Expr::Call(call), return_layout, hole)
-}
-
 fn can_throw_exception(call: &Call) -> bool {
     match call.call_type {
         CallType::ByName { name, .. } => matches!(

@@ -3,7 +3,6 @@
 use crate::assert_evals_to;
 use crate::assert_llvm_evals_to;
 use crate::assert_non_opt_evals_to;
-use core::ffi::c_void;
 use indoc::indoc;
 use roc_std::RocStr;
 
