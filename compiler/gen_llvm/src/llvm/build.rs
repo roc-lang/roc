@@ -2187,91 +2187,6 @@ fn list_literal<'a, 'ctx, 'env>(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-fn invoke_roc_function<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    func_spec_solutions: &FuncSpecSolutions,
-    scope: &mut Scope<'a, 'ctx>,
-    parent: FunctionValue<'ctx>,
-    symbol: Symbol,
-    layout: Layout<'a>,
-    function_value: FunctionValue<'ctx>,
-    arguments: &[Symbol],
-    closure_argument: Option<BasicValueEnum<'ctx>>,
-    pass: &'a roc_mono::ir::Stmt<'a>,
-    fail: &'a roc_mono::ir::Stmt<'a>,
-    exception_id: ExceptionId,
-) -> BasicValueEnum<'ctx> {
-    let context = env.context;
-
-    let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(arguments.len(), env.arena);
-
-    for arg in arguments.iter() {
-        arg_vals.push(load_symbol(scope, arg));
-    }
-    arg_vals.extend(closure_argument);
-
-    let pass_block = context.append_basic_block(parent, "invoke_pass");
-    let fail_block = context.append_basic_block(parent, "invoke_fail");
-
-    let call_result = {
-        let call = env.builder.build_invoke(
-            function_value,
-            arg_vals.as_slice(),
-            pass_block,
-            fail_block,
-            "tmp",
-        );
-
-        call.set_call_convention(function_value.get_call_conventions());
-
-        call.try_as_basic_value()
-            .left()
-            .unwrap_or_else(|| panic!("LLVM error: Invalid call by pointer."))
-    };
-
-    {
-        env.builder.position_at_end(pass_block);
-
-        scope.insert(symbol, (layout, call_result));
-
-        build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, pass);
-
-        scope.remove(&symbol);
-    }
-
-    {
-        env.builder.position_at_end(fail_block);
-
-        let landing_pad_type = {
-            let exception_ptr = context.i8_type().ptr_type(AddressSpace::Generic).into();
-            let selector_value = context.i32_type().into();
-
-            context.struct_type(&[exception_ptr, selector_value], false)
-        };
-
-        let personality_function = get_gxx_personality_v0(env);
-
-        let exception_object = env.builder.build_landing_pad(
-            landing_pad_type,
-            personality_function,
-            &[],
-            true,
-            "invoke_landing_pad",
-        );
-
-        scope.insert(
-            exception_id.into_inner(),
-            (Layout::Struct(&[]), exception_object),
-        );
-
-        build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, fail);
-    }
-
-    call_result
-}
-
 fn decrement_with_size_check<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
@@ -2384,40 +2299,13 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
         Invoke {
             symbol,
             call,
-            layout,
+            layout: _,
             pass,
             fail,
             exception_id,
         } => match call.call_type {
-            CallType::ByName {
-                name,
-                arg_layouts,
-                ref ret_layout,
-                specialization_id,
-                ..
-            } => {
-                let bytes = specialization_id.to_bytes();
-                let callee_var = CalleeSpecVar(&bytes);
-                let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
-
-                let function_value =
-                    function_value_by_func_spec(env, func_spec, name, arg_layouts, ret_layout);
-
-                invoke_roc_function(
-                    env,
-                    layout_ids,
-                    func_spec_solutions,
-                    scope,
-                    parent,
-                    *symbol,
-                    *layout,
-                    function_value,
-                    call.arguments,
-                    None,
-                    pass,
-                    fail,
-                    *exception_id,
-                )
+            CallType::ByName { .. } => {
+                unreachable!("we should not end up here")
             }
 
             CallType::Foreign {
@@ -2432,12 +2320,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                 foreign_symbol,
                 call.arguments,
                 ret_layout,
-                ForeignCallOrInvoke::Invoke {
-                    symbol: *symbol,
-                    pass,
-                    fail,
-                    exception_id: *exception_id,
-                },
+                ForeignCallOrInvoke::Call,
             ),
 
             CallType::LowLevel { .. } => {
@@ -5394,87 +5277,17 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
         build_foreign_symbol_return_result(env, scope, foreign, arguments, ret_type)
     };
 
-    match call_or_invoke {
-        ForeignCallOrInvoke::Call => {
-            let call = env.builder.build_call(function, arguments, "tmp");
+    let call = env.builder.build_call(function, arguments, "tmp");
 
-            // this is a foreign function, use c calling convention
-            call.set_call_convention(C_CALL_CONV);
+    // this is a foreign function, use c calling convention
+    call.set_call_convention(C_CALL_CONV);
 
-            call.try_as_basic_value();
+    call.try_as_basic_value();
 
-            if pass_result_by_pointer {
-                env.builder.build_load(return_pointer, "read_result")
-            } else {
-                call.try_as_basic_value().left().unwrap()
-            }
-        }
-        ForeignCallOrInvoke::Invoke {
-            symbol,
-            pass,
-            fail,
-            exception_id,
-        } => {
-            let pass_block = env.context.append_basic_block(parent, "invoke_pass");
-            let fail_block = env.context.append_basic_block(parent, "invoke_fail");
-
-            let call = env
-                .builder
-                .build_invoke(function, arguments, pass_block, fail_block, "tmp");
-
-            // this is a foreign function, use c calling convention
-            call.set_call_convention(C_CALL_CONV);
-
-            call.try_as_basic_value();
-
-            let call_result = if pass_result_by_pointer {
-                env.builder.build_load(return_pointer, "read_result")
-            } else {
-                call.try_as_basic_value().left().unwrap()
-            };
-
-            {
-                env.builder.position_at_end(pass_block);
-
-                scope.insert(symbol, (*ret_layout, call_result));
-
-                build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, pass);
-
-                scope.remove(&symbol);
-            }
-
-            {
-                env.builder.position_at_end(fail_block);
-
-                let landing_pad_type = {
-                    let exception_ptr =
-                        env.context.i8_type().ptr_type(AddressSpace::Generic).into();
-                    let selector_value = env.context.i32_type().into();
-
-                    env.context
-                        .struct_type(&[exception_ptr, selector_value], false)
-                };
-
-                let personality_function = get_gxx_personality_v0(env);
-
-                let exception_object = env.builder.build_landing_pad(
-                    landing_pad_type,
-                    personality_function,
-                    &[],
-                    true,
-                    "invoke_landing_pad",
-                );
-
-                scope.insert(
-                    exception_id.into_inner(),
-                    (Layout::Struct(&[]), exception_object),
-                );
-
-                build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, fail);
-            }
-
-            call_result
-        }
+    if pass_result_by_pointer {
+        env.builder.build_load(return_pointer, "read_result")
+    } else {
+        call.try_as_basic_value().left().unwrap()
     }
 }
 
