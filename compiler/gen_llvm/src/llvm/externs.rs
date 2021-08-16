@@ -1,17 +1,13 @@
-use crate::debug_info_init;
-use crate::llvm::bitcode::call_void_bitcode_fn;
 use crate::llvm::build::Env;
 use crate::llvm::build::{add_func, C_CALL_CONV};
 use crate::llvm::convert::ptr_int;
 use inkwell::module::Linkage;
-use inkwell::types::BasicType;
-use inkwell::values::{BasicValue, PointerValue};
+use inkwell::values::BasicValue;
 use inkwell::AddressSpace;
-use roc_builtins::bitcode;
 
 /// Define functions for roc_alloc, roc_realloc, and roc_dealloc
 /// which use libc implementations (malloc, realloc, and free)
-pub fn add_default_roc_externs<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) {
+pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
     let ctx = env.context;
     let module = env.module;
     let builder = env.builder;
@@ -146,7 +142,7 @@ pub fn add_default_roc_externs<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) {
     add_sjlj_roc_panic(env)
 }
 
-pub fn add_sjlj_roc_panic<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) {
+pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
     let ctx = env.context;
     let module = env.module;
     let builder = env.builder;
