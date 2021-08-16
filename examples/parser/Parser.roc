@@ -73,6 +73,20 @@ oneOfResult = (oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]
 #      Loop ss -> loop nextState ss
 #      Done aa -> aa
 
+Step state a : [ Loop state, Done a ]
+
+loop : (state -> Parser (Step state a)), state -> Parser a 
+loop = \nextState, s ->
+  \input -> 
+      ss =  (nextState s)
+      when ss is 
+        Loop ss -> 
+          out = ss input
+          if List.len out == 1 then
+            Loop nextState ss
+          else Done (\input -> out)
+        Done aa -> (\input -> success aa)
+
 manyAux : Parser a, List a -> Parser (Step (List a) (List a))
 manyAux = \p, list ->
     \input -> (if input == [] 
@@ -175,5 +189,5 @@ first =
 
 ## HELPERS
 
-Step state a : [ Loop state, Done a ]
+
 
