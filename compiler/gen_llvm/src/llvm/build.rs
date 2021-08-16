@@ -3466,174 +3466,8 @@ where
     }
 
     env.builder.position_at_end(cont_block);
-    let result = builder.build_load(result_alloca, "load_result");
 
-    // env.builder.build_return(Some(&result));
-    let our_result = get_catcher_static(env, call_result_type.into());
-    env.builder.build_store(our_result, result);
-
-    result
-}
-
-fn invoke_and_catch<'a, 'ctx, 'env, F, T>(
-    env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    function: F,
-    calling_convention: u32,
-    arguments: &[BasicValueEnum<'ctx>],
-    return_type: T,
-) -> BasicValueEnum<'ctx>
-where
-    T: inkwell::types::BasicType<'ctx>,
-    F: Into<CallableValue<'ctx>>,
-{
-    let context = env.context;
-    let builder = env.builder;
-
-    let call_result_type = context.struct_type(
-        &[context.i64_type().into(), return_type.as_basic_type_enum()],
-        false,
-    );
-
-    let then_block = context.append_basic_block(parent, "then_block");
-    let catch_block = context.append_basic_block(parent, "catch_block");
-    let cont_block = context.append_basic_block(parent, "cont_block");
-
-    let result_alloca = builder.build_alloca(call_result_type, "result");
-
-    // invoke instead of call, so that we can catch any exeptions thrown in Roc code
-    let call_result = {
-        let call = builder.build_invoke(
-            function,
-            arguments,
-            then_block,
-            catch_block,
-            "call_roc_function",
-        );
-        call.set_call_convention(calling_convention);
-        call.try_as_basic_value().left().unwrap()
-    };
-
-    // exception handling
-    {
-        builder.position_at_end(catch_block);
-
-        build_catch_all_landing_pad(env, result_alloca);
-
-        builder.build_unconditional_branch(cont_block);
-    }
-
-    {
-        builder.position_at_end(then_block);
-
-        let return_value = {
-            let v1 = call_result_type.const_zero();
-
-            let v2 = builder
-                .build_insert_value(v1, context.i64_type().const_zero(), 0, "set_no_error")
-                .unwrap();
-            let v3 = builder
-                .build_insert_value(v2, call_result, 1, "set_call_result")
-                .unwrap();
-
-            v3
-        };
-
-        let ptr = builder.build_bitcast(
-            result_alloca,
-            call_result_type.ptr_type(AddressSpace::Generic),
-            "name",
-        );
-        builder.build_store(ptr.into_pointer_value(), return_value);
-
-        builder.build_unconditional_branch(cont_block);
-    }
-
-    builder.position_at_end(cont_block);
-
-    builder.build_load(result_alloca, "result")
-}
-
-fn build_catch_all_landing_pad<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    result_alloca: PointerValue<'ctx>,
-) {
-    let context = env.context;
-    let builder = env.builder;
-
-    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
-
-    let landing_pad_type = {
-        let exception_ptr = context.i8_type().ptr_type(AddressSpace::Generic).into();
-        let selector_value = context.i32_type().into();
-
-        context.struct_type(&[exception_ptr, selector_value], false)
-    };
-
-    // null pointer functions as a catch-all catch clause
-    let null = u8_ptr.const_zero();
-
-    let personality_function = get_gxx_personality_v0(env);
-
-    let info = builder
-        .build_landing_pad(
-            landing_pad_type,
-            personality_function,
-            &[null.into()],
-            false,
-            "main_landing_pad",
-        )
-        .into_struct_value();
-
-    let exception_ptr = builder
-        .build_extract_value(info, 0, "exception_ptr")
-        .unwrap();
-
-    let thrown = cxa_begin_catch(env, exception_ptr);
-
-    let error_msg = {
-        let exception_type = u8_ptr;
-        let ptr = builder.build_bitcast(
-            thrown,
-            exception_type.ptr_type(AddressSpace::Generic),
-            "cast",
-        );
-
-        builder.build_load(ptr.into_pointer_value(), "error_msg")
-    };
-
-    let return_type = context.struct_type(&[context.i64_type().into(), u8_ptr.into()], false);
-
-    let return_value = {
-        let v1 = return_type.const_zero();
-
-        // flag is non-zero, indicating failure
-        let flag = context.i64_type().const_int(1, false);
-
-        let v2 = builder
-            .build_insert_value(v1, flag, 0, "set_error")
-            .unwrap();
-
-        let v3 = builder
-            .build_insert_value(v2, error_msg, 1, "set_exception")
-            .unwrap();
-
-        v3
-    };
-
-    // bitcast result alloca so we can store our concrete type { flag, error_msg } in there
-    let result_alloca_bitcast = builder
-        .build_bitcast(
-            result_alloca,
-            return_type.ptr_type(AddressSpace::Generic),
-            "result_alloca_bitcast",
-        )
-        .into_pointer_value();
-
-    // store our return value
-    builder.build_store(result_alloca_bitcast, return_value);
-
-    cxa_end_catch(env);
+    builder.build_load(result_alloca, "load_result")
 }
 
 fn make_exception_catcher<'a, 'ctx, 'env>(
@@ -3698,7 +3532,6 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
 
     debug_info_init!(env, wrapper_function);
 
-    // invoke_and_catch(
     let result = set_jump_and_catch_long_jump(
         env,
         wrapper_function,
@@ -3998,7 +3831,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
         *param = builder.build_load(param.into_pointer_value(), "load_param");
     }
 
-    let call_result = invoke_and_catch(
+    let call_result = set_jump_and_catch_long_jump(
         env,
         function_value,
         evaluator,
@@ -6513,64 +6346,6 @@ fn get_gxx_personality_v0<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> Function
             personality_func
         }
     }
-}
-
-fn cxa_end_catch(env: &Env<'_, '_, '_>) {
-    let name = "__cxa_end_catch";
-
-    let module = env.module;
-    let context = env.context;
-
-    let function = match module.get_function(name) {
-        Some(gvalue) => gvalue,
-        None => {
-            let cxa_end_catch = add_func(
-                module,
-                name,
-                context.void_type().fn_type(&[], false),
-                Linkage::External,
-                C_CALL_CONV,
-            );
-
-            cxa_end_catch
-        }
-    };
-    let call = env.builder.build_call(function, &[], "never_used");
-
-    call.set_call_convention(C_CALL_CONV);
-}
-
-fn cxa_begin_catch<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    exception_ptr: BasicValueEnum<'ctx>,
-) -> BasicValueEnum<'ctx> {
-    let name = "__cxa_begin_catch";
-
-    let module = env.module;
-    let context = env.context;
-
-    let function = match module.get_function(name) {
-        Some(gvalue) => gvalue,
-        None => {
-            let u8_ptr = context.i8_type().ptr_type(AddressSpace::Generic);
-
-            let cxa_begin_catch = add_func(
-                module,
-                name,
-                u8_ptr.fn_type(&[u8_ptr.into()], false),
-                Linkage::External,
-                C_CALL_CONV,
-            );
-
-            cxa_begin_catch
-        }
-    };
-    let call = env
-        .builder
-        .build_call(function, &[exception_ptr], "exception_payload_ptr");
-
-    call.set_call_convention(C_CALL_CONV);
-    call.try_as_basic_value().left().unwrap()
 }
 
 /// Add a function to a module, after asserting that the function is unique.
