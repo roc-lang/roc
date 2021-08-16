@@ -157,6 +157,8 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * After the user has refactored code to be simpler, try finding other places in the code base where the same simplification can be made.
 * Show most commonly changed settings on first run so new users can quickly customize their experience. Keeping record of changed settings should be opt-in.
 * Detection of multiple people within same company/team working on same code at the same time (opt-in).
+* Autocorrect likely typos for stuff like `-<` when not in string.
+* If multiple functions are available for import, use function were types would match in insetion position.
 
 #### Autocomplete
 
@@ -252,7 +254,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - It's nice to enhance the feeling of reward after completing a task, this increases motivation.
 - Great for tutorials and the first run of the editor.
 - Suggestions of occasions for positive feedback:
-    - Being able to compile succesfully after starting out with more than X errors.
+    - Being able to compile successfully after starting out with more than X errors.
     - Making a test succeed after repeated failures.
 - Positive feedback could be delivered with messages and/or animations. Animations could be with fireworks, flying roc logo birds, sounds...
 - The intensity of the message/animation could be increased based on the duration/difficulty of the task.
