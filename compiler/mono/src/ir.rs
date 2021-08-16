@@ -6151,36 +6151,6 @@ fn add_needed_external<'a>(
     existing.insert(name, solved_type);
 }
 
-fn can_throw_exception(call: &Call) -> bool {
-    match call.call_type {
-        CallType::ByName { name, .. } => matches!(
-            name,
-            Symbol::NUM_ADD
-                | Symbol::NUM_SUB
-                | Symbol::NUM_MUL
-                | Symbol::NUM_DIV_FLOAT
-                | Symbol::NUM_ABS
-                | Symbol::NUM_NEG
-        ),
-
-        CallType::Foreign { .. } => {
-            // calling foreign functions is very unsafe
-            true
-        }
-
-        CallType::LowLevel { .. } => {
-            // lowlevel operations themselves don't throw
-            // TODO except for on allocation?
-            false
-        }
-        CallType::HigherOrderLowLevel { .. } => {
-            // TODO throwing is based on whether the HOF can throw
-            // or if there is (potentially) allocation in the lowlevel
-            false
-        }
-    }
-}
-
 /// Symbol that links an Invoke with a Rethrow
 /// we'll assign the exception object to this symbol
 /// so we can later rethrow the exception
