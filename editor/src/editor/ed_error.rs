@@ -172,7 +172,7 @@ pub enum EdError {
     },
 
     #[snafu(display("ParseError: Failed to parse AST: SyntaxError: {}.", syntax_err))]
-    SrcParseError { syntax_err: String },
+    SrcParseError { syntax_err: String, backtrace: Backtrace },
 
     #[snafu(display("RecordWithoutFields: expected record to have at least one field because it is not an EmptyRecord."))]
     RecordWithoutFields { backtrace: Backtrace },

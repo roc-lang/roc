@@ -140,6 +140,8 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
     let loaded_module = load_module(&file_path);
 
+    dbg!(&loaded_module);
+
     let mut var_store = VarStore::default();
     let dep_idents = IdentIds::exposed_builtins(8);
     let exposed_ident_ids = IdentIds::default();
@@ -472,8 +474,6 @@ pub fn load_module(src_file: &Path) -> LoadedModule {
         8,
         builtin_defs_map,
     );
-
-    dbg!(&loaded);
 
     match loaded {
         Ok(x) => x,

@@ -2,7 +2,7 @@ use crate::editor::code_lines::CodeLines;
 use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::slow_pool::{MarkNodeId, SlowPool};
 use crate::editor::{
-    ed_error::EdError::SrcParseError,
+    ed_error::SrcParseError,
     ed_error::{EdResult, MissingParent, NoNodeAtCaretPosition, EmptyCodeString},
     markup::nodes::{expr2_to_markup, set_parent_for_all},
 };
@@ -183,9 +183,9 @@ impl<'a> EdModule<'a> {
                         }
                     )
                 },
-                Err(err) => Err(SrcParseError {
+                Err(err) => SrcParseError {
                     syntax_err: format!("{:?}", err),
-                })
+                }.fail()
             }
 
         } else {

@@ -287,6 +287,27 @@ pub fn to_expr_id<'a>(
     (env.add(expr, region), output)
 }
 
+pub fn str_to_expr2_w_defs<'a>(
+    arena: &'a Bump,
+    input: &'a str,
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    region: Region,
+) -> Result<Vec<Expr2>, SyntaxError<'a>> {
+    match roc_parse::test_helpers::parse_defs_with(arena, input.trim()) {
+        Ok(vec_loc_def) => {
+
+            Ok(to_expr2_from_defs(
+                env,
+                scope,
+                arena.alloc(vec_loc_def),
+                region,
+            ))
+        }
+        Err(fail) => Err(fail),
+    }
+}
+
 pub fn str_to_expr2<'a>(
     arena: &'a Bump,
     input: &'a str,
@@ -296,17 +317,27 @@ pub fn str_to_expr2<'a>(
 ) -> Result<(Expr2, self::Output), SyntaxError<'a>> {
     match roc_parse::test_helpers::parse_loc_with(arena, input.trim()) {
         Ok(loc_expr) => {
-            let desugared_loc_expr = desugar_expr(arena, arena.alloc(loc_expr));
-
-            Ok(to_expr2(
-                env,
-                scope,
-                arena.alloc(desugared_loc_expr.value),
-                region,
-            ))
+            Ok(loc_expr_to_expr2(arena, loc_expr, env, scope, region))
         }
         Err(fail) => Err(fail),
     }
+}
+
+fn loc_expr_to_expr2<'a>(
+    arena: &'a Bump,
+    loc_expr: Located<Expr<'a>>,
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    region: Region,
+) -> (Expr2, self::Output) {
+    let desugared_loc_expr = desugar_expr(arena, arena.alloc(loc_expr));
+
+    to_expr2(
+        env,
+        scope,
+        arena.alloc(desugared_loc_expr.value),
+        region,
+    )
 }
 
 pub fn to_expr2<'a>(
@@ -964,6 +995,47 @@ pub fn to_expr2<'a>(
         }
 
         rest => todo!("not yet implemented {:?}", rest),
+    }
+}
+
+pub fn to_expr2_from_defs<'a>(
+    arena: &'a Bump,
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    parsed_defs: &'a Vec<roc_region::all::Loc<roc_parse::ast::Def<'a>>>,
+    region: Region,
+) -> Vec<Expr2> {
+    use roc_parse::ast::Expr::*;
+
+    parsed_defs.iter().map(|loc| {
+        to_expr2_from_def(arena, env, scope, &loc.value, region)
+    }).collect()
+
+}
+
+pub fn to_expr2_from_def<'a>(
+    arena: &'a Bump,
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    parsed_def: &'a roc_parse::ast::Def<'a>,
+    region: Region,
+) -> Expr2 {
+    use roc_parse::ast::Def::*;
+
+    match parsed_def {
+        SpaceBefore(inner_def, _) => {
+            to_expr2_from_def(arena, env, scope, inner_def, region)
+        },
+        SpaceAfter(inner_def, _) => {
+            to_expr2_from_def(arena, env, scope, inner_def, region)
+        }
+        Body(loc_pattern, &loc_expr) => {
+            // TODO loc_pattern use identifier
+            loc_expr_to_expr2(arena, loc_expr, env, scope, region).0
+        }
+        other => {
+            unimplemented!("I don't know how to make an expr2 from this def yet: {:?}", other)
+        }
     }
 }
 

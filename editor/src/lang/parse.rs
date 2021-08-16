@@ -3,7 +3,7 @@ use roc_parse::parser::SyntaxError;
 use crate::lang::scope::Scope;
 use roc_region::all::Region;
 
-use super::{ast::ExprId, expr::{Env, str_to_expr2}};
+use super::{ast::ExprId, expr::{Env, str_to_expr2_w_defs}};
 
 
 
@@ -18,20 +18,20 @@ impl AST {
     pub fn parse_from_string<'a>(code_str: &'a str, env: &mut Env<'a>, ast_arena: &'a Bump) -> Result<AST, SyntaxError<'a>> {
 
         let split_string = code_str.split("\n\n");
-
         let split_code_vec: Vec<&str> = split_string.collect();
 
         if let Some((head, tail)) = split_code_vec.split_first() {
 
             let mut scope = Scope::new(env.home, env.pool, env.var_store);
-
             let region = Region::new(0, 0, 0, 0);
 
             let mut expression_ids = Vec::<ExprId>::new();
 
-            for &expr_str in tail.iter() {
-                let (expr2, _output) = str_to_expr2(&ast_arena, expr_str, env, &mut scope, region)?;
+            let non_header_code = tail.join("\n\n");
 
+            let expr2_vec = str_to_expr2_w_defs(&ast_arena, &non_header_code, env, &mut scope, region)?;
+
+            for expr2 in expr2_vec {
                 let expr_id = env.pool.add(expr2);
 
                 expression_ids.push(expr_id);

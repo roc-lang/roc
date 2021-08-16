@@ -32,7 +32,7 @@ fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
 
 #[inline(always)]
 pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Located<Def<'a>>>, SyntaxError<'a>> {
-    // force that we pare until the end of the input
+    // force that we parse until the end of the input
     let min_indent = 0;
     skip_second!(
         specialize(

@@ -66,7 +66,6 @@ impl Symbol {
     }
 
     pub fn ident_string(self, interns: &Interns) -> &InlinableString {
-        dbg!(&interns.all_ident_ids);
 
         let ident_ids = interns
             .all_ident_ids
