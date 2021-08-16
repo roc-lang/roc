@@ -50,9 +50,7 @@ use roc_builtins::bitcode;
 use roc_collections::all::{ImMap, MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::ir::{
-    BranchInfo, CallType, EntryPoint, ExceptionId, JoinPointId, ModifyRc, OptLevel, ProcLayout,
-};
+use roc_mono::ir::{BranchInfo, CallType, EntryPoint, JoinPointId, ModifyRc, OptLevel, ProcLayout};
 use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, UnionLayout};
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
@@ -935,17 +933,7 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
         } => {
             // we always initially invoke foreign symbols, but if there is nothing to clean up,
             // we emit a normal call
-            build_foreign_symbol(
-                env,
-                layout_ids,
-                func_spec_solutions,
-                scope,
-                parent,
-                foreign_symbol,
-                arguments,
-                ret_layout,
-                ForeignCallOrInvoke::Call,
-            )
+            build_foreign_symbol(env, scope, foreign_symbol, arguments, ret_layout)
         }
     }
 }
@@ -2297,12 +2285,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
         }
 
         Invoke {
-            symbol,
-            call,
-            layout: _,
-            pass,
-            fail,
-            exception_id,
+            call, layout: _, ..
         } => match call.call_type {
             CallType::ByName { .. } => {
                 unreachable!("we should not end up here")
@@ -2311,17 +2294,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             CallType::Foreign {
                 ref foreign_symbol,
                 ref ret_layout,
-            } => build_foreign_symbol(
-                env,
-                layout_ids,
-                func_spec_solutions,
-                scope,
-                parent,
-                foreign_symbol,
-                call.arguments,
-                ret_layout,
-                ForeignCallOrInvoke::Call,
-            ),
+            } => build_foreign_symbol(env, scope, foreign_symbol, call.arguments, ret_layout),
 
             CallType::LowLevel { .. } => {
                 unreachable!("lowlevel itself never throws exceptions")
@@ -5192,16 +5165,6 @@ fn run_low_level<'a, 'ctx, 'env>(
     }
 }
 
-enum ForeignCallOrInvoke<'a> {
-    Call,
-    Invoke {
-        symbol: Symbol,
-        exception_id: ExceptionId,
-        pass: &'a roc_mono::ir::Stmt<'a>,
-        fail: &'a roc_mono::ir::Stmt<'a>,
-    },
-}
-
 fn build_foreign_symbol_return_result<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &mut Scope<'a, 'ctx>,
@@ -5256,14 +5219,10 @@ fn build_foreign_symbol_write_result_into_ptr<'a, 'ctx, 'env>(
 #[allow(clippy::too_many_arguments)]
 fn build_foreign_symbol<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    func_spec_solutions: &FuncSpecSolutions,
     scope: &mut Scope<'a, 'ctx>,
-    parent: FunctionValue<'ctx>,
     foreign: &roc_module::ident::ForeignSymbol,
     arguments: &[Symbol],
     ret_layout: &Layout<'a>,
-    call_or_invoke: ForeignCallOrInvoke<'a>,
 ) -> BasicValueEnum<'ctx> {
     let ret_type = basic_type_from_layout(env, ret_layout);
     let return_pointer = env.builder.build_alloca(ret_type, "return_value");
@@ -6135,28 +6094,6 @@ fn get_foreign_symbol<'a, 'ctx, 'env>(
             );
 
             foreign_function
-        }
-    }
-}
-
-fn get_gxx_personality_v0<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> FunctionValue<'ctx> {
-    let name = "__gxx_personality_v0";
-
-    let module = env.module;
-    let context = env.context;
-
-    match module.get_function(name) {
-        Some(gvalue) => gvalue,
-        None => {
-            let personality_func = add_func(
-                module,
-                name,
-                context.i64_type().fn_type(&[], false),
-                Linkage::External,
-                C_CALL_CONV,
-            );
-
-            personality_func
         }
     }
 }
