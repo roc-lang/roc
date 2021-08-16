@@ -295,6 +295,20 @@ fn list_prepend() {
         RocList::from_slice(&[6, 4]),
         RocList<i64>
     );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+                init : List Str
+                init =
+                    ["foo"]
+
+                List.prepend init "bar"
+            "#
+        ),
+        RocList::from_slice(&[RocStr::from_slice(b"bar"), RocStr::from_slice(b"foo"),]),
+        RocList<RocStr>
+    );
 }
 
 #[test]

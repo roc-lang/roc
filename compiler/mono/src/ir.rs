@@ -4673,8 +4673,13 @@ pub fn from_can<'a>(
                                     );
                                     CapturedSymbols::None
                                 }
-                                Err(_) => {
-                                    debug_assert!(captured_symbols.is_empty());
+                                Err(e) => {
+                                    debug_assert!(
+                                        captured_symbols.is_empty(),
+                                        "{:?}, {:?}",
+                                        &captured_symbols,
+                                        e
+                                    );
                                     CapturedSymbols::None
                                 }
                             };
@@ -6163,7 +6168,7 @@ impl ExceptionId {
     }
 }
 
-fn build_call<'a>(
+fn build_call_new<'a>(
     _env: &mut Env<'a, '_>,
     call: Call<'a>,
     assigned: Symbol,
@@ -6171,6 +6176,59 @@ fn build_call<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     Stmt::Let(assigned, Expr::Call(call), return_layout, hole)
+}
+
+fn can_throw_exception(call: &Call) -> bool {
+    match call.call_type {
+        CallType::ByName { name, .. } => matches!(
+            name,
+            Symbol::NUM_ADD
+                | Symbol::NUM_SUB
+                | Symbol::NUM_MUL
+                | Symbol::NUM_DIV_FLOAT
+                | Symbol::NUM_ABS
+                | Symbol::NUM_NEG
+        ),
+
+        CallType::Foreign { .. } => {
+            // calling foreign functions is very unsafe
+            true
+        }
+
+        CallType::LowLevel { .. } => {
+            // lowlevel operations themselves don't throw
+            // TODO except for on allocation?
+            false
+        }
+        CallType::HigherOrderLowLevel { .. } => {
+            // TODO throwing is based on whether the HOF can throw
+            // or if there is (potentially) allocation in the lowlevel
+            false
+        }
+    }
+}
+
+fn build_call<'a>(
+    env: &mut Env<'a, '_>,
+    call: Call<'a>,
+    assigned: Symbol,
+    return_layout: Layout<'a>,
+    hole: &'a Stmt<'a>,
+) -> Stmt<'a> {
+    if can_throw_exception(&call) {
+        let id = ExceptionId(env.unique_symbol());
+        let fail = env.arena.alloc(Stmt::Resume(id));
+        Stmt::Invoke {
+            symbol: assigned,
+            call,
+            layout: return_layout,
+            fail,
+            pass: hole,
+            exception_id: id,
+        }
+    } else {
+        Stmt::Let(assigned, Expr::Call(call), return_layout, hole)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

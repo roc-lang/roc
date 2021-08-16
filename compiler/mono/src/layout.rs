@@ -415,9 +415,10 @@ impl<'a> LambdaSet<'a> {
         use UnionVariant::*;
         match variant {
             Never => Layout::Union(UnionLayout::NonRecursive(&[])),
-            Unit | UnitWithArguments => Layout::Struct(&[]),
-            BoolUnion { .. } => Layout::Builtin(Builtin::Int1),
-            ByteUnion(_) => Layout::Builtin(Builtin::Int8),
+            Unit | UnitWithArguments | BoolUnion { .. } | ByteUnion(_) => {
+                // no useful information to store
+                Layout::Struct(&[])
+            }
             Newtype {
                 arguments: layouts, ..
             } => Layout::Struct(layouts.into_bump_slice()),
@@ -828,7 +829,7 @@ impl<'a> Layout<'a> {
 /// But if we're careful when to invalidate certain keys, we still get some benefit
 #[derive(Default, Debug)]
 pub struct LayoutCache<'a> {
-    layouts: ven_ena::unify::UnificationTable<ven_ena::unify::InPlace<CachedVariable<'a>>>,
+    _marker: std::marker::PhantomData<&'a u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -838,38 +839,7 @@ pub enum CachedLayout<'a> {
     Problem(LayoutProblem),
 }
 
-/// Must wrap so we can define a specific UnifyKey instance
-/// PhantomData so we can store the 'a lifetime, which is needed to implement the UnifyKey trait,
-/// specifically so we can use `type Value = CachedLayout<'a>`
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct CachedVariable<'a>(Variable, std::marker::PhantomData<&'a ()>);
-
-impl<'a> CachedVariable<'a> {
-    fn new(var: Variable) -> Self {
-        CachedVariable(var, std::marker::PhantomData)
-    }
-}
-
-impl<'a> ven_ena::unify::UnifyKey for CachedVariable<'a> {
-    type Value = CachedLayout<'a>;
-
-    fn index(&self) -> u32 {
-        self.0.index()
-    }
-
-    fn from_index(index: u32) -> Self {
-        CachedVariable(Variable::from_index(index), std::marker::PhantomData)
-    }
-
-    fn tag() -> &'static str {
-        "CachedVariable"
-    }
-}
-
 impl<'a> LayoutCache<'a> {
-    /// Returns Err(()) if given an error, or Ok(Layout) if given a non-erroneous Structure.
-    /// Panics if given a FlexVar or RigidVar, since those should have been
-    /// monomorphized away already!
     pub fn from_var(
         &mut self,
         arena: &'a Bump,
@@ -879,39 +849,13 @@ impl<'a> LayoutCache<'a> {
         // Store things according to the root Variable, to avoid duplicate work.
         let var = subs.get_root_key_without_compacting(var);
 
-        let cached_var = CachedVariable::new(var);
+        let mut env = Env {
+            arena,
+            subs,
+            seen: Vec::new_in(arena),
+        };
 
-        self.expand_to_fit(cached_var);
-
-        use CachedLayout::*;
-        match self.layouts.probe_value(cached_var) {
-            Cached(result) => Ok(result),
-            Problem(problem) => Err(problem),
-            NotCached => {
-                let mut env = Env {
-                    arena,
-                    subs,
-                    seen: Vec::new_in(arena),
-                };
-
-                let result = Layout::from_var(&mut env, var);
-
-                // Don't actually cache. The layout cache is very hard to get right in the presence
-                // of specialization, it's turned of for now so an invalid cache is never the cause
-                // of a problem
-                if false {
-                    let cached_layout = match &result {
-                        Ok(layout) => Cached(*layout),
-                        Err(problem) => Problem(problem.clone()),
-                    };
-
-                    self.layouts
-                        .update_value(cached_var, |existing| existing.value = cached_layout);
-                }
-
-                result
-            }
-        }
+        Layout::from_var(&mut env, var)
     }
 
     pub fn raw_from_var(
@@ -923,54 +867,27 @@ impl<'a> LayoutCache<'a> {
         // Store things according to the root Variable, to avoid duplicate work.
         let var = subs.get_root_key_without_compacting(var);
 
-        let cached_var = CachedVariable::new(var);
+        let mut env = Env {
+            arena,
+            subs,
+            seen: Vec::new_in(arena),
+        };
 
-        self.expand_to_fit(cached_var);
-
-        use CachedLayout::*;
-        match self.layouts.probe_value(cached_var) {
-            Problem(problem) => Err(problem),
-            Cached(_) | NotCached => {
-                let mut env = Env {
-                    arena,
-                    subs,
-                    seen: Vec::new_in(arena),
-                };
-
-                Layout::from_var(&mut env, var).map(|l| match l {
-                    Layout::Closure(a, b, c) => RawFunctionLayout::Function(a, b, c),
-                    other => RawFunctionLayout::ZeroArgumentThunk(other),
-                })
-            }
-        }
+        Layout::from_var(&mut env, var).map(|l| match l {
+            Layout::Closure(a, b, c) => RawFunctionLayout::Function(a, b, c),
+            other => RawFunctionLayout::ZeroArgumentThunk(other),
+        })
     }
 
-    fn expand_to_fit(&mut self, var: CachedVariable<'a>) {
-        use ven_ena::unify::UnifyKey;
-
-        let required = (var.index() as isize) - (self.layouts.len() as isize) + 1;
-        if required > 0 {
-            self.layouts.reserve(required as usize);
-
-            for _ in 0..required {
-                self.layouts.new_key(CachedLayout::NotCached);
-            }
-        }
+    pub fn snapshot(&mut self) -> SnapshotKeyPlaceholder {
+        SnapshotKeyPlaceholder
     }
 
-    pub fn snapshot(
-        &mut self,
-    ) -> ven_ena::unify::Snapshot<ven_ena::unify::InPlace<CachedVariable<'a>>> {
-        self.layouts.snapshot()
-    }
-
-    pub fn rollback_to(
-        &mut self,
-        snapshot: ven_ena::unify::Snapshot<ven_ena::unify::InPlace<CachedVariable<'a>>>,
-    ) {
-        self.layouts.rollback_to(snapshot)
-    }
+    pub fn rollback_to(&mut self, _snapshot: SnapshotKeyPlaceholder) {}
 }
+
+// placeholder for the type ven_ena::unify::Snapshot<ven_ena::unify::InPlace<CachedVariable<'a>>>
+pub struct SnapshotKeyPlaceholder;
 
 impl<'a> Builtin<'a> {
     const I128_SIZE: u32 = std::mem::size_of::<i128>() as u32;

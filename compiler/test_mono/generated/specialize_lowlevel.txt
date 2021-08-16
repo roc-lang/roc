@@ -1,6 +1,6 @@
 procedure Num.24 (#Attr.2, #Attr.3):
-    let Test.24 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Test.24;
+    let Test.25 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Test.25;
 
 procedure Num.26 (#Attr.2, #Attr.3):
     let Test.21 = lowlevel NumMul #Attr.2 #Attr.3;
@@ -8,8 +8,8 @@ procedure Num.26 (#Attr.2, #Attr.3):
 
 procedure Test.6 (Test.8, #Attr.12):
     let Test.4 = UnionAtIndex (Id 0) (Index 0) #Attr.12;
-    let Test.23 = CallByName Num.24 Test.8 Test.4;
-    ret Test.23;
+    let Test.24 = CallByName Num.24 Test.8 Test.4;
+    ret Test.24;
 
 procedure Test.7 (Test.9, #Attr.12):
     let Test.5 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
@@ -35,8 +35,8 @@ procedure Test.0 ():
                 jump Test.15 Test.17;
         
     in
-    let Test.22 = true;
-    if Test.22 then
+    let Test.23 = true;
+    if Test.23 then
         let Test.6 = ClosureTag(Test.6) Test.4;
         jump Test.19 Test.6;
     else

@@ -33,6 +33,7 @@ comptime {
     exportListFn(list.listContains, "contains");
     exportListFn(list.listRepeat, "repeat");
     exportListFn(list.listAppend, "append");
+    exportListFn(list.listPrepend, "prepend");
     exportListFn(list.listSingle, "single");
     exportListFn(list.listJoin, "join");
     exportListFn(list.listRange, "range");
@@ -78,6 +79,7 @@ comptime {
     exportNumFn(num.powInt, "pow_int");
     exportNumFn(num.acos, "acos");
     exportNumFn(num.asin, "asin");
+    exportNumFn(num.round, "round");
 }
 
 // Str Module
