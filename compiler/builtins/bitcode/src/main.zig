@@ -79,6 +79,7 @@ comptime {
     exportNumFn(num.powInt, "pow_int");
     exportNumFn(num.acos, "acos");
     exportNumFn(num.asin, "asin");
+    exportNumFn(num.round, "round");
 }
 
 // Str Module
