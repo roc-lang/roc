@@ -69,14 +69,14 @@ loop = \nextState, s ->
      Loop ss -> loop nextState ss
      Done aa -> aa
 
-# loop : (state -> Parser (Step state a)), state -> Parser a 
-# loop = \nextState, s ->
-#   \input -> 
-#       ss =  (nextState s)
-#       when ss is 
-#         Loop ss -> 
-#           out = ss input
-#           if List.len out == 1 then
-#             Loop nextState ss
-#           else Done (\input -> out)
-#         Done aa -> (\input -> success aa)
+loop : (state -> Parser (Step state a)), state -> Parser a 
+loop = \nextState, s ->
+  \input -> 
+      ss =  (nextState s)
+      when ss is 
+        Loop ss -> 
+          out = ss input
+          if List.len out == 1 then
+            Loop nextState ss
+          else Done (\input -> out)
+        Done aa -> (\input -> success aa)

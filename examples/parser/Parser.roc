@@ -77,6 +77,18 @@ Step state a : [ Loop state, Done a ]
 
 
 
+loop : (state -> Parser (Step state a)), state -> Parser a 
+loop = \nextState, s ->
+  \input -> 
+      ps =  (nextState s)                 # Parser (Step state a))
+      when ps is 
+          Parser (Loop s2) ->
+            []
+
+          Parser (Done aa) -> []
+                       
+      
+
 manyAux : Parser a, List a -> Parser (Step (List a) (List a))
 manyAux = \p, list ->
     \input -> (if input == [] 
