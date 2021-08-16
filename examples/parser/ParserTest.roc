@@ -18,6 +18,18 @@ main =
 
     satisfyResult = satisfyA [97, 98, 99, 100]
 
+# loop : (state -> Parser (Step state a)), state -> Parser a 
+# loop = \nextState, s ->
+#   \input -> 
+#       ss =  (nextState s)
+#       when ss is 
+#         Loop ss -> 
+#           out = ss input
+#           if List.len out == 1 then
+#             Loop nextState ss
+#           else Done (\input -> out)
+#         Done aa -> (\input -> success aa)
+
 
     p2 = {name : "run \"abcd\" satisfy (\\u -> u == 97)) => \"a\"", test : run "abcd" satisfyA == "a" }
     p3 = {name : "Use 'second' to recognize \"a\" then \"b\" returning \"b\"", test : run "abcd" (second  satisfyA satisfyB) == "b"}
@@ -32,7 +44,7 @@ main =
       
  
     [p1, p2, p3, p4, p5, p6, p7, p8, p9, q1]  |> Test.run "Parser test"
-    ## <== Bug above if 'Parse.q2' is used.  Notes below
+    ##  Parser.q2 <== Bug above if 'Parser.q2' is used.  Notes below
       |> Task.putLine
 
 
