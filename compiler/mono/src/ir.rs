@@ -6194,26 +6194,13 @@ impl ExceptionId {
 }
 
 fn build_call<'a>(
-    env: &mut Env<'a, '_>,
+    _env: &mut Env<'a, '_>,
     call: Call<'a>,
     assigned: Symbol,
     return_layout: Layout<'a>,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    if can_throw_exception(&call) {
-        let id = ExceptionId(env.unique_symbol());
-        let fail = env.arena.alloc(Stmt::Resume(id));
-        Stmt::Invoke {
-            symbol: assigned,
-            call,
-            layout: return_layout,
-            fail,
-            pass: hole,
-            exception_id: id,
-        }
-    } else {
-        Stmt::Let(assigned, Expr::Call(call), return_layout, hole)
-    }
+    Stmt::Let(assigned, Expr::Call(call), return_layout, hole)
 }
 
 #[allow(clippy::too_many_arguments)]
