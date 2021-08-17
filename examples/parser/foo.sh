@@ -80,3 +80,21 @@ loop = \nextState, s ->
             Loop nextState ss
           else Done (\input -> out)
         Done aa -> (\input -> success aa)
+
+loop : (state -> Parser (Step state a)), state -> Parser a 
+loop = \nextState, s ->
+  \input -> 
+      ps =  (nextState s)                 # Parser (Step state a))
+      when ps is 
+          Parser (Loop s2) ->
+            output = ps input             # List [Pair (Step state a) (List U8)]
+            when List.head output is      # [Pair (Step state a) (List U8)]
+              Ok (Pair aa input2) -> 
+                if List.len output == 1
+                then 
+                    (loop nextState ps ) input2
+                else 
+                    []
+
+          Parser (Done aa) -> [Pair aa input]
+                
