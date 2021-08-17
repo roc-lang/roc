@@ -2220,6 +2220,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "object"
+version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c55827317fb4c08822499848a14237d2874d6f139828893017237e7ab93eb386"
+dependencies = [
+ "flate2",
+ "memchr",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3295,6 +3305,15 @@ dependencies = [
 [[package]]
 name = "roc_ident"
 version = "0.1.0"
+
+[[package]]
+name = "roc_linker"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "clap 3.0.0-beta.1",
+ "object 0.26.0",
+]
 
 [[package]]
 name = "roc_load"
