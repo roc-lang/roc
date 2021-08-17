@@ -1,11 +1,11 @@
 app "foo"
     packages { base: "platform" }
-    imports [base.Task, Test,  StrExtra]
+    imports [base.Task,  Console, StrExtra]
     provides [ main ] to base
 
  
 main : Task.Task {} []
 main =
-  Test.run StrExtra.tests "StrExtra" |> Task.putLine 
+  StrExtra.concat [Console.green "The grass is green, but ", Console.red "roses are red."] |> Task.putLine 
 
   
