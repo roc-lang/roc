@@ -44,3 +44,7 @@ fn bytesToU32(arg: RocList, position: usize) u32 {
     const exampleAnswer: u32 = 41;
     return 41;
 }
+
+pub fn round(num: f64) callconv(.C) i64 {
+    return @floatToInt(i32, (@round(num)));
+}
