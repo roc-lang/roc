@@ -4,6 +4,7 @@
 use bumpalo::{collections::Vec as BumpVec, Bump};
 use inlinable_string::InlinableString;
 use std::collections::HashMap;
+use std::iter::FromIterator;
 
 use crate::lang::ast::{ClosureExtra, Expr2, ExprId, FloatVal, IntStyle, IntVal, RecordField, ValueDef, WhenBranch, expr2_to_string};
 use crate::lang::def::{
@@ -298,6 +299,7 @@ pub fn str_to_expr2_w_defs<'a>(
         Ok(vec_loc_def) => {
 
             Ok(to_expr2_from_defs(
+                arena,
                 env,
                 scope,
                 arena.alloc(vec_loc_def),
@@ -1002,7 +1004,7 @@ pub fn to_expr2_from_defs<'a>(
     arena: &'a Bump,
     env: &mut Env<'a>,
     scope: &mut Scope,
-    parsed_defs: &'a Vec<roc_region::all::Loc<roc_parse::ast::Def<'a>>>,
+    parsed_defs: &'a BumpVec<roc_region::all::Loc<roc_parse::ast::Def<'a>>>,
     region: Region,
 ) -> Vec<Expr2> {
     use roc_parse::ast::Expr::*;
@@ -1029,9 +1031,43 @@ pub fn to_expr2_from_def<'a>(
         SpaceAfter(inner_def, _) => {
             to_expr2_from_def(arena, env, scope, inner_def, region)
         }
-        Body(loc_pattern, &loc_expr) => {
+        Body(&loc_pattern, &loc_expr) => {
             // TODO loc_pattern use identifier
-            loc_expr_to_expr2(arena, loc_expr, env, scope, region).0
+            let body_expr2 = loc_expr_to_expr2(arena, loc_expr, env, scope, region).0;
+            let body_expr_id = env.pool.add(body_expr2);
+
+            use roc_parse::ast::Pattern::*;
+
+            match loc_pattern.value {
+                Identifier(str_ref) => {
+                    let (_, pattern2) = to_pattern2(env, scope, PatternType::TopLevelDef, &loc_pattern.value, region);
+                    let pattern_id = env.pool.add(pattern2);
+
+                    // TODO support with annotation
+                    let value_def = ValueDef::NoAnnotation {
+                        pattern_id,
+                        expr_id: body_expr_id,
+                        expr_var: env.var_store.fresh(),
+                    };
+
+                    let value_def_id = env.pool.add(value_def);
+
+                    let ident_string = inlinable_string::InlinableString::from_iter(str_ref.chars());
+                    let ident_id = env.ident_ids.add(ident_string);
+                    let var_symbol = Symbol::new(env.home, ident_id);
+                    let body = Expr2::Var(var_symbol);
+                    let body_id = env.pool.add(body);   
+
+                    Expr2::LetValue {
+                        def_id: value_def_id,
+                        body_var: env.var_store.fresh(),
+                        body_id,
+                    }
+                },
+                other => {
+                    unimplemented!("I don't yet know how to convert the pattern {:?} into an expr2", other)
+                }
+            }
         }
         other => {
             unimplemented!("I don't know how to make an expr2 from this def yet: {:?}", other)

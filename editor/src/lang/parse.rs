@@ -17,36 +17,33 @@ pub struct AST {
 impl AST {
     pub fn parse_from_string<'a>(code_str: &'a str, env: &mut Env<'a>, ast_arena: &'a Bump) -> Result<AST, SyntaxError<'a>> {
 
-        let split_string = code_str.split("\n\n");
-        let split_code_vec: Vec<&str> = split_string.collect();
+        let blank_line_indx = code_str.find("\n\n").expect("I was expecting a double newline to split header and rest of code.");
+        
+        let header_str = &code_str[0..blank_line_indx];
+        let tail_str = &code_str[blank_line_indx..];
 
-        if let Some((head, tail)) = split_code_vec.split_first() {
+        let mut scope = Scope::new(env.home, env.pool, env.var_store);
+        let region = Region::new(0, 0, 0, 0);
 
-            let mut scope = Scope::new(env.home, env.pool, env.var_store);
-            let region = Region::new(0, 0, 0, 0);
+        let mut expression_ids = Vec::<ExprId>::new();
 
-            let mut expression_ids = Vec::<ExprId>::new();
 
-            let non_header_code = tail.join("\n\n");
+        let expr2_vec = str_to_expr2_w_defs(&ast_arena, tail_str, env, &mut scope, region)?;
 
-            let expr2_vec = str_to_expr2_w_defs(&ast_arena, &non_header_code, env, &mut scope, region)?;
+        for expr2 in expr2_vec {
+            let expr_id = env.pool.add(expr2);
 
-            for expr2 in expr2_vec {
-                let expr_id = env.pool.add(expr2);
-
-                expression_ids.push(expr_id);
-            }
-            
-
-            Ok(
-                AST { 
-                    header: head.to_string(),
-                    expression_ids,
-                }
-            )
-        } else {
-            panic!("I was expecting a double newline to split header and rest of code.")
+            expression_ids.push(expr_id);
         }
+        
+
+        Ok(
+            AST { 
+                header: header_str.to_string(),
+                expression_ids,
+            }
+        )
+         
     }
 }
 // </temporary WIP zone>
