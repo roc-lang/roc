@@ -155,7 +155,7 @@ pub struct Env<'a, 'ctx, 'env> {
     pub module: &'ctx Module<'ctx>,
     pub interns: Interns,
     pub ptr_bytes: u32,
-    pub leak: bool,
+    pub is_gen_test: bool,
     pub exposed_to_host: MutSet<Symbol>,
 }
 
@@ -546,9 +546,6 @@ static LLVM_STACK_SAVE: &str = "llvm.stacksave";
 
 static LLVM_SETJMP: &str = "llvm.eh.sjlj.setjmp";
 pub static LLVM_LONGJMP: &str = "llvm.eh.sjlj.longjmp";
-
-// static LLVM_SETJMP: &str = "setjmp";
-// pub static LLVM_LONGJMP: &str = "longjmp";
 
 pub static LLVM_SADD_WITH_OVERFLOW_I8: &str = "llvm.sadd.with.overflow.i8";
 pub static LLVM_SADD_WITH_OVERFLOW_I16: &str = "llvm.sadd.with.overflow.i16";
@@ -3026,8 +3023,6 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
         false,
     );
 
-    let roc_wrapper_function = make_exception_catcher(env, roc_function);
-
     // STEP 1: turn `f : a,b,c -> d` into `f : a,b,c, &d -> {}`
     let mut argument_types = roc_function.get_type().get_param_types();
     let return_type = wrapper_return_type;
@@ -3063,12 +3058,28 @@ fn expose_function_to_host_help<'a, 'ctx, 'env>(
     let args = &args[..args.len() - 1];
 
     debug_assert_eq!(args.len(), roc_function.get_params().len());
-    debug_assert_eq!(args.len(), roc_wrapper_function.get_params().len());
 
-    let call_wrapped = builder.build_call(roc_wrapper_function, args, "call_wrapped_function");
-    call_wrapped.set_call_convention(FAST_CALL_CONV);
+    let call_result = {
+        if env.is_gen_test {
+            let roc_wrapper_function = make_exception_catcher(env, roc_function);
+            debug_assert_eq!(args.len(), roc_wrapper_function.get_params().len());
 
-    let call_result = call_wrapped.try_as_basic_value().left().unwrap();
+            builder.position_at_end(entry);
+
+            let call_wrapped =
+                builder.build_call(roc_wrapper_function, args, "call_wrapped_function");
+            call_wrapped.set_call_convention(FAST_CALL_CONV);
+
+            call_wrapped.try_as_basic_value().left().unwrap()
+        } else {
+            let call_unwrapped = builder.build_call(roc_function, args, "call_unwrapped_function");
+            call_unwrapped.set_call_convention(FAST_CALL_CONV);
+
+            let call_unwrapped_result = call_unwrapped.try_as_basic_value().left().unwrap();
+
+            make_good_roc_result(env, call_unwrapped_result)
+        }
+    };
 
     let output_arg = c_function
         .get_nth_param(output_arg_index as u32)
@@ -3133,20 +3144,6 @@ pub fn get_sjlj_message_buffer<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> Poi
         None => env
             .module
             .add_global(type_, None, "roc_sjlj_message_buffer"),
-    };
-
-    global.set_initializer(&type_.const_zero());
-
-    global.as_pointer_value()
-}
-
-pub fn get_catcher_static<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    type_: BasicTypeEnum<'ctx>,
-) -> PointerValue<'ctx> {
-    let global = match env.module.get_global("catcher_static") {
-        Some(global) => global,
-        None => env.module.add_global(type_, None, "catcher_static"),
     };
 
     global.set_initializer(&type_.const_zero());
@@ -3247,18 +3244,7 @@ where
 
         let call_result = call.try_as_basic_value().left().unwrap();
 
-        let return_value = {
-            let v1 = call_result_type.const_zero();
-
-            let v2 = builder
-                .build_insert_value(v1, context.i64_type().const_zero(), 0, "set_no_error")
-                .unwrap();
-            let v3 = builder
-                .build_insert_value(v2, call_result, 1, "set_call_result")
-                .unwrap();
-
-            v3
-        };
+        let return_value = make_good_roc_result(env, call_result);
 
         builder.build_store(result_alloca, return_value);
 
@@ -3337,6 +3323,30 @@ fn make_exception_catcher<'a, 'ctx, 'env>(
     function_value.set_linkage(Linkage::Internal);
 
     function_value
+}
+
+fn make_good_roc_result<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    return_value: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let context = env.context;
+    let builder = env.builder;
+
+    let content_type = return_value.get_type();
+    let wrapper_return_type =
+        context.struct_type(&[context.i64_type().into(), content_type], false);
+
+    let v1 = wrapper_return_type.const_zero();
+
+    let v2 = builder
+        .build_insert_value(v1, context.i64_type().const_zero(), 0, "set_no_error")
+        .unwrap();
+
+    let v3 = builder
+        .build_insert_value(v2, return_value, 1, "set_call_result")
+        .unwrap();
+
+    v3.into_struct_value().into()
 }
 
 fn make_exception_catching_wrapper<'a, 'ctx, 'env>(

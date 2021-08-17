@@ -179,7 +179,7 @@ pub fn gen_and_eval<'a>(
             interns,
             module,
             ptr_bytes,
-            leak: false,
+            is_gen_test: false,
             // important! we don't want any procedures to get the C calling convention
             exposed_to_host: MutSet::default(),
         };

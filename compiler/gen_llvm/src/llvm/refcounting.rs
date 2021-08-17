@@ -278,7 +278,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         // build then block
         {
             builder.position_at_end(then_block);
-            if !env.leak {
+            if !env.is_gen_test {
                 let ptr = builder.build_pointer_cast(
                     refcount_ptr.value,
                     ctx.i8_type().ptr_type(AddressSpace::Generic),

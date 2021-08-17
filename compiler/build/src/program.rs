@@ -144,12 +144,11 @@ pub fn gen_from_mono_module(
         interns: loaded.interns,
         module,
         ptr_bytes,
-        leak: false,
+        // in gen_tests, the compiler provides roc_panic
+        // and sets up the setjump/longjump exception handling
+        is_gen_test: false,
         exposed_to_host: loaded.exposed_to_host.keys().copied().collect(),
     };
-
-    // TODO remove for debug only
-    // roc_gen_llvm::llvm::externs::add_sjlj_roc_panic(&env);
 
     roc_gen_llvm::llvm::build::build_procedures(
         &env,
@@ -160,6 +159,9 @@ pub fn gen_from_mono_module(
     );
 
     env.dibuilder.finalize();
+
+    // we don't use the debug info, and it causes weird errors.
+    module.strip_debug_info();
 
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
