@@ -17,6 +17,7 @@ use crate::editor::util::index_of;
 use crate::lang::ast::ExprId;
 use crate::lang::ast::RecordField;
 use crate::lang::ast::ValueDef;
+use crate::lang::parse::AppHeader;
 use crate::lang::pattern::get_identifier_string;
 use crate::lang::{
     ast::Expr2,
@@ -575,6 +576,187 @@ pub fn set_parent_for_all_helper(
         MarkupNode::Text { parent_id_opt, .. } => *parent_id_opt = Some(parent_node_id),
         MarkupNode::Blank { parent_id_opt, .. } => *parent_id_opt = Some(parent_node_id),
     }
+}
+
+fn header_mn(content: String, ast_node_id: ExprId, mark_node_pool: &mut SlowPool) -> MarkNodeId {
+    let mark_node = MarkupNode::Text {
+        content: content,
+        ast_node_id,
+        syn_high_style: HighlightStyle::PackageRelated,
+        attributes: Attributes::new(),
+        parent_id_opt: None,
+    };
+
+    mark_node_pool.add(mark_node)
+}
+
+fn header_val_mn(content: String, ast_node_id: ExprId, highlight_style: HighlightStyle, mark_node_pool: &mut SlowPool) -> MarkNodeId {
+    let mark_node = MarkupNode::Text {
+        content: content,
+        ast_node_id,
+        syn_high_style: highlight_style,
+        attributes: Attributes::new(),
+        parent_id_opt: None,
+    };
+
+    mark_node_pool.add(mark_node)
+}
+
+pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -> MarkNodeId {
+    let ast_node_id = app_header.ast_node_id;
+
+    let app_node_id =
+        header_mn("app ".to_owned(), ast_node_id, mark_node_pool);
+
+    let app_name_node_id =
+        header_val_mn( 
+            app_header.app_name,
+            ast_node_id,
+            HighlightStyle::String,
+            mark_node_pool
+        );
+
+    let full_app_node = MarkupNode::Nested {
+        ast_node_id,
+        children_ids: vec![app_node_id, app_name_node_id],
+        parent_id_opt: None,
+    };
+
+    let packages_node_id =
+        header_mn("    packages ".to_owned(), ast_node_id, mark_node_pool);
+
+    let pack_left_acc_node_id =  mark_node_pool.add(new_left_accolade_mn(ast_node_id, None));
+
+    let pack_base_node_id =
+        header_val_mn( 
+            "base: ".to_owned(),
+            ast_node_id,
+            HighlightStyle::RecordField,
+            mark_node_pool
+        );
+
+    let pack_val_node_id =
+        header_val_mn( 
+            app_header.packages_base,
+            ast_node_id,
+            HighlightStyle::String,
+            mark_node_pool
+        );
+
+    let pack_right_acc_node_id = mark_node_pool.add(new_right_accolade_mn(ast_node_id, None));
+
+    let full_packages_node = MarkupNode::Nested {
+        ast_node_id,
+        children_ids: vec![packages_node_id, pack_left_acc_node_id, pack_base_node_id, pack_val_node_id, pack_right_acc_node_id],
+        parent_id_opt: None,
+    };
+
+    let imports_node_id = 
+        header_mn("    imports ".to_owned(), ast_node_id, mark_node_pool);
+
+    let imports_left_square_node_id =
+        mark_node_pool.add(new_left_square_mn(ast_node_id, None));
+
+    let nr_of_imports = app_header.imports.len();
+
+    let import_child_ids =
+        app_header.imports.iter().enumerate().map(|(indx, import)| {
+
+            let import_val_mn_id = 
+                header_val_mn( 
+                    import.to_owned(),
+                    ast_node_id,
+                    HighlightStyle::Import,
+                    mark_node_pool
+                );
+
+            if indx != nr_of_imports - 1 {
+                vec![
+                    import_val_mn_id,
+                    mark_node_pool.add(new_comma_mn(ast_node_id, None))
+                ]
+            } else {
+                vec![
+                    import_val_mn_id
+                ]
+            }
+        });
+
+    let imports_right_square_node_id =
+        mark_node_pool.add(new_right_square_mn(ast_node_id, None));
+    
+    let full_import_node = 
+        MarkupNode::Nested {
+            ast_node_id,
+            children_ids: vec![imports_node_id, imports_left_square_node_id],
+            parent_id_opt: None,
+        };
+
+    let provides_node_id =
+        header_mn( 
+            "    provides ".to_owned(),
+            ast_node_id,
+            mark_node_pool
+        );
+
+    let provides_left_square_node_id =
+        mark_node_pool.add(new_left_square_mn(ast_node_id, None));
+
+    let provides_val_node_id =
+        header_val_mn( 
+            // TODO iter over provides like with imports
+            app_header.provides.first().unwrap().to_owned(),
+            ast_node_id,
+            HighlightStyle::Provides,
+            mark_node_pool
+        );
+
+    let provides_right_square_node_id =
+        mark_node_pool.add(new_right_square_mn(ast_node_id, None));
+
+    let provides_end_node_id =
+        header_mn( 
+            " to base".to_owned(),
+            ast_node_id,
+            mark_node_pool
+        );
+
+    let full_provides_node =
+        MarkupNode::Nested {
+            ast_node_id,
+            children_ids: vec![
+                provides_node_id,
+                provides_left_square_node_id,
+                provides_val_node_id,
+                provides_right_square_node_id,
+                provides_end_node_id
+            ],
+            parent_id_opt: None,
+        };
+
+    let full_provides_node_id = mark_node_pool.add(full_provides_node);
+    let full_import_node_id = mark_node_pool.add(full_import_node);
+    let full_packages_node = mark_node_pool.add(full_packages_node);
+    let full_app_node_id = mark_node_pool.add(full_app_node);
+    
+    let header_mark_node =
+        MarkupNode::Nested {
+            ast_node_id,
+            children_ids: vec![
+                full_app_node_id, full_packages_node, full_import_node_id, full_provides_node_id
+            ],
+            parent_id_opt: None,
+        };
+
+    let header_mn_id = mark_node_pool.add(header_mark_node);
+
+    set_parent_for_all(header_mn_id, mark_node_pool);
+
+    header_mn_id
+}
+
+pub fn AST_to_mark_nodes() -> MarkNodeId {
+    //TODO call for header and Expr2's
 }
 
 impl fmt::Display for MarkupNode {

@@ -3,15 +3,24 @@ use roc_parse::parser::SyntaxError;
 use crate::lang::scope::Scope;
 use roc_region::all::Region;
 
-use super::{ast::ExprId, expr::{Env, str_to_expr2_w_defs}};
+use super::{ast::{Expr2, ExprId}, expr::{Env, str_to_expr2_w_defs}};
 
 
+// WORK IN PROGRESS FILE
 
-// <temporary WIP zone>
 #[derive(Debug)]
 pub struct AST {
-    pub header: String,
+    pub header: AppHeader,
     pub expression_ids: Vec<ExprId>,
+}
+
+#[derive(Debug)]
+pub struct AppHeader {
+    pub app_name: String,
+    pub packages_base: String,
+    pub imports: Vec<String>,
+    pub provides: Vec<String>,
+    pub ast_node_id: ExprId,
 }
 
 impl AST {
@@ -36,14 +45,29 @@ impl AST {
             expression_ids.push(expr_id);
         }
         
+        let ast_node_id = env.pool.add(Expr2::Blank);
 
         Ok(
             AST { 
-                header: header_str.to_string(),
+                header: AppHeader::parse_from_string(header_str, ast_node_id),
                 expression_ids,
             }
         )
          
     }
 }
-// </temporary WIP zone>
+
+impl AppHeader {
+
+    // TODO don't use mock struct and actually parse string
+    pub fn parse_from_string(header_str: &str, ast_node_id: ExprId) -> Self {
+
+        AppHeader {
+            app_name: "unititled_app".to_owned(),
+            packages: "{ base: \"platform\" }".to_owned(),
+            imports: vec![],
+            provides: vec![ "main".to_owned() ],
+            ast_node_id
+        }
+    }
+}

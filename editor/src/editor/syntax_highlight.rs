@@ -14,6 +14,8 @@ pub enum HighlightStyle {
     PackageRelated, // app, packages, imports, exposes, provides...
     Variable,
     RecordField,
+    Import,
+    Provides,
     Blank,
 }
 
@@ -31,6 +33,8 @@ pub fn default_highlight_map() -> HashMap<HighlightStyle, RgbaTup> {
         (PackageRelated, gr_colors::WHITE),
         (Variable, gr_colors::WHITE),
         (RecordField, from_hsb(258, 50, 90)),
+        (Import, from_hsb(185, 50, 75)),
+        (Provides, from_hsb(185, 50, 75)),
         (Blank, from_hsb(258, 50, 90)),
         // comment from_hsb(285, 6, 47) or 186, 35, 40
     ]
