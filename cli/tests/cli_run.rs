@@ -202,6 +202,13 @@ mod cli_run {
             expected_ending: "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             use_valgrind: true,
         },
+        testframework:"testframework" => Example {
+            filename: "App.roc",
+            executable_filename: "test-example",
+            stdin: &[],
+            expected_ending: "Example tests\n-------------\nPass :: 1 + 1 == 2\nPass 9: 2 * 3 == 6\n",
+            use_valgrind: true,
+        },
         // shared_quicksort:"shared-quicksort" => Example {
         //     filename: "Quicksort.roc",
         //     executable_filename: "quicksort",
