@@ -1034,6 +1034,7 @@ pub fn to_expr2_from_def<'a>(
         Body(&loc_pattern, &loc_expr) => {
             // TODO loc_pattern use identifier
             let body_expr2 = loc_expr_to_expr2(arena, loc_expr, env, scope, region).0;
+
             let body_expr_id = env.pool.add(body_expr2);
 
             use roc_parse::ast::Pattern::*;

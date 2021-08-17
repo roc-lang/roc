@@ -16,6 +16,7 @@ use crate::editor::syntax_highlight::HighlightStyle;
 use crate::editor::util::index_of;
 use crate::lang::ast::ExprId;
 use crate::lang::ast::RecordField;
+use crate::lang::ast::ValueDef;
 use crate::lang::pattern::get_identifier_string;
 use crate::lang::{
     ast::Expr2,
@@ -262,6 +263,7 @@ pub fn expr2_to_markup<'a, 'b>(
     markup_node_pool: &mut SlowPool,
     interns: &Interns,
 ) -> EdResult<MarkNodeId> {
+
     let mark_node_id = match expr2 {
         Expr2::SmallInt { text, .. }
         | Expr2::I128 { text, .. }
@@ -460,7 +462,7 @@ pub fn expr2_to_markup<'a, 'b>(
                 None
             )
         ),
-        Expr2::LetValue { def_id, body_id, body_var:_} => {
+        Expr2::LetValue { def_id, body_id:_, body_var:_} => {
 
             let pattern_id = 
                 env.pool.get(*def_id).get_pattern_id();
@@ -488,22 +490,35 @@ pub fn expr2_to_markup<'a, 'b>(
 
             let equals_mn_id = markup_node_pool.add(new_equals_mn(expr2_node_id, None));
 
-            let body_mn_id = expr2_to_markup(
-                arena,
-                env,
-                env.pool.get(*body_id),
-                *body_id,
-                markup_node_pool,
-                interns
-            )?;
+            let value_def = env.pool.get(*def_id);
 
-            let full_let_node = MarkupNode::Nested {
-                ast_node_id: expr2_node_id,
-                children_ids: vec![val_name_mn_id, equals_mn_id, body_mn_id],
-                parent_id_opt: None,
-            };
-
-            markup_node_pool.add(full_let_node)
+            match value_def {
+                ValueDef::NoAnnotation {
+                    pattern_id:_,
+                    expr_id,
+                    expr_var:_,
+                } => {
+                    let body_mn_id = expr2_to_markup(
+                        arena,
+                        env,
+                        env.pool.get(*expr_id),
+                        *expr_id,
+                        markup_node_pool,
+                        interns
+                    )?;
+        
+                    let full_let_node = MarkupNode::Nested {
+                        ast_node_id: expr2_node_id,
+                        children_ids: vec![val_name_mn_id, equals_mn_id, body_mn_id],
+                        parent_id_opt: None,
+                    };
+        
+                    markup_node_pool.add(full_let_node)
+                },
+                other => {
+                    unimplemented!("I don't know how to convert {:?} into a MarkupNode yet.", other)
+                }
+            }
         },
         Expr2::RuntimeError() => new_markup_node(
             "RunTimeError".to_string(),
