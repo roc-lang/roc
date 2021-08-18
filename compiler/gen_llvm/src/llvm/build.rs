@@ -1082,14 +1082,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         )
                         .unwrap()
                 }
-                (StructValue(argument), Layout::Closure(_, _, _)) => env
-                    .builder
-                    .build_extract_value(
-                        argument,
-                        *index as u32,
-                        env.arena.alloc(format!("closure_field_access_{}_", index)),
-                    )
-                    .unwrap(),
                 (
                     PointerValue(argument),
                     Layout::Union(UnionLayout::NonNullableUnwrapped(fields)),

@@ -271,6 +271,25 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     }
 
     match closure_data_layout {
+        Layout::Struct(&[]) => {
+            // do nothing
+        }
+        other => {
+            let closure_type = basic_type_from_layout(env, &other).ptr_type(AddressSpace::Generic);
+
+            let closure_cast = env
+                .builder
+                .build_bitcast(closure_ptr, closure_type, "load_opaque")
+                .into_pointer_value();
+
+            let closure_data = env.builder.build_load(closure_cast, "load_opaque");
+
+            arguments_cast.push(closure_data);
+        }
+    }
+
+    /*
+    match closure_data_layout {
         Layout::Closure(_, lambda_set, _) => {
             if let Layout::Struct(&[]) = lambda_set.runtime_representation() {
                 // do nothing
@@ -316,6 +335,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
         }
         other => unreachable!("layout is not valid for a closure: {:?}", other),
     }
+    */
 
     let call = {
         env.builder
@@ -624,6 +644,7 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
 
             let default = [value1, value2];
 
+            /*
             let arguments_cast = match closure_data_layout {
                 Layout::Closure(_, lambda_set, _) => {
                     if let Layout::Struct(&[]) = lambda_set.runtime_representation() {
@@ -645,6 +666,29 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
                 }
                 Layout::Struct([]) => &default,
                 other => unreachable!("layout is not valid for a closure: {:?}", other),
+            };
+            */
+
+            let arguments_cast = match closure_data_layout {
+                Layout::Struct(&[]) => {
+                    // do nothing
+                    &default
+                }
+                other => {
+                    //
+
+                    let closure_type =
+                        basic_type_from_layout(env, &other).ptr_type(AddressSpace::Generic);
+
+                    let closure_cast = env
+                        .builder
+                        .build_bitcast(closure_ptr, closure_type, "load_opaque")
+                        .into_pointer_value();
+
+                    let closure_data = env.builder.build_load(closure_cast, "load_opaque");
+
+                    env.arena.alloc([value1, value2, closure_data]) as &[_]
+                }
             };
 
             let call = env.builder.build_call(

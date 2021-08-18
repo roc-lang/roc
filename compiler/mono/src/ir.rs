@@ -546,11 +546,11 @@ impl<'a> Procs<'a> {
         // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
         let is_self_recursive = false;
 
-        let layout = layout_cache
-            .from_var(env.arena, annotation, env.subs)
+        let raw_layout = layout_cache
+            .raw_from_var(env.arena, annotation, env.subs)
             .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-        let top_level = ProcLayout::from_layout(env.arena, layout);
+        let top_level = ProcLayout::from_raw(env.arena, raw_layout);
 
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
@@ -617,7 +617,11 @@ impl<'a> Procs<'a> {
                                 Ok((proc, layout)) => {
                                     let top_level = ProcLayout::from_raw(env.arena, layout);
 
-                                    debug_assert_eq!(outside_layout, top_level);
+                                    debug_assert_eq!(
+                                        outside_layout, top_level,
+                                        "different raw layouts for {:?}",
+                                        proc.name
+                                    );
 
                                     if self.module_thunks.contains(&proc.name) {
                                         debug_assert!(top_level.arguments.is_empty());
@@ -2470,20 +2474,32 @@ fn specialize_solved_type<'a>(
     let fn_var = introduce_solved_type_to_subs(env, &solved_type);
 
     // for debugging only
-    let attempted_layout = layout_cache
-        .from_var(env.arena, fn_var, env.subs)
+    let raw = layout_cache
+        .raw_from_var(env.arena, fn_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
-    let raw = match attempted_layout {
-        Layout::Closure(a, lambda_set, c) => {
-            if procs.module_thunks.contains(&proc_name) {
+    let raw = if procs.module_thunks.contains(&proc_name) {
+        match raw {
+            RawFunctionLayout::Function(_, lambda_set, _) => {
                 RawFunctionLayout::ZeroArgumentThunk(lambda_set.runtime_representation())
-            } else {
-                RawFunctionLayout::Function(a, lambda_set, c)
             }
+            _ => raw,
         }
-        _ => RawFunctionLayout::ZeroArgumentThunk(attempted_layout),
+    } else {
+        raw
     };
+
+    // TODO this module_thunks.contains check will be important
+    //    let raw = match attempted_layout {
+    //        Layout::Closure(a, lambda_set, c) => {
+    //            if procs.module_thunks.contains(&proc_name) {
+    //                RawFunctionLayout::ZeroArgumentThunk(lambda_set.runtime_representation())
+    //            } else {
+    //                RawFunctionLayout::Function(a, lambda_set, c)
+    //            }
+    //        }
+    //        _ => RawFunctionLayout::ZeroArgumentThunk(attempted_layout),
+    //    };
 
     // make sure rigid variables in the annotation are converted to flex variables
     instantiate_rigids(env.subs, partial_proc.annotation);
@@ -2509,12 +2525,12 @@ fn specialize_solved_type<'a>(
     match specialized {
         Ok(proc) => {
             // when successful, the layout after unification should be the layout before unification
-            debug_assert_eq!(
-                attempted_layout,
-                layout_cache
-                    .from_var(env.arena, fn_var, env.subs)
-                    .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err))
-            );
+            //            debug_assert_eq!(
+            //                attempted_layout,
+            //                layout_cache
+            //                    .from_var(env.arena, fn_var, env.subs)
+            //                    .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err))
+            //            );
 
             env.subs.rollback_to(snapshot);
             layout_cache.rollback_to(cache_snapshot);
@@ -2545,16 +2561,11 @@ impl<'a> ProcLayout<'a> {
 
         for old in old_arguments {
             match old {
-                Layout::Closure(_, lambda_set, _) => {
-                    let repr = lambda_set.runtime_representation();
-                    arguments.push(repr)
-                }
                 other => arguments.push(*other),
             }
         }
 
         let new_result = match result {
-            Layout::Closure(_, lambda_set, _) => lambda_set.runtime_representation(),
             other => other,
         };
 
@@ -2563,12 +2574,10 @@ impl<'a> ProcLayout<'a> {
             result: new_result,
         }
     }
+
+    // TODO remove!!!!!
     pub fn from_layout(arena: &'a Bump, layout: Layout<'a>) -> Self {
         match layout {
-            Layout::Closure(arguments, lambda_set, result) => {
-                let arguments = lambda_set.extend_argument_list(arena, arguments);
-                ProcLayout::new(arena, arguments, *result)
-            }
             _ => ProcLayout {
                 arguments: &[],
                 result: layout,
@@ -6048,7 +6057,11 @@ fn reuse_function_symbol<'a>(
                         )
                     } else if procs.module_thunks.contains(&original) {
                         // this is a 0-argument thunk
-                        let layout = Layout::Closure(argument_layouts, lambda_set, ret_layout);
+
+                        // TODO suspicious
+                        // let layout = Layout::Closure(argument_layouts, lambda_set, ret_layout);
+                        // panic!("suspicious");
+                        let layout = lambda_set.runtime_representation();
                         let top_level = ProcLayout::new(env.arena, &[], layout);
                         procs.insert_passed_by_name(
                             env,
@@ -6654,8 +6667,12 @@ fn call_by_name_module_thunk<'a>(
 
                         match specialize(env, procs, proc_name, layout_cache, pending, partial_proc)
                         {
-                            Ok((proc, layout)) => {
-                                debug_assert!(layout.is_zero_argument_thunk());
+                            Ok((proc, raw_layout)) => {
+                                debug_assert!(
+                                    raw_layout.is_zero_argument_thunk(),
+                                    "but actually {:?}",
+                                    raw_layout
+                                );
 
                                 let was_present =
                                     procs.specialized.remove(&(proc_name, top_level_layout));

@@ -165,11 +165,6 @@ impl<'a, 'i> Env<'a, 'i> {
                 self.constructor_map.insert(symbol, 0);
                 self.layout_map.insert(symbol, Layout::Struct(fields));
             }
-            Closure(_, lambda_set, _) => {
-                self.constructor_map.insert(symbol, 0);
-                self.layout_map
-                    .insert(symbol, lambda_set.runtime_representation());
-            }
             _ => {}
         }
     }
@@ -243,10 +238,6 @@ fn layout_for_constructor<'a>(
         Struct(fields) => {
             debug_assert_eq!(constructor, 0);
             HasFields(fields)
-        }
-        Closure(_arguments, _lambda_set, _result) => {
-            // HasFields(fields)
-            ConstructorLayout::Unknown
         }
         other => unreachable!("weird layout {:?}", other),
     }
@@ -373,13 +364,6 @@ pub fn expand_and_cancel_proc<'a>(
                 env.insert_struct_info(*symbol, fields);
 
                 introduced.push(*symbol);
-            }
-            Layout::Closure(_arguments, _lambda_set, _result) => {
-                // TODO can this be improved again?
-                // let fpointer = Layout::FunctionPointer(arguments, result);
-                // let fields = env.arena.alloc([fpointer, *closure_layout.layout]);
-                // env.insert_struct_info(*symbol, fields);
-                // introduced.push(*symbol);
             }
             _ => {}
         }

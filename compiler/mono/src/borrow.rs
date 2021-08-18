@@ -11,7 +11,6 @@ pub const BORROWED: bool = true;
 
 fn should_borrow_layout(layout: &Layout) -> bool {
     match layout {
-        Layout::Closure(_, _, _) => false,
         _ => layout.is_refcounted(),
     }
 }

@@ -65,9 +65,6 @@ where
 
         for layout in argument_layouts {
             match layout {
-                Layout::Closure(_, lambda_set, _) => {
-                    lambda_set.runtime_representation().hash(&mut hasher);
-                }
                 _ => {
                     layout.hash(&mut hasher);
                 }
@@ -75,9 +72,6 @@ where
         }
 
         match return_layout {
-            Layout::Closure(_, lambda_set, _) => {
-                lambda_set.runtime_representation().hash(&mut hasher);
-            }
             _ => {
                 return_layout.hash(&mut hasher);
             }
@@ -1258,11 +1252,6 @@ fn layout_spec_help(
                 }
             },
         },
-        Closure(_, lambda_set, _) => layout_spec_help(
-            builder,
-            &lambda_set.runtime_representation(),
-            when_recursive,
-        ),
     }
 }
 

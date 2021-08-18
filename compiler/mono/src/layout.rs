@@ -160,9 +160,8 @@ pub enum Layout<'a> {
     Struct(&'a [Layout<'a>]),
     Union(UnionLayout<'a>),
     RecursivePointer,
-
-    /// A function. The types of its arguments, then the type of its return value.
-    Closure(&'a [Layout<'a>], LambdaSet<'a>, &'a Layout<'a>),
+    // /// A function. The types of its arguments, then the type of its return value.
+    // Closure(&'a [Layout<'a>], LambdaSet<'a>, &'a Layout<'a>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -743,7 +742,6 @@ impl<'a> Layout<'a> {
                     }
                 }
             }
-            Closure(_, closure_layout, _) => closure_layout.safe_to_memcpy(),
             RecursivePointer => {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
@@ -808,7 +806,6 @@ impl<'a> Layout<'a> {
                     | NonNullableUnwrapped(_) => pointer_size,
                 }
             }
-            Closure(_, lambda_set, _) => lambda_set.stack_size(pointer_size),
             RecursivePointer => pointer_size,
         }
     }
@@ -840,9 +837,6 @@ impl<'a> Layout<'a> {
             }
             Layout::Builtin(builtin) => builtin.alignment_bytes(pointer_size),
             Layout::RecursivePointer => pointer_size,
-            Layout::Closure(_, captured, _) => {
-                pointer_size.max(captured.alignment_bytes(pointer_size))
-            }
         }
     }
 
@@ -893,8 +887,6 @@ impl<'a> Layout<'a> {
                 }
             }
             RecursivePointer => true,
-
-            Closure(_, closure_layout, _) => closure_layout.contains_refcounted(),
         }
     }
 
@@ -918,20 +910,6 @@ impl<'a> Layout<'a> {
             }
             Union(union_layout) => union_layout.to_doc(alloc, parens),
             RecursivePointer => alloc.text("*self"),
-            Closure(args, closure_layout, result) => {
-                let args_doc = args.iter().map(|x| x.to_doc(alloc, Parens::InFunction));
-
-                let bom = closure_layout
-                    .representation
-                    .to_doc(alloc, Parens::NotNeeded);
-
-                alloc
-                    .intersperse(args_doc, ", ")
-                    .append(alloc.text(" {| "))
-                    .append(bom)
-                    .append(" |} -> ")
-                    .append(result.to_doc(alloc, Parens::InFunction))
-            }
         }
     }
 }
@@ -1257,7 +1235,8 @@ fn layout_from_flat_type<'a>(
 
             let lambda_set = LambdaSet::from_var(env.arena, env.subs, closure_var)?;
 
-            Ok(Layout::Closure(fn_args, lambda_set, ret))
+            // Ok(Layout::Closure(fn_args, lambda_set, ret))
+            Ok(lambda_set.runtime_representation())
         }
         Record(fields, ext_var) => {
             // extract any values from the ext_var
