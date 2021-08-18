@@ -2666,11 +2666,13 @@ macro_rules! match_on_closure_argument {
         let arg_layouts = top_level.arguments;
         let ret_layout = top_level.result;
 
+
         match closure_data_layout {
             RawFunctionLayout::Function(_, lambda_set, _) =>  {
                 lowlevel_match_on_lambda_set(
                     $env,
                     lambda_set,
+                    $op,
                     $closure_data_symbol,
                     |top_level_function, closure_data, closure_env_layout, specialization_id| self::Call {
                         call_type: CallType::HigherOrderLowLevel {
@@ -7613,6 +7615,7 @@ pub fn num_argument_to_int_or_float(
 fn lowlevel_match_on_lambda_set<'a, ToLowLevelCall>(
     env: &mut Env<'a, '_>,
     lambda_set: LambdaSet<'a>,
+    op: LowLevel,
     closure_data_symbol: Symbol,
     to_lowlevel_call: ToLowLevelCall,
     return_layout: Layout<'a>,
@@ -7652,19 +7655,29 @@ where
                 env.arena.alloc(result),
             )
         }
-        Layout::Struct(_) => {
-            let function_symbol = lambda_set.set[0].0;
+        Layout::Struct(_) => match lambda_set.set.get(0) {
+            Some((function_symbol, _)) => {
+                let call_spec_id = env.next_call_specialization_id();
+                let call = to_lowlevel_call(
+                    *function_symbol,
+                    closure_data_symbol,
+                    lambda_set.is_represented(),
+                    call_spec_id,
+                );
 
-            let call_spec_id = env.next_call_specialization_id();
-            let call = to_lowlevel_call(
-                function_symbol,
-                closure_data_symbol,
-                lambda_set.is_represented(),
-                call_spec_id,
-            );
+                build_call(env, call, assigned, return_layout, env.arena.alloc(hole))
+            }
+            None => {
+                eprintln!(
+                    "a function passed to `{:?}` LowLevel call has an empty lambda set!
+                     The most likely reason is that some symbol you use is not in scope.
+                    ",
+                    op
+                );
 
-            build_call(env, call, assigned, return_layout, env.arena.alloc(hole))
-        }
+                return hole.clone();
+            }
+        },
         Layout::Builtin(Builtin::Int1) => {
             let closure_tag_id_symbol = closure_data_symbol;
 
