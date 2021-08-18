@@ -4756,7 +4756,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                         env.context.i128_type().into(),
                         "to_i128",
                     ),
-                    position.into(),
+                    position,
                 ],
                 bitcode::NUM_BYTES_TO_U16,
             )
@@ -4774,7 +4774,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                         env.context.i128_type().into(),
                         "to_i128",
                     ),
-                    position.into(),
+                    position,
                 ],
                 bitcode::NUM_BYTES_TO_U32,
             )
