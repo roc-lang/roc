@@ -189,8 +189,6 @@ pub enum Layout<'a> {
     Struct(&'a [Layout<'a>]),
     Union(UnionLayout<'a>),
     RecursivePointer,
-    // /// A function. The types of its arguments, then the type of its return value.
-    // Closure(&'a [Layout<'a>], LambdaSet<'a>, &'a Layout<'a>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
