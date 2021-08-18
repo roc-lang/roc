@@ -508,7 +508,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(nat_type()),
     );
 
-    // bytesToU16 : List U8, Nat -> U16
+    // bytesToU16 : List U8, Nat -> Result U16 [ OutOfBounds ]
     {
         let position_out_of_bounds = SolvedType::TagUnion(
             vec![(TagName::Global("OutOfBounds".into()), vec![])],
@@ -521,12 +521,18 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         );
     }
 
-    // bytesToU32 : List U8, Nat -> U32
-    add_top_level_function_type!(
-        Symbol::NUM_BYTES_TO_U32,
-        vec![list_type(u8_type()), nat_type()],
-        Box::new(u32_type()),
-    );
+    // bytesToU32 : List U8, Nat -> Result U32 [ OutOfBounds ]
+    {
+        let position_out_of_bounds = SolvedType::TagUnion(
+            vec![(TagName::Global("OutOfBounds".into()), vec![])],
+            Box::new(SolvedType::Wildcard),
+        );
+        add_top_level_function_type!(
+            Symbol::NUM_BYTES_TO_U32,
+            vec![list_type(u8_type()), nat_type()],
+            Box::new(result_type(u32_type(), position_out_of_bounds)),
+        );
+    }
 
     // Bool module
 

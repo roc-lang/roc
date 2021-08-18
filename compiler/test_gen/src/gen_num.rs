@@ -1638,7 +1638,7 @@ mod gen_num {
                 "#
             ),
             40,
-            usize
+            u16
         );
     }
 
@@ -1654,7 +1654,7 @@ mod gen_num {
                 "#
             ),
             1,
-            usize
+            u16
         );
     }
 
@@ -1664,23 +1664,46 @@ mod gen_num {
             indoc!(
                 r#"
                 bytes = Str.toUtf8 "hello"
-                when Num.bytesToU16 bytes 4 is
+                when Num.bytesToU32 bytes 0 is
                     Ok v -> v
                     Err OutOfBounds -> 1
                 "#
             ),
-            1,
-            usize
+            41,
+            u32
         );
     }
 
     #[test]
     fn potato_4() {
-        assert_evals_to!("Num.bytesToU32 [] 1", 41, u32);
+        assert_evals_to!(
+            indoc!(
+                r#"
+                bytes = Str.toUtf8 "hello"
+                when Num.bytesToU32 bytes 234 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            1,
+            u32
+        );
     }
+
 
     #[test]
     fn potato_5() {
-        assert_evals_to!("Num.bytesToU32 [] 0", 41, u32);
+        assert_evals_to!(
+            indoc!(
+                r#"
+                bytes = Str.toUtf8 "hello"
+                when Num.bytesToU32 bytes 2 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            1,
+            u32
+        );
     }
 }
