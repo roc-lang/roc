@@ -115,25 +115,40 @@ impl<'a> RawFunctionLayout<'a> {
 
         let arena = env.arena;
 
-        if let Func(args, closure_var, ret_var) = flat_type {
-            let mut fn_args = Vec::with_capacity_in(args.len(), arena);
+        match flat_type {
+            Func(args, closure_var, ret_var) => {
+                let mut fn_args = Vec::with_capacity_in(args.len(), arena);
 
-            for index in args.into_iter() {
-                let arg_var = env.subs[index];
-                fn_args.push(Layout::from_var(env, arg_var)?);
+                for index in args.into_iter() {
+                    let arg_var = env.subs[index];
+                    fn_args.push(Layout::from_var(env, arg_var)?);
+                }
+
+                let ret = Layout::from_var(env, ret_var)?;
+
+                let fn_args = fn_args.into_bump_slice();
+                let ret = arena.alloc(ret);
+
+                let lambda_set = LambdaSet::from_var(env.arena, env.subs, closure_var)?;
+
+                Ok(Self::Function(fn_args, lambda_set, ret))
             }
+            TagUnion(tags, _) if tags.is_newtype_wrapper(env.subs) => {
+                let slice_index = tags.variables().into_iter().next().unwrap();
+                let slice = env.subs[slice_index];
+                let var_index = slice.into_iter().next().unwrap();
+                let var = env.subs[var_index];
 
-            let ret = Layout::from_var(env, ret_var)?;
-
-            let fn_args = fn_args.into_bump_slice();
-            let ret = arena.alloc(ret);
-
-            let lambda_set = LambdaSet::from_var(env.arena, env.subs, closure_var)?;
-
-            Ok(Self::Function(fn_args, lambda_set, ret))
-        } else {
-            let layout = layout_from_flat_type(env, flat_type)?;
-            Ok(Self::ZeroArgumentThunk(layout))
+                Self::from_var(env, var)
+            }
+            Record(fields, _) if fields.len() == 1 => {
+                //
+                todo!()
+            }
+            _ => {
+                let layout = layout_from_flat_type(env, flat_type)?;
+                Ok(Self::ZeroArgumentThunk(layout))
+            }
         }
     }
 

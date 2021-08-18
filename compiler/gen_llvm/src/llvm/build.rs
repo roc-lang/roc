@@ -3621,15 +3621,6 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     let context = &env.context;
     let builder = env.builder;
 
-    // STEP 1: build function header
-
-    // e.g. `roc__main_1_Fx_caller`
-    let function_name = format!(
-        "roc__{}_{}_caller",
-        def_name,
-        alias_symbol.as_str(&env.interns)
-    );
-
     let mut argument_types = Vec::with_capacity_in(arguments.len() + 3, env.arena);
 
     for layout in arguments {
@@ -3646,6 +3637,29 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     };
     argument_types.push(closure_argument_type.into());
 
+    build_closure_caller_help(
+        env,
+        def_name,
+        evaluator,
+        alias_symbol,
+        argument_types,
+        lambda_set.runtime_representation(),
+        result,
+    )
+}
+
+pub fn build_closure_caller_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    def_name: &str,
+    evaluator: FunctionValue<'ctx>,
+    alias_symbol: Symbol,
+    mut argument_types: Vec<'_, BasicTypeEnum<'ctx>>,
+    lambda_set_runtime_layout: Layout<'a>,
+    result: &Layout<'a>,
+) {
+    let context = &env.context;
+    let builder = env.builder;
+
     let result_type = basic_type_from_layout(env, result);
 
     let roc_call_result_type =
@@ -3653,6 +3667,15 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
     let output_type = { roc_call_result_type.ptr_type(AddressSpace::Generic) };
     argument_types.push(output_type.into());
+
+    // STEP 1: build function header
+
+    // e.g. `roc__main_1_Fx_caller`
+    let function_name = format!(
+        "roc__{}_{}_caller",
+        def_name,
+        alias_symbol.as_str(&env.interns)
+    );
 
     let function_type = context.void_type().fn_type(&argument_types, false);
 
@@ -3672,9 +3695,15 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
     let mut parameters = function_value.get_params();
     let output = parameters.pop().unwrap().into_pointer_value();
-    let closure_data_ptr = parameters.pop().unwrap().into_pointer_value();
 
-    let closure_data = builder.build_load(closure_data_ptr, "load_closure_data");
+    let closure_data = if let Some(closure_data_ptr) = parameters.pop() {
+        let closure_data =
+            builder.build_load(closure_data_ptr.into_pointer_value(), "load_closure_data");
+
+        env.arena.alloc([closure_data]) as &[_]
+    } else {
+        &[]
+    };
 
     let mut parameters = parameters;
 
@@ -3688,7 +3717,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
         function_value,
         evaluator,
         evaluator.get_call_conventions(),
-        &[closure_data],
+        closure_data,
         result_type,
     );
 
@@ -3706,8 +3735,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     );
 
     // STEP 4: build a {} -> u64 function that gives the size of the closure
-    let layout = lambda_set.runtime_representation();
-    build_host_exposed_alias_size(env, def_name, alias_symbol, layout);
+    build_host_exposed_alias_size(env, def_name, alias_symbol, lambda_set_runtime_layout);
 }
 
 fn build_host_exposed_alias_size<'a, 'ctx, 'env>(
@@ -3822,8 +3850,47 @@ pub fn build_proc<'a, 'ctx, 'env>(
                         )
                     }
 
-                    RawFunctionLayout::ZeroArgumentThunk(_) => {
+                    RawFunctionLayout::ZeroArgumentThunk(result) => {
                         // do nothing
+                        /*
+                        let bytes = roc_mono::alias_analysis::func_name_bytes_help(
+                            symbol,
+                            std::iter::empty(),
+                            top_level.result,
+                        );
+                        let func_name = FuncName(&bytes);
+                        let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
+
+                        let mut it = func_solutions.specs();
+                        let func_spec = it.next().unwrap();
+                        debug_assert!(
+                            it.next().is_none(),
+                            "we expect only one specialization of this symbol"
+                        );
+
+                        let evaluator = function_value_by_func_spec(
+                            env,
+                            *func_spec,
+                            symbol,
+                            &[],
+                            &top_level.result,
+                        );
+
+                        let ident_string = proc.name.as_str(&env.interns);
+                        let fn_name: String = format!("{}_1", ident_string);
+
+                        let arena = env.arena;
+
+                        build_closure_caller_help(
+                            env,
+                            &fn_name,
+                            evaluator,
+                            name,
+                            Vec::new_in(arena),
+                            result,
+                            &result,
+                        )
+                        */
                     }
                 }
             }
