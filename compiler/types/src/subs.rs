@@ -354,7 +354,21 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
             let slice = subs.get_subs_slice(*arguments.as_subs_slice());
             write!(f, "Func({:?}, {:?}, {:?})", slice, lambda_set, result)
         }
-        FlatType::Record(_, _) => todo!(),
+        FlatType::Record(fields, ext) => {
+            write!(f, "{{ ")?;
+
+            let (it, new_ext) = fields.sorted_iterator_and_ext(subs, *ext);
+            for (name, content) in it {
+                let separator = match content {
+                    RecordField::Optional(_) => '?',
+                    RecordField::Required(_) => ':',
+                    RecordField::Demanded(_) => ':',
+                };
+                write!(f, "{:?} {} {:?}, ", name, separator, content)?;
+            }
+
+            write!(f, "}}<{:?}>", new_ext)
+        }
         FlatType::TagUnion(tags, ext) => {
             write!(f, "[ ")?;
 
