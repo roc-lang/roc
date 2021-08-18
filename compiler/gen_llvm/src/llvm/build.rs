@@ -3618,9 +3618,6 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     lambda_set: LambdaSet<'a>,
     result: &Layout<'a>,
 ) {
-    let context = &env.context;
-    let builder = env.builder;
-
     let mut argument_types = Vec::with_capacity_in(arguments.len() + 3, env.arena);
 
     for layout in arguments {

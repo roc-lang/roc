@@ -1235,22 +1235,9 @@ fn layout_from_flat_type<'a>(
                 }
             }
         }
-        Func(args, closure_var, ret_var) => {
-            let mut fn_args = Vec::with_capacity_in(args.len(), arena);
-
-            for index in args.into_iter() {
-                let arg_var = env.subs[index];
-                fn_args.push(Layout::from_var(env, arg_var)?);
-            }
-
-            let ret = Layout::from_var(env, ret_var)?;
-
-            let fn_args = fn_args.into_bump_slice();
-            let ret = arena.alloc(ret);
-
+        Func(_, closure_var, _) => {
             let lambda_set = LambdaSet::from_var(env.arena, env.subs, closure_var)?;
 
-            // Ok(Layout::Closure(fn_args, lambda_set, ret))
             Ok(lambda_set.runtime_representation())
         }
         Record(fields, ext_var) => {
