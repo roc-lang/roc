@@ -45,6 +45,10 @@ fn bytesToU32(arg: RocList, position: usize) u32 {
     return 41;
 }
 
+pub fn castToNat(num: i64) callconv(.C) usize {
+    return @intCast(usize, num);
+}
+
 pub fn round(num: f64) callconv(.C) i64 {
     return @floatToInt(i32, (@round(num)));
 }
