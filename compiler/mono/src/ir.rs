@@ -2032,34 +2032,8 @@ fn specialize_external<'a>(
 
                     aliases.insert(*symbol, (name, top_level, layout));
                 }
-                RawFunctionLayout::ZeroArgumentThunk(return_layout) => {
-                    panic!("should be unused");
-                    /*
-                    let assigned = env.unique_symbol();
-
-                    let hole = env.arena.alloc(Stmt::Ret(assigned));
-
-                    let body = force_thunk(env, name, return_layout, assigned, hole);
-
-                    let proc = Proc {
-                        name,
-                        args: &[],
-                        body,
-                        closure_data_layout: None,
-                        ret_layout: return_layout,
-                        is_self_recursive: SelfRecursive::NotSelfRecursive,
-                        must_own_arguments: false,
-                        host_exposed_layouts: HostExposedLayouts::NotHostExposed,
-                    };
-
-                    let top_level = ProcLayout::new(env.arena, &[], return_layout);
-
-                    procs
-                        .specialized
-                        .insert((name, top_level), InProgressProc::Done(proc));
-
-                    aliases.insert(*symbol, (name, top_level, layout));
-                    */
+                RawFunctionLayout::ZeroArgumentThunk(_) => {
+                    unreachable!("so far");
                 }
             }
         }

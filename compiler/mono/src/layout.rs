@@ -440,17 +440,14 @@ impl<'a> LambdaSet<'a> {
                 // here we rely on the fact that a union in a closure would be stored in a one-element record.
                 // a closure representation that is itself union must be a of the shape `Closure1 ... | Closure2 ...`
                 match union {
-                    UnionLayout::NonRecursive(tags) => {
-                        let index = self
+                    UnionLayout::NonRecursive(_) => {
+                        // get the fields from the set, where they are sorted in alphabetic order
+                        // (and not yet sorted by their alignment)
+                        let (index, (_, fields)) = self
                             .set
                             .iter()
-                            .position(|(s, _)| *s == function_symbol)
-                            .unwrap();
-
-                        let (_, fields) = self
-                            .set
-                            .iter()
-                            .find(|(s, _)| *s == function_symbol)
+                            .enumerate()
+                            .find(|(_, (s, _))| *s == function_symbol)
                             .unwrap();
 
                         ClosureRepresentation::Union {
@@ -473,6 +470,8 @@ impl<'a> LambdaSet<'a> {
                 }
             }
             Layout::Struct(_) => {
+                // get the fields from the set, where they are sorted in alphabetic order
+                // (and not yet sorted by their alignment)
                 let (_, fields) = self
                     .set
                     .iter()

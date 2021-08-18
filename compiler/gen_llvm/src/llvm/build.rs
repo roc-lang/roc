@@ -3847,47 +3847,8 @@ pub fn build_proc<'a, 'ctx, 'env>(
                         )
                     }
 
-                    RawFunctionLayout::ZeroArgumentThunk(result) => {
+                    RawFunctionLayout::ZeroArgumentThunk(_) => {
                         // do nothing
-                        /*
-                        let bytes = roc_mono::alias_analysis::func_name_bytes_help(
-                            symbol,
-                            std::iter::empty(),
-                            top_level.result,
-                        );
-                        let func_name = FuncName(&bytes);
-                        let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
-
-                        let mut it = func_solutions.specs();
-                        let func_spec = it.next().unwrap();
-                        debug_assert!(
-                            it.next().is_none(),
-                            "we expect only one specialization of this symbol"
-                        );
-
-                        let evaluator = function_value_by_func_spec(
-                            env,
-                            *func_spec,
-                            symbol,
-                            &[],
-                            &top_level.result,
-                        );
-
-                        let ident_string = proc.name.as_str(&env.interns);
-                        let fn_name: String = format!("{}_1", ident_string);
-
-                        let arena = env.arena;
-
-                        build_closure_caller_help(
-                            env,
-                            &fn_name,
-                            evaluator,
-                            name,
-                            Vec::new_in(arena),
-                            result,
-                            &result,
-                        )
-                        */
                     }
                 }
             }

@@ -160,12 +160,9 @@ impl<'a, 'i> Env<'a, 'i> {
     fn try_insert_struct_info(&mut self, symbol: Symbol, layout: &Layout<'a>) {
         use Layout::*;
 
-        match layout {
-            Struct(fields) => {
-                self.constructor_map.insert(symbol, 0);
-                self.layout_map.insert(symbol, Layout::Struct(fields));
-            }
-            _ => {}
+        if let Struct(fields) = layout {
+            self.constructor_map.insert(symbol, 0);
+            self.layout_map.insert(symbol, Layout::Struct(fields));
         }
     }
 
@@ -359,13 +356,10 @@ pub fn expand_and_cancel_proc<'a>(
     let mut introduced = Vec::new_in(env.arena);
 
     for (layout, symbol) in arguments {
-        match layout {
-            Layout::Struct(fields) => {
-                env.insert_struct_info(*symbol, fields);
+        if let Layout::Struct(fields) = layout {
+            env.insert_struct_info(*symbol, fields);
 
-                introduced.push(*symbol);
-            }
-            _ => {}
+            introduced.push(*symbol);
         }
     }
 

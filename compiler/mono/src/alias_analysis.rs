@@ -64,18 +64,10 @@ where
         let mut hasher = DefaultHasher::new();
 
         for layout in argument_layouts {
-            match layout {
-                _ => {
-                    layout.hash(&mut hasher);
-                }
-            }
+            layout.hash(&mut hasher);
         }
 
-        match return_layout {
-            _ => {
-                return_layout.hash(&mut hasher);
-            }
-        }
+        return_layout.hash(&mut hasher);
 
         hasher.finish()
     };

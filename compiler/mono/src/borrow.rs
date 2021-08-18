@@ -10,9 +10,7 @@ pub const OWNED: bool = false;
 pub const BORROWED: bool = true;
 
 fn should_borrow_layout(layout: &Layout) -> bool {
-    match layout {
-        _ => layout.is_refcounted(),
-    }
+    layout.is_refcounted()
 }
 
 pub fn infer_borrow<'a>(
