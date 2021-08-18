@@ -23,26 +23,22 @@ pub fn asin(num: f64) callconv(.C) f64 {
     return @call(.{ .modifier = always_inline }, math.asin, .{num});
 }
 
-/// TODO: Obviously, this function should do something more interesting
-/// than return the number 40. Fix me!
 pub fn bytesToU16C(arg: RocList, position: usize) callconv(.C) u16 {
-    return @call(.{ .modifier = always_inline }, bytesToU16, .{arg, position});
+    return @call(.{ .modifier = always_inline }, bytesToU16, .{ arg, position });
 }
 
 fn bytesToU16(arg: RocList, position: usize) u16 {
-    const exampleAnswer: u16 = 40;
-    return 40;
+    const bytes = @ptrCast([*]const u8, arg.bytes);
+    return @bitCast(u16, [_]u8{ bytes[position], bytes[position + 1] });
 }
 
-/// TODO: Obviously, this function should do something more interesting
-/// than return the number 40. Fix me!
 pub fn bytesToU32C(arg: RocList, position: usize) callconv(.C) u32 {
-    return @call(.{ .modifier = always_inline }, bytesToU32, .{arg, position});
+    return @call(.{ .modifier = always_inline }, bytesToU32, .{ arg, position });
 }
 
 fn bytesToU32(arg: RocList, position: usize) u32 {
-    const exampleAnswer: u32 = 41;
-    return 41;
+    const bytes = @ptrCast([*]const u8, arg.bytes);
+    return @bitCast(u32, [_]u8{ bytes[position], bytes[position + 1], bytes[position + 2], bytes[position + 3] });
 }
 
 pub fn castToNat(num: i64) callconv(.C) usize {

@@ -3389,7 +3389,7 @@ fn num_bytes_to(symbol: Symbol, var_store: &mut VarStore, offset: i64, low_level
         branches: vec![(
             // if-condition
             no_region(
-                // index + 1 < List.len list
+                // index + offset < List.len list
                 RunLowLevel {
                     op: LowLevel::NumLt,
                     args: vec![
