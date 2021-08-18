@@ -1,5 +1,3 @@
-SHLIB_LDFLAGS = -shared -Wl,--allow-shlib-undefined
-
 all: platform
 
 platform: platform.c libapp.so
