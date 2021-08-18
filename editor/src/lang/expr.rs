@@ -6,7 +6,10 @@ use inlinable_string::InlinableString;
 use std::collections::HashMap;
 use std::iter::FromIterator;
 
-use crate::lang::ast::{ClosureExtra, Expr2, ExprId, FloatVal, IntStyle, IntVal, RecordField, ValueDef, WhenBranch, expr2_to_string};
+use crate::lang::ast::{
+    expr2_to_string, ClosureExtra, Expr2, ExprId, FloatVal, IntStyle, IntVal, RecordField,
+    ValueDef, WhenBranch,
+};
 use crate::lang::def::{
     canonicalize_defs, sort_can_defs, CanDefs, Declaration, Def, PendingDef, References,
 };
@@ -296,16 +299,13 @@ pub fn str_to_expr2_w_defs<'a>(
     region: Region,
 ) -> Result<Vec<Expr2>, SyntaxError<'a>> {
     match roc_parse::test_helpers::parse_defs_with(arena, input.trim()) {
-        Ok(vec_loc_def) => {
-
-            Ok(to_expr2_from_defs(
-                arena,
-                env,
-                scope,
-                arena.alloc(vec_loc_def),
-                region,
-            ))
-        }
+        Ok(vec_loc_def) => Ok(to_expr2_from_defs(
+            arena,
+            env,
+            scope,
+            arena.alloc(vec_loc_def),
+            region,
+        )),
         Err(fail) => Err(fail),
     }
 }
@@ -318,9 +318,7 @@ pub fn str_to_expr2<'a>(
     region: Region,
 ) -> Result<(Expr2, self::Output), SyntaxError<'a>> {
     match roc_parse::test_helpers::parse_loc_with(arena, input.trim()) {
-        Ok(loc_expr) => {
-            Ok(loc_expr_to_expr2(arena, loc_expr, env, scope, region))
-        }
+        Ok(loc_expr) => Ok(loc_expr_to_expr2(arena, loc_expr, env, scope, region)),
         Err(fail) => Err(fail),
     }
 }
@@ -334,12 +332,7 @@ fn loc_expr_to_expr2<'a>(
 ) -> (Expr2, self::Output) {
     let desugared_loc_expr = desugar_expr(arena, arena.alloc(loc_expr));
 
-    to_expr2(
-        env,
-        scope,
-        arena.alloc(desugared_loc_expr.value),
-        region,
-    )
+    to_expr2(env, scope, arena.alloc(desugared_loc_expr.value), region)
 }
 
 pub fn to_expr2<'a>(
@@ -1009,10 +1002,10 @@ pub fn to_expr2_from_defs<'a>(
 ) -> Vec<Expr2> {
     use roc_parse::ast::Expr::*;
 
-    parsed_defs.iter().map(|loc| {
-        to_expr2_from_def(arena, env, scope, &loc.value, region)
-    }).collect()
-
+    parsed_defs
+        .iter()
+        .map(|loc| to_expr2_from_def(arena, env, scope, &loc.value, region))
+        .collect()
 }
 
 pub fn to_expr2_from_def<'a>(
@@ -1025,12 +1018,8 @@ pub fn to_expr2_from_def<'a>(
     use roc_parse::ast::Def::*;
 
     match parsed_def {
-        SpaceBefore(inner_def, _) => {
-            to_expr2_from_def(arena, env, scope, inner_def, region)
-        },
-        SpaceAfter(inner_def, _) => {
-            to_expr2_from_def(arena, env, scope, inner_def, region)
-        }
+        SpaceBefore(inner_def, _) => to_expr2_from_def(arena, env, scope, inner_def, region),
+        SpaceAfter(inner_def, _) => to_expr2_from_def(arena, env, scope, inner_def, region),
         Body(&loc_pattern, &loc_expr) => {
             // TODO loc_pattern use identifier
             let body_expr2 = loc_expr_to_expr2(arena, loc_expr, env, scope, region).0;
@@ -1041,7 +1030,13 @@ pub fn to_expr2_from_def<'a>(
 
             match loc_pattern.value {
                 Identifier(str_ref) => {
-                    let (_, pattern2) = to_pattern2(env, scope, PatternType::TopLevelDef, &loc_pattern.value, region);
+                    let (_, pattern2) = to_pattern2(
+                        env,
+                        scope,
+                        PatternType::TopLevelDef,
+                        &loc_pattern.value,
+                        region,
+                    );
                     let pattern_id = env.pool.add(pattern2);
 
                     // TODO support with annotation
@@ -1053,25 +1048,32 @@ pub fn to_expr2_from_def<'a>(
 
                     let value_def_id = env.pool.add(value_def);
 
-                    let ident_string = inlinable_string::InlinableString::from_iter(str_ref.chars());
+                    let ident_string =
+                        inlinable_string::InlinableString::from_iter(str_ref.chars());
                     let ident_id = env.ident_ids.add(ident_string);
                     let var_symbol = Symbol::new(env.home, ident_id);
                     let body = Expr2::Var(var_symbol);
-                    let body_id = env.pool.add(body);   
+                    let body_id = env.pool.add(body);
 
                     Expr2::LetValue {
                         def_id: value_def_id,
                         body_var: env.var_store.fresh(),
                         body_id,
                     }
-                },
+                }
                 other => {
-                    unimplemented!("I don't yet know how to convert the pattern {:?} into an expr2", other)
+                    unimplemented!(
+                        "I don't yet know how to convert the pattern {:?} into an expr2",
+                        other
+                    )
                 }
             }
         }
         other => {
-            unimplemented!("I don't know how to make an expr2 from this def yet: {:?}", other)
+            unimplemented!(
+                "I don't know how to make an expr2 from this def yet: {:?}",
+                other
+            )
         }
     }
 }
@@ -1520,15 +1522,18 @@ fn decl_to_let(pool: &mut Pool, var_store: &mut VarStore, decl: Declaration, ret
         Declaration::Declare(def) => match def {
             Def::AnnotationOnly { .. } => todo!(),
             Def::Value(value_def) => {
-
                 // TODO remove me
                 match &value_def {
-                    ValueDef::NoAnnotation{ pattern_id, expr_id, expr_var} => {
+                    ValueDef::NoAnnotation {
+                        pattern_id,
+                        expr_id,
+                        expr_var,
+                    } => {
                         dbg!(pool.get(*pattern_id));
                         dbg!(pool.get(*expr_id));
                         dbg!(expr_var);
                     }
-                    _ => panic!("REMOVE THIS BLOCK")
+                    _ => panic!("REMOVE THIS BLOCK"),
                 }
 
                 let def_id = pool.add(value_def);

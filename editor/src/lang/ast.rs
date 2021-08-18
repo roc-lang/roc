@@ -3,11 +3,11 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasherDefault;
 
+use crate::editor::ed_error::{EdResult, UnexpectedASTNode};
 use crate::lang::pattern::{Pattern2, PatternId};
 use crate::lang::pool::Pool;
 use crate::lang::pool::{NodeId, PoolStr, PoolVec, ShallowClone};
 use crate::lang::types::{Type2, TypeId};
-use crate::editor::ed_error::{EdResult, UnexpectedASTNode};
 use arraystring::{typenum::U30, ArrayString};
 use roc_can::expr::Recursive;
 use roc_collections::all::WyHash;
@@ -269,15 +269,15 @@ impl ShallowClone for ValueDef {
 impl ValueDef {
     pub fn get_expr_id(&self) -> ExprId {
         match self {
-            ValueDef::WithAnnotation { expr_id, ..} => *expr_id,
-            ValueDef::NoAnnotation {expr_id, ..} => *expr_id,
+            ValueDef::WithAnnotation { expr_id, .. } => *expr_id,
+            ValueDef::NoAnnotation { expr_id, .. } => *expr_id,
         }
     }
 
     pub fn get_pattern_id(&self) -> NodeId<Pattern2> {
         match self {
-            ValueDef::WithAnnotation { pattern_id, ..} => *pattern_id,
-            ValueDef::NoAnnotation {pattern_id, ..} => *pattern_id,
+            ValueDef::WithAnnotation { pattern_id, .. } => *pattern_id,
+            ValueDef::NoAnnotation { pattern_id, .. } => *pattern_id,
         }
     }
 }
@@ -564,8 +564,13 @@ fn expr2_to_string_helper(
         Expr2::SmallInt { text, .. } => {
             out_string.push_str(&format!("SmallInt({})", text.as_str(pool)));
         }
-        Expr2::LetValue {def_id, body_id, .. } => {
-            out_string.push_str(&format!("LetValue(def_id: {}, body_id: {})", def_id.index, body_id.index));
+        Expr2::LetValue {
+            def_id, body_id, ..
+        } => {
+            out_string.push_str(&format!(
+                "LetValue(def_id: {}, body_id: {})",
+                def_id.index, body_id.index
+            ));
         }
         other => todo!("Implement for {:?}", other),
     }
@@ -580,26 +585,22 @@ fn var_to_string(some_var: &Variable, indent_level: usize) -> String {
 // get string from SmallStr or Str
 pub fn get_string_from_expr2(node_id: ExprId, pool: &Pool) -> EdResult<String> {
     match pool.get(node_id) {
-        Expr2::SmallStr(arr_string) => {
-            Ok(
-                arr_string.as_str().to_string()
-            )
-        },
-        Expr2::Str(pool_str) => {
-            Ok(
-                pool_str.as_str(pool).to_owned()
-            )
+        Expr2::SmallStr(arr_string) => Ok(arr_string.as_str().to_string()),
+        Expr2::Str(pool_str) => Ok(pool_str.as_str(pool).to_owned()),
+        other => UnexpectedASTNode {
+            required_node_type: "SmallStr or Str",
+            encountered_node_type: format!("{:?}", other),
         }
-        other => {
-            UnexpectedASTNode{
-                required_node_type: "SmallStr or Str",
-                encountered_node_type: format!("{:?}", other)
-            }.fail()?
-        }
+        .fail()?,
     }
 }
 
-pub fn update_str_expr(node_id: ExprId, new_char: char, insert_index: usize, pool: &mut Pool) -> EdResult<()> {
+pub fn update_str_expr(
+    node_id: ExprId,
+    new_char: char,
+    insert_index: usize,
+    pool: &mut Pool,
+) -> EdResult<()> {
     let str_expr = pool.get_mut(node_id);
 
     enum Either {
@@ -610,8 +611,7 @@ pub fn update_str_expr(node_id: ExprId, new_char: char, insert_index: usize, poo
 
     let insert_either = match str_expr {
         Expr2::SmallStr(arr_string) => {
-            let insert_res =
-                arr_string.try_insert(insert_index as u8, new_char);
+            let insert_res = arr_string.try_insert(insert_index as u8, new_char);
 
             match insert_res {
                 Ok(_) => Either::Done,
@@ -622,16 +622,13 @@ pub fn update_str_expr(node_id: ExprId, new_char: char, insert_index: usize, poo
                     Either::MyString(new_string)
                 }
             }
-        },
-        Expr2::Str(old_pool_str) => {
-            Either::MyPoolStr(*old_pool_str)
-        },
-        other => {
-            UnexpectedASTNode{
-                required_node_type: "SmallStr or Str",
-                encountered_node_type: format!("{:?}", other)
-            }.fail()?
         }
+        Expr2::Str(old_pool_str) => Either::MyPoolStr(*old_pool_str),
+        other => UnexpectedASTNode {
+            required_node_type: "SmallStr or Str",
+            encountered_node_type: format!("{:?}", other),
+        }
+        .fail()?,
     };
 
     match insert_either {
@@ -639,7 +636,7 @@ pub fn update_str_expr(node_id: ExprId, new_char: char, insert_index: usize, poo
             let new_pool_str = PoolStr::new(&new_string, pool);
 
             pool.set(node_id, Expr2::Str(new_pool_str))
-        },
+        }
         Either::MyPoolStr(old_pool_str) => {
             let mut new_string = old_pool_str.as_str(pool).to_owned();
             new_string.insert(insert_index, new_char);
@@ -647,7 +644,7 @@ pub fn update_str_expr(node_id: ExprId, new_char: char, insert_index: usize, poo
             let new_pool_str = PoolStr::new(&new_string, pool);
 
             pool.set(node_id, Expr2::Str(new_pool_str))
-        },
+        }
         Either::Done => (),
     }
 

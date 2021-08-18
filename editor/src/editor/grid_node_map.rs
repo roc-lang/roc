@@ -285,7 +285,7 @@ impl fmt::Display for GridNodeMap {
 
             write!(f, "{}\n", row_str)?;
         }
-        
+
         write!(f, "(grid_node_map, {:?} lines)\n", self.lines.len())?;
 
         Ok(())

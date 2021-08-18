@@ -109,7 +109,7 @@ impl fmt::Display for CodeLines {
                 .collect::<Vec<String>>()
                 .join(" ");
 
-            let escaped_row_str = row_str.replace("\n","\\n");
+            let escaped_row_str = row_str.replace("\n", "\\n");
 
             write!(f, "\n{}", escaped_row_str)?;
         }

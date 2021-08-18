@@ -66,7 +66,6 @@ impl Symbol {
     }
 
     pub fn ident_string(self, interns: &Interns) -> &InlinableString {
-
         let ident_ids = interns
             .all_ident_ids
             .get(&self.module_id())
@@ -543,8 +542,11 @@ impl IdentIds {
         }
     }
 
-    pub fn update_key(&mut self, old_ident_name: InlinableString, new_ident_name: InlinableString) -> Result<IdentId, String> {
-
+    pub fn update_key(
+        &mut self,
+        old_ident_name: InlinableString,
+        new_ident_name: InlinableString,
+    ) -> Result<IdentId, String> {
         let ident_id_ref_opt = self.by_ident.get(&old_ident_name);
 
         match ident_id_ref_opt {

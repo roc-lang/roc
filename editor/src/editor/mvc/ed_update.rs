@@ -96,12 +96,16 @@ impl<'a> EdModel<'a> {
         markup_ids: &[MarkNodeId],
         markup_node_pool: &SlowPool,
     ) -> EdResult<GridNodeMap> {
-
         let mut grid_node_map = GridNodeMap::new();
         let mut line_ctr = 0;
 
         for mark_id in markup_ids.iter() {
-            EdModel::build_grid_node_map(*mark_id, &mut grid_node_map, &mut line_ctr, markup_node_pool)?;
+            EdModel::build_grid_node_map(
+                *mark_id,
+                &mut grid_node_map,
+                &mut line_ctr,
+                markup_node_pool,
+            )?;
         }
 
         Ok(grid_node_map)
@@ -191,16 +195,20 @@ impl<'a> EdModel<'a> {
         index: usize,
         node_ids: &[MarkNodeId],
     ) -> UIResult<()> {
-
         let mut col_nr = index;
 
         for &node_id in node_ids {
             let node_content_str = self.markup_node_pool.get(node_id).get_content();
 
-            self.grid_node_map
-            .insert_between_line(line_nr, col_nr, node_content_str.len(), node_id)?;
+            self.grid_node_map.insert_between_line(
+                line_nr,
+                col_nr,
+                node_content_str.len(),
+                node_id,
+            )?;
 
-            self.code_lines.insert_between_line(line_nr, col_nr, &node_content_str)?;
+            self.code_lines
+                .insert_between_line(line_nr, col_nr, &node_content_str)?;
 
             col_nr += node_content_str.len();
         }
@@ -317,7 +325,12 @@ impl<'a> EdModel<'a> {
         let content = subs.get(var).content;
 
         PoolStr::new(
-            &content_to_string(content, &subs, self.module.env.home, &self.loaded_module.interns),
+            &content_to_string(
+                content,
+                &subs,
+                self.module.env.home,
+                &self.loaded_module.interns,
+            ),
             self.module.env.pool,
         )
     }
@@ -931,14 +944,19 @@ pub mod test_ed_update {
         expected_post_lines: &[&str],
         new_char_seq: &str,
     ) -> Result<(), String> {
-
         let mut code_str = pre_lines.join("\n").replace("┃", "");
 
         let mut model_refs = init_model_refs();
         let code_arena = Bump::new();
         let module_ids = ModuleIds::default();
 
-        let mut ed_model = ed_model_from_dsl(&mut code_str, pre_lines, &mut model_refs, &module_ids, &code_arena)?;
+        let mut ed_model = ed_model_from_dsl(
+            &mut code_str,
+            pre_lines,
+            &mut model_refs,
+            &module_ids,
+            &code_arena,
+        )?;
 
         for input_char in new_char_seq.chars() {
             if input_char == '🡲' {
@@ -1809,7 +1827,7 @@ pub mod test_ed_update {
 
     #[test]
     fn test_ignore_let_value() -> Result<(), String> {
-        assert_insert_seq_ignore(&["a ┃= 0","a"], IGNORE_CHARS)?;
+        assert_insert_seq_ignore(&["a ┃= 0", "a"], IGNORE_CHARS)?;
         assert_insert_seq_ignore(&["a =┃ 0", "a"], IGNORE_CHARS)?;
 
         Ok(())
@@ -1822,14 +1840,19 @@ pub mod test_ed_update {
         expected_post_lines: &[&str],
         repeats: usize,
     ) -> Result<(), String> {
-
         let mut code_str = pre_lines.join("").replace("┃", "");
 
         let mut model_refs = init_model_refs();
         let code_arena = Bump::new();
         let module_ids = ModuleIds::default();
 
-        let mut ed_model = ed_model_from_dsl(&mut code_str, pre_lines, &mut model_refs, &module_ids, &code_arena)?;
+        let mut ed_model = ed_model_from_dsl(
+            &mut code_str,
+            pre_lines,
+            &mut model_refs,
+            &module_ids,
+            &code_arena,
+        )?;
 
         for _ in 0..repeats {
             ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up)?;
@@ -2082,14 +2105,19 @@ pub mod test_ed_update {
         expected_tooltips: &[&str],
         new_char_seq: &str,
     ) -> Result<(), String> {
-
         let mut code_str = pre_lines.join("").replace("┃", "");
 
         let mut model_refs = init_model_refs();
         let code_arena = Bump::new();
         let module_ids = ModuleIds::default();
 
-        let mut ed_model = ed_model_from_dsl(&mut code_str, pre_lines, &mut model_refs, &module_ids, &code_arena)?;
+        let mut ed_model = ed_model_from_dsl(
+            &mut code_str,
+            pre_lines,
+            &mut model_refs,
+            &module_ids,
+            &code_arena,
+        )?;
 
         for input_char in new_char_seq.chars() {
             if input_char == '🡲' {
@@ -2244,7 +2272,13 @@ pub mod test_ed_update {
         let code_arena = Bump::new();
         let module_ids = ModuleIds::default();
 
-        let mut ed_model = ed_model_from_dsl(&mut code_str, pre_lines, &mut model_refs, &module_ids, &code_arena)?;
+        let mut ed_model = ed_model_from_dsl(
+            &mut code_str,
+            pre_lines,
+            &mut model_refs,
+            &module_ids,
+            &code_arena,
+        )?;
 
         for _ in 0..repeats {
             ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up)?;
@@ -2374,7 +2408,13 @@ pub mod test_ed_update {
         let code_arena = Bump::new();
         let module_ids = ModuleIds::default();
 
-        let mut ed_model = ed_model_from_dsl(&mut code_str, pre_lines, &mut model_refs, &module_ids, &code_arena)?;
+        let mut ed_model = ed_model_from_dsl(
+            &mut code_str,
+            pre_lines,
+            &mut model_refs,
+            &module_ids,
+            &code_arena,
+        )?;
 
         for _ in 0..repeats {
             ed_model.ed_handle_key_down(&ctrl_cmd_shift(), Up)?;

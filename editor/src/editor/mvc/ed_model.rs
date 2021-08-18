@@ -4,13 +4,13 @@ use crate::editor::markup::nodes::ast_to_mark_nodes;
 use crate::editor::slow_pool::{MarkNodeId, SlowPool};
 use crate::editor::{
     ed_error::SrcParseError,
-    ed_error::{EdResult, MissingParent, NoNodeAtCaretPosition, EmptyCodeString},
+    ed_error::{EdResult, EmptyCodeString, MissingParent, NoNodeAtCaretPosition},
 };
 use crate::graphics::primitives::rect::Rect;
-use crate::lang::ast::{Expr2};
-use crate::lang::expr::{Env};
+use crate::lang::ast::Expr2;
+use crate::lang::expr::Env;
 use crate::lang::parse::AST;
-use crate::lang::pool::{NodeId};
+use crate::lang::pool::NodeId;
 use crate::lang::pool::PoolStr;
 use crate::ui::text::caret_w_select::CaretWSelect;
 use crate::ui::text::lines::SelectableLines;
@@ -55,27 +55,21 @@ pub fn init_model<'a>(
     loaded_module: LoadedModule,
     code_arena: &'a Bump,
 ) -> EdResult<EdModel<'a>> {
-
     let mut module = EdModule::new(&code_str, env, &code_arena)?;
 
     let mut markup_node_pool = SlowPool::new();
 
-    let markup_ids = 
-        if code_str.is_empty() {
-
-            EmptyCodeString{}.fail()
-
-        } else {
-
-            ast_to_mark_nodes(
-                &code_arena,
-                &mut module.env,
-                &module.ast,
-                &mut markup_node_pool,
-                &loaded_module.interns
-            )
-
-        }?;
+    let markup_ids = if code_str.is_empty() {
+        EmptyCodeString {}.fail()
+    } else {
+        ast_to_mark_nodes(
+            &code_arena,
+            &mut module.env,
+            &module.ast,
+            &mut markup_node_pool,
+            &loaded_module.interns,
+        )
+    }?;
 
     let code_lines = EdModel::build_code_lines_from_markup(&markup_ids, &markup_node_pool)?;
     let grid_node_map = EdModel::build_node_map_from_markup(&markup_ids, &markup_node_pool)?;
@@ -160,25 +154,17 @@ pub struct EdModule<'a> {
 impl<'a> EdModule<'a> {
     pub fn new(code_str: &'a str, mut env: Env<'a>, ast_arena: &'a Bump) -> EdResult<EdModule<'a>> {
         if !code_str.is_empty() {
-            
             let parse_res = AST::parse_from_string(code_str, &mut env, ast_arena);
 
             match parse_res {
-                Ok(ast) => {
-                    Ok(
-                        EdModule { 
-                            env,
-                            ast,
-                        }
-                    )
-                },
+                Ok(ast) => Ok(EdModule { env, ast }),
                 Err(err) => SrcParseError {
                     syntax_err: format!("{:?}", err),
-                }.fail()
+                }
+                .fail(),
             }
-
         } else {
-            EmptyCodeString{}.fail()
+            EmptyCodeString {}.fail()
         }
     }
 }
@@ -200,12 +186,12 @@ pub mod test_ed_model {
     use roc_module::symbol::IdentIds;
     use roc_module::symbol::ModuleIds;
     use roc_types::subs::VarStore;
-    use tempfile::tempdir;
-    use uuid::Uuid;
     use std::fs::File;
+    use std::io::Write;
     use std::path::Path;
     use std::path::PathBuf;
-    use std::io::Write;
+    use tempfile::tempdir;
+    use uuid::Uuid;
 
     pub fn init_dummy_model<'a>(
         code_str: &'a str,
@@ -229,13 +215,7 @@ pub mod test_ed_model {
             exposed_ident_ids,
         );
 
-        ed_model::init_model(
-            code_str,
-            file_path,
-            env,
-            loaded_module,
-            code_arena,
-        )
+        ed_model::init_model(code_str, file_path, env, loaded_module, code_arena)
     }
 
     pub struct EdModelRefs {
@@ -274,30 +254,28 @@ main = "Hello, world!"
         *clean_code_str = [header_str, clean_code_str.as_str()].join("");
 
         let temp_dir = tempdir().expect("Failed to create temporary directory for test.");
-        let temp_file_path_buf = PathBuf::from(
-                                    [Uuid::new_v4().to_string(), ".roc".to_string()].join("")
-                                );
+        let temp_file_path_buf =
+            PathBuf::from([Uuid::new_v4().to_string(), ".roc".to_string()].join(""));
         let temp_file_full_path = temp_dir.path().join(temp_file_path_buf);
-        
-        let mut file = File::create(temp_file_full_path.clone())
-                                .expect(
-                                    &format!("Failed to create temporary file for path {:?}", temp_file_full_path)
-                                );
-        writeln!(file, "{}", clean_code_str)
-            .expect(
-                &format!("Failed to write {:?} to file: {:?}", clean_code_str, file)
-            );
+
+        let mut file = File::create(temp_file_full_path.clone()).expect(&format!(
+            "Failed to create temporary file for path {:?}",
+            temp_file_full_path
+        ));
+        writeln!(file, "{}", clean_code_str).expect(&format!(
+            "Failed to write {:?} to file: {:?}",
+            clean_code_str, file
+        ));
 
         let loaded_module = load_module(&temp_file_full_path);
 
-        let mut ed_model =
-            init_dummy_model(
-                clean_code_str,
-                loaded_module,
-                module_ids,
-                ed_model_refs,
-                code_arena,
-            )?;
+        let mut ed_model = init_dummy_model(
+            clean_code_str,
+            loaded_module,
+            module_ids,
+            ed_model_refs,
+            code_arena,
+        )?;
 
         ed_model.set_caret(caret_w_select.caret_pos);
 

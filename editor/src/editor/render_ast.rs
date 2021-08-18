@@ -24,7 +24,7 @@ pub fn build_code_graphics<'a>(
 
     let mut all_glyph_text_vec = vec![];
     let mut all_rects = vec![];
-    let mut txt_row_col = (0,0);
+    let mut txt_row_col = (0, 0);
 
     for markup_id in markup_ids.iter() {
         let mark_node = markup_node_pool.get(*markup_id);
@@ -72,7 +72,7 @@ struct CodeStyle<'a> {
 fn markup_to_wgpu<'a>(
     markup_node: &'a MarkupNode,
     code_style: &CodeStyle,
-    txt_row_col: &mut  (usize, usize),
+    txt_row_col: &mut (usize, usize),
     markup_node_pool: &'a SlowPool,
 ) -> EdResult<(Vec<glyph_brush::OwnedText>, Vec<Rect>)> {
     let mut wgpu_texts: Vec<glyph_brush::OwnedText> = Vec::new();

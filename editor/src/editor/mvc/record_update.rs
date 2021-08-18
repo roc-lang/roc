@@ -36,15 +36,11 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
 
     ast_pool.set(ast_node_id, expr2_node);
 
-    let left_bracket_node_id = 
-        ed_model.add_mark_node(
-            new_left_accolade_mn(ast_node_id, Some(curr_mark_node_id))
-        );
+    let left_bracket_node_id =
+        ed_model.add_mark_node(new_left_accolade_mn(ast_node_id, Some(curr_mark_node_id)));
 
-    let right_bracket_node_id = 
-        ed_model.add_mark_node(
-            new_right_accolade_mn(ast_node_id, Some(curr_mark_node_id))
-        );
+    let right_bracket_node_id =
+        ed_model.add_mark_node(new_right_accolade_mn(ast_node_id, Some(curr_mark_node_id)));
 
     let nested_node = MarkupNode::Nested {
         ast_node_id,
@@ -53,7 +49,9 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     };
 
     if is_blank_node {
-        ed_model.markup_node_pool.replace_node(curr_mark_node_id, nested_node);
+        ed_model
+            .markup_node_pool
+            .replace_node(curr_mark_node_id, nested_node);
 
         // remove data corresponding to Blank node
         ed_model.del_at_line(old_caret_pos.line, old_caret_pos.column)?;
@@ -64,7 +62,7 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
         ed_model.insert_all_between_line(
             old_caret_pos.line,
             old_caret_pos.column,
-            &vec![left_bracket_node_id, right_bracket_node_id]
+            &vec![left_bracket_node_id, right_bracket_node_id],
         )?;
 
         Ok(InputOutcome::Accepted)
@@ -232,12 +230,9 @@ pub fn update_record_colon(
                                     .get_mut(parent_id)
                                     .add_child_at_index(new_child_index, record_colon_node_id)?;
 
-                                let record_blank_node_id =
-                                    ed_model
-                                        .add_mark_node(
-                                            new_blank_mn(new_field_val_id, Some(parent_id))
-                                        );
-                                
+                                let record_blank_node_id = ed_model
+                                    .add_mark_node(new_blank_mn(new_field_val_id, Some(parent_id)));
+
                                 ed_model
                                     .markup_node_pool
                                     .get_mut(parent_id)

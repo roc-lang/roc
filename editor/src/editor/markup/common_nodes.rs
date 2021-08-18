@@ -1,7 +1,9 @@
-use crate::{editor::{slow_pool::{MarkNodeId}, syntax_highlight::HighlightStyle}, lang::ast::ExprId};
+use crate::{
+    editor::{slow_pool::MarkNodeId, syntax_highlight::HighlightStyle},
+    lang::ast::ExprId,
+};
 
-use super::{attribute::Attributes, nodes::MarkupNode, nodes};
-
+use super::{attribute::Attributes, nodes, nodes::MarkupNode};
 
 pub fn new_equals_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
     MarkupNode::Text {
@@ -48,7 +50,7 @@ pub fn new_left_accolade_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeI
         ast_node_id,
         syn_high_style: HighlightStyle::Bracket,
         attributes: Attributes::new(),
-        parent_id_opt
+        parent_id_opt,
     }
 }
 
@@ -58,7 +60,7 @@ pub fn new_right_accolade_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNode
         ast_node_id,
         syn_high_style: HighlightStyle::Bracket,
         attributes: Attributes::new(),
-        parent_id_opt
+        parent_id_opt,
     }
 }
 
@@ -91,4 +93,3 @@ pub fn new_line_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> Ma
         parent_id_opt,
     }
 }
-

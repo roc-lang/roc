@@ -30,8 +30,8 @@ use roc_load::file::LoadedModule;
 use roc_module::symbol::IdentIds;
 use roc_types::subs::VarStore;
 use std::fs::File;
+use std::io::Write;
 use std::{error::Error, io, path::Path};
-use std::io::{Write};
 use wgpu::{CommandEncoder, RenderPass, TextureView};
 use wgpu_glyph::GlyphBrush;
 use winit::{
@@ -157,13 +157,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
     let ed_model_opt = {
         let ed_model_res =
-            ed_model::init_model(
-                &code_str,
-                file_path,
-                env, 
-                loaded_module,
-                &code_arena,
-            );
+            ed_model::init_model(&code_str, file_path, env, loaded_module, &code_arena);
 
         match ed_model_res {
             Ok(mut ed_model) => {
@@ -403,28 +397,23 @@ fn begin_render_pass<'a>(
 }
 
 fn read_file(file_path_opt: Option<&Path>) -> (&Path, String) {
-
     if let Some(file_path) = file_path_opt {
+        let file_as_str = std::fs::read_to_string(file_path).expect(&format!(
+            "Failed to read from provided file path: {:?}",
+            file_path
+        ));
 
-        let file_as_str =
-            std::fs::read_to_string(file_path)
-                .expect(
-                    &format!("Failed to read from provided file path: {:?}", file_path)
-                );
-        
         (file_path, file_as_str)
     } else {
         let untitled_path = Path::new("UntitledApp.roc");
 
-        let code_str = 
-            if !untitled_path.exists() {
-                let mut untitled_file = 
-                    File::create(untitled_path)
-                        .expect(
-                            &format!("I wanted to create {:?}, but it failed.", untitled_path)
-                        );
+        let code_str = if !untitled_path.exists() {
+            let mut untitled_file = File::create(untitled_path).expect(&format!(
+                "I wanted to create {:?}, but it failed.",
+                untitled_path
+            ));
 
-                let hello_world_roc = r#"app "untitled-app"
+            let hello_world_roc = r#"app "untitled-app"
     packages { base: "platform" }
     imports []
     provides [ main ] to base
@@ -432,28 +421,22 @@ fn read_file(file_path_opt: Option<&Path>) -> (&Path, String) {
 main = "Hello, world!"
 "#;
 
-                write!(untitled_file, "{}", hello_world_roc)
-                    .expect(
-                        &format!(
-                                r#"I wanted to write:
+            write!(untitled_file, "{}", hello_world_roc).expect(&format!(
+                r#"I wanted to write:
 
 {:?}
 
-to file {:?}, but it failed."#
-                            , hello_world_roc
-                            , untitled_file
-                            )
-                    );
-                
-                hello_world_roc.to_string()
-            } else {
+to file {:?}, but it failed."#,
+                hello_world_roc, untitled_file
+            ));
 
-                std::fs::read_to_string(untitled_path)
-                    .expect(
-                        &format!("I detected an existing {:?}, but I failed to read from it.", untitled_path)
-                    )
-
-            };
+            hello_world_roc.to_string()
+        } else {
+            std::fs::read_to_string(untitled_path).expect(&format!(
+                "I detected an existing {:?}, but I failed to read from it.",
+                untitled_path
+            ))
+        };
 
         (untitled_path, code_str)
     }
@@ -467,7 +450,10 @@ pub fn load_module(src_file: &Path) -> LoadedModule {
         &arena,
         src_file.to_path_buf(),
         arena.alloc(roc_builtins::std::standard_stdlib()),
-        src_file.parent().expect(&format!("src_file {:?} did not have a parent directory but I need to have one.", src_file)),
+        src_file.parent().expect(&format!(
+            "src_file {:?} did not have a parent directory but I need to have one.",
+            src_file
+        )),
         subs_by_module,
         8,
         builtin_defs_map,
@@ -476,9 +462,15 @@ pub fn load_module(src_file: &Path) -> LoadedModule {
     match loaded {
         Ok(x) => x,
         Err(roc_load::file::LoadingProblem::FormattedReport(report)) => {
-            panic!("Failed to load module from src_file {:?}. Report: {:?}", src_file,report);
+            panic!(
+                "Failed to load module from src_file {:?}. Report: {:?}",
+                src_file, report
+            );
         }
-        Err(e) => panic!("Failed to load module from src_file {:?}: {:?}", src_file, e),
+        Err(e) => panic!(
+            "Failed to load module from src_file {:?}: {:?}",
+            src_file, e
+        ),
     }
 }
 

@@ -1,7 +1,7 @@
 use inlinable_string::InlinableString;
 use roc_module::symbol::Symbol;
 
-use crate::editor::ed_error::{EdResult};
+use crate::editor::ed_error::EdResult;
 use crate::editor::markup::attribute::Attributes;
 use crate::editor::markup::common_nodes::new_blank_mn;
 use crate::editor::markup::common_nodes::new_equals_mn;
@@ -17,7 +17,6 @@ use crate::lang::pattern::Pattern2;
 use crate::lang::pool::NodeId;
 use crate::ui::text::lines::SelectableLines;
 use std::iter::FromIterator;
-
 
 pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<InputOutcome> {
     let NodeContext {
@@ -39,17 +38,16 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     let ident_id = ed_model.module.env.ident_ids.add(ident_string);
     let var_symbol = Symbol::new(ed_model.module.env.home, ident_id);
     let body = Expr2::Var(var_symbol);
-    let body_id = ed_model.module.env.pool.add(body);    
+    let body_id = ed_model.module.env.pool.add(body);
 
     let pattern = Pattern2::Identifier(var_symbol);
     let pattern_id = ed_model.module.env.pool.add(pattern);
 
-    let value_def =
-        ValueDef::NoAnnotation {
-            pattern_id,
-            expr_id: val_expr_id,
-            expr_var: ed_model.module.env.var_store.fresh()
-        };
+    let value_def = ValueDef::NoAnnotation {
+        pattern_id,
+        expr_id: val_expr_id,
+        expr_var: ed_model.module.env.var_store.fresh(),
+    };
     let def_id = ed_model.module.env.pool.add(value_def);
 
     let expr2_node = Expr2::LetValue {
@@ -104,7 +102,13 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     }
 }
 
-pub fn update_let_value(val_name_mn_id: MarkNodeId, def_id: NodeId<ValueDef>, body_id: NodeId<Expr2>, ed_model: &mut EdModel, new_char: &char) -> EdResult<InputOutcome> {
+pub fn update_let_value(
+    val_name_mn_id: MarkNodeId,
+    def_id: NodeId<ValueDef>,
+    body_id: NodeId<Expr2>,
+    ed_model: &mut EdModel,
+    new_char: &char,
+) -> EdResult<InputOutcome> {
     if new_char.is_ascii_alphanumeric() {
         let old_caret_pos = ed_model.get_caret();
 
@@ -128,13 +132,26 @@ pub fn update_let_value(val_name_mn_id: MarkNodeId, def_id: NodeId<ValueDef>, bo
 
             let ident_string = InlinableString::from_iter(content_str_mut.chars());
             // TODO no unwrap
-            let ident_id = ed_model.module.env.ident_ids.update_key(old_val_ident_string, ident_string).unwrap();
+            let ident_id = ed_model
+                .module
+                .env
+                .ident_ids
+                .update_key(old_val_ident_string, ident_string)
+                .unwrap();
 
             let new_var_symbol = Symbol::new(ed_model.module.env.home, ident_id);
 
-            ed_model.module.env.pool.set(value_ident_pattern_id, Pattern2::Identifier(new_var_symbol));
-            
-            ed_model.module.env.pool.set(body_id, Expr2::Var(new_var_symbol));
+            ed_model
+                .module
+                .env
+                .pool
+                .set(value_ident_pattern_id, Pattern2::Identifier(new_var_symbol));
+
+            ed_model
+                .module
+                .env
+                .pool
+                .set(body_id, Expr2::Var(new_var_symbol));
 
             // update GridNodeMap and CodeLines
             ed_model.insert_between_line(
@@ -151,7 +168,6 @@ pub fn update_let_value(val_name_mn_id: MarkNodeId, def_id: NodeId<ValueDef>, bo
         } else {
             Ok(InputOutcome::Ignored)
         }
-
     } else {
         Ok(InputOutcome::Ignored)
     }

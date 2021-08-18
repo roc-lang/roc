@@ -1,6 +1,8 @@
 use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::{MissingParent, UnexpectedASTNode};
-use crate::editor::markup::common_nodes::{new_blank_mn, new_comma_mn, new_left_square_mn, new_right_square_mn};
+use crate::editor::markup::common_nodes::{
+    new_blank_mn, new_comma_mn, new_left_square_mn, new_right_square_mn,
+};
 use crate::editor::markup::nodes;
 use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::app_update::InputOutcome;
@@ -31,15 +33,11 @@ pub fn start_new_list(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
 
     ed_model.module.env.pool.set(ast_node_id, expr2_node);
 
-    let left_bracket_node_id = 
-        ed_model.add_mark_node(
-            new_left_square_mn(ast_node_id, Some(curr_mark_node_id))
-        );
+    let left_bracket_node_id =
+        ed_model.add_mark_node(new_left_square_mn(ast_node_id, Some(curr_mark_node_id)));
 
     let right_bracket_node_id =
-        ed_model.add_mark_node(
-            new_right_square_mn(ast_node_id, Some(curr_mark_node_id))
-        );
+        ed_model.add_mark_node(new_right_square_mn(ast_node_id, Some(curr_mark_node_id)));
 
     let nested_node = MarkupNode::Nested {
         ast_node_id,
@@ -48,7 +46,9 @@ pub fn start_new_list(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     };
 
     if is_blank_node {
-        ed_model.markup_node_pool.replace_node(curr_mark_node_id, nested_node);
+        ed_model
+            .markup_node_pool
+            .replace_node(curr_mark_node_id, nested_node);
 
         // remove data corresponding to Blank node
         ed_model.del_at_line(old_caret_pos.line, old_caret_pos.column)?;
@@ -178,23 +178,13 @@ pub fn update_mark_children(
     parent_id_opt: Option<MarkNodeId>,
     ed_model: &mut EdModel,
 ) -> EdResult<Vec<MarkNodeId>> {
-
-    let blank_mark_node_id =
-        ed_model
-            .add_mark_node(
-                new_blank_mn(blank_elt_id, parent_id_opt)
-            );
-
+    let blank_mark_node_id = ed_model.add_mark_node(new_blank_mn(blank_elt_id, parent_id_opt));
 
     let mut children: Vec<MarkNodeId> = vec![];
 
     if new_child_index > 1 {
-
         let comma_mark_node_id =
-            ed_model
-                .add_mark_node(
-                    new_comma_mn(list_ast_node_id, parent_id_opt)
-                );
+            ed_model.add_mark_node(new_comma_mn(list_ast_node_id, parent_id_opt));
 
         ed_model.simple_move_carets_right(nodes::COMMA.len());
 

@@ -7,9 +7,9 @@ use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_update::get_node_context;
 use crate::editor::mvc::ed_update::NodeContext;
 use crate::editor::syntax_highlight::HighlightStyle;
+use crate::lang::ast::update_str_expr;
 use crate::lang::ast::ArrString;
 use crate::lang::ast::Expr2;
-use crate::lang::ast::update_str_expr;
 use crate::lang::pool::PoolStr;
 
 pub fn update_small_string(
@@ -74,10 +74,7 @@ pub fn update_small_string(
     }
 }
 
-pub fn update_string(
-    new_char: char,
-    ed_model: &mut EdModel,
-) -> EdResult<InputOutcome> {
+pub fn update_string(new_char: char, ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     let NodeContext {
         old_caret_pos,
         curr_mark_node_id,
@@ -105,7 +102,12 @@ pub fn update_string(
         )?;
 
         // update ast
-        update_str_expr(ast_node_id, new_char, node_caret_offset, &mut ed_model.module.env.pool)?;
+        update_str_expr(
+            ast_node_id,
+            new_char,
+            node_caret_offset,
+            &mut ed_model.module.env.pool,
+        )?;
 
         // update caret
         ed_model.simple_move_carets_right(1);

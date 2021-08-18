@@ -46,9 +46,7 @@ pub enum EdError {
     #[snafu(display(
         "EmptyCodeString: I need to have a code string (code_str) that contains either an app, interface or Package-Config header. The code string was empty.",
     ))]
-    EmptyCodeString {
-        backtrace: Backtrace,
-    },
+    EmptyCodeString { backtrace: Backtrace },
 
     #[snafu(display("GetContentOnNestedNode: tried to get string content from Nested MarkupNode. Can only get content from Text or Blank nodes."))]
     GetContentOnNestedNode { backtrace: Backtrace },
@@ -172,7 +170,10 @@ pub enum EdError {
     },
 
     #[snafu(display("ParseError: Failed to parse AST: SyntaxError: {}.", syntax_err))]
-    SrcParseError { syntax_err: String, backtrace: Backtrace },
+    SrcParseError {
+        syntax_err: String,
+        backtrace: Backtrace,
+    },
 
     #[snafu(display("RecordWithoutFields: expected record to have at least one field because it is not an EmptyRecord."))]
     RecordWithoutFields { backtrace: Backtrace },

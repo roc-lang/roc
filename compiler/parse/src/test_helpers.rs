@@ -1,11 +1,11 @@
 use crate::ast;
 use crate::module::module_defs;
 // use crate::module::module_defs;
-use crate::parser::{State, SyntaxError};
-use bumpalo::Bump;
-use bumpalo::collections::Vec as BumpVec;
-use roc_region::all::Located;
 use crate::parser::Parser;
+use crate::parser::{State, SyntaxError};
+use bumpalo::collections::Vec as BumpVec;
+use bumpalo::Bump;
+use roc_region::all::Located;
 
 pub fn parse_expr_with<'a>(
     arena: &'a Bump,
