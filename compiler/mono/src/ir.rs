@@ -2517,18 +2517,6 @@ fn specialize_solved_type<'a>(
         raw
     };
 
-    // TODO this module_thunks.contains check will be important
-    //    let raw = match attempted_layout {
-    //        Layout::Closure(a, lambda_set, c) => {
-    //            if procs.module_thunks.contains(&proc_name) {
-    //                RawFunctionLayout::ZeroArgumentThunk(lambda_set.runtime_representation())
-    //            } else {
-    //                RawFunctionLayout::Function(a, lambda_set, c)
-    //            }
-    //        }
-    //        _ => RawFunctionLayout::ZeroArgumentThunk(attempted_layout),
-    //    };
-
     // make sure rigid variables in the annotation are converted to flex variables
     instantiate_rigids(env.subs, partial_proc.annotation);
 
@@ -2599,15 +2587,6 @@ impl<'a> ProcLayout<'a> {
             arguments: arguments.into_bump_slice(),
             result: new_result,
         }
-    }
-
-    // TODO remove!!!!!
-    fn from_layout(_arena: &'a Bump, _layout: Layout<'a>) -> Self {
-        panic!();
-        //        ProcLayout {
-        //            arguments: &[],
-        //            result: layout,
-        //        }
     }
 
     pub fn from_raw(arena: &'a Bump, raw: RawFunctionLayout<'a>) -> Self {
@@ -6030,12 +6009,21 @@ fn reuse_function_symbol<'a>(
         None => {
             match arg_var {
                 Some(arg_var) if env.is_imported_symbol(original) => {
-                    let layout = layout_cache
-                        .from_var(env.arena, arg_var, env.subs)
+                    let raw = layout_cache
+                        .raw_from_var(env.arena, arg_var, env.subs)
                         .expect("creating layout does not fail");
 
                     if procs.imported_module_thunks.contains(&original) {
-                        let top_level = ProcLayout::new(env.arena, &[], layout);
+                        let layout = match raw {
+                            RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
+                            RawFunctionLayout::Function(_, lambda_set, _) => {
+                                lambda_set.runtime_representation()
+                            }
+                        };
+
+                        let raw = RawFunctionLayout::ZeroArgumentThunk(layout);
+                        let top_level = ProcLayout::from_raw(env.arena, raw);
+
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
@@ -6046,7 +6034,7 @@ fn reuse_function_symbol<'a>(
 
                         force_thunk(env, original, layout, symbol, env.arena.alloc(result))
                     } else {
-                        let top_level = ProcLayout::from_layout(env.arena, layout);
+                        let top_level = ProcLayout::from_raw(env.arena, raw);
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
