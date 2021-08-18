@@ -3382,7 +3382,7 @@ fn num_bytes_to(symbol: Symbol, var_store: &mut VarStore, offset: i64, low_level
     let add_var = var_store.fresh();
     let cast_var = var_store.fresh();
 
-    // Perform a bounds check. If it passes, run LowLevel::NumBytesToU16
+    // Perform a bounds check. If it passes, run LowLevel::low_level
     let body = If {
         cond_var: bool_var,
         branch_var: var_store.fresh(),
