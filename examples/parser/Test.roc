@@ -1,4 +1,4 @@
-interface Test exposes [  Test, eval, run, runF, failures, testList ] imports [ ]
+interface Test exposes [  Test, eval, run, runF, failures, testList ] imports [ Console]
 
 # This interface provides a simple way to run tests.  A test is a record
 # with two fields:
@@ -24,7 +24,7 @@ interface Test exposes [  Test, eval, run, runF, failures, testList ] imports [ 
 Test : { name : Str, test: Bool }
 
 passFail : Bool -> Str 
-passFail = \pass -> if pass then "Pass :: " else "Fail :: "
+passFail = \pass -> if pass then (Console.cyan "Pass :: ") else (Console.magenta "Fail :: ")
 
 eval : Test -> Str
 eval = \{ name, test } -> Str.concat (passFail test) name
@@ -35,17 +35,17 @@ eval = \{ name, test } -> Str.concat (passFail test) name
 
 run : List Test, Str -> Str
 run = \tests, title -> 
-   results = List.map tests eval |> concatStrListWithSeparator "\n" 
+   results = List.map tests eval |> Str.joinWith "\n" 
    n = Str.countGraphemes title
    underline = strRepeat n "-"
-   concatStrList [title, "\n", underline, "\n", results] |> spaceAboveBelow
+   Str.joinWith [title, "\n", underline, "\n", results] "" |> spaceAboveBelow
 
 runF : List Test, Str -> Str
 runF = \tests, title -> 
-   results = tests |> failures |> List.map eval |> concatStrListWithSeparator "\n" 
+   results = tests |> failures |> List.map eval |> Str.joinWith "\n" 
    n = Str.countGraphemes title
    underline = strRepeat n "-"
-   concatStrList [title, "\n", underline, "\n", results] |> spaceAboveBelow
+   Str.joinWith [title, "\n", underline, "\n", results] "" |> spaceAboveBelow
 
 
 failures  : List Test -> List Test
@@ -78,31 +78,12 @@ filterList = \list, predicate ->
 ## Strings
 
 strRepeat: Nat, Str -> Str
-strRepeat = \n, str -> List.repeat n str |> concatStrList
+strRepeat = \n, str -> List.repeat n str |> Str.joinWith ""
 
 spaceAboveBelow: Str -> Str
-spaceAboveBelow = \str -> concatStrList ["\n", str, "\n"]
+spaceAboveBelow = \str -> Str.joinWith ["\n", str, "\n"] ""
 
 
-concatStrList : List Str -> Str 
-concatStrList = \list -> 
-    when List.first list is 
-       Ok head -> 
-           Str.concat head (concatStrList (List.drop list 1))
-       Err _ -> "" 
-
-
-concatStrListWithSeparator : List Str, Str -> Str 
-concatStrListWithSeparator = \list, separator -> 
-    when List.first list is 
-       Ok head -> 
-            # TODO: Not great code following
-            rest = List.drop list 1
-              if List.len rest > 0 then 
-                Str.concat (Str.concat head separator) (concatStrListWithSeparator rest separator)
-              else 
-                Str.concat head (concatStrListWithSeparator rest separator)
-       Err _ -> "" 
 
 
 
