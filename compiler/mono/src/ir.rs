@@ -7675,7 +7675,7 @@ where
                     op
                 );
 
-                return hole.clone();
+                hole.clone()
             }
         },
         Layout::Builtin(Builtin::Int1) => {
