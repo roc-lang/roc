@@ -2128,7 +2128,7 @@ fn specialize_external<'a>(
 
                     match closure_layout.layout_for_member(proc_name) {
                         ClosureRepresentation::Union {
-                            tag_layout: field_layouts,
+                            alphabetic_order_fields: field_layouts,
                             union_layout,
                             tag_id,
                             ..
@@ -2136,7 +2136,21 @@ fn specialize_external<'a>(
                             debug_assert!(matches!(union_layout, UnionLayout::NonRecursive(_)));
                             debug_assert_eq!(field_layouts.len(), captured.len());
 
-                            for (index, (symbol, _variable)) in captured.iter().enumerate() {
+                            let mut combined = Vec::from_iter_in(
+                                captured.iter().map(|(x, _)| x).zip(field_layouts.iter()),
+                                env.arena,
+                            );
+
+                            let ptr_bytes = env.ptr_bytes;
+
+                            combined.sort_by(|(_, layout1), (_, layout2)| {
+                                let size1 = layout1.alignment_bytes(ptr_bytes);
+                                let size2 = layout2.alignment_bytes(ptr_bytes);
+
+                                size2.cmp(&size1)
+                            });
+
+                            for (index, (symbol, layout)) in combined.iter().enumerate() {
                                 let expr = Expr::UnionAtIndex {
                                     tag_id,
                                     structure: Symbol::ARG_CLOSURE,
@@ -2144,52 +2158,63 @@ fn specialize_external<'a>(
                                     union_layout,
                                 };
 
-                                let layout = field_layouts[index];
-
                                 specialized_body = Stmt::Let(
-                                    *symbol,
+                                    **symbol,
                                     expr,
-                                    layout,
+                                    **layout,
                                     env.arena.alloc(specialized_body),
                                 );
                             }
                         }
-                        ClosureRepresentation::Other(layout) => match layout {
-                            Layout::Struct(field_layouts) => {
-                                debug_assert_eq!(
-                                    captured.len(),
-                                    field_layouts.len(),
-                                    "{:?} captures {:?} but has layout {:?}",
-                                    proc_name,
-                                    &captured,
-                                    &field_layouts
+                        ClosureRepresentation::AlphabeticOrderStruct(field_layouts) => {
+                            let mut combined = Vec::from_iter_in(
+                                captured.iter().map(|(x, _)| x).zip(field_layouts.iter()),
+                                env.arena,
+                            );
+
+                            let ptr_bytes = env.ptr_bytes;
+
+                            combined.sort_by(|(_, layout1), (_, layout2)| {
+                                let size1 = layout1.alignment_bytes(ptr_bytes);
+                                let size2 = layout2.alignment_bytes(ptr_bytes);
+
+                                size2.cmp(&size1)
+                            });
+
+                            debug_assert_eq!(
+                                captured.len(),
+                                field_layouts.len(),
+                                "{:?} captures {:?} but has layout {:?}",
+                                proc_name,
+                                &captured,
+                                &field_layouts
+                            );
+
+                            for (index, (symbol, layout)) in combined.iter().enumerate() {
+                                let expr = Expr::StructAtIndex {
+                                    index: index as _,
+                                    field_layouts,
+                                    structure: Symbol::ARG_CLOSURE,
+                                };
+
+                                specialized_body = Stmt::Let(
+                                    **symbol,
+                                    expr,
+                                    **layout,
+                                    env.arena.alloc(specialized_body),
                                 );
-
-                                for (index, (symbol, _variable)) in captured.iter().enumerate() {
-                                    let expr = Expr::StructAtIndex {
-                                        index: index as _,
-                                        field_layouts,
-                                        structure: Symbol::ARG_CLOSURE,
-                                    };
-
-                                    let layout = field_layouts[index];
-
-                                    specialized_body = Stmt::Let(
-                                        *symbol,
-                                        expr,
-                                        layout,
-                                        env.arena.alloc(specialized_body),
-                                    );
-                                }
-                                //                                    let symbol = captured[0].0;
-                                //
-                                //                                    substitute_in_exprs(
-                                //                                        env.arena,
-                                //                                        &mut specialized_body,
-                                //                                        symbol,
-                                //                                        Symbol::ARG_CLOSURE,
-                                //                                    );
                             }
+                            //                                    let symbol = captured[0].0;
+                            //
+                            //                                    substitute_in_exprs(
+                            //                                        env.arena,
+                            //                                        &mut specialized_body,
+                            //                                        symbol,
+                            //                                        Symbol::ARG_CLOSURE,
+                            //                                    );
+                        }
+
+                        ClosureRepresentation::Other(layout) => match layout {
                             Layout::Builtin(Builtin::Int1) => {
                                 // just ignore this value
                                 // IDEA don't pass this value in the future
@@ -2585,14 +2610,12 @@ impl<'a> ProcLayout<'a> {
         let mut arguments = Vec::with_capacity_in(old_arguments.len(), arena);
 
         for old in old_arguments {
-            match old {
-                other => arguments.push(*other),
-            }
+            let other = old;
+            arguments.push(*other);
         }
 
-        let new_result = match result {
-            other => other,
-        };
+        let other = result;
+        let new_result = other;
 
         ProcLayout {
             arguments: arguments.into_bump_slice(),
@@ -2601,16 +2624,15 @@ impl<'a> ProcLayout<'a> {
     }
 
     // TODO remove!!!!!
-    pub fn from_layout(arena: &'a Bump, layout: Layout<'a>) -> Self {
-        match layout {
-            _ => ProcLayout {
-                arguments: &[],
-                result: layout,
-            },
-        }
+    fn from_layout(_arena: &'a Bump, _layout: Layout<'a>) -> Self {
+        panic!();
+        //        ProcLayout {
+        //            arguments: &[],
+        //            result: layout,
+        //        }
     }
 
-    fn from_raw(arena: &'a Bump, raw: RawFunctionLayout<'a>) -> Self {
+    pub fn from_raw(arena: &'a Bump, raw: RawFunctionLayout<'a>) -> Self {
         match raw {
             RawFunctionLayout::Function(arguments, lambda_set, result) => {
                 let arguments = lambda_set.extend_argument_list(arena, arguments);
@@ -4091,10 +4113,25 @@ fn construct_closure_data<'a>(
     match lambda_set.layout_for_member(name) {
         ClosureRepresentation::Union {
             tag_id,
-            tag_layout: _,
+            alphabetic_order_fields: field_layouts,
             tag_name,
             union_layout,
         } => {
+            let mut combined =
+                Vec::from_iter_in(symbols.iter().zip(field_layouts.iter()), env.arena);
+
+            let ptr_bytes = env.ptr_bytes;
+
+            combined.sort_by(|(_, layout1), (_, layout2)| {
+                let size1 = layout1.alignment_bytes(ptr_bytes);
+                let size2 = layout2.alignment_bytes(ptr_bytes);
+
+                size2.cmp(&size1)
+            });
+
+            let symbols =
+                Vec::from_iter_in(combined.iter().map(|(a, _)| **a), env.arena).into_bump_slice();
+
             let expr = Expr::Tag {
                 tag_id,
                 tag_layout: union_layout,
@@ -4109,8 +4146,30 @@ fn construct_closure_data<'a>(
                 env.arena.alloc(hole),
             )
         }
-        ClosureRepresentation::Other(Layout::Struct(field_layouts)) => {
+        ClosureRepresentation::AlphabeticOrderStruct(field_layouts) => {
             debug_assert_eq!(field_layouts.len(), symbols.len());
+
+            let mut combined =
+                Vec::from_iter_in(symbols.iter().zip(field_layouts.iter()), env.arena);
+
+            let ptr_bytes = env.ptr_bytes;
+
+            combined.sort_by(|(_, layout1), (_, layout2)| {
+                let size1 = layout1.alignment_bytes(ptr_bytes);
+                let size2 = layout2.alignment_bytes(ptr_bytes);
+
+                size2.cmp(&size1)
+            });
+
+            let symbols =
+                Vec::from_iter_in(combined.iter().map(|(a, _)| **a), env.arena).into_bump_slice();
+            let field_layouts =
+                Vec::from_iter_in(combined.iter().map(|(_, b)| **b), env.arena).into_bump_slice();
+
+            debug_assert_eq!(
+                Layout::Struct(field_layouts),
+                lambda_set.runtime_representation()
+            );
 
             let expr = Expr::Struct(symbols);
 
@@ -6048,7 +6107,7 @@ fn reuse_function_symbol<'a>(
             let captured = partial_proc.captured_symbols.clone();
 
             match res_layout {
-                RawFunctionLayout::Function(argument_layouts, lambda_set, ret_layout) => {
+                RawFunctionLayout::Function(_, lambda_set, _) => {
                     // define the function pointer
                     let function_ptr_layout = ProcLayout::from_raw(env.arena, res_layout);
 

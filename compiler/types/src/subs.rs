@@ -337,7 +337,9 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
         } => write!(f, "Recursion({:?}, {:?})", structure, opt_name),
         Content::Structure(flat_type) => subs_fmt_flat_type(flat_type, subs, f),
         Content::Alias(name, arguments, actual) => {
-            write!(f, "Alias({:?}, {:?}, {:?})", name, arguments, actual)
+            let slice = subs.get_subs_slice(*arguments.variables().as_subs_slice());
+
+            write!(f, "Alias({:?}, {:?}, {:?})", name, slice, actual)
         }
         Content::Error => write!(f, "Error"),
     }
