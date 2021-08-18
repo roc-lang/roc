@@ -96,12 +96,12 @@ impl<'a> EdModel<'a> {
         markup_ids: &[MarkNodeId],
         markup_node_pool: &SlowPool,
     ) -> EdResult<GridNodeMap> {
+
         let mut grid_node_map = GridNodeMap::new();
+        let mut line_ctr = 0;
 
         for mark_id in markup_ids.iter() {
-            EdModel::build_grid_node_map(*mark_id, &mut grid_node_map, markup_node_pool)?;
-
-            grid_node_map.lines.push(Vec::new());
+            EdModel::build_grid_node_map(*mark_id, &mut grid_node_map, &mut line_ctr, markup_node_pool)?;
         }
 
         Ok(grid_node_map)
@@ -114,18 +114,24 @@ impl<'a> EdModel<'a> {
     fn build_grid_node_map(
         node_id: MarkNodeId,
         grid_node_map: &mut GridNodeMap,
+        line_ctr: &mut usize,
         markup_node_pool: &SlowPool,
     ) -> EdResult<()> {
         let node = markup_node_pool.get(node_id);
 
         if node.is_nested() {
             for child_id in node.get_children_ids() {
-                EdModel::build_grid_node_map(child_id, grid_node_map, markup_node_pool)?;
+                EdModel::build_grid_node_map(child_id, grid_node_map, line_ctr, markup_node_pool)?;
             }
         } else {
             let node_content_str = node.get_content();
 
-            grid_node_map.add_to_line(0, node_content_str.len(), node_id)?;
+            grid_node_map.add_to_line(*line_ctr, node_content_str.len(), node_id)?;
+
+            if node_content_str.ends_with("\n") {
+                *line_ctr += 1;
+                grid_node_map.lines.push(vec![]);
+            }
         }
 
         Ok(())
@@ -139,8 +145,6 @@ impl<'a> EdModel<'a> {
 
         for mark_node_id in markup_node_ids.iter() {
             EdModel::build_markup_string(*mark_node_id, &mut all_code_string, markup_node_pool)?;
-
-            all_code_string.push_str("\n")
         }
 
         let code_lines = CodeLines::from_str(&all_code_string);

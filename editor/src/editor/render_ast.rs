@@ -24,6 +24,7 @@ pub fn build_code_graphics<'a>(
 
     let mut all_glyph_text_vec = vec![];
     let mut all_rects = vec![];
+    let mut txt_row_col = (0,0);
 
     for markup_id in markup_ids.iter() {
         let mark_node = markup_node_pool.get(*markup_id);
@@ -36,8 +37,13 @@ pub fn build_code_graphics<'a>(
                 txt_coords,
                 glyph_dim_rect,
             },
+            &mut txt_row_col,
             markup_node_pool,
         )?;
+
+        // on to next line
+        txt_row_col.0 += 1;
+        txt_row_col.1 = 0;
 
         all_glyph_text_vec.append(&mut glyph_text_vec);
         all_rects.append(&mut rects)
@@ -66,19 +72,18 @@ struct CodeStyle<'a> {
 fn markup_to_wgpu<'a>(
     markup_node: &'a MarkupNode,
     code_style: &CodeStyle,
+    txt_row_col: &mut  (usize, usize),
     markup_node_pool: &'a SlowPool,
 ) -> EdResult<(Vec<glyph_brush::OwnedText>, Vec<Rect>)> {
     let mut wgpu_texts: Vec<glyph_brush::OwnedText> = Vec::new();
     let mut rects: Vec<Rect> = Vec::new();
-
-    let mut txt_row_col = (0, 0);
 
     markup_to_wgpu_helper(
         markup_node,
         &mut wgpu_texts,
         &mut rects,
         code_style,
-        &mut txt_row_col,
+        txt_row_col,
         markup_node_pool,
     )?;
 
@@ -125,7 +130,10 @@ fn markup_to_wgpu_helper<'a>(
                 .with_color(colors::to_slice(*highlight_color))
                 .with_scale(code_style.font_size);
 
-            
+            if content.contains("\n") {
+                txt_row_col.0 += 1;
+                txt_row_col.1 = 0;
+            }
 
             txt_row_col.1 += content.len();
             wgpu_texts.push(glyph_text);
@@ -145,7 +153,7 @@ fn markup_to_wgpu_helper<'a>(
             let char_width = code_style.glyph_dim_rect.width;
             let char_height = code_style.glyph_dim_rect.height;
 
-            let hole_rect = Rect {
+            let blank_rect = Rect {
                 top_left_coords: (
                     code_style.txt_coords.x + (txt_row_col.1 as f32) * char_width,
                     code_style.txt_coords.y
@@ -157,7 +165,7 @@ fn markup_to_wgpu_helper<'a>(
                 height: char_height,
                 color: *highlight_color,
             };
-            rects.push(hole_rect);
+            rects.push(blank_rect);
 
             txt_row_col.1 += BLANK_PLACEHOLDER.len();
             wgpu_texts.push(glyph_text);

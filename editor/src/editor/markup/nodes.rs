@@ -792,6 +792,8 @@ pub fn ast_to_mark_nodes<'a, 'b>(
 
         let expr2_markup_id = expr2_to_markup(arena, env, expr2, expr_id, mark_node_pool, interns)?;
 
+        set_parent_for_all(expr2_markup_id, mark_node_pool);
+
         all_mark_node_ids.push(
             expr2_markup_id
         );
@@ -837,8 +839,9 @@ fn tree_as_string_helper(
             .to_owned();
 
         let child = mark_node_pool.get(child_id);
+        let child_str = format!("{}", mark_node_pool.get(child_id)).replace("\n","\\n");
 
-        full_str.push_str(&format!("{} mn_id {}\n", child, child_id));
+        full_str.push_str(&format!("{} mn_id {}\n", child_str, child_id));
 
         tree_string.push_str(&full_str);
 

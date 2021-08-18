@@ -269,7 +269,6 @@ imports []
 provides [ main ] to base
 
 main = "Hello, world!"
-
 "#;
 
         *clean_code_str = [header_str, clean_code_str.as_str()].join("");

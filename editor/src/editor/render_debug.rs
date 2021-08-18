@@ -29,15 +29,16 @@ pub fn build_debug_graphics(
         .with_color(colors::to_slice(from_hsb(0, 49, 96)))
         .with_scale(config.code_font_size);
 
-    let mut mark_node_trees_string = "mark node trees:\n".to_owned();
+    let mut mark_node_trees_string = "\nmark node trees:".to_owned();
 
     for mark_id in ed_model.markup_ids.iter() {
 
         mark_node_trees_string.push_str(
             &tree_as_string(
-            *mark_id,
-            &ed_model.markup_node_pool,
-        ));
+                *mark_id,
+                &ed_model.markup_node_pool,
+            )
+        );
 
         mark_node_trees_string.push_str("\n");
     }

@@ -105,14 +105,16 @@ impl fmt::Display for CodeLines {
         for row in &self.lines {
             let row_str = row
                 .chars()
-                .map(|code_char| format!("'{}'", code_char))
+                .map(|code_char| format!("{}", code_char))
                 .collect::<Vec<String>>()
-                .join(", ");
+                .join(" ");
 
-            write!(f, "\n{}", row_str)?;
+            let escaped_row_str = row_str.replace("\n","\\n");
+
+            write!(f, "\n{}", escaped_row_str)?;
         }
 
-        write!(f, "      (code_lines)")?;
+        write!(f, "      (code_lines, {:?} lines)\n", self.lines.len())?;
 
         Ok(())
     }
