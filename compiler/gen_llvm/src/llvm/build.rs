@@ -3634,26 +3634,6 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     };
     argument_types.push(closure_argument_type.into());
 
-    build_closure_caller_help(
-        env,
-        def_name,
-        evaluator,
-        alias_symbol,
-        argument_types,
-        lambda_set.runtime_representation(),
-        result,
-    )
-}
-
-pub fn build_closure_caller_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    def_name: &str,
-    evaluator: FunctionValue<'ctx>,
-    alias_symbol: Symbol,
-    mut argument_types: Vec<'_, BasicTypeEnum<'ctx>>,
-    lambda_set_runtime_layout: Layout<'a>,
-    result: &Layout<'a>,
-) {
     let context = &env.context;
     let builder = env.builder;
 
@@ -3732,7 +3712,12 @@ pub fn build_closure_caller_help<'a, 'ctx, 'env>(
     );
 
     // STEP 4: build a {} -> u64 function that gives the size of the closure
-    build_host_exposed_alias_size(env, def_name, alias_symbol, lambda_set_runtime_layout);
+    build_host_exposed_alias_size(
+        env,
+        def_name,
+        alias_symbol,
+        lambda_set.runtime_representation(),
+    );
 }
 
 fn build_host_exposed_alias_size<'a, 'ctx, 'env>(
