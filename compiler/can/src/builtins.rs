@@ -1092,26 +1092,113 @@ fn num_asin(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Num.bytesToU16 : List U8, Nat -> U16
 fn num_bytes_to_u16(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let len_var = var_store.fresh();
     let list_var = var_store.fresh();
-    let nat_var = var_store.fresh();
-    let ret_var = var_store.fresh();
+    let elem_var = var_store.fresh();
 
-    let body = RunLowLevel {
-        op: LowLevel::NumBytesToU16,
-        args: vec![
-            (list_var, Var(Symbol::ARG_1)),
-            (nat_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var,
+    let ret_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+    let add_var = var_store.fresh();
+    let cast_var = var_store.fresh();
+
+    // Perform a bounds check. If it passes, run LowLevel::NumBytesToU16
+    let body = If {
+        cond_var: bool_var,
+        branch_var: var_store.fresh(),
+        branches: vec![(
+            // if-condition
+            no_region(
+                // index + 1 < List.len list
+                RunLowLevel {
+                    op: LowLevel::NumLt,
+                    args: vec![
+                        (
+                            len_var,
+                            RunLowLevel {
+                                op: LowLevel::NumAdd,
+                                args: vec![
+                                    (add_var, Var(Symbol::ARG_2)),
+                                    (
+                                        add_var,
+                                        RunLowLevel {
+                                            ret_var: cast_var,
+                                            args: vec![(cast_var, Num(var_store.fresh(), 1))],
+                                            op: LowLevel::NumCastToNat,
+                                        },
+                                    ),
+                                ],
+                                ret_var: add_var,
+                            },
+                        ),
+                        (
+                            len_var,
+                            RunLowLevel {
+                                op: LowLevel::ListLen,
+                                args: vec![(list_var, Var(Symbol::ARG_1))],
+                                ret_var: len_var,
+                            },
+                        ),
+                    ],
+                    ret_var: bool_var,
+                },
+            ),
+            // then-branch
+            no_region(
+                // Ok
+                tag(
+                    "Ok",
+                    vec![RunLowLevel {
+                        op: LowLevel::NumBytesToU16,
+                        args: vec![
+                            (list_var, Var(Symbol::ARG_1)),
+                            (len_var, Var(Symbol::ARG_2)),
+                        ],
+                        ret_var: elem_var,
+                    }],
+                    var_store,
+                ),
+            ),
+        )],
+        final_else: Box::new(
+            // else-branch
+            no_region(
+                // Err
+                tag(
+                    "Err",
+                    vec![tag("OutOfBounds", Vec::new(), var_store)],
+                    var_store,
+                ),
+            ),
+        ),
     };
 
     defn(
         symbol,
-        vec![(list_var, Symbol::ARG_1), (nat_var, Symbol::ARG_2)],
+        vec![(list_var, Symbol::ARG_1), (len_var, Symbol::ARG_2)],
         var_store,
         body,
         ret_var,
     )
+    // let list_var = var_store.fresh();
+    // let nat_var = var_store.fresh();
+    // let ret_var = var_store.fresh();
+
+    // let body = RunLowLevel {
+    //     op: LowLevel::NumBytesToU16,
+    //     args: vec![
+    //         (list_var, Var(Symbol::ARG_1)),
+    //         (nat_var, Var(Symbol::ARG_2)),
+    //     ],
+    //     ret_var,
+    // };
+
+    // defn(
+    //     symbol,
+    //     vec![(list_var, Symbol::ARG_1), (nat_var, Symbol::ARG_2)],
+    //     var_store,
+    //     body,
+    //     ret_var,
+    // )
 }
 
 /// Num.bytesToU32 : List U8, Nat -> U32

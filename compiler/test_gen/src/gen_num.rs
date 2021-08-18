@@ -1628,21 +1628,59 @@ mod gen_num {
     // TODO: Once we know what the function should do, let's give these real names!
     #[test]
     fn potato_1() {
-        assert_evals_to!("Num.bytesToU16 [] 1", 40, u16);
+        assert_evals_to!(
+            indoc!(
+                r#"
+                bytes = Str.toUtf8 "hello"
+                when Num.bytesToU16 bytes 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            40,
+            usize
+        );
     }
 
     #[test]
     fn potato_2() {
-        assert_evals_to!("Num.bytesToU16 [] 0", 40, u16);
+        assert_evals_to!(
+            indoc!(
+                r#"
+                bytes = Str.toUtf8 "hello"
+                when Num.bytesToU16 bytes 234 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            1,
+            usize
+        );
     }
 
     #[test]
     fn potato_3() {
-        assert_evals_to!("Num.bytesToU32 [] 1", 41, u32);
+        assert_evals_to!(
+            indoc!(
+                r#"
+                bytes = Str.toUtf8 "hello"
+                when Num.bytesToU16 bytes 4 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            1,
+            usize
+        );
     }
 
     #[test]
     fn potato_4() {
+        assert_evals_to!("Num.bytesToU32 [] 1", 41, u32);
+    }
+
+    #[test]
+    fn potato_5() {
         assert_evals_to!("Num.bytesToU32 [] 0", 41, u32);
     }
 }
