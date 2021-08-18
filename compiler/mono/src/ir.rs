@@ -2028,7 +2028,10 @@ fn specialize_external<'a>(
 
                     aliases.insert(*symbol, (name, top_level, layout));
                 }
-                RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!("so far"),
+                RawFunctionLayout::ZeroArgumentThunk(layout) => {
+                    todo!("our layout is {:?}", layout);
+                    //
+                }
             }
         }
 

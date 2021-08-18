@@ -29,9 +29,124 @@ pub enum RawFunctionLayout<'a> {
     ZeroArgumentThunk(Layout<'a>),
 }
 
-impl RawFunctionLayout<'_> {
+impl<'a> RawFunctionLayout<'a> {
     pub fn is_zero_argument_thunk(&self) -> bool {
         matches!(self, RawFunctionLayout::ZeroArgumentThunk(_))
+    }
+
+    fn new_help<'b>(
+        env: &mut Env<'a, 'b>,
+        var: Variable,
+        content: Content,
+    ) -> Result<Self, LayoutProblem> {
+        use roc_types::subs::Content::*;
+        match content {
+            FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
+            RecursionVar { structure, .. } => {
+                let structure_content = env.subs.get_content_without_compacting(structure);
+                Self::new_help(env, structure, structure_content.clone())
+            }
+            Structure(flat_type) => Self::layout_from_flat_type(env, flat_type),
+
+            // Ints
+            Alias(Symbol::NUM_I128, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Int128)))
+            }
+            Alias(Symbol::NUM_I64, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Int64)))
+            }
+            Alias(Symbol::NUM_I32, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Int32)))
+            }
+            Alias(Symbol::NUM_I16, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Int16)))
+            }
+            Alias(Symbol::NUM_I8, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Int8)))
+            }
+
+            // I think unsigned and signed use the same layout
+            Alias(Symbol::NUM_U128, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Int128)))
+            }
+            Alias(Symbol::NUM_U64, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Int64)))
+            }
+            Alias(Symbol::NUM_U32, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Int32)))
+            }
+            Alias(Symbol::NUM_U16, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Int16)))
+            }
+            Alias(Symbol::NUM_U8, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Int8)))
+            }
+
+            // Floats
+            Alias(Symbol::NUM_F64, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Float64)))
+            }
+            Alias(Symbol::NUM_F32, args, _) => {
+                debug_assert!(args.is_empty());
+                Ok(Self::ZeroArgumentThunk(Layout::Builtin(Builtin::Float32)))
+            }
+
+            Alias(_, _, var) => Self::from_var(env, var),
+            Error => Err(LayoutProblem::Erroneous),
+        }
+    }
+
+    fn layout_from_flat_type(
+        env: &mut Env<'a, '_>,
+        flat_type: FlatType,
+    ) -> Result<Self, LayoutProblem> {
+        use roc_types::subs::FlatType::*;
+
+        let arena = env.arena;
+
+        if let Func(args, closure_var, ret_var) = flat_type {
+            let mut fn_args = Vec::with_capacity_in(args.len(), arena);
+
+            for index in args.into_iter() {
+                let arg_var = env.subs[index];
+                fn_args.push(Layout::from_var(env, arg_var)?);
+            }
+
+            let ret = Layout::from_var(env, ret_var)?;
+
+            let fn_args = fn_args.into_bump_slice();
+            let ret = arena.alloc(ret);
+
+            let lambda_set = LambdaSet::from_var(env.arena, env.subs, closure_var)?;
+
+            Ok(Self::Function(fn_args, lambda_set, ret))
+        } else {
+            let layout = layout_from_flat_type(env, flat_type)?;
+            Ok(Self::ZeroArgumentThunk(layout))
+        }
+    }
+
+    /// Returns Err(()) if given an error, or Ok(Layout) if given a non-erroneous Structure.
+    /// Panics if given a FlexVar or RigidVar, since those should have been
+    /// monomorphized away already!
+    fn from_var(env: &mut Env<'a, '_>, var: Variable) -> Result<Self, LayoutProblem> {
+        if env.is_seen(var) {
+            unreachable!("The initial variable of a signature cannot be seen already")
+        } else {
+            let content = env.subs.get_content_without_compacting(var);
+            Self::new_help(env, var, content.clone())
+        }
     }
 }
 
@@ -873,10 +988,7 @@ impl<'a> LayoutCache<'a> {
             seen: Vec::new_in(arena),
         };
 
-        Layout::from_var(&mut env, var).map(|l| match l {
-            Layout::Closure(a, b, c) => RawFunctionLayout::Function(a, b, c),
-            other => RawFunctionLayout::ZeroArgumentThunk(other),
-        })
+        RawFunctionLayout::from_var(&mut env, var)
     }
 
     pub fn snapshot(&mut self) -> SnapshotKeyPlaceholder {
