@@ -2110,6 +2110,8 @@ fn specialize_external<'a>(
                             debug_assert!(matches!(union_layout, UnionLayout::NonRecursive(_)));
                             debug_assert_eq!(field_layouts.len(), captured.len());
 
+                            // captured variables are in symbol-alphabetic order, but now we want
+                            // them ordered by their alignment requirements
                             let mut combined = Vec::from_iter_in(
                                 captured.iter().map(|(x, _)| x).zip(field_layouts.iter()),
                                 env.arena,
@@ -2141,6 +2143,8 @@ fn specialize_external<'a>(
                             }
                         }
                         ClosureRepresentation::AlphabeticOrderStruct(field_layouts) => {
+                            // captured variables are in symbol-alphabetic order, but now we want
+                            // them ordered by their alignment requirements
                             let mut combined = Vec::from_iter_in(
                                 captured.iter().map(|(x, _)| x).zip(field_layouts.iter()),
                                 env.arena,
@@ -4091,6 +4095,8 @@ fn construct_closure_data<'a>(
             tag_name,
             union_layout,
         } => {
+            // captured variables are in symbol-alphabetic order, but now we want
+            // them ordered by their alignment requirements
             let mut combined =
                 Vec::from_iter_in(symbols.iter().zip(field_layouts.iter()), env.arena);
 
@@ -4123,6 +4129,8 @@ fn construct_closure_data<'a>(
         ClosureRepresentation::AlphabeticOrderStruct(field_layouts) => {
             debug_assert_eq!(field_layouts.len(), symbols.len());
 
+            // captured variables are in symbol-alphabetic order, but now we want
+            // them ordered by their alignment requirements
             let mut combined =
                 Vec::from_iter_in(symbols.iter().zip(field_layouts.iter()), env.arena);
 
