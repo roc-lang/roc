@@ -1,9 +1,9 @@
 app "app"
      packages { base: "platform" }
-     imports [base.Task, Test] 
+     imports [base.Task, Test, ListExtra] 
      provides [ main ] to base
 
 main : Task.Task {} []
 main =
-  Test.run Test.testList "Test the Test library"
-    |> Task.putLine 
+ListExtra.tests |> Test.run  "ListExtra Library"
+    |> Task.putLine  
