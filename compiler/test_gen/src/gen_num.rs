@@ -1734,7 +1734,6 @@ mod gen_num {
         );
     }
 
-
     #[test]
     fn bytes_to_u32_min_u8s() {
         assert_evals_to!(
@@ -1779,5 +1778,4 @@ mod gen_num {
             u32
         );
     }
-
 }
