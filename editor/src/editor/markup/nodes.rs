@@ -8,6 +8,7 @@ use crate::editor::markup::common_nodes::new_comma_mn;
 use crate::editor::markup::common_nodes::new_equals_mn;
 use crate::editor::markup::common_nodes::new_left_accolade_mn;
 use crate::editor::markup::common_nodes::new_left_square_mn;
+use crate::editor::markup::common_nodes::new_line_mn;
 use crate::editor::markup::common_nodes::new_right_accolade_mn;
 use crate::editor::markup::common_nodes::new_right_square_mn;
 use crate::editor::slow_pool::MarkNodeId;
@@ -17,7 +18,7 @@ use crate::editor::util::index_of;
 use crate::lang::ast::ExprId;
 use crate::lang::ast::RecordField;
 use crate::lang::ast::ValueDef;
-use crate::lang::parse::AppHeader;
+use crate::lang::parse::{AppHeader, AST};
 use crate::lang::pattern::get_identifier_string;
 use crate::lang::{
     ast::Expr2,
@@ -610,7 +611,7 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
 
     let app_name_node_id =
         header_val_mn( 
-            app_header.app_name,
+            app_header.app_name.clone(),
             ast_node_id,
             HighlightStyle::String,
             mark_node_pool
@@ -637,7 +638,7 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
 
     let pack_val_node_id =
         header_val_mn( 
-            app_header.packages_base,
+            app_header.packages_base.clone(),
             ast_node_id,
             HighlightStyle::String,
             mark_node_pool
@@ -659,7 +660,7 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
 
     let nr_of_imports = app_header.imports.len();
 
-    let import_child_ids =
+    let mut import_child_ids: Vec<MarkNodeId> =
         app_header.imports.iter().enumerate().map(|(indx, import)| {
 
             let import_val_mn_id = 
@@ -680,15 +681,20 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
                     import_val_mn_id
                 ]
             }
-        });
+        }).flatten().collect();
 
     let imports_right_square_node_id =
         mark_node_pool.add(new_right_square_mn(ast_node_id, None));
+
+    let mut full_import_children = vec![imports_node_id, imports_left_square_node_id];
+
+    full_import_children.append(&mut import_child_ids);
+    full_import_children.push(imports_right_square_node_id);
     
     let full_import_node = 
         MarkupNode::Nested {
             ast_node_id,
-            children_ids: vec![imports_node_id, imports_left_square_node_id],
+            children_ids: full_import_children,
             parent_id_opt: None,
         };
 
@@ -733,17 +739,30 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
             ],
             parent_id_opt: None,
         };
-
-    let full_provides_node_id = mark_node_pool.add(full_provides_node);
-    let full_import_node_id = mark_node_pool.add(full_import_node);
-    let full_packages_node = mark_node_pool.add(full_packages_node);
+    
     let full_app_node_id = mark_node_pool.add(full_app_node);
+    let newline_node_id_1 = mark_node_pool.add(new_line_mn(ast_node_id, None));
+    let full_packages_node = mark_node_pool.add(full_packages_node);
+    let newline_node_id_2 = mark_node_pool.add(new_line_mn(ast_node_id, None));
+    let full_import_node_id = mark_node_pool.add(full_import_node);
+    let newline_node_id_3 = mark_node_pool.add(new_line_mn(ast_node_id, None));
+    let full_provides_node_id = mark_node_pool.add(full_provides_node);
+    let newline_node_id_4 = mark_node_pool.add(new_line_mn(ast_node_id, None));
+    let newline_node_id_5 = mark_node_pool.add(new_line_mn(ast_node_id, None));
     
     let header_mark_node =
         MarkupNode::Nested {
             ast_node_id,
             children_ids: vec![
-                full_app_node_id, full_packages_node, full_import_node_id, full_provides_node_id
+                full_app_node_id,
+                newline_node_id_1,
+                full_packages_node,
+                newline_node_id_2,
+                full_import_node_id,
+                newline_node_id_3,
+                full_provides_node_id,
+                newline_node_id_4,
+                newline_node_id_5,
             ],
             parent_id_opt: None,
         };
@@ -755,8 +774,30 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
     header_mn_id
 }
 
-pub fn AST_to_mark_nodes() -> MarkNodeId {
-    //TODO call for header and Expr2's
+pub fn ast_to_mark_nodes<'a, 'b>(
+    arena: &'a Bump,
+    env: &mut Env<'b>,
+    ast: &AST,
+    mark_node_pool: &mut SlowPool,
+    interns: &Interns,) -> EdResult<Vec<MarkNodeId>> {
+
+    let mut all_mark_node_ids = vec![];
+
+    all_mark_node_ids.push(
+        header_to_markup(&ast.header, mark_node_pool)
+    );
+
+    for &expr_id in ast.expression_ids.iter() {
+        let expr2 = env.pool.get(expr_id);
+
+        let expr2_markup_id = expr2_to_markup(arena, env, expr2, expr_id, mark_node_pool, interns)?;
+
+        all_mark_node_ids.push(
+            expr2_markup_id
+        );
+    }
+    
+    Ok(all_mark_node_ids)
 }
 
 impl fmt::Display for MarkupNode {

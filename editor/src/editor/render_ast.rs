@@ -125,6 +125,8 @@ fn markup_to_wgpu_helper<'a>(
                 .with_color(colors::to_slice(*highlight_color))
                 .with_scale(code_style.font_size);
 
+            
+
             txt_row_col.1 += content.len();
             wgpu_texts.push(glyph_text);
         }

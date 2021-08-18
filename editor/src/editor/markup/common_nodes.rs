@@ -82,3 +82,13 @@ pub fn new_right_square_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId
     }
 }
 
+pub fn new_line_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
+    MarkupNode::Text {
+        content: "\n".to_owned(),
+        ast_node_id,
+        syn_high_style: HighlightStyle::Blank,
+        attributes: Attributes::new(),
+        parent_id_opt,
+    }
+}
+

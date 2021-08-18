@@ -1,10 +1,10 @@
 use crate::editor::code_lines::CodeLines;
 use crate::editor::grid_node_map::GridNodeMap;
+use crate::editor::markup::nodes::ast_to_mark_nodes;
 use crate::editor::slow_pool::{MarkNodeId, SlowPool};
 use crate::editor::{
     ed_error::SrcParseError,
     ed_error::{EdResult, MissingParent, NoNodeAtCaretPosition, EmptyCodeString},
-    markup::nodes::{expr2_to_markup, set_parent_for_all},
 };
 use crate::graphics::primitives::rect::Rect;
 use crate::lang::ast::{Expr2};
@@ -60,33 +60,22 @@ pub fn init_model<'a>(
 
     let mut markup_node_pool = SlowPool::new();
 
-    let markup_ids = if code_str.is_empty() {
+    let markup_ids = 
+        if code_str.is_empty() {
 
-        EmptyCodeString{}.fail()
+            EmptyCodeString{}.fail()
 
-    } else {
-        let mut temp_markup_ids = Vec::new();
+        } else {
 
-        for &expr_id in module.ast.expression_ids.iter() {
-            let expr2 = module.env.pool.get(expr_id);
-
-            let temp_markup_id = expr2_to_markup(
+            ast_to_mark_nodes(
                 &code_arena,
                 &mut module.env,
-                expr2,
-                expr_id,
+                &module.ast,
                 &mut markup_node_pool,
                 &loaded_module.interns
-            )?;
+            )
 
-            // it's easier to set the parent of the MarkupNodes afterwards
-            set_parent_for_all(temp_markup_id, &mut markup_node_pool);
-
-            temp_markup_ids.push(temp_markup_id);
-        }
-
-        Ok(temp_markup_ids)
-    }?;
+        }?;
 
     let code_lines = EdModel::build_code_lines_from_markup(&markup_ids, &markup_node_pool)?;
     let grid_node_map = EdModel::build_node_map_from_markup(&markup_ids, &markup_node_pool)?;
