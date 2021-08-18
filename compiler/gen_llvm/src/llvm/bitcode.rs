@@ -272,7 +272,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
 
     match closure_data_layout {
         Layout::Struct(&[]) => {
-            // do nothing
+            // nothing to add
         }
         other => {
             let closure_type = basic_type_from_layout(env, &other).ptr_type(AddressSpace::Generic);
@@ -287,55 +287,6 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
             arguments_cast.push(closure_data);
         }
     }
-
-    /*
-    match closure_data_layout {
-        Layout::Closure(_, lambda_set, _) => {
-            if let Layout::Struct(&[]) = lambda_set.runtime_representation() {
-                // do nothing
-            } else {
-                let closure_type =
-                    basic_type_from_layout(env, &lambda_set.runtime_representation())
-                        .ptr_type(AddressSpace::Generic);
-
-                let closure_cast = env
-                    .builder
-                    .build_bitcast(closure_ptr, closure_type, "load_opaque")
-                    .into_pointer_value();
-
-                let closure_data = env.builder.build_load(closure_cast, "load_opaque");
-
-                arguments_cast.push(closure_data);
-            }
-        }
-        Layout::Struct([Layout::Closure(_, lambda_set, _)]) => {
-            // a case required for Set.walk; may be able to remove when we can define builtins in
-            // terms of other builtins in the right way (using their function symbols instead of
-            // hacking with lowlevel ops).
-            let closure_type = basic_type_from_layout(
-                env,
-                &Layout::Struct(&[lambda_set.runtime_representation()]),
-            )
-            .ptr_type(AddressSpace::Generic);
-
-            let closure_cast = env
-                .builder
-                .build_bitcast(closure_ptr, closure_type, "load_opaque")
-                .into_pointer_value();
-
-            let closure_data = env.builder.build_load(closure_cast, "load_opaque");
-
-            arguments_cast.push(closure_data);
-        }
-        Layout::Struct([]) => {
-            // do nothing, should try to remove this case later
-        }
-        Layout::Struct(_) => {
-            // do nothing, should try to remove this case later
-        }
-        other => unreachable!("layout is not valid for a closure: {:?}", other),
-    }
-    */
 
     let call = {
         env.builder
@@ -644,39 +595,12 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
 
             let default = [value1, value2];
 
-            /*
-            let arguments_cast = match closure_data_layout {
-                Layout::Closure(_, lambda_set, _) => {
-                    if let Layout::Struct(&[]) = lambda_set.runtime_representation() {
-                        &default
-                    } else {
-                        let closure_type =
-                            basic_type_from_layout(env, &lambda_set.runtime_representation())
-                                .ptr_type(AddressSpace::Generic);
-
-                        let closure_cast = env
-                            .builder
-                            .build_bitcast(closure_ptr, closure_type, "load_opaque")
-                            .into_pointer_value();
-
-                        let closure_data = env.builder.build_load(closure_cast, "load_opaque");
-
-                        env.arena.alloc([value1, value2, closure_data]) as &[_]
-                    }
-                }
-                Layout::Struct([]) => &default,
-                other => unreachable!("layout is not valid for a closure: {:?}", other),
-            };
-            */
-
             let arguments_cast = match closure_data_layout {
                 Layout::Struct(&[]) => {
-                    // do nothing
+                    // nothing to add
                     &default
                 }
                 other => {
-                    //
-
                     let closure_type =
                         basic_type_from_layout(env, &other).ptr_type(AddressSpace::Generic);
 
