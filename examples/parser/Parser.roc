@@ -77,13 +77,19 @@ Step state a : [ Loop state, Done a ]
 
               
 
-loop : (state -> Parser (Step state a)), state -> Parser a 
+loop : (state -> Parser (Step (List a) (List a))), state -> Parser (List a) 
 loop = \nextState, s ->
-  \_input -> 
-      ps =  (nextState s)                 # Parser (Step state a))
-      when ps is 
-          Loop _s2 -> []
-          Done _aa -> []     
+  \input -> 
+      ps =  (nextState s)                 # Parser (Step (List a)(List a))
+      out = ps input                      # List (Pair (Step (List a)(List a)) (List U8))
+      if List.len out != 1 then [Pair [] input]
+      else 
+          when List.first out is 
+            Ok (Pair (Loop aas) input2) -> (nextState aas) input2 
+            Ok (Pair (Done aas) input2) -> [Pair aas input2]
+            Err _ -> [Pair [] input]
+ 
+        
 
 manyAux : Parser a, List a -> Parser (Step (List a) (List a))
 manyAux = \p, list ->

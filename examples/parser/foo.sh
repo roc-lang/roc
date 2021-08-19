@@ -130,3 +130,11 @@ isEven = \n ->
 t1 = {name: "filter [1,2,3,4,5,6] isEven == [2,4,6]", test: filter [1,2,3,4,5,6] isEven == [2,4,6]}
 
 tests = [t1]     
+
+oop : (state -> Parser (Step state a)), state -> Parser a 
+loop = \nextState, s ->
+  \_input -> 
+      ps =  (nextState s)                 # Parser (Step state a))
+      when ps input s 
+          List (Pair (Loop ss) input2) -> []
+          List (Pair (Done aa) input2) -> []     
