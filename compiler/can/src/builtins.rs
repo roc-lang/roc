@@ -3404,7 +3404,7 @@ fn num_bytes_to(symbol: Symbol, var_store: &mut VarStore, offset: i64, low_level
                                         RunLowLevel {
                                             ret_var: cast_var,
                                             args: vec![(cast_var, Num(var_store.fresh(), offset))],
-                                            op: LowLevel::NumCastToNat,
+                                            op: LowLevel::NumIntCast,
                                         },
                                     ),
                                 ],

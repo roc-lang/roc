@@ -10,7 +10,6 @@ pub const NUM_IS_FINITE: &str = "roc_builtins.num.is_finite";
 pub const NUM_POW_INT: &str = "roc_builtins.num.pow_int";
 pub const NUM_BYTES_TO_U16: &str = "roc_builtins.num.bytes_to_u16";
 pub const NUM_BYTES_TO_U32: &str = "roc_builtins.num.bytes_to_u32";
-pub const NUM_CAST_TO_NAT: &str = "roc_builtins.num.cast_to_nat";
 pub const NUM_ROUND: &str = "roc_builtins.num.round";
 
 pub const STR_INIT: &str = "roc_builtins.str.init";

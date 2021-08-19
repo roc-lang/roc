@@ -4740,11 +4740,6 @@ fn run_low_level<'a, 'ctx, 'env>(
                 }
             }
         }
-        NumCastToNat => {
-            debug_assert_eq!(args.len(), 1);
-            let num = load_symbol(scope, &args[0]).into_int_value();
-            call_bitcode_fn(env, &[num.into()], bitcode::NUM_CAST_TO_NAT)
-        }
         NumBytesToU16 => {
             debug_assert_eq!(args.len(), 2);
             let list = load_symbol(scope, &args[0]).into_struct_value();

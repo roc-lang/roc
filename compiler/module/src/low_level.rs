@@ -89,7 +89,6 @@ pub enum LowLevel {
     NumAsin,
     NumBytesToU16,
     NumBytesToU32,
-    NumCastToNat,
     NumBitwiseAnd,
     NumBitwiseXor,
     NumBitwiseOr,
@@ -126,7 +125,7 @@ impl LowLevel {
             | NumSqrtUnchecked | NumLogUnchecked | NumRound | NumToFloat | NumPow | NumCeiling
             | NumPowInt | NumFloor | NumIsFinite | NumAtan | NumAcos | NumAsin | NumBitwiseAnd
             | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy | NumShiftRightBy | NumBytesToU16
-            | NumBytesToU32 | NumCastToNat | NumShiftRightZfBy | NumIntCast | Eq | NotEq | And
+            | NumBytesToU32 | NumShiftRightZfBy | NumIntCast | Eq | NotEq | And
             | Or | Not | Hash | ExpectTrue => false,
 
             ListMap | ListMap2 | ListMap3 | ListMapWithIndex | ListKeepIf | ListWalk

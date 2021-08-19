@@ -81,7 +81,6 @@ comptime {
     exportNumFn(num.asin, "asin");
     exportNumFn(num.bytesToU16C, "bytes_to_u16");
     exportNumFn(num.bytesToU32C, "bytes_to_u32");
-    exportNumFn(num.castToNat, "cast_to_nat");
     exportNumFn(num.round, "round");
 }
 
