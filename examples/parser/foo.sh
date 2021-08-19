@@ -138,3 +138,42 @@ loop = \nextState, s ->
       when ps input s 
           List (Pair (Loop ss) input2) -> []
           List (Pair (Done aa) input2) -> []     
+
+
+loop : (state -> Parser (Step (List a) (List a))), state -> Parser (List a) 
+loop = \nextState, s ->
+  \input -> 
+      ps =  (nextState s)                 # Parser (Step (List a)(List a))
+      out = ps input                      # List (Pair (Step (List a)(List a)) (List U8))
+      if List.len out != 1 then [Pair (Done []) input]
+      else 
+          when List.first out is 
+            Ok (Pair (Loop aas) input2) -> [Pair (Loop aas) input2]
+            Ok (Pair (Done aas) input2) -> [Pair (Done aas) input2]
+            Err _ -> [Pair (Done []) input]
+
+# state : List a
+#
+loop : (state -> Parser (Step (List a) (List a))), state -> Parser (List a) 
+loop = \nextState, s ->
+  \input -> 
+      ps =  (nextState s)                 # Parser (Step (List a)(List a))
+      out = ps input                      # List (Pair (Step (List a)(List a)) (List U8))
+      if List.len out != 1 then [Pair [] input]
+      else 
+          when List.first out is 
+            Ok (Pair (Loop aas) input2) -> (nextState aas) input2 
+            Ok (Pair (Done aas) input2) -> [Pair aas input2]
+            Err _ -> [Pair [] input]            
+
+loop : (state -> Parser (Step (List a) (List a))), state -> Parser (List a) 
+loop = \nextState, s ->
+  \input -> 
+      ps =  (nextState s)                 # Parser (Step (List a)(List a))
+      out = ps input                      # List (Pair (Step (List a)(List a)) (List U8))
+      if List.len out != 1 then [Pair [] input]
+      else 
+          when List.first out is 
+            Ok (Pair (Loop aas) input2) -> (nextState aas) input2 
+            Ok (Pair (Done aas) input2) -> [Pair aas input2]
+            Err _ -> [Pair [] input] 

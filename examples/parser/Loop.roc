@@ -28,6 +28,7 @@ loop = \nextState, s ->
         Loop ss ->
             loop nextState ss
         Done aa -> aa
+           
 
 Counter : { counter : I64, value : I64 }
 
