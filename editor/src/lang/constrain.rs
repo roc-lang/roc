@@ -1,7 +1,7 @@
 use bumpalo::{collections::Vec as BumpVec, Bump};
 
 use crate::lang::{
-    ast::{ClosureExtra, Expr2, ExprId, RecordField, ValueDef, WhenBranch},
+    ast::{ClosureExtra, Expr2, ExprId, FunctionDef, RecordField, ValueDef, WhenBranch},
     expr::Env,
     pattern::{DestructType, Pattern2, PatternId, PatternState2, RecordDestruct},
     pool::{Pool, PoolStr, PoolVec, ShallowClone},
@@ -810,6 +810,95 @@ pub fn constrain_expr<'a>(
                 }
             }
         }
+        Expr2::LetFunction {
+            def_id,
+            body_id,
+            body_var,
+        } => {
+            let function_def = env.pool.get(*def_id);
+            let body = env.pool.get(*body_id);
+
+            let body_con = constrain_expr(arena, env, body, expected.shallow_clone(), region);
+
+            match function_def {
+                FunctionDef::WithAnnotation { .. } => todo!("implement {:?}", function_def),
+                FunctionDef::NoAnnotation {
+                    arguments,
+                    return_var,
+                    body: expr_id,
+                    ..
+                } => {
+                    let mut and_constraints = BumpVec::with_capacity_in(2, arena);
+
+                    let mut flex_vars = BumpVec::with_capacity_in(1, arena);
+                    flex_vars.push(*body_var);
+
+                    let mut state = PatternState2 {
+                        headers: BumpMap::new_in(arena),
+                        vars: BumpVec::with_capacity_in(1, arena),
+                        constraints: BumpVec::with_capacity_in(1, arena),
+                    };
+
+                    let expr_type = Type2::Variable(*return_var);
+
+                    for node_id in arguments.iter_node_ids() {
+                        let (pattern_id, pattern_var) = env.pool.get(node_id);
+
+                        let pattern = env.pool.get(*pattern_id);
+
+                        let pattern_type = Type2::Variable(*pattern_var);
+
+                        let pattern_expected =
+                            PExpected::NoExpectation(pattern_type.shallow_clone());
+
+                        constrain_pattern(
+                            arena,
+                            env,
+                            pattern,
+                            region,
+                            pattern_expected,
+                            &mut state,
+                        );
+
+                        state.vars.push(*pattern_var);
+                    }
+
+                    let def_expr = env.pool.get(*expr_id);
+
+                    let constrained_def = Let(arena.alloc(LetConstraint {
+                        rigid_vars: BumpVec::new_in(arena),
+                        flex_vars: state.vars,
+                        def_types: state.headers,
+                        defs_constraint: Let(arena.alloc(LetConstraint {
+                            rigid_vars: BumpVec::new_in(arena), // always empty
+                            flex_vars: BumpVec::new_in(arena), // empty, because our functions have no arguments
+                            def_types: BumpMap::new_in(arena), // empty, because our functions have no arguments!
+                            defs_constraint: And(state.constraints),
+                            ret_constraint: constrain_expr(
+                                arena,
+                                env,
+                                def_expr,
+                                Expected::NoExpectation(expr_type),
+                                region,
+                            ),
+                        })),
+                        ret_constraint: body_con,
+                    }));
+
+                    and_constraints.push(constrained_def);
+
+                    and_constraints.push(Eq(
+                        Type2::Variable(*body_var),
+                        expected,
+                        Category::Storage(std::file!(), std::line!()),
+                        // TODO: needs to be ret region
+                        region,
+                    ));
+
+                    dbg!(exists(arena, flex_vars, And(and_constraints)))
+                }
+            }
+        }
         Expr2::Update {
             symbol,
             updates,
@@ -1023,7 +1112,6 @@ pub fn constrain_expr<'a>(
             exists(arena, vars, And(and_constraints))
         }
         Expr2::LetRec { .. } => todo!(),
-        Expr2::LetFunction { .. } => todo!(),
     }
 }
 
