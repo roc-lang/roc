@@ -2657,3 +2657,85 @@ fn lambda_set_enum_byte_byte() {
         i64
     );
 }
+
+#[test]
+fn list_walk_until() {
+    // see https://github.com/rtfeldman/roc/issues/1576
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+
+            satisfyA : {} -> List {}
+            satisfyA = \_ -> []
+
+            oneOfResult =
+                List.walkUntil [ satisfyA ] (\_, _ -> Stop []) []
+
+            main =
+                when oneOfResult is
+                    _ -> 32
+            "#
+        ),
+        32,
+        i64
+    );
+}
+
+#[test]
+#[ignore]
+fn int_literal_not_specialized() {
+    // see https://github.com/rtfeldman/roc/issues/1600
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+
+            satisfy : (U8 -> Bool) -> Str
+            satisfy = \_ -> "foo"
+
+
+            main : I64
+            main =
+                p1 = (\u -> u == 97)
+
+                satisfyA = satisfy p1
+
+                when satisfyA is
+                    _ -> 32
+            "#
+        ),
+        32,
+        i64
+    );
+}
+
+#[test]
+#[ignore]
+fn unresolved_tvar_when_capture_is_unused() {
+    // see https://github.com/rtfeldman/roc/issues/1585
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                main : I64
+                main =
+                    r : Bool
+                    r = False
+
+                    # underscore does not change the problem, maybe it's type-related? We don 't really know what `Green` refers to below
+                    p1 = (\x -> r == (1 == 1))
+                    oneOfResult = List.map [p1] (\p -> p Green)
+
+                    when oneOfResult is
+                        _ -> 32
+
+            "#
+        ),
+        32,
+        i64
+    );
+}

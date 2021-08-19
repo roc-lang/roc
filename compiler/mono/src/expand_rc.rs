@@ -160,17 +160,9 @@ impl<'a, 'i> Env<'a, 'i> {
     fn try_insert_struct_info(&mut self, symbol: Symbol, layout: &Layout<'a>) {
         use Layout::*;
 
-        match layout {
-            Struct(fields) => {
-                self.constructor_map.insert(symbol, 0);
-                self.layout_map.insert(symbol, Layout::Struct(fields));
-            }
-            Closure(_, lambda_set, _) => {
-                self.constructor_map.insert(symbol, 0);
-                self.layout_map
-                    .insert(symbol, lambda_set.runtime_representation());
-            }
-            _ => {}
+        if let Struct(fields) = layout {
+            self.constructor_map.insert(symbol, 0);
+            self.layout_map.insert(symbol, Layout::Struct(fields));
         }
     }
 
@@ -243,10 +235,6 @@ fn layout_for_constructor<'a>(
         Struct(fields) => {
             debug_assert_eq!(constructor, 0);
             HasFields(fields)
-        }
-        Closure(_arguments, _lambda_set, _result) => {
-            // HasFields(fields)
-            ConstructorLayout::Unknown
         }
         other => unreachable!("weird layout {:?}", other),
     }
@@ -368,20 +356,10 @@ pub fn expand_and_cancel_proc<'a>(
     let mut introduced = Vec::new_in(env.arena);
 
     for (layout, symbol) in arguments {
-        match layout {
-            Layout::Struct(fields) => {
-                env.insert_struct_info(*symbol, fields);
+        if let Layout::Struct(fields) = layout {
+            env.insert_struct_info(*symbol, fields);
 
-                introduced.push(*symbol);
-            }
-            Layout::Closure(_arguments, _lambda_set, _result) => {
-                // TODO can this be improved again?
-                // let fpointer = Layout::FunctionPointer(arguments, result);
-                // let fields = env.arena.alloc([fpointer, *closure_layout.layout]);
-                // env.insert_struct_info(*symbol, fields);
-                // introduced.push(*symbol);
-            }
-            _ => {}
+            introduced.push(*symbol);
         }
     }
 
