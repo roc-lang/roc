@@ -1082,14 +1082,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         )
                         .unwrap()
                 }
-                (StructValue(argument), Layout::Closure(_, _, _)) => env
-                    .builder
-                    .build_extract_value(
-                        argument,
-                        *index as u32,
-                        env.arena.alloc(format!("closure_field_access_{}_", index)),
-                    )
-                    .unwrap(),
                 (
                     PointerValue(argument),
                     Layout::Union(UnionLayout::NonNullableUnwrapped(fields)),
@@ -3626,18 +3618,6 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     lambda_set: LambdaSet<'a>,
     result: &Layout<'a>,
 ) {
-    let context = &env.context;
-    let builder = env.builder;
-
-    // STEP 1: build function header
-
-    // e.g. `roc__main_1_Fx_caller`
-    let function_name = format!(
-        "roc__{}_{}_caller",
-        def_name,
-        alias_symbol.as_str(&env.interns)
-    );
-
     let mut argument_types = Vec::with_capacity_in(arguments.len() + 3, env.arena);
 
     for layout in arguments {
@@ -3654,6 +3634,9 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     };
     argument_types.push(closure_argument_type.into());
 
+    let context = &env.context;
+    let builder = env.builder;
+
     let result_type = basic_type_from_layout(env, result);
 
     let roc_call_result_type =
@@ -3661,6 +3644,15 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
     let output_type = { roc_call_result_type.ptr_type(AddressSpace::Generic) };
     argument_types.push(output_type.into());
+
+    // STEP 1: build function header
+
+    // e.g. `roc__main_1_Fx_caller`
+    let function_name = format!(
+        "roc__{}_{}_caller",
+        def_name,
+        alias_symbol.as_str(&env.interns)
+    );
 
     let function_type = context.void_type().fn_type(&argument_types, false);
 
@@ -3680,9 +3672,15 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
 
     let mut parameters = function_value.get_params();
     let output = parameters.pop().unwrap().into_pointer_value();
-    let closure_data_ptr = parameters.pop().unwrap().into_pointer_value();
 
-    let closure_data = builder.build_load(closure_data_ptr, "load_closure_data");
+    let closure_data = if let Some(closure_data_ptr) = parameters.pop() {
+        let closure_data =
+            builder.build_load(closure_data_ptr.into_pointer_value(), "load_closure_data");
+
+        env.arena.alloc([closure_data]) as &[_]
+    } else {
+        &[]
+    };
 
     let mut parameters = parameters;
 
@@ -3696,7 +3694,7 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
         function_value,
         evaluator,
         evaluator.get_call_conventions(),
-        &[closure_data],
+        closure_data,
         result_type,
     );
 
@@ -3714,8 +3712,12 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
     );
 
     // STEP 4: build a {} -> u64 function that gives the size of the closure
-    let layout = lambda_set.runtime_representation();
-    build_host_exposed_alias_size(env, def_name, alias_symbol, layout);
+    build_host_exposed_alias_size(
+        env,
+        def_name,
+        alias_symbol,
+        lambda_set.runtime_representation(),
+    );
 }
 
 fn build_host_exposed_alias_size<'a, 'ctx, 'env>(
