@@ -3,7 +3,7 @@ interface Parser exposes [
     succeed, any,  satisfy, fail,
     map, andThen, oneOf, oneOfResult,
     first, second,
-    lowerCase, manyAux, q2,
+    lowerCase, manyAux, many, q2,
     runToString
   ] imports [Pair]
 
@@ -49,23 +49,9 @@ oneOfResult = (oneOf [satisfyA, satisfyB]) [97, 98, 99, 100]
 ## MANY
 
 
-
- 
-# many : Parser a -> Parser (List a)
-
-# manyAuxFAKE : Parser a, List a -> Parser (Step (List a) (List a))
-# manyAuxFAKE = \_, _ ->
-#     \input -> (succeed (Done [])) input
-              
-# manyAuxFAKE2 : Parser a, List a -> Parser (Step (List a) (List a))
-# manyAuxFAKE2 = \p, list ->
-#     \inpu
-              
-
-# many : Parser a -> Parser (List a)
-# many = \p -> 
-#    \input -> loop (\list -> ((manyAux p list) input) ) []
-
+many : Parser a -> Parser (List a)
+many = \p -> 
+    \input -> (loop (\list -> manyAux p list) [])  input  
 
 # loop : (state -> Parser (Step state a)), state -> Parser a 
 # loop = \nextState, s ->
@@ -106,11 +92,10 @@ manyAux = \p, list ->
                 p2 = succeed (Done (List.reverse list))
                 (oneOf [ p1, p2 ])) input
 
-
-q2 = {name: "Parser.run [97,98,99] (manyAux lowerCase [ ]) => Pair ((Loop [97]) [98,99])", test: Parser.run [97,98,99] (manyAux lowerCase [ ]) == [Pair (Loop [97]) [98,99]]}
-
 isLowerCaseAlpha : U8 -> Bool
 isLowerCaseAlpha = \u -> u >= 97 && u <= 122
+
+
 
 lowerCase = satisfy isLowerCaseAlpha
 
@@ -196,7 +181,9 @@ first =
 
 
 
-## HELPERS
+## tests
+q2 = {name: "Parser.run [97,98,99] (manyAux lowerCase [ ]) => Pair ((Loop [97]) [98,99])", test: Parser.run [97,98,99] (manyAux lowerCase [ ]) == [Pair (Loop [97]) [98,99]]}
+
 
 
 

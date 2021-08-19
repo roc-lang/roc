@@ -177,3 +177,6 @@ loop = \nextState, s ->
             Ok (Pair (Loop aas) input2) -> (nextState aas) input2 
             Ok (Pair (Done aas) input2) -> [Pair aas input2]
             Err _ -> [Pair [] input] 
+
+foo : Parser a -> Parser (Step (List a) (List a))
+foo = \p -> manyAux p []
