@@ -331,6 +331,21 @@ fn constrain_let_value() {
 }
 
 #[test]
+fn constrain_let_function() {
+    infer_eq(
+        indoc!(
+            r#"
+            x = \a, b ->
+                Pair a b
+
+            x
+            "#
+        ),
+        "Num a, Num a -> [ Pair a a ]*",
+    )
+}
+
+#[test]
 fn constrain_update() {
     infer_eq(
         indoc!(
