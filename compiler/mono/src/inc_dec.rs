@@ -271,10 +271,20 @@ impl<'a> Context<'a> {
     fn get_var_info(&self, symbol: Symbol) -> VarInfo {
         match self.vars.get(&symbol) {
             Some(info) => *info,
-            None => panic!(
-                "Symbol {:?} {} has no info in {:?}",
-                symbol, symbol, self.vars
-            ),
+            None => {
+                eprintln!(
+                    "Symbol {:?} {} has no info in self.vars",
+                    symbol,
+                    symbol, // self.vars
+                );
+
+                VarInfo {
+                    persistent: true,
+                    reference: false,
+                    consume: false,
+                    reset: false,
+                }
+            }
         }
     }
 
