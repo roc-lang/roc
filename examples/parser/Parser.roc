@@ -3,7 +3,7 @@ interface Parser exposes [
     succeed, any,  satisfy, fail,
     map, andThen, oneOf, oneOfResult,
     first, second,
-    lowerCase, manyAux, many, q2,
+    lowerCase, manyAux, many, q2, q3,
     runToString
   ] imports [Pair]
 
@@ -183,6 +183,7 @@ first =
 
 ## tests
 q2 = {name: "Parser.run [97,98,99] (manyAux lowerCase [ ]) => Pair ((Loop [97]) [98,99])", test: Parser.run [97,98,99] (manyAux lowerCase [ ]) == [Pair (Loop [97]) [98,99]]}
+q3 = {name: "many lowerCase", test: Parser.run [97, 99, 100, 0] (many lowerCase) == [Pair [97, 98, 99] [0]] }
 
 
 
