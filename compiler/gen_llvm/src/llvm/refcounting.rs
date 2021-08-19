@@ -659,23 +659,6 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
             Some(function)
         }
 
-        Closure(_, lambda_set, _) => {
-            if lambda_set.contains_refcounted() {
-                let function = modify_refcount_layout_build_function(
-                    env,
-                    parent,
-                    layout_ids,
-                    mode,
-                    when_recursive,
-                    &lambda_set.runtime_representation(),
-                )?;
-
-                Some(function)
-            } else {
-                None
-            }
-        }
-
         Struct(layouts) => {
             let function = modify_refcount_struct(env, layout_ids, layouts, mode, when_recursive);
 

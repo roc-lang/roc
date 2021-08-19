@@ -26,10 +26,6 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
     use Layout::*;
 
     match layout {
-        Closure(_args, closure_layout, _ret_layout) => {
-            let closure_data_layout = closure_layout.runtime_representation();
-            basic_type_from_layout(env, &closure_data_layout)
-        }
         Struct(sorted_fields) => basic_type_from_record(env, sorted_fields),
         Union(union_layout) => {
             use UnionLayout::*;

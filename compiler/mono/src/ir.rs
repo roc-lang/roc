@@ -546,11 +546,11 @@ impl<'a> Procs<'a> {
         // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
         let is_self_recursive = false;
 
-        let layout = layout_cache
-            .from_var(env.arena, annotation, env.subs)
+        let raw_layout = layout_cache
+            .raw_from_var(env.arena, annotation, env.subs)
             .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-        let top_level = ProcLayout::from_layout(env.arena, layout);
+        let top_level = ProcLayout::from_raw(env.arena, raw_layout);
 
         match patterns_to_when(env, layout_cache, loc_args, ret_var, loc_body) {
             Ok((_, pattern_symbols, body)) => {
@@ -617,7 +617,11 @@ impl<'a> Procs<'a> {
                                 Ok((proc, layout)) => {
                                     let top_level = ProcLayout::from_raw(env.arena, layout);
 
-                                    debug_assert_eq!(outside_layout, top_level);
+                                    debug_assert_eq!(
+                                        outside_layout, top_level,
+                                        "different raw layouts for {:?}",
+                                        proc.name
+                                    );
 
                                     if self.module_thunks.contains(&proc.name) {
                                         debug_assert!(top_level.arguments.is_empty());
@@ -2028,7 +2032,9 @@ fn specialize_external<'a>(
 
                     aliases.insert(*symbol, (name, top_level, layout));
                 }
-                RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!("so far"),
+                RawFunctionLayout::ZeroArgumentThunk(_) => {
+                    unreachable!("so far");
+                }
             }
         }
 
@@ -2096,7 +2102,7 @@ fn specialize_external<'a>(
 
                     match closure_layout.layout_for_member(proc_name) {
                         ClosureRepresentation::Union {
-                            tag_layout: field_layouts,
+                            alphabetic_order_fields: field_layouts,
                             union_layout,
                             tag_id,
                             ..
@@ -2104,7 +2110,23 @@ fn specialize_external<'a>(
                             debug_assert!(matches!(union_layout, UnionLayout::NonRecursive(_)));
                             debug_assert_eq!(field_layouts.len(), captured.len());
 
-                            for (index, (symbol, _variable)) in captured.iter().enumerate() {
+                            // captured variables are in symbol-alphabetic order, but now we want
+                            // them ordered by their alignment requirements
+                            let mut combined = Vec::from_iter_in(
+                                captured.iter().map(|(x, _)| x).zip(field_layouts.iter()),
+                                env.arena,
+                            );
+
+                            let ptr_bytes = env.ptr_bytes;
+
+                            combined.sort_by(|(_, layout1), (_, layout2)| {
+                                let size1 = layout1.alignment_bytes(ptr_bytes);
+                                let size2 = layout2.alignment_bytes(ptr_bytes);
+
+                                size2.cmp(&size1)
+                            });
+
+                            for (index, (symbol, layout)) in combined.iter().enumerate() {
                                 let expr = Expr::UnionAtIndex {
                                     tag_id,
                                     structure: Symbol::ARG_CLOSURE,
@@ -2112,52 +2134,65 @@ fn specialize_external<'a>(
                                     union_layout,
                                 };
 
-                                let layout = field_layouts[index];
-
                                 specialized_body = Stmt::Let(
-                                    *symbol,
+                                    **symbol,
                                     expr,
-                                    layout,
+                                    **layout,
                                     env.arena.alloc(specialized_body),
                                 );
                             }
                         }
-                        ClosureRepresentation::Other(layout) => match layout {
-                            Layout::Struct(field_layouts) => {
-                                debug_assert_eq!(
-                                    captured.len(),
-                                    field_layouts.len(),
-                                    "{:?} captures {:?} but has layout {:?}",
-                                    proc_name,
-                                    &captured,
-                                    &field_layouts
+                        ClosureRepresentation::AlphabeticOrderStruct(field_layouts) => {
+                            // captured variables are in symbol-alphabetic order, but now we want
+                            // them ordered by their alignment requirements
+                            let mut combined = Vec::from_iter_in(
+                                captured.iter().map(|(x, _)| x).zip(field_layouts.iter()),
+                                env.arena,
+                            );
+
+                            let ptr_bytes = env.ptr_bytes;
+
+                            combined.sort_by(|(_, layout1), (_, layout2)| {
+                                let size1 = layout1.alignment_bytes(ptr_bytes);
+                                let size2 = layout2.alignment_bytes(ptr_bytes);
+
+                                size2.cmp(&size1)
+                            });
+
+                            debug_assert_eq!(
+                                captured.len(),
+                                field_layouts.len(),
+                                "{:?} captures {:?} but has layout {:?}",
+                                proc_name,
+                                &captured,
+                                &field_layouts
+                            );
+
+                            for (index, (symbol, layout)) in combined.iter().enumerate() {
+                                let expr = Expr::StructAtIndex {
+                                    index: index as _,
+                                    field_layouts,
+                                    structure: Symbol::ARG_CLOSURE,
+                                };
+
+                                specialized_body = Stmt::Let(
+                                    **symbol,
+                                    expr,
+                                    **layout,
+                                    env.arena.alloc(specialized_body),
                                 );
-
-                                for (index, (symbol, _variable)) in captured.iter().enumerate() {
-                                    let expr = Expr::StructAtIndex {
-                                        index: index as _,
-                                        field_layouts,
-                                        structure: Symbol::ARG_CLOSURE,
-                                    };
-
-                                    let layout = field_layouts[index];
-
-                                    specialized_body = Stmt::Let(
-                                        *symbol,
-                                        expr,
-                                        layout,
-                                        env.arena.alloc(specialized_body),
-                                    );
-                                }
-                                //                                    let symbol = captured[0].0;
-                                //
-                                //                                    substitute_in_exprs(
-                                //                                        env.arena,
-                                //                                        &mut specialized_body,
-                                //                                        symbol,
-                                //                                        Symbol::ARG_CLOSURE,
-                                //                                    );
                             }
+                            //                                    let symbol = captured[0].0;
+                            //
+                            //                                    substitute_in_exprs(
+                            //                                        env.arena,
+                            //                                        &mut specialized_body,
+                            //                                        symbol,
+                            //                                        Symbol::ARG_CLOSURE,
+                            //                                    );
+                        }
+
+                        ClosureRepresentation::Other(layout) => match layout {
                             Layout::Builtin(Builtin::Int1) => {
                                 // just ignore this value
                                 // IDEA don't pass this value in the future
@@ -2467,19 +2502,19 @@ fn specialize_solved_type<'a>(
     let fn_var = introduce_solved_type_to_subs(env, &solved_type);
 
     // for debugging only
-    let attempted_layout = layout_cache
-        .from_var(env.arena, fn_var, env.subs)
+    let raw = layout_cache
+        .raw_from_var(env.arena, fn_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
-    let raw = match attempted_layout {
-        Layout::Closure(a, lambda_set, c) => {
-            if procs.module_thunks.contains(&proc_name) {
+    let raw = if procs.module_thunks.contains(&proc_name) {
+        match raw {
+            RawFunctionLayout::Function(_, lambda_set, _) => {
                 RawFunctionLayout::ZeroArgumentThunk(lambda_set.runtime_representation())
-            } else {
-                RawFunctionLayout::Function(a, lambda_set, c)
             }
+            _ => raw,
         }
-        _ => RawFunctionLayout::ZeroArgumentThunk(attempted_layout),
+    } else {
+        raw
     };
 
     // make sure rigid variables in the annotation are converted to flex variables
@@ -2506,12 +2541,12 @@ fn specialize_solved_type<'a>(
     match specialized {
         Ok(proc) => {
             // when successful, the layout after unification should be the layout before unification
-            debug_assert_eq!(
-                attempted_layout,
-                layout_cache
-                    .from_var(env.arena, fn_var, env.subs)
-                    .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err))
-            );
+            //            debug_assert_eq!(
+            //                attempted_layout,
+            //                layout_cache
+            //                    .from_var(env.arena, fn_var, env.subs)
+            //                    .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err))
+            //            );
 
             env.subs.rollback_to(snapshot);
             layout_cache.rollback_to(cache_snapshot);
@@ -2541,39 +2576,20 @@ impl<'a> ProcLayout<'a> {
         let mut arguments = Vec::with_capacity_in(old_arguments.len(), arena);
 
         for old in old_arguments {
-            match old {
-                Layout::Closure(_, lambda_set, _) => {
-                    let repr = lambda_set.runtime_representation();
-                    arguments.push(repr)
-                }
-                other => arguments.push(*other),
-            }
+            let other = old;
+            arguments.push(*other);
         }
 
-        let new_result = match result {
-            Layout::Closure(_, lambda_set, _) => lambda_set.runtime_representation(),
-            other => other,
-        };
+        let other = result;
+        let new_result = other;
 
         ProcLayout {
             arguments: arguments.into_bump_slice(),
             result: new_result,
         }
     }
-    pub fn from_layout(arena: &'a Bump, layout: Layout<'a>) -> Self {
-        match layout {
-            Layout::Closure(arguments, lambda_set, result) => {
-                let arguments = lambda_set.extend_argument_list(arena, arguments);
-                ProcLayout::new(arena, arguments, *result)
-            }
-            _ => ProcLayout {
-                arguments: &[],
-                result: layout,
-            },
-        }
-    }
 
-    fn from_raw(arena: &'a Bump, raw: RawFunctionLayout<'a>) -> Self {
+    pub fn from_raw(arena: &'a Bump, raw: RawFunctionLayout<'a>) -> Self {
         match raw {
             RawFunctionLayout::Function(arguments, lambda_set, result) => {
                 let arguments = lambda_set.extend_argument_list(arena, arguments);
@@ -2666,11 +2682,13 @@ macro_rules! match_on_closure_argument {
         let arg_layouts = top_level.arguments;
         let ret_layout = top_level.result;
 
+
         match closure_data_layout {
             RawFunctionLayout::Function(_, lambda_set, _) =>  {
                 lowlevel_match_on_lambda_set(
                     $env,
                     lambda_set,
+                    $op,
                     $closure_data_symbol,
                     |top_level_function, closure_data, closure_env_layout, specialization_id| self::Call {
                         call_type: CallType::HigherOrderLowLevel {
@@ -4054,10 +4072,27 @@ fn construct_closure_data<'a>(
     match lambda_set.layout_for_member(name) {
         ClosureRepresentation::Union {
             tag_id,
-            tag_layout: _,
+            alphabetic_order_fields: field_layouts,
             tag_name,
             union_layout,
         } => {
+            // captured variables are in symbol-alphabetic order, but now we want
+            // them ordered by their alignment requirements
+            let mut combined =
+                Vec::from_iter_in(symbols.iter().zip(field_layouts.iter()), env.arena);
+
+            let ptr_bytes = env.ptr_bytes;
+
+            combined.sort_by(|(_, layout1), (_, layout2)| {
+                let size1 = layout1.alignment_bytes(ptr_bytes);
+                let size2 = layout2.alignment_bytes(ptr_bytes);
+
+                size2.cmp(&size1)
+            });
+
+            let symbols =
+                Vec::from_iter_in(combined.iter().map(|(a, _)| **a), env.arena).into_bump_slice();
+
             let expr = Expr::Tag {
                 tag_id,
                 tag_layout: union_layout,
@@ -4072,8 +4107,32 @@ fn construct_closure_data<'a>(
                 env.arena.alloc(hole),
             )
         }
-        ClosureRepresentation::Other(Layout::Struct(field_layouts)) => {
+        ClosureRepresentation::AlphabeticOrderStruct(field_layouts) => {
             debug_assert_eq!(field_layouts.len(), symbols.len());
+
+            // captured variables are in symbol-alphabetic order, but now we want
+            // them ordered by their alignment requirements
+            let mut combined =
+                Vec::from_iter_in(symbols.iter().zip(field_layouts.iter()), env.arena);
+
+            let ptr_bytes = env.ptr_bytes;
+
+            combined.sort_by(|(_, layout1), (_, layout2)| {
+                let size1 = layout1.alignment_bytes(ptr_bytes);
+                let size2 = layout2.alignment_bytes(ptr_bytes);
+
+                size2.cmp(&size1)
+            });
+
+            let symbols =
+                Vec::from_iter_in(combined.iter().map(|(a, _)| **a), env.arena).into_bump_slice();
+            let field_layouts =
+                Vec::from_iter_in(combined.iter().map(|(_, b)| **b), env.arena).into_bump_slice();
+
+            debug_assert_eq!(
+                Layout::Struct(field_layouts),
+                lambda_set.runtime_representation()
+            );
 
             let expr = Expr::Struct(symbols);
 
@@ -5952,12 +6011,21 @@ fn reuse_function_symbol<'a>(
         None => {
             match arg_var {
                 Some(arg_var) if env.is_imported_symbol(original) => {
-                    let layout = layout_cache
-                        .from_var(env.arena, arg_var, env.subs)
+                    let raw = layout_cache
+                        .raw_from_var(env.arena, arg_var, env.subs)
                         .expect("creating layout does not fail");
 
                     if procs.imported_module_thunks.contains(&original) {
-                        let top_level = ProcLayout::new(env.arena, &[], layout);
+                        let layout = match raw {
+                            RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
+                            RawFunctionLayout::Function(_, lambda_set, _) => {
+                                lambda_set.runtime_representation()
+                            }
+                        };
+
+                        let raw = RawFunctionLayout::ZeroArgumentThunk(layout);
+                        let top_level = ProcLayout::from_raw(env.arena, raw);
+
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
@@ -5968,7 +6036,7 @@ fn reuse_function_symbol<'a>(
 
                         force_thunk(env, original, layout, symbol, env.arena.alloc(result))
                     } else {
-                        let top_level = ProcLayout::from_layout(env.arena, layout);
+                        let top_level = ProcLayout::from_raw(env.arena, raw);
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
@@ -6011,7 +6079,7 @@ fn reuse_function_symbol<'a>(
             let captured = partial_proc.captured_symbols.clone();
 
             match res_layout {
-                RawFunctionLayout::Function(argument_layouts, lambda_set, ret_layout) => {
+                RawFunctionLayout::Function(_, lambda_set, _) => {
                     // define the function pointer
                     let function_ptr_layout = ProcLayout::from_raw(env.arena, res_layout);
 
@@ -6045,7 +6113,11 @@ fn reuse_function_symbol<'a>(
                         )
                     } else if procs.module_thunks.contains(&original) {
                         // this is a 0-argument thunk
-                        let layout = Layout::Closure(argument_layouts, lambda_set, ret_layout);
+
+                        // TODO suspicious
+                        // let layout = Layout::Closure(argument_layouts, lambda_set, ret_layout);
+                        // panic!("suspicious");
+                        let layout = lambda_set.runtime_representation();
                         let top_level = ProcLayout::new(env.arena, &[], layout);
                         procs.insert_passed_by_name(
                             env,
@@ -6608,8 +6680,12 @@ fn call_by_name_module_thunk<'a>(
 
                         match specialize(env, procs, proc_name, layout_cache, pending, partial_proc)
                         {
-                            Ok((proc, layout)) => {
-                                debug_assert!(layout.is_zero_argument_thunk());
+                            Ok((proc, raw_layout)) => {
+                                debug_assert!(
+                                    raw_layout.is_zero_argument_thunk(),
+                                    "but actually {:?}",
+                                    raw_layout
+                                );
 
                                 let was_present =
                                     procs.specialized.remove(&(proc_name, top_level_layout));
@@ -7570,6 +7646,7 @@ pub fn num_argument_to_int_or_float(
 fn lowlevel_match_on_lambda_set<'a, ToLowLevelCall>(
     env: &mut Env<'a, '_>,
     lambda_set: LambdaSet<'a>,
+    op: LowLevel,
     closure_data_symbol: Symbol,
     to_lowlevel_call: ToLowLevelCall,
     return_layout: Layout<'a>,
@@ -7609,19 +7686,29 @@ where
                 env.arena.alloc(result),
             )
         }
-        Layout::Struct(_) => {
-            let function_symbol = lambda_set.set[0].0;
+        Layout::Struct(_) => match lambda_set.set.get(0) {
+            Some((function_symbol, _)) => {
+                let call_spec_id = env.next_call_specialization_id();
+                let call = to_lowlevel_call(
+                    *function_symbol,
+                    closure_data_symbol,
+                    lambda_set.is_represented(),
+                    call_spec_id,
+                );
 
-            let call_spec_id = env.next_call_specialization_id();
-            let call = to_lowlevel_call(
-                function_symbol,
-                closure_data_symbol,
-                lambda_set.is_represented(),
-                call_spec_id,
-            );
+                build_call(env, call, assigned, return_layout, env.arena.alloc(hole))
+            }
+            None => {
+                eprintln!(
+                    "a function passed to `{:?}` LowLevel call has an empty lambda set!
+                     The most likely reason is that some symbol you use is not in scope.
+                    ",
+                    op
+                );
 
-            build_call(env, call, assigned, return_layout, env.arena.alloc(hole))
-        }
+                hole.clone()
+            }
+        },
         Layout::Builtin(Builtin::Int1) => {
             let closure_tag_id_symbol = closure_data_symbol;
 
