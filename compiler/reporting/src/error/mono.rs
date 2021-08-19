@@ -142,7 +142,7 @@ fn pattern_to_doc_help<'b>(
             Bit(true) => alloc.text("True"),
             Bit(false) => alloc.text("False"),
             Byte(b) => alloc.text(b.to_string()),
-            Float(f) => alloc.text(f.to_string()),
+            Float(_, f) => alloc.text(f.to_string()),
             Str(s) => alloc.string(s.into()),
         },
         Ctor(union, tag_id, args) => {

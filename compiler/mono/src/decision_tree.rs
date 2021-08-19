@@ -85,8 +85,7 @@ enum Test<'a> {
         arguments: Vec<(Pattern<'a>, Layout<'a>)>,
     },
     IsInt(i128),
-    // float patterns are stored as u64 so they are comparable/hashable
-    IsFloat(u64),
+    IsFloat(Box<str>, u64),
     IsStr(Box<str>),
     IsBit(bool),
     IsByte {
@@ -109,7 +108,7 @@ impl<'a> Hash for Test<'a> {
                 state.write_u8(1);
                 v.hash(state);
             }
-            IsFloat(v) => {
+            IsFloat(_, v) => {
                 state.write_u8(2);
                 v.hash(state);
             }
@@ -301,7 +300,7 @@ fn tests_are_complete_help(last_test: &Test, number_of_tests: usize) -> bool {
         Test::IsByte { num_alts, .. } => number_of_tests == *num_alts,
         Test::IsBit(_) => number_of_tests == 2,
         Test::IsInt(_) => false,
-        Test::IsFloat(_) => false,
+        Test::IsFloat(_, _) => false,
         Test::IsStr(_) => false,
     }
 }
@@ -555,7 +554,7 @@ fn test_at_path<'a>(
                     num_alts: union.alternatives.len(),
                 },
                 IntLiteral(v) => IsInt(*v),
-                FloatLiteral(v) => IsFloat(*v),
+                FloatLiteral(s, v) => IsFloat(s.clone(), *v),
                 StrLiteral(v) => IsStr(v.clone()),
             };
 
@@ -811,8 +810,8 @@ fn to_relevant_branch_help<'a>(
             _ => None,
         },
 
-        FloatLiteral(float) => match test {
-            IsFloat(test_float) if float == *test_float => {
+        FloatLiteral(_, float) => match test {
+            IsFloat(_, test_float) if float == *test_float => {
                 start.extend(end);
                 Some(Branch {
                     goal: branch.goal,
@@ -909,7 +908,7 @@ fn needs_tests(pattern: &Pattern) -> bool {
         | BitLiteral { .. }
         | EnumLiteral { .. }
         | IntLiteral(_)
-        | FloatLiteral(_)
+        | FloatLiteral(_, _)
         | StrLiteral(_) => true,
     }
 }
@@ -1269,10 +1268,10 @@ fn test_to_equality<'a>(
             (stores, lhs_symbol, rhs_symbol, None)
         }
 
-        Test::IsFloat(test_int) => {
+        Test::IsFloat(test_str, test_int) => {
             // TODO maybe we can actually use i64 comparison here?
             let test_float = f64::from_bits(test_int as u64);
-            let lhs = Expr::Literal(Literal::Float(test_float));
+            let lhs = Expr::Literal(Literal::Float(env.arena.alloc(test_str), test_float));
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Float64), lhs));
 
@@ -1709,7 +1708,7 @@ fn decide_to_branching<'a>(
 
                 let tag = match test {
                     Test::IsInt(v) => v as u64,
-                    Test::IsFloat(v) => v as u64,
+                    Test::IsFloat(_, v) => v as u64,
                     Test::IsBit(v) => v as u64,
                     Test::IsByte { tag_id, .. } => tag_id as u64,
                     Test::IsCtor { tag_id, .. } => tag_id as u64,

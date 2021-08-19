@@ -16,6 +16,7 @@ roc_builtins = { path = "../builtins" }
 roc_unify = { path = "../unify" }
 roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
+roc_std = { path = "../../roc_std" }
 morphic_lib = { path = "../../vendor/morphic_lib" }
 im    = "14" # im and im-rc should always have the same version!
 im-rc = "14" # im and im-rc should always have the same version!
@@ -29,7 +30,6 @@ roc_parse = { path = "../parse" }
 roc_load = { path = "../load" }
 roc_reporting = { path = "../reporting" }
 roc_build = { path = "../build" }
-roc_std = { path = "../../roc_std" }
 pretty_assertions = "0.5.1"
 maplit = "1.0.1"
 indoc = "0.3.3"

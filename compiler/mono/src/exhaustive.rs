@@ -55,7 +55,7 @@ pub enum Literal {
     Int(i128),
     Bit(bool),
     Byte(u8),
-    Float(u64),
+    Float(Box<str>, u64),
     Str(Box<str>),
 }
 
@@ -64,7 +64,7 @@ fn simplify(pattern: &crate::ir::Pattern) -> Pattern {
 
     match pattern {
         IntLiteral(v) => Literal(Literal::Int(*v)),
-        FloatLiteral(v) => Literal(Literal::Float(*v)),
+        FloatLiteral(s, v) => Literal(Literal::Float(s.clone(), *v)),
         StrLiteral(v) => Literal(Literal::Str(v.clone())),
 
         // To make sure these are exhaustive, we have to "fake" a union here

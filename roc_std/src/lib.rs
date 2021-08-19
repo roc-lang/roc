@@ -731,11 +731,9 @@ impl RocDec {
             }
         };
 
-        let after_point = match parts.next() {
-            Some(answer) if answer.len() <= Self::DECIMAL_PLACES as usize => answer,
-            _ => {
-                return None;
-            }
+        let opt_after_point = match parts.next() {
+            Some(answer) if answer.len() <= Self::DECIMAL_PLACES as usize => Some(answer),
+            _ => None,
         };
 
         // There should have only been one "." in the string!
@@ -744,22 +742,27 @@ impl RocDec {
         }
 
         // Calculate the low digits - the ones after the decimal point.
-        let lo = match after_point.parse::<i128>() {
-            Ok(answer) => {
-                // Translate e.g. the 1 from 0.1 into 10000000000000000000
-                // by "restoring" the elided trailing zeroes to the number!
-                let trailing_zeroes = Self::DECIMAL_PLACES as usize - after_point.len();
-                let lo = answer * 10i128.pow(trailing_zeroes as u32);
+        let lo = match opt_after_point {
+            Some(after_point) => {
+                match after_point.parse::<i128>() {
+                    Ok(answer) => {
+                        // Translate e.g. the 1 from 0.1 into 10000000000000000000
+                        // by "restoring" the elided trailing zeroes to the number!
+                        let trailing_zeroes = Self::DECIMAL_PLACES as usize - after_point.len();
+                        let lo = answer * 10i128.pow(trailing_zeroes as u32);
 
-                if !before_point.starts_with('-') {
-                    lo
-                } else {
-                    -lo
+                        if !before_point.starts_with('-') {
+                            lo
+                        } else {
+                            -lo
+                        }
+                    }
+                    Err(_) => {
+                        return None;
+                    }
                 }
             }
-            Err(_) => {
-                return None;
-            }
+            None => 0,
         };
 
         // Calculate the high digits - the ones before the decimal point.

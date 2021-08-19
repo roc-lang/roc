@@ -3017,6 +3017,7 @@ dependencies = [
  "roc_region",
  "roc_reporting",
  "roc_solve",
+ "roc_std",
  "roc_types",
  "roc_unify",
  "serde_json",

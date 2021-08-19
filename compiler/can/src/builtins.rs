@@ -285,11 +285,7 @@ fn lowlevel_4(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
 fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
     let int_precision_var = var_store.fresh();
-    let body = Int(
-        int_var,
-        int_precision_var,
-        i64::MAX.to_string().into_boxed_str(),
-    );
+    let body = int(int_var, int_precision_var, i64::MAX.into());
 
     Def {
         annotation: None,
@@ -304,11 +300,7 @@ fn num_max_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
 fn num_min_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
     let int_precision_var = var_store.fresh();
-    let body = Int(
-        int_var,
-        int_precision_var,
-        i64::MIN.to_string().into_boxed_str(),
-    );
+    let body = int(int_var, int_precision_var, i64::MIN.into());
 
     Def {
         annotation: None,
@@ -693,10 +685,7 @@ fn num_is_zero(symbol: Symbol, var_store: &mut VarStore) -> Def {
         op: LowLevel::Eq,
         args: vec![
             (arg_var, Var(Symbol::ARG_1)),
-            (
-                arg_var,
-                Num(unbound_zero_var, "0".to_string().into_boxed_str()),
-            ),
+            (arg_var, num(unbound_zero_var, 0)),
         ],
         ret_var: bool_var,
     };
@@ -719,10 +708,7 @@ fn num_is_negative(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let body = RunLowLevel {
         op: LowLevel::NumGt,
         args: vec![
-            (
-                arg_var,
-                Num(unbound_zero_var, "0".to_string().into_boxed_str()),
-            ),
+            (arg_var, num(unbound_zero_var, 0)),
             (arg_var, Var(Symbol::ARG_1)),
         ],
         ret_var: bool_var,
@@ -747,10 +733,7 @@ fn num_is_positive(symbol: Symbol, var_store: &mut VarStore) -> Def {
         op: LowLevel::NumGt,
         args: vec![
             (arg_var, Var(Symbol::ARG_1)),
-            (
-                arg_var,
-                Num(unbound_zero_var, "0".to_string().into_boxed_str()),
-            ),
+            (arg_var, num(unbound_zero_var, 0)),
         ],
         ret_var: bool_var,
     };
@@ -773,24 +756,14 @@ fn num_is_odd(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let body = RunLowLevel {
         op: LowLevel::Eq,
         args: vec![
-            (
-                arg_var,
-                Int(
-                    var_store.fresh(),
-                    var_store.fresh(),
-                    1.to_string().into_boxed_str(),
-                ),
-            ),
+            (arg_var, int(var_store.fresh(), var_store.fresh(), 1)),
             (
                 arg_var,
                 RunLowLevel {
                     op: LowLevel::NumRemUnchecked,
                     args: vec![
                         (arg_var, Var(Symbol::ARG_1)),
-                        (
-                            arg_var,
-                            Num(unbound_two_var, "2".to_string().into_boxed_str()),
-                        ),
+                        (arg_var, num(unbound_two_var, 2)),
                     ],
                     ret_var: arg_var,
                 },
@@ -817,14 +790,14 @@ fn num_is_even(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let body = RunLowLevel {
         op: LowLevel::Eq,
         args: vec![
-            (arg_var, Num(arg_num_var, "0".to_string().into_boxed_str())),
+            (arg_var, num(arg_num_var, 0)),
             (
                 arg_var,
                 RunLowLevel {
                     op: LowLevel::NumRemUnchecked,
                     args: vec![
                         (arg_var, Var(Symbol::ARG_1)),
-                        (arg_var, Num(arg_num_var, "2".to_string().into_boxed_str())),
+                        (arg_var, num(arg_num_var, 2)),
                     ],
                     ret_var: arg_var,
                 },
@@ -878,14 +851,7 @@ fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 op: LowLevel::NumGte,
                 args: vec![
                     (float_var, Var(Symbol::ARG_1)),
-                    (
-                        float_var,
-                        Float(
-                            unbound_zero_var,
-                            precision_var,
-                            "0.0".to_string().into_boxed_str(),
-                        ),
-                    ),
+                    (float_var, float(unbound_zero_var, precision_var, 0.0)),
                 ],
                 ret_var: bool_var,
             }),
@@ -931,14 +897,7 @@ fn num_log(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 op: LowLevel::NumGt,
                 args: vec![
                     (float_var, Var(Symbol::ARG_1)),
-                    (
-                        float_var,
-                        Float(
-                            unbound_zero_var,
-                            precision_var,
-                            "0.0".to_string().into_boxed_str(),
-                        ),
-                    ),
+                    (float_var, float(unbound_zero_var, precision_var, 0.0)),
                 ],
                 ret_var: bool_var,
             }),
@@ -1168,11 +1127,7 @@ fn num_int_cast(symbol: Symbol, var_store: &mut VarStore) -> Def {
 fn num_max_i128(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let int_var = var_store.fresh();
     let int_precision_var = var_store.fresh();
-    let body = Int(
-        int_var,
-        int_precision_var,
-        i128::MAX.to_string().into_boxed_str(),
-    );
+    let body = int(int_var, int_precision_var, i128::MAX);
 
     let std = roc_builtins::std::types();
     let solved = std.get(&symbol).unwrap();
@@ -1205,10 +1160,7 @@ fn list_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let body = RunLowLevel {
         op: LowLevel::Eq,
         args: vec![
-            (
-                len_var,
-                Num(unbound_zero_var, "0".to_string().into_boxed_str()),
-            ),
+            (len_var, num(unbound_zero_var, 0)),
             (
                 len_var,
                 RunLowLevel {
@@ -2087,10 +2039,7 @@ fn list_sum(symbol: Symbol, var_store: &mut VarStore) -> Def {
         args: vec![
             (list_var, Var(Symbol::ARG_1)),
             (closure_var, list_sum_add(num_var, var_store)),
-            (
-                num_var,
-                Num(var_store.fresh(), "0".to_string().into_boxed_str()),
-            ),
+            (num_var, num(var_store.fresh(), 0)),
         ],
         ret_var,
     };
@@ -2132,10 +2081,7 @@ fn list_product(symbol: Symbol, var_store: &mut VarStore) -> Def {
         args: vec![
             (list_var, Var(Symbol::ARG_1)),
             (closure_var, list_product_mul(num_var, var_store)),
-            (
-                num_var,
-                Num(var_store.fresh(), "1".to_string().into_boxed_str()),
-            ),
+            (num_var, num(var_store.fresh(), 1)),
         ],
         ret_var,
     };
@@ -2613,10 +2559,7 @@ fn num_rem(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     op: LowLevel::NotEq,
                     args: vec![
                         (num_var, Var(Symbol::ARG_2)),
-                        (
-                            num_var,
-                            Num(unbound_zero_var, "0".to_string().into_boxed_str()),
-                        ),
+                        (num_var, num(unbound_zero_var, 0)),
                     ],
                     ret_var: bool_var,
                 },
@@ -2719,14 +2662,7 @@ fn num_div_float(symbol: Symbol, var_store: &mut VarStore) -> Def {
                     op: LowLevel::NotEq,
                     args: vec![
                         (num_var, Var(Symbol::ARG_2)),
-                        (
-                            num_var,
-                            Float(
-                                unbound_zero_var,
-                                precision_var,
-                                "0.0".to_string().into_boxed_str(),
-                            ),
-                        ),
+                        (num_var, float(unbound_zero_var, precision_var, 0.0)),
                     ],
                     ret_var: bool_var,
                 },
@@ -2791,11 +2727,7 @@ fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
                         (num_var, Var(Symbol::ARG_2)),
                         (
                             num_var,
-                            Int(
-                                unbound_zero_var,
-                                unbound_zero_precision_var,
-                                0.to_string().into_boxed_str(),
-                            ),
+                            int(unbound_zero_var, unbound_zero_precision_var, 0),
                         ),
                     ],
                     ret_var: bool_var,
@@ -2865,10 +2797,7 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (
-                            len_var,
-                            Int(zero_var, zero_precision_var, 0.to_string().into_boxed_str()),
-                        ),
+                        (len_var, int(zero_var, zero_precision_var, 0)),
                         (
                             len_var,
                             RunLowLevel {
@@ -2892,14 +2821,7 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
                             op: LowLevel::ListGetUnsafe,
                             args: vec![
                                 (list_var, Var(Symbol::ARG_1)),
-                                (
-                                    len_var,
-                                    Int(
-                                        zero_var,
-                                        zero_precision_var,
-                                        0.to_string().into_boxed_str(),
-                                    ),
-                                ),
+                                (len_var, int(zero_var, zero_precision_var, 0)),
                             ],
                             ret_var: list_elem_var,
                         },
@@ -2956,10 +2878,7 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                 RunLowLevel {
                     op: LowLevel::NotEq,
                     args: vec![
-                        (
-                            len_var,
-                            Int(num_var, num_precision_var, 0.to_string().into_boxed_str()),
-                        ),
+                        (len_var, int(num_var, num_precision_var, 0)),
                         (
                             len_var,
                             RunLowLevel {
@@ -2998,14 +2917,7 @@ fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
                                                     ret_var: len_var,
                                                 },
                                             ),
-                                            (
-                                                arg_var,
-                                                Int(
-                                                    num_var,
-                                                    num_precision_var,
-                                                    1.to_string().into_boxed_str(),
-                                                ),
-                                            ),
+                                            (arg_var, int(num_var, num_precision_var, 1)),
                                         ],
                                         ret_var: len_var,
                                     },
@@ -3473,4 +3385,19 @@ fn defn_help(
         arguments: closure_args,
         loc_body: Box::new(no_region(body)),
     }
+}
+
+#[inline(always)]
+fn int(num_var: Variable, precision_var: Variable, i: i128) -> Expr {
+    Int(num_var, precision_var, i.to_string().into_boxed_str(), i)
+}
+
+#[inline(always)]
+fn float(num_var: Variable, precision_var: Variable, f: f64) -> Expr {
+    Float(num_var, precision_var, f.to_string().into_boxed_str(), f)
+}
+
+#[inline(always)]
+fn num(num_var: Variable, i: i64) -> Expr {
+    Num(num_var, i.to_string().into_boxed_str(), i)
 }

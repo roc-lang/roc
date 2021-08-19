@@ -1016,7 +1016,7 @@ impl ModifyRc {
 pub enum Literal<'a> {
     // Literals
     Int(i128),
-    Float(f64),
+    Float(&'a str, f64),
     Str(&'a str),
     /// Closed tag unions containing exactly two (0-arity) tags compile to Expr::Bool,
     /// so they can (at least potentially) be emitted as 1-bit machine bools.
@@ -1197,7 +1197,7 @@ impl<'a> Literal<'a> {
 
         match self {
             Int(lit) => alloc.text(format!("{}i64", lit)),
-            Float(lit) => alloc.text(format!("{}f64", lit)),
+            Float(_, lit) => alloc.text(format!("{}f64", lit)),
             Bool(lit) => alloc.text(format!("{}", lit)),
             Byte(lit) => alloc.text(format!("{}u8", lit)),
             Str(lit) => alloc.text(format!("{:?}", lit)),
@@ -1729,7 +1729,7 @@ fn pattern_to_when<'a>(
             (symbol, Located::at_zero(wrapped_body))
         }
 
-        IntLiteral(_, _) | NumLiteral(_, _) | FloatLiteral(_, _) | StrLiteral(_) => {
+        IntLiteral(_, _, _) | NumLiteral(_, _, _) | FloatLiteral(_, _, _) | StrLiteral(_) => {
             // These patters are refutable, and thus should never occur outside a `when` expression
             // They should have been replaced with `UnsupportedPattern` during canonicalization
             unreachable!("refutable pattern {:?} where irrefutable pattern is expected. This should never happen!", pattern.value)
@@ -2707,17 +2707,17 @@ pub fn with_hole<'a>(
     let arena = env.arena;
 
     match can_expr {
-        Int(_, precision, num) => {
+        Int(_, precision, _, int) => {
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, precision, false) {
                 IntOrFloat::SignedIntType(precision) => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Int(num)),
+                    Expr::Literal(Literal::Int(int)),
                     Layout::Builtin(int_precision_to_builtin(precision)),
                     hole,
                 ),
                 IntOrFloat::UnsignedIntType(precision) => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Int(num)),
+                    Expr::Literal(Literal::Int(int)),
                     Layout::Builtin(int_precision_to_builtin(precision)),
                     hole,
                 ),
@@ -2725,17 +2725,17 @@ pub fn with_hole<'a>(
             }
         }
 
-        Float(_, precision, num) => {
+        Float(_, precision, float_str, float) => {
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, precision, true) {
                 IntOrFloat::BinaryFloatType(precision) => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Float(num as f64)),
+                    Expr::Literal(Literal::Float(arena.alloc(float_str), float)),
                     Layout::Builtin(float_precision_to_builtin(precision)),
                     hole,
                 ),
                 IntOrFloat::DecimalFloatType => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Float(num as f64)),
+                    Expr::Literal(Literal::Float(arena.alloc(float_str), float)),
                     Layout::Builtin(Builtin::Decimal),
                     hole,
                 ),
@@ -2750,32 +2750,34 @@ pub fn with_hole<'a>(
             hole,
         ),
 
-        Num(var, num) => match num_argument_to_int_or_float(env.subs, env.ptr_bytes, var, false) {
-            IntOrFloat::SignedIntType(precision) => Stmt::Let(
-                assigned,
-                Expr::Literal(Literal::Int(num.into())),
-                Layout::Builtin(int_precision_to_builtin(precision)),
-                hole,
-            ),
-            IntOrFloat::UnsignedIntType(precision) => Stmt::Let(
-                assigned,
-                Expr::Literal(Literal::Int(num.into())),
-                Layout::Builtin(int_precision_to_builtin(precision)),
-                hole,
-            ),
-            IntOrFloat::BinaryFloatType(precision) => Stmt::Let(
-                assigned,
-                Expr::Literal(Literal::Float(num as f64)),
-                Layout::Builtin(float_precision_to_builtin(precision)),
-                hole,
-            ),
-            IntOrFloat::DecimalFloatType => Stmt::Let(
-                assigned,
-                Expr::Literal(Literal::Float(num as f64)),
-                Layout::Builtin(Builtin::Decimal),
-                hole,
-            ),
-        },
+        Num(var, num_str, num) => {
+            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, var, false) {
+                IntOrFloat::SignedIntType(precision) => Stmt::Let(
+                    assigned,
+                    Expr::Literal(Literal::Int(num.into())),
+                    Layout::Builtin(int_precision_to_builtin(precision)),
+                    hole,
+                ),
+                IntOrFloat::UnsignedIntType(precision) => Stmt::Let(
+                    assigned,
+                    Expr::Literal(Literal::Int(num.into())),
+                    Layout::Builtin(int_precision_to_builtin(precision)),
+                    hole,
+                ),
+                IntOrFloat::BinaryFloatType(precision) => Stmt::Let(
+                    assigned,
+                    Expr::Literal(Literal::Float(arena.alloc(num_str), num as f64)),
+                    Layout::Builtin(float_precision_to_builtin(precision)),
+                    hole,
+                ),
+                IntOrFloat::DecimalFloatType => Stmt::Let(
+                    assigned,
+                    Expr::Literal(Literal::Float(arena.alloc(num_str), num as f64)),
+                    Layout::Builtin(Builtin::Decimal),
+                    hole,
+                ),
+            }
+        }
         LetNonRec(def, cont, _) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
                 if let Closure {
@@ -5523,7 +5525,7 @@ fn store_pattern_help<'a>(
             return StorePattern::NotProductive(stmt);
         }
         IntLiteral(_)
-        | FloatLiteral(_)
+        | FloatLiteral(_, _)
         | EnumLiteral { .. }
         | BitLiteral { .. }
         | StrLiteral(_) => {
@@ -5657,7 +5659,7 @@ fn store_tag_pattern<'a>(
                 // ignore
             }
             IntLiteral(_)
-            | FloatLiteral(_)
+            | FloatLiteral(_, _)
             | EnumLiteral { .. }
             | BitLiteral { .. }
             | StrLiteral(_) => {}
@@ -5732,7 +5734,7 @@ fn store_newtype_pattern<'a>(
                 // ignore
             }
             IntLiteral(_)
-            | FloatLiteral(_)
+            | FloatLiteral(_, _)
             | EnumLiteral { .. }
             | BitLiteral { .. }
             | StrLiteral(_) => {}
@@ -5807,7 +5809,7 @@ fn store_record_destruct<'a>(
                 return StorePattern::NotProductive(stmt);
             }
             IntLiteral(_)
-            | FloatLiteral(_)
+            | FloatLiteral(_, _)
             | EnumLiteral { .. }
             | BitLiteral { .. }
             | StrLiteral(_) => {
@@ -6782,7 +6784,7 @@ pub enum Pattern<'a> {
     Identifier(Symbol),
     Underscore,
     IntLiteral(i128),
-    FloatLiteral(u64),
+    FloatLiteral(Box<str>, u64),
     BitLiteral {
         value: bool,
         tag_name: TagName,
@@ -6859,8 +6861,11 @@ fn from_can_pattern_help<'a>(
     match can_pattern {
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
-        IntLiteral(_, int) => Ok(Pattern::IntLiteral(*int as i128)),
-        FloatLiteral(_, float) => Ok(Pattern::FloatLiteral(f64::to_bits(*float))),
+        IntLiteral(_, _, int) => Ok(Pattern::IntLiteral(*int as i128)),
+        FloatLiteral(_, float_str, float) => Ok(Pattern::FloatLiteral(
+            float_str.clone(),
+            f64::to_bits(*float),
+        )),
         StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
         Shadowed(region, ident) => Err(RuntimeError::Shadowing {
             original_region: *region,
@@ -6871,12 +6876,16 @@ fn from_can_pattern_help<'a>(
             // TODO preserve malformed problem information here?
             Err(RuntimeError::UnsupportedPattern(*region))
         }
-        NumLiteral(var, num) => {
+        NumLiteral(var, num_str, num) => {
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
                 IntOrFloat::SignedIntType(_) => Ok(Pattern::IntLiteral(*num as i128)),
                 IntOrFloat::UnsignedIntType(_) => Ok(Pattern::IntLiteral(*num as i128)),
-                IntOrFloat::BinaryFloatType(_) => Ok(Pattern::FloatLiteral(*num as u64)),
-                IntOrFloat::DecimalFloatType => Ok(Pattern::FloatLiteral(*num as u64)),
+                IntOrFloat::BinaryFloatType(_) => {
+                    Ok(Pattern::FloatLiteral(num_str.clone(), *num as u64))
+                }
+                IntOrFloat::DecimalFloatType => {
+                    Ok(Pattern::FloatLiteral(num_str.clone(), *num as u64))
+                }
             }
         }
 

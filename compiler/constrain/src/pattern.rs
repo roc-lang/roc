@@ -56,9 +56,9 @@ fn headers_from_annotation_help(
         | Shadowed(_, _)
         | MalformedPattern(_, _)
         | UnsupportedPattern(_)
-        | NumLiteral(_, _)
-        | IntLiteral(_, _)
-        | FloatLiteral(_, _)
+        | NumLiteral(_, _, _)
+        | IntLiteral(_, _, _)
+        | FloatLiteral(_, _, _)
         | StrLiteral(_) => true,
 
         RecordDestructure { destructs, .. } => match annotation.value.shallow_dealias() {
@@ -143,7 +143,7 @@ pub fn constrain_pattern(
             );
         }
 
-        NumLiteral(var, _) => {
+        NumLiteral(var, _, _) => {
             state.vars.push(*var);
 
             state.constraints.push(Constraint::Pattern(
@@ -154,7 +154,7 @@ pub fn constrain_pattern(
             ));
         }
 
-        IntLiteral(precision_var, _) => {
+        IntLiteral(precision_var, _, _) => {
             state.constraints.push(Constraint::Pattern(
                 region,
                 PatternCategory::Int,
@@ -163,7 +163,7 @@ pub fn constrain_pattern(
             ));
         }
 
-        FloatLiteral(precision_var, _) => {
+        FloatLiteral(precision_var, _, _) => {
             state.constraints.push(Constraint::Pattern(
                 region,
                 PatternCategory::Float,
