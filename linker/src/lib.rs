@@ -45,10 +45,24 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     })?;
 
     // TODO: Extract PLT related information for these functions.
+    // The information need is really the address of each plt version of each application function.
+    // To find this, first get the dynmaic symbols for the app functions.
+    // Then reference them on the dynamic relocation table to figure out their plt function number.
+    // Then with the plt base address and that function number(or scanning the code), it should be possible to find the address.
+
     // TODO: For all text sections check for function calls to app functions.
+    // This should just be disassembly and then scanning for jmp and call style ops that jump to the plt offsets we care about.
+    // The data well be store in a list for each function name.
+    // Not really sure if/how namespacing will lead to conflicts (i.e. naming an app function printf when c alread has printf).
+
     // TODO: Store all this data in a nice format.
+
     // TODO: Potentially create a version of the executable with certain dynamic and PLT information deleted.
+    // Remove shared library dependencies.
+    // Delete extra plt entries, dynamic symbols, and dynamic relocations (might require updating other plt entries, may not worth it).
+    // Add regular symbols pointing to 0 for the app functions (maybe not needed if it is just link metadata).
     // It may be fine to just add some of this information to the metadata instead and deal with it on final exec creation.
+    // If we are copying the exec to a new location in the background anyway it may be basically free.
 
     Ok(0)
 }

@@ -1,7 +1,7 @@
 all: platform
 
 platform: platform.c libapp.so
-	$(CC) -O2 -fPIC -o $@ $^
+	$(CC) -O2 -fPIC -fPIE -o $@ $^
 
 libapp.so: app.c
 	$(CC) -O2 -fPIC -shared -o $@ $^
