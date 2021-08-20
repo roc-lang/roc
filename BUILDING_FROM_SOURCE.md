@@ -1,7 +1,7 @@
 # Building the Roc compiler from source
 
 
-## Installing LLVM, Python, Zig, and valgrind
+## Installing LLVM, Zig, valgrind, and Python 2.7
 
 To build the compiler, you need these installed:
 
