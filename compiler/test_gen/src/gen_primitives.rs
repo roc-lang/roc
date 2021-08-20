@@ -2393,7 +2393,6 @@ fn call_invalid_layout() {
         3,
         i64,
         |x| x,
-        false,
         true
     );
 }

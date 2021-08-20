@@ -1,40 +1,40 @@
 procedure List.4 (#Attr.2, #Attr.3, #Attr.4):
-    let Test.23 = lowlevel ListLen #Attr.2;
-    let Test.21 = lowlevel NumLt #Attr.3 Test.23;
-    if Test.21 then
-        let Test.22 = lowlevel ListSet #Attr.2 #Attr.3 #Attr.4;
-        ret Test.22;
+    let Test.22 = lowlevel ListLen #Attr.2;
+    let Test.20 = lowlevel NumLt #Attr.3 Test.22;
+    if Test.20 then
+        let Test.21 = lowlevel ListSet #Attr.2 #Attr.3 #Attr.4;
+        ret Test.21;
     else
         ret #Attr.2;
 
 procedure List.7 (#Attr.2):
-    let Test.10 = lowlevel ListLen #Attr.2;
-    ret Test.10;
+    let Test.9 = lowlevel ListLen #Attr.2;
+    ret Test.9;
 
 procedure Num.24 (#Attr.2, #Attr.3):
     let Test.7 = lowlevel NumAdd #Attr.2 #Attr.3;
     ret Test.7;
 
 procedure Test.1 ():
-    let Test.12 = 1i64;
-    let Test.13 = 2i64;
-    let Test.14 = 3i64;
-    let Test.11 = Array [Test.12, Test.13, Test.14];
-    ret Test.11;
+    let Test.11 = 1i64;
+    let Test.12 = 2i64;
+    let Test.13 = 3i64;
+    let Test.10 = Array [Test.11, Test.12, Test.13];
+    ret Test.10;
 
 procedure Test.2 (Test.3):
+    let Test.17 = 0i64;
     let Test.18 = 0i64;
-    let Test.19 = 0i64;
-    let Test.17 = CallByName List.4 Test.3 Test.18 Test.19;
-    ret Test.17;
+    let Test.16 = CallByName List.4 Test.3 Test.17 Test.18;
+    ret Test.16;
 
 procedure Test.0 ():
-    let Test.16 = CallByName Test.1;
-    let Test.15 = CallByName Test.2 Test.16;
-    let Test.5 = CallByName List.7 Test.15;
-    dec Test.15;
-    let Test.9 = CallByName Test.1;
-    let Test.6 = CallByName List.7 Test.9;
-    dec Test.9;
+    let Test.15 = CallByName Test.1;
+    let Test.14 = CallByName Test.2 Test.15;
+    let Test.5 = CallByName List.7 Test.14;
+    dec Test.14;
+    let Test.8 = CallByName Test.1;
+    let Test.6 = CallByName List.7 Test.8;
+    dec Test.8;
     let Test.4 = CallByName Num.24 Test.5 Test.6;
     ret Test.4;
