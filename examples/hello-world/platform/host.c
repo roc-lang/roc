@@ -17,6 +17,12 @@ void roc_dealloc(void* ptr, unsigned int alignment) {
     free(ptr);
 }
 
+void roc_panic(void* ptr, unsigned int alignment) {
+    char* msg = (char *)ptr; 
+    fprintf(stderr, "Application crashed with message\n\n    %s\n\nShutting down\n", msg);
+    exit(0);
+}
+
 struct RocStr {
     char* bytes;
     size_t len;
