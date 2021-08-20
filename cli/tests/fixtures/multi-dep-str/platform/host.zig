@@ -40,6 +40,13 @@ export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
     free(@alignCast(16, @ptrCast([*]u8, c_ptr)));
 }
 
+export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
+    const stderr = std.io.getStdErr().writer();
+    const msg = @ptrCast([*:0]const u8, c_ptr);
+    stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
+    std.process.exit(0);
+}
+
 const RocCallResult = extern struct { flag: usize, content: RocStr };
 
 const Unit = extern struct {};

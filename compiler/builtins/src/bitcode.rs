@@ -8,6 +8,7 @@ pub const NUM_ACOS: &str = "roc_builtins.num.acos";
 pub const NUM_ATAN: &str = "roc_builtins.num.atan";
 pub const NUM_IS_FINITE: &str = "roc_builtins.num.is_finite";
 pub const NUM_POW_INT: &str = "roc_builtins.num.pow_int";
+pub const NUM_ROUND: &str = "roc_builtins.num.round";
 
 pub const STR_INIT: &str = "roc_builtins.str.init";
 pub const STR_COUNT_SEGMENTS: &str = "roc_builtins.str.count_segments";
@@ -57,6 +58,7 @@ pub const LIST_WALK_BACKWARDS: &str = "roc_builtins.list.walk_backwards";
 pub const LIST_CONTAINS: &str = "roc_builtins.list.contains";
 pub const LIST_REPEAT: &str = "roc_builtins.list.repeat";
 pub const LIST_APPEND: &str = "roc_builtins.list.append";
+pub const LIST_PREPEND: &str = "roc_builtins.list.prepend";
 pub const LIST_DROP: &str = "roc_builtins.list.drop";
 pub const LIST_SWAP: &str = "roc_builtins.list.swap";
 pub const LIST_SINGLE: &str = "roc_builtins.list.single";
@@ -76,3 +78,5 @@ pub const DEC_ADD_WITH_OVERFLOW: &str = "roc_builtins.dec.add_with_overflow";
 pub const DEC_SUB_WITH_OVERFLOW: &str = "roc_builtins.dec.sub_with_overflow";
 pub const DEC_MUL_WITH_OVERFLOW: &str = "roc_builtins.dec.mul_with_overflow";
 pub const DEC_DIV: &str = "roc_builtins.dec.div";
+
+pub const UTILS_TEST_PANIC: &str = "roc_builtins.utils.test_panic";

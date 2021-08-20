@@ -21,3 +21,7 @@ pub fn acos(num: f64) callconv(.C) f64 {
 pub fn asin(num: f64) callconv(.C) f64 {
     return @call(.{ .modifier = always_inline }, math.asin, .{num});
 }
+
+pub fn round(num: f64) callconv(.C) i64 {
+    return @floatToInt(i32, (@round(num)));
+}
