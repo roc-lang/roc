@@ -91,10 +91,14 @@ impl<T> RocList<T> {
         }
     }
 
-    fn get_storage_ptr(&self) -> *const isize {
-        let ptr = self.elements as *const isize;
+    fn get_storage_ptr_help(elements: *mut T) -> *mut isize {
+        let ptr = elements as *mut isize;
 
         unsafe { ptr.offset(-1) }
+    }
+
+    fn get_storage_ptr(&self) -> *const isize {
+        Self::get_storage_ptr_help(self.elements)
     }
 
     fn get_storage_ptr_mut(&mut self) -> *mut isize {
@@ -277,6 +281,84 @@ impl<T> RocList<T> {
     /// to store both T values as well as the refcount/capacity storage slot.
     fn align_of_storage_ptr() -> u32 {
         mem::align_of::<T>().max(mem::align_of::<usize>()) as u32
+    }
+
+    unsafe fn drop_pointer_to_first_argument(ptr: *mut T) {
+        let storage_ptr = Self::get_storage_ptr_help(ptr);
+        let storage_val = *storage_ptr;
+
+        if storage_val == REFCOUNT_1 || storage_val > 0 {
+            // If we have no more references, or if this was unique,
+            // deallocate it.
+            roc_dealloc(storage_ptr as *mut c_void, Self::align_of_storage_ptr());
+        } else if storage_val < 0 {
+            // If this still has more references, decrement one.
+            *storage_ptr = storage_val - 1;
+        }
+
+        // The only remaining option is that this is in readonly memory,
+        // in which case we shouldn't attempt to do anything to it.
+    }
+}
+
+impl<'a, T> IntoIterator for &'a RocList<T> {
+    type Item = &'a T;
+
+    type IntoIter = <&'a [T] as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_slice().iter()
+    }
+}
+
+use core::ptr::NonNull;
+
+pub struct IntoIter<T> {
+    buf: NonNull<T>,
+    // pub cap: usize,
+    ptr: *const T,
+    remaining: usize,
+}
+
+impl<T> Iterator for IntoIter<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        next_help(self)
+    }
+}
+
+fn next_help<T>(this: &mut IntoIter<T>) -> Option<T> {
+    if this.remaining == 0 {
+        None
+    } else if mem::size_of::<T>() == 0 {
+        // purposefully don't use 'ptr.offset' because for
+        // vectors with 0-size elements this would return the
+        // same pointer.
+        this.remaining -= 1;
+
+        // Make up a value of this ZST.
+        Some(unsafe { mem::zeroed() })
+    } else {
+        let old = this.ptr;
+        this.ptr = unsafe { this.ptr.offset(1) };
+        this.remaining -= 1;
+
+        Some(unsafe { ptr::read(old) })
+    }
+}
+
+impl<T> Drop for IntoIter<T> {
+    fn drop(&mut self) {
+        // drop the elements that we have not yet returned.
+        while let Some(item) = next_help(self) {
+            drop(item);
+        }
+
+        // deallocate the whole buffer
+        unsafe {
+            RocList::drop_pointer_to_first_argument(self.buf.as_mut());
+        }
     }
 }
 
