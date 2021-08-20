@@ -198,10 +198,6 @@ fn build_eq<'a, 'ctx, 'env>(
                 )
             }
         },
-
-        Layout::Closure(_, _, _) => {
-            unreachable!("the type system will guarantee these are never compared")
-        }
     }
 }
 
@@ -339,10 +335,6 @@ fn build_neq<'a, 'ctx, 'env>(
 
         Layout::RecursivePointer => {
             unreachable!("recursion pointers should never be compared directly")
-        }
-
-        Layout::Closure(_, _, _) => {
-            unreachable!("the type system will guarantee these are never compared")
         }
     }
 }

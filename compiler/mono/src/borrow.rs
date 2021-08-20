@@ -10,10 +10,7 @@ pub const OWNED: bool = false;
 pub const BORROWED: bool = true;
 
 fn should_borrow_layout(layout: &Layout) -> bool {
-    match layout {
-        Layout::Closure(_, _, _) => false,
-        _ => layout.is_refcounted(),
-    }
+    layout.is_refcounted()
 }
 
 pub fn infer_borrow<'a>(
@@ -1012,6 +1009,8 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         NumAbs | NumNeg | NumSin | NumCos | NumSqrtUnchecked | NumLogUnchecked | NumRound
         | NumCeiling | NumFloor | NumToFloat | Not | NumIsFinite | NumAtan | NumAcos | NumAsin
         | NumIntCast => arena.alloc_slice_copy(&[irrelevant]),
+        NumBytesToU16 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+        NumBytesToU32 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[owned, borrowed]),
         StrStartsWithCodePt => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrFromUtf8 => arena.alloc_slice_copy(&[owned]),
