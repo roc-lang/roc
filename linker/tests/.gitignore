@@ -1,3 +1,5 @@
 *.so
+*.o
+*.hex
+
 platform
-platform.o

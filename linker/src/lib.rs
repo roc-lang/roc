@@ -1,9 +1,9 @@
 use clap::{App, AppSettings, Arg, ArgMatches};
-use iced_x86::{Decoder, DecoderOptions, Instruction, OpKind};
+use iced_x86::{Decoder, DecoderOptions, Instruction, OpCodeOperandKind, OpKind};
 use memmap2::Mmap;
 use object::{
-    Architecture, BinaryFormat, Object, ObjectSection, ObjectSymbol, Relocation, RelocationKind,
-    RelocationTarget, Section, Symbol,
+    Architecture, BinaryFormat, CompressedFileRange, CompressionFormat, Object, ObjectSection,
+    ObjectSymbol, Relocation, RelocationKind, RelocationTarget, Section, Symbol,
 };
 use roc_collections::all::MutMap;
 use std::fs;
@@ -46,6 +46,13 @@ pub fn build_app<'a>() -> App<'a> {
         )
 }
 
+#[derive(Debug)]
+struct SurgeryEntry {
+    file_offset: u64,
+    virtual_offset: u64,
+    size: u8,
+}
+
 pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     let verbose = matches.is_present(FLAG_VERBOSE);
 
@@ -56,7 +63,8 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
 
     let exec_file = fs::File::open(&matches.value_of(EXEC).unwrap())?;
     let exec_mmap = unsafe { Mmap::map(&exec_file)? };
-    let exec_obj = match object::File::parse(&*exec_mmap) {
+    let file_data = &*exec_mmap;
+    let exec_obj = match object::File::parse(file_data) {
         Ok(obj) => obj,
         Err(err) => {
             println!("Failed to parse executable file: {}", err);
@@ -77,8 +85,24 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     }
 
     // Extract PLT related information for app functions.
-    let plt_address = match exec_obj.sections().find(|sec| sec.name() == Ok(".plt")) {
-        Some(section) => section.address(),
+    let (plt_address, plt_offset) = match exec_obj.sections().find(|sec| sec.name() == Ok(".plt")) {
+        Some(section) => {
+            let file_offset = match section.compressed_file_range() {
+                Ok(
+                    range
+                    @
+                    CompressedFileRange {
+                        format: CompressionFormat::None,
+                        ..
+                    },
+                ) => range.offset,
+                _ => {
+                    println!("Surgical linking does not work with compressed plt sections");
+                    return Ok(-1);
+                }
+            };
+            (section.address(), file_offset)
+        }
         None => {
             println!("Failed to find PLT section. Probably an malformed executable.");
             return Ok(-1);
@@ -86,6 +110,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     };
     if verbose {
         println!("PLT Address: {:x}", plt_address);
+        println!("PLT File Offset: {:x}", plt_offset);
     }
 
     let plt_relocs: Vec<Relocation> = (match exec_obj.dynamic_relocations() {
@@ -164,8 +189,28 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         println!();
         println!("Analyzing instuctions for branches");
     }
+    let mut surgeries: MutMap<&str, SurgeryEntry> = MutMap::default();
     let mut indirect_warning_given = false;
     for sec in text_sections {
+        let (file_offset, compressed) = match sec.compressed_file_range() {
+            Ok(
+                range
+                @
+                CompressedFileRange {
+                    format: CompressionFormat::None,
+                    ..
+                },
+            ) => (range.offset, false),
+            Ok(range) => (range.offset, true),
+            Err(err) => {
+                println!(
+                    "Issues dealing with section compression for {:x?}: {}",
+                    sec, err
+                );
+                return Ok(-1);
+            }
+        };
+
         let data = match sec.uncompressed_data() {
             Ok(data) => data,
             Err(err) => {
@@ -189,6 +234,10 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
                 Ok(OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64) => {
                     let target = inst.near_branch_target();
                     if let Some(func_name) = app_func_addresses.get(&target) {
+                        if compressed {
+                            println!("Surgical linking does not work with compressed text sections: {:x?}", sec);
+                        }
+
                         if verbose {
                             println!(
                                 "Found branch from {:x} to {:x}({})",
@@ -197,8 +246,41 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
                                 func_name
                             );
                         }
-                        // TODO: Actually correctly capture the jump type and offset.
-                        // We need to know exactly which bytes to surgically replace.
+
+                        // TODO: Double check these offsets are always correct.
+                        // We may need to do a custom offset based on opcode instead.
+                        let op_kind = inst.op_code().try_op_kind(0).unwrap();
+                        let op_size: u8 = match op_kind {
+                            OpCodeOperandKind::br16_1 | OpCodeOperandKind::br32_1 => 1,
+                            OpCodeOperandKind::br16_2 => 2,
+                            OpCodeOperandKind::br32_4 | OpCodeOperandKind::br64_4 => 4,
+                            _ => {
+                                println!(
+                                    "Ran into an unknown operand kind when analyzing branches: {:?}",
+                                    op_kind
+                                );
+                                return Ok(-1);
+                            }
+                        };
+                        let offset = inst.next_ip() - op_size as u64 - sec.address() + file_offset;
+                        if verbose {
+                            println!(
+                                "\tNeed to surgically replace {} bytes at file offset {:x}",
+                                op_size, offset,
+                            );
+                            println!(
+                                "\tIts current value is {:x?}",
+                                &file_data[offset as usize..(offset + op_size as u64) as usize]
+                            )
+                        }
+                        surgeries.insert(
+                            func_name,
+                            SurgeryEntry {
+                                file_offset: offset,
+                                virtual_offset: inst.next_ip(),
+                                size: op_size,
+                            },
+                        );
                     }
                 }
                 Ok(OpKind::FarBranch16 | OpKind::FarBranch32) => {
@@ -216,8 +298,10 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
                     {
                         if !indirect_warning_given {
                             indirect_warning_given = true;
+                            println!();
                             println!("Cannot analyaze through indirect jmp type instructions");
-                            println!("Most likely this is not a problem, but it could mean a loss in optimizations")
+                            println!("Most likely this is not a problem, but it could mean a loss in optimizations");
+                            println!();
                         }
                         if verbose {
                             println!(
@@ -236,14 +320,17 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         }
     }
 
+    println!("{:x?}", surgeries);
+
     // TODO: Store all this data in a nice format.
 
-    // TODO: Potentially create a version of the executable with certain dynamic and PLT information deleted (changing offset may break stuff so be careful).
+    // TODO: Potentially create a version of the executable with certain dynamic information deleted (changing offset may break stuff so be careful).
     // Remove shared library dependencies.
-    // Delete extra plt entries, dynamic symbols, and dynamic relocations (might require updating other plt entries, may not worth it).
+    // Also modify the PLT entries such that they just are jumps to the app functions. They will be used for indirect calls.
     // Add regular symbols pointing to 0 for the app functions (maybe not needed if it is just link metadata).
     // We have to be really carefull here. If we change the size or address of any section, it will mess with offsets.
     // Must likely we want to null out data. If we have to go through and update every relative offset, this will be much more complex.
+    // Potentially we can take advantage of virtual address to avoid actually needing to shift any offsets.
     // It may be fine to just add some of this information to the metadata instead and deal with it on final exec creation.
     // If we are copying the exec to a new location in the background anyway it may be basically free.
 
