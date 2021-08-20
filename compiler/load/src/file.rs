@@ -4227,17 +4227,21 @@ where
             declarations,
             dep_idents,
             unused_imports,
-        } => Ok(run_solve(
-            module,
-            ident_ids,
-            module_timing,
-            imported_symbols,
-            constraint,
-            var_store,
-            declarations,
-            dep_idents,
-            unused_imports,
-        )),
+        } => {
+            dbg!(&constraint);
+
+            Ok(run_solve(
+                module,
+                ident_ids,
+                module_timing,
+                imported_symbols,
+                constraint,
+                var_store,
+                declarations,
+                dep_idents,
+                unused_imports,
+            ))
+        }
         BuildPendingSpecializations {
             module_id,
             ident_ids,

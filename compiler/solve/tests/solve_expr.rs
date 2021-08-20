@@ -3609,6 +3609,21 @@ mod solve_expr {
     }
 
     #[test]
+    fn lucas() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                add = \x, y ->
+                  Pair x y
+                  
+                add
+                "#
+            ),
+            "{ x : Num a, y : F64, z : Int * }",
+        );
+    }
+
+    #[test]
     fn open_optional_field_unifies_with_present() {
         infer_eq_without_problem(
             indoc!(

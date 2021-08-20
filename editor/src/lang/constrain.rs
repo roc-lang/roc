@@ -826,11 +826,12 @@ pub fn constrain_expr<'a>(
                     arguments,
                     return_var,
                     body: expr_id,
-                    ..
+                    name,
                 } => {
                     let mut and_constraints = BumpVec::with_capacity_in(2, arena);
 
                     let mut flex_vars = BumpVec::with_capacity_in(1, arena);
+
                     flex_vars.push(*body_var);
 
                     let mut state = PatternState2 {
@@ -839,9 +840,11 @@ pub fn constrain_expr<'a>(
                         constraints: BumpVec::with_capacity_in(1, arena),
                     };
 
-                    let expr_type = Type2::Variable(*return_var);
+                    let arg_types = PoolVec::with_capacity(arguments.len() as u32, env.pool);
 
-                    for node_id in arguments.iter_node_ids() {
+                    for (node_id, arg_type_id) in
+                        arguments.iter_node_ids().zip(arg_types.iter_node_ids())
+                    {
                         let (pattern_id, pattern_var) = env.pool.get(node_id);
 
                         let pattern = env.pool.get(*pattern_id);
@@ -861,26 +864,87 @@ pub fn constrain_expr<'a>(
                         );
 
                         state.vars.push(*pattern_var);
+
+                        env.pool[arg_type_id] = pattern_type;
                     }
 
                     let def_expr = env.pool.get(*expr_id);
 
-                    let constrained_def = Let(arena.alloc(LetConstraint {
+                    let expr_type = Type2::Variable(*return_var);
+
+                    let mut fn_and_constraints = BumpVec::with_capacity_in(1, arena);
+
+                    fn_and_constraints.push(Let(arena.alloc(LetConstraint {
+                        rigid_vars: BumpVec::new_in(arena),
+                        flex_vars: BumpVec::new_in(arena),
+                        def_types: state.headers,
+                        defs_constraint: And(state.constraints),
+                        ret_constraint: constrain_expr(
+                            arena,
+                            env,
+                            def_expr,
+                            Expected::NoExpectation(expr_type.shallow_clone()),
+                            region,
+                        ),
+                    })));
+
+                    let function_type = Type2::Function(
+                        arg_types,
+                        env.pool.add(Type2::Variable(*body_var)),
+                        env.pool.add(expr_type.shallow_clone()),
+                    );
+
+                    fn_and_constraints.push(Eq(
+                        function_type.shallow_clone(),
+                        Expected::NoExpectation(expr_type.shallow_clone()),
+                        Category::Lambda,
+                        region,
+                    ));
+
+                    fn_and_constraints.push(Eq(
+                        expr_type.shallow_clone(),
+                        Expected::NoExpectation(function_type),
+                        Category::Storage(std::file!(), std::line!()),
+                        region,
+                    ));
+
+                    let thing = BumpVec::with_capacity_in(1, arena);
+
+                    thing.push(Eq(
+                        expr_type.shallow_clone(),
+                        Expected::NoExpectation(expr_type.shallow_clone()),
+                        Category::ClosureSize,
+                        region,
+                    ));
+
+                    fn_and_constraints.push(And(thing));
+
+                    let fn_constraint = Let(arena.alloc(LetConstraint {
                         rigid_vars: BumpVec::new_in(arena),
                         flex_vars: state.vars,
-                        def_types: state.headers,
+                        def_types: BumpMap::new_in(arena),
+                        defs_constraint: And(fn_and_constraints),
+                        ret_constraint: True,
+                    }));
+
+                    let mut def_types = BumpMap::with_capacity_in(1, arena);
+
+                    def_types.insert(*name, expr_type);
+
+                    let mut def_flex_vars = BumpVec::with_capacity_in(1, arena);
+
+                    def_flex_vars.push(*return_var);
+
+                    let constrained_def = Let(arena.alloc(LetConstraint {
+                        rigid_vars: BumpVec::new_in(arena),
+                        flex_vars: def_flex_vars,
+                        def_types,
                         defs_constraint: Let(arena.alloc(LetConstraint {
                             rigid_vars: BumpVec::new_in(arena), // always empty
                             flex_vars: BumpVec::new_in(arena), // empty, because our functions have no arguments
                             def_types: BumpMap::new_in(arena), // empty, because our functions have no arguments!
-                            defs_constraint: And(state.constraints),
-                            ret_constraint: constrain_expr(
-                                arena,
-                                env,
-                                def_expr,
-                                Expected::NoExpectation(expr_type),
-                                region,
-                            ),
+                            defs_constraint: And(BumpVec::new_in(arena)),
+                            ret_constraint: fn_constraint,
                         })),
                         ret_constraint: body_con,
                     }));
