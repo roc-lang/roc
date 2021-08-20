@@ -157,7 +157,7 @@ fn markup_to_wgpu_helper<'a>(
                 top_left_coords: (
                     code_style.txt_coords.x + (txt_row_col.1 as f32) * char_width,
                     code_style.txt_coords.y
-                        + (txt_row_col.0 as f32) * char_height
+                        + ((txt_row_col.0 - 1) as f32) * char_height
                         + 0.1 * char_height,
                 )
                     .into(),
