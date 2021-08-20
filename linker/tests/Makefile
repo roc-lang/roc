@@ -1,10 +1,15 @@
+SHARED_ARGS = -fPIC -ffunction-sections 
+
 all: platform
 
-platform: platform.cc libapp.so
-	$(CXX) -O2 -fPIC -fPIE -o $@ $^
+platform: platform.o linker.ld libapp.so
+	$(CXX) $(SHARED_ARGS) -L. -lapp -fPIE -T linker.ld -o $@ $<
+
+platform.o: platform.cc
+	$(CXX) $(SHARED_ARGS) -c -o $@ $^
 
 libapp.so: app.cc
-	$(CXX) -O2 -fPIC -shared -o $@ $^
+	$(CXX) $(SHARED_ARGS) -shared -o $@ $^
 
 clean:
-	rm -f platform libapp.so
+	rm -f platform platform.o libapp.so

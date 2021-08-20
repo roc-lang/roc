@@ -1,8 +1,9 @@
 use clap::{App, AppSettings, Arg, ArgMatches};
+use iced_x86::{Decoder, DecoderOptions, Instruction, OpKind};
 use memmap2::Mmap;
 use object::{
     Architecture, BinaryFormat, Object, ObjectSection, ObjectSymbol, Relocation, RelocationKind,
-    RelocationTarget, Symbol,
+    RelocationTarget, Section, Symbol,
 };
 use roc_collections::all::MutMap;
 use std::fs;
@@ -121,6 +122,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         }
     }
 
+    // TODO: Analyze if this offset is always correct.
     const PLT_ADDRESS_OFFSET: u64 = 0x10;
 
     let mut app_func_addresses: MutMap<u64, &str> = MutMap::default();
@@ -139,10 +141,100 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         println!("App Function Address Map: {:x?}", app_func_addresses);
     }
 
-    // TODO: For all text sections check for function calls to app functions.
-    // This should just be disassembly and then scanning for jmp and call style ops that jump to the plt offsets we care about.
-    // The data well be store in a list for each function name.
-    // Not really sure if/how namespacing will lead to conflicts (i.e. naming an app function printf when c alread has printf).
+    let text_sections: Vec<Section> = exec_obj
+        .sections()
+        .filter(|sec| {
+            let name = sec.name();
+            name.is_ok() && name.unwrap().starts_with(".text")
+        })
+        .collect();
+    if text_sections.is_empty() {
+        println!("No text sections found. This application has no code.");
+        return Ok(-1);
+    }
+    if verbose {
+        println!();
+        println!("Text Sections");
+        for sec in text_sections.iter() {
+            println!("{:x?}", sec);
+        }
+    }
+
+    if verbose {
+        println!();
+        println!("Analyzing instuctions for branches");
+    }
+    let mut indirect_warning_given = false;
+    for sec in text_sections {
+        let data = match sec.uncompressed_data() {
+            Ok(data) => data,
+            Err(err) => {
+                println!("Failed to load text section, {:x?}: {}", sec, err);
+                return Ok(-1);
+            }
+        };
+        let mut decoder = Decoder::with_ip(64, &data, sec.address(), DecoderOptions::NONE);
+        let mut inst = Instruction::default();
+
+        while decoder.can_decode() {
+            decoder.decode_out(&mut inst);
+
+            // Note: This gets really complex fast if we want to support more than basic calls/jumps.
+            // A lot of them have to load addresses into registers/memory so we would have to discover that value.
+            // Would probably require some static code analysis and would be impossible in some cases.
+            // As an alternative we can leave in the calls to the plt, but change the plt to jmp to the static function.
+            // That way any indirect call will just have the overhead of an extra jump.
+            match inst.try_op_kind(0) {
+                // Relative Offsets.
+                Ok(OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64) => {
+                    let target = inst.near_branch_target();
+                    if let Some(func_name) = app_func_addresses.get(&target) {
+                        if verbose {
+                            println!(
+                                "Found branch from {:x} to {:x}({})",
+                                inst.ip(),
+                                target,
+                                func_name
+                            );
+                        }
+                        // TODO: Actually correctly capture the jump type and offset.
+                        // We need to know exactly which bytes to surgically replace.
+                    }
+                }
+                Ok(OpKind::FarBranch16 | OpKind::FarBranch32) => {
+                    println!(
+                        "Found branch type instruction that is not yet support: {:x?}",
+                        inst
+                    );
+                    return Ok(-1);
+                }
+                Ok(_) => {
+                    if inst.is_call_far_indirect()
+                        || inst.is_call_near_indirect()
+                        || inst.is_jmp_far_indirect()
+                        || inst.is_jmp_near_indirect()
+                    {
+                        if !indirect_warning_given {
+                            indirect_warning_given = true;
+                            println!("Cannot analyaze through indirect jmp type instructions");
+                            println!("Most likely this is not a problem, but it could mean a loss in optimizations")
+                        }
+                        if verbose {
+                            println!(
+                                "Found indirect jump type instruction at {}: {}",
+                                inst.ip(),
+                                inst
+                            );
+                        }
+                    }
+                }
+                Err(err) => {
+                    println!("Failed to decode assembly: {}", err);
+                    return Ok(-1);
+                }
+            }
+        }
+    }
 
     // TODO: Store all this data in a nice format.
 
@@ -150,6 +242,8 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     // Remove shared library dependencies.
     // Delete extra plt entries, dynamic symbols, and dynamic relocations (might require updating other plt entries, may not worth it).
     // Add regular symbols pointing to 0 for the app functions (maybe not needed if it is just link metadata).
+    // We have to be really carefull here. If we change the size or address of any section, it will mess with offsets.
+    // Must likely we want to null out data. If we have to go through and update every relative offset, this will be much more complex.
     // It may be fine to just add some of this information to the metadata instead and deal with it on final exec creation.
     // If we are copying the exec to a new location in the background anyway it may be basically free.
 
