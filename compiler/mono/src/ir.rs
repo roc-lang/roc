@@ -6250,6 +6250,38 @@ fn build_call<'a>(
     Stmt::Let(assigned, Expr::Call(call), return_layout, hole)
 }
 
+/// See https://github.com/rtfeldman/roc/issues/1549
+///
+/// What happened is that a function has a type error, but the arguments are not processed.
+/// That means specializations were missing. Normally that is not a problem, but because
+/// of our closure strategy, internal functions can "leak". That's what happened here.
+///
+/// The solution is to evaluate the arguments as normal, and only when calling the function give an error
+fn evaluate_arguments_then_runtime_error<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    msg: String,
+    loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
+) -> Stmt<'a> {
+    let arena = env.arena;
+
+    // eventually we will throw this runtime error
+    let result = Stmt::RuntimeError(env.arena.alloc(msg));
+
+    // but, we also still evaluate and specialize the arguments to give better error messages
+    let arg_symbols = Vec::from_iter_in(
+        loc_args
+            .iter()
+            .map(|(_, arg_expr)| possible_reuse_symbol(env, procs, &arg_expr.value)),
+        arena,
+    )
+    .into_bump_slice();
+
+    let iter = loc_args.into_iter().rev().zip(arg_symbols.iter().rev());
+    assign_to_symbols(env, procs, layout_cache, iter, result)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn call_by_name<'a>(
     env: &mut Env<'a, '_>,
@@ -6268,14 +6300,16 @@ fn call_by_name<'a>(
                 "Hit an unresolved type variable {:?} when creating a layout for {:?} (var {:?})",
                 var, proc_name, fn_var
             );
-            Stmt::RuntimeError(env.arena.alloc(msg))
+
+            evaluate_arguments_then_runtime_error(env, procs, layout_cache, msg, loc_args)
         }
         Err(LayoutProblem::Erroneous) => {
             let msg = format!(
                 "Hit an erroneous type when creating a layout for {:?}",
                 proc_name
             );
-            Stmt::RuntimeError(env.arena.alloc(msg))
+
+            evaluate_arguments_then_runtime_error(env, procs, layout_cache, msg, loc_args)
         }
         Ok(RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout)) => {
             if procs.module_thunks.contains(&proc_name) {
