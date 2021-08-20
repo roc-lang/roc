@@ -4733,6 +4733,7 @@ pub fn from_can<'a>(
                                     CapturedSymbols::None
                                 }
                                 Err(_) => {
+                                    // just allow this. see https://github.com/rtfeldman/roc/issues/1585
                                     if captured_symbols.is_empty() {
                                         CapturedSymbols::None
                                     } else {
