@@ -32,25 +32,9 @@ pub fn occurring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) 
                 stack.push(cont);
             }
 
-            Invoke {
-                symbol,
-                call,
-                pass,
-                fail,
-                ..
-            } => {
-                occurring_variables_call(call, &mut result);
-                result.insert(*symbol);
-                bound_variables.insert(*symbol);
-                stack.push(pass);
-                stack.push(fail);
-            }
-
             Ret(symbol) => {
                 result.insert(*symbol);
             }
-
-            Resume(_) => {}
 
             Refcounting(modify, cont) => {
                 let symbol = modify.get_symbol();
@@ -236,11 +220,6 @@ fn consume_expr(m: &VarMap, e: &Expr<'_>) -> bool {
         },
         _ => true,
     }
-}
-
-fn consume_call(_: &VarMap, _: &crate::ir::Call<'_>) -> bool {
-    // variables bound by a call (or invoke) must always be consumed
-    true
 }
 
 impl<'a> Context<'a> {
@@ -814,22 +793,6 @@ impl<'a> Context<'a> {
         (new_b, live_vars)
     }
 
-    fn update_var_info_invoke(
-        &self,
-        symbol: Symbol,
-        layout: &Layout<'a>,
-        call: &crate::ir::Call<'a>,
-    ) -> Self {
-        // is this value a constant?
-        // TODO do function pointers also fall into this category?
-        let persistent = call.arguments.is_empty();
-
-        // must this value be consumed?
-        let consume = consume_call(&self.vars, call);
-
-        self.update_var_info_help(symbol, layout, persistent, consume, false)
-    }
-
     fn update_var_info(&self, symbol: Symbol, layout: &Layout<'a>, expr: &Expr<'a>) -> Self {
         // is this value a constant?
         // TODO do function pointers also fall into this category?
@@ -965,82 +928,6 @@ impl<'a> Context<'a> {
                 ctx.visit_variable_declaration(*symbol, expr.clone(), *layout, b, &b_live_vars)
             }
 
-            Invoke {
-                symbol,
-                call,
-                pass,
-                fail,
-                layout,
-                exception_id,
-            } => {
-                // live vars of the whole expression
-                let invoke_live_vars = collect_stmt(stmt, &self.jp_live_vars, MutSet::default());
-
-                let fail = {
-                    // TODO should we use ctor info like Lean?
-                    let ctx = self.clone();
-                    let (b, alt_live_vars) = ctx.visit_stmt(fail);
-                    ctx.add_dec_for_alt(&invoke_live_vars, &alt_live_vars, b)
-                };
-
-                let pass = {
-                    // TODO should we use ctor info like Lean?
-                    let ctx = self.clone();
-                    let ctx = ctx.update_var_info_invoke(*symbol, layout, call);
-                    let (b, alt_live_vars) = ctx.visit_stmt(pass);
-                    ctx.add_dec_for_alt(&invoke_live_vars, &alt_live_vars, b)
-                };
-
-                let invoke = Invoke {
-                    symbol: *symbol,
-                    call: call.clone(),
-                    pass,
-                    fail,
-                    layout: *layout,
-                    exception_id: *exception_id,
-                };
-
-                let cont = self.arena.alloc(invoke);
-
-                use crate::ir::CallType;
-                let stmt = match &call.call_type {
-                    CallType::LowLevel { op, .. } => {
-                        let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
-                        self.add_dec_after_lowlevel(call.arguments, ps, cont, &invoke_live_vars)
-                    }
-
-                    CallType::HigherOrderLowLevel { .. } => {
-                        todo!("copy the code for normal calls over to here");
-                    }
-
-                    CallType::Foreign { .. } => {
-                        let ps = crate::borrow::foreign_borrow_signature(
-                            self.arena,
-                            call.arguments.len(),
-                        );
-
-                        self.add_dec_after_lowlevel(call.arguments, ps, cont, &invoke_live_vars)
-                    }
-
-                    CallType::ByName {
-                        name,
-                        ret_layout,
-                        arg_layouts,
-                        ..
-                    } => {
-                        let top_level = ProcLayout::new(self.arena, arg_layouts, *ret_layout);
-
-                        // get the borrow signature
-                        let ps = self
-                            .param_map
-                            .get_symbol(*name, top_level)
-                            .expect("function is defined");
-                        self.add_dec_after_application(call.arguments, ps, cont, &invoke_live_vars)
-                    }
-                };
-
-                (stmt, invoke_live_vars)
-            }
             Join {
                 id: j,
                 parameters: _,
@@ -1085,8 +972,6 @@ impl<'a> Context<'a> {
                     (stmt, live_vars)
                 }
             }
-
-            Resume(_) => (stmt, MutSet::default()),
 
             Jump(j, xs) => {
                 let empty = MutSet::default();
@@ -1176,25 +1061,7 @@ pub fn collect_stmt(
 
             vars
         }
-        Invoke {
-            symbol,
-            call,
-            pass,
-            fail,
-            ..
-        } => {
-            vars = collect_stmt(pass, jp_live_vars, vars);
-            vars = collect_stmt(fail, jp_live_vars, vars);
 
-            vars.remove(symbol);
-
-            let mut result = MutSet::default();
-            occurring_variables_call(call, &mut result);
-
-            vars.extend(result);
-
-            vars
-        }
         Ret(symbol) => {
             vars.insert(*symbol);
             vars
@@ -1251,8 +1118,6 @@ pub fn collect_stmt(
 
             vars
         }
-
-        Resume(_) => vars,
 
         RuntimeError(_) => vars,
     }

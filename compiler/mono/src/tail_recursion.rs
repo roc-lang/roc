@@ -92,28 +92,6 @@ fn insert_jumps<'a>(
             Some(arena.alloc(jump))
         }
 
-        Invoke {
-            symbol,
-            call:
-                crate::ir::Call {
-                    call_type: CallType::ByName { name: fsym, .. },
-                    arguments,
-                    ..
-                },
-            fail,
-            pass: Stmt::Ret(rsym),
-            exception_id,
-            ..
-        } if needle == *fsym && symbol == rsym => {
-            debug_assert_eq!(fail, &&Stmt::Resume(*exception_id));
-
-            // replace the call and return with a jump
-
-            let jump = Stmt::Jump(goal_id, arguments);
-
-            Some(arena.alloc(jump))
-        }
-
         Let(symbol, expr, layout, cont) => {
             let opt_cont = insert_jumps(arena, cont, goal_id, needle);
 
@@ -121,36 +99,6 @@ fn insert_jumps<'a>(
                 let cont = opt_cont.unwrap_or(cont);
 
                 Some(arena.alloc(Let(*symbol, expr.clone(), *layout, cont)))
-            } else {
-                None
-            }
-        }
-
-        Invoke {
-            symbol,
-            call,
-            fail,
-            pass,
-            layout,
-            exception_id,
-        } => {
-            let opt_pass = insert_jumps(arena, pass, goal_id, needle);
-            let opt_fail = insert_jumps(arena, fail, goal_id, needle);
-
-            if opt_pass.is_some() || opt_fail.is_some() {
-                let pass = opt_pass.unwrap_or(pass);
-                let fail = opt_fail.unwrap_or(fail);
-
-                let stmt = Invoke {
-                    symbol: *symbol,
-                    call: call.clone(),
-                    layout: *layout,
-                    pass,
-                    fail,
-                    exception_id: *exception_id,
-                };
-
-                Some(arena.alloc(stmt))
             } else {
                 None
             }
@@ -241,7 +189,6 @@ fn insert_jumps<'a>(
             None => None,
         },
 
-        Resume(_) => None,
         Ret(_) => None,
         Jump(_, _) => None,
         RuntimeError(_) => None,

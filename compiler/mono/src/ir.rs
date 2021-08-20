@@ -885,17 +885,6 @@ pub type Stores<'a> = &'a [(Symbol, Layout<'a>, Expr<'a>)];
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt<'a> {
     Let(Symbol, Expr<'a>, Layout<'a>, &'a Stmt<'a>),
-    Invoke {
-        symbol: Symbol,
-        call: Call<'a>,
-        layout: Layout<'a>,
-        pass: &'a Stmt<'a>,
-        fail: &'a Stmt<'a>,
-        exception_id: ExceptionId,
-    },
-    /// after cleanup, rethrow the exception object (stored in the exception id)
-    /// so it bubbles up
-    Resume(ExceptionId),
     Switch {
         /// This *must* stand for an integer, because Switch potentially compiles to a jump table.
         cond_symbol: Symbol,
@@ -1379,44 +1368,10 @@ impl<'a> Stmt<'a> {
                 .append(alloc.hardline())
                 .append(cont.to_doc(alloc)),
 
-            Invoke {
-                symbol,
-                call,
-                pass,
-                fail: Stmt::Resume(_),
-                ..
-            } => alloc
-                .text("let ")
-                .append(symbol_to_doc(alloc, *symbol))
-                .append(" = ")
-                .append(call.to_doc(alloc))
-                .append(";")
-                .append(alloc.hardline())
-                .append(pass.to_doc(alloc)),
-
-            Invoke {
-                symbol,
-                call,
-                pass,
-                fail,
-                ..
-            } => alloc
-                .text("invoke ")
-                .append(symbol_to_doc(alloc, *symbol))
-                .append(" = ")
-                .append(call.to_doc(alloc))
-                .append(" catch")
-                .append(alloc.hardline())
-                .append(fail.to_doc(alloc).indent(4))
-                .append(alloc.hardline())
-                .append(pass.to_doc(alloc)),
-
             Ret(symbol) => alloc
                 .text("ret ")
                 .append(symbol_to_doc(alloc, *symbol))
                 .append(";"),
-
-            Resume(_) => alloc.text("unreachable;"),
 
             Switch {
                 cond_symbol,
@@ -4613,15 +4568,12 @@ pub fn from_can<'a>(
                 arguments,
             };
 
-            let exception_id = ExceptionId(env.unique_symbol());
-            let rest = Stmt::Invoke {
-                symbol: env.unique_symbol(),
-                call,
-                layout: bool_layout,
-                pass: env.arena.alloc(rest),
-                fail: env.arena.alloc(Stmt::Resume(exception_id)),
-                exception_id,
-            };
+            let rest = Stmt::Let(
+                env.unique_symbol(),
+                Expr::Call(call),
+                bool_layout,
+                env.arena.alloc(rest),
+            );
 
             with_hole(
                 env,
@@ -5205,35 +5157,6 @@ fn substitute_in_stmt_help<'a>(
                 None
             }
         }
-        Invoke {
-            symbol,
-            call,
-            layout,
-            pass,
-            fail,
-            exception_id,
-        } => {
-            let opt_call = substitute_in_call(arena, call, subs);
-            let opt_pass = substitute_in_stmt_help(arena, pass, subs);
-            let opt_fail = substitute_in_stmt_help(arena, fail, subs);
-
-            if opt_pass.is_some() || opt_fail.is_some() | opt_call.is_some() {
-                let pass = opt_pass.unwrap_or(pass);
-                let fail = opt_fail.unwrap_or_else(|| *fail);
-                let call = opt_call.unwrap_or_else(|| call.clone());
-
-                Some(arena.alloc(Invoke {
-                    symbol: *symbol,
-                    call,
-                    layout: *layout,
-                    pass,
-                    fail,
-                    exception_id: *exception_id,
-                }))
-            } else {
-                None
-            }
-        }
         Join {
             id,
             parameters,
@@ -5347,8 +5270,6 @@ fn substitute_in_stmt_help<'a>(
                 None
             }
         }
-
-        Resume(_) => None,
 
         RuntimeError(_) => None,
     }
@@ -6226,18 +6147,6 @@ fn add_needed_external<'a>(
 
     let solved_type = SolvedType::from_var(env.subs, fn_var);
     existing.insert(name, solved_type);
-}
-
-/// Symbol that links an Invoke with a Rethrow
-/// we'll assign the exception object to this symbol
-/// so we can later rethrow the exception
-#[derive(Copy, Clone, PartialEq, Debug)]
-pub struct ExceptionId(Symbol);
-
-impl ExceptionId {
-    pub fn into_inner(self) -> Symbol {
-        self.0
-    }
 }
 
 fn build_call<'a>(

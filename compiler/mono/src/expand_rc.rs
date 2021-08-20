@@ -563,29 +563,6 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                 expand_and_cancel(env, cont)
             }
 
-            Invoke {
-                symbol,
-                call,
-                layout,
-                pass,
-                fail,
-                exception_id,
-            } => {
-                let pass = expand_and_cancel(env, pass);
-                let fail = expand_and_cancel(env, fail);
-
-                let stmt = Invoke {
-                    symbol: *symbol,
-                    call: call.clone(),
-                    layout: *layout,
-                    pass,
-                    fail,
-                    exception_id: *exception_id,
-                };
-
-                env.arena.alloc(stmt)
-            }
-
             Join {
                 id,
                 parameters,
@@ -605,7 +582,7 @@ fn expand_and_cancel<'a>(env: &mut Env<'a, '_>, stmt: &'a Stmt<'a>) -> &'a Stmt<
                 env.arena.alloc(stmt)
             }
 
-            Resume(_) | Ret(_) | Jump(_, _) | RuntimeError(_) => stmt,
+            Ret(_) | Jump(_, _) | RuntimeError(_) => stmt,
         }
     };
 

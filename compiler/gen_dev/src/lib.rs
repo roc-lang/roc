@@ -100,19 +100,6 @@ where
                 self.free_symbols(stmt);
                 Ok(())
             }
-            Stmt::Invoke {
-                symbol,
-                layout,
-                call,
-                pass,
-                fail: _,
-                exception_id: _,
-            } => {
-                // for now, treat invoke as a normal call
-                self.build_expr(symbol, &Expr::Call(call.clone()), layout)?;
-                self.free_symbols(stmt);
-                self.build_stmt(pass)
-            }
             Stmt::Switch {
                 cond_symbol,
                 cond_layout,
@@ -499,20 +486,6 @@ where
                 self.scan_ast(following);
             }
 
-            Stmt::Invoke {
-                symbol,
-                layout: _,
-                call,
-                pass,
-                fail: _,
-                exception_id: _,
-            } => {
-                // for now, treat invoke as a normal call
-                self.set_last_seen(*symbol, stmt);
-                self.scan_ast_call(call, stmt);
-                self.scan_ast(pass);
-            }
-
             Stmt::Switch {
                 cond_symbol,
                 branches,
@@ -528,7 +501,6 @@ where
             Stmt::Ret(sym) => {
                 self.set_last_seen(*sym, stmt);
             }
-            Stmt::Resume(_exception_id) => {}
             Stmt::Refcounting(modify, following) => {
                 let sym = modify.get_symbol();
 
