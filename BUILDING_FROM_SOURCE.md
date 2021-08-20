@@ -1,12 +1,10 @@
 # Building the Roc compiler from source
 
 
-## Installing LLVM, Python, Zig, valgrind, libunwind, and libc++-dev
+## Installing LLVM, Python, Zig, and valgrind
 
 To build the compiler, you need these installed:
 
-* `libunwind` (macOS should already have this one installed)
-* `libc++-dev` and `libc++abi-dev`
 * Python 2.7 (Windows only), `python-is-python3` (Ubuntu)
 * [Zig](https://ziglang.org/), see below for version
 * LLVM, see below for version
@@ -17,11 +15,6 @@ To run the test suite (via `cargo test`), you additionally need to install:
 Alternatively, you can use `cargo test --no-fail-fast` or `cargo test -p specific_tests` to skip over the valgrind failures & tests.
 
 For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir). This dependency is only required to build with the `--debug` flag, and for normal developtment you should be fine without it. 
-
-### libunwind & libc++-dev
-
-MacOS systems should already have `libunwind`, but other systems will need to install it (On Ubuntu, this can be done with `sudo apt-get install libunwind-dev`).
-Some systems may already have `libc++-dev` on them, but if not, you may need to install it. (On Ubuntu, this can be done with `sudo apt-get install libc++-dev libc++abi-dev`.)
 
 ### libcxb libraries
 
