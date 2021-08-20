@@ -311,6 +311,25 @@ impl<'a, T> IntoIterator for &'a RocList<T> {
     }
 }
 
+impl<T> IntoIterator for RocList<T> {
+    type Item = T;
+
+    type IntoIter = IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let remaining = self.len();
+
+        let buf = unsafe { NonNull::new_unchecked(self.elements as _) };
+        let ptr = self.elements;
+
+        IntoIter {
+            buf,
+            ptr,
+            remaining,
+        }
+    }
+}
+
 use core::ptr::NonNull;
 
 pub struct IntoIter<T> {
