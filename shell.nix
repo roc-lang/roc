@@ -50,10 +50,7 @@ let
 
     # lib deps
     glibc_multi
-    llvmPkgs.libcxx
-    llvmPkgs.libcxxabi
     libffi
-    libunwind
     libxml2
     ncurses
     zlib
@@ -78,9 +75,6 @@ in pkgs.mkShell {
     lib.makeLibraryPath ([
       pkg-config
       stdenv.cc.cc.lib
-      llvmPkgs.libcxx
-      llvmPkgs.libcxxabi
-      libunwind
       libffi
       ncurses
       zlib
