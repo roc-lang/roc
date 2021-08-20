@@ -15,12 +15,16 @@ extern fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignmen
 // This should never be passed a null pointer.
 extern fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void;
 
+// Signals to the host that the program has paniced
+extern fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void;
+
 comptime {
     // During tetsts, use the testing allocators to satisfy these functions.
     if (std.builtin.is_test) {
         @export(testing_roc_alloc, .{ .name = "roc_alloc", .linkage = .Strong });
         @export(testing_roc_realloc, .{ .name = "roc_realloc", .linkage = .Strong });
         @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
+        @export(testing_roc_panic, .{ .name = "roc_panic", .linkage = .Strong });
     }
 }
 
@@ -41,6 +45,10 @@ fn testing_roc_dealloc(c_ptr: *c_void, _: u32) callconv(.C) void {
     std.testing.allocator.destroy(ptr);
 }
 
+fn testing_roc_panic(c_ptr: *c_void, _: u32) callconv(.C) void {
+    @panic("Roc paniced");
+}
+
 pub fn alloc(size: usize, alignment: u32) [*]u8 {
     return @ptrCast([*]u8, @call(.{ .modifier = always_inline }, roc_alloc, .{ size, alignment }));
 }
@@ -51,6 +59,22 @@ pub fn realloc(c_ptr: [*]u8, new_size: usize, old_size: usize, alignment: u32) [
 
 pub fn dealloc(c_ptr: [*]u8, alignment: u32) void {
     return @call(.{ .modifier = always_inline }, roc_dealloc, .{ c_ptr, alignment });
+}
+
+// must export this explicitly because right now it is not used from zig code
+pub fn panic(c_ptr: *c_void, alignment: u32) callconv(.C) void {
+    return @call(.{ .modifier = always_inline }, roc_panic, .{ c_ptr, alignment });
+}
+
+// indirection because otherwise zig creats an alias to the panic function which our LLVM code
+// does not know how to deal with
+pub fn test_panic(c_ptr: *c_void, alignment: u32) callconv(.C) void {
+    const cstr = @ptrCast([*:0]u8, c_ptr);
+
+    // const stderr = std.io.getStdErr().writer();
+    // stderr.print("Roc panicked: {s}!\n", .{cstr}) catch unreachable;
+
+    std.c.exit(1);
 }
 
 pub const Inc = fn (?[*]u8) callconv(.C) void;
