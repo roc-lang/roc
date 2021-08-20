@@ -18,7 +18,8 @@ test = false
 bench = false
 
 [dependencies]
+bumpalo = { version = "3.6.1", features = ["collections"] }
 # TODO switch to clap 3.0.0 once it's out. Tried adding clap = "~3.0.0-beta.1" and cargo wouldn't accept it
 clap = { git = "https://github.com/rtfeldman/clap", branch = "master" }
+memmap2 = "0.3"
 object = { version = "0.26", features = ["read"] }
-bumpalo = { version = "3.6.1", features = ["collections"] }

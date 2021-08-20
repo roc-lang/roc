@@ -1899,6 +1899,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "memmap2"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00b6c2ebff6180198788f5db08d7ce3bc1d0b617176678831a7510825973e357"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "memoffset"
 version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3312,6 +3321,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "clap 3.0.0-beta.1",
+ "memmap2 0.3.1",
  "object 0.26.0",
 ]
 
@@ -3798,7 +3808,7 @@ dependencies = [
  "dlib 0.4.2",
  "lazy_static",
  "log",
- "memmap2",
+ "memmap2 0.1.0",
  "nix 0.18.0",
  "wayland-client",
  "wayland-cursor",

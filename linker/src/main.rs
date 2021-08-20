@@ -7,8 +7,8 @@ fn main() -> io::Result<()> {
     let exit_code = match matches.subcommand_name() {
         None => Ok::<i32, io::Error>(-1),
         Some(CMD_PREPROCESS) => {
-            preprocess()?;
-            Ok(0)
+            let sub_matches = matches.subcommand_matches(CMD_PREPROCESS).unwrap();
+            preprocess(sub_matches)
         }
         Some(CMD_SURGERY) => Ok(0),
         _ => unreachable!(),
