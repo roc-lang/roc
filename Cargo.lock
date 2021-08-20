@@ -3323,6 +3323,7 @@ dependencies = [
  "clap 3.0.0-beta.1",
  "memmap2 0.3.1",
  "object 0.26.0",
+ "roc_collections",
 ]
 
 [[package]]
