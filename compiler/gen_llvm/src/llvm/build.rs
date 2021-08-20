@@ -4746,6 +4746,42 @@ fn run_low_level<'a, 'ctx, 'env>(
                 }
             }
         }
+        NumBytesToU16 => {
+            debug_assert_eq!(args.len(), 2);
+            let list = load_symbol(scope, &args[0]).into_struct_value();
+            let position = load_symbol(scope, &args[1]);
+            call_bitcode_fn(
+                env,
+                &[
+                    complex_bitcast(
+                        env.builder,
+                        list.into(),
+                        env.context.i128_type().into(),
+                        "to_i128",
+                    ),
+                    position,
+                ],
+                bitcode::NUM_BYTES_TO_U16,
+            )
+        }
+        NumBytesToU32 => {
+            debug_assert_eq!(args.len(), 2);
+            let list = load_symbol(scope, &args[0]).into_struct_value();
+            let position = load_symbol(scope, &args[1]);
+            call_bitcode_fn(
+                env,
+                &[
+                    complex_bitcast(
+                        env.builder,
+                        list.into(),
+                        env.context.i128_type().into(),
+                        "to_i128",
+                    ),
+                    position,
+                ],
+                bitcode::NUM_BYTES_TO_U32,
+            )
+        }
         NumCompare => {
             use inkwell::FloatPredicate;
 
