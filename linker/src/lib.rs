@@ -8,6 +8,7 @@ use object::{
 use roc_collections::all::MutMap;
 use std::fs;
 use std::io;
+use std::time::{Duration, SystemTime};
 
 pub const CMD_PREPROCESS: &str = "preprocess";
 pub const CMD_SURGERY: &str = "surgery";
@@ -15,6 +16,10 @@ pub const FLAG_VERBOSE: &str = "verbose";
 
 pub const EXEC: &str = "EXEC";
 pub const SHARED_LIB: &str = "SHARED_LIB";
+
+fn report_timing(label: &str, duration: Duration) {
+    &println!("\t{:9.3} ms   {}", duration.as_secs_f64() * 1000.0, label,);
+}
 
 pub fn build_app<'a>() -> App<'a> {
     App::new("link")
@@ -56,11 +61,15 @@ struct SurgeryEntry {
 pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     let verbose = matches.is_present(FLAG_VERBOSE);
 
+    let total_start = SystemTime::now();
+    let shared_lib_processing_start = SystemTime::now();
     let app_functions = application_functions(&matches.value_of(SHARED_LIB).unwrap())?;
     if verbose {
         println!("Found app functions: {:?}", app_functions);
     }
+    let shared_lib_processing_duration = shared_lib_processing_start.elapsed().unwrap();
 
+    let exec_parsing_start = SystemTime::now();
     let exec_file = fs::File::open(&matches.value_of(EXEC).unwrap())?;
     let exec_mmap = unsafe { Mmap::map(&exec_file)? };
     let file_data = &*exec_mmap;
@@ -71,6 +80,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
             return Ok(-1);
         }
     };
+    let exec_parsing_duration = exec_parsing_start.elapsed().unwrap();
 
     // TODO: Deal with other file formats and architectures.
     let format = exec_obj.format();
@@ -85,6 +95,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     }
 
     // Extract PLT related information for app functions.
+    let symbol_and_plt_processing_start = SystemTime::now();
     let (plt_address, plt_offset) = match exec_obj.sections().find(|sec| sec.name() == Ok(".plt")) {
         Some(section) => {
             let file_offset = match section.compressed_file_range() {
@@ -165,7 +176,9 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         println!();
         println!("App Function Address Map: {:x?}", app_func_addresses);
     }
+    let symbol_and_plt_processing_duration = symbol_and_plt_processing_start.elapsed().unwrap();
 
+    let text_disassembly_start = SystemTime::now();
     let text_sections: Vec<Section> = exec_obj
         .sections()
         .filter(|sec| {
@@ -319,8 +332,11 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
             }
         }
     }
+    let text_disassembly_duration = text_disassembly_start.elapsed().unwrap();
 
+    println!();
     println!("{:x?}", surgeries);
+    println!();
 
     // TODO: Store all this data in a nice format.
 
@@ -333,6 +349,48 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     // Potentially we can take advantage of virtual address to avoid actually needing to shift any offsets.
     // It may be fine to just add some of this information to the metadata instead and deal with it on final exec creation.
     // If we are copying the exec to a new location in the background anyway it may be basically free.
+
+    let elf_hacking_start = SystemTime::now();
+    let elf64 = file_data[4] == 2;
+    let litte_endian = file_data[5] == 1;
+    if !elf64 || !litte_endian {
+        println!("Only 64bit little endian elf currently supported for preprocessing");
+        return Ok(-1);
+    }
+    let ph_offset = &file_data[28..32];
+    let sh_offset = &file_data[32..36];
+    let eh_size = &file_data[40..42];
+    if verbose {
+        println!();
+        println!("Is Elf64: {}", elf64);
+        println!("Is Little Endian: {}", litte_endian);
+        println!("PH Offset: {:x?}", ph_offset);
+        println!("SH Offset: {:x?}", sh_offset);
+        println!("EH Size: {:x?}", eh_size);
+    }
+    let elf_hacking_duration = elf_hacking_start.elapsed().unwrap();
+    let total_duration = total_start.elapsed().unwrap();
+
+    println!();
+    println!("Timings");
+    report_timing("Shared Library Processing", shared_lib_processing_duration);
+    report_timing("Executable Parsing", exec_parsing_duration);
+    report_timing(
+        "Symbol and PLT Processing",
+        symbol_and_plt_processing_duration,
+    );
+    report_timing("Text Disassembly", text_disassembly_duration);
+    report_timing("Elf Hacking", elf_hacking_duration);
+    report_timing(
+        "Other",
+        total_duration
+            - shared_lib_processing_duration
+            - exec_parsing_duration
+            - symbol_and_plt_processing_duration
+            - text_disassembly_duration
+            - elf_hacking_duration,
+    );
+    report_timing("Total", total_duration);
 
     Ok(0)
 }
