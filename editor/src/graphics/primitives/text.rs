@@ -81,7 +81,7 @@ fn section_from_text<'a>(
         ..Section::default()
     }
     .add_text(
-        wgpu_glyph::Text::new(&text.text)
+        wgpu_glyph::Text::new(text.text)
             .with_color(Vector4::from(text.color))
             .with_scale(text.size),
     )
@@ -156,5 +156,5 @@ pub fn build_glyph_brush(
 ) -> Result<GlyphBrush<()>, InvalidFont> {
     let inconsolata = FontArc::try_from_slice(include_bytes!("../../../Inconsolata-Regular.ttf"))?;
 
-    Ok(GlyphBrushBuilder::using_font(inconsolata).build(&gpu_device, render_format))
+    Ok(GlyphBrushBuilder::using_font(inconsolata).build(gpu_device, render_format))
 }

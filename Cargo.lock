@@ -402,6 +402,7 @@ dependencies = [
  "bumpalo",
  "criterion",
  "inlinable_string",
+ "rlimit",
  "roc_cli",
  "roc_collections",
  "roc_load",
@@ -2980,6 +2981,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1382d1f0a252c4bf97dc20d979a2fdd05b024acd7c2ed0f7595d7817666a157"
 
 [[package]]
+name = "rlimit"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc0bf25554376fd362f54332b8410a625c71f15445bca32ffdfdf4ec9ac91726"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "roc_build"
 version = "0.1.0"
 dependencies = [
@@ -3037,7 +3047,6 @@ dependencies = [
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
- "inlinable_string",
  "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
@@ -3065,7 +3074,6 @@ dependencies = [
  "im-rc 14.3.0",
  "indoc 0.3.6",
  "inkwell 0.1.0",
- "inlinable_string",
  "libc",
  "libloading 0.6.7",
  "maplit",
@@ -3140,6 +3148,7 @@ dependencies = [
  "roc_collections",
  "roc_load",
  "roc_module",
+ "roc_parse",
  "roc_region",
  "roc_types",
 ]
@@ -3161,7 +3170,6 @@ dependencies = [
  "im 15.0.0",
  "im-rc 15.0.0",
  "indoc 1.0.3",
- "inlinable_string",
  "libc",
  "log",
  "maplit",
@@ -3207,7 +3215,6 @@ dependencies = [
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
- "inlinable_string",
  "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
@@ -3226,7 +3233,6 @@ dependencies = [
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
- "inlinable_string",
  "itertools 0.9.0",
  "libc",
  "libloading 0.6.7",
@@ -3265,7 +3271,6 @@ dependencies = [
  "im-rc 14.3.0",
  "indoc 0.3.6",
  "inkwell 0.1.0",
- "inlinable_string",
  "libc",
  "maplit",
  "morphic_lib",
@@ -3292,13 +3297,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_ident"
+version = "0.1.0"
+
+[[package]]
 name = "roc_load"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
  "crossbeam",
  "indoc 0.3.6",
- "inlinable_string",
  "maplit",
  "morphic_lib",
  "num_cpus",
@@ -3329,12 +3337,13 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "indoc 0.3.6",
- "inlinable_string",
  "lazy_static",
  "maplit",
  "pretty_assertions 0.5.1",
  "roc_collections",
+ "roc_ident",
  "roc_region",
+ "static_assertions",
 ]
 
 [[package]]
@@ -3362,6 +3371,7 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "ven_ena",
+ "ven_graph",
  "ven_pretty",
 ]
 
@@ -3372,7 +3382,6 @@ dependencies = [
  "bumpalo",
  "encode_unicode",
  "indoc 0.3.6",
- "inlinable_string",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
  "quickcheck_macros 0.8.0",
@@ -3386,7 +3395,6 @@ name = "roc_problem"
 version = "0.1.0"
 dependencies = [
  "indoc 0.3.6",
- "inlinable_string",
  "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
@@ -3410,7 +3418,6 @@ dependencies = [
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
- "inlinable_string",
  "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
@@ -3456,16 +3463,12 @@ dependencies = [
 [[package]]
 name = "roc_std"
 version = "0.1.0"
-dependencies = [
- "libc",
-]
 
 [[package]]
 name = "roc_types"
 version = "0.1.0"
 dependencies = [
  "indoc 0.3.6",
- "inlinable_string",
  "maplit",
  "pretty_assertions 0.5.1",
  "quickcheck 0.8.5",
@@ -3473,6 +3476,7 @@ dependencies = [
  "roc_collections",
  "roc_module",
  "roc_region",
+ "static_assertions",
  "ven_ena",
 ]
 
@@ -3953,7 +3957,6 @@ dependencies = [
  "im-rc 14.3.0",
  "indoc 0.3.6",
  "inkwell 0.1.0",
- "inlinable_string",
  "libc",
  "libloading 0.6.7",
  "maplit",
@@ -3989,7 +3992,6 @@ dependencies = [
  "im 14.3.0",
  "im-rc 14.3.0",
  "indoc 0.3.6",
- "inlinable_string",
  "libc",
  "libloading 0.6.7",
  "pretty_assertions 0.5.1",

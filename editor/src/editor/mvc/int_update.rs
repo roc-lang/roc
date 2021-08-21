@@ -22,7 +22,7 @@ pub fn start_new_int(ed_model: &mut EdModel, digit_char: &char) -> EdResult<Inpu
         curr_mark_node,
         parent_id_opt,
         ast_node_id,
-    } = get_node_context(&ed_model)?;
+    } = get_node_context(ed_model)?;
 
     let is_blank_node = curr_mark_node.is_blank();
 

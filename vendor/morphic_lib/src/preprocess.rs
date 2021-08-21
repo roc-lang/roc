@@ -679,8 +679,8 @@ fn preprocess_block_expr(
                     values_in_scope,
                     continuations_in_scope,
                     block,
-                    &api_node.op,
-                    &api_node.inputs,
+                    api_node.op,
+                    api_node.inputs,
                 )
                 .map_err(Error::annotate_binding(BindingLocation::Value(
                     api_value_id,
@@ -1149,7 +1149,7 @@ fn preprocess_func_def(
     let (final_block, ret_val) = preprocess_block_expr(
         tc,
         ctx,
-        &api_builder,
+        api_builder,
         body_types,
         &mut graph_builder,
         &mut values_in_scope,
@@ -1183,7 +1183,7 @@ fn preprocess_const_def(
     let (final_block, ret_val) = preprocess_block_expr(
         tc,
         ctx,
-        &api_builder,
+        api_builder,
         body_types,
         &mut graph_builder,
         &mut values_in_scope,

@@ -49,7 +49,7 @@ pub fn helper<'a>(
     let loaded = roc_load::file::load_and_monomorphize_from_str(
         arena,
         filename,
-        &module_src,
+        module_src,
         &stdlib,
         src_dir,
         exposed_types,
@@ -73,19 +73,22 @@ pub fn helper<'a>(
         procedures.insert(key, proc);
     }
 
-    /*
-    println!("=========== Procedures ==========");
-    println!("{:?}", procedures);
-    println!("=================================\n");
+    // You can comment and uncomment this block out to get more useful information
+    // while you're working on the dev backend!
+    {
+        // println!("=========== Procedures ==========");
+        // println!("{:?}", procedures);
+        // println!("=================================\n");
 
-    println!("=========== Interns    ==========");
-    println!("{:?}", interns);
-    println!("=================================\n");
+        // println!("=========== Interns    ==========");
+        // println!("{:?}", interns);
+        // println!("=================================\n");
 
-    println!("=========== Exposed    ==========");
-    println!("{:?}", exposed_to_host);
-    println!("=================================\n");
-    */
+        // println!("=========== Exposed    ==========");
+        // println!("{:?}", exposed_to_host);
+        // println!("=================================\n");
+    }
+
     debug_assert_eq!(exposed_to_host.len(), 1);
     let main_fn_symbol = loaded.entry_point.symbol;
     let main_fn_layout = loaded.entry_point.layout;

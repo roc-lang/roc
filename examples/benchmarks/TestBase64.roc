@@ -7,7 +7,7 @@ IO a : Task.Task a []
 
 main : IO {}
 main =
-    when Base64.fromBytes (Str.toBytes "Hello World") is
+    when Base64.fromBytes (Str.toUtf8 "Hello World") is
         Err _ ->
             Task.putLine "sadness"
 

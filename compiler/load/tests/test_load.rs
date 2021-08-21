@@ -6,7 +6,6 @@ extern crate pretty_assertions;
 extern crate maplit;
 
 extern crate bumpalo;
-extern crate inlinable_string;
 extern crate roc_collections;
 extern crate roc_load;
 extern crate roc_module;
@@ -17,7 +16,6 @@ mod helpers;
 mod test_load {
     use crate::helpers::fixtures_dir;
     use bumpalo::Bump;
-    use inlinable_string::InlinableString;
     use roc_can::builtins::builtin_defs_map;
     use roc_can::def::Declaration::*;
     use roc_can::def::Def;
@@ -169,8 +167,8 @@ mod test_load {
             .expect("Test ModuleID not found in module_ids");
 
         // App module names are hardcoded and not based on anything user-specified
-        if expected_name != ModuleName::APP {
-            assert_eq!(expected_name, &InlinableString::from(module_name));
+        if expected_name.as_str() != ModuleName::APP {
+            assert_eq!(&expected_name.as_str(), &module_name);
         }
 
         loaded_module
@@ -184,12 +182,11 @@ mod test_load {
         expected_types: &mut HashMap<&str, &str>,
     ) {
         for (symbol, expr_var) in &def.pattern_vars {
-            let content = subs.get(*expr_var).content;
-
             name_all_type_vars(*expr_var, subs);
 
-            let actual_str = content_to_string(content, subs, home, &interns);
-            let fully_qualified = symbol.fully_qualified(&interns, home).to_string();
+            let content = subs.get_content_without_compacting(*expr_var);
+            let actual_str = content_to_string(content, subs, home, interns);
+            let fully_qualified = symbol.fully_qualified(interns, home).to_string();
             let expected_type = expected_types
                 .remove(fully_qualified.as_str())
                 .unwrap_or_else(|| {
@@ -341,7 +338,7 @@ mod test_load {
             .get_name(loaded_module.module_id)
             .expect("Test ModuleID not found in module_ids");
 
-        assert_eq!(expected_name, &InlinableString::from("Primary"));
+        assert_eq!(expected_name.as_str(), "Primary");
         assert_eq!(def_count, 10);
     }
 

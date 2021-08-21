@@ -1,4 +1,4 @@
-FROM rust:1.52-slim-buster
+FROM rust:1.54-slim-buster
 WORKDIR /earthbuild
 
 prep-debian:
@@ -40,7 +40,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     # rustfmt
     RUN rustup component add rustfmt
     # criterion
-    RUN cargo install --git https://github.com/Anton-4/cargo-criterion --branch main
+    RUN cargo install cargo-criterion
     # sccache
     RUN apt -y install libssl-dev
     RUN cargo install sccache

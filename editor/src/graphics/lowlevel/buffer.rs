@@ -121,10 +121,10 @@ pub fn create_rect_buffers(
     let num_rects = {
         let mut quad_buffer_builder = QuadBufferBuilder::new();
         for rect in rects {
-            quad_buffer_builder = quad_buffer_builder.push_rect(&rect);
+            quad_buffer_builder = quad_buffer_builder.push_rect(rect);
         }
 
-        let (stg_vertex, stg_index, num_indices) = quad_buffer_builder.build(&gpu_device);
+        let (stg_vertex, stg_index, num_indices) = quad_buffer_builder.build(gpu_device);
 
         stg_vertex.copy_to_buffer(encoder, &vertex_buffer);
         stg_index.copy_to_buffer(encoder, &index_buffer);

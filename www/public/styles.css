@@ -282,8 +282,9 @@ code {
   font-family: var(--font-mono);
   color: var(--code-color);
   background-color: var(--code-bg-color);
-  padding: 2px 8px;
+  padding: 0 8px;
   display: inline-block;
+  line-height: 28px;
 }
 
 code a {

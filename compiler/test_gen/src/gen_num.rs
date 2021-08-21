@@ -3,7 +3,7 @@ mod gen_num {
     use crate::assert_evals_to;
     use crate::assert_llvm_evals_to;
     use indoc::indoc;
-    use roc_std::RocOrder;
+    use roc_std::{RocDec, RocOrder};
 
     #[test]
     fn nat_alias() {
@@ -329,6 +329,22 @@ mod gen_num {
     }
 
     #[test]
+    fn dec_float_alias() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : Dec
+                    x = 2.1
+
+                    x
+                "#
+            ),
+            RocDec::from_str_to_i128_unsafe("2.1"),
+            i128
+        );
+    }
+
+    #[test]
     fn f64_float_alias() {
         assert_evals_to!(
             indoc!(
@@ -465,8 +481,12 @@ mod gen_num {
     }
 
     #[test]
-    fn f64_round_old() {
+    fn f64_round() {
         assert_evals_to!("Num.round 3.6", 4, i64);
+        assert_evals_to!("Num.round 3.4", 3, i64);
+        assert_evals_to!("Num.round 2.5", 3, i64);
+        assert_evals_to!("Num.round -2.3", -2, i64);
+        assert_evals_to!("Num.round -2.5", -3, i64);
     }
 
     #[test]
@@ -544,6 +564,27 @@ mod gen_num {
     }
 
     #[test]
+    fn gen_add_dec() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : Dec
+                    x = 2.1
+
+                    y : Dec
+                    y = 3.1
+
+                    z : Dec
+                    z = x + y
+
+                    z
+                "#
+            ),
+            RocDec::from_str_to_i128_unsafe("5.2"),
+            i128
+        );
+    }
+    #[test]
     fn gen_add_f64() {
         assert_evals_to!(
             indoc!(
@@ -586,6 +627,26 @@ mod gen_num {
             f64
         );
     }
+    #[test]
+    fn gen_div_dec() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : Dec
+                    x = 10
+
+                    y : Dec
+                    y = 3
+
+                    when x / y is
+                        Ok val -> val
+                        Err _ -> -1
+                "#
+            ),
+            RocDec::from_str_to_i128_unsafe("3.333333333333333333"),
+            i128
+        );
+    }
 
     #[test]
     fn gen_int_eq() {
@@ -606,6 +667,44 @@ mod gen_num {
             indoc!(
                 r#"
                     4 != 5
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn gen_dec_eq() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : Dec
+                    x = 4
+
+                    y : Dec
+                    y = 4
+
+                    x == y
+                "#
+            ),
+            true,
+            bool
+        );
+    }
+
+    #[test]
+    fn gen_dec_neq() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : Dec
+                    x = 4
+
+                    y : Dec
+                    y = 5
+
+                    x != y
                 "#
             ),
             true,
@@ -644,6 +743,28 @@ mod gen_num {
     }
 
     #[test]
+    fn gen_sub_dec() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : Dec
+                    x = 1.5
+
+                    y : Dec
+                    y = 2.4
+                    
+                    z : Dec
+                    z = 3
+
+                    (x - y) - z
+                "#
+            ),
+            RocDec::from_str_to_i128_unsafe("-3.9"),
+            i128
+        );
+    }
+
+    #[test]
     fn gen_sub_f64() {
         assert_evals_to!(
             indoc!(
@@ -669,6 +790,27 @@ mod gen_num {
         );
     }
 
+    #[test]
+    fn gen_mul_dec() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                    x : Dec
+                    x = 2
+
+                    y : Dec
+                    y = 4
+
+                    z : Dec
+                    z = 6
+
+                    x * y * z
+                "#
+            ),
+            RocDec::from_str_to_i128_unsafe("48.0"),
+            i128
+        );
+    }
     #[test]
     fn gen_mul_i64() {
         assert_evals_to!(
@@ -1481,5 +1623,159 @@ mod gen_num {
 
         // overflow
         assert_evals_to!("Num.isMultipleOf -9223372036854775808 -1", true, bool);
+    }
+
+    #[test]
+    fn bytes_to_u16_clearly_out_of_bounds() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                bytes = Str.toUtf8 "hello"
+                when Num.bytesToU16 bytes 234 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            1,
+            u16
+        );
+    }
+
+    #[test]
+    fn bytes_to_u16_subtly_out_of_bounds() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                bytes = Str.toUtf8 "hello"
+                when Num.bytesToU16 bytes 4 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            1,
+            u16
+        );
+    }
+
+    #[test]
+    fn bytes_to_u32_clearly_out_of_bounds() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                bytes = Str.toUtf8 "hello"
+                when Num.bytesToU32 bytes 234 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            1,
+            u32
+        );
+    }
+
+    #[test]
+    fn bytes_to_u32_subtly_out_of_bounds() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                bytes = Str.toUtf8 "hello"
+                when Num.bytesToU32 bytes 2 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            1,
+            u32
+        );
+    }
+
+    #[test]
+    fn bytes_to_u16_max_u8s() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.bytesToU16 [255, 255] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            65535,
+            u16
+        );
+    }
+
+    #[test]
+    fn bytes_to_u16_min_u8s() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.bytesToU16 [0, 0] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            0,
+            u16
+        );
+    }
+
+    #[test]
+    fn bytes_to_u16_random_u8s() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.bytesToU16 [164, 215] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            55_204,
+            u16
+        );
+    }
+
+    #[test]
+    fn bytes_to_u32_min_u8s() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.bytesToU32 [0, 0, 0, 0] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            0,
+            u32
+        );
+    }
+
+    #[test]
+    fn bytes_to_u32_max_u8s() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.bytesToU32 [255, 255, 255, 255] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            4_294_967_295,
+            u32
+        );
+    }
+
+    #[test]
+    fn bytes_to_u32_random_u8s() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.bytesToU32 [252, 124, 128, 121] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            2_038_463_740,
+            u32
+        );
     }
 }

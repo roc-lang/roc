@@ -303,12 +303,12 @@ fn applied_type<'a>(min_indent: u16) -> impl Parser<'a, TypeAnnotation<'a>, Type
         ),
         |(ctor, args): (TypeAnnotation<'a>, Vec<'a, Located<TypeAnnotation<'a>>>)| {
             match &ctor {
-                TypeAnnotation::Apply(ref module_name, ref name, _) => {
+                TypeAnnotation::Apply(module_name, name, _) => {
                     if args.is_empty() {
                         // ctor is already an Apply with no args, so return it directly.
                         ctor
                     } else {
-                        TypeAnnotation::Apply(*module_name, *name, args.into_bump_slice())
+                        TypeAnnotation::Apply(module_name, name, args.into_bump_slice())
                     }
                 }
                 TypeAnnotation::Malformed(_) => ctor,
@@ -371,7 +371,7 @@ fn expression<'a>(min_indent: u16) -> impl Parser<'a, Located<TypeAnnotation<'a>
             .parse(arena, state)?;
 
             // prepare arguments
-            let mut arguments = Vec::with_capacity_in(rest.len() + 1, &arena);
+            let mut arguments = Vec::with_capacity_in(rest.len() + 1, arena);
             arguments.push(first);
             arguments.extend(rest);
             let output = arena.alloc(arguments);

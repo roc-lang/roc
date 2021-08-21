@@ -7,6 +7,3 @@ repository = "https://github.com/rtfeldman/roc"
 readme = "README.md"
 edition = "2018"
 description = "Rust representations of Roc data structures"
-
-[dependencies]
-libc = "0.2"

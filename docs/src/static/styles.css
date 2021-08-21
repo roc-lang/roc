@@ -65,7 +65,7 @@ a {
   text-decoration: none;
 }
 
-a:hover {
+a:hover, a:hover code {
   text-decoration: underline;
 }
 
@@ -287,11 +287,14 @@ code {
   display: inline-block;
 }
 
-code a {
+code a, a code {
+  text-decoration: none;
   color: var(--code-link-color);
+  background: none;
+  padding: 0;
 }
 
-code a:visited {
+code a:visited, a:visited code {
   color: var(--code-link-color);
 }
 

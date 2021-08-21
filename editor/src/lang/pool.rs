@@ -13,6 +13,7 @@
 use libc::{c_void, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 use roc_can::expected::Expected;
 use roc_can::expected::PExpected;
+use std::any::type_name;
 use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::mem::size_of;
@@ -132,8 +133,14 @@ impl Pool {
     }
 
     pub fn add<T>(&mut self, node: T) -> NodeId<T> {
-        // It's only safe to store this if T is the same size as S.
-        debug_assert_eq!(size_of::<T>(), NODE_BYTES);
+        // It's only safe to store this if T fits in S.
+        debug_assert!(
+            size_of::<T>() <= NODE_BYTES,
+            "{} has a size of {}, but it needs to be at most {}",
+            type_name::<T>(),
+            size_of::<T>(),
+            NODE_BYTES
+        );
 
         let node_id = self.reserve(1);
         let node_ptr = unsafe { self.nodes.offset(node_id.index as isize) } as *mut T;
@@ -322,7 +329,12 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
     }
 
     pub fn with_capacity(len: u32, pool: &mut Pool) -> Self {
-        debug_assert!(size_of::<T>() <= NODE_BYTES, "{}", size_of::<T>());
+        debug_assert!(
+            size_of::<T>() <= NODE_BYTES,
+            "{} has a size of {}",
+            type_name::<T>(),
+            size_of::<T>()
+        );
 
         if len == 0 {
             Self::empty(pool)

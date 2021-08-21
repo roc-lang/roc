@@ -81,7 +81,7 @@ fn fn_record() {
     assert_evals_to!(
         indoc!(
             r#"
-                    getRec = \x -> { y: 17, x, z: 19 }
+                    getRec = \x -> { y: "foo", x, z: 19 }
 
                     (getRec 15).x
                 "#
@@ -761,14 +761,19 @@ fn return_nested_record() {
 }
 
 #[test]
-fn accessor() {
+fn accessor_twice() {
+    assert_evals_to!(".foo { foo: 4 }  + .foo { bar: 6.28, foo: 3 } ", 7, i64);
+}
+
+#[test]
+fn accessor_multi_element_record() {
     assert_evals_to!(
         indoc!(
             r#"
-                .foo { foo: 4 } + .foo { bar: 6.28, foo: 3 }
+                .foo { foo: 4, bar: "foo" }
                 "#
         ),
-        7,
+        4,
         i64
     );
 }

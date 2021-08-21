@@ -52,6 +52,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 ### Cool regular editors
 
 * [Helix](https://github.com/helix-editor/helix) modal (terminal, for now) editor in rust. Good UX.
+* [Kakoune](https://kakoune.org/) editor with advanced text selection and manipulation features.
 
 
 ### Structured Editing
@@ -141,7 +142,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Show productivity/feature tips on startup. Show link to page with all tips. Allow not seeing tips next time.
 * Search friendly editor docs inside the editor. Offer to send search string to Roc maintainers when no results, or if no results were clicked.
 * File history timeline view. Show timeline with commits that changed this file, the number of lines added and deleted as well as which user made the changes. Arrow navigation should allow you to quickly view different versions of the file.
-* Suggested quick fixes should be directly visible and clickable. Not like in vs code where you put the caret on an error until a lightbulb appears in the margin which you have to click for the fixes to apppear, after which you click to apply the fix you want :( .
+* Suggested quick fixes should be directly visible and clickable. Not like in vs code where you put the caret on an error until a lightbulb appears in the margin which you have to click for the fixes to apppear, after which you click to apply the fix you want :( . You should be able to apply suggestions in rapid succession. e.g. if you copy some roc code from the internet you should be able to apply 5 import suggestions quickly. 
 * Regex-like find and substitution based on plain english description and example (replacement). i.e. replace all `[` between double quotes with `{`. [Inspiration](https://alexmoltzau.medium.com/english-to-regex-thanks-to-gpt-3-13f03b68236e).
 * Show productivity tips based on behavior. i.e. if the user is scrolling through the error bar and clicking on the next error several times, show a tip with "go to next error" shortcut.
 * Command to "benchmark this function" or "benchmark this test" with flamegraph and execution time per line.
@@ -153,6 +154,11 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     * search through a database of our zullip questions
     * ...
 * smart insert: press a shortcut and enter a plain english description of a code snippet you need. Examples: "convert string to list of chars", "sort list of records by field foo descending", "plot this list with date on x-axis"...
+* After the user has refactored code to be simpler, try finding other places in the code base where the same simplification can be made.
+* Show most commonly changed settings on first run so new users can quickly customize their experience. Keeping record of changed settings should be opt-in.
+* Detection of multiple people within same company/team working on same code at the same time (opt-in).
+* Autocorrect likely typos for stuff like `-<` when not in string.
+* If multiple functions are available for import, use function were types would match in insetion position.
 
 #### Autocomplete
 
@@ -198,6 +204,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 * Fuzzy natural language based setting adjustment in search bar or with voice input: increase font size, enable autosave, switch to light theme...
 * Detect deviation of best practices, example case: alert developer when they are defining a color inline (rgb(30,30,30)) while all colors have been previously imported from a single file. See also [Codota](https://www.codota.com).
 * It would be valuable to record the user's interactions with the editor when debugging as well as the AST. On enough data we could train a model to perform a bunch of debugging steps and show values of the most important variables in relation to the bug. Having assistance in finding the exact code that causes the problem could be super valuable. There could be sensitive data, so it should only be recorded and or shared for open source codebases with permissive licenses and with explicit user permission.
+* To allow for more privacy; data gathering can be kept only local or only shared within a team/company. Say we offer the ability to save the changes made after an error occurred. Another developer in the company who encounters this error could be notified someone has previously encountered this error along with their changes made after the error. Optionally, the first developer's name can be shown (only within team/company) so the second developer can quickly ask for help.
 
 
 ## Testing
@@ -224,6 +231,40 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     The API and documentation are meant to interface with humans.
 * [DocC](https://developer.apple.com/videos/play/wwdc2021/10166/) neat documentation approach for swift. 
 
+## General Plugin Ideas
+
+### Ideas
+
+* Plugin to translate linux commands like curl to Roc code
+
+### Inspiration
+
+- [Boop](https://github.com/IvanMathy/Boop) scriptable scratchpad for developers. Contains collection of useful conversions: json formatting, url encoding, encode to base64...
+- [processing](processing.org) Interactive editor, dragging left or right with mouse to change values. Instant results.
+
+## High performance
+
+### Inspiration
+
+- [10x editor](http://www.10xeditor.com/) IDE/Editor targeted at the professional developer with an emphasis on performance and scalability.
+
+
+## Positive feedback
+
+- It's nice to enhance the feeling of reward after completing a task, this increases motivation.
+- Great for tutorials and the first run of the editor.
+- Suggestions of occasions for positive feedback:
+    - Being able to compile successfully after starting out with more than X errors.
+    - Making a test succeed after repeated failures.
+- Positive feedback could be delivered with messages and/or animations. Animations could be with fireworks, flying roc logo birds, sounds...
+- The intensity of the message/animation could be increased based on the duration/difficulty of the task.
+- Suggest to search for help or take a break after being stuck on a test/compile errors... for some time. A search could be done for group chats for relevant libraries.
+
+### Inspiration
+
+- [Duolingo](https://www.duolingo.com) app to learn languages
+- [Khan academy](https://www.khanacademy.org/) free quality education for everyone
+
 ## General Thoughts/Ideas
 
 Thoughts and ideas possibly taken from above inspirations or separate.
@@ -240,6 +281,7 @@ Thoughts and ideas possibly taken from above inspirations or separate.
       Imagine if everytime for the user doesnt want to rely on shining rendered pixels on the screen for a feedback from machine, we make a acoustic room simulation, where with moving the "stick", either with mouse or with key arrows, we bump into one of the objects and that produces certain contextually appropriate sound (clean)*ding*
       
       On the each level of abstraction they can make sounds more deeper, so then when you type letters you feel like you are playing with the sand (soft)*shh*. We would need help from some sound engineer about it, but imagine moving down, which can be voice trigered command for motion impaired, you hear (soft)*pup* and the name of the module, and then you have options and commands appropriate for the module, they could map to those  basic 4 buttons that we trained user on, and he would shortcut all the soft talk with click of a button. Think of the satisfaction when you can skip the dialog of the game and get straight into action. (X) Open functions! each function would make a sound and say its name, unless you press search and start searching for a specific function inside module, if you want one you select or move to next.
+      - Related idea: Playing sounds in rapid succession for different expressions in your program might be a high throughput alternative to stepping through your code line by line. I'd bet you quickly learn what your porgram should sound like. The difference in throughput would be even larger for those who need to rely on voice transcription.
       
    * Motor impariments
       [rant]BACKS OF CODERS ARE NOT HEALTHY! We need to change that![/neverstop]
@@ -263,3 +305,5 @@ Thoughts and ideas possibly taken from above inspirations or separate.
 * "Error mode" where the editor jumps you to the next error
     * Similar in theory to diff tools that jump you to the next merge conflict
 * dependency recommendation
+* Command to change the file to put all exposed functions at the top of the file, private functions below. Other alternative; ability to show a "file explorer" that shows exposed functions first, followed by private functions.
+* We could provide a more expansive explanation in errors that can benefit from it. This explanation could be folded(shown on click) by default in the editor.

@@ -25,6 +25,8 @@ use crate::lang::{
     expr::Env,
     pool::{NodeId, PoolStr},
 };
+use crate::lang::ast::{Expr2, ExprId, RecordField};
+use crate::lang::{expr::Env, pool::PoolStr};
 use crate::ui::util::slice_get;
 use bumpalo::Bump;
 use roc_module::symbol::Interns;
@@ -33,19 +35,19 @@ use std::fmt;
 #[derive(Debug)]
 pub enum MarkupNode {
     Nested {
-        ast_node_id: NodeId<Expr2>,
+        ast_node_id: ExprId,
         children_ids: Vec<MarkNodeId>,
         parent_id_opt: Option<MarkNodeId>,
     },
     Text {
         content: String,
-        ast_node_id: NodeId<Expr2>,
+        ast_node_id: ExprId,
         syn_high_style: HighlightStyle,
         attributes: Attributes,
         parent_id_opt: Option<MarkNodeId>,
     },
     Blank {
-        ast_node_id: NodeId<Expr2>,
+        ast_node_id: ExprId,
         attributes: Attributes,
         syn_high_style: HighlightStyle, // TODO remove HighlightStyle, this is always HighlightStyle::Blank
         parent_id_opt: Option<MarkNodeId>,
@@ -53,7 +55,7 @@ pub enum MarkupNode {
 }
 
 impl MarkupNode {
-    pub fn get_ast_node_id(&self) -> NodeId<Expr2> {
+    pub fn get_ast_node_id(&self) -> ExprId {
         match self {
             MarkupNode::Nested { ast_node_id, .. } => *ast_node_id,
             MarkupNode::Text { ast_node_id, .. } => *ast_node_id,
@@ -95,22 +97,24 @@ impl MarkupNode {
     ) -> EdResult<(usize, usize)> {
         match self {
             MarkupNode::Nested { children_ids, .. } => {
-                let mark_position_opt = children_ids.iter().position(|&c_id| c_id == child_id);
+                let mut mark_child_index_opt: Option<usize> = None;
+                let mut child_ids_with_ast: Vec<MarkNodeId> = Vec::new();
+                let self_ast_id = self.get_ast_node_id();
 
-                if let Some(child_index) = mark_position_opt {
-                    let self_ast_id = self.get_ast_node_id();
+                for (indx, &mark_child_id) in children_ids.iter().enumerate() {
+                    if mark_child_id == child_id {
+                        mark_child_index_opt = Some(indx);
+                    }
 
-                    let child_ids_with_ast = children_ids
-                        .iter()
-                        .filter(|c_id| {
-                            let child_mark_node = markup_node_pool.get(**c_id);
-                            // a node that points to the same ast_node as the parent is a ',', '[', ']'
-                            // those are not "real" ast children
-                            child_mark_node.get_ast_node_id() != self_ast_id
-                        })
-                        .copied()
-                        .collect::<Vec<MarkNodeId>>();
+                    let child_mark_node = markup_node_pool.get(mark_child_id);
+                    // a node that points to the same ast_node as the parent is a ',', '[', ']'
+                    // those are not "real" ast children
+                    if child_mark_node.get_ast_node_id() != self_ast_id {
+                        child_ids_with_ast.push(mark_child_id)
+                    }
+                }
 
+                if let Some(child_index) = mark_child_index_opt {
                     if child_index == (children_ids.len() - 1) {
                         let ast_child_index = child_ids_with_ast.len();
 
@@ -139,7 +143,7 @@ impl MarkupNode {
                             }
                         }
 
-                        let closest_ast_child = slice_get(best_index, &children_ids)?;
+                        let closest_ast_child = slice_get(best_index, children_ids)?;
 
                         let closest_ast_child_index =
                             index_of(*closest_ast_child, &child_ids_with_ast)?;
@@ -240,7 +244,7 @@ pub const EQUALS: &str = " = ";
 
 fn new_markup_node(
     text: String,
-    node_id: NodeId<Expr2>,
+    node_id: ExprId,
     highlight_style: HighlightStyle,
     markup_node_pool: &mut SlowPool,
 ) -> MarkNodeId {
@@ -260,7 +264,7 @@ pub fn expr2_to_markup<'a, 'b>(
     arena: &'a Bump,
     env: &mut Env<'b>,
     expr2: &Expr2,
-    expr2_node_id: NodeId<Expr2>,
+    expr2_node_id: ExprId,
     markup_node_pool: &mut SlowPool,
     interns: &Interns,
 ) -> EdResult<MarkNodeId> {
@@ -269,7 +273,7 @@ pub fn expr2_to_markup<'a, 'b>(
         | Expr2::I128 { text, .. }
         | Expr2::U128 { text, .. }
         | Expr2::Float { text, .. } => {
-            let num_str = get_string(env, &text);
+            let num_str = get_string(env, text);
 
             new_markup_node(
                 num_str,
@@ -285,7 +289,7 @@ pub fn expr2_to_markup<'a, 'b>(
             markup_node_pool,
         ),
         Expr2::GlobalTag { name, .. } => new_markup_node(
-            get_string(env, &name),
+            get_string(env, name),
             expr2_node_id,
             HighlightStyle::Type,
             markup_node_pool,

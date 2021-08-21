@@ -1,8 +1,8 @@
 app "effect-example"
     packages { base: "thing/platform-dir" }
-    imports [base.Task]
+    imports [fx.Effect]
     provides [ main ] to base
 
-main : Task.Task {} []
+main : Effect.Effect {}
 main =
-    Task.after Task.getLine \lineThisThing -> Task.putLine lineThisThing
+    Effect.after Effect.getLine \lineThisThing -> Effect.putLine lineThisThing

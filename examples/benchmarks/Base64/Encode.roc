@@ -9,7 +9,7 @@ InvalidChar : U8
 toBytes : Str -> List U8
 toBytes = \str ->
     str
-        |> Str.toBytes
+        |> Str.toUtf8
         |> encodeChunks
         |> Bytes.Encode.sequence
         |> Bytes.Encode.encode

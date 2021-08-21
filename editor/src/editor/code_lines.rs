@@ -66,7 +66,7 @@ impl Lines for CodeLines {
     fn get_line(&self, line_nr: usize) -> UIResult<&str> {
         let line_string = slice_get(line_nr, &self.lines)?;
 
-        Ok(&line_string)
+        Ok(line_string)
     }
 
     fn line_len(&self, line_nr: usize) -> UIResult<usize> {
@@ -85,7 +85,7 @@ impl Lines for CodeLines {
         let mut lines = BumpString::with_capacity_in(self.nr_of_chars(), arena);
 
         for line in &self.lines {
-            lines.push_str(&line);
+            lines.push_str(line);
         }
 
         lines

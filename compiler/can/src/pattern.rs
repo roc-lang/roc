@@ -185,7 +185,7 @@ pub fn canonicalize_pattern<'a>(
             }
         }
 
-        FloatLiteral(ref string) => match pattern_type {
+        FloatLiteral(string) => match pattern_type {
             WhenBranch => match finish_parsing_float(string) {
                 Err(_error) => {
                     let problem = MalformedPatternProblem::MalformedFloat;

@@ -6,7 +6,7 @@ use roc_module::symbol::Symbol;
 use roc_parse::ast::{AssignedField, Tag, TypeAnnotation};
 use roc_region::all::{Located, Region};
 use roc_types::subs::{VarStore, Variable};
-use roc_types::types::{Alias, Problem, RecordField, Type};
+use roc_types::types::{Alias, LambdaSet, Problem, RecordField, Type};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Annotation {
@@ -159,7 +159,7 @@ fn can_annotation_help(
                     Err(problem) => {
                         env.problem(roc_problem::can::Problem::RuntimeError(problem));
 
-                        return Type::Erroneous(Problem::UnrecognizedIdent(ident.into()));
+                        return Type::Erroneous(Problem::UnrecognizedIdent(ident));
                     }
                 }
             } else {
@@ -227,14 +227,27 @@ fn can_annotation_help(
                     }
 
                     // make sure hidden variables are freshly instantiated
-                    for var in alias.lambda_set_variables.iter() {
-                        substitutions.insert(var.into_inner(), Type::Variable(var_store.fresh()));
+                    let mut lambda_set_variables =
+                        Vec::with_capacity(alias.lambda_set_variables.len());
+                    for typ in alias.lambda_set_variables.iter() {
+                        if let Type::Variable(var) = typ.0 {
+                            let fresh = var_store.fresh();
+                            substitutions.insert(var, Type::Variable(fresh));
+                            lambda_set_variables.push(LambdaSet(Type::Variable(fresh)));
+                        } else {
+                            unreachable!("at this point there should be only vars in there");
+                        }
                     }
 
                     // instantiate variables
                     actual.substitute(&substitutions);
 
-                    Type::Alias(symbol, vars, Box::new(actual))
+                    Type::Alias {
+                        symbol,
+                        type_arguments: vars,
+                        lambda_set_variables,
+                        actual: Box::new(actual),
+                    }
                 }
                 None => {
                     let mut args = Vec::new();
@@ -373,12 +386,18 @@ fn can_annotation_help(
                     introduced_variables.insert_host_exposed_alias(symbol, actual_var);
                     Type::HostExposedAlias {
                         name: symbol,
-                        arguments: vars,
+                        type_arguments: vars,
+                        lambda_set_variables: alias.lambda_set_variables.clone(),
                         actual: Box::new(alias.typ.clone()),
                         actual_var,
                     }
                 } else {
-                    Type::Alias(symbol, vars, Box::new(alias.typ.clone()))
+                    Type::Alias {
+                        symbol,
+                        type_arguments: vars,
+                        lambda_set_variables: alias.lambda_set_variables.clone(),
+                        actual: Box::new(alias.typ.clone()),
+                    }
                 }
             }
             _ => {

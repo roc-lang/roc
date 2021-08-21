@@ -94,7 +94,7 @@ pub fn list_single<'a, 'ctx, 'env>(
             pass_element_as_opaque(env, element),
             layout_width(env, element_layout),
         ],
-        &bitcode::LIST_SINGLE,
+        bitcode::LIST_SINGLE,
     )
 }
 
@@ -121,70 +121,6 @@ pub fn list_repeat<'a, 'ctx, 'env>(
     )
 }
 
-/// List.prepend : List elem, elem -> List elem
-pub fn list_prepend<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    original_wrapper: StructValue<'ctx>,
-    elem: BasicValueEnum<'ctx>,
-    elem_layout: &Layout<'a>,
-) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-    let ctx = env.context;
-
-    // Load the usize length from the wrapper.
-    let len = list_len(builder, original_wrapper);
-    let elem_type = basic_type_from_layout(env, elem_layout);
-    let ptr_type = elem_type.ptr_type(AddressSpace::Generic);
-    let list_ptr = load_list_ptr(builder, original_wrapper, ptr_type);
-
-    // The output list length, which is the old list length + 1
-    let new_list_len = env.builder.build_int_add(
-        ctx.i64_type().const_int(1_u64, false),
-        len,
-        "new_list_length",
-    );
-
-    // Allocate space for the new array that we'll copy into.
-    let clone_ptr = allocate_list(env, elem_layout, new_list_len);
-
-    builder.build_store(clone_ptr, elem);
-
-    let index_1_ptr = unsafe {
-        builder.build_in_bounds_gep(
-            clone_ptr,
-            &[ctx.i64_type().const_int(1_u64, false)],
-            "load_index",
-        )
-    };
-
-    // Calculate the number of bytes we'll need to allocate.
-    let elem_bytes = env
-        .ptr_int()
-        .const_int(elem_layout.stack_size(env.ptr_bytes) as u64, false);
-
-    // This is the size of the list coming in, before we have added an element
-    // to the beginning.
-    let list_size = env
-        .builder
-        .build_int_mul(elem_bytes, len, "mul_old_len_by_elem_bytes");
-
-    let ptr_bytes = env.ptr_bytes;
-
-    if elem_layout.safe_to_memcpy() {
-        // Copy the bytes from the original array into the new
-        // one we just allocated
-        //
-        // TODO how do we decide when to do the small memcpy vs the normal one?
-        builder
-            .build_memcpy(index_1_ptr, ptr_bytes, list_ptr, ptr_bytes, list_size)
-            .unwrap();
-    } else {
-        panic!("TODO Cranelift currently only knows how to clone list elements that are Copy.");
-    }
-
-    store_list(env, clone_ptr, new_list_len)
-}
-
 /// List.join : List (List elem) -> List elem
 pub fn list_join<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -207,7 +143,7 @@ pub fn list_join<'a, 'ctx, 'env>(
                     env.alignment_intvalue(element_layout),
                     layout_width(env, element_layout),
                 ],
-                &bitcode::LIST_JOIN,
+                bitcode::LIST_JOIN,
             )
         }
         _ => {
@@ -240,7 +176,7 @@ pub fn list_reverse<'a, 'ctx, 'env>(
             env.alignment_intvalue(&element_layout),
             layout_width(env, &element_layout),
         ],
-        &bitcode::LIST_REVERSE,
+        bitcode::LIST_REVERSE,
     )
 }
 
@@ -292,11 +228,30 @@ pub fn list_append<'a, 'ctx, 'env>(
         env,
         &[
             pass_list_as_i128(env, original_wrapper.into()),
-            env.alignment_intvalue(&element_layout),
+            env.alignment_intvalue(element_layout),
             pass_element_as_opaque(env, element),
             layout_width(env, element_layout),
         ],
-        &bitcode::LIST_APPEND,
+        bitcode::LIST_APPEND,
+    )
+}
+
+/// List.prepend : List elem, elem -> List elem
+pub fn list_prepend<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    original_wrapper: StructValue<'ctx>,
+    element: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    call_bitcode_fn_returns_list(
+        env,
+        &[
+            pass_list_as_i128(env, original_wrapper.into()),
+            env.alignment_intvalue(element_layout),
+            pass_element_as_opaque(env, element),
+            layout_width(env, element_layout),
+        ],
+        bitcode::LIST_PREPEND,
     )
 }
 
@@ -312,12 +267,12 @@ pub fn list_swap<'a, 'ctx, 'env>(
         env,
         &[
             pass_list_as_i128(env, original_wrapper.into()),
-            env.alignment_intvalue(&element_layout),
-            layout_width(env, &element_layout),
+            env.alignment_intvalue(element_layout),
+            layout_width(env, element_layout),
             index_1.into(),
             index_2.into(),
         ],
-        &bitcode::LIST_SWAP,
+        bitcode::LIST_SWAP,
     )
 }
 
@@ -329,17 +284,17 @@ pub fn list_drop<'a, 'ctx, 'env>(
     count: IntValue<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let dec_element_fn = build_dec_wrapper(env, layout_ids, &element_layout);
+    let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
     call_bitcode_fn_returns_list(
         env,
         &[
             pass_list_as_i128(env, original_wrapper.into()),
-            env.alignment_intvalue(&element_layout),
-            layout_width(env, &element_layout),
+            env.alignment_intvalue(element_layout),
+            layout_width(env, element_layout),
             count.into(),
             dec_element_fn.as_global_value().as_pointer_value().into(),
         ],
-        &bitcode::LIST_DROP,
+        bitcode::LIST_DROP,
     )
 }
 
@@ -378,7 +333,7 @@ pub fn list_set<'a, 'ctx, 'env>(
             &[
                 bytes.into(),
                 length.into(),
-                env.alignment_intvalue(&element_layout),
+                env.alignment_intvalue(element_layout),
                 index.into(),
                 pass_element_as_opaque(env, element),
                 layout_width(env, element_layout),
@@ -457,7 +412,7 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
                     roc_function_call.inc_n_data.into(),
                     roc_function_call.data_is_owned.into(),
                     pass_as_opaque(env, default_ptr),
-                    env.alignment_intvalue(&element_layout),
+                    env.alignment_intvalue(element_layout),
                     layout_width(env, element_layout),
                     layout_width(env, default_layout),
                     pass_as_opaque(env, result_ptr),
@@ -488,7 +443,7 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
                     roc_function_call.inc_n_data.into(),
                     roc_function_call.data_is_owned.into(),
                     pass_as_opaque(env, default_ptr),
-                    env.alignment_intvalue(&element_layout),
+                    env.alignment_intvalue(element_layout),
                     layout_width(env, element_layout),
                     layout_width(env, function_call_return_layout),
                     layout_width(env, default_layout),
@@ -564,7 +519,7 @@ pub fn list_range<'a, 'ctx, 'env>(
             pass_as_opaque(env, low_ptr),
             pass_as_opaque(env, high_ptr),
         ],
-        &bitcode::LIST_RANGE,
+        bitcode::LIST_RANGE,
     )
 }
 
@@ -612,12 +567,12 @@ pub fn list_keep_if<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            env.alignment_intvalue(&element_layout),
+            env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
             inc_element_fn.as_global_value().as_pointer_value().into(),
             dec_element_fn.as_global_value().as_pointer_value().into(),
         ],
-        &bitcode::LIST_KEEP_IF,
+        bitcode::LIST_KEEP_IF,
     )
 }
 
@@ -654,7 +609,7 @@ pub fn list_keep_oks<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            env.alignment_intvalue(&before_layout),
+            env.alignment_intvalue(before_layout),
             layout_width(env, before_layout),
             layout_width(env, result_layout),
             layout_width(env, after_layout),
@@ -698,7 +653,7 @@ pub fn list_keep_errs<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            env.alignment_intvalue(&before_layout),
+            env.alignment_intvalue(before_layout),
             layout_width(env, before_layout),
             layout_width(env, result_layout),
             layout_width(env, after_layout),
@@ -725,7 +680,7 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            env.alignment_intvalue(&element_layout),
+            env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
         ],
         bitcode::LIST_SORT_WITH,
@@ -748,7 +703,7 @@ pub fn list_map_with_index<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            env.alignment_intvalue(&element_layout),
+            env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
             layout_width(env, return_layout),
         ],
@@ -772,7 +727,7 @@ pub fn list_map<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            env.alignment_intvalue(&element_layout),
+            env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
             layout_width(env, return_layout),
         ],
@@ -874,7 +829,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
                 env.alignment_intvalue(elem_layout),
                 layout_width(env, elem_layout),
             ],
-            &bitcode::LIST_CONCAT,
+            bitcode::LIST_CONCAT,
         ),
         _ => {
             unreachable!("Invalid List layout for List.concat {:?}", list_layout);

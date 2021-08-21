@@ -2,8 +2,7 @@ use crate::editor::ed_error::EdResult;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::slow_pool::MarkNodeId;
-use crate::lang::ast::Expr2;
-use crate::lang::pool::NodeId;
+use crate::lang::ast::{Expr2, ExprId};
 use crate::lang::pool::PoolStr;
 use crate::ui::text::lines::SelectableLines;
 
@@ -11,7 +10,7 @@ pub fn update_invalid_lookup(
     input_str: &str,
     old_pool_str: &PoolStr,
     curr_mark_node_id: MarkNodeId,
-    ast_node_id: NodeId<Expr2>,
+    ast_node_id: ExprId,
     ed_model: &mut EdModel,
 ) -> EdResult<InputOutcome> {
     if input_str.chars().all(|ch| ch.is_ascii_alphanumeric()) {

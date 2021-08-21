@@ -1612,7 +1612,7 @@ fn hash_bstr(hasher: &mut Sha256, bstr: &[u8]) {
 
 fn hash_func_name(mod_: ModName, func: FuncName) -> FuncSpec {
     let mut hasher = Sha256::new();
-    hash_bstr(&mut hasher, &mod_.0);
-    hash_bstr(&mut hasher, &func.0);
+    hash_bstr(&mut hasher, mod_.0);
+    hash_bstr(&mut hasher, func.0);
     FuncSpec(hasher.finalize().into())
 }

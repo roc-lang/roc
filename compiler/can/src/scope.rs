@@ -47,7 +47,7 @@ impl Scope {
             let alias = Alias {
                 region,
                 typ,
-                lambda_set_variables: MutSet::default(),
+                lambda_set_variables: Vec::new(),
                 recursion_variables: MutSet::default(),
                 type_variables: variables,
             };
@@ -89,7 +89,7 @@ impl Scope {
             None => Err(RuntimeError::LookupNotInScope(
                 Located {
                     region,
-                    value: ident.clone().into(),
+                    value: ident.clone(),
                 },
                 self.idents.keys().map(|v| v.as_ref().into()).collect(),
             )),
@@ -124,9 +124,9 @@ impl Scope {
                 // If this IdentId was already added previously
                 // when the value was exposed in the module header,
                 // use that existing IdentId. Otherwise, create a fresh one.
-                let ident_id = match exposed_ident_ids.get_id(&ident.as_inline_str()) {
+                let ident_id = match exposed_ident_ids.get_id(&ident) {
                     Some(ident_id) => *ident_id,
-                    None => all_ident_ids.add(ident.clone().into()),
+                    None => all_ident_ids.add(ident.clone()),
                 };
 
                 let symbol = Symbol::new(self.home, ident_id);
@@ -143,7 +143,7 @@ impl Scope {
     ///
     /// Used for record guards like { x: Just _ }
     pub fn ignore(&mut self, ident: Ident, all_ident_ids: &mut IdentIds) -> Symbol {
-        let ident_id = all_ident_ids.add(ident.into());
+        let ident_id = all_ident_ids.add(ident);
         Symbol::new(self.home, ident_id)
     }
 
@@ -197,6 +197,11 @@ impl Scope {
 
             true
         });
+
+        let lambda_set_variables: Vec<_> = lambda_set_variables
+            .into_iter()
+            .map(|v| roc_types::types::LambdaSet(Type::Variable(v)))
+            .collect();
 
         let alias = Alias {
             region,

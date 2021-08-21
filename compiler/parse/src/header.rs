@@ -7,7 +7,6 @@ use crate::parser::{
 };
 use crate::string_literal;
 use bumpalo::collections::Vec;
-use inlinable_string::InlinableString;
 use roc_region::all::Loc;
 
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
@@ -45,12 +44,6 @@ pub struct ModuleName<'a>(&'a str);
 impl<'a> From<ModuleName<'a>> for &'a str {
     fn from(name: ModuleName<'a>) -> Self {
         name.0
-    }
-}
-
-impl<'a> From<ModuleName<'a>> for InlinableString {
-    fn from(name: ModuleName<'a>) -> InlinableString {
-        name.0.into()
     }
 }
 

@@ -36,7 +36,10 @@ pub fn infer_expr(
     };
     let (solved, _) = solve::run(&env, problems, subs, constraint);
 
-    let content = solved.inner().get_without_compacting(expr_var).content;
+    let content = solved
+        .inner()
+        .get_content_without_compacting(expr_var)
+        .clone();
 
     (content, solved.into_inner())
 }
@@ -110,7 +113,7 @@ pub fn can_expr_with<'a>(
     home: ModuleId,
     expr_str: &'a str,
 ) -> Result<CanExprOut, ParseErrOut<'a>> {
-    let loc_expr = match roc_parse::test_helpers::parse_loc_with(&arena, expr_str) {
+    let loc_expr = match roc_parse::test_helpers::parse_loc_with(arena, expr_str) {
         Ok(e) => e,
         Err(fail) => {
             let interns = Interns::default();
@@ -142,7 +145,7 @@ pub fn can_expr_with<'a>(
 
     let mut scope = Scope::new(home, &mut var_store);
     let dep_idents = IdentIds::exposed_builtins(0);
-    let mut env = Env::new(home, dep_idents, &module_ids, IdentIds::default());
+    let mut env = Env::new(home, &dep_idents, &module_ids, IdentIds::default());
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &mut var_store,

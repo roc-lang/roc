@@ -27,7 +27,7 @@ pub fn str_split<'a, 'ctx, 'env>(
     let segment_count = call_bitcode_fn(
         env,
         &[str_i128.into(), delim_i128.into()],
-        &bitcode::STR_COUNT_SEGMENTS,
+        bitcode::STR_COUNT_SEGMENTS,
     )
     .into_int_value();
 
@@ -47,7 +47,7 @@ pub fn str_split<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[ret_list_ptr_zig_rocstr, str_i128.into(), delim_i128.into()],
-        &bitcode::STR_STR_SPLIT_IN_PLACE,
+        bitcode::STR_STR_SPLIT_IN_PLACE,
     );
 
     store_list(env, ret_list_ptr, segment_count)
@@ -62,7 +62,7 @@ fn str_symbol_to_i128<'a, 'ctx, 'env>(
 
     let i128_type = env.context.i128_type().into();
 
-    complex_bitcast(&env.builder, string, i128_type, "str_to_i128").into_int_value()
+    complex_bitcast(env.builder, string, i128_type, "str_to_i128").into_int_value()
 }
 
 pub fn str_to_i128<'a, 'ctx, 'env>(
@@ -119,7 +119,7 @@ pub fn str_concat<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[str1_i128.into(), str2_i128.into()],
-        &bitcode::STR_CONCAT,
+        bitcode::STR_CONCAT,
     )
 }
 
@@ -138,7 +138,7 @@ pub fn str_join_with<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[list_i128.into(), str_i128.into()],
-        &bitcode::STR_JOIN_WITH,
+        bitcode::STR_JOIN_WITH,
     )
 }
 
@@ -151,7 +151,7 @@ pub fn str_number_of_bytes<'a, 'ctx, 'env>(
 
     // the builtin will always return an u64
     let length =
-        call_bitcode_fn(env, &[str_i128.into()], &bitcode::STR_NUMBER_OF_BYTES).into_int_value();
+        call_bitcode_fn(env, &[str_i128.into()], bitcode::STR_NUMBER_OF_BYTES).into_int_value();
 
     // cast to the appropriate usize of the current build
     env.builder
@@ -171,11 +171,11 @@ pub fn str_starts_with<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[str_i128.into(), prefix_i128.into()],
-        &bitcode::STR_STARTS_WITH,
+        bitcode::STR_STARTS_WITH,
     )
 }
 
-/// Str.startsWithCodePoint : Str, U32 -> Bool
+/// Str.startsWithCodePt : Str, U32 -> Bool
 pub fn str_starts_with_code_point<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
@@ -188,7 +188,7 @@ pub fn str_starts_with_code_point<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[str_i128.into(), prefix],
-        &bitcode::STR_STARTS_WITH_CODE_POINT,
+        bitcode::STR_STARTS_WITH_CODE_PT,
     )
 }
 
@@ -205,7 +205,7 @@ pub fn str_ends_with<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[str_i128.into(), prefix_i128.into()],
-        &bitcode::STR_ENDS_WITH,
+        bitcode::STR_ENDS_WITH,
     )
 }
 
@@ -220,7 +220,7 @@ pub fn str_count_graphemes<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[str_i128.into()],
-        &bitcode::STR_COUNT_GRAPEHEME_CLUSTERS,
+        bitcode::STR_COUNT_GRAPEHEME_CLUSTERS,
     )
 }
 
@@ -232,11 +232,11 @@ pub fn str_from_int<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let int = load_symbol(scope, &int_symbol);
 
-    call_bitcode_fn(env, &[int], &bitcode::STR_FROM_INT)
+    call_bitcode_fn(env, &[int], bitcode::STR_FROM_INT)
 }
 
-/// Str.toBytes : Str -> List U8
-pub fn str_to_bytes<'a, 'ctx, 'env>(
+/// Str.toUtf8 : Str -> List U8
+pub fn str_to_utf8<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     original_wrapper: StructValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
@@ -244,10 +244,66 @@ pub fn str_to_bytes<'a, 'ctx, 'env>(
         env.builder,
         original_wrapper.into(),
         env.context.i128_type().into(),
-        "to_bytes",
+        "to_utf8",
     );
 
-    call_bitcode_fn_returns_list(env, &[string], &bitcode::STR_TO_BYTES)
+    call_bitcode_fn_returns_list(env, &[string], bitcode::STR_TO_UTF8)
+}
+
+/// Str.fromUtf8 : List U8, { count : Nat, start : Nat } -> { a : Bool, b : Str, c : Nat, d : I8 }
+pub fn str_from_utf8_range<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    _parent: FunctionValue<'ctx>,
+    list_wrapper: StructValue<'ctx>,
+    count_and_start: StructValue<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    let result_type = env.module.get_struct_type("str.FromUtf8Result").unwrap();
+    let result_ptr = builder.build_alloca(result_type, "alloca_utf8_validate_bytes_result");
+
+    call_void_bitcode_fn(
+        env,
+        &[
+            complex_bitcast(
+                env.builder,
+                list_wrapper.into(),
+                env.context.i128_type().into(),
+                "to_i128",
+            ),
+            // TODO: This won't work for 32 bit targets!
+            complex_bitcast(
+                env.builder,
+                count_and_start.into(),
+                env.context.i128_type().into(),
+                "to_i128",
+            ),
+            result_ptr.into(),
+        ],
+        bitcode::STR_FROM_UTF8_RANGE,
+    );
+
+    let record_type = env.context.struct_type(
+        &[
+            env.ptr_int().into(),
+            super::convert::zig_str_type(env).into(),
+            env.context.bool_type().into(),
+            ctx.i8_type().into(),
+        ],
+        false,
+    );
+
+    let result_ptr_cast = env
+        .builder
+        .build_bitcast(
+            result_ptr,
+            record_type.ptr_type(AddressSpace::Generic),
+            "to_unnamed",
+        )
+        .into_pointer_value();
+
+    builder.build_load(result_ptr_cast, "load_utf8_validate_bytes_result")
 }
 
 /// Str.fromUtf8 : List U8 -> { a : Bool, b : Str, c : Nat, d : I8 }
@@ -273,7 +329,7 @@ pub fn str_from_utf8<'a, 'ctx, 'env>(
             ),
             result_ptr.into(),
         ],
-        &bitcode::STR_FROM_UTF8,
+        bitcode::STR_FROM_UTF8,
     );
 
     let record_type = env.context.struct_type(
@@ -306,7 +362,7 @@ pub fn str_from_float<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let float = load_symbol(scope, &int_symbol);
 
-    call_bitcode_fn(env, &[float], &bitcode::STR_FROM_FLOAT)
+    call_bitcode_fn(env, &[float], bitcode::STR_FROM_FLOAT)
 }
 
 /// Str.equal : Str, Str -> Bool
@@ -321,7 +377,7 @@ pub fn str_equal<'a, 'ctx, 'env>(
     call_bitcode_fn(
         env,
         &[str1_i128.into(), str2_i128.into()],
-        &bitcode::STR_EQUAL,
+        bitcode::STR_EQUAL,
     )
 }
 

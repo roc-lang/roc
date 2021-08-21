@@ -436,8 +436,8 @@ pub enum Number {
 pub enum EString<'a> {
     Open(Row, Col),
 
-    CodePointOpen(Row, Col),
-    CodePointEnd(Row, Col),
+    CodePtOpen(Row, Col),
+    CodePtEnd(Row, Col),
 
     Space(BadInputError, Row, Col),
     EndlessSingle(Row, Col),

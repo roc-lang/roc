@@ -313,7 +313,7 @@ pub fn canonical_string_literal<'a>(_arena: &Bump, _raw: &'a str, _region: Regio
 
 //                         problems.push(Loc {
 //                             region,
-//                             value: Problem::UnicodeCodePointTooLarge,
+//                             value: Problem::UnicodeCodePtTooLarge,
 //                         });
 //                     } else {
 //                         // If it all checked out, add it to
@@ -322,7 +322,7 @@ pub fn canonical_string_literal<'a>(_arena: &Bump, _raw: &'a str, _region: Regio
 //                             Some(ch) => buf.push(ch),
 //                             None => {
 //                                 problems.push(loc_escaped_unicode(
-//                                     Problem::InvalidUnicodeCodePoint,
+//                                     Problem::InvalidUnicodeCodePt,
 //                                     &state,
 //                                     start_of_unicode,
 //                                     hex_str.len(),
@@ -335,7 +335,7 @@ pub fn canonical_string_literal<'a>(_arena: &Bump, _raw: &'a str, _region: Regio
 //                     let problem = if hex_str.is_empty() {
 //                         Problem::NoUnicodeDigits
 //                     } else {
-//                         Problem::NonHexCharsInUnicodeCodePoint
+//                         Problem::NonHexCharsInUnicodeCodePt
 //                     };
 
 //                     problems.push(loc_escaped_unicode(

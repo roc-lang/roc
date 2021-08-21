@@ -1,10 +1,6 @@
 procedure Test.0 ():
-    let Test.9 = 0i64;
-    let Test.11 = 0i64;
-    let Test.13 = 0i64;
-    let Test.14 = 1i64;
-    let Test.12 = Z ;
-    let Test.10 = S Test.12;
-    let Test.8 = S Test.10;
+    let Test.10 = Z ;
+    let Test.9 = S Test.10;
+    let Test.8 = S Test.9;
     let Test.2 = S Test.8;
     ret Test.2;

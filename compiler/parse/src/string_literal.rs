@@ -18,7 +18,7 @@ fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
                 // We didn't find any hex digits!
                 return Err((
                     NoProgress,
-                    EString::CodePointEnd(state.line, state.column),
+                    EString::CodePtEnd(state.line, state.column),
                     state,
                 ));
             } else {
@@ -32,7 +32,7 @@ fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
 
         Err((
             NoProgress,
-            EString::CodePointEnd(state.line, state.column),
+            EString::CodePtEnd(state.line, state.column),
             state,
         ))
     }
@@ -257,9 +257,9 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                             // give a canonicalization error if the digits form
                             // an invalid unicode code point.
                             let (_progress, loc_digits, new_state) = between!(
-                                word1(b'(', EString::CodePointOpen),
+                                word1(b'(', EString::CodePtOpen),
                                 loc(ascii_hex_digits()),
-                                word1(b')', EString::CodePointEnd)
+                                word1(b')', EString::CodePtEnd)
                             )
                             .parse(arena, state)?;
 

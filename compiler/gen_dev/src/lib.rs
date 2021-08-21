@@ -74,7 +74,7 @@ where
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
     fn build_proc(&mut self, proc: Proc<'a>) -> Result<(&'a [u8], &[Relocation]), String> {
         self.reset();
-        self.load_args(&proc.args)?;
+        self.load_args(proc.args)?;
         // let start = std::time::Instant::now();
         self.scan_ast(&proc.body);
         self.create_free_map();
@@ -99,19 +99,6 @@ where
                 self.return_symbol(sym)?;
                 self.free_symbols(stmt);
                 Ok(())
-            }
-            Stmt::Invoke {
-                symbol,
-                layout,
-                call,
-                pass,
-                fail: _,
-                exception_id: _,
-            } => {
-                // for now, treat invoke as a normal call
-                self.build_expr(symbol, &Expr::Call(call.clone()), layout)?;
-                self.free_symbols(stmt);
-                self.build_stmt(pass)
             }
             Stmt::Switch {
                 cond_symbol,
@@ -201,6 +188,12 @@ where
                             Symbol::NUM_SUB => {
                                 self.build_run_low_level(sym, &LowLevel::NumSub, arguments, layout)
                             }
+                            Symbol::NUM_ROUND => self.build_run_low_level(
+                                sym,
+                                &LowLevel::NumRound,
+                                arguments,
+                                layout,
+                            ),
                             Symbol::BOOL_EQ => {
                                 self.build_run_low_level(sym, &LowLevel::Eq, arguments, layout)
                             }
@@ -300,7 +293,13 @@ where
                 // Should we panic?
                 x => Err(format!("wrong layout, {:?}, for LowLevel::Eq", x)),
             },
-
+            LowLevel::NumRound => self.build_fn_call(
+                sym,
+                bitcode::NUM_ROUND.to_string(),
+                args,
+                &[Layout::Builtin(Builtin::Float64)],
+                layout,
+            ),
             x => Err(format!("low level, {:?}. is not yet implemented", x)),
         }
     }
@@ -487,20 +486,6 @@ where
                 self.scan_ast(following);
             }
 
-            Stmt::Invoke {
-                symbol,
-                layout: _,
-                call,
-                pass,
-                fail: _,
-                exception_id: _,
-            } => {
-                // for now, treat invoke as a normal call
-                self.set_last_seen(*symbol, stmt);
-                self.scan_ast_call(call, stmt);
-                self.scan_ast(pass);
-            }
-
             Stmt::Switch {
                 cond_symbol,
                 branches,
@@ -516,7 +501,6 @@ where
             Stmt::Ret(sym) => {
                 self.set_last_seen(*sym, stmt);
             }
-            Stmt::Resume(_exception_id) => {}
             Stmt::Refcounting(modify, following) => {
                 let sym = modify.get_symbol();
 

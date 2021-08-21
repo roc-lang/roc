@@ -138,13 +138,10 @@ macro_rules! advance_state {
     };
 }
 
-pub fn parse_ident_help<'a>(
-    arena: &'a Bump,
-    state: State<'a>,
-) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
+pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
     let initial = state;
 
-    match parse_ident_help_help(arena, state) {
+    match parse_ident_help(arena, state) {
         Ok((progress, ident, state)) => {
             if let Ident::Access { module_name, parts } = ident {
                 if module_name.is_empty() {
@@ -526,7 +523,7 @@ fn chomp_access_chain<'a>(buffer: &'a [u8], parts: &mut Vec<'a, &'a str>) -> Res
     }
 }
 
-fn parse_ident_help_help<'a>(
+fn parse_ident_help<'a>(
     arena: &'a Bump,
     mut state: State<'a>,
 ) -> ParseResult<'a, Ident<'a>, BadIdent> {

@@ -1,6 +1,6 @@
 package roc/unicode 0.1.0
     roc 0.0.0
-    exposes [ Unicode, Unicode.Scalar, Unicode.CodePoint ]
+    exposes [ Unicode, Unicode.Scalar, Unicode.CodePt ]
     packages {}
     license UPL-1.0
 

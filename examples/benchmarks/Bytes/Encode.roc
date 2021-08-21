@@ -54,6 +54,7 @@ encode = \encoder ->
     encodeHelp encoder 0 output
         |> .output
 
+encodeHelp : Encoder, Nat, List U8 -> { output: List U8, offset: Nat }
 encodeHelp = \encoder, offset, output ->
     when encoder is
         Unsigned8 value ->

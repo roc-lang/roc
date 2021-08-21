@@ -145,7 +145,7 @@ mod test_can {
         let region = Region::zero();
 
         assert_can(
-            &string.clone(),
+            string.clone(),
             RuntimeError(RuntimeError::InvalidFloat(
                 FloatErrorKind::Error,
                 region,
@@ -658,7 +658,7 @@ mod test_can {
                         recursive: recursion,
                         ..
                     }) => recursion.clone(),
-                    Some(other @ _) => {
+                    Some(other) => {
                         panic!("assignment at {} is not a closure, but a {:?}", i, other)
                     }
                     None => {
@@ -680,7 +680,7 @@ mod test_can {
                             recursive: recursion,
                             ..
                         } => recursion.clone(),
-                        other @ _ => {
+                        other => {
                             panic!("assignment at {} is not a closure, but a {:?}", i, other)
                         }
                     }
@@ -1590,7 +1590,7 @@ mod test_can {
     //         // (Rust has this restriction. I assume it's a good idea.)
     //         assert_malformed_str(
     //             r#""abc\u{110000}def""#,
-    //             vec![Located::new(0, 7, 0, 12, Problem::UnicodeCodePointTooLarge)],
+    //             vec![Located::new(0, 7, 0, 12, Problem::UnicodeCodePtTooLarge)],
     //         );
     //     }
 

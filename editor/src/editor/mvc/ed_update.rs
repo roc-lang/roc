@@ -25,9 +25,8 @@ use crate::editor::mvc::string_update::update_string;
 use crate::editor::slow_pool::MarkNodeId;
 use crate::editor::slow_pool::SlowPool;
 use crate::editor::syntax_highlight::HighlightStyle;
-use crate::lang::ast::Expr2;
+use crate::lang::ast::{Expr2, ExprId};
 use crate::lang::constrain::constrain_expr;
-use crate::lang::pool::NodeId;
 use crate::lang::pool::Pool;
 use crate::lang::pool::PoolStr;
 use crate::lang::types::Type2;
@@ -226,7 +225,7 @@ impl<'a> EdModel<'a> {
         &mut self,
         expr_start_pos: TextPos,
         expr_end_pos: TextPos,
-        ast_node_id: NodeId<Expr2>,
+        ast_node_id: ExprId,
         mark_node_id: MarkNodeId,
     ) -> EdResult<()> {
         self.set_raw_sel(RawSelection {
@@ -271,7 +270,7 @@ impl<'a> EdModel<'a> {
             if self.grid_node_map.node_exists_at_pos(caret_pos) {
                 let (expr_start_pos, expr_end_pos, ast_node_id, mark_node_id) = self
                     .grid_node_map
-                    .get_expr_start_end_pos(self.get_caret(), &self)?;
+                    .get_expr_start_end_pos(self.get_caret(), self)?;
 
                 self.set_selected_expr(expr_start_pos, expr_end_pos, ast_node_id, mark_node_id)?;
             } else if self
@@ -280,7 +279,7 @@ impl<'a> EdModel<'a> {
             {
                 let (expr_start_pos, expr_end_pos, ast_node_id, mark_node_id) = self
                     .grid_node_map
-                    .get_expr_start_end_pos(self.get_caret().decrement_col(), &self)?;
+                    .get_expr_start_end_pos(self.get_caret().decrement_col(), self)?;
 
                 self.set_selected_expr(expr_start_pos, expr_end_pos, ast_node_id, mark_node_id)?;
             }
@@ -289,7 +288,7 @@ impl<'a> EdModel<'a> {
         Ok(())
     }
 
-    fn expr2_to_type(&mut self, expr2_id: NodeId<Expr2>) -> PoolStr {
+    fn expr2_to_type(&mut self, expr2_id: ExprId) -> PoolStr {
         let var = self.module.env.var_store.fresh();
         let expr = self.module.env.pool.get(expr2_id);
         let arena = Bump::new();
@@ -297,7 +296,7 @@ impl<'a> EdModel<'a> {
         let constrained = constrain_expr(
             &arena,
             &mut self.module.env,
-            &expr,
+            expr,
             Expected::NoExpectation(Type2::Variable(var)),
             Region::zero(),
         );
@@ -322,7 +321,7 @@ impl<'a> EdModel<'a> {
 
         let subs = solved.inner_mut();
 
-        let content = subs.get(var).content;
+        let content = subs.get_content_without_compacting(var);
 
         PoolStr::new(
             &content_to_string(
@@ -583,7 +582,7 @@ pub struct NodeContext<'a> {
     pub curr_mark_node_id: MarkNodeId,
     pub curr_mark_node: &'a MarkupNode,
     pub parent_id_opt: Option<MarkNodeId>,
-    pub ast_node_id: NodeId<Expr2>,
+    pub ast_node_id: ExprId,
 }
 
 pub fn get_node_context<'a>(ed_model: &'a EdModel) -> EdResult<NodeContext<'a>> {
@@ -663,7 +662,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                         }
                                         Expr2::SmallStr(old_arr_str) => {
                                             update_small_string(
-                                                &ch, old_arr_str, ed_model
+                                                ch, old_arr_str, ed_model
                                             )?
                                         }
                                         Expr2::Str(..) => {
@@ -2148,11 +2147,11 @@ pub mod test_ed_update {
         expected_tooltip: &str,
         new_char: char,
     ) -> Result<(), String> {
-        assert_type_tooltips_seq(pre_lines, &vec![expected_tooltip], &new_char.to_string())
+        assert_type_tooltips_seq(pre_lines, &[expected_tooltip], &new_char.to_string())
     }
 
     pub fn assert_type_tooltip_clean(lines: &[&str], expected_tooltip: &str) -> Result<(), String> {
-        assert_type_tooltips_seq(lines, &vec![expected_tooltip], "")
+        assert_type_tooltips_seq(lines, &[expected_tooltip], "")
     }
 
     // When doing ctrl+shift+up multiple times we select the surrounding expression every time,
