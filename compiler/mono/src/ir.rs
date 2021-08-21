@@ -4684,14 +4684,16 @@ pub fn from_can<'a>(
                                     );
                                     CapturedSymbols::None
                                 }
-                                Err(e) => {
-                                    debug_assert!(
-                                        captured_symbols.is_empty(),
-                                        "{:?}, {:?}",
-                                        &captured_symbols,
-                                        e
-                                    );
-                                    CapturedSymbols::None
+                                Err(_) => {
+                                    // just allow this. see https://github.com/rtfeldman/roc/issues/1585
+                                    if captured_symbols.is_empty() {
+                                        CapturedSymbols::None
+                                    } else {
+                                        let mut temp =
+                                            Vec::from_iter_in(captured_symbols, env.arena);
+                                        temp.sort();
+                                        CapturedSymbols::Captured(temp.into_bump_slice())
+                                    }
                                 }
                             };
 

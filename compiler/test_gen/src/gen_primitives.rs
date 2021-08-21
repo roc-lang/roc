@@ -2712,7 +2712,6 @@ fn int_literal_not_specialized() {
 }
 
 #[test]
-#[ignore]
 fn unresolved_tvar_when_capture_is_unused() {
     // see https://github.com/rtfeldman/roc/issues/1585
     assert_evals_to!(
@@ -2725,8 +2724,7 @@ fn unresolved_tvar_when_capture_is_unused() {
                     r : Bool
                     r = False
 
-                    # underscore does not change the problem, maybe it's type-related? We don 't really know what `Green` refers to below
-                    p1 = (\x -> r == (1 == 1))
+                    p1 = (\_ -> r == (1 == 1))
                     oneOfResult = List.map [p1] (\p -> p Green)
 
                     when oneOfResult is

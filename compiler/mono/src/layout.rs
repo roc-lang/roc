@@ -2222,7 +2222,7 @@ fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
 }
 
 #[cfg(not(debug_assertions))]
-fn ext_var_is_empty_record(subs: &Subs, ext_var: Variable) -> bool {
+fn ext_var_is_empty_record(_subs: &Subs, _ext_var: Variable) -> bool {
     // This should only ever be used in debug_assert! macros
     unreachable!();
 }
