@@ -7,11 +7,9 @@ use crate::editor::{
     ed_error::{EdResult, EmptyCodeString, MissingParent, NoNodeAtCaretPosition},
 };
 use crate::graphics::primitives::rect::Rect;
+use crate::lang::ast::ExprId;
 use crate::lang::expr::Env;
 use crate::lang::parse::AST;
-use crate::lang::pool::NodeId;
-use crate::lang::ast::{Expr2, ExprId};
-use crate::lang::expr::{str_to_expr2, Env};
 use crate::lang::pool::PoolStr;
 use crate::ui::text::caret_w_select::CaretWSelect;
 use crate::ui::text::lines::SelectableLines;
@@ -56,11 +54,7 @@ pub fn init_model<'a>(
     loaded_module: LoadedModule,
     code_arena: &'a Bump,
 ) -> EdResult<EdModel<'a>> {
-<<<<<<< HEAD
     let mut module = EdModule::new(&code_str, env, &code_arena)?;
-=======
-    let mut module = EdModule::new(code_str, env, code_arena)?;
->>>>>>> 1348ec433b56d0919fa3c25ce2fd8d879d99f681
 
     let mut markup_node_pool = SlowPool::new();
 
@@ -150,11 +144,7 @@ impl<'a> EdModel<'a> {
 #[derive(Debug)]
 pub struct EdModule<'a> {
     pub env: Env<'a>,
-<<<<<<< HEAD
     pub ast: AST,
-=======
-    pub ast_root_id: ExprId,
->>>>>>> 1348ec433b56d0919fa3c25ce2fd8d879d99f681
 }
 
 // for debugging
@@ -165,24 +155,9 @@ impl<'a> EdModule<'a> {
         if !code_str.is_empty() {
             let parse_res = AST::parse_from_string(code_str, &mut env, ast_arena);
 
-<<<<<<< HEAD
             match parse_res {
                 Ok(ast) => Ok(EdModule { env, ast }),
                 Err(err) => SrcParseError {
-=======
-            let expr2_result = str_to_expr2(ast_arena, code_str, &mut env, &mut scope, region);
-
-            match expr2_result {
-                Ok((expr2, _output)) => {
-                    let ast_root_id = env.pool.add(expr2);
-
-                    // for debugging
-                    // dbg!(expr2_to_string(ast_root_id, env.pool));
-
-                    Ok(EdModule { env, ast_root_id })
-                }
-                Err(err) => Err(ParseError {
->>>>>>> 1348ec433b56d0919fa3c25ce2fd8d879d99f681
                     syntax_err: format!("{:?}", err),
                 }
                 .fail(),
@@ -239,17 +214,7 @@ pub mod test_ed_model {
             exposed_ident_ids,
         );
 
-<<<<<<< HEAD
         ed_model::init_model(code_str, file_path, env, loaded_module, code_arena)
-=======
-        ed_model::init_model(
-            code_str,
-            file_path,
-            env,
-            &ed_model_refs.interns,
-            &ed_model_refs.code_arena,
-        )
->>>>>>> 1348ec433b56d0919fa3c25ce2fd8d879d99f681
     }
 
     pub struct EdModelRefs {

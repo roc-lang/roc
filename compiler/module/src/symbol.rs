@@ -553,24 +553,26 @@ impl IdentIds {
 
     pub fn update_key(
         &mut self,
-        old_ident_name: InlinableString,
-        new_ident_name: InlinableString,
+        old_ident_name: &str,
+        new_ident_name: &str,
     ) -> Result<IdentId, String> {
-        let ident_id_ref_opt = self.by_ident.get(&old_ident_name);
+        let old_ident: Ident = old_ident_name.into();
+
+        let ident_id_ref_opt = self.by_ident.get(&old_ident);
 
         match ident_id_ref_opt {
             Some(ident_id_ref) => {
                 let ident_id = (*ident_id_ref).clone();
 
-                self.by_ident.remove(&old_ident_name);
-                self.by_ident.insert(new_ident_name.clone(), ident_id);
+                self.by_ident.remove(&old_ident);
+                self.by_ident.insert(new_ident_name.into(), ident_id);
 
                 let by_id = &mut self.by_id;
-                let key_index_opt = by_id.iter().position(|x| *x == old_ident_name);
+                let key_index_opt = by_id.iter().position(|x| *x == old_ident);
 
                 if let Some(key_index) = key_index_opt {
                     if let Some(vec_elt) = by_id.get_mut(key_index) {
-                        *vec_elt = new_ident_name;
+                        *vec_elt = new_ident_name.into();
                     } else {
                         // we get the index from by_id so unless there is a bug in the rust std lib, this is unreachable
                         unreachable!()

@@ -1,4 +1,3 @@
-use inlinable_string::InlinableString;
 use roc_module::symbol::Symbol;
 
 use crate::editor::ed_error::EdResult;
@@ -16,7 +15,6 @@ use crate::lang::ast::{Expr2, ValueDef};
 use crate::lang::pattern::Pattern2;
 use crate::lang::pool::NodeId;
 use crate::ui::text::lines::SelectableLines;
-use std::iter::FromIterator;
 
 pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<InputOutcome> {
     let NodeContext {
@@ -34,8 +32,7 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     let val_expr2_node = Expr2::Blank;
     let val_expr_id = ed_model.module.env.pool.add(val_expr2_node);
 
-    let ident_string = InlinableString::from_iter(val_name_string.chars());
-    let ident_id = ed_model.module.env.ident_ids.add(ident_string);
+    let ident_id = ed_model.module.env.ident_ids.add(val_name_string.clone().into());
     let var_symbol = Symbol::new(ed_model.module.env.home, ident_id);
     let body = Expr2::Var(var_symbol);
     let body_id = ed_model.module.env.pool.add(body);
@@ -117,7 +114,6 @@ pub fn update_let_value(
         let content_str_mut = val_name_mn_mut.get_content_mut()?;
 
         let old_val_name = content_str_mut.clone();
-        let old_val_ident_string = InlinableString::from_iter(old_val_name.chars());
 
         let node_caret_offset = ed_model
             .grid_node_map
@@ -130,13 +126,12 @@ pub fn update_let_value(
             let value_def = ed_model.module.env.pool.get(def_id);
             let value_ident_pattern_id = value_def.get_pattern_id();
 
-            let ident_string = InlinableString::from_iter(content_str_mut.chars());
             // TODO no unwrap
             let ident_id = ed_model
                 .module
                 .env
                 .ident_ids
-                .update_key(old_val_ident_string, ident_string)
+                .update_key(&old_val_name, content_str_mut)
                 .unwrap();
 
             let new_var_symbol = Symbol::new(ed_model.module.env.home, ident_id);

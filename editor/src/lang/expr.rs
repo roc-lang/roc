@@ -1045,9 +1045,7 @@ pub fn to_expr2_from_def<'a>(
 
                     let value_def_id = env.pool.add(value_def);
 
-                    let ident_string =
-                        inlinable_string::InlinableString::from_iter(str_ref.chars());
-                    let ident_id = env.ident_ids.add(ident_string);
+                    let ident_id = env.ident_ids.add(str_ref.into());
                     let var_symbol = Symbol::new(env.home, ident_id);
                     let body = Expr2::Var(var_symbol);
                     let body_id = env.pool.add(body);

@@ -23,10 +23,8 @@ use crate::lang::pattern::get_identifier_string;
 use crate::lang::{
     ast::Expr2,
     expr::Env,
-    pool::{NodeId, PoolStr},
+    pool::{PoolStr},
 };
-use crate::lang::ast::{Expr2, ExprId, RecordField};
-use crate::lang::{expr::Env, pool::PoolStr};
 use crate::ui::util::slice_get;
 use bumpalo::Bump;
 use roc_module::symbol::Interns;
