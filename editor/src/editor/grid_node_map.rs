@@ -282,10 +282,10 @@ impl fmt::Display for GridNodeMap {
                 .collect::<Vec<String>>()
                 .join(", ");
 
-            write!(f, "{}\n", row_str)?;
+            writeln!(f, "{}", row_str)?;
         }
 
-        write!(f, "(grid_node_map, {:?} lines)\n", self.lines.len())?;
+        writeln!(f, "(grid_node_map, {:?} lines)", self.lines.len())?;
 
         Ok(())
     }

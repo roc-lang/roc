@@ -43,7 +43,7 @@ impl AST {
 
         let mut expression_ids = Vec::<ExprId>::new();
 
-        let expr2_vec = str_to_expr2_w_defs(&ast_arena, tail_str, env, &mut scope, region)?;
+        let expr2_vec = str_to_expr2_w_defs(ast_arena, tail_str, env, &mut scope, region)?;
 
         for expr2 in expr2_vec {
             let expr_id = env.pool.add(expr2);

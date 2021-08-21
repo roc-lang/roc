@@ -562,7 +562,7 @@ impl IdentIds {
 
         match ident_id_ref_opt {
             Some(ident_id_ref) => {
-                let ident_id = (*ident_id_ref).clone();
+                let ident_id = *ident_id_ref;
 
                 self.by_ident.remove(&old_ident);
                 self.by_ident.insert(new_ident_name.into(), ident_id);

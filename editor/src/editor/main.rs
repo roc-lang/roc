@@ -138,7 +138,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
     let (file_path, code_str) = read_file(file_path_opt);
 
-    let loaded_module = load_module(&file_path);
+    let loaded_module = load_module(file_path);
 
     let mut var_store = VarStore::default();
     let dep_idents = IdentIds::exposed_builtins(8);
@@ -398,20 +398,17 @@ fn begin_render_pass<'a>(
 
 fn read_file(file_path_opt: Option<&Path>) -> (&Path, String) {
     if let Some(file_path) = file_path_opt {
-        let file_as_str = std::fs::read_to_string(file_path).expect(&format!(
-            "Failed to read from provided file path: {:?}",
-            file_path
-        ));
+        let file_as_str = std::fs::read_to_string(file_path)
+            .unwrap_or_else(|_| panic!("Failed to read from provided file path: {:?}", file_path));
 
         (file_path, file_as_str)
     } else {
         let untitled_path = Path::new("UntitledApp.roc");
 
         let code_str = if !untitled_path.exists() {
-            let mut untitled_file = File::create(untitled_path).expect(&format!(
-                "I wanted to create {:?}, but it failed.",
-                untitled_path
-            ));
+            let mut untitled_file = File::create(untitled_path).unwrap_or_else(|_| {
+                panic!("I wanted to create {:?}, but it failed.", untitled_path)
+            });
 
             let hello_world_roc = r#"app "untitled-app"
     packages { base: "platform" }
@@ -421,21 +418,25 @@ fn read_file(file_path_opt: Option<&Path>) -> (&Path, String) {
 main = "Hello, world!"
 "#;
 
-            write!(untitled_file, "{}", hello_world_roc).expect(&format!(
-                r#"I wanted to write:
+            write!(untitled_file, "{}", hello_world_roc).unwrap_or_else(|_| {
+                panic!(
+                    r#"I wanted to write:
 
 {:?}
 
 to file {:?}, but it failed."#,
-                hello_world_roc, untitled_file
-            ));
+                    hello_world_roc, untitled_file
+                )
+            });
 
             hello_world_roc.to_string()
         } else {
-            std::fs::read_to_string(untitled_path).expect(&format!(
-                "I detected an existing {:?}, but I failed to read from it.",
-                untitled_path
-            ))
+            std::fs::read_to_string(untitled_path).unwrap_or_else(|_| {
+                panic!(
+                    "I detected an existing {:?}, but I failed to read from it.",
+                    untitled_path
+                )
+            })
         };
 
         (untitled_path, code_str)
@@ -450,10 +451,12 @@ pub fn load_module(src_file: &Path) -> LoadedModule {
         &arena,
         src_file.to_path_buf(),
         arena.alloc(roc_builtins::std::standard_stdlib()),
-        src_file.parent().expect(&format!(
-            "src_file {:?} did not have a parent directory but I need to have one.",
-            src_file
-        )),
+        src_file.parent().unwrap_or_else(|| {
+            panic!(
+                "src_file {:?} did not have a parent directory but I need to have one.",
+                src_file
+            )
+        }),
         subs_by_module,
         8,
         builtin_defs_map,

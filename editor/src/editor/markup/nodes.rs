@@ -20,11 +20,7 @@ use crate::lang::ast::RecordField;
 use crate::lang::ast::ValueDef;
 use crate::lang::parse::{AppHeader, AST};
 use crate::lang::pattern::get_identifier_string;
-use crate::lang::{
-    ast::Expr2,
-    expr::Env,
-    pool::{PoolStr},
-};
+use crate::lang::{ast::Expr2, expr::Env, pool::PoolStr};
 use crate::ui::util::slice_get;
 use bumpalo::Bump;
 use roc_module::symbol::Interns;
@@ -523,7 +519,7 @@ pub fn set_parent_for_all_helper(
 
 fn header_mn(content: String, ast_node_id: ExprId, mark_node_pool: &mut SlowPool) -> MarkNodeId {
     let mark_node = MarkupNode::Text {
-        content: content,
+        content,
         ast_node_id,
         syn_high_style: HighlightStyle::PackageRelated,
         attributes: Attributes::new(),
@@ -540,7 +536,7 @@ fn header_val_mn(
     mark_node_pool: &mut SlowPool,
 ) -> MarkNodeId {
     let mark_node = MarkupNode::Text {
-        content: content,
+        content,
         ast_node_id,
         syn_high_style: highlight_style,
         attributes: Attributes::new(),
@@ -711,9 +707,7 @@ pub fn ast_to_mark_nodes<'a, 'b>(
     mark_node_pool: &mut SlowPool,
     interns: &Interns,
 ) -> EdResult<Vec<MarkNodeId>> {
-    let mut all_mark_node_ids = vec![];
-
-    all_mark_node_ids.push(header_to_markup(&ast.header, mark_node_pool));
+    let mut all_mark_node_ids = vec![header_to_markup(&ast.header, mark_node_pool)];
 
     for &expr_id in ast.expression_ids.iter() {
         let expr2 = env.pool.get(expr_id);

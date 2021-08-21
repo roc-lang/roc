@@ -23,7 +23,7 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
         curr_mark_node,
         parent_id_opt,
         ast_node_id,
-    } = get_node_context(&ed_model)?;
+    } = get_node_context(ed_model)?;
 
     let is_blank_node = curr_mark_node.is_blank();
 
@@ -32,7 +32,11 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     let val_expr2_node = Expr2::Blank;
     let val_expr_id = ed_model.module.env.pool.add(val_expr2_node);
 
-    let ident_id = ed_model.module.env.ident_ids.add(val_name_string.clone().into());
+    let ident_id = ed_model
+        .module
+        .env
+        .ident_ids
+        .add(val_name_string.clone().into());
     let var_symbol = Symbol::new(ed_model.module.env.home, ident_id);
     let body = Expr2::Var(var_symbol);
     let body_id = ed_model.module.env.pool.add(body);
@@ -90,7 +94,7 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
         ed_model.insert_all_between_line(
             old_caret_pos.line,
             old_caret_pos.column,
-            &vec![val_name_mn_id, equals_mn_id, body_mn_id],
+            &[val_name_mn_id, equals_mn_id, body_mn_id],
         )?;
 
         Ok(InputOutcome::Accepted)

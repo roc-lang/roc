@@ -114,7 +114,7 @@ impl fmt::Display for CodeLines {
             write!(f, "\n{}", escaped_row_str)?;
         }
 
-        write!(f, "      (code_lines, {:?} lines)\n", self.lines.len())?;
+        writeln!(f, "      (code_lines, {:?} lines)", self.lines.len())?;
 
         Ok(())
     }

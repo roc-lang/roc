@@ -34,7 +34,7 @@ pub fn build_debug_graphics(
     for mark_id in ed_model.markup_ids.iter() {
         mark_node_trees_string.push_str(&tree_as_string(*mark_id, &ed_model.markup_node_pool));
 
-        mark_node_trees_string.push_str("\n");
+        mark_node_trees_string.push('\n');
     }
 
     let mark_node_tree_text = glyph_brush::OwnedText::new(mark_node_trees_string)

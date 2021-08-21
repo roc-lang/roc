@@ -61,7 +61,7 @@ pub fn start_new_record(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
         ed_model.insert_all_between_line(
             old_caret_pos.line,
             old_caret_pos.column,
-            &vec![left_bracket_node_id, right_bracket_node_id],
+            &[left_bracket_node_id, right_bracket_node_id],
         )?;
 
         Ok(InputOutcome::Accepted)
@@ -247,7 +247,7 @@ pub fn update_record_colon(
                                 ed_model.insert_all_between_line(
                                     old_caret_pos.line,
                                     old_caret_pos.column,
-                                    &vec![record_colon_node_id, record_blank_node_id],
+                                    &[record_colon_node_id, record_blank_node_id],
                                 )?;
 
                                 Ok(InputOutcome::Accepted)

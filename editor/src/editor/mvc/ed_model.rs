@@ -54,7 +54,7 @@ pub fn init_model<'a>(
     loaded_module: LoadedModule,
     code_arena: &'a Bump,
 ) -> EdResult<EdModel<'a>> {
-    let mut module = EdModule::new(&code_str, env, &code_arena)?;
+    let mut module = EdModule::new(code_str, env, code_arena)?;
 
     let mut markup_node_pool = SlowPool::new();
 
@@ -62,7 +62,7 @@ pub fn init_model<'a>(
         EmptyCodeString {}.fail()
     } else {
         ast_to_mark_nodes(
-            &code_arena,
+            code_arena,
             &mut module.env,
             &module.ast,
             &mut markup_node_pool,

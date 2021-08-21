@@ -131,7 +131,7 @@ impl<'a> EdModel<'a> {
 
             grid_node_map.add_to_line(*line_ctr, node_content_str.len(), node_id)?;
 
-            if node_content_str.ends_with("\n") {
+            if node_content_str.ends_with('\n') {
                 *line_ctr += 1;
                 grid_node_map.lines.push(vec![]);
             }
@@ -326,7 +326,7 @@ impl<'a> EdModel<'a> {
         PoolStr::new(
             &content_to_string(
                 content,
-                &subs,
+                subs,
                 self.module.env.home,
                 &self.loaded_module.interns,
             ),
