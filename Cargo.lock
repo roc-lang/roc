@@ -178,6 +178,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bincode"
+version = "1.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3329,12 +3338,14 @@ version = "0.1.0"
 name = "roc_linker"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "bumpalo",
  "clap 3.0.0-beta.1",
  "iced-x86",
  "memmap2 0.3.1",
  "object 0.26.0",
  "roc_collections",
+ "serde",
 ]
 
 [[package]]

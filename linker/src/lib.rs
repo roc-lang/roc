@@ -1,3 +1,4 @@
+use bincode::{deserialize_from, serialize_into};
 use clap::{App, AppSettings, Arg, ArgMatches};
 use iced_x86::{Decoder, DecoderOptions, Instruction, OpCodeOperandKind, OpKind};
 use memmap2::Mmap;
@@ -10,9 +11,12 @@ use std::convert::TryFrom;
 use std::ffi::CStr;
 use std::fs;
 use std::io;
+use std::io::BufWriter;
 use std::os::raw::c_char;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
+
+mod metadata;
 
 pub const CMD_PREPROCESS: &str = "preprocess";
 pub const CMD_SURGERY: &str = "surgery";
@@ -78,13 +82,6 @@ pub fn build_app<'a>() -> App<'a> {
         )
 }
 
-#[derive(Debug)]
-struct SurgeryEntry {
-    file_offset: u64,
-    virtual_offset: u64,
-    size: u8,
-}
-
 pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     let verbose = matches.is_present(FLAG_VERBOSE);
 
@@ -120,6 +117,8 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         println!("Architecture, {:?}, not supported", arch);
         return Ok(-1);
     }
+
+    let mut md: metadata::Metadata = Default::default();
 
     // Extract PLT related information for app functions.
     let symbol_and_plt_processing_start = SystemTime::now();
@@ -174,9 +173,17 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         .dynamic_symbols()
         .filter(|sym| {
             let name = sym.name();
-            name.is_ok() && app_functions.contains(&name.unwrap().to_string())
+            // Note: We are scrapping version information like '@GLIBC_2.2.5'
+            // We probably never need to remedy this due to the focus on Roc only.
+            name.is_ok()
+                && app_functions.contains(&name.unwrap().split('@').next().unwrap().to_string())
         })
         .collect();
+    for sym in app_syms.iter() {
+        let name = sym.name().unwrap().to_string();
+        md.app_functions.push(name.clone());
+        md.surgeries.insert(name, vec![]);
+    }
     if verbose {
         println!();
         println!("PLT Symbols for App Functions");
@@ -194,6 +201,8 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
             if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
                 let func_address = (i as u64 + 1) * PLT_ADDRESS_OFFSET + plt_address;
                 app_func_addresses.insert(func_address, symbol.name().unwrap());
+                md.plt_addresses
+                    .insert(symbol.name().unwrap().to_string(), func_address);
                 break;
             }
         }
@@ -229,7 +238,6 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         println!();
         println!("Analyzing instuctions for branches");
     }
-    let mut surgeries: MutMap<&str, SurgeryEntry> = MutMap::default();
     let mut indirect_warning_given = false;
     for sec in text_sections {
         let (file_offset, compressed) = match sec.compressed_file_range() {
@@ -313,14 +321,14 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
                                 &file_data[offset as usize..(offset + op_size as u64) as usize]
                             )
                         }
-                        surgeries.insert(
-                            func_name,
-                            SurgeryEntry {
+                        md.surgeries
+                            .get_mut(*func_name)
+                            .unwrap()
+                            .push(metadata::SurgeryEntry {
                                 file_offset: offset,
                                 virtual_offset: inst.next_ip(),
                                 size: op_size,
-                            },
-                        );
+                            });
                     }
                 }
                 Ok(OpKind::FarBranch16 | OpKind::FarBranch32) => {
@@ -385,6 +393,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
             return Ok(-1);
         }
     };
+    md.dynamic_section_offset = Some(dyn_offset as u64);
 
     let dynstr_sec = match exec_obj.section_by_name(".dynstr") {
         Some(sec) => sec,
@@ -408,7 +417,6 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         .unwrap();
 
     let mut dyn_lib_index = 0;
-    let mut shared_lib_index = None;
     loop {
         let dyn_tag = u64::from_le_bytes(
             <[u8; 8]>::try_from(
@@ -432,7 +440,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
                 println!("Found shared lib with name: {}", c_str);
             }
             if c_str == shared_lib_name {
-                shared_lib_index = Some(dyn_lib_index);
+                md.shared_lib_index = Some(dyn_lib_index as u64);
                 if verbose {
                     println!(
                         "Found shared lib in dynamic table at index: {}",
@@ -444,12 +452,12 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
 
         dyn_lib_index += 1;
     }
+    md.dynamic_lib_count = Some(dyn_lib_index as u64);
 
-    if shared_lib_index.is_none() {
+    if md.shared_lib_index.is_none() {
         println!("Shared lib not found as a dependency of the executable");
         return Ok(-1);
     }
-    let shared_lib_index = shared_lib_index.unwrap();
     let scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed().unwrap();
 
     let elf64 = file_data[4] == 2;
@@ -475,7 +483,6 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         println!("SH Entry Size: {}", sh_ent_size);
         println!("SH Entry Count: {}", sh_num);
     }
-    let total_duration = total_start.elapsed().unwrap();
 
     // TODO: Potentially create a version of the executable with certain dynamic information deleted (changing offset may break stuff so be careful).
     // Remove shared library dependencies.
@@ -487,6 +494,22 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     // It may be fine to just add some of this information to the metadata instead and deal with it on final exec creation.
     // If we are copying the exec to a new location in the background anyway it may be basically free.
 
+    if verbose {
+        println!();
+        println!("{:?}", md);
+    }
+
+    let saving_metadata_start = SystemTime::now();
+    let output = fs::File::create(&matches.value_of(METADATA).unwrap())?;
+    let output = BufWriter::new(output);
+    if let Err(err) = serialize_into(output, &md) {
+        println!("Failed to serialize metadata: {}", err);
+        return Ok(-1);
+    };
+    let saving_metadata_duration = saving_metadata_start.elapsed().unwrap();
+
+    let total_duration = total_start.elapsed().unwrap();
+
     println!();
     println!("Timings");
     report_timing("Shared Library Processing", shared_lib_processing_duration);
@@ -497,6 +520,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     );
     report_timing("Text Disassembly", text_disassembly_duration);
     report_timing("Scanning Dynamic Deps", scanning_dynamic_deps_duration);
+    report_timing("Saving Metadata", saving_metadata_duration);
     report_timing(
         "Other",
         total_duration
@@ -504,7 +528,8 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
             - exec_parsing_duration
             - symbol_and_plt_processing_duration
             - text_disassembly_duration
-            - scanning_dynamic_deps_duration,
+            - scanning_dynamic_deps_duration
+            - saving_metadata_duration,
     );
     report_timing("Total", total_duration);
 
