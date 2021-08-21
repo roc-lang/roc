@@ -359,10 +359,6 @@ impl<'a> ParamMap<'a> {
                 Let(_, _, _, cont) => {
                     stack.push(cont);
                 }
-                Invoke { pass, fail, .. } => {
-                    stack.push(pass);
-                    stack.push(fail);
-                }
                 Switch {
                     branches,
                     default_branch,
@@ -373,7 +369,7 @@ impl<'a> ParamMap<'a> {
                 }
                 Refcounting(_, _) => unreachable!("these have not been introduced yet"),
 
-                Ret(_) | Resume(_) | Jump(_, _) | RuntimeError(_) => {
+                Ret(_) | Jump(_, _) | RuntimeError(_) => {
                     // these are terminal, do nothing
                 }
             }
@@ -878,23 +874,6 @@ impl<'a> BorrowInfState<'a> {
                 }
             }
 
-            Invoke {
-                symbol,
-                call,
-                layout: _,
-                pass,
-                fail,
-                exception_id: _,
-            } => {
-                self.collect_stmt(param_map, pass);
-                self.collect_stmt(param_map, fail);
-
-                self.collect_call(param_map, *symbol, call);
-
-                // TODO how to preserve the tail call of an invoke?
-                // self.preserve_tail_call(*x, v, b);
-            }
-
             Jump(j, ys) => {
                 let ps = param_map.get_join_point(*j);
 
@@ -916,7 +895,7 @@ impl<'a> BorrowInfState<'a> {
             }
             Refcounting(_, _) => unreachable!("these have not been introduced yet"),
 
-            Ret(_) | RuntimeError(_) | Resume(_) => {
+            Ret(_) | RuntimeError(_) => {
                 // these are terminal, do nothing
             }
         }
@@ -1096,13 +1075,6 @@ fn call_info_stmt<'a>(arena: &'a Bump, stmt: &Stmt<'a>, info: &mut CallInfo<'a>)
                 }
                 stack.push(cont);
             }
-            Invoke {
-                call, pass, fail, ..
-            } => {
-                call_info_call(call, info);
-                stack.push(pass);
-                stack.push(fail);
-            }
             Switch {
                 branches,
                 default_branch,
@@ -1113,7 +1085,7 @@ fn call_info_stmt<'a>(arena: &'a Bump, stmt: &Stmt<'a>, info: &mut CallInfo<'a>)
             }
             Refcounting(_, _) => unreachable!("these have not been introduced yet"),
 
-            Ret(_) | Resume(_) | Jump(_, _) | RuntimeError(_) => {
+            Ret(_) | Jump(_, _) | RuntimeError(_) => {
                 // these are terminal, do nothing
             }
         }
