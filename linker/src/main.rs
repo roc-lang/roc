@@ -1,4 +1,4 @@
-use roc_linker::{build_app, preprocess, CMD_PREPROCESS, CMD_SURGERY};
+use roc_linker::{build_app, preprocess, surgery, CMD_PREPROCESS, CMD_SURGERY};
 use std::io;
 
 fn main() -> io::Result<()> {
@@ -10,7 +10,10 @@ fn main() -> io::Result<()> {
             let sub_matches = matches.subcommand_matches(CMD_PREPROCESS).unwrap();
             preprocess(sub_matches)
         }
-        Some(CMD_SURGERY) => Ok(0),
+        Some(CMD_SURGERY) => {
+            let sub_matches = matches.subcommand_matches(CMD_SURGERY).unwrap();
+            surgery(sub_matches)
+        }
         _ => unreachable!(),
     }?;
     std::process::exit(exit_code);
