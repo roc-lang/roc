@@ -885,17 +885,6 @@ pub type Stores<'a> = &'a [(Symbol, Layout<'a>, Expr<'a>)];
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt<'a> {
     Let(Symbol, Expr<'a>, Layout<'a>, &'a Stmt<'a>),
-    Invoke {
-        symbol: Symbol,
-        call: Call<'a>,
-        layout: Layout<'a>,
-        pass: &'a Stmt<'a>,
-        fail: &'a Stmt<'a>,
-        exception_id: ExceptionId,
-    },
-    /// after cleanup, rethrow the exception object (stored in the exception id)
-    /// so it bubbles up
-    Resume(ExceptionId),
     Switch {
         /// This *must* stand for an integer, because Switch potentially compiles to a jump table.
         cond_symbol: Symbol,
@@ -1379,44 +1368,10 @@ impl<'a> Stmt<'a> {
                 .append(alloc.hardline())
                 .append(cont.to_doc(alloc)),
 
-            Invoke {
-                symbol,
-                call,
-                pass,
-                fail: Stmt::Resume(_),
-                ..
-            } => alloc
-                .text("let ")
-                .append(symbol_to_doc(alloc, *symbol))
-                .append(" = ")
-                .append(call.to_doc(alloc))
-                .append(";")
-                .append(alloc.hardline())
-                .append(pass.to_doc(alloc)),
-
-            Invoke {
-                symbol,
-                call,
-                pass,
-                fail,
-                ..
-            } => alloc
-                .text("invoke ")
-                .append(symbol_to_doc(alloc, *symbol))
-                .append(" = ")
-                .append(call.to_doc(alloc))
-                .append(" catch")
-                .append(alloc.hardline())
-                .append(fail.to_doc(alloc).indent(4))
-                .append(alloc.hardline())
-                .append(pass.to_doc(alloc)),
-
             Ret(symbol) => alloc
                 .text("ret ")
                 .append(symbol_to_doc(alloc, *symbol))
                 .append(";"),
-
-            Resume(_) => alloc.text("unreachable;"),
 
             Switch {
                 cond_symbol,
@@ -4613,15 +4568,12 @@ pub fn from_can<'a>(
                 arguments,
             };
 
-            let exception_id = ExceptionId(env.unique_symbol());
-            let rest = Stmt::Invoke {
-                symbol: env.unique_symbol(),
-                call,
-                layout: bool_layout,
-                pass: env.arena.alloc(rest),
-                fail: env.arena.alloc(Stmt::Resume(exception_id)),
-                exception_id,
-            };
+            let rest = Stmt::Let(
+                env.unique_symbol(),
+                Expr::Call(call),
+                bool_layout,
+                env.arena.alloc(rest),
+            );
 
             with_hole(
                 env,
@@ -5205,35 +5157,6 @@ fn substitute_in_stmt_help<'a>(
                 None
             }
         }
-        Invoke {
-            symbol,
-            call,
-            layout,
-            pass,
-            fail,
-            exception_id,
-        } => {
-            let opt_call = substitute_in_call(arena, call, subs);
-            let opt_pass = substitute_in_stmt_help(arena, pass, subs);
-            let opt_fail = substitute_in_stmt_help(arena, fail, subs);
-
-            if opt_pass.is_some() || opt_fail.is_some() | opt_call.is_some() {
-                let pass = opt_pass.unwrap_or(pass);
-                let fail = opt_fail.unwrap_or_else(|| *fail);
-                let call = opt_call.unwrap_or_else(|| call.clone());
-
-                Some(arena.alloc(Invoke {
-                    symbol: *symbol,
-                    call,
-                    layout: *layout,
-                    pass,
-                    fail,
-                    exception_id: *exception_id,
-                }))
-            } else {
-                None
-            }
-        }
         Join {
             id,
             parameters,
@@ -5347,8 +5270,6 @@ fn substitute_in_stmt_help<'a>(
                 None
             }
         }
-
-        Resume(_) => None,
 
         RuntimeError(_) => None,
     }
@@ -6228,18 +6149,6 @@ fn add_needed_external<'a>(
     existing.insert(name, solved_type);
 }
 
-/// Symbol that links an Invoke with a Rethrow
-/// we'll assign the exception object to this symbol
-/// so we can later rethrow the exception
-#[derive(Copy, Clone, PartialEq, Debug)]
-pub struct ExceptionId(Symbol);
-
-impl ExceptionId {
-    pub fn into_inner(self) -> Symbol {
-        self.0
-    }
-}
-
 fn build_call<'a>(
     _env: &mut Env<'a, '_>,
     call: Call<'a>,
@@ -6248,6 +6157,38 @@ fn build_call<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     Stmt::Let(assigned, Expr::Call(call), return_layout, hole)
+}
+
+/// See https://github.com/rtfeldman/roc/issues/1549
+///
+/// What happened is that a function has a type error, but the arguments are not processed.
+/// That means specializations were missing. Normally that is not a problem, but because
+/// of our closure strategy, internal functions can "leak". That's what happened here.
+///
+/// The solution is to evaluate the arguments as normal, and only when calling the function give an error
+fn evaluate_arguments_then_runtime_error<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    msg: String,
+    loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
+) -> Stmt<'a> {
+    let arena = env.arena;
+
+    // eventually we will throw this runtime error
+    let result = Stmt::RuntimeError(env.arena.alloc(msg));
+
+    // but, we also still evaluate and specialize the arguments to give better error messages
+    let arg_symbols = Vec::from_iter_in(
+        loc_args
+            .iter()
+            .map(|(_, arg_expr)| possible_reuse_symbol(env, procs, &arg_expr.value)),
+        arena,
+    )
+    .into_bump_slice();
+
+    let iter = loc_args.into_iter().rev().zip(arg_symbols.iter().rev());
+    assign_to_symbols(env, procs, layout_cache, iter, result)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6268,14 +6209,16 @@ fn call_by_name<'a>(
                 "Hit an unresolved type variable {:?} when creating a layout for {:?} (var {:?})",
                 var, proc_name, fn_var
             );
-            Stmt::RuntimeError(env.arena.alloc(msg))
+
+            evaluate_arguments_then_runtime_error(env, procs, layout_cache, msg, loc_args)
         }
         Err(LayoutProblem::Erroneous) => {
             let msg = format!(
                 "Hit an erroneous type when creating a layout for {:?}",
                 proc_name
             );
-            Stmt::RuntimeError(env.arena.alloc(msg))
+
+            evaluate_arguments_then_runtime_error(env, procs, layout_cache, msg, loc_args)
         }
         Ok(RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout)) => {
             if procs.module_thunks.contains(&proc_name) {
