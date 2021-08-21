@@ -6,8 +6,12 @@ use object::{
     ObjectSymbol, Relocation, RelocationKind, RelocationTarget, Section, Symbol,
 };
 use roc_collections::all::MutMap;
+use std::convert::TryFrom;
+use std::ffi::CStr;
 use std::fs;
 use std::io;
+use std::os::raw::c_char;
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 pub const CMD_PREPROCESS: &str = "preprocess";
@@ -15,7 +19,9 @@ pub const CMD_SURGERY: &str = "surgery";
 pub const FLAG_VERBOSE: &str = "verbose";
 
 pub const EXEC: &str = "EXEC";
+pub const METADATA: &str = "METADATA";
 pub const SHARED_LIB: &str = "SHARED_LIB";
+pub const OBJ: &str = "OBJ";
 
 fn report_timing(label: &str, duration: Duration) {
     &println!("\t{:9.3} ms   {}", duration.as_secs_f64() * 1000.0, label,);
@@ -39,6 +45,11 @@ pub fn build_app<'a>() -> App<'a> {
                         .required(true),
                 )
                 .arg(
+                    Arg::with_name(METADATA)
+                        .help("Where to save the metadata from preprocessing")
+                        .required(true),
+                )
+                .arg(
                     Arg::with_name(FLAG_VERBOSE)
                         .long(FLAG_VERBOSE)
                         .short('v')
@@ -47,7 +58,23 @@ pub fn build_app<'a>() -> App<'a> {
                 ),
         )
         .subcommand(
-            App::new(CMD_SURGERY).about("Links a preprocessed platform with a Roc application."),
+            App::new(CMD_SURGERY)
+                .about("Links a preprocessed platform with a Roc application.")
+                .arg(
+                    Arg::with_name(EXEC)
+                        .help("The dynamically link platform executable")
+                        .required(true),
+                )
+                .arg(
+                    Arg::with_name(METADATA)
+                        .help("The metadata created by preprocessing the platform")
+                        .required(true),
+                )
+                .arg(
+                    Arg::with_name(OBJ)
+                        .help("the object file waiting to be linked")
+                        .required(true),
+                ),
         )
 }
 
@@ -96,7 +123,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
 
     // Extract PLT related information for app functions.
     let symbol_and_plt_processing_start = SystemTime::now();
-    let (plt_address, plt_offset) = match exec_obj.sections().find(|sec| sec.name() == Ok(".plt")) {
+    let (plt_address, plt_offset) = match exec_obj.section_by_name(".plt") {
         Some(section) => {
             let file_offset = match section.compressed_file_range() {
                 Ok(
@@ -108,7 +135,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
                     },
                 ) => range.offset,
                 _ => {
-                    println!("Surgical linking does not work with compressed plt sections");
+                    println!("Surgical linking does not work with compressed plt section");
                     return Ok(-1);
                 }
             };
@@ -316,13 +343,13 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
                             println!("Most likely this is not a problem, but it could mean a loss in optimizations");
                             println!();
                         }
-                        if verbose {
-                            println!(
-                                "Found indirect jump type instruction at {}: {}",
-                                inst.ip(),
-                                inst
-                            );
-                        }
+                        // if verbose {
+                        //     println!(
+                        //         "Found indirect jump type instruction at {}: {}",
+                        //         inst.ip(),
+                        //         inst
+                        //     );
+                        // }
                     }
                 }
                 Err(err) => {
@@ -334,11 +361,121 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     }
     let text_disassembly_duration = text_disassembly_start.elapsed().unwrap();
 
-    println!();
-    println!("{:x?}", surgeries);
-    println!();
-
     // TODO: Store all this data in a nice format.
+    let scanning_dynamic_deps_start = SystemTime::now();
+
+    let dyn_sec = match exec_obj.section_by_name(".dynamic") {
+        Some(sec) => sec,
+        None => {
+            println!("There must be a dynamic section in the executable");
+            return Ok(-1);
+        }
+    };
+    let dyn_offset = match dyn_sec.compressed_file_range() {
+        Ok(
+            range
+            @
+            CompressedFileRange {
+                format: CompressionFormat::None,
+                ..
+            },
+        ) => range.offset as usize,
+        _ => {
+            println!("Surgical linking does not work with compressed dynamic section");
+            return Ok(-1);
+        }
+    };
+
+    let dynstr_sec = match exec_obj.section_by_name(".dynstr") {
+        Some(sec) => sec,
+        None => {
+            println!("There must be a dynstr section in the executable");
+            return Ok(-1);
+        }
+    };
+    let dynstr_data = match dynstr_sec.uncompressed_data() {
+        Ok(data) => data,
+        Err(err) => {
+            println!("Failed to load dynstr section: {}", err);
+            return Ok(-1);
+        }
+    };
+
+    let shared_lib_name = Path::new(matches.value_of(SHARED_LIB).unwrap())
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+
+    let mut dyn_lib_index = 0;
+    let mut shared_lib_index = None;
+    loop {
+        let dyn_tag = u64::from_le_bytes(
+            <[u8; 8]>::try_from(
+                &file_data[dyn_offset + dyn_lib_index * 16..dyn_offset + dyn_lib_index * 16 + 8],
+            )
+            .unwrap(),
+        );
+        if dyn_tag == 0 {
+            break;
+        } else if dyn_tag == 1 {
+            let dynstr_off = u64::from_le_bytes(
+                <[u8; 8]>::try_from(
+                    &file_data
+                        [dyn_offset + dyn_lib_index * 16 + 8..dyn_offset + dyn_lib_index * 16 + 16],
+                )
+                .unwrap(),
+            ) as usize;
+            let c_buf: *const c_char = dynstr_data[dynstr_off..].as_ptr() as *const i8;
+            let c_str = unsafe { CStr::from_ptr(c_buf) }.to_str().unwrap();
+            if verbose {
+                println!("Found shared lib with name: {}", c_str);
+            }
+            if c_str == shared_lib_name {
+                shared_lib_index = Some(dyn_lib_index);
+                if verbose {
+                    println!(
+                        "Found shared lib in dynamic table at index: {}",
+                        dyn_lib_index
+                    );
+                }
+            }
+        }
+
+        dyn_lib_index += 1;
+    }
+
+    if shared_lib_index.is_none() {
+        println!("Shared lib not found as a dependency of the executable");
+        return Ok(-1);
+    }
+    let shared_lib_index = shared_lib_index.unwrap();
+    let scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed().unwrap();
+
+    let elf64 = file_data[4] == 2;
+    let litte_endian = file_data[5] == 1;
+    if !elf64 || !litte_endian {
+        println!("Only 64bit little endian elf currently supported for preprocessing");
+        return Ok(-1);
+    }
+    let ph_offset = u64::from_le_bytes(<[u8; 8]>::try_from(&file_data[32..40]).unwrap());
+    let sh_offset = &u64::from_le_bytes(<[u8; 8]>::try_from(&file_data[40..48]).unwrap());
+    let ph_ent_size = &u16::from_le_bytes(<[u8; 2]>::try_from(&file_data[54..56]).unwrap());
+    let ph_num = &u16::from_le_bytes(<[u8; 2]>::try_from(&file_data[56..58]).unwrap());
+    let sh_ent_size = &u16::from_le_bytes(<[u8; 2]>::try_from(&file_data[58..60]).unwrap());
+    let sh_num = &u16::from_le_bytes(<[u8; 2]>::try_from(&file_data[60..62]).unwrap());
+    if verbose {
+        println!();
+        println!("Is Elf64: {}", elf64);
+        println!("Is Little Endian: {}", litte_endian);
+        println!("PH Offset: {:x}", ph_offset);
+        println!("PH Entry Size: {}", ph_ent_size);
+        println!("PH Entry Count: {}", ph_num);
+        println!("SH Offset: {:x}", sh_offset);
+        println!("SH Entry Size: {}", sh_ent_size);
+        println!("SH Entry Count: {}", sh_num);
+    }
+    let total_duration = total_start.elapsed().unwrap();
 
     // TODO: Potentially create a version of the executable with certain dynamic information deleted (changing offset may break stuff so be careful).
     // Remove shared library dependencies.
@@ -350,27 +487,6 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     // It may be fine to just add some of this information to the metadata instead and deal with it on final exec creation.
     // If we are copying the exec to a new location in the background anyway it may be basically free.
 
-    let elf_hacking_start = SystemTime::now();
-    let elf64 = file_data[4] == 2;
-    let litte_endian = file_data[5] == 1;
-    if !elf64 || !litte_endian {
-        println!("Only 64bit little endian elf currently supported for preprocessing");
-        return Ok(-1);
-    }
-    let ph_offset = &file_data[28..32];
-    let sh_offset = &file_data[32..36];
-    let eh_size = &file_data[40..42];
-    if verbose {
-        println!();
-        println!("Is Elf64: {}", elf64);
-        println!("Is Little Endian: {}", litte_endian);
-        println!("PH Offset: {:x?}", ph_offset);
-        println!("SH Offset: {:x?}", sh_offset);
-        println!("EH Size: {:x?}", eh_size);
-    }
-    let elf_hacking_duration = elf_hacking_start.elapsed().unwrap();
-    let total_duration = total_start.elapsed().unwrap();
-
     println!();
     println!("Timings");
     report_timing("Shared Library Processing", shared_lib_processing_duration);
@@ -380,7 +496,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         symbol_and_plt_processing_duration,
     );
     report_timing("Text Disassembly", text_disassembly_duration);
-    report_timing("Elf Hacking", elf_hacking_duration);
+    report_timing("Scanning Dynamic Deps", scanning_dynamic_deps_duration);
     report_timing(
         "Other",
         total_duration
@@ -388,7 +504,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
             - exec_parsing_duration
             - symbol_and_plt_processing_duration
             - text_disassembly_duration
-            - elf_hacking_duration,
+            - scanning_dynamic_deps_duration,
     );
     report_timing("Total", total_duration);
 
