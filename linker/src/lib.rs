@@ -369,7 +369,6 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     }
     let text_disassembly_duration = text_disassembly_start.elapsed().unwrap();
 
-    // TODO: Store all this data in a nice format.
     let scanning_dynamic_deps_start = SystemTime::now();
 
     let dyn_sec = match exec_obj.section_by_name(".dynamic") {
@@ -484,16 +483,6 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         println!("SH Entry Count: {}", sh_num);
     }
 
-    // TODO: Potentially create a version of the executable with certain dynamic information deleted (changing offset may break stuff so be careful).
-    // Remove shared library dependencies.
-    // Also modify the PLT entries such that they just are jumps to the app functions. They will be used for indirect calls.
-    // Add regular symbols pointing to 0 for the app functions (maybe not needed if it is just link metadata).
-    // We have to be really carefull here. If we change the size or address of any section, it will mess with offsets.
-    // Must likely we want to null out data. If we have to go through and update every relative offset, this will be much more complex.
-    // Potentially we can take advantage of virtual address to avoid actually needing to shift any offsets.
-    // It may be fine to just add some of this information to the metadata instead and deal with it on final exec creation.
-    // If we are copying the exec to a new location in the background anyway it may be basically free.
-
     if verbose {
         println!();
         println!("{:?}", md);
@@ -509,6 +498,16 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     let saving_metadata_duration = saving_metadata_start.elapsed().unwrap();
 
     let total_duration = total_start.elapsed().unwrap();
+
+    // TODO: Potentially create a version of the executable with certain dynamic information deleted (changing offset may break stuff so be careful).
+    // Remove shared library dependencies.
+    // Also modify the PLT entries such that they just are jumps to the app functions. They will be used for indirect calls.
+    // Add regular symbols pointing to 0 for the app functions (maybe not needed if it is just link metadata).
+    // We have to be really carefull here. If we change the size or address of any section, it will mess with offsets.
+    // Must likely we want to null out data. If we have to go through and update every relative offset, this will be much more complex.
+    // Potentially we can take advantage of virtual address to avoid actually needing to shift any offsets.
+    // It may be fine to just add some of this information to the metadata instead and deal with it on final exec creation.
+    // If we are copying the exec to a new location in the background anyway it may be basically free.
 
     println!();
     println!("Timings");
