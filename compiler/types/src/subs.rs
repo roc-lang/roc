@@ -327,6 +327,14 @@ fn subs_fmt_desc(this: &Descriptor, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
     write!(f, " m: {:?}", &this.mark)
 }
 
+pub struct SubsFmtContent<'a>(pub &'a Content, pub &'a Subs);
+
+impl<'a> fmt::Debug for SubsFmtContent<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        subs_fmt_content(self.0, self.1, f)
+    }
+}
+
 fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt::Result {
     match this {
         Content::FlexVar(name) => write!(f, "Flex({:?})", name),
@@ -342,6 +350,14 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
             write!(f, "Alias({:?}, {:?}, {:?})", name, slice, actual)
         }
         Content::Error => write!(f, "Error"),
+    }
+}
+
+pub struct SubsFmtFlatType<'a>(pub &'a FlatType, pub &'a Subs);
+
+impl<'a> fmt::Debug for SubsFmtFlatType<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        subs_fmt_flat_type(self.0, self.1, f)
     }
 }
 

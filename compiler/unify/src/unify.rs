@@ -1076,8 +1076,8 @@ fn unify_flat_type(
             // any other combination is a mismatch
             mismatch!(
                 "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
-                other1,
-                other2
+                roc_types::subs::SubsFmtFlatType(other1, subs),
+                roc_types::subs::SubsFmtFlatType(other2, subs)
             )
         }
     }

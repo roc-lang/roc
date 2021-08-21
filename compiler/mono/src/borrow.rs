@@ -46,7 +46,14 @@ pub fn infer_borrow<'a>(
     // component (in top-sorted order, from primitives (std-lib) to main)
 
     let successor_map = &make_successor_mapping(arena, procs);
-    let successors = move |key: &Symbol| successor_map[key].iter().copied();
+    let successors = move |key: &Symbol| {
+        let slice = match successor_map.get(key) {
+            None => &[] as &[_],
+            Some(s) => s.as_slice(),
+        };
+
+        slice.iter().copied()
+    };
 
     let mut symbols = Vec::with_capacity_in(procs.len(), arena);
     symbols.extend(procs.keys().map(|x| x.0));
@@ -217,7 +224,10 @@ impl<'a> DeclarationToIndex<'a> {
                 }
             }
         }
-        unreachable!("symbol/layout combo must be in DeclarationToIndex")
+        unreachable!(
+            "symbol/layout {:?} {:?} combo must be in DeclarationToIndex",
+            needle_symbol, needle_layout
+        )
     }
 }
 
@@ -359,10 +369,6 @@ impl<'a> ParamMap<'a> {
                 Let(_, _, _, cont) => {
                     stack.push(cont);
                 }
-                Invoke { pass, fail, .. } => {
-                    stack.push(pass);
-                    stack.push(fail);
-                }
                 Switch {
                     branches,
                     default_branch,
@@ -373,7 +379,7 @@ impl<'a> ParamMap<'a> {
                 }
                 Refcounting(_, _) => unreachable!("these have not been introduced yet"),
 
-                Ret(_) | Resume(_) | Jump(_, _) | RuntimeError(_) => {
+                Ret(_) | Jump(_, _) | RuntimeError(_) => {
                     // these are terminal, do nothing
                 }
             }
@@ -878,23 +884,6 @@ impl<'a> BorrowInfState<'a> {
                 }
             }
 
-            Invoke {
-                symbol,
-                call,
-                layout: _,
-                pass,
-                fail,
-                exception_id: _,
-            } => {
-                self.collect_stmt(param_map, pass);
-                self.collect_stmt(param_map, fail);
-
-                self.collect_call(param_map, *symbol, call);
-
-                // TODO how to preserve the tail call of an invoke?
-                // self.preserve_tail_call(*x, v, b);
-            }
-
             Jump(j, ys) => {
                 let ps = param_map.get_join_point(*j);
 
@@ -916,7 +905,7 @@ impl<'a> BorrowInfState<'a> {
             }
             Refcounting(_, _) => unreachable!("these have not been introduced yet"),
 
-            Ret(_) | RuntimeError(_) | Resume(_) => {
+            Ret(_) | RuntimeError(_) => {
                 // these are terminal, do nothing
             }
         }
@@ -1096,13 +1085,6 @@ fn call_info_stmt<'a>(arena: &'a Bump, stmt: &Stmt<'a>, info: &mut CallInfo<'a>)
                 }
                 stack.push(cont);
             }
-            Invoke {
-                call, pass, fail, ..
-            } => {
-                call_info_call(call, info);
-                stack.push(pass);
-                stack.push(fail);
-            }
             Switch {
                 branches,
                 default_branch,
@@ -1113,7 +1095,7 @@ fn call_info_stmt<'a>(arena: &'a Bump, stmt: &Stmt<'a>, info: &mut CallInfo<'a>)
             }
             Refcounting(_, _) => unreachable!("these have not been introduced yet"),
 
-            Ret(_) | Resume(_) | Jump(_, _) | RuntimeError(_) => {
+            Ret(_) | Jump(_, _) | RuntimeError(_) => {
                 // these are terminal, do nothing
             }
         }
