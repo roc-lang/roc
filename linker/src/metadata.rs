@@ -16,4 +16,6 @@ pub struct Metadata {
     pub dynamic_section_offset: Option<u64>,
     pub dynamic_lib_count: Option<u64>,
     pub shared_lib_index: Option<u64>,
+    pub symbol_table_section_offset: Option<u64>,
+    pub symbol_table_size: Option<u64>,
 }

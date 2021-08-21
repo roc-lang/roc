@@ -471,6 +471,30 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     }
     let scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed().unwrap();
 
+    let symtab_sec = match exec_obj.section_by_name(".symtab") {
+        Some(sec) => sec,
+        None => {
+            println!("There must be a dynsym section in the executable");
+            return Ok(-1);
+        }
+    };
+    let symtab_offset = match symtab_sec.compressed_file_range() {
+        Ok(
+            range
+            @
+            CompressedFileRange {
+                format: CompressionFormat::None,
+                ..
+            },
+        ) => range.offset as usize,
+        _ => {
+            println!("Surgical linking does not work with compressed dynsym section");
+            return Ok(-1);
+        }
+    };
+    md.symbol_table_section_offset = Some(symtab_offset as u64);
+    md.symbol_table_size = Some(symtab_sec.size());
+
     if verbose {
         println!();
         println!("{:?}", md);
@@ -599,7 +623,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     let ph_end = ph_offset as usize + ph_num as usize * ph_ent_size as usize;
     out_mmap[..ph_end].copy_from_slice(&exec_data[..ph_end]);
     let file_header = load_struct_inplace_mut::<elf::FileHeader64<LittleEndian>>(&mut out_mmap, 0);
-    // file_header.e_phnum = endian::U16::new(LittleEndian, ph_num + 1);
+    file_header.e_phnum = endian::U16::new(LittleEndian, ph_num + 1);
     file_header.e_shoff = endian::U64::new(LittleEndian, sh_offset + added_data);
     // file_header.e_shnum = endian::U16::new(LittleEndian, 0);
     // file_header.e_shstrndx = endian::U16::new(LittleEndian, elf::SHN_UNDEF);
@@ -632,6 +656,15 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
             ph.p_memsz = endian::U64::new(LittleEndian, p_memsz + added_data);
             first_load_start = Some(p_vaddr + ph_end as u64);
             first_load_end = Some(p_vaddr + p_memsz);
+        } else if p_type == elf::PT_NOTE {
+            ph.p_type = endian::U32::new(LittleEndian, 0);
+            ph.p_flags = endian::U32::new(LittleEndian, 0);
+            ph.p_offset = endian::U64::new(LittleEndian, 0);
+            ph.p_vaddr = endian::U64::new(LittleEndian, 0);
+            ph.p_paddr = endian::U64::new(LittleEndian, 0);
+            ph.p_filesz = endian::U64::new(LittleEndian, 0);
+            ph.p_memsz = endian::U64::new(LittleEndian, 0);
+            ph.p_align = endian::U64::new(LittleEndian, 0);
         } else if p_type == elf::PT_PHDR {
             ph.p_filesz =
                 endian::U64::new(LittleEndian, ph.p_filesz.get(NativeEndian) + added_data);
@@ -643,6 +676,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
             ph.p_paddr = endian::U64::new(LittleEndian, ph.p_paddr.get(NativeEndian) + added_data);
         } else if first_load_start.unwrap() <= p_vaddr && p_vaddr <= first_load_end.unwrap() {
             ph.p_vaddr = endian::U64::new(LittleEndian, p_vaddr + added_data);
+            ph.p_paddr = endian::U64::new(LittleEndian, ph.p_paddr.get(NativeEndian) + added_data);
         } else if p_type != elf::PT_GNU_STACK && p_type != elf::PT_NULL {
             ph.p_offset =
                 endian::U64::new(LittleEndian, ph.p_offset.get(NativeEndian) + added_data);
@@ -668,7 +702,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     out_mmap[ph_end + added_data as usize..sh_offset as usize + added_data as usize]
         .copy_from_slice(&exec_data[ph_end..sh_offset as usize]);
 
-    // Update dynamic table entry for shift of extra ProgramHeader.
+    // Update dynamic table entries for shift of extra ProgramHeader.
     let dyn_offset = match md.dynamic_section_offset {
         Some(offset) => offset as usize,
         None => {
@@ -730,7 +764,6 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
             | elf::DT_VERNEED => {
                 let d_addr = d.d_val.get(NativeEndian);
                 if first_load_start.unwrap() <= d_addr && d_addr <= first_load_end.unwrap() {
-                    println!("Updating {:x?}", d);
                     d.d_val = endian::U64::new(LittleEndian, d_addr + added_data);
                 }
             }
@@ -747,6 +780,35 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     //         16 * (dyn_lib_count - shared_index),
     //     );
     // }
+
+    // Update symbol table entries for shift of extra ProgramHeader.
+    let symtab_offset = match md.symbol_table_section_offset {
+        Some(offset) => offset as usize,
+        None => {
+            println!("Metadata missing symbol table section offset");
+            return Ok(-1);
+        }
+    };
+    let symtab_size = match md.symbol_table_size {
+        Some(count) => count as usize,
+        None => {
+            println!("Metadata missing symbol table size");
+            return Ok(-1);
+        }
+    };
+
+    let symbols = load_structs_inplace_mut::<elf::Sym64<LittleEndian>>(
+        &mut out_mmap,
+        symtab_offset + added_data as usize,
+        symtab_size / mem::size_of::<elf::Sym64<LittleEndian>>(),
+    );
+
+    for sym in symbols {
+        let addr = sym.st_value.get(NativeEndian);
+        if first_load_start.unwrap() <= addr && addr <= first_load_end.unwrap() {
+            sym.st_value = endian::U64::new(LittleEndian, addr + added_data);
+        }
+    }
 
     let offset = sh_offset as usize;
     // Copy sections and resolve their relocations.
