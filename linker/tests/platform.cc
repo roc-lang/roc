@@ -1,12 +1,12 @@
 #include <iostream>
 
-void init();
-void app();
-int cleanup();
+const char* init();
+const char* app();
+const char* cleanup();
 
-void func_section_1() { init(); }
+void func_section_1() { std::cout << init(); }
 
-void func_section_2() { app(); }
+void func_section_2() { std::cout << app(); }
 
 int main() {
   std::cout << "Hello World from the platform\n";
@@ -15,7 +15,8 @@ int main() {
 
   // Long term we want to support this case cause if it accidentially arises, we
   // don't want bugs.
-  int (*func_pointer)();
+  const char* (*func_pointer)();
   func_pointer = &cleanup;
-  return (*func_pointer)();
+  std::cout << (*func_pointer)();
+  return 0;
 }
