@@ -28,7 +28,10 @@ extern "C" {
 
 #[no_mangle]
 pub unsafe fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
-    return libc::malloc(size);
+    let answer = libc::malloc(size);
+
+    println!("---Allocating: {:?}", answer);
+    answer
 }
 
 #[no_mangle]
@@ -43,6 +46,7 @@ pub unsafe fn roc_realloc(
 
 #[no_mangle]
 pub unsafe fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
+    println!("---Deallocating: {:?}", c_ptr);
     return libc::free(c_ptr);
 }
 
