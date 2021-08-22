@@ -1,8 +1,8 @@
 platform examples/cli
-    requires {} { main : Effect {} }
+    requires {}{ main : Task {} [] } # TODO FIXME
     exposes []
     packages {}
-    imports [ fx.Effect ]
+    imports [ Task.{ Task } ]
     provides [ mainForHost ]
     effects fx.Effect
         {
@@ -10,6 +10,5 @@ platform examples/cli
             getLine : Effect Str
         }
 
-
-mainForHost : Effect.Effect {} as Fx
+mainForHost : Task {} [] as Fx
 mainForHost = main
