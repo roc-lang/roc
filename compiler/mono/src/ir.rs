@@ -7927,13 +7927,15 @@ fn union_lambda_set_to_switch<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    // NOTE this can happen if there is a type error somewhere. Since the lambda set is empty,
-    // there is really nothing we can do here, so we just proceed with the hole itself and
-    // hope that the type error is communicated in a clear way elsewhere.
     if lambda_set.is_empty() {
-        return hole.clone();
+        // NOTE this can happen if there is a type error somewhere. Since the lambda set is empty,
+        // there is really nothing we can do here. We generate a runtime error here which allows
+        // code gen to proceed. We then assume that we hit another (more descriptive) error before
+        // hitting this one
+
+        let msg = "a Lambda Set isempty. Most likely there is a type error in your program.";
+        return Stmt::RuntimeError(msg);
     }
-    debug_assert!(!lambda_set.is_empty());
 
     let join_point_id = JoinPointId(env.unique_symbol());
 
