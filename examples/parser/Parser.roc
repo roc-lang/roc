@@ -58,7 +58,7 @@ map =
 
 
 
-## AND_THEN  
+## AND_THEN, FIRST, SECOND 
 
 andThen : Parser a, (a -> Parser b) -> Parser b 
 andThen = \p, q ->
@@ -76,8 +76,6 @@ second =
 first : Parser a, Parser b -> Parser a
 first = 
   \p, q ->  Parser.andThen p (\out -> Parser.map q (\_ -> out))
-
-
 
 
 ## ONE OF  
@@ -153,7 +151,6 @@ successful = \results -> List.len results == 1
 runT = \input, parser -> runToString Utility.showU8 input parser 
 
 
-satisfyWhatCameBefore = \u2 -> Parser.satisfy (\u3 -> u3 == u2)
 
 satisfyResult = satisfyA [97, 98, 99, 100]
 
@@ -167,11 +164,15 @@ t5 = {name : "Use map to shift output of parser: run \"abcd\" (map any (\\u -> u
 t6 = {name: "Use andThen to recognize strings beginning with two repeated letters (succeed on input \"aaxyz\")", 
       test: runT "aaxyz" (andThen any satisfyWhatCameBefore) == "a"}
 
+satisfyWhatCameBefore = \u2 -> satisfy (\u3 -> u3 == u2)
+
+testAndThen = { name: "andThen", test: runToString Utility.showU8 "aaxyz" (andThen any satisfyWhatCameBefore) == "a"}
+
 t7 = {name: "is successful (positive)", test: List.len satisfyResult == 1}
 t8 = {name: "is successful (negative)", test: List.len ( satisfyA [100, 98, 99, 100] ) != 1}
 t9 = {name: "test of lowerCase parser with u = 97", test: runT "abcd" Parser.lowerCase == "a" } 
 
-testsP = [t1, t2, t3, t4, t5, t6, t7, t8, t9, q1]
+testsP = [t1, t2, t3, t4, t5, testAndThen, t7, t8, t9, q1]
 
 q1 = {name: "test of oneOf combinator", test: List.len oneOfResult == 1 }     
 q2 = {name: "Parser.run [97,98,99] (manyAux lowerCase [ ]) => Pair ((Loop [97]) [98,99])", test: Parser.run [97,98,99] (manyAux lowerCase [ ]) == [Pair (Loop [97]) [98,99]]}
