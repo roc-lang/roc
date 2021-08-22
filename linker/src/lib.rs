@@ -300,6 +300,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
                     if let Some(func_name) = app_func_addresses.get(&target) {
                         if compressed {
                             println!("Surgical linking does not work with compressed text sections: {:x?}", sec);
+                            return Ok(-1);
                         }
 
                         if verbose {
@@ -549,28 +550,30 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     // It may be fine to just add some of this information to the metadata instead and deal with it on final exec creation.
     // If we are copying the exec to a new location in the background anyway it may be basically free.
 
-    println!();
-    println!("Timings");
-    report_timing("Shared Library Processing", shared_lib_processing_duration);
-    report_timing("Executable Parsing", exec_parsing_duration);
-    report_timing(
-        "Symbol and PLT Processing",
-        symbol_and_plt_processing_duration,
-    );
-    report_timing("Text Disassembly", text_disassembly_duration);
-    report_timing("Scanning Dynamic Deps", scanning_dynamic_deps_duration);
-    report_timing("Saving Metadata", saving_metadata_duration);
-    report_timing(
-        "Other",
-        total_duration
-            - shared_lib_processing_duration
-            - exec_parsing_duration
-            - symbol_and_plt_processing_duration
-            - text_disassembly_duration
-            - scanning_dynamic_deps_duration
-            - saving_metadata_duration,
-    );
-    report_timing("Total", total_duration);
+    if verbose {
+        println!();
+        println!("Timings");
+        report_timing("Shared Library Processing", shared_lib_processing_duration);
+        report_timing("Executable Parsing", exec_parsing_duration);
+        report_timing(
+            "Symbol and PLT Processing",
+            symbol_and_plt_processing_duration,
+        );
+        report_timing("Text Disassembly", text_disassembly_duration);
+        report_timing("Scanning Dynamic Deps", scanning_dynamic_deps_duration);
+        report_timing("Saving Metadata", saving_metadata_duration);
+        report_timing(
+            "Other",
+            total_duration
+                - shared_lib_processing_duration
+                - exec_parsing_duration
+                - symbol_and_plt_processing_duration
+                - text_disassembly_duration
+                - scanning_dynamic_deps_duration
+                - saving_metadata_duration,
+        );
+        report_timing("Total", total_duration);
+    }
 
     Ok(0)
 }
@@ -635,7 +638,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     };
     let app_parsing_duration = app_parsing_start.elapsed().unwrap();
 
-    let out_gen_start = SystemTime::now();
+    let platform_gen_start = SystemTime::now();
     let max_out_len = exec_data.len() + app_data.len() + 4096;
     let out_file = fs::OpenOptions::new()
         .read(true)
@@ -873,9 +876,14 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
             sym.st_value = endian::U64::new(LittleEndian, addr + added_data);
         }
     }
+    let platform_gen_duration = platform_gen_start.elapsed().unwrap();
+
+    // Flush platform only data to speed up write to disk.
+    let mut offset = sh_offset as usize;
+    out_mmap.flush_async_range(0, offset)?;
 
     // Align offset for new text/data section.
-    let mut offset = sh_offset as usize;
+    let out_gen_start = SystemTime::now();
     let remainder = offset % load_align_constraint as usize;
     offset += load_align_constraint as usize - remainder;
     let new_segment_offset = offset;
@@ -941,7 +949,9 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         let size = data.len();
         out_mmap[offset..offset + size].copy_from_slice(&data);
         // Deal with definitions and relocations for this section.
-        println!();
+        if verbose {
+            println!();
+        }
         let current_segment_offset = (offset - new_segment_offset) as i64;
         for rel in sec.relocations() {
             if verbose {
@@ -975,7 +985,6 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                 }
             }
         }
-        println!();
         for sym in symbols.iter() {
             if sym.section() == SymbolSection::Section(sec.index()) {
                 let name = sym.name().unwrap_or_default().to_string();
@@ -1003,6 +1012,9 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     out_mmap[offset..offset + sh_size]
         .copy_from_slice(&exec_data[sh_offset as usize..sh_offset as usize + sh_size]);
     offset += sh_size;
+
+    // Flush app only data to speed up write to disk.
+    out_mmap.flush_async_range(new_segment_offset, offset - new_segment_offset)?;
 
     // Add 2 new sections.
     let new_section_count = 2;
@@ -1142,10 +1154,10 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         if let Some((plt_off, plt_vaddr)) = md.plt_addresses.get(&func_name) {
             let plt_off = *plt_off as usize;
             let plt_vaddr = *plt_vaddr;
-            println!("\tPLT: {:x}, {:x}", plt_off, plt_vaddr);
             let jmp_inst_len = 5;
             let target = (virt_offset as i64 - (plt_vaddr as i64 + jmp_inst_len as i64)) as i32;
             if verbose {
+                println!("\tPLT: {:x}, {:x}", plt_off, plt_vaddr);
                 println!("\tTarget Jump: {:x}", target);
             }
             let data = target.to_le_bytes();
@@ -1178,23 +1190,32 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
 
     let out_gen_duration = out_gen_start.elapsed().unwrap();
 
+    let flushing_data_start = SystemTime::now();
+    out_mmap.flush()?;
+    let flushing_data_duration = flushing_data_start.elapsed().unwrap();
     let total_duration = total_start.elapsed().unwrap();
 
-    println!();
-    println!("Timings");
-    report_timing("Loading Metadata", loading_metadata_duration);
-    report_timing("Executable Parsing", exec_parsing_duration);
-    report_timing("Application Parsing", app_parsing_duration);
-    report_timing("Output Generation", out_gen_duration);
-    report_timing(
-        "Other",
-        total_duration
-            - loading_metadata_duration
-            - exec_parsing_duration
-            - app_parsing_duration
-            - out_gen_duration,
-    );
-    report_timing("Total", total_duration);
+    if verbose {
+        println!();
+        println!("Timings");
+        report_timing("Loading Metadata", loading_metadata_duration);
+        report_timing("Executable Parsing", exec_parsing_duration);
+        report_timing("Application Parsing", app_parsing_duration);
+        report_timing("Platform Only Generation", platform_gen_duration);
+        report_timing("Output Generation", out_gen_duration);
+        report_timing("Flushing Data to Disk", flushing_data_duration);
+        report_timing(
+            "Other",
+            total_duration
+                - loading_metadata_duration
+                - exec_parsing_duration
+                - app_parsing_duration
+                - platform_gen_duration
+                - out_gen_duration
+                - flushing_data_duration,
+        );
+        report_timing("Total", total_duration);
+    }
     Ok(0)
 }
 
