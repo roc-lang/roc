@@ -2760,3 +2760,21 @@ fn unresolved_tvar_when_capture_is_unused() {
         i64
     );
 }
+
+#[test]
+#[should_panic(expected = "Roc failed with message: ")]
+fn value_not_exposed_hits_panic() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                main : I64
+                main =
+                    Str.toInt 32
+            "#
+        ),
+        32,
+        i64
+    );
+}
