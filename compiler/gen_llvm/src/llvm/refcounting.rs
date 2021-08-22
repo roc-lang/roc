@@ -278,7 +278,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         // build then block
         {
             builder.position_at_end(then_block);
-            if !env.leak {
+            if !env.is_gen_test {
                 let ptr = builder.build_pointer_cast(
                     refcount_ptr.value,
                     ctx.i8_type().ptr_type(AddressSpace::Generic),
@@ -657,23 +657,6 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
             );
 
             Some(function)
-        }
-
-        Closure(_, lambda_set, _) => {
-            if lambda_set.contains_refcounted() {
-                let function = modify_refcount_layout_build_function(
-                    env,
-                    parent,
-                    layout_ids,
-                    mode,
-                    when_recursive,
-                    &lambda_set.runtime_representation(),
-                )?;
-
-                Some(function)
-            } else {
-                None
-            }
         }
 
         Struct(layouts) => {

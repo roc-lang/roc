@@ -47,7 +47,7 @@ impl Scope {
             let alias = Alias {
                 region,
                 typ,
-                lambda_set_variables: MutSet::default(),
+                lambda_set_variables: Vec::new(),
                 recursion_variables: MutSet::default(),
                 type_variables: variables,
             };
@@ -197,6 +197,11 @@ impl Scope {
 
             true
         });
+
+        let lambda_set_variables: Vec<_> = lambda_set_variables
+            .into_iter()
+            .map(|v| roc_types::types::LambdaSet(Type::Variable(v)))
+            .collect();
 
         let alias = Alias {
             region,

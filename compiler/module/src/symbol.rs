@@ -891,7 +891,9 @@ define_builtins! {
         100 NUM_AT_DECIMAL: "@Decimal"
         101 NUM_DECIMAL: "Decimal" imported
         102 NUM_DEC: "Dec" imported // the Num.Dectype alias
-
+        103 NUM_BYTES_TO_U16: "bytesToU16"
+        104 NUM_BYTES_TO_U32: "bytesToU32"
+        105 NUM_CAST_TO_NAT: "#castToNat"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias
@@ -921,6 +923,7 @@ define_builtins! {
         15 STR_TO_UTF8: "toUtf8"
         16 STR_STARTS_WITH_CODE_PT: "startsWithCodePt"
         17 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
+        18 STR_FROM_UTF8_RANGE: "fromUtf8Range"
     }
     4 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias

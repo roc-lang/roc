@@ -63,6 +63,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_COUNT_GRAPHEMES => str_count_graphemes,
         STR_FROM_INT => str_from_int,
         STR_FROM_UTF8 => str_from_utf8,
+        STR_FROM_UTF8_RANGE => str_from_utf8_range,
         STR_TO_UTF8 => str_to_utf8,
         STR_FROM_FLOAT=> str_from_float,
         LIST_LEN => list_len,
@@ -160,6 +161,8 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_ATAN => num_atan,
         NUM_ACOS => num_acos,
         NUM_ASIN => num_asin,
+        NUM_BYTES_TO_U16 => num_bytes_to_u16,
+        NUM_BYTES_TO_U32 => num_bytes_to_u32,
         NUM_MAX_INT => num_max_int,
         NUM_MIN_INT => num_min_int,
         NUM_BITWISE_AND => num_bitwise_and,
@@ -1087,6 +1090,16 @@ fn num_asin(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+/// Num.bytesToU16 : List U8, Nat -> Result U16 [ OutOfBounds ]
+fn num_bytes_to_u16(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_bytes_to(symbol, var_store, 1, LowLevel::NumBytesToU16)
+}
+
+/// Num.bytesToU32 : List U8, Nat -> Result U32 [ OutOfBounds ]
+fn num_bytes_to_u32(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_bytes_to(symbol, var_store, 3, LowLevel::NumBytesToU32)
+}
+
 /// Num.bitwiseAnd : Int a, Int a -> Int a
 fn num_bitwise_and(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumBitwiseAnd)
@@ -1352,7 +1365,7 @@ fn str_from_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Str.fromUtf8 : List U8 -> Result Str [ BadUtf8 Utf8Problem ]*
+/// Str.fromUtf8 : List U8 -> Result Str [ BadUtf8 { byteIndex : Nat, problem : Utf8Problem  } } ]*
 fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bytes_var = var_store.fresh();
     let bool_var = var_store.fresh();
@@ -1450,6 +1463,179 @@ fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
     defn(
         symbol,
         vec![(bytes_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        ret_var,
+    )
+}
+/// Str.fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [ BadUtf8 { byteIndex : Nat, problem : Utf8Problem  } } ]*
+fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let bytes_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+    let arg_record_var = var_store.fresh();
+    let ll_record_var = var_store.fresh();
+    let ret_var = var_store.fresh();
+
+    // let arg_3 = RunLowLevel FromUtf8Range arg_1 arg_2
+    //
+    // arg_3 :
+    //   { a : Bool   -- isOk
+    //   , b : String -- result_str
+    //   , c : Nat    -- problem_byte_index
+    //   , d : I8     -- problem_code
+    //   }
+    //
+    // if arg_3.a then
+    //  Ok arg_3.str
+    // else
+    //  Err (BadUtf8 { byteIndex: arg_3.byteIndex, problem : arg_3.problem })
+
+    let def = crate::def::Def {
+        loc_pattern: no_region(Pattern::Identifier(Symbol::ARG_3)),
+        loc_expr: no_region(RunLowLevel {
+            op: LowLevel::StrFromUtf8Range,
+            args: vec![
+                (bytes_var, Var(Symbol::ARG_1)),
+                (arg_record_var, Var(Symbol::ARG_2)),
+            ],
+            ret_var: ll_record_var,
+        }),
+        expr_var: ll_record_var,
+        pattern_vars: SendMap::default(),
+        annotation: None,
+    };
+
+    let cont = If {
+        branch_var: ret_var,
+        cond_var: bool_var,
+        branches: vec![(
+            // if-condition
+            no_region(
+                // arg_2.c -> Bool
+                Access {
+                    record_var: ll_record_var,
+                    ext_var: var_store.fresh(),
+                    field: "c_isOk".into(),
+                    field_var: var_store.fresh(),
+                    loc_expr: Box::new(no_region(Var(Symbol::ARG_3))),
+                },
+            ),
+            // all is good
+            no_region(tag(
+                "Ok",
+                // arg_2.a -> Str
+                vec![Access {
+                    record_var: ll_record_var,
+                    ext_var: var_store.fresh(),
+                    field: "b_str".into(),
+                    field_var: var_store.fresh(),
+                    loc_expr: Box::new(no_region(Var(Symbol::ARG_3))),
+                }],
+                var_store,
+            )),
+        )],
+        final_else: Box::new(
+            // bad!!
+            no_region(tag(
+                "Err",
+                vec![tag(
+                    "BadUtf8",
+                    vec![
+                        Access {
+                            record_var: ll_record_var,
+                            ext_var: var_store.fresh(),
+                            field: "d_problem".into(),
+                            field_var: var_store.fresh(),
+                            loc_expr: Box::new(no_region(Var(Symbol::ARG_3))),
+                        },
+                        Access {
+                            record_var: ll_record_var,
+                            ext_var: var_store.fresh(),
+                            field: "a_byteIndex".into(),
+                            field_var: var_store.fresh(),
+                            loc_expr: Box::new(no_region(Var(Symbol::ARG_3))),
+                        },
+                    ],
+                    var_store,
+                )],
+                var_store,
+            )),
+        ),
+    };
+
+    let roc_result = LetNonRec(Box::new(def), Box::new(no_region(cont)), ret_var);
+
+    // Only do the business with the let if we're in bounds!
+
+    let bounds_var = var_store.fresh();
+    let bounds_bool = var_store.fresh();
+    let add_var = var_store.fresh();
+
+    let body = If {
+        cond_var: bounds_bool,
+        branch_var: ret_var,
+        branches: vec![(
+            no_region(RunLowLevel {
+                op: LowLevel::NumLte,
+                args: vec![
+                    (
+                        bounds_var,
+                        RunLowLevel {
+                            op: LowLevel::NumAdd,
+                            args: vec![
+                                (
+                                    add_var,
+                                    Access {
+                                        record_var: arg_record_var,
+                                        ext_var: var_store.fresh(),
+                                        field: "start".into(),
+                                        field_var: var_store.fresh(),
+                                        loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                                    },
+                                ),
+                                (
+                                    add_var,
+                                    Access {
+                                        record_var: arg_record_var,
+                                        ext_var: var_store.fresh(),
+                                        field: "count".into(),
+                                        field_var: var_store.fresh(),
+                                        loc_expr: Box::new(no_region(Var(Symbol::ARG_2))),
+                                    },
+                                ),
+                            ],
+                            ret_var: add_var,
+                        },
+                    ),
+                    (
+                        bounds_var,
+                        RunLowLevel {
+                            op: LowLevel::ListLen,
+                            args: vec![(bytes_var, Var(Symbol::ARG_1))],
+                            ret_var: bounds_var,
+                        },
+                    ),
+                ],
+                ret_var: bounds_bool,
+            }),
+            no_region(roc_result),
+        )],
+        final_else: Box::new(
+            // else-branch
+            no_region(
+                // Err
+                tag(
+                    "Err",
+                    vec![tag("OutOfBounds", Vec::new(), var_store)],
+                    var_store,
+                ),
+            ),
+        ),
+    };
+
+    defn(
+        symbol,
+        vec![(bytes_var, Symbol::ARG_1), (arg_record_var, Symbol::ARG_2)],
         var_store,
         body,
         ret_var,
@@ -3183,6 +3369,97 @@ fn defn(
         pattern_vars: SendMap::default(),
         annotation: None,
     }
+}
+
+#[inline(always)]
+fn num_bytes_to(symbol: Symbol, var_store: &mut VarStore, offset: i64, low_level: LowLevel) -> Def {
+    let len_var = var_store.fresh();
+    let list_var = var_store.fresh();
+    let elem_var = var_store.fresh();
+
+    let ret_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+    let add_var = var_store.fresh();
+    let cast_var = var_store.fresh();
+
+    // Perform a bounds check. If it passes, run LowLevel::low_level
+    let body = If {
+        cond_var: bool_var,
+        branch_var: var_store.fresh(),
+        branches: vec![(
+            // if-condition
+            no_region(
+                // index + offset < List.len list
+                RunLowLevel {
+                    op: LowLevel::NumLt,
+                    args: vec![
+                        (
+                            len_var,
+                            RunLowLevel {
+                                op: LowLevel::NumAdd,
+                                args: vec![
+                                    (add_var, Var(Symbol::ARG_2)),
+                                    (
+                                        add_var,
+                                        RunLowLevel {
+                                            ret_var: cast_var,
+                                            args: vec![(cast_var, Num(var_store.fresh(), offset))],
+                                            op: LowLevel::NumIntCast,
+                                        },
+                                    ),
+                                ],
+                                ret_var: add_var,
+                            },
+                        ),
+                        (
+                            len_var,
+                            RunLowLevel {
+                                op: LowLevel::ListLen,
+                                args: vec![(list_var, Var(Symbol::ARG_1))],
+                                ret_var: len_var,
+                            },
+                        ),
+                    ],
+                    ret_var: bool_var,
+                },
+            ),
+            // then-branch
+            no_region(
+                // Ok
+                tag(
+                    "Ok",
+                    vec![RunLowLevel {
+                        op: low_level,
+                        args: vec![
+                            (list_var, Var(Symbol::ARG_1)),
+                            (len_var, Var(Symbol::ARG_2)),
+                        ],
+                        ret_var: elem_var,
+                    }],
+                    var_store,
+                ),
+            ),
+        )],
+        final_else: Box::new(
+            // else-branch
+            no_region(
+                // Err
+                tag(
+                    "Err",
+                    vec![tag("OutOfBounds", Vec::new(), var_store)],
+                    var_store,
+                ),
+            ),
+        ),
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1), (len_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        ret_var,
+    )
 }
 
 #[inline(always)]
