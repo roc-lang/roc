@@ -352,8 +352,6 @@ fn jit_to_ast_help<'a>(
         | Layout::RecursivePointer => {
             todo!("add support for rendering recursive tag unions in the REPL")
         }
-
-        Layout::Closure(_, _, _) => Err(ToAstProblem::FunctionLayout),
     }
 }
 

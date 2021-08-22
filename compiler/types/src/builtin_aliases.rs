@@ -522,6 +522,16 @@ pub fn u8_type() -> SolvedType {
 }
 
 #[inline(always)]
+pub fn u16_type() -> SolvedType {
+    SolvedType::Alias(
+        Symbol::NUM_U16,
+        vec![],
+        vec![],
+        Box::new(int_alias_content(unsigned16_type())),
+    )
+}
+
+#[inline(always)]
 pub fn binary64_type() -> SolvedType {
     SolvedType::Alias(
         Symbol::NUM_BINARY64,

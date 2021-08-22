@@ -4060,7 +4060,7 @@ fn add_def_to_module<'a>(
                             pattern_vars.push(*var);
                         }
 
-                        let layout = match layout_cache.from_var(
+                        let layout = match layout_cache.raw_from_var(
                             mono_env.arena,
                             annotation,
                             mono_env.subs,
@@ -4085,7 +4085,7 @@ fn add_def_to_module<'a>(
 
                         procs.insert_exposed(
                             symbol,
-                            ProcLayout::from_layout(mono_env.arena, layout),
+                            ProcLayout::from_raw(mono_env.arena, layout),
                             mono_env.arena,
                             mono_env.subs,
                             def.annotation,

@@ -79,6 +79,8 @@ comptime {
     exportNumFn(num.powInt, "pow_int");
     exportNumFn(num.acos, "acos");
     exportNumFn(num.asin, "asin");
+    exportNumFn(num.bytesToU16C, "bytes_to_u16");
+    exportNumFn(num.bytesToU32C, "bytes_to_u32");
     exportNumFn(num.round, "round");
 }
 
@@ -103,6 +105,14 @@ comptime {
     exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
 }
 
+// Utils
+const utils = @import("utils.zig");
+comptime {
+    exportUtilsFn(utils.test_panic, "test_panic");
+
+    @export(utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
+}
+
 // Export helpers - Must be run inside a comptime
 fn exportBuiltinFn(comptime func: anytype, comptime func_name: []const u8) void {
     @export(func, .{ .name = "roc_builtins." ++ func_name, .linkage = .Strong });
@@ -121,6 +131,10 @@ fn exportListFn(comptime func: anytype, comptime func_name: []const u8) void {
 }
 fn exportDecFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "dec." ++ func_name);
+}
+
+fn exportUtilsFn(comptime func: anytype, comptime func_name: []const u8) void {
+    exportBuiltinFn(func, "utils." ++ func_name);
 }
 
 // Custom panic function, as builtin Zig version errors during LLVM verification

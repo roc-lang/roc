@@ -179,6 +179,12 @@ fn build_object<'a, B: Backend<'a>>(
             "roc_dealloc".into(),
             "free".into(),
         )?;
+        generate_wrapper(
+            &mut backend,
+            &mut output,
+            "roc_panic".into(),
+            "roc_builtins.utils.test_panic".into(),
+        )?;
     }
 
     // Setup layout_ids for procedure calls.

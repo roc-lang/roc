@@ -161,6 +161,8 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_ATAN => num_atan,
         NUM_ACOS => num_acos,
         NUM_ASIN => num_asin,
+        NUM_BYTES_TO_U16 => num_bytes_to_u16,
+        NUM_BYTES_TO_U32 => num_bytes_to_u32,
         NUM_MAX_INT => num_max_int,
         NUM_MIN_INT => num_min_int,
         NUM_BITWISE_AND => num_bitwise_and,
@@ -1086,6 +1088,16 @@ fn num_asin(symbol: Symbol, var_store: &mut VarStore) -> Def {
         body,
         ret_float_var,
     )
+}
+
+/// Num.bytesToU16 : List U8, Nat -> Result U16 [ OutOfBounds ]
+fn num_bytes_to_u16(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_bytes_to(symbol, var_store, 1, LowLevel::NumBytesToU16)
+}
+
+/// Num.bytesToU32 : List U8, Nat -> Result U32 [ OutOfBounds ]
+fn num_bytes_to_u32(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_bytes_to(symbol, var_store, 3, LowLevel::NumBytesToU32)
 }
 
 /// Num.bitwiseAnd : Int a, Int a -> Int a
@@ -3357,6 +3369,97 @@ fn defn(
         pattern_vars: SendMap::default(),
         annotation: None,
     }
+}
+
+#[inline(always)]
+fn num_bytes_to(symbol: Symbol, var_store: &mut VarStore, offset: i64, low_level: LowLevel) -> Def {
+    let len_var = var_store.fresh();
+    let list_var = var_store.fresh();
+    let elem_var = var_store.fresh();
+
+    let ret_var = var_store.fresh();
+    let bool_var = var_store.fresh();
+    let add_var = var_store.fresh();
+    let cast_var = var_store.fresh();
+
+    // Perform a bounds check. If it passes, run LowLevel::low_level
+    let body = If {
+        cond_var: bool_var,
+        branch_var: var_store.fresh(),
+        branches: vec![(
+            // if-condition
+            no_region(
+                // index + offset < List.len list
+                RunLowLevel {
+                    op: LowLevel::NumLt,
+                    args: vec![
+                        (
+                            len_var,
+                            RunLowLevel {
+                                op: LowLevel::NumAdd,
+                                args: vec![
+                                    (add_var, Var(Symbol::ARG_2)),
+                                    (
+                                        add_var,
+                                        RunLowLevel {
+                                            ret_var: cast_var,
+                                            args: vec![(cast_var, Num(var_store.fresh(), offset))],
+                                            op: LowLevel::NumIntCast,
+                                        },
+                                    ),
+                                ],
+                                ret_var: add_var,
+                            },
+                        ),
+                        (
+                            len_var,
+                            RunLowLevel {
+                                op: LowLevel::ListLen,
+                                args: vec![(list_var, Var(Symbol::ARG_1))],
+                                ret_var: len_var,
+                            },
+                        ),
+                    ],
+                    ret_var: bool_var,
+                },
+            ),
+            // then-branch
+            no_region(
+                // Ok
+                tag(
+                    "Ok",
+                    vec![RunLowLevel {
+                        op: low_level,
+                        args: vec![
+                            (list_var, Var(Symbol::ARG_1)),
+                            (len_var, Var(Symbol::ARG_2)),
+                        ],
+                        ret_var: elem_var,
+                    }],
+                    var_store,
+                ),
+            ),
+        )],
+        final_else: Box::new(
+            // else-branch
+            no_region(
+                // Err
+                tag(
+                    "Err",
+                    vec![tag("OutOfBounds", Vec::new(), var_store)],
+                    var_store,
+                ),
+            ),
+        ),
+    };
+
+    defn(
+        symbol,
+        vec![(list_var, Symbol::ARG_1), (len_var, Symbol::ARG_2)],
+        var_store,
+        body,
+        ret_var,
+    )
 }
 
 #[inline(always)]
