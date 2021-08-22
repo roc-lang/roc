@@ -1,7 +1,10 @@
 interface Parser2 exposes [ 
     Parser, run, 
-    # succeed, fail, any
-    tests
+    succeed, fail, any,
+    andThen, first, second,
+    map,mapT2,
+
+    tests, badStuff
   ] imports [Pair, Utility]
 
 ## PARSER  
@@ -13,6 +16,7 @@ run : (List U8), Parser a -> List ([Pair a (List U8)])
 run = 
   \input, parser -> parser input
 
+runU8 : Str, Parser U8 -> Str
 runU8 = \input, parser -> runToString Utility.showU8 input parser 
 
 ## SUCCEED 
@@ -50,9 +54,11 @@ satisfy = \predicate ->
         _ -> [ ]
 
 
+## MAP
 
-satisfyA = satisfy (\u -> u == 97)
-satisfyB = satisfy (\u -> u == 98)
+map : Parser a, (a -> b) -> Parser b  
+map = 
+  \p, f -> \input -> p input |> List.map (\pair -> Pair.mapFirst pair f) 
 
 
 ## AND_THEN, FIRST, SECOND 
@@ -66,13 +72,13 @@ andThen = \p, q ->
 #
 second : Parser a, Parser b -> Parser b
 second = 
-  \p, q ->  Parser.andThen p (\_ -> q)
+  \p, q ->  andThen p (\_ -> q)
 
 # Run p, then q, returning output of p and ignoring that of q
 #
 first : Parser a, Parser b -> Parser a
 first = 
-  \p, q ->  Parser.andThen p (\out -> Parser.map q (\_ -> out))
+  \p, q ->  andThen p (\out -> map q (\_ -> out))
 
 
 
@@ -91,16 +97,20 @@ satisfyB = satisfy (\u -> u == 98)
 
 satisfyWhatCameBefore = \u2 -> satisfy (\u3 -> u3 == u2)
 
-testAndThen = { name: "andThen", test: runToString Utility.showU8 "aaxyz" (andThen any satisfyWhatCameBefore) == "a"}
+andThenT = { name: "andThen", test: runU8 "aaxyz" (andThen any satisfyWhatCameBefore) == "a"}
 
 ## PANIC
 secondT = {name : "Use 'second' to recognize \"a\" then \"b\" returning \"b\"", test : runU8 "abcd" (second  satisfyA satisfyB) == "b"}
 firstT = {name : "Use 'first' to recognize \"a\" then \"b\" returning \"a\"", test : runU8 "abcd" (first  satisfyA satisfyB) == "a"}
 
+mapT = {name : "Use map to shift output of parser: run \"abcd\" (map any (\\u -> u + 25)) == \"z\"", test : runU8 "abcd" (map any (\u -> u + 25)) == "z"  }
 
 
-tests = [ anyT, satisfyT, testAndThen]
+mapT2 = runU8 "abcd" (map any (\u -> u + 25))
 
+
+tests = [ anyT, satisfyT,  mapT, andThenT, firstT, secondT]
+badStuff = [andThenT, firstT, secondT, mapT, andThenT, firstT, secondT]
 
 
 ## FOR STRING OUTPUT 
