@@ -3,6 +3,7 @@
 use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
+use libc;
 use roc_std::{RocCallResult, RocStr};
 use std::ffi::CStr;
 use std::os::raw::c_char;
