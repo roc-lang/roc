@@ -163,7 +163,10 @@ pp2 = {name : "run \"abcd\" satisfy (\\u -> u == 97)) => \"a\"", test : runT "ab
 pp3 = {name : "Use 'second' to recognize \"a\" then \"b\" returning \"b\"", test : runT "abcd" (second  satisfyA satisfyB) == "b"}
 pp4 = {name : "Use 'first' to recognize \"a\" then \"b\" returning \"a\"", test : runT "abcd" (first  satisfyA satisfyB) == "a"}
 pp5 = {name : "Use map to shift output of parser: run \"abcd\" (map any (\\u -> u + 25)) == \"z\"", test : runT "abcd" (map any (\u -> u + 25)) == "z"  }
-pp6 = {name: "Use andThen to recognize strings beginning with two repeated letters (succeed on input \"aaxyz\")", test: runT "aaxyz" (andThen any satisfyWhatCameBefore) == "a"}
+
+pp6 = {name: "Use andThen to recognize strings beginning with two repeated letters (succeed on input \"aaxyz\")", 
+      test: runT "aaxyz" (andThen any satisfyWhatCameBefore) == "a"}
+
 pp7 = {name: "is successful (positive)", test: List.len satisfyResult == 1}
 pp8 = {name: "is successful (negative)", test: List.len ( satisfyA [100, 98, 99, 100] ) != 1}
 pp9 = {name: "test of lowerCase parser with u = 97", test: runT "abcd" Parser.lowerCase == "a" } 
