@@ -1,9 +1,6 @@
 interface Stdout
-    exposes [ putLine, putInt ]
+    exposes [ line ]
     imports [ fx.Effect, Task ]
 
-putLine : Str -> Task {} *
-putLine = \line -> Effect.map (Effect.putLine line) (\_ -> Ok {})
-
-putInt : I64 -> Task {} *
-putInt = \line -> Effect.map (Effect.putInt line) (\_ -> Ok {})
+line : Str -> Task.Task {} *
+line = \line -> Effect.map (Effect.putLine line) (\_ -> Ok {})
