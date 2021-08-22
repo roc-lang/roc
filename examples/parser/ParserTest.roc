@@ -18,18 +18,6 @@ main =
 
     satisfyResult = satisfyA [97, 98, 99, 100]
 
-# loop : (state -> Parser (Step state a)), state -> Parser a 
-# loop = \nextState, s ->
-#   \input -> 
-#       ss =  (nextState s)
-#       when ss is 
-#         Loop ss -> 
-#           out = ss input
-#           if List.len out == 1 then
-#             Loop nextState ss
-#           else Done (\input -> out)
-#         Done aa -> (\input -> success aa)
-
 
     p2 = {name : "run \"abcd\" satisfy (\\u -> u == 97)) => \"a\"", test : run "abcd" satisfyA == "a" }
     p3 = {name : "Use 'second' to recognize \"a\" then \"b\" returning \"b\"", test : run "abcd" (second  satisfyA satisfyB) == "b"}
@@ -43,18 +31,9 @@ main =
     
  
     [p1, p2, p3, p4, p5, p6, p7, p8, p9]  |> Test.run "Parser test"
-    ##  Parser.q2 <== Bug above if 'Parser.q2' is used.  Notes below
       |> Task.putLine
 
 
-# NOTES.  Parser.q2 is test of 'Parser.manyAux.  If 'Parser.q2` is omitted from the list [p1, p2, ...], the code runs 
-# without incident.  Hence the code for 'q2' type-checks.  However, if 'Parser.q2' in included in the test list,
-# the app panics:
 
-#   ➜  examples git:(dev) ✗ cargo run parser/ParserTest.roc
-#    Finished dev [unoptimized + debuginfo] target(s) in 0.90s
-#     Running `/Users/jxxcarlson/dev/roc/roc/target/debug/roc parser/ParserTest.roc`
-# thread 'main' panicked at 'internal error: entered unreachable code: symbol/layout combo must be in DeclarationToIndex', compiler/mono/src/borrow.rs:223:9
-# stack backtrace:
 
 
