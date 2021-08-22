@@ -899,6 +899,7 @@ pub mod test_ed_update {
     use crate::editor::mvc::ed_update::handle_new_char;
     use crate::editor::mvc::ed_update::EdModel;
     use crate::editor::mvc::ed_update::EdResult;
+    use crate::editor::resources::strings::HELLO_WORLD;
     use crate::ui::text::lines::SelectableLines;
     use crate::ui::ui_error::UIResult;
     use crate::window::keyboard_input::no_mods;
@@ -967,7 +968,10 @@ pub mod test_ed_update {
             }
         }
 
-        let post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
+        let mut post_lines = ui_res_to_res(ed_model_to_dsl(&ed_model))?;
+
+        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 1;
+        post_lines.drain(0..nr_hello_world_lines);
 
         assert_eq!(post_lines, expected_post_lines);
 

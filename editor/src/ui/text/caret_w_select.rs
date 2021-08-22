@@ -12,6 +12,12 @@ pub struct CaretWSelect {
     pub selection_opt: Option<Selection>,
 }
 
+pub enum CaretPos {
+    Start,
+    Exact(TextPos),
+    End
+}
+
 fn mk_some_sel(start_pos: TextPos, end_pos: TextPos) -> UIResult<Option<Selection>> {
     if start_pos == end_pos {
         Ok(None)

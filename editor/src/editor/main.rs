@@ -2,7 +2,7 @@ use super::keyboard_input;
 use super::style::CODE_TXT_XY;
 use crate::editor::mvc::ed_view;
 use crate::editor::mvc::ed_view::RenderedWgpu;
-use crate::editor::resources::strings::NOTHING_OPENED;
+use crate::editor::resources::strings::{HELLO_WORLD, NOTHING_OPENED};
 use crate::editor::{
     config::Config,
     ed_error::print_err,
@@ -19,6 +19,7 @@ use crate::graphics::{
 };
 use crate::lang::expr::Env;
 use crate::lang::pool::Pool;
+use crate::ui::text::caret_w_select::CaretPos;
 use crate::ui::util::slice_get;
 use bumpalo::Bump;
 use cgmath::Vector2;
@@ -157,7 +158,7 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
 
     let ed_model_opt = {
         let ed_model_res =
-            ed_model::init_model(&code_str, file_path, env, loaded_module, &code_arena);
+            ed_model::init_model(&code_str, file_path, env, loaded_module, &code_arena, CaretPos::End);
 
         match ed_model_res {
             Ok(mut ed_model) => {
@@ -410,26 +411,18 @@ fn read_file(file_path_opt: Option<&Path>) -> (&Path, String) {
                 panic!("I wanted to create {:?}, but it failed.", untitled_path)
             });
 
-            let hello_world_roc = r#"app "untitled-app"
-    packages { base: "platform" }
-    imports []
-    provides [ main ] to base
-
-main = "Hello, world!"
-"#;
-
-            write!(untitled_file, "{}", hello_world_roc).unwrap_or_else(|_| {
+            write!(untitled_file, "{}", HELLO_WORLD).unwrap_or_else(|_| {
                 panic!(
                     r#"I wanted to write:
 
 {:?}
 
 to file {:?}, but it failed."#,
-                    hello_world_roc, untitled_file
+HELLO_WORLD, untitled_file
                 )
             });
 
-            hello_world_roc.to_string()
+            HELLO_WORLD.to_string()
         } else {
             std::fs::read_to_string(untitled_path).unwrap_or_else(|_| {
                 panic!(

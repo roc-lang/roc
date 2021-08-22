@@ -11,7 +11,7 @@ use crate::lang::ast::ExprId;
 use crate::lang::expr::Env;
 use crate::lang::parse::AST;
 use crate::lang::pool::PoolStr;
-use crate::ui::text::caret_w_select::CaretWSelect;
+use crate::ui::text::caret_w_select::{CaretPos, CaretWSelect};
 use crate::ui::text::lines::SelectableLines;
 use crate::ui::text::text_pos::TextPos;
 use crate::ui::ui_error::UIResult;
@@ -53,6 +53,7 @@ pub fn init_model<'a>(
     env: Env<'a>,
     loaded_module: LoadedModule,
     code_arena: &'a Bump,
+    caret_pos: CaretPos, // to set caret position
 ) -> EdResult<EdModel<'a>> {
     let mut module = EdModule::new(code_str, env, code_arena)?;
 
@@ -73,6 +74,16 @@ pub fn init_model<'a>(
     let code_lines = EdModel::build_code_lines_from_markup(&markup_ids, &markup_node_pool)?;
     let grid_node_map = EdModel::build_node_map_from_markup(&markup_ids, &markup_node_pool)?;
 
+    let caret = match caret_pos {
+        CaretPos::Start => CaretWSelect::default(),
+        CaretPos::Exact(txt_pos) => {
+            CaretWSelect::new(txt_pos, None)
+        },
+        CaretPos::End => {
+            CaretWSelect::new(code_lines.end_txt_pos(), None)
+        },
+    };
+
     Ok(EdModel {
         module,
         file_path,
@@ -82,7 +93,7 @@ pub fn init_model<'a>(
         markup_node_pool,
         glyph_dim_rect_opt: None,
         has_focus: true,
-        caret_w_select_vec: NonEmpty::new((CaretWSelect::default(), None)),
+        caret_w_select_vec: NonEmpty::new((caret, None)),
         selected_expr_opt: None,
         loaded_module,
         show_debug_view: false,
@@ -173,8 +184,10 @@ pub mod test_ed_model {
     use crate::editor::ed_error::EdResult;
     use crate::editor::main::load_module;
     use crate::editor::mvc::ed_model;
+    use crate::editor::resources::strings::HELLO_WORLD;
     use crate::lang::expr::Env;
     use crate::lang::pool::Pool;
+    use crate::ui::text::caret_w_select::CaretPos;
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_dsl_to_selection;
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_selection_to_dsl;
     use crate::ui::text::lines::SelectableLines;
@@ -214,7 +227,7 @@ pub mod test_ed_model {
             exposed_ident_ids,
         );
 
-        ed_model::init_model(code_str, file_path, env, loaded_module, code_arena)
+        ed_model::init_model(code_str, file_path, env, loaded_module, code_arena, CaretPos::End)
     }
 
     pub struct EdModelRefs {
@@ -241,16 +254,7 @@ pub mod test_ed_model {
         let code_lines_vec: Vec<String> = (*code_lines).iter().map(|s| s.to_string()).collect();
         let caret_w_select = convert_dsl_to_selection(&code_lines_vec)?;
 
-        let header_str = r#"
-app "test-app"
-packages { base: "platform" }
-imports []
-provides [ main ] to base
-
-main = "Hello, world!"
-"#;
-
-        *clean_code_str = [header_str, clean_code_str.as_str()].join("");
+        *clean_code_str = [HELLO_WORLD, clean_code_str.as_str()].join("\n");
 
         let temp_dir = tempdir().expect("Failed to create temporary directory for test.");
         let temp_file_path_buf =
