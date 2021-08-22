@@ -733,6 +733,30 @@ pub fn listAppend(list: RocList, alignment: u32, element: Opaque, element_width:
     return output;
 }
 
+pub fn listPrepend(list: RocList, alignment: u32, element: Opaque, element_width: usize) callconv(.C) RocList {
+    const old_length = list.len();
+    var output = list.reallocate(alignment, old_length + 1, element_width);
+
+    // can't use one memcpy here because source and target overlap
+    if (output.bytes) |target| {
+        var i: usize = old_length;
+
+        while (i > 0) {
+            i -= 1;
+
+            // move the ith element to the (i + 1)th position
+            @memcpy(target + (i + 1) * element_width, target + i * element_width, element_width);
+        }
+
+        // finally copy in the new first element
+        if (element) |source| {
+            @memcpy(target, source, element_width);
+        }
+    }
+
+    return output;
+}
+
 pub fn listSwap(
     list: RocList,
     alignment: u32,

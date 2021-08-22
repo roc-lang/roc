@@ -2,7 +2,7 @@ use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::LetConstraint;
 use roc_can::expected::Expected::{self, *};
 use roc_collections::all::SendMap;
-use roc_module::ident::TagName;
+use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::subs::Variable;
@@ -90,8 +90,22 @@ pub fn str_type() -> Type {
 }
 
 #[inline(always)]
+fn builtin_alias(
+    symbol: Symbol,
+    type_arguments: Vec<(Lowercase, Type)>,
+    actual: Box<Type>,
+) -> Type {
+    Type::Alias {
+        symbol,
+        type_arguments,
+        actual,
+        lambda_set_variables: vec![],
+    }
+}
+
+#[inline(always)]
 pub fn num_float(range: Type) -> Type {
-    Type::Alias(
+    builtin_alias(
         Symbol::NUM_FLOAT,
         vec![("range".into(), range.clone())],
         Box::new(num_num(num_floatingpoint(range))),
@@ -108,7 +122,7 @@ pub fn num_floatingpoint(range: Type) -> Type {
         Box::new(Type::EmptyTagUnion),
     );
 
-    Type::Alias(
+    builtin_alias(
         Symbol::NUM_FLOATINGPOINT,
         vec![("range".into(), range)],
         Box::new(alias_content),
@@ -122,12 +136,12 @@ pub fn num_binary64() -> Type {
         Box::new(Type::EmptyTagUnion),
     );
 
-    Type::Alias(Symbol::NUM_BINARY64, vec![], Box::new(alias_content))
+    builtin_alias(Symbol::NUM_BINARY64, vec![], Box::new(alias_content))
 }
 
 #[inline(always)]
 pub fn num_int(range: Type) -> Type {
-    Type::Alias(
+    builtin_alias(
         Symbol::NUM_INT,
         vec![("range".into(), range.clone())],
         Box::new(num_num(num_integer(range))),
@@ -141,7 +155,7 @@ pub fn num_signed64() -> Type {
         Box::new(Type::EmptyTagUnion),
     );
 
-    Type::Alias(Symbol::NUM_SIGNED64, vec![], Box::new(alias_content))
+    builtin_alias(Symbol::NUM_SIGNED64, vec![], Box::new(alias_content))
 }
 
 #[inline(always)]
@@ -154,7 +168,7 @@ pub fn num_integer(range: Type) -> Type {
         Box::new(Type::EmptyTagUnion),
     );
 
-    Type::Alias(
+    builtin_alias(
         Symbol::NUM_INTEGER,
         vec![("range".into(), range)],
         Box::new(alias_content),
@@ -168,7 +182,7 @@ pub fn num_num(typ: Type) -> Type {
         Box::new(Type::EmptyTagUnion),
     );
 
-    Type::Alias(
+    builtin_alias(
         Symbol::NUM_NUM,
         vec![("range".into(), typ)],
         Box::new(alias_content),

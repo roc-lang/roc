@@ -27,6 +27,25 @@ pub unsafe fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
     libc::free(c_ptr)
 }
 
+#[no_mangle]
+pub unsafe fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
+    use roc_gen_llvm::llvm::build::PanicTagId;
+
+    use libc::c_char;
+    use std::convert::TryFrom;
+    use std::ffi::CStr;
+
+    match PanicTagId::try_from(tag_id) {
+        Ok(PanicTagId::NullTerminatedString) => {
+            let slice = CStr::from_ptr(c_ptr as *const c_char);
+            let string = slice.to_str().unwrap();
+            eprintln!("Roc hit a panic: {}", string);
+            std::process::exit(1);
+        }
+        Err(_) => unreachable!(),
+    }
+}
+
 #[test]
 fn roc_list_construction() {
     let list = RocList::from_slice(&[1i64; 23]);
@@ -275,6 +294,20 @@ fn list_prepend() {
         ),
         RocList::from_slice(&[6, 4]),
         RocList<i64>
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+                init : List Str
+                init =
+                    ["foo"]
+
+                List.prepend init "bar"
+            "#
+        ),
+        RocList::from_slice(&[RocStr::from_slice(b"bar"), RocStr::from_slice(b"foo"),]),
+        RocList<RocStr>
     );
 }
 

@@ -1997,6 +1997,7 @@ fn case_or_pattern() {
 }
 
 #[test]
+#[ignore]
 fn rosetree_basic() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -2392,7 +2393,6 @@ fn call_invalid_layout() {
         3,
         i64,
         |x| x,
-        false,
         true
     );
 }
@@ -2526,6 +2526,237 @@ fn pattern_match_unit_tag() {
             "#
         ),
         0,
+        i64
+    );
+}
+
+#[test]
+fn mirror_llvm_alignment_padding() {
+    // see https://github.com/rtfeldman/roc/issues/1569
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                main : Str
+                main =
+                    p1 = {name : "test1", test: 1 == 1 }
+
+                    List.map [p1, p1 ] (\{ test } -> if test  then "pass" else "fail")
+                       |> Str.joinWith "\n"
+
+            "#
+        ),
+        RocStr::from_slice(b"pass\npass"),
+        RocStr
+    );
+}
+
+#[test]
+fn lambda_set_bool() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                p1 = (\u -> u == 97)
+                p2 = (\u -> u == 98)
+
+                main : I64
+                main =
+                    oneOfResult = List.map [p1, p2] (\p -> p 42)
+
+                    when oneOfResult is
+                        _ -> 32
+
+            "#
+        ),
+        32,
+        i64
+    );
+}
+
+#[test]
+fn lambda_set_byte() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                p1 = (\u -> u == 97)
+                p2 = (\u -> u == 98)
+                p3 = (\u -> u == 99)
+
+                main : I64
+                main =
+                    oneOfResult = List.map [p1, p2, p3] (\p -> p 42)
+
+                    when oneOfResult is
+                        _ -> 32
+
+            "#
+        ),
+        32,
+        i64
+    );
+}
+
+#[test]
+fn lambda_set_struct_byte() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+
+                main : I64
+                main =
+                    r : [ Red, Green, Blue ]
+                    r = Red
+
+                    p1 = (\u -> r == u)
+                    oneOfResult = List.map [p1, p1] (\p -> p Green)
+
+                    when oneOfResult is
+                        _ -> 32
+
+            "#
+        ),
+        32,
+        i64
+    );
+}
+
+#[test]
+fn lambda_set_enum_byte_byte() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+
+                main : I64
+                main =
+                    r : [ Red, Green, Blue ]
+                    r = Red
+
+                    g : [ Red, Green, Blue ]
+                    g = Green
+
+                    p1 = (\u -> r == u)
+                    p2 = (\u -> g == u)
+                    oneOfResult = List.map [p1, p2] (\p -> p Green)
+
+                    when oneOfResult is
+                        _ -> 32
+
+            "#
+        ),
+        32,
+        i64
+    );
+}
+
+#[test]
+fn list_walk_until() {
+    // see https://github.com/rtfeldman/roc/issues/1576
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+
+            satisfyA : {} -> List {}
+            satisfyA = \_ -> []
+
+            oneOfResult =
+                List.walkUntil [ satisfyA ] (\_, _ -> Stop []) []
+
+            main =
+                when oneOfResult is
+                    _ -> 32
+            "#
+        ),
+        32,
+        i64
+    );
+}
+
+#[test]
+fn int_literal_not_specialized_with_annotation() {
+    // see https://github.com/rtfeldman/roc/issues/1600
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            main =
+                satisfy : (U8 -> Str) -> Str
+                satisfy = \_ -> "foo"
+
+                myEq : a, a -> Str
+                myEq = \_, _ -> "bar"
+
+                p1 : Num * -> Str
+                p1 = (\u -> myEq u 64)
+
+                when satisfy p1 is
+                    _ -> 32
+            "#
+        ),
+        32,
+        i64
+    );
+}
+
+#[test]
+fn int_literal_not_specialized_no_annotation() {
+    // see https://github.com/rtfeldman/roc/issues/1600
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            main =
+                satisfy : (U8 -> Str) -> Str
+                satisfy = \_ -> "foo"
+
+                myEq : a, a -> Str
+                myEq = \_, _ -> "bar"
+
+                p1 = (\u -> myEq u 64)
+
+                when satisfy p1 is
+                    _ -> 32
+            "#
+        ),
+        32,
+        i64
+    );
+}
+
+#[test]
+fn unresolved_tvar_when_capture_is_unused() {
+    // see https://github.com/rtfeldman/roc/issues/1585
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                main : I64
+                main =
+                    r : Bool
+                    r = False
+
+                    p1 = (\_ -> r == (1 == 1))
+                    oneOfResult = List.map [p1] (\p -> p Green)
+
+                    when oneOfResult is
+                        _ -> 32
+
+            "#
+        ),
+        32,
         i64
     );
 }
