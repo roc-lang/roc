@@ -47,7 +47,7 @@ pub fn build_app<'a>() -> App<'a> {
                 .about("Preprocesses a dynamically linked platform to prepare for linking.")
                 .arg(
                     Arg::with_name(EXEC)
-                        .help("The dynamically link platform executable")
+                        .help("The dynamically linked platform executable")
                         .required(true),
                 )
                 .arg(
@@ -58,6 +58,11 @@ pub fn build_app<'a>() -> App<'a> {
                 .arg(
                     Arg::with_name(METADATA)
                         .help("Where to save the metadata from preprocessing")
+                        .required(true),
+                )
+                .arg(
+                    Arg::with_name(OUT)
+                        .help("The modified version of the dynamically linked platform executable")
                         .required(true),
                 )
                 .arg(
@@ -72,11 +77,6 @@ pub fn build_app<'a>() -> App<'a> {
             App::new(CMD_SURGERY)
                 .about("Links a preprocessed platform with a Roc application.")
                 .arg(
-                    Arg::with_name(EXEC)
-                        .help("The dynamically link platform executable")
-                        .required(true),
-                )
-                .arg(
                     Arg::with_name(METADATA)
                         .help("The metadata created by preprocessing the platform")
                         .required(true),
@@ -86,7 +86,7 @@ pub fn build_app<'a>() -> App<'a> {
                         .help("The Roc application object file waiting to be linked")
                         .required(true),
                 )
-                .arg(Arg::with_name(OUT).help("The output file").required(true))
+                .arg(Arg::with_name(OUT).help("The modified version of the dynamically linked platform. It will be consumed to make linking faster.").required(true))
                 .arg(
                     Arg::with_name(FLAG_VERBOSE)
                         .long(FLAG_VERBOSE)
@@ -111,14 +111,31 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     let exec_parsing_start = SystemTime::now();
     let exec_file = fs::File::open(&matches.value_of(EXEC).unwrap())?;
     let exec_mmap = unsafe { Mmap::map(&exec_file)? };
-    let file_data = &*exec_mmap;
-    let exec_obj = match object::File::parse(file_data) {
+    let exec_data = &*exec_mmap;
+    let exec_obj = match object::File::parse(exec_data) {
         Ok(obj) => obj,
         Err(err) => {
             println!("Failed to parse executable file: {}", err);
             return Ok(-1);
         }
     };
+    let exec_header = load_struct_inplace::<elf::FileHeader64<LittleEndian>>(exec_data, 0);
+
+    let ph_offset = exec_header.e_phoff.get(NativeEndian);
+    let ph_ent_size = exec_header.e_phentsize.get(NativeEndian);
+    let ph_num = exec_header.e_phnum.get(NativeEndian);
+    let sh_offset = exec_header.e_shoff.get(NativeEndian);
+    let sh_ent_size = exec_header.e_shentsize.get(NativeEndian);
+    let sh_num = exec_header.e_shnum.get(NativeEndian);
+    if verbose {
+        println!();
+        println!("PH Offset: 0x{:x}", ph_offset);
+        println!("PH Entry Size: {}", ph_ent_size);
+        println!("PH Entry Count: {}", ph_num);
+        println!("SH Offset: 0x{:x}", sh_offset);
+        println!("SH Entry Size: {}", sh_ent_size);
+        println!("SH Entry Count: {}", sh_num);
+    }
     let exec_parsing_duration = exec_parsing_start.elapsed().unwrap();
 
     // TODO: Deal with other file formats and architectures.
@@ -335,7 +352,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
                             );
                             println!(
                                 "\tIts current value is {:x?}",
-                                &file_data[offset as usize..(offset + op_size as u64) as usize]
+                                &exec_data[offset as usize..(offset + op_size as u64) as usize]
                             )
                         }
                         md.surgeries
@@ -409,7 +426,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
             return Ok(-1);
         }
     };
-    md.dynamic_section_offset = Some(dyn_offset as u64);
+    md.dynamic_section_offset = dyn_offset as u64;
 
     let dynstr_sec = match exec_obj.section_by_name(".dynstr") {
         Some(sec) => sec,
@@ -433,10 +450,11 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         .unwrap();
 
     let mut dyn_lib_index = 0;
+    let mut shared_lib_found = false;
     loop {
         let dyn_tag = u64::from_le_bytes(
             <[u8; 8]>::try_from(
-                &file_data[dyn_offset + dyn_lib_index * 16..dyn_offset + dyn_lib_index * 16 + 8],
+                &exec_data[dyn_offset + dyn_lib_index * 16..dyn_offset + dyn_lib_index * 16 + 8],
             )
             .unwrap(),
         );
@@ -445,7 +463,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         } else if dyn_tag == 1 {
             let dynstr_off = u64::from_le_bytes(
                 <[u8; 8]>::try_from(
-                    &file_data
+                    &exec_data
                         [dyn_offset + dyn_lib_index * 16 + 8..dyn_offset + dyn_lib_index * 16 + 16],
                 )
                 .unwrap(),
@@ -456,7 +474,8 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
                 println!("Found shared lib with name: {}", c_str);
             }
             if c_str == shared_lib_name {
-                md.shared_lib_index = Some(dyn_lib_index as u64);
+                shared_lib_found = true;
+                md.shared_lib_index = dyn_lib_index as u64;
                 if verbose {
                     println!(
                         "Found shared lib in dynamic table at index: {}",
@@ -468,9 +487,9 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
 
         dyn_lib_index += 1;
     }
-    md.dynamic_lib_count = Some(dyn_lib_index as u64);
+    md.dynamic_lib_count = dyn_lib_index as u64;
 
-    if md.shared_lib_index.is_none() {
+    if !shared_lib_found {
         println!("Shared lib not found as a dependency of the executable");
         return Ok(-1);
     }
@@ -498,8 +517,8 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
             return Ok(-1);
         }
     };
-    md.symbol_table_section_offset = Some(symtab_offset as u64);
-    md.symbol_table_size = Some(symtab_sec.size());
+    md.symbol_table_section_offset = symtab_offset as u64;
+    md.symbol_table_size = symtab_sec.size();
 
     let dynsym_sec = match exec_obj.section_by_name(".dynsym") {
         Some(sec) => sec,
@@ -522,135 +541,21 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
             return Ok(-1);
         }
     };
-    md.dynamic_symbol_table_section_offset = Some(dynsym_offset as u64);
-
-    if verbose {
-        println!();
-        println!("{:?}", md);
-    }
-
-    let saving_metadata_start = SystemTime::now();
-    let output = fs::File::create(&matches.value_of(METADATA).unwrap())?;
-    let output = BufWriter::new(output);
-    if let Err(err) = serialize_into(output, &md) {
-        println!("Failed to serialize metadata: {}", err);
-        return Ok(-1);
-    };
-    let saving_metadata_duration = saving_metadata_start.elapsed().unwrap();
-
-    let total_duration = total_start.elapsed().unwrap();
-
-    // TODO: Potentially create a version of the executable with certain dynamic information deleted (changing offset may break stuff so be careful).
-    // Remove shared library dependencies.
-    // Also modify the PLT entries such that they just are jumps to the app functions. They will be used for indirect calls.
-    // Add regular symbols pointing to 0 for the app functions (maybe not needed if it is just link metadata).
-    // We have to be really carefull here. If we change the size or address of any section, it will mess with offsets.
-    // Must likely we want to null out data. If we have to go through and update every relative offset, this will be much more complex.
-    // Potentially we can take advantage of virtual address to avoid actually needing to shift any offsets.
-    // It may be fine to just add some of this information to the metadata instead and deal with it on final exec creation.
-    // If we are copying the exec to a new location in the background anyway it may be basically free.
-
-    if verbose {
-        println!();
-        println!("Timings");
-        report_timing("Shared Library Processing", shared_lib_processing_duration);
-        report_timing("Executable Parsing", exec_parsing_duration);
-        report_timing(
-            "Symbol and PLT Processing",
-            symbol_and_plt_processing_duration,
-        );
-        report_timing("Text Disassembly", text_disassembly_duration);
-        report_timing("Scanning Dynamic Deps", scanning_dynamic_deps_duration);
-        report_timing("Saving Metadata", saving_metadata_duration);
-        report_timing(
-            "Other",
-            total_duration
-                - shared_lib_processing_duration
-                - exec_parsing_duration
-                - symbol_and_plt_processing_duration
-                - text_disassembly_duration
-                - scanning_dynamic_deps_duration
-                - saving_metadata_duration,
-        );
-        report_timing("Total", total_duration);
-    }
-
-    Ok(0)
-}
-
-pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
-    let verbose = matches.is_present(FLAG_VERBOSE);
-
-    let total_start = SystemTime::now();
-    let loading_metadata_start = SystemTime::now();
-    let input = fs::File::open(&matches.value_of(METADATA).unwrap())?;
-    let input = BufReader::new(input);
-    let md: metadata::Metadata = match deserialize_from(input) {
-        Ok(data) => data,
-        Err(err) => {
-            println!("Failed to deserialize metadata: {}", err);
-            return Ok(-1);
-        }
-    };
-    let loading_metadata_duration = loading_metadata_start.elapsed().unwrap();
-
-    let exec_parsing_start = SystemTime::now();
-    let exec_file = fs::File::open(&matches.value_of(EXEC).unwrap())?;
-    let exec_mmap = unsafe { Mmap::map(&exec_file)? };
-    let exec_data = &*exec_mmap;
-    let elf64 = exec_data[4] == 2;
-    let litte_endian = exec_data[5] == 1;
-    if !elf64 || !litte_endian {
-        println!("Only 64bit little endian elf currently supported for surgery");
-        return Ok(-1);
-    }
-    let exec_header = load_struct_inplace::<elf::FileHeader64<LittleEndian>>(exec_data, 0);
-
-    let ph_offset = exec_header.e_phoff.get(NativeEndian);
-    let ph_ent_size = exec_header.e_phentsize.get(NativeEndian);
-    let ph_num = exec_header.e_phnum.get(NativeEndian);
-    let sh_offset = exec_header.e_shoff.get(NativeEndian);
-    let sh_ent_size = exec_header.e_shentsize.get(NativeEndian);
-    let sh_num = exec_header.e_shnum.get(NativeEndian);
-    if verbose {
-        println!();
-        println!("Is Elf64: {}", elf64);
-        println!("Is Little Endian: {}", litte_endian);
-        println!("PH Offset: 0x{:x}", ph_offset);
-        println!("PH Entry Size: {}", ph_ent_size);
-        println!("PH Entry Count: {}", ph_num);
-        println!("SH Offset: 0x{:x}", sh_offset);
-        println!("SH Entry Size: {}", sh_ent_size);
-        println!("SH Entry Count: {}", sh_num);
-    }
-    let exec_parsing_duration = exec_parsing_start.elapsed().unwrap();
-
-    let app_parsing_start = SystemTime::now();
-    let app_file = fs::File::open(&matches.value_of(APP).unwrap())?;
-    let app_mmap = unsafe { Mmap::map(&app_file)? };
-    let app_data = &*app_mmap;
-    let app_obj = match object::File::parse(app_data) {
-        Ok(obj) => obj,
-        Err(err) => {
-            println!("Failed to parse application file: {}", err);
-            return Ok(-1);
-        }
-    };
-    let app_parsing_duration = app_parsing_start.elapsed().unwrap();
+    md.dynamic_symbol_table_section_offset = dynsym_offset as u64;
 
     let platform_gen_start = SystemTime::now();
-    let max_out_len = exec_data.len() + app_data.len() + 4096;
+    md.exec_len = exec_data.len() as u64;
     let out_file = fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(true)
         .open(&matches.value_of(OUT).unwrap())?;
-    out_file.set_len(max_out_len as u64)?;
+    out_file.set_len(md.exec_len)?;
     let mut out_mmap = unsafe { MmapMut::map_mut(&out_file)? };
 
     // Write a modified elf header with an extra program header entry.
-    let added_data = ph_ent_size as u64;
+    md.added_data = ph_ent_size as u64;
     let ph_end = ph_offset as usize + ph_num as usize * ph_ent_size as usize;
     out_mmap[..ph_end].copy_from_slice(&exec_data[..ph_end]);
     let file_header = load_struct_inplace_mut::<elf::FileHeader64<LittleEndian>>(&mut out_mmap, 0);
@@ -665,40 +570,36 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     // Steal the extra bytes we need from the first loaded sections.
     // Generally this section has empty space due to alignment.
     let mut first_load_found = false;
-    let mut shift_start = 0;
-    let mut shift_end = 0;
-    let mut first_load_aligned_size = 0;
-    let mut load_align_constraint = 0;
     for mut ph in program_headers.iter_mut() {
         let p_type = ph.p_type.get(NativeEndian);
         let p_align = ph.p_align.get(NativeEndian);
         let p_filesz = ph.p_filesz.get(NativeEndian);
         let p_memsz = ph.p_memsz.get(NativeEndian);
         if p_type == elf::PT_LOAD && ph.p_offset.get(NativeEndian) == 0 {
-            if p_filesz / p_align != (p_filesz + added_data) / p_align {
+            if p_filesz / p_align != (p_filesz + md.added_data) / p_align {
                 println!("Not enough extra space in the executable for alignment");
                 println!("This makes linking a lot harder and is not supported yet");
                 return Ok(-1);
             }
-            ph.p_filesz = endian::U64::new(LittleEndian, p_filesz + added_data);
-            let new_memsz = p_memsz + added_data;
+            ph.p_filesz = endian::U64::new(LittleEndian, p_filesz + md.added_data);
+            let new_memsz = p_memsz + md.added_data;
             ph.p_memsz = endian::U64::new(LittleEndian, new_memsz);
             let p_vaddr = ph.p_vaddr.get(NativeEndian);
 
             first_load_found = true;
-            shift_start = p_vaddr + ph_end as u64;
+            md.shift_start = p_vaddr + ph_end as u64;
             let align_remainder = new_memsz % p_align;
-            first_load_aligned_size = if align_remainder == 0 {
+            md.first_load_aligned_size = if align_remainder == 0 {
                 new_memsz
             } else {
                 new_memsz + (p_align - align_remainder)
             };
-            shift_end = p_vaddr + first_load_aligned_size;
-            load_align_constraint = p_align;
+            md.shift_end = p_vaddr + md.first_load_aligned_size;
+            md.load_align_constraint = p_align;
             break;
         } else if p_type == elf::PT_PHDR {
-            ph.p_filesz = endian::U64::new(LittleEndian, p_filesz + added_data);
-            ph.p_memsz = endian::U64::new(LittleEndian, p_memsz + added_data);
+            ph.p_filesz = endian::U64::new(LittleEndian, p_filesz + md.added_data);
+            ph.p_memsz = endian::U64::new(LittleEndian, p_memsz + md.added_data);
         }
     }
     if !first_load_found {
@@ -709,26 +610,30 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     if verbose {
         println!(
             "First Byte loaded after Program Headers: 0x{:x}",
-            shift_start
+            md.shift_start
         );
-        println!("Last Byte loaded in first load: 0x{:x}", shift_end);
-        println!("Aligned first load size: 0x{:x}", first_load_aligned_size);
+        println!("Last Byte loaded in first load: 0x{:x}", md.shift_end);
+        println!(
+            "Aligned first load size: 0x{:x}",
+            md.first_load_aligned_size
+        );
     }
 
     for mut ph in program_headers {
         let p_vaddr = ph.p_vaddr.get(NativeEndian);
-        if shift_start <= p_vaddr && p_vaddr < shift_end {
+        if md.shift_start <= p_vaddr && p_vaddr < md.shift_end {
             let p_align = ph.p_align.get(NativeEndian);
             let p_offset = ph.p_offset.get(NativeEndian);
-            let new_offset = p_offset + added_data;
-            let new_vaddr = p_vaddr + added_data;
+            let new_offset = p_offset + md.added_data;
+            let new_vaddr = p_vaddr + md.added_data;
             if new_offset % p_align != 0 || new_vaddr % p_align != 0 {
                 println!("Ran into alignment issues when moving segments");
                 return Ok(-1);
             }
-            ph.p_offset = endian::U64::new(LittleEndian, p_offset + added_data);
-            ph.p_vaddr = endian::U64::new(LittleEndian, p_vaddr + added_data);
-            ph.p_paddr = endian::U64::new(LittleEndian, ph.p_paddr.get(NativeEndian) + added_data);
+            ph.p_offset = endian::U64::new(LittleEndian, p_offset + md.added_data);
+            ph.p_vaddr = endian::U64::new(LittleEndian, p_vaddr + md.added_data);
+            ph.p_paddr =
+                endian::U64::new(LittleEndian, ph.p_paddr.get(NativeEndian) + md.added_data);
         }
     }
 
@@ -741,8 +646,8 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     for sh in exec_section_headers {
         let offset = sh.sh_offset.get(NativeEndian);
         let size = sh.sh_size.get(NativeEndian);
-        if offset <= first_load_aligned_size - added_data
-            && offset + size >= first_load_aligned_size - added_data
+        if offset <= md.first_load_aligned_size - md.added_data
+            && offset + size >= md.first_load_aligned_size - md.added_data
         {
             println!("A section overlaps with some alignment data we need to delete");
             return Ok(-1);
@@ -751,40 +656,22 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
 
     // Copy to program header, but add an extra item for the new data at the end of the file.
     // Also delete the extra padding to keep things align.
-    out_mmap[ph_end + added_data as usize..first_load_aligned_size as usize].copy_from_slice(
-        &exec_data[ph_end..first_load_aligned_size as usize - added_data as usize],
+    out_mmap[ph_end + md.added_data as usize..md.first_load_aligned_size as usize].copy_from_slice(
+        &exec_data[ph_end..md.first_load_aligned_size as usize - md.added_data as usize],
     );
-    out_mmap[first_load_aligned_size as usize..sh_offset as usize]
-        .copy_from_slice(&exec_data[first_load_aligned_size as usize..sh_offset as usize]);
+    out_mmap[md.first_load_aligned_size as usize..]
+        .copy_from_slice(&exec_data[md.first_load_aligned_size as usize..]);
 
     // Update dynamic table entries for shift of extra ProgramHeader.
-    let dyn_offset = match md.dynamic_section_offset {
-        Some(offset) => {
-            if ph_end as u64 <= offset && offset < first_load_aligned_size {
-                offset + added_data
-            } else {
-                offset
-            }
-        }
-        None => {
-            println!("Metadata missing dynamic section offset");
-            return Ok(-1);
-        }
+    let dyn_offset = if ph_end as u64 <= md.dynamic_section_offset
+        && md.dynamic_section_offset < md.first_load_aligned_size
+    {
+        md.dynamic_section_offset + md.added_data
+    } else {
+        md.dynamic_section_offset
     };
-    let dyn_lib_count = match md.dynamic_lib_count {
-        Some(count) => count as usize,
-        None => {
-            println!("Metadata missing dynamic library count");
-            return Ok(-1);
-        }
-    };
-    let shared_index = match md.shared_lib_index {
-        Some(index) => index as usize,
-        None => {
-            println!("Metadata missing shared library index");
-            return Ok(-1);
-        }
-    };
+    let dyn_lib_count = md.dynamic_lib_count as usize;
+    let shared_index = md.shared_lib_index as usize;
 
     let dyns = load_structs_inplace_mut::<elf::Dyn64<LittleEndian>>(
         &mut out_mmap,
@@ -824,8 +711,8 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
             | elf::DT_VERDEF
             | elf::DT_VERNEED => {
                 let d_addr = d.d_val.get(NativeEndian);
-                if shift_start <= d_addr && d_addr < shift_end {
-                    d.d_val = endian::U64::new(LittleEndian, d_addr + added_data);
+                if md.shift_start <= d_addr && d_addr < md.shift_end {
+                    d.d_val = endian::U64::new(LittleEndian, d_addr + md.added_data);
                 }
             }
             _ => {}
@@ -843,26 +730,14 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     }
 
     // Update symbol table entries for shift of extra ProgramHeader.
-    let symtab_offset = match md.symbol_table_section_offset {
-        Some(offset) => {
-            if ph_end as u64 <= offset && offset < first_load_aligned_size {
-                offset + added_data
-            } else {
-                offset
-            }
-        }
-        None => {
-            println!("Metadata missing symbol table section offset");
-            return Ok(-1);
-        }
+    let symtab_offset = if ph_end as u64 <= md.symbol_table_section_offset
+        && md.symbol_table_section_offset < md.first_load_aligned_size
+    {
+        md.symbol_table_section_offset + md.added_data
+    } else {
+        md.symbol_table_section_offset
     };
-    let symtab_size = match md.symbol_table_size {
-        Some(count) => count as usize,
-        None => {
-            println!("Metadata missing symbol table size");
-            return Ok(-1);
-        }
-    };
+    let symtab_size = md.symbol_table_size as usize;
 
     let symbols = load_structs_inplace_mut::<elf::Sym64<LittleEndian>>(
         &mut out_mmap,
@@ -872,20 +747,141 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
 
     for sym in symbols {
         let addr = sym.st_value.get(NativeEndian);
-        if shift_start <= addr && addr < shift_end {
-            sym.st_value = endian::U64::new(LittleEndian, addr + added_data);
+        if md.shift_start <= addr && addr < md.shift_end {
+            sym.st_value = endian::U64::new(LittleEndian, addr + md.added_data);
         }
     }
     let platform_gen_duration = platform_gen_start.elapsed().unwrap();
 
-    // Flush platform only data to speed up write to disk.
-    let mut offset = sh_offset as usize;
-    out_mmap.flush_async_range(0, offset)?;
+    if verbose {
+        println!();
+        println!("{:?}", md);
+    }
+
+    let saving_metadata_start = SystemTime::now();
+    let output = fs::File::create(&matches.value_of(METADATA).unwrap())?;
+    let output = BufWriter::new(output);
+    if let Err(err) = serialize_into(output, &md) {
+        println!("Failed to serialize metadata: {}", err);
+        return Ok(-1);
+    };
+    let saving_metadata_duration = saving_metadata_start.elapsed().unwrap();
+
+    let flushing_data_start = SystemTime::now();
+    out_mmap.flush()?;
+    let flushing_data_duration = flushing_data_start.elapsed().unwrap();
+
+    let total_duration = total_start.elapsed().unwrap();
+
+    if verbose {
+        println!();
+        println!("Timings");
+        report_timing("Shared Library Processing", shared_lib_processing_duration);
+        report_timing("Executable Parsing", exec_parsing_duration);
+        report_timing(
+            "Symbol and PLT Processing",
+            symbol_and_plt_processing_duration,
+        );
+        report_timing("Text Disassembly", text_disassembly_duration);
+        report_timing("Scanning Dynamic Deps", scanning_dynamic_deps_duration);
+        report_timing("Generate Modified Platform", platform_gen_duration);
+        report_timing("Saving Metadata", saving_metadata_duration);
+        report_timing("Flushing Data to Disk", flushing_data_duration);
+        report_timing(
+            "Other",
+            total_duration
+                - shared_lib_processing_duration
+                - exec_parsing_duration
+                - symbol_and_plt_processing_duration
+                - text_disassembly_duration
+                - scanning_dynamic_deps_duration
+                - platform_gen_duration
+                - saving_metadata_duration
+                - flushing_data_duration,
+        );
+        report_timing("Total", total_duration);
+    }
+
+    Ok(0)
+}
+
+pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
+    let verbose = matches.is_present(FLAG_VERBOSE);
+
+    let total_start = SystemTime::now();
+    let loading_metadata_start = SystemTime::now();
+    let input = fs::File::open(&matches.value_of(METADATA).unwrap())?;
+    let input = BufReader::new(input);
+    let md: metadata::Metadata = match deserialize_from(input) {
+        Ok(data) => data,
+        Err(err) => {
+            println!("Failed to deserialize metadata: {}", err);
+            return Ok(-1);
+        }
+    };
+    let loading_metadata_duration = loading_metadata_start.elapsed().unwrap();
+
+    let app_parsing_start = SystemTime::now();
+    let app_file = fs::File::open(&matches.value_of(APP).unwrap())?;
+    let app_mmap = unsafe { Mmap::map(&app_file)? };
+    let app_data = &*app_mmap;
+    let app_obj = match object::File::parse(app_data) {
+        Ok(obj) => obj,
+        Err(err) => {
+            println!("Failed to parse application file: {}", err);
+            return Ok(-1);
+        }
+    };
+    let app_parsing_duration = app_parsing_start.elapsed().unwrap();
+
+    let exec_parsing_start = SystemTime::now();
+    let exec_file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&matches.value_of(OUT).unwrap())?;
+
+    let max_out_len = md.exec_len + app_data.len() as u64 + 4096;
+    exec_file.set_len(max_out_len)?;
+
+    let mut exec_mmap = unsafe { MmapMut::map_mut(&exec_file)? };
+    let elf64 = exec_mmap[4] == 2;
+    let litte_endian = exec_mmap[5] == 1;
+    if !elf64 || !litte_endian {
+        println!("Only 64bit little endian elf currently supported for surgery");
+        return Ok(-1);
+    }
+    let exec_header = load_struct_inplace::<elf::FileHeader64<LittleEndian>>(&exec_mmap, 0);
+
+    let ph_offset = exec_header.e_phoff.get(NativeEndian);
+    let ph_ent_size = exec_header.e_phentsize.get(NativeEndian);
+    let ph_num = exec_header.e_phnum.get(NativeEndian);
+    let ph_end = ph_offset as usize + ph_num as usize * ph_ent_size as usize;
+    let sh_offset = exec_header.e_shoff.get(NativeEndian);
+    let sh_ent_size = exec_header.e_shentsize.get(NativeEndian);
+    let sh_num = exec_header.e_shnum.get(NativeEndian);
+    if verbose {
+        println!();
+        println!("Is Elf64: {}", elf64);
+        println!("Is Little Endian: {}", litte_endian);
+        println!("PH Offset: 0x{:x}", ph_offset);
+        println!("PH Entry Size: {}", ph_ent_size);
+        println!("PH Entry Count: {}", ph_num);
+        println!("SH Offset: 0x{:x}", sh_offset);
+        println!("SH Entry Size: {}", sh_ent_size);
+        println!("SH Entry Count: {}", sh_num);
+    }
+    let exec_parsing_duration = exec_parsing_start.elapsed().unwrap();
+
+    let out_gen_start = SystemTime::now();
+    // Backup section header table.
+    let sh_size = sh_ent_size as usize * sh_num as usize;
+    let mut sh_tab = vec![];
+    sh_tab.extend_from_slice(&exec_mmap[sh_offset as usize..sh_offset as usize + sh_size]);
 
     // Align offset for new text/data section.
-    let out_gen_start = SystemTime::now();
-    let remainder = offset % load_align_constraint as usize;
-    offset += load_align_constraint as usize - remainder;
+    let mut offset = md.exec_len as usize;
+    let remainder = offset % md.load_align_constraint as usize;
+    offset += md.load_align_constraint as usize - remainder;
     let new_segment_offset = offset;
     let new_data_section_offset = offset;
 
@@ -911,7 +907,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
             }
         };
         let size = data.len();
-        out_mmap[offset..offset + size].copy_from_slice(&data);
+        exec_mmap[offset..offset + size].copy_from_slice(&data);
         for (i, sym) in symbols.iter().enumerate() {
             if sym.section() == SymbolSection::Section(sec.index()) {
                 rodata_address_map.insert(i, offset + sym.address() as usize - new_segment_offset);
@@ -947,7 +943,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
             }
         };
         let size = data.len();
-        out_mmap[offset..offset + size].copy_from_slice(&data);
+        exec_mmap[offset..offset + size].copy_from_slice(&data);
         // Deal with definitions and relocations for this section.
         if verbose {
             println!();
@@ -971,7 +967,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                         32 => {
                             let data = (target as i32).to_le_bytes();
                             let base = offset + rel.0 as usize;
-                            out_mmap[base..base + 4].copy_from_slice(&data);
+                            exec_mmap[base..base + 4].copy_from_slice(&data);
                         }
                         x => {
                             println!("Relocation size not yet supported: {}", x);
@@ -1008,30 +1004,28 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     }
 
     let new_sh_offset = offset;
-    let sh_size = sh_ent_size as usize * sh_num as usize;
-    out_mmap[offset..offset + sh_size]
-        .copy_from_slice(&exec_data[sh_offset as usize..sh_offset as usize + sh_size]);
+    exec_mmap[offset..offset + sh_size].copy_from_slice(&sh_tab);
     offset += sh_size;
 
     // Flush app only data to speed up write to disk.
-    out_mmap.flush_async_range(new_segment_offset, offset - new_segment_offset)?;
+    exec_mmap.flush_async_range(new_segment_offset, offset - new_segment_offset)?;
 
     // Add 2 new sections.
     let new_section_count = 2;
     offset += new_section_count * sh_ent_size as usize;
     let section_headers = load_structs_inplace_mut::<elf::SectionHeader64<LittleEndian>>(
-        &mut out_mmap,
+        &mut exec_mmap,
         new_sh_offset as usize,
         sh_num as usize + new_section_count,
     );
     for mut sh in section_headers.iter_mut() {
         let offset = sh.sh_offset.get(NativeEndian);
         let addr = sh.sh_addr.get(NativeEndian);
-        if ph_end as u64 <= offset && offset < first_load_aligned_size {
-            sh.sh_offset = endian::U64::new(LittleEndian, offset + added_data);
+        if ph_end as u64 <= offset && offset < md.first_load_aligned_size {
+            sh.sh_offset = endian::U64::new(LittleEndian, offset + md.added_data);
         }
-        if shift_start <= addr && addr < shift_end {
-            sh.sh_addr = endian::U64::new(LittleEndian, addr + added_data);
+        if md.shift_start <= addr && addr < md.shift_end {
+            sh.sh_addr = endian::U64::new(LittleEndian, addr + md.added_data);
         }
     }
 
@@ -1040,8 +1034,8 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         .map(|sh| sh.sh_addr.get(NativeEndian) + sh.sh_size.get(NativeEndian))
         .max()
         .unwrap();
-    let remainder = last_vaddr % load_align_constraint;
-    let new_segment_vaddr = last_vaddr + load_align_constraint - remainder;
+    let remainder = last_vaddr % md.load_align_constraint;
+    let new_segment_vaddr = last_vaddr + md.load_align_constraint - remainder;
     let new_data_section_vaddr = new_segment_vaddr;
     let new_data_section_size = new_text_section_offset - new_data_section_offset;
     let new_text_section_vaddr = new_data_section_vaddr + new_data_section_size as u64;
@@ -1076,16 +1070,15 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     new_text_section.sh_entsize = endian::U64::new(LittleEndian, 0);
 
     // Reload and update file header and size.
-    let file_header = load_struct_inplace_mut::<elf::FileHeader64<LittleEndian>>(&mut out_mmap, 0);
+    let file_header = load_struct_inplace_mut::<elf::FileHeader64<LittleEndian>>(&mut exec_mmap, 0);
     file_header.e_shoff = endian::U64::new(LittleEndian, new_sh_offset as u64);
     file_header.e_shnum = endian::U16::new(LittleEndian, sh_num + new_section_count as u16);
-    out_file.set_len(offset as u64 + 1)?;
 
     // Add new segment.
     let program_headers = load_structs_inplace_mut::<elf::ProgramHeader64<LittleEndian>>(
-        &mut out_mmap,
+        &mut exec_mmap,
         ph_offset as usize,
-        ph_num as usize + 1,
+        ph_num as usize,
     );
     let new_segment = program_headers.last_mut().unwrap();
     new_segment.p_type = endian::U32::new(LittleEndian, elf::PT_LOAD);
@@ -1096,21 +1089,15 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     let new_segment_size = (new_sh_offset - new_segment_offset) as u64;
     new_segment.p_filesz = endian::U64::new(LittleEndian, new_segment_size);
     new_segment.p_memsz = endian::U64::new(LittleEndian, new_segment_size);
-    new_segment.p_align = endian::U64::new(LittleEndian, load_align_constraint);
+    new_segment.p_align = endian::U64::new(LittleEndian, md.load_align_constraint);
 
     // Update calls from platform and dynamic symbols.
-    let dynsym_offset = match md.dynamic_symbol_table_section_offset {
-        Some(offset) => {
-            if ph_end as u64 <= offset && offset < first_load_aligned_size {
-                offset + added_data
-            } else {
-                offset
-            }
-        }
-        None => {
-            println!("Metadata missing dynamic symbol table section offset");
-            return Ok(-1);
-        }
+    let dynsym_offset = if ph_end as u64 <= md.dynamic_symbol_table_section_offset
+        && md.dynamic_symbol_table_section_offset < md.first_load_aligned_size
+    {
+        md.dynamic_symbol_table_section_offset + md.added_data
+    } else {
+        md.dynamic_symbol_table_section_offset
     };
 
     for func_name in md.app_functions {
@@ -1139,7 +1126,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                         println!("\tTarget Jump: {:x}", target);
                     }
                     let data = target.to_le_bytes();
-                    out_mmap[s.file_offset as usize..s.file_offset as usize + 4]
+                    exec_mmap[s.file_offset as usize..s.file_offset as usize + 4]
                         .copy_from_slice(&data);
                 }
                 x => {
@@ -1161,16 +1148,16 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                 println!("\tTarget Jump: {:x}", target);
             }
             let data = target.to_le_bytes();
-            out_mmap[plt_off] = 0xE9;
-            out_mmap[plt_off + 1..plt_off + jmp_inst_len].copy_from_slice(&data);
+            exec_mmap[plt_off] = 0xE9;
+            exec_mmap[plt_off + 1..plt_off + jmp_inst_len].copy_from_slice(&data);
             for i in jmp_inst_len..PLT_ADDRESS_OFFSET as usize {
-                out_mmap[plt_off + i] = 0x90;
+                exec_mmap[plt_off + i] = 0x90;
             }
         }
 
         if let Some(i) = md.dynamic_symbol_indices.get(&func_name) {
             let sym = load_struct_inplace_mut::<elf::Sym64<LittleEndian>>(
-                &mut out_mmap,
+                &mut exec_mmap,
                 dynsym_offset as usize + *i as usize * mem::size_of::<elf::Sym64<LittleEndian>>(),
             );
             sym.st_shndx = endian::U16::new(LittleEndian, new_text_section_index as u16);
@@ -1191,8 +1178,10 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     let out_gen_duration = out_gen_start.elapsed().unwrap();
 
     let flushing_data_start = SystemTime::now();
-    out_mmap.flush()?;
+    exec_mmap.flush()?;
     let flushing_data_duration = flushing_data_start.elapsed().unwrap();
+
+    exec_file.set_len(offset as u64 + 1)?;
     let total_duration = total_start.elapsed().unwrap();
 
     if verbose {
@@ -1201,7 +1190,6 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         report_timing("Loading Metadata", loading_metadata_duration);
         report_timing("Executable Parsing", exec_parsing_duration);
         report_timing("Application Parsing", app_parsing_duration);
-        report_timing("Platform Only Generation", platform_gen_duration);
         report_timing("Output Generation", out_gen_duration);
         report_timing("Flushing Data to Disk", flushing_data_duration);
         report_timing(
@@ -1210,7 +1198,6 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                 - loading_metadata_duration
                 - exec_parsing_duration
                 - app_parsing_duration
-                - platform_gen_duration
                 - out_gen_duration
                 - flushing_data_duration,
         );
