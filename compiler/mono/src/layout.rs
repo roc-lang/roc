@@ -554,10 +554,10 @@ impl<'a> LambdaSet<'a> {
             }
 
             Ok(()) | Err((_, Content::FlexVar(_))) => {
-                // TODO hack for builting functions.
+                // this can happen when there is a type error somewhere
                 Ok(LambdaSet {
                     set: &[],
-                    representation: arena.alloc(Layout::Struct(&[])),
+                    representation: arena.alloc(Layout::Union(UnionLayout::NonRecursive(&[]))),
                 })
             }
             _ => panic!("called LambdaSet.from_var on invalid input"),

@@ -2683,26 +2683,50 @@ fn list_walk_until() {
 }
 
 #[test]
-#[ignore]
-fn int_literal_not_specialized() {
+fn int_literal_not_specialized_with_annotation() {
     // see https://github.com/rtfeldman/roc/issues/1600
     assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [ main ] to "./platform"
 
-
-            satisfy : (U8 -> Bool) -> Str
-            satisfy = \_ -> "foo"
-
-
-            main : I64
             main =
-                p1 = (\u -> u == 97)
+                satisfy : (U8 -> Str) -> Str
+                satisfy = \_ -> "foo"
 
-                satisfyA = satisfy p1
+                myEq : a, a -> Str
+                myEq = \_, _ -> "bar"
 
-                when satisfyA is
+                p1 : Num * -> Str
+                p1 = (\u -> myEq u 64)
+
+                when satisfy p1 is
+                    _ -> 32
+            "#
+        ),
+        32,
+        i64
+    );
+}
+
+#[test]
+fn int_literal_not_specialized_no_annotation() {
+    // see https://github.com/rtfeldman/roc/issues/1600
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            main =
+                satisfy : (U8 -> Str) -> Str
+                satisfy = \_ -> "foo"
+
+                myEq : a, a -> Str
+                myEq = \_, _ -> "bar"
+
+                p1 = (\u -> myEq u 64)
+
+                when satisfy p1 is
                     _ -> 32
             "#
         ),
@@ -2730,6 +2754,24 @@ fn unresolved_tvar_when_capture_is_unused() {
                     when oneOfResult is
                         _ -> 32
 
+            "#
+        ),
+        32,
+        i64
+    );
+}
+
+#[test]
+#[should_panic(expected = "Roc failed with message: ")]
+fn value_not_exposed_hits_panic() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [ main ] to "./platform"
+
+                main : I64
+                main =
+                    Str.toInt 32
             "#
         ),
         32,
