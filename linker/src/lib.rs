@@ -158,8 +158,8 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         }
     };
     if verbose {
-        println!("PLT Address: {:x}", plt_address);
-        println!("PLT File Offset: {:x}", plt_offset);
+        println!("PLT Address: 0x{:x}", plt_address);
+        println!("PLT File Offset: 0x{:x}", plt_offset);
     }
 
     let plt_relocs: Vec<Relocation> = (match exec_obj.dynamic_relocations() {
@@ -300,7 +300,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
 
                         if verbose {
                             println!(
-                                "Found branch from {:x} to {:x}({})",
+                                "Found branch from 0x{:x} to 0x{:x}({})",
                                 inst.ip(),
                                 target,
                                 func_name
@@ -325,7 +325,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
                         let offset = inst.next_ip() - op_size as u64 - sec.address() + file_offset;
                         if verbose {
                             println!(
-                                "\tNeed to surgically replace {} bytes at file offset {:x}",
+                                "\tNeed to surgically replace {} bytes at file offset 0x{:x}",
                                 op_size, offset,
                             );
                             println!(
@@ -585,10 +585,10 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         println!();
         println!("Is Elf64: {}", elf64);
         println!("Is Little Endian: {}", litte_endian);
-        println!("PH Offset: {:x}", ph_offset);
+        println!("PH Offset: 0x{:x}", ph_offset);
         println!("PH Entry Size: {}", ph_ent_size);
         println!("PH Entry Count: {}", ph_num);
-        println!("SH Offset: {:x}", sh_offset);
+        println!("SH Offset: 0x{:x}", sh_offset);
         println!("SH Entry Size: {}", sh_ent_size);
         println!("SH Entry Count: {}", sh_num);
     }
@@ -624,7 +624,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     out_mmap[..ph_end].copy_from_slice(&exec_data[..ph_end]);
     let file_header = load_struct_inplace_mut::<elf::FileHeader64<LittleEndian>>(&mut out_mmap, 0);
     file_header.e_phnum = endian::U16::new(LittleEndian, ph_num + 1);
-    file_header.e_shoff = endian::U64::new(LittleEndian, sh_offset + added_data);
+    // file_header.e_shoff = endian::U64::new(LittleEndian, sh_offset + added_data);
     // file_header.e_shnum = endian::U16::new(LittleEndian, 0);
     // file_header.e_shstrndx = endian::U16::new(LittleEndian, elf::SHN_UNDEF);
 
@@ -636,75 +636,107 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
 
     // Steal the extra bytes we need from the first loaded sections.
     // Generally this section has empty space due to alignment.
-    // TODO: I am not sure if these can be out of order. If they can be, we need to change this.
-    let mut first_load_start = None;
-    let mut first_load_end = None;
-    for mut ph in program_headers {
+    let mut first_load_found = false;
+    let mut shift_start = 0;
+    let mut shift_end = 0;
+    let mut first_load_aligned_size = 0;
+    for mut ph in program_headers.iter_mut() {
         let p_type = ph.p_type.get(NativeEndian);
-        let p_vaddr = ph.p_vaddr.get(NativeEndian);
-        if first_load_end.is_none() && p_type == elf::PT_LOAD && ph.p_offset.get(NativeEndian) == 0
-        {
-            let p_filesz = ph.p_filesz.get(NativeEndian);
-            let p_align = ph.p_align.get(NativeEndian);
-            let p_memsz = ph.p_memsz.get(NativeEndian);
+        let p_align = ph.p_align.get(NativeEndian);
+        let p_filesz = ph.p_filesz.get(NativeEndian);
+        let p_memsz = ph.p_memsz.get(NativeEndian);
+        if p_type == elf::PT_LOAD && ph.p_offset.get(NativeEndian) == 0 {
             if p_filesz / p_align != (p_filesz + added_data) / p_align {
                 println!("Not enough extra space in the executable for alignment");
                 println!("This makes linking a lot harder and is not supported yet");
                 return Ok(-1);
             }
             ph.p_filesz = endian::U64::new(LittleEndian, p_filesz + added_data);
-            ph.p_memsz = endian::U64::new(LittleEndian, p_memsz + added_data);
-            first_load_start = Some(p_vaddr + ph_end as u64);
-            first_load_end = Some(p_vaddr + p_memsz);
-        } else if p_type == elf::PT_NOTE {
-            ph.p_type = endian::U32::new(LittleEndian, 0);
-            ph.p_flags = endian::U32::new(LittleEndian, 0);
-            ph.p_offset = endian::U64::new(LittleEndian, 0);
-            ph.p_vaddr = endian::U64::new(LittleEndian, 0);
-            ph.p_paddr = endian::U64::new(LittleEndian, 0);
-            ph.p_filesz = endian::U64::new(LittleEndian, 0);
-            ph.p_memsz = endian::U64::new(LittleEndian, 0);
-            ph.p_align = endian::U64::new(LittleEndian, 0);
+            let new_memsz = p_memsz + added_data;
+            ph.p_memsz = endian::U64::new(LittleEndian, new_memsz);
+            let p_vaddr = ph.p_vaddr.get(NativeEndian);
+
+            first_load_found = true;
+            shift_start = p_vaddr + ph_end as u64;
+            let align_remainder = new_memsz % p_align;
+            first_load_aligned_size = if align_remainder == 0 {
+                new_memsz
+            } else {
+                new_memsz + (p_align - align_remainder)
+            };
+            shift_end = p_vaddr + first_load_aligned_size;
+            break;
         } else if p_type == elf::PT_PHDR {
-            ph.p_filesz =
-                endian::U64::new(LittleEndian, ph.p_filesz.get(NativeEndian) + added_data);
-            ph.p_memsz = endian::U64::new(LittleEndian, ph.p_memsz.get(NativeEndian) + added_data);
-        } else if first_load_end.is_none() {
-            ph.p_offset =
-                endian::U64::new(LittleEndian, ph.p_offset.get(NativeEndian) + added_data);
-            ph.p_vaddr = endian::U64::new(LittleEndian, p_vaddr + added_data);
-            ph.p_paddr = endian::U64::new(LittleEndian, ph.p_paddr.get(NativeEndian) + added_data);
-        } else if first_load_start.unwrap() <= p_vaddr && p_vaddr <= first_load_end.unwrap() {
-            ph.p_vaddr = endian::U64::new(LittleEndian, p_vaddr + added_data);
-            ph.p_paddr = endian::U64::new(LittleEndian, ph.p_paddr.get(NativeEndian) + added_data);
-        } else if p_type != elf::PT_GNU_STACK && p_type != elf::PT_NULL {
-            ph.p_offset =
-                endian::U64::new(LittleEndian, ph.p_offset.get(NativeEndian) + added_data);
+            ph.p_filesz = endian::U64::new(LittleEndian, p_filesz + added_data);
+            ph.p_memsz = endian::U64::new(LittleEndian, p_memsz + added_data);
         }
     }
-    if first_load_start.is_none() || first_load_end.is_none() {
-        println!("Executable does not load any data");
+    if !first_load_found {
+        println!("Executable does not load any data at 0x00000000");
         println!("Probably input the wrong file as the executable");
         return Ok(-1);
     }
     if verbose {
         println!(
-            "First Byte loaded after Program Headers: {:x}",
-            first_load_start.unwrap()
+            "First Byte loaded after Program Headers: 0x{:x}",
+            shift_start
         );
-        println!(
-            "Last Byte loaded in first load: {:x}",
-            first_load_end.unwrap()
-        );
+        println!("Last Byte loaded in first load: 0x{:x}", shift_end);
+        println!("Aligned first load size: 0x{:x}", first_load_aligned_size);
+    }
+
+    for mut ph in program_headers {
+        let p_vaddr = ph.p_vaddr.get(NativeEndian);
+        if shift_start <= p_vaddr && p_vaddr < shift_end {
+            let p_align = ph.p_align.get(NativeEndian);
+            let p_offset = ph.p_offset.get(NativeEndian);
+            let new_offset = p_offset + added_data;
+            let new_vaddr = p_vaddr + added_data;
+            if new_offset % p_align != 0 || new_vaddr % p_align != 0 {
+                println!("Ran into alignment issues when moving segments");
+                return Ok(-1);
+            }
+            ph.p_offset = endian::U64::new(LittleEndian, p_offset + added_data);
+            ph.p_vaddr = endian::U64::new(LittleEndian, p_vaddr + added_data);
+            ph.p_paddr = endian::U64::new(LittleEndian, ph.p_paddr.get(NativeEndian) + added_data);
+        }
+    }
+
+    // Ensure no section overlaps with the hopefully blank data we are going to delete.
+    let exec_section_headers = load_structs_inplace::<elf::SectionHeader64<LittleEndian>>(
+        &exec_mmap,
+        sh_offset as usize,
+        sh_num as usize,
+    );
+    for sh in exec_section_headers {
+        let offset = sh.sh_offset.get(NativeEndian);
+        let addr = sh.sh_addr.get(NativeEndian);
+        let size = sh.sh_size.get(NativeEndian);
+        if offset <= first_load_aligned_size - added_data
+            && offset + size >= first_load_aligned_size - added_data
+        {
+            println!("A section overlaps with some alignment data we need to delete");
+            return Ok(-1);
+        }
     }
 
     // Copy to program header, but add an extra item for the new data at the end of the file.
-    out_mmap[ph_end + added_data as usize..sh_offset as usize + added_data as usize]
-        .copy_from_slice(&exec_data[ph_end..sh_offset as usize]);
+    // Also delete the extra padding to keep things align.
+    out_mmap[ph_end + added_data as usize..first_load_aligned_size as usize].copy_from_slice(
+        &exec_data[ph_end..first_load_aligned_size as usize - added_data as usize],
+    );
+    out_mmap[first_load_aligned_size as usize..sh_offset as usize]
+        .copy_from_slice(&exec_data[first_load_aligned_size as usize..sh_offset as usize]);
 
     // Update dynamic table entries for shift of extra ProgramHeader.
     let dyn_offset = match md.dynamic_section_offset {
-        Some(offset) => offset as usize,
+        Some(offset) => {
+            if ph_end as u64 <= offset && offset < first_load_aligned_size {
+                offset + added_data
+            } else {
+                offset
+            }
+        }
         None => {
             println!("Metadata missing dynamic section offset");
             return Ok(-1);
@@ -727,7 +759,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
 
     let dyns = load_structs_inplace_mut::<elf::Dyn64<LittleEndian>>(
         &mut out_mmap,
-        dyn_offset + added_data as usize,
+        dyn_offset as usize,
         dyn_lib_count,
     );
     for mut d in dyns {
@@ -763,7 +795,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
             | elf::DT_VERDEF
             | elf::DT_VERNEED => {
                 let d_addr = d.d_val.get(NativeEndian);
-                if first_load_start.unwrap() <= d_addr && d_addr <= first_load_end.unwrap() {
+                if shift_start <= d_addr && d_addr < shift_end {
                     d.d_val = endian::U64::new(LittleEndian, d_addr + added_data);
                 }
             }
@@ -783,7 +815,13 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
 
     // Update symbol table entries for shift of extra ProgramHeader.
     let symtab_offset = match md.symbol_table_section_offset {
-        Some(offset) => offset as usize,
+        Some(offset) => {
+            if ph_end as u64 <= offset && offset < first_load_aligned_size {
+                offset + added_data
+            } else {
+                offset
+            }
+        }
         None => {
             println!("Metadata missing symbol table section offset");
             return Ok(-1);
@@ -799,13 +837,13 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
 
     let symbols = load_structs_inplace_mut::<elf::Sym64<LittleEndian>>(
         &mut out_mmap,
-        symtab_offset + added_data as usize,
+        symtab_offset as usize,
         symtab_size / mem::size_of::<elf::Sym64<LittleEndian>>(),
     );
 
     for sym in symbols {
         let addr = sym.st_value.get(NativeEndian);
-        if first_load_start.unwrap() <= addr && addr <= first_load_end.unwrap() {
+        if shift_start <= addr && addr < shift_end {
             sym.st_value = endian::U64::new(LittleEndian, addr + added_data);
         }
     }
@@ -830,21 +868,20 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     // }];
 
     let sh_size = sh_ent_size as usize * sh_num as usize;
-    out_mmap[offset + added_data as usize..offset + added_data as usize + sh_size]
-        .copy_from_slice(&exec_data[offset..offset + sh_size]);
+    out_mmap[offset..offset + sh_size].copy_from_slice(&exec_data[offset..offset + sh_size]);
 
     let section_headers = load_structs_inplace_mut::<elf::SectionHeader64<LittleEndian>>(
         &mut out_mmap,
-        offset + added_data as usize,
+        offset as usize,
         sh_num as usize,
     );
     for mut sh in section_headers {
         let offset = sh.sh_offset.get(NativeEndian);
-        if offset >= ph_end as u64 {
+        let addr = sh.sh_addr.get(NativeEndian);
+        if ph_end as u64 <= offset && offset < first_load_aligned_size {
             sh.sh_offset = endian::U64::new(LittleEndian, offset + added_data);
         }
-        let addr = sh.sh_addr.get(NativeEndian);
-        if first_load_start.unwrap() <= addr && addr <= first_load_end.unwrap() {
+        if shift_start <= addr && addr < shift_end {
             sh.sh_addr = endian::U64::new(LittleEndian, addr + added_data);
         }
     }
