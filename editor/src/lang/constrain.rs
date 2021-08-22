@@ -908,7 +908,7 @@ pub fn constrain_expr<'a>(
                         region,
                     ));
 
-                    let thing = BumpVec::with_capacity_in(1, arena);
+                    let mut thing = BumpVec::with_capacity_in(1, arena);
 
                     thing.push(Eq(
                         expr_type.shallow_clone(),
