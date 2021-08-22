@@ -6,7 +6,7 @@ use object::{elf, endian};
 use object::{
     Architecture, BinaryFormat, CompressedFileRange, CompressionFormat, LittleEndian, NativeEndian,
     Object, ObjectSection, ObjectSymbol, Relocation, RelocationKind, RelocationTarget, Section,
-    Symbol,
+    Symbol, SymbolSection,
 };
 use roc_collections::all::MutMap;
 use std::convert::TryFrom;
@@ -597,7 +597,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     let app_parsing_start = SystemTime::now();
     let app_file = fs::File::open(&matches.value_of(APP).unwrap())?;
     let app_mmap = unsafe { Mmap::map(&app_file)? };
-    let app_data = &*exec_mmap;
+    let app_data = &*app_mmap;
     let app_obj = match object::File::parse(app_data) {
         Ok(obj) => obj,
         Err(err) => {
@@ -608,7 +608,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     let app_parsing_duration = app_parsing_start.elapsed().unwrap();
 
     let out_gen_start = SystemTime::now();
-    let max_out_len = exec_data.len() + app_data.len();
+    let max_out_len = exec_data.len() + app_data.len() + 4096;
     let out_file = fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -624,9 +624,6 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     out_mmap[..ph_end].copy_from_slice(&exec_data[..ph_end]);
     let file_header = load_struct_inplace_mut::<elf::FileHeader64<LittleEndian>>(&mut out_mmap, 0);
     file_header.e_phnum = endian::U16::new(LittleEndian, ph_num + 1);
-    // file_header.e_shoff = endian::U64::new(LittleEndian, sh_offset + added_data);
-    // file_header.e_shnum = endian::U16::new(LittleEndian, 0);
-    // file_header.e_shstrndx = endian::U16::new(LittleEndian, elf::SHN_UNDEF);
 
     let program_headers = load_structs_inplace_mut::<elf::ProgramHeader64<LittleEndian>>(
         &mut out_mmap,
@@ -640,6 +637,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     let mut shift_start = 0;
     let mut shift_end = 0;
     let mut first_load_aligned_size = 0;
+    let mut load_align_constraint = 0;
     for mut ph in program_headers.iter_mut() {
         let p_type = ph.p_type.get(NativeEndian);
         let p_align = ph.p_align.get(NativeEndian);
@@ -665,6 +663,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                 new_memsz + (p_align - align_remainder)
             };
             shift_end = p_vaddr + first_load_aligned_size;
+            load_align_constraint = p_align;
             break;
         } else if p_type == elf::PT_PHDR {
             ph.p_filesz = endian::U64::new(LittleEndian, p_filesz + added_data);
@@ -710,7 +709,6 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     );
     for sh in exec_section_headers {
         let offset = sh.sh_offset.get(NativeEndian);
-        let addr = sh.sh_addr.get(NativeEndian);
         let size = sh.sh_size.get(NativeEndian);
         if offset <= first_load_aligned_size - added_data
             && offset + size >= first_load_aligned_size - added_data
@@ -807,8 +805,8 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     // let out_ptr = out_mmap.as_mut_ptr();
     // unsafe {
     //     std::ptr::copy(
-    //         out_ptr.offset((dyn_offset + added_data as usize + 16 * (shared_index + 1)) as isize),
-    //         out_ptr.offset((dyn_offset + added_data as usize + 16 * shared_index) as isize),
+    //         out_ptr.offset((dyn_offset as usize + 16 * (shared_index + 1)) as isize),
+    //         out_ptr.offset((dyn_offset as usize + 16 * shared_index) as isize),
     //         16 * (dyn_lib_count - shared_index),
     //     );
     // }
@@ -848,34 +846,107 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         }
     }
 
-    let offset = sh_offset as usize;
-    // Copy sections and resolve their relocations.
-    // let text_sections: Vec<Section> = app_obj
-    //     .sections()
-    //     .filter(|sec| {
-    //         let name = sec.name();
-    //         name.is_ok() && name.unwrap().starts_with(".text")
-    //     })
-    //     .collect();
-    // if text_sections.is_empty() {
-    //     println!("No text sections found. This application has no code.");
-    //     return Ok(-1);
+    // Find current locations for symbols.
+    // let sym_map: MutMap<String, ()> = MutMap::default();
+    // for sym in app_obj.symbols() {
+    //     println!("{:x?}", sym);
     // }
 
-    // let mut new_headers: Vec<SectionHeader64<LittleEndian>> = vec![SectionHeader64::<LittleEndian> {
-    //     sh_name: endian::U32::new(LittleEndian, 1);
-    //     sh_type: endian::U32::new(LittleEndian, elf::SHT_PROGBITS);
-    // }];
+    // Align offset for new text/data section.
+    let mut offset = sh_offset as usize;
+    let remainder = offset % load_align_constraint as usize;
+    offset += load_align_constraint as usize - remainder;
+    let new_segment_offset = offset;
+    let new_data_section_offset = offset;
 
+    // Copy sections and resolve their symbols/relocations.
+    let symbols = app_obj.symbols().collect::<Vec<Symbol>>();
+
+    let rodata_sections: Vec<Section> = app_obj
+        .sections()
+        .filter(|sec| {
+            let name = sec.name();
+            name.is_ok()
+                && (name.unwrap().starts_with(".data") || name.unwrap().starts_with(".rodata"))
+        })
+        .collect();
+
+    let mut rodata_address_map: MutMap<usize, u64> = MutMap::default();
+    for sec in rodata_sections {
+        let data = match sec.uncompressed_data() {
+            Ok(data) => data,
+            Err(err) => {
+                println!("Failed to load data section, {:x?}: {}", sec, err);
+                return Ok(-1);
+            }
+        };
+        let size = data.len();
+        out_mmap[offset..offset + size].copy_from_slice(&data);
+        for (i, sym) in symbols.iter().enumerate() {
+            if sym.section() == SymbolSection::Section(sec.index()) {
+                rodata_address_map.insert(i, offset as u64 + sym.address());
+            }
+        }
+        offset += size;
+    }
+
+    if verbose {
+        println!("Data Relocation Addresses: {:x?}", rodata_address_map);
+    }
+
+    let text_sections: Vec<Section> = app_obj
+        .sections()
+        .filter(|sec| {
+            let name = sec.name();
+            name.is_ok() && name.unwrap().starts_with(".text")
+        })
+        .collect();
+    if text_sections.is_empty() {
+        println!("No text sections found. This application has no code.");
+        return Ok(-1);
+    }
+    let new_text_section_offset = offset;
+    for sec in text_sections {
+        let data = match sec.uncompressed_data() {
+            Ok(data) => data,
+            Err(err) => {
+                println!("Failed to load text section, {:x?}: {}", sec, err);
+                return Ok(-1);
+            }
+        };
+        let size = data.len();
+        out_mmap[offset..offset + size].copy_from_slice(&data);
+        // Deal with definitions and relocations for this section.
+        println!();
+        for rel in sec.relocations() {
+            println!("{:x?}", rel);
+            match rel.1.target() {
+                RelocationTarget::Symbol(index) => {
+                    println!("\t{:x?}", app_obj.symbol_by_index(index));
+                }
+                _ => {
+                    println!("Relocation not yet support: {:x?}", rel);
+                }
+            }
+        }
+        offset += size;
+    }
+
+    let new_sh_offset = offset;
     let sh_size = sh_ent_size as usize * sh_num as usize;
-    out_mmap[offset..offset + sh_size].copy_from_slice(&exec_data[offset..offset + sh_size]);
+    out_mmap[offset..offset + sh_size]
+        .copy_from_slice(&exec_data[sh_offset as usize..sh_offset as usize + sh_size]);
+    offset += sh_size;
 
+    // Add 2 new sections.
+    let new_section_count = 2;
+    offset += new_section_count * sh_ent_size as usize;
     let section_headers = load_structs_inplace_mut::<elf::SectionHeader64<LittleEndian>>(
         &mut out_mmap,
-        offset as usize,
-        sh_num as usize,
+        new_sh_offset as usize,
+        sh_num as usize + new_section_count,
     );
-    for mut sh in section_headers {
+    for mut sh in section_headers.iter_mut() {
         let offset = sh.sh_offset.get(NativeEndian);
         let addr = sh.sh_addr.get(NativeEndian);
         if ph_end as u64 <= offset && offset < first_load_aligned_size {
@@ -885,6 +956,68 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
             sh.sh_addr = endian::U64::new(LittleEndian, addr + added_data);
         }
     }
+
+    let last_vaddr = section_headers
+        .iter()
+        .map(|sh| sh.sh_addr.get(NativeEndian) + sh.sh_size.get(NativeEndian))
+        .max()
+        .unwrap();
+    let remainder = last_vaddr % load_align_constraint;
+    let new_segment_vaddr = last_vaddr + load_align_constraint - remainder;
+    let new_data_section_vaddr = new_segment_vaddr;
+    let new_data_section_size = new_text_section_offset - new_data_section_offset;
+    let new_text_section_vaddr = new_data_section_vaddr + new_data_section_size as u64;
+
+    let new_data_section = &mut section_headers[section_headers.len() - 2];
+    new_data_section.sh_name = endian::U32::new(LittleEndian, 0);
+    new_data_section.sh_type = endian::U32::new(LittleEndian, elf::SHT_PROGBITS);
+    new_data_section.sh_flags = endian::U64::new(LittleEndian, (elf::SHF_ALLOC) as u64);
+    new_data_section.sh_addr = endian::U64::new(LittleEndian, new_data_section_vaddr);
+    new_data_section.sh_offset = endian::U64::new(LittleEndian, new_data_section_offset as u64);
+    new_data_section.sh_size = endian::U64::new(LittleEndian, new_data_section_size as u64);
+    new_data_section.sh_link = endian::U32::new(LittleEndian, 0);
+    new_data_section.sh_info = endian::U32::new(LittleEndian, 0);
+    new_data_section.sh_addralign = endian::U64::new(LittleEndian, 16);
+    new_data_section.sh_entsize = endian::U64::new(LittleEndian, 0);
+
+    let new_text_section = &mut section_headers[section_headers.len() - 1];
+    new_text_section.sh_name = endian::U32::new(LittleEndian, 0);
+    new_text_section.sh_type = endian::U32::new(LittleEndian, elf::SHT_PROGBITS);
+    new_text_section.sh_flags =
+        endian::U64::new(LittleEndian, (elf::SHF_ALLOC | elf::SHF_EXECINSTR) as u64);
+    new_text_section.sh_addr = endian::U64::new(LittleEndian, new_text_section_vaddr);
+    new_text_section.sh_offset = endian::U64::new(LittleEndian, new_text_section_offset as u64);
+    new_text_section.sh_size = endian::U64::new(
+        LittleEndian,
+        new_sh_offset as u64 - new_text_section_offset as u64,
+    );
+    new_text_section.sh_link = endian::U32::new(LittleEndian, 0);
+    new_text_section.sh_info = endian::U32::new(LittleEndian, 0);
+    new_text_section.sh_addralign = endian::U64::new(LittleEndian, 16);
+    new_text_section.sh_entsize = endian::U64::new(LittleEndian, 0);
+
+    // Reload and update file header and size.
+    let file_header = load_struct_inplace_mut::<elf::FileHeader64<LittleEndian>>(&mut out_mmap, 0);
+    file_header.e_shoff = endian::U64::new(LittleEndian, new_sh_offset as u64);
+    file_header.e_shnum = endian::U16::new(LittleEndian, sh_num + new_section_count as u16);
+    out_file.set_len(offset as u64 + 1)?;
+
+    // Add new segment.
+    let program_headers = load_structs_inplace_mut::<elf::ProgramHeader64<LittleEndian>>(
+        &mut out_mmap,
+        ph_offset as usize,
+        ph_num as usize + 1,
+    );
+    let new_segment = program_headers.last_mut().unwrap();
+    new_segment.p_type = endian::U32::new(LittleEndian, elf::PT_LOAD);
+    new_segment.p_flags = endian::U32::new(LittleEndian, elf::PF_R | elf::PF_X);
+    new_segment.p_offset = endian::U64::new(LittleEndian, new_segment_offset as u64);
+    new_segment.p_vaddr = endian::U64::new(LittleEndian, new_segment_vaddr);
+    new_segment.p_paddr = endian::U64::new(LittleEndian, new_segment_vaddr);
+    let new_segment_size = (new_sh_offset - new_segment_offset) as u64;
+    new_segment.p_filesz = endian::U64::new(LittleEndian, new_segment_size);
+    new_segment.p_memsz = endian::U64::new(LittleEndian, new_segment_size);
+    new_segment.p_align = endian::U64::new(LittleEndian, load_align_constraint);
 
     let out_gen_duration = out_gen_start.elapsed().unwrap();
 
