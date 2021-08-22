@@ -38,16 +38,68 @@ any = \inp ->
    when List.first inp is 
      Ok u -> [Pair u (List.drop inp 1)]
      _ -> [ ]
-##
+
+
+
+## SATISFY  
+
+satisfy : (U8 -> Bool) -> Parser U8  
+satisfy = \predicate -> 
+    \input -> when List.first (any input) is
+        Ok (Pair u rest) ->  if predicate u then List.single (Pair u rest) else []
+        _ -> [ ]
+
+
+
+satisfyA = satisfy (\u -> u == 97)
+satisfyB = satisfy (\u -> u == 98)
+
+
+## AND_THEN, FIRST, SECOND 
+
+andThen : Parser a, (a -> Parser b) -> Parser b 
+andThen = \p, q ->
+            \input -> p input |> List.map (\(Pair a input2) -> (q a) input2) |> List.join
+
+
+# Run p, then q, returning output of q and ignoring that of p
+#
+second : Parser a, Parser b -> Parser b
+second = 
+  \p, q ->  Parser.andThen p (\_ -> q)
+
+# Run p, then q, returning output of p and ignoring that of q
+#
+first : Parser a, Parser b -> Parser a
+first = 
+  \p, q ->  Parser.andThen p (\out -> Parser.map q (\_ -> out))
+
+
+
+
+###############################################
 
 
 ## TESTS
 
 anyT = {name : "run \"abcd any => \"a\"", test: runU8 "abcd" any == "a" }
 
-dummy = {name: "1 + 1 == 2", test: 1 + 1 == 2}
+satisfyT = {name : "run \"abcd\" satisfy (\\u -> u == 97)) => \"a\"", test : runU8 "abcd" satisfyA == "a" }
 
-tests = [dummy, anyT]
+satisfyA = satisfy (\u -> u == 97)
+satisfyB = satisfy (\u -> u == 98)
+
+satisfyWhatCameBefore = \u2 -> satisfy (\u3 -> u3 == u2)
+
+testAndThen = { name: "andThen", test: runToString Utility.showU8 "aaxyz" (andThen any satisfyWhatCameBefore) == "a"}
+
+## PANIC
+secondT = {name : "Use 'second' to recognize \"a\" then \"b\" returning \"b\"", test : runU8 "abcd" (second  satisfyA satisfyB) == "b"}
+firstT = {name : "Use 'first' to recognize \"a\" then \"b\" returning \"a\"", test : runU8 "abcd" (first  satisfyA satisfyB) == "a"}
+
+
+
+tests = [ anyT, satisfyT, testAndThen]
 
 
 
