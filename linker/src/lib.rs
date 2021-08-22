@@ -31,6 +31,9 @@ pub const SHARED_LIB: &str = "SHARED_LIB";
 pub const APP: &str = "APP";
 pub const OUT: &str = "OUT";
 
+// TODO: Analyze if this offset is always correct.
+const PLT_ADDRESS_OFFSET: u64 = 0x10;
+
 fn report_timing(label: &str, duration: Duration) {
     &println!("\t{:9.3} ms   {}", duration.as_secs_f64() * 1000.0, label,);
 }
@@ -194,7 +197,8 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     for sym in app_syms.iter() {
         let name = sym.name().unwrap().to_string();
         md.app_functions.push(name.clone());
-        md.surgeries.insert(name, vec![]);
+        md.surgeries.insert(name.clone(), vec![]);
+        md.dynamic_symbol_indices.insert(name, sym.index().0 as u64);
     }
     if verbose {
         println!();
@@ -204,17 +208,17 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         }
     }
 
-    // TODO: Analyze if this offset is always correct.
-    const PLT_ADDRESS_OFFSET: u64 = 0x10;
-
     let mut app_func_addresses: MutMap<u64, &str> = MutMap::default();
     for (i, reloc) in plt_relocs.into_iter().enumerate() {
         for symbol in app_syms.iter() {
             if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
                 let func_address = (i as u64 + 1) * PLT_ADDRESS_OFFSET + plt_address;
+                let func_offset = (i as u64 + 1) * PLT_ADDRESS_OFFSET + plt_offset;
                 app_func_addresses.insert(func_address, symbol.name().unwrap());
-                md.plt_addresses
-                    .insert(symbol.name().unwrap().to_string(), func_address);
+                md.plt_addresses.insert(
+                    symbol.name().unwrap().to_string(),
+                    (func_offset, func_address),
+                );
                 break;
             }
         }
@@ -469,12 +473,13 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         println!("Shared lib not found as a dependency of the executable");
         return Ok(-1);
     }
+
     let scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed().unwrap();
 
     let symtab_sec = match exec_obj.section_by_name(".symtab") {
         Some(sec) => sec,
         None => {
-            println!("There must be a dynsym section in the executable");
+            println!("There must be a symtab section in the executable");
             return Ok(-1);
         }
     };
@@ -488,12 +493,35 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
             },
         ) => range.offset as usize,
         _ => {
-            println!("Surgical linking does not work with compressed dynsym section");
+            println!("Surgical linking does not work with compressed symtab section");
             return Ok(-1);
         }
     };
     md.symbol_table_section_offset = Some(symtab_offset as u64);
     md.symbol_table_size = Some(symtab_sec.size());
+
+    let dynsym_sec = match exec_obj.section_by_name(".dynsym") {
+        Some(sec) => sec,
+        None => {
+            println!("There must be a dynsym section in the executable");
+            return Ok(-1);
+        }
+    };
+    let dynsym_offset = match dynsym_sec.compressed_file_range() {
+        Ok(
+            range
+            @
+            CompressedFileRange {
+                format: CompressionFormat::None,
+                ..
+            },
+        ) => range.offset as usize,
+        _ => {
+            println!("Surgical linking does not work with compressed dynsym section");
+            return Ok(-1);
+        }
+    };
+    md.dynamic_symbol_table_section_offset = Some(dynsym_offset as u64);
 
     if verbose {
         println!();
@@ -802,14 +830,14 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     }
 
     // Delete shared library from the dynamic table.
-    // let out_ptr = out_mmap.as_mut_ptr();
-    // unsafe {
-    //     std::ptr::copy(
-    //         out_ptr.offset((dyn_offset as usize + 16 * (shared_index + 1)) as isize),
-    //         out_ptr.offset((dyn_offset as usize + 16 * shared_index) as isize),
-    //         16 * (dyn_lib_count - shared_index),
-    //     );
-    // }
+    let out_ptr = out_mmap.as_mut_ptr();
+    unsafe {
+        std::ptr::copy(
+            out_ptr.offset((dyn_offset as usize + 16 * (shared_index + 1)) as isize),
+            out_ptr.offset((dyn_offset as usize + 16 * shared_index) as isize),
+            16 * (dyn_lib_count - shared_index),
+        );
+    }
 
     // Update symbol table entries for shift of extra ProgramHeader.
     let symtab_offset = match md.symbol_table_section_offset {
@@ -846,12 +874,6 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         }
     }
 
-    // Find current locations for symbols.
-    // let sym_map: MutMap<String, ()> = MutMap::default();
-    // for sym in app_obj.symbols() {
-    //     println!("{:x?}", sym);
-    // }
-
     // Align offset for new text/data section.
     let mut offset = sh_offset as usize;
     let remainder = offset % load_align_constraint as usize;
@@ -871,7 +893,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         })
         .collect();
 
-    let mut rodata_address_map: MutMap<usize, u64> = MutMap::default();
+    let mut rodata_address_map: MutMap<usize, usize> = MutMap::default();
     for sec in rodata_sections {
         let data = match sec.uncompressed_data() {
             Ok(data) => data,
@@ -884,7 +906,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         out_mmap[offset..offset + size].copy_from_slice(&data);
         for (i, sym) in symbols.iter().enumerate() {
             if sym.section() == SymbolSection::Section(sec.index()) {
-                rodata_address_map.insert(i, offset as u64 + sym.address());
+                rodata_address_map.insert(i, offset + sym.address() as usize - new_segment_offset);
             }
         }
         offset += size;
@@ -906,6 +928,8 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         return Ok(-1);
     }
     let new_text_section_offset = offset;
+    let mut app_func_size_map: MutMap<String, u64> = MutMap::default();
+    let mut app_func_segment_offset_map: MutMap<String, usize> = MutMap::default();
     for sec in text_sections {
         let data = match sec.uncompressed_data() {
             Ok(data) => data,
@@ -918,18 +942,60 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         out_mmap[offset..offset + size].copy_from_slice(&data);
         // Deal with definitions and relocations for this section.
         println!();
+        let current_segment_offset = (offset - new_segment_offset) as i64;
         for rel in sec.relocations() {
-            println!("{:x?}", rel);
+            if verbose {
+                println!("Found Relocation: {:x?}", rel);
+            }
             match rel.1.target() {
                 RelocationTarget::Symbol(index) => {
-                    println!("\t{:x?}", app_obj.symbol_by_index(index));
+                    let target = match rodata_address_map.get(&index.0) {
+                        Some(x) => *x as i64,
+                        None => {
+                            println!("Undefined Symbol in relocation: {:x?}", rel);
+                            return Ok(-1);
+                        }
+                    } - (rel.0 as i64 + current_segment_offset)
+                        + rel.1.addend();
+                    match rel.1.size() {
+                        32 => {
+                            let data = (target as i32).to_le_bytes();
+                            let base = offset + rel.0 as usize;
+                            out_mmap[base..base + 4].copy_from_slice(&data);
+                        }
+                        x => {
+                            println!("Relocation size not yet supported: {}", x);
+                            return Ok(-1);
+                        }
+                    }
                 }
                 _ => {
                     println!("Relocation not yet support: {:x?}", rel);
+                    return Ok(-1);
+                }
+            }
+        }
+        println!();
+        for sym in symbols.iter() {
+            if sym.section() == SymbolSection::Section(sec.index()) {
+                let name = sym.name().unwrap_or_default().to_string();
+                if md.app_functions.contains(&name) {
+                    app_func_segment_offset_map.insert(
+                        name.clone(),
+                        offset + sym.address() as usize - new_segment_offset,
+                    );
+                    app_func_size_map.insert(name, sym.size());
                 }
             }
         }
         offset += size;
+    }
+
+    if verbose {
+        println!(
+            "Found App Function Symbols: {:x?}",
+            app_func_segment_offset_map
+        );
     }
 
     let new_sh_offset = offset;
@@ -980,7 +1046,8 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     new_data_section.sh_addralign = endian::U64::new(LittleEndian, 16);
     new_data_section.sh_entsize = endian::U64::new(LittleEndian, 0);
 
-    let new_text_section = &mut section_headers[section_headers.len() - 1];
+    let new_text_section_index = section_headers.len() - 1;
+    let new_text_section = &mut section_headers[new_text_section_index];
     new_text_section.sh_name = endian::U32::new(LittleEndian, 0);
     new_text_section.sh_type = endian::U32::new(LittleEndian, elf::SHT_PROGBITS);
     new_text_section.sh_flags =
@@ -1018,6 +1085,96 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     new_segment.p_filesz = endian::U64::new(LittleEndian, new_segment_size);
     new_segment.p_memsz = endian::U64::new(LittleEndian, new_segment_size);
     new_segment.p_align = endian::U64::new(LittleEndian, load_align_constraint);
+
+    // Update calls from platform and dynamic symbols.
+    let dynsym_offset = match md.dynamic_symbol_table_section_offset {
+        Some(offset) => {
+            if ph_end as u64 <= offset && offset < first_load_aligned_size {
+                offset + added_data
+            } else {
+                offset
+            }
+        }
+        None => {
+            println!("Metadata missing dynamic symbol table section offset");
+            return Ok(-1);
+        }
+    };
+
+    for func_name in md.app_functions {
+        let virt_offset = match app_func_segment_offset_map.get(&func_name) {
+            Some(offset) => new_segment_vaddr + *offset as u64,
+            None => {
+                println!("Function, {}, was not defined by the app", &func_name);
+                return Ok(-1);
+            }
+        };
+        if verbose {
+            println!(
+                "Updating calls to {} to the address: {:x}",
+                &func_name, virt_offset
+            );
+        }
+
+        for s in md.surgeries.get(&func_name).unwrap_or(&vec![]) {
+            if verbose {
+                println!("\tPerforming surgery: {:x?}", s);
+            }
+            match s.size {
+                4 => {
+                    let target = (virt_offset as i64 - s.virtual_offset as i64) as i32;
+                    if verbose {
+                        println!("\tTarget Jump: {:x}", target);
+                    }
+                    let data = target.to_le_bytes();
+                    out_mmap[s.file_offset as usize..s.file_offset as usize + 4]
+                        .copy_from_slice(&data);
+                }
+                x => {
+                    println!("Surgery size not yet supported: {}", x);
+                    return Ok(-1);
+                }
+            }
+        }
+
+        // Replace plt call code with just a jump.
+        // This is a backup incase we missed a call to the plt.
+        if let Some((plt_off, plt_vaddr)) = md.plt_addresses.get(&func_name) {
+            let plt_off = *plt_off as usize;
+            let plt_vaddr = *plt_vaddr;
+            println!("\tPLT: {:x}, {:x}", plt_off, plt_vaddr);
+            let jmp_inst_len = 5;
+            let target = (virt_offset as i64 - (plt_vaddr as i64 + jmp_inst_len as i64)) as i32;
+            if verbose {
+                println!("\tTarget Jump: {:x}", target);
+            }
+            let data = target.to_le_bytes();
+            out_mmap[plt_off] = 0xE9;
+            out_mmap[plt_off + 1..plt_off + jmp_inst_len].copy_from_slice(&data);
+            for i in jmp_inst_len..PLT_ADDRESS_OFFSET as usize {
+                out_mmap[plt_off + i] = 0x90;
+            }
+        }
+
+        if let Some(i) = md.dynamic_symbol_indices.get(&func_name) {
+            let sym = load_struct_inplace_mut::<elf::Sym64<LittleEndian>>(
+                &mut out_mmap,
+                dynsym_offset as usize + *i as usize * mem::size_of::<elf::Sym64<LittleEndian>>(),
+            );
+            sym.st_shndx = endian::U16::new(LittleEndian, new_text_section_index as u16);
+            sym.st_value = endian::U64::new(LittleEndian, virt_offset as u64);
+            sym.st_size = endian::U64::new(
+                LittleEndian,
+                match app_func_size_map.get(&func_name) {
+                    Some(size) => *size,
+                    None => {
+                        println!("Size missing for: {}", &func_name);
+                        return Ok(-1);
+                    }
+                },
+            );
+        }
+    }
 
     let out_gen_duration = out_gen_start.elapsed().unwrap();
 
