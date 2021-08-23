@@ -24,6 +24,7 @@ mod metadata;
 pub const CMD_PREPROCESS: &str = "preprocess";
 pub const CMD_SURGERY: &str = "surgery";
 pub const FLAG_VERBOSE: &str = "verbose";
+pub const FLAG_TIME: &str = "time";
 
 pub const EXEC: &str = "EXEC";
 pub const METADATA: &str = "METADATA";
@@ -73,6 +74,13 @@ pub fn build_app<'a>() -> App<'a> {
                         .short('v')
                         .help("Enable verbose printing")
                         .required(false),
+                )
+                .arg(
+                    Arg::with_name(FLAG_TIME)
+                        .long(FLAG_TIME)
+                        .short('t')
+                        .help("Print timing information")
+                        .required(false),
                 ),
         )
         .subcommand(
@@ -95,12 +103,20 @@ pub fn build_app<'a>() -> App<'a> {
                         .short('v')
                         .help("Enable verbose printing")
                         .required(false),
+                )
+                .arg(
+                    Arg::with_name(FLAG_TIME)
+                        .long(FLAG_TIME)
+                        .short('t')
+                        .help("Print timing information")
+                        .required(false),
                 ),
         )
 }
 
 pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     let verbose = matches.is_present(FLAG_VERBOSE);
+    let time = matches.is_present(FLAG_TIME);
 
     let total_start = SystemTime::now();
     let shared_lib_processing_start = SystemTime::now();
@@ -857,7 +873,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
 
     let total_duration = total_start.elapsed().unwrap();
 
-    if verbose {
+    if verbose || time {
         println!();
         println!("Timings");
         report_timing("Shared Library Processing", shared_lib_processing_duration);
@@ -891,6 +907,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
 
 pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     let verbose = matches.is_present(FLAG_VERBOSE);
+    let time = matches.is_present(FLAG_TIME);
 
     let total_start = SystemTime::now();
     let loading_metadata_start = SystemTime::now();
@@ -1120,12 +1137,14 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                             RelocationKind::GotRelative => {
                                 // If we see got relative store the address directly after this section.
                                 // GOT requires indirection if we don't modify the code.
-                                println!("GOT hacking");
+                                if verbose {
+                                    println!("GOT hacking this may not work right");
+                                }
                                 let got_val = target_offset as u64 + new_segment_vaddr;
                                 let target_offset = (got_offset - new_segment_offset) as i64;
                                 let data = got_val.to_le_bytes();
                                 exec_mmap[got_offset..got_offset + 8].copy_from_slice(&data);
-                                got_offset += 8;
+                                got_offset = aligned_offset(got_offset + 8);
                                 target_offset - (rel.0 as i64 + current_section_offset)
                                     + rel.1.addend()
                             }
@@ -1179,8 +1198,6 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
 
     offset = aligned_offset(offset);
     let new_sh_offset = offset;
-    println!("Offset: {:x}", offset);
-    println!("Size: {}", sh_size);
     exec_mmap[offset..offset + sh_size].copy_from_slice(&sh_tab);
     offset += sh_size;
 
@@ -1355,7 +1372,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     exec_file.set_len(offset as u64 + 1)?;
     let total_duration = total_start.elapsed().unwrap();
 
-    if verbose {
+    if verbose || time {
         println!();
         println!("Timings");
         report_timing("Loading Metadata", loading_metadata_duration);
