@@ -816,8 +816,8 @@ pub fn constrain_expr<'a>(
             body_var,
         } => {
             let function_def = env.pool.get(*def_id);
-            let body = env.pool.get(*body_id);
 
+            let body = env.pool.get(*body_id);
             let body_con = constrain_expr(arena, env, body, expected.shallow_clone(), region);
 
             match function_def {
@@ -828,138 +828,55 @@ pub fn constrain_expr<'a>(
                     body: expr_id,
                     name,
                 } => {
-                    let mut and_constraints = BumpVec::with_capacity_in(2, arena);
+                    let expr_var = *return_var;
+                    let expr_type = Type2::Variable(expr_var);
 
-                    let mut flex_vars = BumpVec::with_capacity_in(1, arena);
-
-                    flex_vars.push(*body_var);
-
-                    let mut state = PatternState2 {
+                    // confusingly, this is the `foo` part in `foo = \...`
+                    let mut def_pattern_state = PatternState2 {
                         headers: BumpMap::new_in(arena),
-                        vars: BumpVec::with_capacity_in(1, arena),
-                        constraints: BumpVec::with_capacity_in(1, arena),
+                        vars: BumpVec::new_in(arena),
+                        constraints: BumpVec::new_in(arena),
                     };
 
-                    let arg_types = PoolVec::with_capacity(arguments.len() as u32, env.pool);
+                    // CHEATZ
+                    let closure_type = Type2::Variable(Variable::EMPTY_TAG_UNION);
 
-                    for (node_id, arg_type_id) in
-                        arguments.iter_node_ids().zip(arg_types.iter_node_ids())
-                    {
-                        let (pattern_id, pattern_var) = env.pool.get(node_id);
-
-                        let pattern = env.pool.get(*pattern_id);
-
-                        let pattern_type = Type2::Variable(*pattern_var);
-
-                        let pattern_expected =
-                            PExpected::NoExpectation(pattern_type.shallow_clone());
-
-                        constrain_pattern(
-                            arena,
-                            env,
-                            pattern,
-                            region,
-                            pattern_expected,
-                            &mut state,
-                        );
-
-                        state.vars.push(*pattern_var);
-
-                        env.pool[arg_type_id] = pattern_type;
-                    }
-
-                    let def_expr = env.pool.get(*expr_id);
-
-                    let expr_type = Type2::Variable(*return_var);
-
-                    let mut fn_and_constraints = BumpVec::with_capacity_in(1, arena);
-
-                    fn_and_constraints.push(Let(arena.alloc(LetConstraint {
-                        rigid_vars: BumpVec::new_in(arena),
-                        flex_vars: BumpVec::new_in(arena),
-                        def_types: state.headers,
-                        defs_constraint: And(state.constraints),
-                        ret_constraint: constrain_expr(
-                            arena,
-                            env,
-                            def_expr,
-                            Expected::NoExpectation(expr_type.shallow_clone()),
-                            region,
-                        ),
-                    })));
-
-                    let function_type = Type2::Function(
-                        arg_types,
-                        env.pool.add(Type2::Variable(*body_var)),
-                        env.pool.add(expr_type.shallow_clone()),
+                    let (_vars, pattern_state, function_type) = constrain_untyped_args(
+                        arena,
+                        env,
+                        arguments,
+                        closure_type,
+                        expr_type.shallow_clone(),
                     );
 
-                    fn_and_constraints.push(Eq(
-                        function_type.shallow_clone(),
+                    def_pattern_state.headers.insert(*name, function_type);
+                    def_pattern_state.vars.push(expr_var);
+
+                    let function_body = env.pool.get(*expr_id);
+
+                    let expr_con = constrain_expr(
+                        arena,
+                        env,
+                        function_body,
                         Expected::NoExpectation(expr_type.shallow_clone()),
-                        Category::Lambda,
                         region,
-                    ));
+                    );
 
-                    fn_and_constraints.push(Eq(
-                        expr_type.shallow_clone(),
-                        Expected::NoExpectation(function_type),
-                        Category::Storage(std::file!(), std::line!()),
-                        region,
-                    ));
+                    let new_rigids = BumpVec::new_in(arena);
 
-                    let mut thing = BumpVec::with_capacity_in(1, arena);
-
-                    thing.push(Eq(
-                        expr_type.shallow_clone(),
-                        Expected::NoExpectation(expr_type.shallow_clone()),
-                        Category::ClosureSize,
-                        region,
-                    ));
-
-                    fn_and_constraints.push(And(thing));
-
-                    let fn_constraint = Let(arena.alloc(LetConstraint {
-                        rigid_vars: BumpVec::new_in(arena),
-                        flex_vars: state.vars,
-                        def_types: BumpMap::new_in(arena),
-                        defs_constraint: And(fn_and_constraints),
-                        ret_constraint: True,
-                    }));
-
-                    let mut def_types = BumpMap::with_capacity_in(1, arena);
-
-                    def_types.insert(*name, expr_type);
-
-                    let mut def_flex_vars = BumpVec::with_capacity_in(1, arena);
-
-                    def_flex_vars.push(*return_var);
-
-                    let constrained_def = Let(arena.alloc(LetConstraint {
-                        rigid_vars: BumpVec::new_in(arena),
-                        flex_vars: def_flex_vars,
-                        def_types,
+                    Let(arena.alloc(LetConstraint {
+                        rigid_vars: new_rigids,
+                        flex_vars: def_pattern_state.vars,
+                        def_types: def_pattern_state.headers,
                         defs_constraint: Let(arena.alloc(LetConstraint {
                             rigid_vars: BumpVec::new_in(arena), // always empty
-                            flex_vars: BumpVec::new_in(arena), // empty, because our functions have no arguments
-                            def_types: BumpMap::new_in(arena), // empty, because our functions have no arguments!
-                            defs_constraint: And(BumpVec::new_in(arena)),
-                            ret_constraint: fn_constraint,
+                            flex_vars: pattern_state.vars, // empty, because our functions have no arguments
+                            def_types: pattern_state.headers, // empty, because our functions have no arguments!
+                            defs_constraint: And(pattern_state.constraints),
+                            ret_constraint: expr_con,
                         })),
                         ret_constraint: body_con,
-                    }));
-
-                    and_constraints.push(constrained_def);
-
-                    and_constraints.push(Eq(
-                        Type2::Variable(*body_var),
-                        expected,
-                        Category::Storage(std::file!(), std::line!()),
-                        // TODO: needs to be ret region
-                        region,
-                    ));
-
-                    dbg!(exists(arena, flex_vars, And(and_constraints)))
+                    }))
                 }
             }
         }
