@@ -694,10 +694,8 @@ impl<'a> Procs<'a> {
         layout: ProcLayout<'a>,
         layout_cache: &mut LayoutCache<'a>,
     ) {
-        let tuple = (name, layout);
-
         // If we've already specialized this one, no further work is needed.
-        if self.specialized.contains_key(&tuple) {
+        if self.specialized.contains_key(&(name, layout)) {
             return;
         }
 
@@ -707,15 +705,12 @@ impl<'a> Procs<'a> {
             return;
         }
 
-        // We're done with that tuple, so move layout back out to avoid cloning it.
-        let (name, layout) = tuple;
-
-        let pending = PendingSpecialization::from_var(env.arena, env.subs, fn_var);
-
         // This should only be called when pending_specializations is Some.
         // Otherwise, it's being called in the wrong pass!
         match &mut self.pending_specializations {
             Some(pending_specializations) => {
+                let pending = PendingSpecialization::from_var(env.arena, env.subs, fn_var);
+
                 // register the pending specialization, so this gets code genned later
                 if self.module_thunks.contains(&name) {
                     debug_assert!(layout.arguments.is_empty());
@@ -736,7 +731,26 @@ impl<'a> Procs<'a> {
                 // (We had a bug around this before this system existed!)
                 self.specialized.insert((symbol, layout), InProgress);
 
-                match specialize(env, self, symbol, layout_cache, pending, partial_proc) {
+                // See https://github.com/rtfeldman/roc/issues/1600
+                //
+                // The annotation variable is the generic/lifted/top-level annotation.
+                // It is connected to the variables of the function's body
+                //
+                // fn_var is the variable representing the type that we actually need for the
+                // function right here.
+                //
+                // For some reason, it matters that we unify with the original variable. Extracting
+                // that variable into a SolvedType and then introducing it again severs some
+                // connection that turns out to be important
+                match specialize_variable(
+                    env,
+                    self,
+                    symbol,
+                    layout_cache,
+                    fn_var,
+                    Default::default(),
+                    partial_proc,
+                ) {
                     Ok((proc, _ignore_layout)) => {
                         // the `layout` is a function pointer, while `_ignore_layout` can be a
                         // closure. We only specialize functions, storing this value with a closure
@@ -885,17 +899,6 @@ pub type Stores<'a> = &'a [(Symbol, Layout<'a>, Expr<'a>)];
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt<'a> {
     Let(Symbol, Expr<'a>, Layout<'a>, &'a Stmt<'a>),
-    Invoke {
-        symbol: Symbol,
-        call: Call<'a>,
-        layout: Layout<'a>,
-        pass: &'a Stmt<'a>,
-        fail: &'a Stmt<'a>,
-        exception_id: ExceptionId,
-    },
-    /// after cleanup, rethrow the exception object (stored in the exception id)
-    /// so it bubbles up
-    Resume(ExceptionId),
     Switch {
         /// This *must* stand for an integer, because Switch potentially compiles to a jump table.
         cond_symbol: Symbol,
@@ -1379,44 +1382,10 @@ impl<'a> Stmt<'a> {
                 .append(alloc.hardline())
                 .append(cont.to_doc(alloc)),
 
-            Invoke {
-                symbol,
-                call,
-                pass,
-                fail: Stmt::Resume(_),
-                ..
-            } => alloc
-                .text("let ")
-                .append(symbol_to_doc(alloc, *symbol))
-                .append(" = ")
-                .append(call.to_doc(alloc))
-                .append(";")
-                .append(alloc.hardline())
-                .append(pass.to_doc(alloc)),
-
-            Invoke {
-                symbol,
-                call,
-                pass,
-                fail,
-                ..
-            } => alloc
-                .text("invoke ")
-                .append(symbol_to_doc(alloc, *symbol))
-                .append(" = ")
-                .append(call.to_doc(alloc))
-                .append(" catch")
-                .append(alloc.hardline())
-                .append(fail.to_doc(alloc).indent(4))
-                .append(alloc.hardline())
-                .append(pass.to_doc(alloc)),
-
             Ret(symbol) => alloc
                 .text("ret ")
                 .append(symbol_to_doc(alloc, *symbol))
                 .append(";"),
-
-            Resume(_) => alloc.text("unreachable;"),
 
             Switch {
                 cond_symbol,
@@ -2493,13 +2462,57 @@ fn specialize_solved_type<'a>(
     host_exposed_aliases: BumpMap<Symbol, SolvedType>,
     partial_proc: PartialProc<'a>,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
+    specialize_variable_help(
+        env,
+        procs,
+        proc_name,
+        layout_cache,
+        |env| introduce_solved_type_to_subs(env, &solved_type),
+        host_exposed_aliases,
+        partial_proc,
+    )
+}
+
+fn specialize_variable<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    proc_name: Symbol,
+    layout_cache: &mut LayoutCache<'a>,
+    fn_var: Variable,
+    host_exposed_aliases: BumpMap<Symbol, SolvedType>,
+    partial_proc: PartialProc<'a>,
+) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
+    specialize_variable_help(
+        env,
+        procs,
+        proc_name,
+        layout_cache,
+        |_| fn_var,
+        host_exposed_aliases,
+        partial_proc,
+    )
+}
+
+fn specialize_variable_help<'a, F>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    proc_name: Symbol,
+    layout_cache: &mut LayoutCache<'a>,
+    fn_var_thunk: F,
+    host_exposed_aliases: BumpMap<Symbol, SolvedType>,
+    partial_proc: PartialProc<'a>,
+) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>>
+where
+    F: FnOnce(&mut Env<'a, '_>) -> Variable,
+{
     // add the specializations that other modules require of us
     use roc_solve::solve::instantiate_rigids;
 
     let snapshot = env.subs.snapshot();
     let cache_snapshot = layout_cache.snapshot();
 
-    let fn_var = introduce_solved_type_to_subs(env, &solved_type);
+    // important: evaluate after the snapshot has been created!
+    let fn_var = fn_var_thunk(env);
 
     // for debugging only
     let raw = layout_cache
@@ -2768,32 +2781,36 @@ pub fn with_hole<'a>(
             hole,
         ),
 
-        Num(var, num) => match num_argument_to_int_or_float(env.subs, env.ptr_bytes, var, false) {
-            IntOrFloat::SignedIntType(precision) => Stmt::Let(
-                assigned,
-                Expr::Literal(Literal::Int(num.into())),
-                Layout::Builtin(int_precision_to_builtin(precision)),
-                hole,
-            ),
-            IntOrFloat::UnsignedIntType(precision) => Stmt::Let(
-                assigned,
-                Expr::Literal(Literal::Int(num.into())),
-                Layout::Builtin(int_precision_to_builtin(precision)),
-                hole,
-            ),
-            IntOrFloat::BinaryFloatType(precision) => Stmt::Let(
-                assigned,
-                Expr::Literal(Literal::Float(num as f64)),
-                Layout::Builtin(float_precision_to_builtin(precision)),
-                hole,
-            ),
-            IntOrFloat::DecimalFloatType => Stmt::Let(
-                assigned,
-                Expr::Literal(Literal::Float(num as f64)),
-                Layout::Builtin(Builtin::Decimal),
-                hole,
-            ),
-        },
+        Num(var, num) => {
+            // first figure out what kind of number this is
+
+            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, var, false) {
+                IntOrFloat::SignedIntType(precision) => Stmt::Let(
+                    assigned,
+                    Expr::Literal(Literal::Int(num.into())),
+                    Layout::Builtin(int_precision_to_builtin(precision)),
+                    hole,
+                ),
+                IntOrFloat::UnsignedIntType(precision) => Stmt::Let(
+                    assigned,
+                    Expr::Literal(Literal::Int(num.into())),
+                    Layout::Builtin(int_precision_to_builtin(precision)),
+                    hole,
+                ),
+                IntOrFloat::BinaryFloatType(precision) => Stmt::Let(
+                    assigned,
+                    Expr::Literal(Literal::Float(num as f64)),
+                    Layout::Builtin(float_precision_to_builtin(precision)),
+                    hole,
+                ),
+                IntOrFloat::DecimalFloatType => Stmt::Let(
+                    assigned,
+                    Expr::Literal(Literal::Float(num as f64)),
+                    Layout::Builtin(Builtin::Decimal),
+                    hole,
+                ),
+            }
+        }
         LetNonRec(def, cont, _) => {
             if let roc_can::pattern::Pattern::Identifier(symbol) = &def.loc_pattern.value {
                 if let Closure {
@@ -4613,15 +4630,12 @@ pub fn from_can<'a>(
                 arguments,
             };
 
-            let exception_id = ExceptionId(env.unique_symbol());
-            let rest = Stmt::Invoke {
-                symbol: env.unique_symbol(),
-                call,
-                layout: bool_layout,
-                pass: env.arena.alloc(rest),
-                fail: env.arena.alloc(Stmt::Resume(exception_id)),
-                exception_id,
-            };
+            let rest = Stmt::Let(
+                env.unique_symbol(),
+                Expr::Call(call),
+                bool_layout,
+                env.arena.alloc(rest),
+            );
 
             with_hole(
                 env,
@@ -4732,14 +4746,16 @@ pub fn from_can<'a>(
                                     );
                                     CapturedSymbols::None
                                 }
-                                Err(e) => {
-                                    debug_assert!(
-                                        captured_symbols.is_empty(),
-                                        "{:?}, {:?}",
-                                        &captured_symbols,
-                                        e
-                                    );
-                                    CapturedSymbols::None
+                                Err(_) => {
+                                    // just allow this. see https://github.com/rtfeldman/roc/issues/1585
+                                    if captured_symbols.is_empty() {
+                                        CapturedSymbols::None
+                                    } else {
+                                        let mut temp =
+                                            Vec::from_iter_in(captured_symbols, env.arena);
+                                        temp.sort();
+                                        CapturedSymbols::Captured(temp.into_bump_slice())
+                                    }
                                 }
                             };
 
@@ -5205,35 +5221,6 @@ fn substitute_in_stmt_help<'a>(
                 None
             }
         }
-        Invoke {
-            symbol,
-            call,
-            layout,
-            pass,
-            fail,
-            exception_id,
-        } => {
-            let opt_call = substitute_in_call(arena, call, subs);
-            let opt_pass = substitute_in_stmt_help(arena, pass, subs);
-            let opt_fail = substitute_in_stmt_help(arena, fail, subs);
-
-            if opt_pass.is_some() || opt_fail.is_some() | opt_call.is_some() {
-                let pass = opt_pass.unwrap_or(pass);
-                let fail = opt_fail.unwrap_or_else(|| *fail);
-                let call = opt_call.unwrap_or_else(|| call.clone());
-
-                Some(arena.alloc(Invoke {
-                    symbol: *symbol,
-                    call,
-                    layout: *layout,
-                    pass,
-                    fail,
-                    exception_id: *exception_id,
-                }))
-            } else {
-                None
-            }
-        }
         Join {
             id,
             parameters,
@@ -5347,8 +5334,6 @@ fn substitute_in_stmt_help<'a>(
                 None
             }
         }
-
-        Resume(_) => None,
 
         RuntimeError(_) => None,
     }
@@ -6228,18 +6213,6 @@ fn add_needed_external<'a>(
     existing.insert(name, solved_type);
 }
 
-/// Symbol that links an Invoke with a Rethrow
-/// we'll assign the exception object to this symbol
-/// so we can later rethrow the exception
-#[derive(Copy, Clone, PartialEq, Debug)]
-pub struct ExceptionId(Symbol);
-
-impl ExceptionId {
-    pub fn into_inner(self) -> Symbol {
-        self.0
-    }
-}
-
 fn build_call<'a>(
     _env: &mut Env<'a, '_>,
     call: Call<'a>,
@@ -6248,6 +6221,38 @@ fn build_call<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     Stmt::Let(assigned, Expr::Call(call), return_layout, hole)
+}
+
+/// See https://github.com/rtfeldman/roc/issues/1549
+///
+/// What happened is that a function has a type error, but the arguments are not processed.
+/// That means specializations were missing. Normally that is not a problem, but because
+/// of our closure strategy, internal functions can "leak". That's what happened here.
+///
+/// The solution is to evaluate the arguments as normal, and only when calling the function give an error
+fn evaluate_arguments_then_runtime_error<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    msg: String,
+    loc_args: std::vec::Vec<(Variable, Located<roc_can::expr::Expr>)>,
+) -> Stmt<'a> {
+    let arena = env.arena;
+
+    // eventually we will throw this runtime error
+    let result = Stmt::RuntimeError(env.arena.alloc(msg));
+
+    // but, we also still evaluate and specialize the arguments to give better error messages
+    let arg_symbols = Vec::from_iter_in(
+        loc_args
+            .iter()
+            .map(|(_, arg_expr)| possible_reuse_symbol(env, procs, &arg_expr.value)),
+        arena,
+    )
+    .into_bump_slice();
+
+    let iter = loc_args.into_iter().rev().zip(arg_symbols.iter().rev());
+    assign_to_symbols(env, procs, layout_cache, iter, result)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6268,14 +6273,16 @@ fn call_by_name<'a>(
                 "Hit an unresolved type variable {:?} when creating a layout for {:?} (var {:?})",
                 var, proc_name, fn_var
             );
-            Stmt::RuntimeError(env.arena.alloc(msg))
+
+            evaluate_arguments_then_runtime_error(env, procs, layout_cache, msg, loc_args)
         }
         Err(LayoutProblem::Erroneous) => {
             let msg = format!(
                 "Hit an erroneous type when creating a layout for {:?}",
                 proc_name
             );
-            Stmt::RuntimeError(env.arena.alloc(msg))
+
+            evaluate_arguments_then_runtime_error(env, procs, layout_cache, msg, loc_args)
         }
         Ok(RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout)) => {
             if procs.module_thunks.contains(&proc_name) {
@@ -7920,7 +7927,15 @@ fn union_lambda_set_to_switch<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    debug_assert!(!lambda_set.is_empty());
+    if lambda_set.is_empty() {
+        // NOTE this can happen if there is a type error somewhere. Since the lambda set is empty,
+        // there is really nothing we can do here. We generate a runtime error here which allows
+        // code gen to proceed. We then assume that we hit another (more descriptive) error before
+        // hitting this one
+
+        let msg = "a Lambda Set isempty. Most likely there is a type error in your program.";
+        return Stmt::RuntimeError(msg);
+    }
 
     let join_point_id = JoinPointId(env.unique_symbol());
 
