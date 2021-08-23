@@ -45,7 +45,10 @@ fn testing_roc_dealloc(c_ptr: *c_void, _: u32) callconv(.C) void {
     std.testing.allocator.destroy(ptr);
 }
 
-fn testing_roc_panic(_: *c_void, _: u32) callconv(.C) void {
+fn testing_roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
+    _ = c_ptr;
+    _ = tag_id;
+
     @panic("Roc paniced");
 }
 
