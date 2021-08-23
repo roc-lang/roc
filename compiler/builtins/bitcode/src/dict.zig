@@ -9,12 +9,12 @@ const RocList = @import("list.zig").RocList;
 
 const INITIAL_SEED = 0xc70f6907;
 
-const InPlace = packed enum(u8) {
+const InPlace = enum(u8) {
     InPlace,
     Clone,
 };
 
-const Slot = packed enum(u8) {
+const Slot = enum(u8) {
     Empty,
     Filled,
     PreviouslyFilled,
@@ -63,7 +63,7 @@ fn capacityOfLevel(input: usize) usize {
 // alignment of the key and value. The tag furthermore indicates
 // which has the biggest aligmnent. If both are the same, we put
 // the key first
-const Alignment = packed enum(u8) {
+const Alignment = enum(u8) {
     Align16KeyFirst,
     Align16ValueFirst,
     Align8KeyFirst,
