@@ -31,6 +31,8 @@ pub const SHARED_LIB: &str = "SHARED_LIB";
 pub const APP: &str = "APP";
 pub const OUT: &str = "OUT";
 
+const MIN_FUNC_ALIGNMENT: usize = 0x10;
+
 // TODO: Analyze if this offset is always correct.
 const PLT_ADDRESS_OFFSET: u64 = 0x10;
 
@@ -102,9 +104,9 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
 
     let total_start = SystemTime::now();
     let shared_lib_processing_start = SystemTime::now();
-    let app_functions = application_functions(&matches.value_of(SHARED_LIB).unwrap())?;
+    let app_functions = roc_application_functions(&matches.value_of(SHARED_LIB).unwrap())?;
     if verbose {
-        println!("Found app functions: {:?}", app_functions);
+        println!("Found roc app functions: {:?}", app_functions);
     }
     let shared_lib_processing_duration = shared_lib_processing_start.elapsed().unwrap();
 
@@ -136,7 +138,6 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         println!("SH Entry Size: {}", sh_ent_size);
         println!("SH Entry Count: {}", sh_num);
     }
-    let exec_parsing_duration = exec_parsing_start.elapsed().unwrap();
 
     // TODO: Deal with other file formats and architectures.
     let format = exec_obj.format();
@@ -151,6 +152,28 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     }
 
     let mut md: metadata::Metadata = Default::default();
+
+    for sym in exec_obj.symbols().filter(|sym| {
+        sym.is_definition() && sym.name().is_ok() && sym.name().unwrap().starts_with("roc_")
+    }) {
+        let name = sym.name().unwrap().to_string();
+        // special exceptions for memcpy and memset.
+        if &name == "roc_memcpy" {
+            md.roc_func_addresses
+                .insert("memcpy".to_string(), sym.address() as u64);
+        } else if name == "roc_memset" {
+            md.roc_func_addresses
+                .insert("memset".to_string(), sym.address() as u64);
+        }
+        md.roc_func_addresses.insert(name, sym.address() as u64);
+    }
+
+    println!(
+        "Found roc function definitions: {:x?}",
+        md.roc_func_addresses
+    );
+
+    let exec_parsing_duration = exec_parsing_start.elapsed().unwrap();
 
     // Extract PLT related information for app functions.
     let symbol_and_plt_processing_start = SystemTime::now();
@@ -193,13 +216,6 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     .map(|(_, reloc)| reloc)
     .filter(|reloc| reloc.kind() == RelocationKind::Elf(7))
     .collect();
-    if verbose {
-        println!();
-        println!("PLT relocations");
-        for reloc in plt_relocs.iter() {
-            println!("{:x?}", reloc);
-        }
-    }
 
     let app_syms: Vec<Symbol> = exec_obj
         .dynamic_symbols()
@@ -470,9 +486,6 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
             ) as usize;
             let c_buf: *const c_char = dynstr_data[dynstr_off..].as_ptr() as *const i8;
             let c_str = unsafe { CStr::from_ptr(c_buf) }.to_str().unwrap();
-            if verbose {
-                println!("Found shared lib with name: {}", c_str);
-            }
             if c_str == shared_lib_name {
                 shared_lib_found = true;
                 md.shared_lib_index = dyn_lib_index as u64;
@@ -554,52 +567,26 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     out_file.set_len(md.exec_len)?;
     let mut out_mmap = unsafe { MmapMut::map_mut(&out_file)? };
 
-    // Write a modified elf header with an extra program header entry.
-    md.added_data = ph_ent_size as u64;
+    // Copy header and check if their is a notes segment.
+    // If so, copy it instead of dealing with shifting data.
+    // Otherwise shift data and hope for no overlaps/conflicts.
     let ph_end = ph_offset as usize + ph_num as usize * ph_ent_size as usize;
     out_mmap[..ph_end].copy_from_slice(&exec_data[..ph_end]);
-    let file_header = load_struct_inplace_mut::<elf::FileHeader64<LittleEndian>>(&mut out_mmap, 0);
-    file_header.e_phnum = endian::U16::new(LittleEndian, ph_num + 1);
 
-    let program_headers = load_structs_inplace_mut::<elf::ProgramHeader64<LittleEndian>>(
-        &mut out_mmap,
+    let program_headers = load_structs_inplace::<elf::ProgramHeader64<LittleEndian>>(
+        &out_mmap,
         ph_offset as usize,
-        ph_num as usize + 1,
+        ph_num as usize,
     );
-
-    // Steal the extra bytes we need from the first loaded sections.
-    // Generally this section has empty space due to alignment.
+    let mut notes_section_index = None;
     let mut first_load_found = false;
-    for mut ph in program_headers.iter_mut() {
+    for (i, ph) in program_headers.iter().enumerate() {
         let p_type = ph.p_type.get(NativeEndian);
-        let p_align = ph.p_align.get(NativeEndian);
-        let p_filesz = ph.p_filesz.get(NativeEndian);
-        let p_memsz = ph.p_memsz.get(NativeEndian);
-        if p_type == elf::PT_LOAD && ph.p_offset.get(NativeEndian) == 0 {
-            if p_filesz / p_align != (p_filesz + md.added_data) / p_align {
-                println!("Not enough extra space in the executable for alignment");
-                println!("This makes linking a lot harder and is not supported yet");
-                return Ok(-1);
-            }
-            ph.p_filesz = endian::U64::new(LittleEndian, p_filesz + md.added_data);
-            let new_memsz = p_memsz + md.added_data;
-            ph.p_memsz = endian::U64::new(LittleEndian, new_memsz);
-            let p_vaddr = ph.p_vaddr.get(NativeEndian);
-
+        if p_type == elf::PT_NOTE {
+            notes_section_index = Some(i)
+        } else if p_type == elf::PT_LOAD && ph.p_offset.get(NativeEndian) == 0 {
             first_load_found = true;
-            md.shift_start = p_vaddr + ph_end as u64;
-            let align_remainder = new_memsz % p_align;
-            md.first_load_aligned_size = if align_remainder == 0 {
-                new_memsz
-            } else {
-                new_memsz + (p_align - align_remainder)
-            };
-            md.shift_end = p_vaddr + md.first_load_aligned_size;
-            md.load_align_constraint = p_align;
-            break;
-        } else if p_type == elf::PT_PHDR {
-            ph.p_filesz = endian::U64::new(LittleEndian, p_filesz + md.added_data);
-            ph.p_memsz = endian::U64::new(LittleEndian, p_memsz + md.added_data);
+            md.load_align_constraint = ph.p_align.get(NativeEndian);
         }
     }
     if !first_load_found {
@@ -609,58 +596,155 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     }
     if verbose {
         println!(
-            "First Byte loaded after Program Headers: 0x{:x}",
-            md.shift_start
-        );
-        println!("Last Byte loaded in first load: 0x{:x}", md.shift_end);
-        println!(
             "Aligned first load size: 0x{:x}",
             md.first_load_aligned_size
         );
     }
 
-    for mut ph in program_headers {
-        let p_vaddr = ph.p_vaddr.get(NativeEndian);
-        if md.shift_start <= p_vaddr && p_vaddr < md.shift_end {
-            let p_align = ph.p_align.get(NativeEndian);
-            let p_offset = ph.p_offset.get(NativeEndian);
-            let new_offset = p_offset + md.added_data;
-            let new_vaddr = p_vaddr + md.added_data;
-            if new_offset % p_align != 0 || new_vaddr % p_align != 0 {
-                println!("Ran into alignment issues when moving segments");
-                return Ok(-1);
-            }
-            ph.p_offset = endian::U64::new(LittleEndian, p_offset + md.added_data);
-            ph.p_vaddr = endian::U64::new(LittleEndian, p_vaddr + md.added_data);
-            ph.p_paddr =
-                endian::U64::new(LittleEndian, ph.p_paddr.get(NativeEndian) + md.added_data);
-        }
-    }
+    let last_segment_vaddr = load_structs_inplace::<elf::ProgramHeader64<LittleEndian>>(
+        &exec_mmap,
+        ph_offset as usize,
+        ph_num as usize,
+    )
+    .iter()
+    .filter(|ph| ph.p_type.get(NativeEndian) != elf::PT_GNU_STACK)
+    .map(|ph| ph.p_vaddr.get(NativeEndian) + ph.p_memsz.get(NativeEndian))
+    .max()
+    .unwrap();
 
-    // Ensure no section overlaps with the hopefully blank data we are going to delete.
-    let exec_section_headers = load_structs_inplace::<elf::SectionHeader64<LittleEndian>>(
+    let last_section_vaddr = load_structs_inplace::<elf::SectionHeader64<LittleEndian>>(
         &exec_mmap,
         sh_offset as usize,
         sh_num as usize,
-    );
-    for sh in exec_section_headers {
-        let offset = sh.sh_offset.get(NativeEndian);
-        let size = sh.sh_size.get(NativeEndian);
-        if offset <= md.first_load_aligned_size - md.added_data
-            && offset + size >= md.first_load_aligned_size - md.added_data
-        {
-            println!("A section overlaps with some alignment data we need to delete");
-            return Ok(-1);
-        }
-    }
+    )
+    .iter()
+    .map(|sh| sh.sh_addr.get(NativeEndian) + sh.sh_size.get(NativeEndian))
+    .max()
+    .unwrap();
+    md.last_vaddr =
+        std::cmp::max(last_section_vaddr, last_segment_vaddr) + md.load_align_constraint;
 
-    // Copy to program header, but add an extra item for the new data at the end of the file.
-    // Also delete the extra padding to keep things align.
-    out_mmap[ph_end + md.added_data as usize..md.first_load_aligned_size as usize].copy_from_slice(
-        &exec_data[ph_end..md.first_load_aligned_size as usize - md.added_data as usize],
-    );
-    out_mmap[md.first_load_aligned_size as usize..]
-        .copy_from_slice(&exec_data[md.first_load_aligned_size as usize..]);
+    if let Some(i) = notes_section_index {
+        if verbose {
+            println!();
+            println!("Found notes sections to steal for loading");
+        }
+        // Have a note sections.
+        // Delete it leaving a null entry at the end of the program header table.
+        let notes_offset = ph_offset as usize + ph_ent_size as usize * i;
+        let out_ptr = out_mmap.as_mut_ptr();
+        unsafe {
+            std::ptr::copy(
+                out_ptr.offset((notes_offset + ph_ent_size as usize) as isize),
+                out_ptr.offset(notes_offset as isize),
+                (ph_num as usize - i) * ph_ent_size as usize,
+            );
+        }
+
+        // Copy rest of data.
+        out_mmap[ph_end as usize..].copy_from_slice(&exec_data[ph_end as usize..]);
+    } else {
+        if verbose {
+            println!();
+            println!("Falling back to linking within padding");
+        }
+        // Fallback, try to only shift the first section with the plt in it.
+        // If there is not enough padding, this will fail.
+        md.added_data = ph_ent_size as u64;
+        let file_header =
+            load_struct_inplace_mut::<elf::FileHeader64<LittleEndian>>(&mut out_mmap, 0);
+        file_header.e_phnum = endian::U16::new(LittleEndian, ph_num + 1);
+
+        let program_headers = load_structs_inplace_mut::<elf::ProgramHeader64<LittleEndian>>(
+            &mut out_mmap,
+            ph_offset as usize,
+            ph_num as usize + 1,
+        );
+
+        // Steal the extra bytes we need from the first loaded sections.
+        // Generally this section has empty space due to alignment.
+        for mut ph in program_headers.iter_mut() {
+            let p_type = ph.p_type.get(NativeEndian);
+            let p_align = ph.p_align.get(NativeEndian);
+            let p_filesz = ph.p_filesz.get(NativeEndian);
+            let p_memsz = ph.p_memsz.get(NativeEndian);
+            if p_type == elf::PT_LOAD && ph.p_offset.get(NativeEndian) == 0 {
+                if p_filesz / p_align != (p_filesz + md.added_data) / p_align {
+                    println!("Not enough extra space in the executable for alignment");
+                    println!("This makes linking a lot harder and is not supported yet");
+                    return Ok(-1);
+                }
+                ph.p_filesz = endian::U64::new(LittleEndian, p_filesz + md.added_data);
+                let new_memsz = p_memsz + md.added_data;
+                ph.p_memsz = endian::U64::new(LittleEndian, new_memsz);
+                let p_vaddr = ph.p_vaddr.get(NativeEndian);
+
+                md.shift_start = p_vaddr + ph_end as u64;
+                let align_remainder = new_memsz % p_align;
+                md.first_load_aligned_size = if align_remainder == 0 {
+                    new_memsz
+                } else {
+                    new_memsz + (p_align - align_remainder)
+                };
+                md.shift_end = p_vaddr + md.first_load_aligned_size;
+                break;
+            } else if p_type == elf::PT_PHDR {
+                ph.p_filesz = endian::U64::new(LittleEndian, p_filesz + md.added_data);
+                ph.p_memsz = endian::U64::new(LittleEndian, p_memsz + md.added_data);
+            }
+        }
+        if verbose {
+            println!(
+                "First Byte loaded after Program Headers: 0x{:x}",
+                md.shift_start
+            );
+            println!("Last Byte loaded in first load: 0x{:x}", md.shift_end);
+        }
+
+        for mut ph in program_headers {
+            let p_vaddr = ph.p_vaddr.get(NativeEndian);
+            if md.shift_start <= p_vaddr && p_vaddr < md.shift_end {
+                let p_align = ph.p_align.get(NativeEndian);
+                let p_offset = ph.p_offset.get(NativeEndian);
+                let new_offset = p_offset + md.added_data;
+                let new_vaddr = p_vaddr + md.added_data;
+                if new_offset % p_align != 0 || new_vaddr % p_align != 0 {
+                    println!("Ran into alignment issues when moving segments");
+                    return Ok(-1);
+                }
+                ph.p_offset = endian::U64::new(LittleEndian, p_offset + md.added_data);
+                ph.p_vaddr = endian::U64::new(LittleEndian, p_vaddr + md.added_data);
+                ph.p_paddr =
+                    endian::U64::new(LittleEndian, ph.p_paddr.get(NativeEndian) + md.added_data);
+            }
+        }
+
+        // Ensure no section overlaps with the hopefully blank data we are going to delete.
+        let exec_section_headers = load_structs_inplace::<elf::SectionHeader64<LittleEndian>>(
+            &exec_mmap,
+            sh_offset as usize,
+            sh_num as usize,
+        );
+        for sh in exec_section_headers {
+            let offset = sh.sh_offset.get(NativeEndian);
+            let size = sh.sh_size.get(NativeEndian);
+            if offset <= md.first_load_aligned_size - md.added_data
+                && offset + size >= md.first_load_aligned_size - md.added_data
+            {
+                println!("A section overlaps with some alignment data we need to delete");
+                return Ok(-1);
+            }
+        }
+
+        // Copy to program header, but add an extra item for the new data at the end of the file.
+        // Also delete the extra padding to keep things align.
+        out_mmap[ph_end + md.added_data as usize..md.first_load_aligned_size as usize]
+            .copy_from_slice(
+                &exec_data[ph_end..md.first_load_aligned_size as usize - md.added_data as usize],
+            );
+        out_mmap[md.first_load_aligned_size as usize..]
+            .copy_from_slice(&exec_data[md.first_load_aligned_size as usize..]);
+    }
 
     // Update dynamic table entries for shift of extra ProgramHeader.
     let dyn_offset = if ph_end as u64 <= md.dynamic_section_offset
@@ -755,7 +839,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
 
     if verbose {
         println!();
-        println!("{:?}", md);
+        println!("{:x?}", md);
     }
 
     let saving_metadata_start = SystemTime::now();
@@ -878,12 +962,25 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     let mut sh_tab = vec![];
     sh_tab.extend_from_slice(&exec_mmap[sh_offset as usize..sh_offset as usize + sh_size]);
 
-    // Align offset for new text/data section.
     let mut offset = md.exec_len as usize;
-    let remainder = offset % md.load_align_constraint as usize;
-    offset += md.load_align_constraint as usize - remainder;
+    offset = aligned_offset(offset);
     let new_segment_offset = offset;
     let new_data_section_offset = offset;
+
+    // Align physical and virtual address of new segment.
+    let remainder = new_segment_offset as u64 % md.load_align_constraint;
+    let vremainder = md.last_vaddr % md.load_align_constraint;
+    let new_segment_vaddr = if remainder > vremainder {
+        md.last_vaddr + (remainder - vremainder)
+    } else if vremainder > remainder {
+        md.last_vaddr + ((remainder + md.load_align_constraint) - vremainder)
+    } else {
+        md.last_vaddr
+    };
+    if verbose {
+        println!();
+        println!("New Virtual Segment Address: {:x?}", new_segment_vaddr);
+    }
 
     // Copy sections and resolve their symbols/relocations.
     let symbols = app_obj.symbols().collect::<Vec<Symbol>>();
@@ -892,12 +989,15 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         .sections()
         .filter(|sec| {
             let name = sec.name();
+            // TODO: we should really split these out and use finer permission controls.
             name.is_ok()
-                && (name.unwrap().starts_with(".data") || name.unwrap().starts_with(".rodata"))
+                && (name.unwrap().starts_with(".data")
+                    || name.unwrap().starts_with(".rodata")
+                    || name.unwrap().starts_with(".bss"))
         })
         .collect();
 
-    let mut rodata_address_map: MutMap<usize, usize> = MutMap::default();
+    let mut symbol_offset_map: MutMap<usize, usize> = MutMap::default();
     for sec in rodata_sections {
         let data = match sec.uncompressed_data() {
             Ok(data) => data,
@@ -906,18 +1006,30 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                 return Ok(-1);
             }
         };
-        let size = data.len();
-        exec_mmap[offset..offset + size].copy_from_slice(&data);
-        for (i, sym) in symbols.iter().enumerate() {
+        let size = sec.size() as usize;
+        offset = aligned_offset(offset);
+        if verbose {
+            println!(
+                "Adding Section {} at offset {:x} with size {:x}",
+                sec.name().unwrap(),
+                offset,
+                size
+            );
+        }
+        exec_mmap[offset..offset + data.len()].copy_from_slice(&data);
+        for sym in symbols.iter() {
             if sym.section() == SymbolSection::Section(sec.index()) {
-                rodata_address_map.insert(i, offset + sym.address() as usize - new_segment_offset);
+                symbol_offset_map.insert(
+                    sym.index().0,
+                    offset + sym.address() as usize - new_segment_offset,
+                );
             }
         }
         offset += size;
     }
 
     if verbose {
-        println!("Data Relocation Addresses: {:x?}", rodata_address_map);
+        println!("Data Relocation Offsets: {:x?}", symbol_offset_map);
     }
 
     let text_sections: Vec<Section> = app_obj
@@ -942,47 +1054,29 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                 return Ok(-1);
             }
         };
-        let size = data.len();
-        exec_mmap[offset..offset + size].copy_from_slice(&data);
+        let size = sec.size() as usize;
+        offset = aligned_offset(offset);
+        if verbose {
+            println!(
+                "Adding Section {} at offset {:x} with size {:x}",
+                sec.name().unwrap(),
+                offset,
+                size
+            );
+        }
+        exec_mmap[offset..offset + data.len()].copy_from_slice(&data);
         // Deal with definitions and relocations for this section.
         if verbose {
             println!();
+            println!("Processing Section: {:x?}", sec);
         }
-        let current_segment_offset = (offset - new_segment_offset) as i64;
-        for rel in sec.relocations() {
-            if verbose {
-                println!("Found Relocation: {:x?}", rel);
-            }
-            match rel.1.target() {
-                RelocationTarget::Symbol(index) => {
-                    let target = match rodata_address_map.get(&index.0) {
-                        Some(x) => *x as i64,
-                        None => {
-                            println!("Undefined Symbol in relocation: {:x?}", rel);
-                            return Ok(-1);
-                        }
-                    } - (rel.0 as i64 + current_segment_offset)
-                        + rel.1.addend();
-                    match rel.1.size() {
-                        32 => {
-                            let data = (target as i32).to_le_bytes();
-                            let base = offset + rel.0 as usize;
-                            exec_mmap[base..base + 4].copy_from_slice(&data);
-                        }
-                        x => {
-                            println!("Relocation size not yet supported: {}", x);
-                            return Ok(-1);
-                        }
-                    }
-                }
-                _ => {
-                    println!("Relocation not yet support: {:x?}", rel);
-                    return Ok(-1);
-                }
-            }
-        }
+        let current_section_offset = (offset - new_segment_offset) as i64;
         for sym in symbols.iter() {
             if sym.section() == SymbolSection::Section(sec.index()) {
+                symbol_offset_map.insert(
+                    sym.index().0,
+                    offset + sym.address() as usize - new_segment_offset,
+                );
                 let name = sym.name().unwrap_or_default().to_string();
                 if md.app_functions.contains(&name) {
                     app_func_segment_offset_map.insert(
@@ -993,7 +1087,87 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                 }
             }
         }
-        offset += size;
+        let mut got_offset = aligned_offset(offset + size);
+        for rel in sec.relocations() {
+            if verbose {
+                println!("\tFound Relocation: {:x?}", rel);
+            }
+            match rel.1.target() {
+                RelocationTarget::Symbol(index) => {
+                    let target_offset = if let Some(target_offset) = symbol_offset_map.get(&index.0)
+                    {
+                        Some(*target_offset as i64)
+                    } else if let Ok(sym) = app_obj.symbol_by_index(index) {
+                        // Not one of the apps symbols, check if it is from the roc host.
+                        if let Ok(name) = sym.name() {
+                            if let Some(address) = md.roc_func_addresses.get(name) {
+                                Some((*address - new_segment_vaddr) as i64)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(target_offset) = target_offset {
+                        let target = match rel.1.kind() {
+                            RelocationKind::Relative | RelocationKind::PltRelative => {
+                                target_offset - (rel.0 as i64 + current_section_offset)
+                                    + rel.1.addend()
+                            }
+                            RelocationKind::GotRelative => {
+                                // If we see got relative store the address directly after this section.
+                                // GOT requires indirection if we don't modify the code.
+                                println!("GOT hacking");
+                                let got_val = target_offset as u64 + new_segment_vaddr;
+                                let target_offset = (got_offset - new_segment_offset) as i64;
+                                let data = got_val.to_le_bytes();
+                                exec_mmap[got_offset..got_offset + 8].copy_from_slice(&data);
+                                got_offset += 8;
+                                target_offset - (rel.0 as i64 + current_section_offset)
+                                    + rel.1.addend()
+                            }
+                            RelocationKind::Absolute => target_offset + new_segment_vaddr as i64,
+                            x => {
+                                println!("Relocation Kind not yet support: {:?}", x);
+                                return Ok(-1);
+                            }
+                        };
+                        match rel.1.size() {
+                            32 => {
+                                let data = (target as i32).to_le_bytes();
+                                let base = offset + rel.0 as usize;
+                                exec_mmap[base..base + 4].copy_from_slice(&data);
+                            }
+                            64 => {
+                                let data = target.to_le_bytes();
+                                let base = offset + rel.0 as usize;
+                                exec_mmap[base..base + 8].copy_from_slice(&data);
+                            }
+                            x => {
+                                println!("Relocation size not yet supported: {}", x);
+                                return Ok(-1);
+                            }
+                        }
+                    } else {
+                        println!(
+                            "Undefined Symbol in relocation, {:x?}: {:x?}",
+                            rel,
+                            app_obj.symbol_by_index(index)
+                        );
+                        return Ok(-1);
+                    }
+                }
+
+                _ => {
+                    println!("Relocation target not yet support: {:x?}", rel);
+                    return Ok(-1);
+                }
+            }
+        }
+        offset = got_offset;
     }
 
     if verbose {
@@ -1003,7 +1177,10 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         );
     }
 
+    offset = aligned_offset(offset);
     let new_sh_offset = offset;
+    println!("Offset: {:x}", offset);
+    println!("Size: {}", sh_size);
     exec_mmap[offset..offset + sh_size].copy_from_slice(&sh_tab);
     offset += sh_size;
 
@@ -1029,13 +1206,6 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         }
     }
 
-    let last_vaddr = section_headers
-        .iter()
-        .map(|sh| sh.sh_addr.get(NativeEndian) + sh.sh_size.get(NativeEndian))
-        .max()
-        .unwrap();
-    let remainder = last_vaddr % md.load_align_constraint;
-    let new_segment_vaddr = last_vaddr + md.load_align_constraint - remainder;
     let new_data_section_vaddr = new_segment_vaddr;
     let new_data_section_size = new_text_section_offset - new_data_section_offset;
     let new_text_section_vaddr = new_data_section_vaddr + new_data_section_size as u64;
@@ -1082,7 +1252,8 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     );
     let new_segment = program_headers.last_mut().unwrap();
     new_segment.p_type = endian::U32::new(LittleEndian, elf::PT_LOAD);
-    new_segment.p_flags = endian::U32::new(LittleEndian, elf::PF_R | elf::PF_X);
+    // This is terrible but currently needed. Just bash everything to get how and make it read-write-execute.
+    new_segment.p_flags = endian::U32::new(LittleEndian, elf::PF_R | elf::PF_X | elf::PF_W);
     new_segment.p_offset = endian::U64::new(LittleEndian, new_segment_offset as u64);
     new_segment.p_vaddr = endian::U64::new(LittleEndian, new_segment_vaddr);
     new_segment.p_paddr = endian::U64::new(LittleEndian, new_segment_vaddr);
@@ -1206,6 +1377,14 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     Ok(0)
 }
 
+fn aligned_offset(offset: usize) -> usize {
+    if offset % MIN_FUNC_ALIGNMENT == 0 {
+        offset
+    } else {
+        offset + MIN_FUNC_ALIGNMENT - (offset % MIN_FUNC_ALIGNMENT)
+    }
+}
+
 fn load_struct_inplace<'a, T>(bytes: &'a [u8], offset: usize) -> &'a T {
     &load_structs_inplace(bytes, offset, 1)[0]
 }
@@ -1236,7 +1415,7 @@ fn load_structs_inplace_mut<'a, T>(
     body
 }
 
-fn application_functions(shared_lib_name: &str) -> io::Result<Vec<String>> {
+fn roc_application_functions(shared_lib_name: &str) -> io::Result<Vec<String>> {
     let shared_file = fs::File::open(&shared_lib_name)?;
     let shared_mmap = unsafe { Mmap::map(&shared_file)? };
     let shared_obj = object::File::parse(&*shared_mmap).map_err(|err| {
@@ -1245,7 +1424,7 @@ fn application_functions(shared_lib_name: &str) -> io::Result<Vec<String>> {
             format!("Failed to parse shared library file: {}", err),
         )
     })?;
-    shared_obj
+    Ok(shared_obj
         .exports()
         .unwrap()
         .into_iter()
@@ -1256,5 +1435,8 @@ fn application_functions(shared_lib_name: &str) -> io::Result<Vec<String>> {
                 io::ErrorKind::InvalidData,
                 format!("Failed to load function names from shared library: {}", err),
             )
-        })
+        })?
+        .into_iter()
+        .filter(|name| name.starts_with("roc_"))
+        .collect::<Vec<_>>())
 }
