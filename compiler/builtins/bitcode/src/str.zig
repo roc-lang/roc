@@ -51,7 +51,7 @@ pub const RocStr = extern struct {
         return result;
     }
 
-    pub fn initBig(_: InPlace, number_of_chars: u64) RocStr {
+    pub fn initBig(_: InPlace, number_of_chars: usize) RocStr {
         const first_element = utils.allocateWithRefcount(number_of_chars, @sizeOf(usize));
 
         return RocStr{
