@@ -335,12 +335,12 @@ fn constrain_let_function() {
     infer_eq(
         indoc!(
             r#"
-            x = \_ -> "foo"
+            x = \a, b -> Pair a b
 
             x
             "#
         ),
-        "* -> Str",
+        "*, * -> [ Pair * * ]*",
     )
 }
 

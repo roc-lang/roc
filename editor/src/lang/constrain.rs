@@ -817,6 +817,9 @@ pub fn constrain_expr<'a>(
         } => {
             let function_def = env.pool.get(*def_id);
 
+            let mut flex_vars = BumpVec::with_capacity_in(1, arena);
+            flex_vars.push(*body_var);
+
             let body = env.pool.get(*body_id);
             let body_con = constrain_expr(arena, env, body, expected.shallow_clone(), region);
 
@@ -864,7 +867,9 @@ pub fn constrain_expr<'a>(
 
                     let new_rigids = BumpVec::new_in(arena);
 
-                    Let(arena.alloc(LetConstraint {
+                    let mut and_constraints = BumpVec::with_capacity_in(2, arena);
+
+                    let def_constraint = Let(arena.alloc(LetConstraint {
                         rigid_vars: new_rigids,
                         flex_vars: def_pattern_state.vars,
                         def_types: def_pattern_state.headers,
@@ -876,7 +881,19 @@ pub fn constrain_expr<'a>(
                             ret_constraint: expr_con,
                         })),
                         ret_constraint: body_con,
-                    }))
+                    }));
+
+                    and_constraints.push(def_constraint);
+
+                    and_constraints.push(Eq(
+                        Type2::Variable(*body_var),
+                        expected,
+                        Category::Storage(std::file!(), std::line!()),
+                        // TODO: needs to be ret region
+                        region,
+                    ));
+
+                    exists(arena, flex_vars, And(and_constraints))
                 }
             }
         }
