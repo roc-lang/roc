@@ -155,6 +155,10 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
     * ...
 * smart insert: press a shortcut and enter a plain english description of a code snippet you need. Examples: "convert string to list of chars", "sort list of records by field foo descending", "plot this list with date on x-axis"...
 * After the user has refactored code to be simpler, try finding other places in the code base where the same simplification can be made.
+* Show most commonly changed settings on first run so new users can quickly customize their experience. Keeping record of changed settings should be opt-in.
+* Detection of multiple people within same company/team working on same code at the same time (opt-in).
+* Autocorrect likely typos for stuff like `-<` when not in string.
+* If multiple functions are available for import, use function were types would match in insetion position.
 
 #### Autocomplete
 
@@ -236,12 +240,30 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 ### Inspiration
 
 - [Boop](https://github.com/IvanMathy/Boop) scriptable scratchpad for developers. Contains collection of useful conversions: json formatting, url encoding, encode to base64...
+- [processing](processing.org) Interactive editor, dragging left or right with mouse to change values. Instant results.
 
 ## High performance
 
 ### Inspiration
 
 - [10x editor](http://www.10xeditor.com/) IDE/Editor targeted at the professional developer with an emphasis on performance and scalability.
+
+
+## Positive feedback
+
+- It's nice to enhance the feeling of reward after completing a task, this increases motivation.
+- Great for tutorials and the first run of the editor.
+- Suggestions of occasions for positive feedback:
+    - Being able to compile successfully after starting out with more than X errors.
+    - Making a test succeed after repeated failures.
+- Positive feedback could be delivered with messages and/or animations. Animations could be with fireworks, flying roc logo birds, sounds...
+- The intensity of the message/animation could be increased based on the duration/difficulty of the task.
+- Suggest to search for help or take a break after being stuck on a test/compile errors... for some time. A search could be done for group chats for relevant libraries.
+
+### Inspiration
+
+- [Duolingo](https://www.duolingo.com) app to learn languages
+- [Khan academy](https://www.khanacademy.org/) free quality education for everyone
 
 ## General Thoughts/Ideas
 
