@@ -9,12 +9,12 @@ const RocList = @import("list.zig").RocList;
 
 const INITIAL_SEED = 0xc70f6907;
 
-const InPlace = packed enum(u8) {
+const InPlace = enum(u8) {
     InPlace,
     Clone,
 };
 
-const Slot = packed enum(u8) {
+const Slot = enum(u8) {
     Empty,
     Filled,
     PreviouslyFilled,
@@ -63,7 +63,7 @@ fn capacityOfLevel(input: usize) usize {
 // alignment of the key and value. The tag furthermore indicates
 // which has the biggest aligmnent. If both are the same, we put
 // the key first
-const Alignment = packed enum(u8) {
+const Alignment = enum(u8) {
     Align16KeyFirst,
     Align16ValueFirst,
     Align8KeyFirst,
@@ -359,7 +359,7 @@ pub const RocDict = extern struct {
             // hash the key, and modulo by the maximum size
             // (so we get an in-bounds index)
             const hash = hash_fn(seed, key);
-            const index = capacityOfLevel(current_level - 1) + (hash % current_level_size);
+            const index = capacityOfLevel(current_level - 1) + @intCast(usize, (hash % current_level_size));
 
             switch (self.getSlot(index, key_width, value_width)) {
                 Slot.Empty, Slot.PreviouslyFilled => {
@@ -426,7 +426,7 @@ pub fn dictInsert(input: RocDict, alignment: Alignment, key: Opaque, key_width: 
         }
 
         const hash = hash_fn(seed, key);
-        const index = capacityOfLevel(current_level - 1) + (hash % current_level_size);
+        const index = capacityOfLevel(current_level - 1) + @intCast(usize, (hash % current_level_size));
         assert(index < result.capacity());
 
         switch (result.getSlot(index, key_width, value_width)) {
