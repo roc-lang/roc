@@ -52,7 +52,7 @@ pub const RocStr = extern struct {
         return result;
     }
 
-    pub fn initBig(in_place: InPlace, number_of_chars: u64) RocStr {
+    pub fn initBig(in_place: InPlace, number_of_chars: usize) RocStr {
         const first_element = utils.allocateWithRefcount(number_of_chars, @sizeOf(usize));
 
         return RocStr{
@@ -425,16 +425,18 @@ fn strFromIntHelp(comptime T: type, int: T) RocStr {
 pub fn strFromFloatC(float: f64) callconv(.C) RocStr {
     // NOTE the compiled zig for float formatting seems to use LLVM11-specific features
     // hopefully we can use zig instead of snprintf in the future when we upgrade
-    const c = @cImport({
-        // See https://github.com/ziglang/zig/issues/515
-        @cDefine("_NO_CRT_STDIO_INLINE", "1");
-        @cInclude("stdio.h");
-    });
-    var buf: [100]u8 = undefined;
+    //    const c = @cImport({
+    //        // See https://github.com/ziglang/zig/issues/515
+    //        @cDefine("_NO_CRT_STDIO_INLINE", "1");
+    //        @cInclude("stdio.h");
+    //    });
+    //    var buf: [100]u8 = undefined;
+    //
+    //    const result = c.snprintf(&buf, 100, "%f", float);
+    //
+    //    return RocStr.init(&buf, @intCast(usize, result));
 
-    const result = c.snprintf(&buf, 100, "%f", float);
-
-    return RocStr.init(&buf, @intCast(usize, result));
+    @panic("nope!");
 }
 
 // Str.split

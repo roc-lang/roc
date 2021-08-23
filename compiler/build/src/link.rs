@@ -27,6 +27,10 @@ pub fn link(
 ) -> io::Result<(Child, PathBuf)> {
     match target {
         Triple {
+            architecture: Architecture::Wasm32,
+            ..
+        } => link_wasm32(target, output_path, input_paths, link_type),
+        Triple {
             operating_system: OperatingSystem::Linux,
             ..
         } => link_linux(target, output_path, input_paths, link_type),
@@ -494,6 +498,16 @@ fn link_macos(
             .spawn()?,
         output_path,
     ))
+}
+
+fn link_wasm32(
+    target: &Triple,
+    output_path: PathBuf,
+    input_paths: &[&str],
+    link_type: LinkType,
+) -> io::Result<(Child, PathBuf)> {
+    dbg!(target, output_path, input_paths, link_type);
+    panic!()
 }
 
 #[cfg(feature = "llvm")]

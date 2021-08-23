@@ -131,7 +131,7 @@ pub fn build_file<'a>(
         arena,
         loaded,
         &roc_file_path,
-        Triple::host(),
+        target,
         app_o_file,
         opt_level,
         emit_debug_info,

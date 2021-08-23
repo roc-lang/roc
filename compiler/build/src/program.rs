@@ -29,7 +29,7 @@ pub fn gen_from_mono_module(
     arena: &bumpalo::Bump,
     mut loaded: MonomorphizedModule,
     roc_file_path: &Path,
-    target: target_lexicon::Triple,
+    target: &target_lexicon::Triple,
     app_o_file: &Path,
     opt_level: OptLevel,
     emit_debug_info: bool,

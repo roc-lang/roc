@@ -5,7 +5,6 @@ use roc_cli::{
 use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
-use target_lexicon::{Architecture, Triple};
 
 #[cfg(feature = "llvm")]
 use roc_cli::build;
@@ -14,14 +13,6 @@ use std::ffi::{OsStr, OsString};
 #[cfg(not(feature = "llvm"))]
 fn build(_target: &Triple, _matches: &clap::ArgMatches, _config: BuildConfig) -> io::Result<i32> {
     panic!("Building without LLVM is not currently supported.");
-}
-
-fn wasm32_target_tripple() -> Triple {
-    let mut triple = Triple::unknown();
-
-    triple.architecture = Architecture::Wasm32;
-
-    triple
 }
 
 fn main() -> io::Result<()> {
@@ -33,11 +24,7 @@ fn main() -> io::Result<()> {
                 Some(arg_index) => {
                     let roc_file_arg_index = arg_index + 1; // Not sure why this +1 is necessary, but it is!
 
-                    build(
-                        &Triple::host(),
-                        &matches,
-                        BuildConfig::BuildAndRun { roc_file_arg_index },
-                    )
+                    build(&matches, BuildConfig::BuildAndRun { roc_file_arg_index })
                 }
 
                 None => {
@@ -48,7 +35,6 @@ fn main() -> io::Result<()> {
             }
         }
         Some(CMD_BUILD) => Ok(build(
-            &Triple::host(),
             matches.subcommand_matches(CMD_BUILD).unwrap(),
             BuildConfig::BuildOnly,
         )?),

@@ -401,7 +401,7 @@ pub fn dictLen(dict: RocDict) callconv(.C) usize {
 
 // commonly used type aliases
 const Opaque = ?[*]u8;
-const HashFn = fn (u64, ?[*]u8) callconv(.C) u64;
+const HashFn = fn (u64, ?[*]u8) callconv(.C) usize;
 const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
 
 const Inc = fn (?[*]u8) callconv(.C) void;
@@ -426,7 +426,7 @@ pub fn dictInsert(input: RocDict, alignment: Alignment, key: Opaque, key_width: 
         }
 
         const hash = hash_fn(seed, key);
-        const index = capacityOfLevel(current_level - 1) + (hash % current_level_size);
+        const index: usize = capacityOfLevel(current_level - 1) + (hash % current_level_size);
         assert(index < result.capacity());
 
         switch (result.getSlot(index, key_width, value_width)) {
