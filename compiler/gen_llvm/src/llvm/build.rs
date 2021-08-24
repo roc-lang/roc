@@ -405,20 +405,6 @@ fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
 
     add_intrinsic(
         module,
-        LLVM_MEMSET_I32,
-        void_type.fn_type(
-            &[
-                i8_ptr_type.into(),
-                i8_type.into(),
-                i32_type.into(),
-                i1_type.into(),
-            ],
-            false,
-        ),
-    );
-
-    add_intrinsic(
-        module,
         LLVM_SETJMP,
         i32_type.fn_type(&[i8_ptr_type.into()], false),
     );

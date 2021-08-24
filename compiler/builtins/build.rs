@@ -31,7 +31,7 @@ fn main() {
     let build_script_dir_path = fs::canonicalize(Path::new(".")).unwrap();
     let bitcode_path = build_script_dir_path.join("bitcode");
 
-    let src_obj_path = bitcode_path.join("builtins.o");
+    let src_obj_path = bitcode_path.join("builtins-64bit.o");
     let src_obj = src_obj_path.to_str().expect("Invalid src object path");
 
     let dest_ir_path = bitcode_path.join("builtins-32bit.ll");

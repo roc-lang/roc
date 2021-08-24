@@ -32,8 +32,8 @@ pub fn build(b: *Builder) void {
 
     // LLVM IR 32-bit (wasm)
     var target = b.standardTargetOptions(.{});
-    target.os_tag = std.Target.Os.Tag.wasi;
-    target.cpu_arch = std.Target.Cpu.Arch.wasm32;
+    target.os_tag = std.Target.Os.Tag.linux;
+    target.cpu_arch = std.Target.Cpu.Arch.i386;
     // target.abi = std.Target.Abi.none;
     target.abi = std.Target.Abi.musl;
 
