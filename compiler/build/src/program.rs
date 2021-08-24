@@ -251,15 +251,27 @@ pub fn gen_from_mono_module(
                 });
     } else {
         // Emit the .o file
+        use target_lexicon::Architecture;
+        match target.architecture {
+            Architecture::X86_64 | Architecture::Aarch64(_) => {
+                let reloc = RelocMode::Default;
+                let model = CodeModel::Default;
+                let target_machine =
+                    target::target_machine(target, convert_opt_level(opt_level), reloc, model)
+                        .unwrap();
 
-        let reloc = RelocMode::Default;
-        let model = CodeModel::Default;
-        let target_machine =
-            target::target_machine(&target, convert_opt_level(opt_level), reloc, model).unwrap();
-
-        target_machine
-            .write_to_file(env.module, FileType::Object, app_o_file)
-            .expect("Writing .o file failed");
+                target_machine
+                    .write_to_file(env.module, FileType::Object, app_o_file)
+                    .expect("Writing .o file failed");
+            }
+            Architecture::Wasm32 => {
+                module.write_bitcode_to_path(app_o_file);
+            }
+            _ => panic!(
+                "TODO gracefully handle unsupported architecture: {:?}",
+                target.architecture
+            ),
+        }
     }
 
     let emit_o_file = emit_o_file_start.elapsed().unwrap();

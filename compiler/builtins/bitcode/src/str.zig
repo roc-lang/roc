@@ -14,8 +14,6 @@ const InPlace = enum(u8) {
     Clone,
 };
 
-const HEL = [_]u8{ 'h', 'e', 'l' };
-
 const SMALL_STR_MAX_LENGTH = small_string_size - 1;
 const small_string_size = 2 * @sizeOf(usize);
 const blank_small_string: [@sizeOf(RocStr)]u8 = init_blank_small_string(small_string_size);

@@ -131,6 +131,15 @@ pub fn build_app<'a>() -> App<'a> {
                 .required(false),
         )
         .arg(
+            Arg::with_name(FLAG_BACKEND)
+                .long(FLAG_BACKEND)
+                .help("Choose a different backend")
+                // .requires(BACKEND)
+                .default_value("llvm")
+                .possible_values(&["llvm", "wasm", "asm"])
+                .required(false),
+        )
+        .arg(
             Arg::with_name(ROC_FILE)
                 .help("The .roc file of an app to build and run")
                 .required(false),
@@ -266,7 +275,14 @@ pub fn build(matches: &ArgMatches, config: BuildConfig) -> io::Result<i32> {
                     Ok(outcome.status_code())
                 }
                 BuildAndRun { roc_file_arg_index } => {
-                    let mut cmd = Command::new(binary_path);
+                    let mut cmd = match target.architecture {
+                        Architecture::Wasm32 => Command::new("wasmtime"),
+                        _ => Command::new(&binary_path),
+                    };
+
+                    if let Architecture::Wasm32 = target.architecture {
+                        cmd.arg(binary_path);
+                    }
 
                     // Forward all the arguments after the .roc file argument
                     // to the new process. This way, you can do things like:

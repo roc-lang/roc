@@ -30,22 +30,31 @@ extern fn roc__mainForHost_1_Fx_size() i64;
 extern fn roc__mainForHost_1_Fx_result_size() i64;
 
 extern fn malloc(size: usize) callconv(.C) ?*c_void;
-extern fn realloc(c_ptr: [*]align(@alignOf(u128)) u8, size: usize) callconv(.C) ?*c_void;
-extern fn free(c_ptr: [*]align(@alignOf(u128)) u8) callconv(.C) void;
+extern fn realloc(c_ptr: [*]align(@alignOf(usize)) u8, size: usize) callconv(.C) ?*c_void;
+extern fn free(c_ptr: [*]align(@alignOf(usize)) u8) callconv(.C) void;
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
+    _ = alignment;
+
     return malloc(size);
 }
 
-export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void {
-    return realloc(@alignCast(16, @ptrCast([*]u8, c_ptr)), new_size);
+export fn roc_realloc(c_ptr: *c_void, old_size: usize, new_size: usize, alignment: u32) callconv(.C) ?*c_void {
+    _ = old_size;
+    _ = alignment;
+
+    return realloc(@alignCast(@alignOf(usize), @ptrCast([*]u8, c_ptr)), new_size);
 }
 
 export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
-    free(@alignCast(16, @ptrCast([*]u8, c_ptr)));
+    _ = alignment;
+
+    const ptr = @alignCast(@alignOf(usize), @ptrCast([*]u8, c_ptr));
+    free(ptr);
 }
 
 export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
+    _ = tag_id;
     const stderr = std.io.getStdErr().writer();
     const msg = @ptrCast([*:0]const u8, c_ptr);
     stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
@@ -54,34 +63,25 @@ export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
 
 const Unit = extern struct {};
 
-pub export fn main() u8 {
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
+const RocCallResult = extern struct { flag: u64, ptr: usize };
 
-    const size = @intCast(usize, roc__mainForHost_size());
-    const raw_output = std.heap.c_allocator.alloc(u8, size) catch unreachable;
-    var output = @ptrCast([*]u8, raw_output);
-
-    defer {
-        std.heap.c_allocator.free(raw_output);
-    }
+pub fn main() u8 {
+    var output = RocCallResult{ .flag = 0, .ptr = 0 };
 
     var ts1: std.os.timespec = undefined;
     std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts1) catch unreachable;
 
-    roc__mainForHost_1_exposed(output);
+    roc__mainForHost_1_exposed(@ptrCast([*]u8, &output));
 
-    const elements = @ptrCast([*]u64, @alignCast(8, output));
-
-    var flag = elements[0];
-
-    if (flag == 0) {
+    if (output.flag == 0) {
         // all is well
-        const closure_data_pointer = @ptrCast([*]u8, output[8..size]);
+        const closure_data_pointer = @intToPtr([*]u8, output.ptr);
 
         call_the_closure(closure_data_pointer);
     } else {
-        const msg = @intToPtr([*:0]const u8, elements[1]);
+        const stderr = std.io.getStdErr().writer();
+
+        const msg = @intToPtr([*:0]const u8, @intCast(usize, output.ptr));
         stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
 
         return 0;
@@ -92,6 +92,8 @@ pub export fn main() u8 {
 
     const delta = to_seconds(ts2) - to_seconds(ts1);
 
+    // const stderr = std.io.getStdOut().writer();
+    const stderr = std.io.getStdErr().writer();
     stderr.print("runtime: {d:.3}ms\n", .{delta * 1000}) catch unreachable;
 
     return 0;
@@ -103,7 +105,7 @@ fn to_seconds(tms: std.os.timespec) f64 {
 
 fn call_the_closure(closure_data_pointer: [*]u8) void {
     const size = roc__mainForHost_1_Fx_result_size();
-    const raw_output = std.heap.c_allocator.alloc(u8, @intCast(usize, size)) catch unreachable;
+    const raw_output = std.heap.c_allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
     var output = @ptrCast([*]u8, raw_output);
 
     defer {
