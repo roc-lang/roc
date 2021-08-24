@@ -1,5 +1,4 @@
 const utils = @import("utils.zig");
-const roc_mem = @import("mem.zig");
 const RocList = @import("list.zig").RocList;
 const std = @import("std");
 const mem = std.mem;
@@ -10,7 +9,7 @@ const expectEqual = testing.expectEqual;
 const expectError = testing.expectError;
 const expect = testing.expect;
 
-const InPlace = packed enum(u8) {
+const InPlace = enum(u8) {
     InPlace,
     Clone,
 };
@@ -52,7 +51,7 @@ pub const RocStr = extern struct {
         return result;
     }
 
-    pub fn initBig(in_place: InPlace, number_of_chars: u64) RocStr {
+    pub fn initBig(_: InPlace, number_of_chars: usize) RocStr {
         const first_element = utils.allocateWithRefcount(number_of_chars, @sizeOf(usize));
 
         return RocStr{
@@ -222,7 +221,7 @@ pub const RocStr = extern struct {
     // null-terminated strings. Otherwise, we need to allocate and copy a new
     // null-terminated string, which has a much higher performance cost!
     fn isNullTerminated(self: RocStr) bool {
-        const len = self.len();
+        const length = self.len();
         const longest_small_str = @sizeOf(RocStr) - 1;
 
         // NOTE: We want to compare length here, *NOT* check for is_small_str!
@@ -231,7 +230,7 @@ pub const RocStr = extern struct {
         //
         // (The other branch dereferences the bytes pointer, which is not safe
         // to do for the empty string.)
-        if (len <= longest_small_str) {
+        if (length <= longest_small_str) {
             // If we're a small string, then usually the next byte after the
             // end of the string will be zero. (Small strings set all their
             // unused bytes to 0, so that comparison for equality can be fast.)
@@ -242,7 +241,7 @@ pub const RocStr = extern struct {
             // Also, if we are exactly a maximum-length small string,
             // then the next byte is off the end of the struct;
             // in that case, we are also not null-terminated!
-            return len != 0 and len != longest_small_str;
+            return length != 0 and length != longest_small_str;
         } else {
             // This is a big string, and it's not empty, so we can safely
             // dereference the pointer.
@@ -253,8 +252,8 @@ pub const RocStr = extern struct {
             //
             // If we have excess capacity, then we can safely read the next
             // byte after the end of the string. Maybe it happens to be zero!
-            if (capacity_or_refcount > @intCast(isize, len)) {
-                return self.str_bytes[len] == 0;
+            if (capacity_or_refcount > @intCast(isize, length)) {
+                return self.str_bytes[length] == 0;
             } else {
                 // This string was refcounted or immortal; we can't safely read
                 // the next byte, so assume the string is not null-terminated.
@@ -267,10 +266,10 @@ pub const RocStr = extern struct {
     // Returns 0 for refcounted stirngs and immortal strings.
     // Returns the stored capacity value for all other strings.
     pub fn capacity(self: RocStr) usize {
-        const len = self.len();
+        const length = self.len();
         const longest_small_str = @sizeOf(RocStr) - 1;
 
-        if (len <= longest_small_str) {
+        if (length <= longest_small_str) {
             // Note that although empty strings technically have the full
             // capacity of a small string available, they aren't marked as small
             // strings, so if you want to make use of that capacity, you need
@@ -316,7 +315,14 @@ pub const RocStr = extern struct {
     pub fn asU8ptr(self: RocStr) [*]u8 {
         // Since this conditional would be prone to branch misprediction,
         // make sure it will compile to a cmov.
-        return if (self.isSmallStr() or self.isEmpty()) (&@bitCast([@sizeOf(RocStr)]u8, self)) else (@ptrCast([*]u8, self.str_bytes));
+        // return if (self.isSmallStr() or self.isEmpty()) (&@bitCast([@sizeOf(RocStr)]u8, self)) else (@ptrCast([*]u8, self.str_bytes));
+        if (self.isSmallStr() or self.isEmpty()) {
+            const as_int = @ptrToInt(&self);
+            const as_ptr = @intToPtr([*]u8, as_int);
+            return as_ptr;
+        } else {
+            return @ptrCast([*]u8, self.str_bytes);
+        }
     }
 
     // Given a pointer to some bytes, write the first (len) bytes of this
@@ -408,7 +414,7 @@ pub fn strFromIntC(int: i64) callconv(.C) RocStr {
 
 fn strFromIntHelp(comptime T: type, int: T) RocStr {
     // determine maximum size for this T
-    comptime const size = comptime blk: {
+    const size = comptime blk: {
         // the string representation of the minimum i128 value uses at most 40 characters
         var buf: [40]u8 = undefined;
         var result = std.fmt.bufPrint(&buf, "{}", .{std.math.minInt(T)}) catch unreachable;
@@ -785,8 +791,6 @@ pub fn countGraphemeClusters(string: RocStr) callconv(.C) usize {
     return count;
 }
 
-fn rocStrFromLiteral(bytes_arr: *const []u8) RocStr {}
-
 test "countGraphemeClusters: empty string" {
     const count = countGraphemeClusters(RocStr.empty());
     try expectEqual(count, 0);
@@ -867,7 +871,6 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
 
 // Str.startsWithCodePt
 pub fn startsWithCodePt(string: RocStr, prefix: u32) callconv(.C) bool {
-    const bytes_len = string.len();
     const bytes_ptr = string.asU8ptr();
 
     var buffer: [4]u8 = undefined;
@@ -1266,7 +1269,7 @@ pub fn numberOfNextCodepointBytes(ptr: [*]u8, len: usize, index: usize) Utf8Deco
 
 // Return types for validateUtf8Bytes
 // Values must be in alphabetical order. That is, lowest values are the first alphabetically.
-pub const Utf8ByteProblem = packed enum(u8) {
+pub const Utf8ByteProblem = enum(u8) {
     CodepointTooLarge = 0,
     EncodesSurrogateHalf = 1,
     ExpectedContinuation = 2,
