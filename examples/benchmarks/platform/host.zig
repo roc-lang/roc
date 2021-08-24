@@ -30,31 +30,22 @@ extern fn roc__mainForHost_1_Fx_size() i64;
 extern fn roc__mainForHost_1_Fx_result_size() i64;
 
 extern fn malloc(size: usize) callconv(.C) ?*c_void;
-extern fn realloc(c_ptr: [*]align(@alignOf(usize)) u8, size: usize) callconv(.C) ?*c_void;
-extern fn free(c_ptr: [*]align(@alignOf(usize)) u8) callconv(.C) void;
+extern fn realloc(c_ptr: [*]align(@alignOf(u128)) u8, size: usize) callconv(.C) ?*c_void;
+extern fn free(c_ptr: [*]align(@alignOf(u128)) u8) callconv(.C) void;
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
-    _ = alignment;
-
     return malloc(size);
 }
 
-export fn roc_realloc(c_ptr: *c_void, old_size: usize, new_size: usize, alignment: u32) callconv(.C) ?*c_void {
-    _ = old_size;
-    _ = alignment;
-
-    return realloc(@alignCast(@alignOf(usize), @ptrCast([*]u8, c_ptr)), new_size);
+export fn roc_realloc(c_ptr: *c_void, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*c_void {
+    return realloc(@alignCast(16, @ptrCast([*]u8, c_ptr)), new_size);
 }
 
 export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
-    _ = alignment;
-
-    const ptr = @alignCast(@alignOf(usize), @ptrCast([*]u8, c_ptr));
-    free(ptr);
+    free(@alignCast(16, @ptrCast([*]u8, c_ptr)));
 }
 
 export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
-    _ = tag_id;
     const stderr = std.io.getStdErr().writer();
     const msg = @ptrCast([*:0]const u8, c_ptr);
     stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
@@ -62,8 +53,6 @@ export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
 }
 
 const Unit = extern struct {};
-
-const RocCallResult = extern struct { flag: u64, ptr: usize };
 
 pub fn main() u8 {
     const size = @intCast(usize, roc__mainForHost_size());
@@ -89,9 +78,8 @@ pub fn main() u8 {
 
         call_the_closure(closure_data_pointer);
     } else {
-        const stderr = std.io.getStdErr().writer();
-
         const msg = @intToPtr([*:0]const u8, elements[1]);
+        const stderr = std.io.getStdErr().writer();
         stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
 
         return 0;
@@ -102,7 +90,6 @@ pub fn main() u8 {
 
     const delta = to_seconds(ts2) - to_seconds(ts1);
 
-    // const stderr = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
     stderr.print("runtime: {d:.3}ms\n", .{delta * 1000}) catch unreachable;
 
