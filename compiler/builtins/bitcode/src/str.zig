@@ -308,16 +308,17 @@ pub const RocStr = extern struct {
         return (ptr - 1)[0] == utils.REFCOUNT_ONE;
     }
 
-    pub fn asSlice(self: RocStr) []u8 {
+    pub fn asSlice(self: *RocStr) []u8 {
         return self.asU8ptr()[0..self.len()];
     }
 
-    pub fn asU8ptr(self: RocStr) [*]u8 {
+    pub fn asU8ptr(self: *RocStr) [*]u8 {
+
         // Since this conditional would be prone to branch misprediction,
         // make sure it will compile to a cmov.
         // return if (self.isSmallStr() or self.isEmpty()) (&@bitCast([@sizeOf(RocStr)]u8, self)) else (@ptrCast([*]u8, self.str_bytes));
         if (self.isSmallStr() or self.isEmpty()) {
-            const as_int = @ptrToInt(&self);
+            const as_int = @ptrToInt(self);
             const as_ptr = @intToPtr([*]u8, as_int);
             return as_ptr;
         } else {
