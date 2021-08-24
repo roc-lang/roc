@@ -8,7 +8,6 @@ use crate::editor::markup::common_nodes::new_comma_mn;
 use crate::editor::markup::common_nodes::new_equals_mn;
 use crate::editor::markup::common_nodes::new_left_accolade_mn;
 use crate::editor::markup::common_nodes::new_left_square_mn;
-use crate::editor::markup::common_nodes::new_line_mn;
 use crate::editor::markup::common_nodes::new_right_accolade_mn;
 use crate::editor::markup::common_nodes::new_right_square_mn;
 use crate::editor::slow_pool::MarkNodeId;
@@ -32,6 +31,7 @@ pub enum MarkupNode {
         ast_node_id: ExprId,
         children_ids: Vec<MarkNodeId>,
         parent_id_opt: Option<MarkNodeId>,
+        new_line_at_end: bool,
     },
     Text {
         content: String,
@@ -39,12 +39,14 @@ pub enum MarkupNode {
         syn_high_style: HighlightStyle,
         attributes: Attributes,
         parent_id_opt: Option<MarkNodeId>,
+        new_line_at_end: bool,
     },
     Blank {
         ast_node_id: ExprId,
         attributes: Attributes,
         syn_high_style: HighlightStyle, // TODO remove HighlightStyle, this is always HighlightStyle::Blank
         parent_id_opt: Option<MarkNodeId>,
+        new_line_at_end: bool,
     },
 }
 
@@ -248,6 +250,7 @@ fn new_markup_node(
         syn_high_style: highlight_style,
         attributes: Attributes::new(),
         parent_id_opt: None,
+        new_line_at_end: false,
     };
 
     markup_node_pool.add(node)
@@ -331,6 +334,7 @@ pub fn expr2_to_markup<'a, 'b>(
                 ast_node_id: expr2_node_id,
                 children_ids,
                 parent_id_opt: None,
+                new_line_at_end: false,
             };
 
             markup_node_pool.add(list_node)
@@ -345,6 +349,7 @@ pub fn expr2_to_markup<'a, 'b>(
                 ast_node_id: expr2_node_id,
                 children_ids,
                 parent_id_opt: None,
+                new_line_at_end: false,
             };
 
             markup_node_pool.add(record_node)
@@ -394,6 +399,7 @@ pub fn expr2_to_markup<'a, 'b>(
                 ast_node_id: expr2_node_id,
                 children_ids,
                 parent_id_opt: None,
+                new_line_at_end: false,
             };
 
             markup_node_pool.add(record_node)
@@ -421,6 +427,7 @@ pub fn expr2_to_markup<'a, 'b>(
                 syn_high_style: HighlightStyle::Variable,
                 attributes: Attributes::new(),
                 parent_id_opt: None,
+                new_line_at_end: false,
             };
 
             let val_name_mn_id = markup_node_pool.add(val_name_mn);
@@ -448,6 +455,7 @@ pub fn expr2_to_markup<'a, 'b>(
                         ast_node_id: expr2_node_id,
                         children_ids: vec![val_name_mn_id, equals_mn_id, body_mn_id],
                         parent_id_opt: None,
+                        new_line_at_end: true,
                     };
 
                     markup_node_pool.add(full_let_node)
@@ -479,6 +487,7 @@ pub fn set_parent_for_all(markup_node_id: MarkNodeId, markup_node_pool: &mut Slo
         ast_node_id: _,
         children_ids,
         parent_id_opt: _,
+        new_line_at_end: _,
     } = node
     {
         // need to clone because of borrowing issues
@@ -524,6 +533,7 @@ fn header_mn(content: String, ast_node_id: ExprId, mark_node_pool: &mut SlowPool
         syn_high_style: HighlightStyle::PackageRelated,
         attributes: Attributes::new(),
         parent_id_opt: None,
+        new_line_at_end: false,
     };
 
     mark_node_pool.add(mark_node)
@@ -541,6 +551,7 @@ fn header_val_mn(
         syn_high_style: highlight_style,
         attributes: Attributes::new(),
         parent_id_opt: None,
+        new_line_at_end: false,
     };
 
     mark_node_pool.add(mark_node)
@@ -562,6 +573,7 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
         ast_node_id,
         children_ids: vec![app_node_id, app_name_node_id],
         parent_id_opt: None,
+        new_line_at_end: true,
     };
 
     let packages_node_id = header_mn("    packages ".to_owned(), ast_node_id, mark_node_pool);
@@ -594,6 +606,7 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
             pack_right_acc_node_id,
         ],
         parent_id_opt: None,
+        new_line_at_end: true,
     };
 
     let imports_node_id = header_mn("    imports ".to_owned(), ast_node_id, mark_node_pool);
@@ -637,6 +650,7 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
         ast_node_id,
         children_ids: full_import_children,
         parent_id_opt: None,
+        new_line_at_end: true,
     };
 
     let provides_node_id = header_mn("    provides ".to_owned(), ast_node_id, mark_node_pool);
@@ -665,32 +679,24 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
             provides_end_node_id,
         ],
         parent_id_opt: None,
+        new_line_at_end: false,
     };
 
     let full_app_node_id = mark_node_pool.add(full_app_node);
-    let newline_node_id_1 = mark_node_pool.add(new_line_mn(ast_node_id, None));
     let full_packages_node = mark_node_pool.add(full_packages_node);
-    let newline_node_id_2 = mark_node_pool.add(new_line_mn(ast_node_id, None));
     let full_import_node_id = mark_node_pool.add(full_import_node);
-    let newline_node_id_3 = mark_node_pool.add(new_line_mn(ast_node_id, None));
     let full_provides_node_id = mark_node_pool.add(full_provides_node);
-    let newline_node_id_4 = mark_node_pool.add(new_line_mn(ast_node_id, None));
-    let newline_node_id_5 = mark_node_pool.add(new_line_mn(ast_node_id, None));
 
     let header_mark_node = MarkupNode::Nested {
         ast_node_id,
         children_ids: vec![
             full_app_node_id,
-            newline_node_id_1,
             full_packages_node,
-            newline_node_id_2,
             full_import_node_id,
-            newline_node_id_3,
             full_provides_node_id,
-            newline_node_id_4,
-            newline_node_id_5,
         ],
         parent_id_opt: None,
+        new_line_at_end: true,
     };
 
     let header_mn_id = mark_node_pool.add(header_mark_node);

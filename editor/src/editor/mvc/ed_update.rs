@@ -6,6 +6,7 @@ use crate::editor::ed_error::EdResult;
 use crate::editor::ed_error::MissingSelection;
 use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::markup::attribute::Attributes;
+use crate::editor::markup::common_nodes::new_blank_mn;
 use crate::editor::markup::nodes;
 use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::app_update::InputOutcome;
@@ -87,6 +88,16 @@ impl<'a> EdModel<'a> {
     pub fn simple_move_carets_left(&mut self, repeat: usize) {
         for caret_tup in self.caret_w_select_vec.iter_mut() {
             caret_tup.0.caret_pos.column -= repeat;
+            caret_tup.1 = None;
+        }
+    }
+
+    // disregards EdModel.code_lines because the caller knows the resulting caret position will be valid.
+    // allows us to prevent multiple updates to EdModel.code_lines
+    pub fn simple_move_carets_down(&mut self, repeat: usize) {
+        for caret_tup in self.caret_w_select_vec.iter_mut() {
+            caret_tup.0.caret_pos.column = 0;
+            caret_tup.0.caret_pos.line += repeat;
             caret_tup.1 = None;
         }
     }
@@ -213,6 +224,14 @@ impl<'a> EdModel<'a> {
         }
 
         Ok(())
+    }
+
+    pub fn insert_empty_line(
+        &mut self,
+        line_nr: usize,
+    ) -> UIResult<()> {
+        self.code_lines.insert_empty_line(line_nr)?;
+        self.grid_node_map.insert_empty_line(line_nr)
     }
 
     // updates grid_node_map and code_lines but nothing else.
@@ -652,6 +671,10 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                         // this can also be a tag union or become a set, assuming list for now
                                         start_new_list(ed_model)?
                                     }
+                                    '\r' => {
+                                        // For consistency and convenience there is only one way to format Roc, you can't add extra blank lines.
+                                        InputOutcome::Ignored
+                                    }
                                     _ => InputOutcome::Ignored
                                 }
                             } else if let Some(prev_mark_node_id) = prev_mark_node_id_opt{
@@ -856,22 +879,59 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                             }
 
                     } else { //no MarkupNode at the current position
-                            let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
-                            if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
-                                let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
+                            if *received_char == '\r' {
+                                // TODO move to separate file
+                                let carets = ed_model.get_carets();
+                                
+                                for caret_pos in carets.iter() {
+                                    let caret_line_nr = caret_pos.line;
+                                    // one blank line between top level definitions
+                                    ed_model.insert_empty_line(caret_line_nr + 1)?;
+                                    ed_model.insert_empty_line(caret_line_nr + 1)?;
 
-                                let prev_ast_node = ed_model.module.env.pool.get(prev_mark_node.get_ast_node_id());
+                                    // create Blank node at new line
+                                    let new_line_blank = Expr2::Blank;
+                                    let new_line_blank_id = ed_model.module.env.pool.add(new_line_blank);
 
-                                match prev_ast_node {
-                                    Expr2::SmallInt{ .. } => {
-                                        update_int(ed_model, prev_mark_node_id, ch)?
-                                    },
-                                    _ => {
-                                        InputOutcome::Ignored
-                                    }
+                                    // TODO this should insert at caret line_nr, not push at end
+                                    ed_model.module.ast.expression_ids.push(new_line_blank_id);
+
+                                    let blank_mn_id = ed_model
+                                        .add_mark_node(new_blank_mn(new_line_blank_id, None));
+
+                                    // TODO this should insert at caret line_nr, not push at end
+                                    ed_model.markup_ids.push(blank_mn_id);
+
+                                    ed_model.insert_all_between_line(
+                                        caret_pos.line + 2, // one blank line between top level definitions
+                                        0,
+                                        &[blank_mn_id],
+                                    )?;
                                 }
+
+                                ed_model.simple_move_carets_down(2); // one blank line between top level definitions
+
+                                InputOutcome::Accepted
+                                
+
                             } else {
-                                InputOutcome::Ignored
+                                let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
+                                if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
+                                    let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
+    
+                                    let prev_ast_node = ed_model.module.env.pool.get(prev_mark_node.get_ast_node_id());
+    
+                                    match prev_ast_node {
+                                        Expr2::SmallInt{ .. } => {
+                                            update_int(ed_model, prev_mark_node_id, ch)?
+                                        },
+                                        _ => {
+                                            InputOutcome::Ignored
+                                        }
+                                    }
+                                } else {
+                                    InputOutcome::Ignored
+                                }
                             }
                         };
 

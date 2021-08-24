@@ -41,8 +41,8 @@ pub fn build_code_graphics<'a>(
             markup_node_pool,
         )?;
 
-        // on to next line
-        txt_row_col.0 += 1;
+        // next line + leave line between top level definitions
+        txt_row_col.0 += 2;
         txt_row_col.1 = 0;
 
         all_glyph_text_vec.append(&mut glyph_text_vec);
@@ -99,6 +99,7 @@ fn markup_to_wgpu_helper<'a>(
     txt_row_col: &mut (usize, usize),
     markup_node_pool: &'a SlowPool,
 ) -> EdResult<()> {
+
     match markup_node {
         MarkupNode::Nested {
             ast_node_id: _,
@@ -157,7 +158,7 @@ fn markup_to_wgpu_helper<'a>(
                 top_left_coords: (
                     code_style.txt_coords.x + (txt_row_col.1 as f32) * char_width,
                     code_style.txt_coords.y
-                        + ((txt_row_col.0 - 1) as f32) * char_height
+                        + ((txt_row_col.0 - 2) as f32) * char_height
                         + 0.1 * char_height,
                 )
                     .into(),

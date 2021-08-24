@@ -9,7 +9,7 @@ use crate::editor::util::index_of;
 use crate::lang::ast::ExprId;
 use crate::ui::text::selection::Selection;
 use crate::ui::text::text_pos::TextPos;
-use crate::ui::ui_error::UIResult;
+use crate::ui::ui_error::{UIResult, OutOfBounds};
 use crate::ui::util::{slice_get, slice_get_mut};
 use snafu::OptionExt;
 use std::fmt;
@@ -48,6 +48,23 @@ impl GridNodeMap {
         line_ref.splice(index..index, new_cols_vec);
 
         Ok(())
+    }
+
+    pub fn insert_empty_line(
+        &mut self,
+        line_nr: usize
+    ) -> UIResult<()> {
+        if line_nr <= self.lines.len() {
+            self.lines.insert(line_nr, Vec::new());
+
+            Ok(())
+        } else {
+            OutOfBounds {
+                index: line_nr,
+                collection_name: "code_lines.lines".to_owned(),
+                len: self.lines.len(),
+            }.fail()
+        }        
     }
 
     pub fn del_at_line(&mut self, line_nr: usize, index: usize) -> UIResult<()> {

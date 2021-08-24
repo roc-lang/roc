@@ -102,6 +102,13 @@ pub fn init_model<'a>(
 }
 
 impl<'a> EdModel<'a> {
+    pub fn get_carets(&self) -> Vec<TextPos> {
+        self.caret_w_select_vec
+            .iter()
+            .map(|tup| tup.0.caret_pos)
+            .collect()
+    }
+
     pub fn get_curr_mark_node_id(&self) -> UIResult<MarkNodeId> {
         let caret_pos = self.get_caret();
         self.grid_node_map.get_id_at_row_col(caret_pos)

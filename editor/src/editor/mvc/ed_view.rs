@@ -61,7 +61,7 @@ pub fn model_to_wgpu<'a>(
 
     let mut all_rendered = RenderedWgpu::new();
 
-    let tip_txt_coords = (txt_coords.x, txt_coords.y - 4.0 * config.code_font_size);
+    let tip_txt_coords = (txt_coords.x, txt_coords.y - (START_TIP.matches('\n').count() as f32 + 1.0) * config.code_font_size);
 
     let start_tip_text = owned_section_from_text(&Text {
         position: tip_txt_coords.into(),

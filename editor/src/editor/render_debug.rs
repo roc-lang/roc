@@ -21,6 +21,10 @@ pub fn build_debug_graphics(
 
     let debug_txt_coords: Vector2<f32> = (txt_coords.x, txt_coords.y * 3.0).into();
 
+    let carets_text = glyph_brush::OwnedText::new(format!("carets: {:?}\n\n", ed_model.get_carets()))
+        .with_color(colors::to_slice(from_hsb(0, 0, 100)))
+        .with_scale(config.code_font_size);
+
     let grid_node_map_text = glyph_brush::OwnedText::new(format!("{}", ed_model.grid_node_map))
         .with_color(colors::to_slice(from_hsb(20, 41, 100)))
         .with_scale(config.code_font_size);
@@ -57,6 +61,7 @@ pub fn build_debug_graphics(
 
     let section = gr_text::owned_section_from_glyph_texts(
         vec![
+            carets_text,
             grid_node_map_text,
             code_lines_text,
             mark_node_tree_text,

@@ -1,7 +1,7 @@
 use crate::ui::text::lines::Lines;
 use crate::ui::text::selection::Selection;
 use crate::ui::text::text_pos::TextPos;
-use crate::ui::ui_error::UIResult;
+use crate::ui::ui_error::{UIResult, OutOfBounds};
 use crate::ui::util::slice_get;
 use crate::ui::util::slice_get_mut;
 use bumpalo::collections::String as BumpString;
@@ -38,6 +38,23 @@ impl CodeLines {
         self.nr_of_chars += new_str.len();
 
         Ok(())
+    }
+
+    pub fn insert_empty_line(
+        &mut self,
+        line_nr: usize
+    ) -> UIResult<()> {
+        if line_nr <= self.lines.len() {
+            self.lines.insert(line_nr, String::new());
+
+            Ok(())
+        } else {
+            OutOfBounds {
+                index: line_nr,
+                collection_name: "code_lines.lines".to_owned(),
+                len: self.lines.len(),
+            }.fail()
+        }        
     }
 
     pub fn del_at_line(&mut self, line_nr: usize, index: usize) -> UIResult<()> {
