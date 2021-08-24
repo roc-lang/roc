@@ -115,7 +115,7 @@ pub fn decref(
 
     var bytes = bytes_or_null orelse return;
 
-    const isizes: [*]isize = @ptrCast([*]isize, @alignCast(8, bytes));
+    const isizes: [*]isize = @ptrCast([*]isize, @alignCast(@sizeOf(isize), bytes));
 
     const refcount = (isizes - 1)[0];
     const refcount_isize = @bitCast(isize, refcount);
