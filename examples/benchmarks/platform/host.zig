@@ -66,22 +66,32 @@ const Unit = extern struct {};
 const RocCallResult = extern struct { flag: u64, ptr: usize };
 
 pub fn main() u8 {
-    var output = RocCallResult{ .flag = 0, .ptr = 0 };
+    const size = @intCast(usize, roc__mainForHost_size());
+    const raw_output = std.heap.c_allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
+    var output = @ptrCast([*]u8, raw_output);
+
+    defer {
+        std.heap.c_allocator.free(raw_output);
+    }
 
     var ts1: std.os.timespec = undefined;
     std.os.clock_gettime(std.os.CLOCK_REALTIME, &ts1) catch unreachable;
 
-    roc__mainForHost_1_exposed(@ptrCast([*]u8, &output));
+    roc__mainForHost_1_exposed(output);
 
-    if (output.flag == 0) {
+    const elements = @ptrCast([*]u64, @alignCast(8, output));
+
+    var flag = elements[0];
+
+    if (flag == 0) {
         // all is well
-        const closure_data_pointer = @intToPtr([*]u8, output.ptr);
+        const closure_data_pointer = @ptrCast([*]u8, output[8..size]);
 
         call_the_closure(closure_data_pointer);
     } else {
         const stderr = std.io.getStdErr().writer();
 
-        const msg = @intToPtr([*:0]const u8, @intCast(usize, output.ptr));
+        const msg = @intToPtr([*:0]const u8, elements[1]);
         stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
 
         return 0;
