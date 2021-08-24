@@ -64,24 +64,10 @@ where
         let mut hasher = DefaultHasher::new();
 
         for layout in argument_layouts {
-            match layout {
-                Layout::Closure(_, lambda_set, _) => {
-                    lambda_set.runtime_representation().hash(&mut hasher);
-                }
-                _ => {
-                    layout.hash(&mut hasher);
-                }
-            }
+            layout.hash(&mut hasher);
         }
 
-        match return_layout {
-            Layout::Closure(_, lambda_set, _) => {
-                lambda_set.runtime_representation().hash(&mut hasher);
-            }
-            _ => {
-                return_layout.hash(&mut hasher);
-            }
-        }
+        return_layout.hash(&mut hasher);
 
         hasher.finish()
     };
@@ -303,30 +289,6 @@ fn stmt_spec<'a>(
 
             Ok(result)
         }
-        Invoke {
-            symbol,
-            call,
-            layout: call_layout,
-            pass,
-            fail,
-            exception_id: _,
-        } => {
-            // a call that might throw an exception
-
-            let value_id = call_spec(builder, env, block, call_layout, call)?;
-
-            let pass_block = builder.add_block();
-            env.symbols.insert(*symbol, value_id);
-            let pass_value_id = stmt_spec(builder, env, pass_block, layout, pass)?;
-            env.symbols.remove(symbol);
-            let pass_block_expr = BlockExpr(pass_block, pass_value_id);
-
-            let fail_block = builder.add_block();
-            let fail_value_id = stmt_spec(builder, env, fail_block, layout, fail)?;
-            let fail_block_expr = BlockExpr(fail_block, fail_value_id);
-
-            builder.add_choice(block, &[pass_block_expr, fail_block_expr])
-        }
         Switch {
             cond_symbol: _,
             cond_layout: _,
@@ -434,7 +396,7 @@ fn stmt_spec<'a>(
             let jpid = env.join_points[id];
             builder.add_jump(block, jpid, argument, ret_type_id)
         }
-        Resume(_) | RuntimeError(_) => {
+        RuntimeError(_) => {
             let type_id = layout_spec(builder, layout)?;
 
             builder.add_terminate(block, type_id)
@@ -1258,11 +1220,6 @@ fn layout_spec_help(
                 }
             },
         },
-        Closure(_, lambda_set, _) => layout_spec_help(
-            builder,
-            &lambda_set.runtime_representation(),
-            when_recursive,
-        ),
     }
 }
 
