@@ -133,7 +133,7 @@ fn hash_builtin<'a, 'ctx, 'env>(
             // let zig deal with big vs small string
             call_bitcode_fn(
                 env,
-                &[seed.into(), build_str::str_to_i128(env, val).into()],
+                &[seed.into(), build_str::str_to_c_abi(env, val).into()],
                 bitcode::DICT_HASH_STR,
             )
             .into_int_value()

@@ -14,6 +14,8 @@ const InPlace = enum(u8) {
     Clone,
 };
 
+const HEL = [_]u8{ 'h', 'e', 'l' };
+
 const SMALL_STR_MAX_LENGTH = small_string_size - 1;
 const small_string_size = 2 * @sizeOf(usize);
 const blank_small_string: [@sizeOf(RocStr)]u8 = init_blank_small_string(small_string_size);
@@ -308,17 +310,17 @@ pub const RocStr = extern struct {
         return (ptr - 1)[0] == utils.REFCOUNT_ONE;
     }
 
-    pub fn asSlice(self: *RocStr) []u8 {
+    pub fn asSlice(self: RocStr) []u8 {
         return self.asU8ptr()[0..self.len()];
     }
 
-    pub fn asU8ptr(self: *RocStr) [*]u8 {
+    pub fn asU8ptr(self: RocStr) [*]u8 {
 
         // Since this conditional would be prone to branch misprediction,
         // make sure it will compile to a cmov.
         // return if (self.isSmallStr() or self.isEmpty()) (&@bitCast([@sizeOf(RocStr)]u8, self)) else (@ptrCast([*]u8, self.str_bytes));
         if (self.isSmallStr() or self.isEmpty()) {
-            const as_int = @ptrToInt(self);
+            const as_int = @ptrToInt(&self);
             const as_ptr = @intToPtr([*]u8, as_int);
             return as_ptr;
         } else {
@@ -430,20 +432,14 @@ fn strFromIntHelp(comptime T: type, int: T) RocStr {
 
 // Str.fromFloat
 pub fn strFromFloatC(float: f64) callconv(.C) RocStr {
-    // NOTE the compiled zig for float formatting seems to use LLVM11-specific features
-    // hopefully we can use zig instead of snprintf in the future when we upgrade
-    //    const c = @cImport({
-    //        // See https://github.com/ziglang/zig/issues/515
-    //        @cDefine("_NO_CRT_STDIO_INLINE", "1");
-    //        @cInclude("stdio.h");
-    //    });
-    //    var buf: [100]u8 = undefined;
-    //
-    //    const result = c.snprintf(&buf, 100, "%f", float);
-    //
-    //    return RocStr.init(&buf, @intCast(usize, result));
+    return @call(.{ .modifier = always_inline }, strFromFloatHelp, .{ f64, float });
+}
 
-    @panic("nope!");
+fn strFromFloatHelp(comptime T: type, float: T) RocStr {
+    var buf: [100]u8 = undefined;
+    const result = std.fmt.bufPrint(&buf, "{d}", .{float}) catch unreachable;
+
+    return RocStr.init(&buf, result.len);
 }
 
 // Str.split
