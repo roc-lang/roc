@@ -104,18 +104,6 @@ where
                 self.free_symbols(stmt);
                 Ok(())
             }
-            Stmt::Invoke {
-                symbol,
-                layout,
-                call,
-                pass,
-                fail: _,
-                exception_id: _,
-            } => {
-                // for now, treat invoke as a normal call
-                let stmt = Stmt::Let(*symbol, Expr::Call(call.clone()), *layout, pass);
-                self.build_stmt(&stmt, ret_layout)
-            }
             Stmt::Switch {
                 cond_symbol,
                 cond_layout,

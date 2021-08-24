@@ -321,18 +321,18 @@ mod dev_records {
         );
     }
 
-    #[test]
-    fn i64_record2_literal() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                       { x: 3, y: 5 }
-                "#
-            ),
-            (3, 5),
-            (i64, i64)
-        );
-    }
+    // #[test]
+    // fn i64_record2_literal() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                    { x: 3, y: 5 }
+    //             "#
+    //         ),
+    //         (3, 5),
+    //         (i64, i64)
+    //     );
+    // }
 
     // // #[test]
     // // fn i64_record3_literal() {
@@ -836,20 +836,20 @@ mod dev_records {
     //     );
     // }
 
-    #[test]
-    fn update_record() {
-        assert_evals_to!(
-            indoc!(
-                r#"
-                    rec = { foo: 42, bar: 6 }
+    // #[test]
+    // fn update_record() {
+    //     assert_evals_to!(
+    //         indoc!(
+    //             r#"
+    //                 rec = { foo: 42, bar: 6 }
 
-                    { rec & foo: rec.foo + 1 }
-                "#
-            ),
-            (6, 43),
-            (i64, i64)
-        );
-    }
+    //                 { rec & foo: rec.foo + 1 }
+    //             "#
+    //         ),
+    //         (6, 43),
+    //         (i64, i64)
+    //     );
+    // }
 
     #[test]
     fn update_single_element_record() {
