@@ -401,7 +401,7 @@ pub fn dictLen(dict: RocDict) callconv(.C) usize {
 
 // commonly used type aliases
 const Opaque = ?[*]u8;
-const HashFn = fn (u64, ?[*]u8) callconv(.C) usize;
+const HashFn = fn (u64, ?[*]u8) callconv(.C) u64;
 const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
 
 const Inc = fn (?[*]u8) callconv(.C) void;
