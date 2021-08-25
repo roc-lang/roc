@@ -253,7 +253,7 @@ pub fn str_to_utf8<'a, 'ctx, 'env>(
     let string = complex_bitcast(
         env.builder,
         original_wrapper.into(),
-        env.str_list_int().into(),
+        env.str_list_c_abi().into(),
         "to_utf8",
     );
 
@@ -279,13 +279,13 @@ pub fn str_from_utf8_range<'a, 'ctx, 'env>(
             complex_bitcast(
                 env.builder,
                 list_wrapper.into(),
-                env.str_list_int().into(),
+                env.str_list_c_abi().into(),
                 "to_i128",
             ),
             complex_bitcast(
                 env.builder,
                 count_and_start.into(),
-                env.str_list_int().into(),
+                env.str_list_c_abi().into(),
                 "to_i128",
             ),
             result_ptr.into(),
@@ -333,7 +333,7 @@ pub fn str_from_utf8<'a, 'ctx, 'env>(
             complex_bitcast(
                 env.builder,
                 original_wrapper.into(),
-                env.str_list_int().into(),
+                env.str_list_c_abi().into(),
                 "to_i128",
             ),
             result_ptr.into(),

@@ -188,7 +188,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     ///
     /// on 64-bit systems, this is i128
     /// on 32-bit systems, this is i64
-    pub fn str_list_int(&self) -> IntType<'ctx> {
+    pub fn str_list_c_abi(&self) -> IntType<'ctx> {
         crate::llvm::convert::str_list_int(self.context, self.ptr_bytes)
     }
 
@@ -5223,7 +5223,7 @@ fn to_cc_type_builtin<'a, 'ctx, 'env>(
         | Builtin::Float32
         | Builtin::Float16 => basic_type_from_builtin(env, builtin),
         Builtin::Str | Builtin::EmptyStr | Builtin::List(_) | Builtin::EmptyList => {
-            env.str_list_int().into()
+            env.str_list_c_abi().into()
         }
         Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::EmptyDict | Builtin::EmptySet => {
             // TODO verify this is what actually happens

@@ -61,7 +61,7 @@ fn pass_list_cc<'a, 'ctx, 'env>(
     complex_bitcast(
         env.builder,
         list,
-        env.str_list_int().into(),
+        env.str_list_c_abi().into(),
         "to_str_list_int",
     )
 }
@@ -929,7 +929,6 @@ pub fn incrementing_elem_loop<'a, 'ctx, 'env, LoopFn>(
 where
     LoopFn: FnMut(IntValue<'ctx>, BasicValueEnum<'ctx>),
 {
-    let ctx = env.context;
     let builder = env.builder;
 
     incrementing_index_loop(env, parent, len, index_name, |index| {
