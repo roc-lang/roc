@@ -878,7 +878,7 @@ fn hash_bitcode_fn<'a, 'ctx, 'env>(
     buffer: PointerValue<'ctx>,
     width: u32,
 ) -> IntValue<'ctx> {
-    let num_bytes = env.context.i64_type().const_int(width as u64, false);
+    let num_bytes = env.ptr_int().const_int(width as u64, false);
 
     call_bitcode_fn(
         env,
