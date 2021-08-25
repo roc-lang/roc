@@ -2,7 +2,7 @@ use roc_module::symbol::Symbol;
 
 use crate::editor::ed_error::EdResult;
 use crate::editor::markup::attribute::Attributes;
-use crate::editor::markup::common_nodes::new_blank_mn;
+use crate::editor::markup::common_nodes::new_blank_mn_w_nl;
 use crate::editor::markup::common_nodes::new_equals_mn;
 use crate::editor::markup::nodes::MarkupNode;
 use crate::editor::mvc::app_update::InputOutcome;
@@ -26,6 +26,7 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
     } = get_node_context(ed_model)?;
 
     let is_blank_node = curr_mark_node.is_blank();
+    let curr_mark_node_has_nl = curr_mark_node.has_newline_at_end();
 
     let val_name_string = new_char.to_string();
     // safe unwrap because our ArrString has a 30B capacity
@@ -65,18 +66,20 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
         syn_high_style: HighlightStyle::Variable,
         attributes: Attributes::new(),
         parent_id_opt: Some(curr_mark_node_id),
+        newline_at_end: curr_mark_node_has_nl,
     };
 
     let val_name_mn_id = ed_model.add_mark_node(val_name_mark_node);
 
     let equals_mn_id = ed_model.add_mark_node(new_equals_mn(ast_node_id, Some(curr_mark_node_id)));
 
-    let body_mn_id = ed_model.add_mark_node(new_blank_mn(body_id, Some(curr_mark_node_id)));
+    let body_mn_id = ed_model.add_mark_node(new_blank_mn_w_nl(val_expr_id, Some(curr_mark_node_id)));
 
     let val_mark_node = MarkupNode::Nested {
         ast_node_id,
         children_ids: vec![val_name_mn_id, equals_mn_id, body_mn_id],
         parent_id_opt,
+        newline_at_end: true,
     };
 
     if is_blank_node {

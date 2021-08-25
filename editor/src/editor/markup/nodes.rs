@@ -31,7 +31,7 @@ pub enum MarkupNode {
         ast_node_id: ExprId,
         children_ids: Vec<MarkNodeId>,
         parent_id_opt: Option<MarkNodeId>,
-        new_line_at_end: bool,
+        newline_at_end: bool,
     },
     Text {
         content: String,
@@ -39,14 +39,14 @@ pub enum MarkupNode {
         syn_high_style: HighlightStyle,
         attributes: Attributes,
         parent_id_opt: Option<MarkNodeId>,
-        new_line_at_end: bool,
+        newline_at_end: bool,
     },
     Blank {
         ast_node_id: ExprId,
         attributes: Attributes,
         syn_high_style: HighlightStyle, // TODO remove HighlightStyle, this is always HighlightStyle::Blank
         parent_id_opt: Option<MarkNodeId>,
-        new_line_at_end: bool,
+        newline_at_end: bool,
     },
 }
 
@@ -222,6 +222,22 @@ impl MarkupNode {
     pub fn is_nested(&self) -> bool {
         matches!(self, MarkupNode::Nested { .. })
     }
+
+    pub fn has_newline_at_end(&self) -> bool {
+        match self {
+            MarkupNode::Nested { newline_at_end,.. } => *newline_at_end,
+            MarkupNode::Text { newline_at_end,.. } => *newline_at_end,
+            MarkupNode::Blank { newline_at_end,.. } => *newline_at_end,
+        }
+    }
+
+    pub fn add_newline_at_end(&mut self) {
+        match self {
+            MarkupNode::Nested { newline_at_end,.. } => *newline_at_end = true,
+            MarkupNode::Text { newline_at_end,.. } => *newline_at_end = true,
+            MarkupNode::Blank { newline_at_end,.. } => *newline_at_end = true,
+        }
+    }
 }
 
 fn get_string<'a>(env: &Env<'a>, pool_str: &PoolStr) -> String {
@@ -250,7 +266,7 @@ fn new_markup_node(
         syn_high_style: highlight_style,
         attributes: Attributes::new(),
         parent_id_opt: None,
-        new_line_at_end: false,
+        newline_at_end: false,
     };
 
     markup_node_pool.add(node)
@@ -334,7 +350,7 @@ pub fn expr2_to_markup<'a, 'b>(
                 ast_node_id: expr2_node_id,
                 children_ids,
                 parent_id_opt: None,
-                new_line_at_end: false,
+                newline_at_end: false,
             };
 
             markup_node_pool.add(list_node)
@@ -349,7 +365,7 @@ pub fn expr2_to_markup<'a, 'b>(
                 ast_node_id: expr2_node_id,
                 children_ids,
                 parent_id_opt: None,
-                new_line_at_end: false,
+                newline_at_end: false,
             };
 
             markup_node_pool.add(record_node)
@@ -399,7 +415,7 @@ pub fn expr2_to_markup<'a, 'b>(
                 ast_node_id: expr2_node_id,
                 children_ids,
                 parent_id_opt: None,
-                new_line_at_end: false,
+                newline_at_end: false,
             };
 
             markup_node_pool.add(record_node)
@@ -414,11 +430,6 @@ pub fn expr2_to_markup<'a, 'b>(
 
             let pattern2 = env.pool.get(pattern_id);
 
-            //TODO remove me
-            /*dbg!(env.pool.get(expr_id));
-            dbg!(env.pool.get(env.pool.get(*def_id).get_pattern_id()));
-            dbg!(env.pool.get(*body_id));*/
-
             let val_name = get_identifier_string(pattern2, interns)?;
 
             let val_name_mn = MarkupNode::Text {
@@ -427,7 +438,7 @@ pub fn expr2_to_markup<'a, 'b>(
                 syn_high_style: HighlightStyle::Variable,
                 attributes: Attributes::new(),
                 parent_id_opt: None,
-                new_line_at_end: false,
+                newline_at_end: false,
             };
 
             let val_name_mn_id = markup_node_pool.add(val_name_mn);
@@ -451,11 +462,14 @@ pub fn expr2_to_markup<'a, 'b>(
                         interns,
                     )?;
 
+                    let body_mn = markup_node_pool.get_mut(body_mn_id);
+                    body_mn.add_newline_at_end();
+
                     let full_let_node = MarkupNode::Nested {
                         ast_node_id: expr2_node_id,
                         children_ids: vec![val_name_mn_id, equals_mn_id, body_mn_id],
                         parent_id_opt: None,
-                        new_line_at_end: true,
+                        newline_at_end: true,
                     };
 
                     markup_node_pool.add(full_let_node)
@@ -487,7 +501,7 @@ pub fn set_parent_for_all(markup_node_id: MarkNodeId, markup_node_pool: &mut Slo
         ast_node_id: _,
         children_ids,
         parent_id_opt: _,
-        new_line_at_end: _,
+        newline_at_end: _,
     } = node
     {
         // need to clone because of borrowing issues
@@ -533,7 +547,7 @@ fn header_mn(content: String, ast_node_id: ExprId, mark_node_pool: &mut SlowPool
         syn_high_style: HighlightStyle::PackageRelated,
         attributes: Attributes::new(),
         parent_id_opt: None,
-        new_line_at_end: false,
+        newline_at_end: false,
     };
 
     mark_node_pool.add(mark_node)
@@ -551,7 +565,7 @@ fn header_val_mn(
         syn_high_style: highlight_style,
         attributes: Attributes::new(),
         parent_id_opt: None,
-        new_line_at_end: false,
+        newline_at_end: false,
     };
 
     mark_node_pool.add(mark_node)
@@ -573,7 +587,7 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
         ast_node_id,
         children_ids: vec![app_node_id, app_name_node_id],
         parent_id_opt: None,
-        new_line_at_end: true,
+        newline_at_end: true,
     };
 
     let packages_node_id = header_mn("    packages ".to_owned(), ast_node_id, mark_node_pool);
@@ -606,7 +620,7 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
             pack_right_acc_node_id,
         ],
         parent_id_opt: None,
-        new_line_at_end: true,
+        newline_at_end: true,
     };
 
     let imports_node_id = header_mn("    imports ".to_owned(), ast_node_id, mark_node_pool);
@@ -650,7 +664,7 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
         ast_node_id,
         children_ids: full_import_children,
         parent_id_opt: None,
-        new_line_at_end: true,
+        newline_at_end: true,
     };
 
     let provides_node_id = header_mn("    provides ".to_owned(), ast_node_id, mark_node_pool);
@@ -679,7 +693,7 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
             provides_end_node_id,
         ],
         parent_id_opt: None,
-        new_line_at_end: false,
+        newline_at_end: true,
     };
 
     let full_app_node_id = mark_node_pool.add(full_app_node);
@@ -696,7 +710,7 @@ pub fn header_to_markup(app_header: &AppHeader, mark_node_pool: &mut SlowPool) -
             full_provides_node_id,
         ],
         parent_id_opt: None,
-        new_line_at_end: true,
+        newline_at_end: true,
     };
 
     let header_mn_id = mark_node_pool.add(header_mark_node);

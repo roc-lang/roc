@@ -12,6 +12,7 @@ pub fn new_equals_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> 
         syn_high_style: HighlightStyle::Operator,
         attributes: Attributes::new(),
         parent_id_opt,
+        newline_at_end: false,
     }
 }
 
@@ -22,6 +23,7 @@ pub fn new_comma_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> M
         syn_high_style: HighlightStyle::Blank,
         attributes: Attributes::new(),
         parent_id_opt,
+        newline_at_end: false,
     }
 }
 
@@ -31,6 +33,17 @@ pub fn new_blank_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> M
         syn_high_style: HighlightStyle::Blank,
         attributes: Attributes::new(),
         parent_id_opt,
+        newline_at_end: false,
+    }
+}
+
+pub fn new_blank_mn_w_nl(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
+    MarkupNode::Blank {
+        ast_node_id,
+        syn_high_style: HighlightStyle::Blank,
+        attributes: Attributes::new(),
+        parent_id_opt,
+        newline_at_end: true,
     }
 }
 
@@ -41,6 +54,7 @@ pub fn new_colon_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> M
         syn_high_style: HighlightStyle::Operator,
         attributes: Attributes::new(),
         parent_id_opt,
+        newline_at_end: false,
     }
 }
 
@@ -51,6 +65,7 @@ pub fn new_left_accolade_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeI
         syn_high_style: HighlightStyle::Bracket,
         attributes: Attributes::new(),
         parent_id_opt,
+        newline_at_end: false,
     }
 }
 
@@ -61,6 +76,7 @@ pub fn new_right_accolade_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNode
         syn_high_style: HighlightStyle::Bracket,
         attributes: Attributes::new(),
         parent_id_opt,
+        newline_at_end: false,
     }
 }
 
@@ -71,6 +87,7 @@ pub fn new_left_square_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>
         syn_high_style: HighlightStyle::Bracket,
         attributes: Attributes::new(),
         parent_id_opt,
+        newline_at_end: false,
     }
 }
 
@@ -81,15 +98,6 @@ pub fn new_right_square_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId
         syn_high_style: HighlightStyle::Bracket,
         attributes: Attributes::new(),
         parent_id_opt,
-    }
-}
-
-pub fn new_line_mn(ast_node_id: ExprId, parent_id_opt: Option<MarkNodeId>) -> MarkupNode {
-    MarkupNode::Text {
-        content: "\n".to_owned(),
-        ast_node_id,
-        syn_high_style: HighlightStyle::Blank,
-        attributes: Attributes::new(),
-        parent_id_opt,
+        newline_at_end: false,
     }
 }

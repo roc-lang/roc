@@ -102,6 +102,20 @@ impl<'a> EdModel<'a> {
         }
     }
 
+    // disregards EdModel.code_lines because the caller knows the resulting caret position will be valid.
+    // allows us to prevent multiple updates to EdModel.code_lines
+    pub fn simple_move_caret_down(&mut self, old_caret_pos:TextPos, repeat: usize) {
+        for caret_tup in self.caret_w_select_vec.iter_mut() {
+
+            if caret_tup.0.caret_pos == old_caret_pos {
+                caret_tup.0.caret_pos.column = 0;
+                caret_tup.0.caret_pos.line += repeat;
+                caret_tup.1 = None;
+            }
+            
+        }
+    }
+
     pub fn build_node_map_from_markup(
         markup_ids: &[MarkNodeId],
         markup_node_pool: &SlowPool,
@@ -141,11 +155,11 @@ impl<'a> EdModel<'a> {
             let node_content_str = node.get_content();
 
             grid_node_map.add_to_line(*line_ctr, node_content_str.len(), node_id)?;
+        }
 
-            if node_content_str.ends_with('\n') {
-                *line_ctr += 1;
-                grid_node_map.lines.push(vec![]);
-            }
+        if node.has_newline_at_end() {
+            *line_ctr += 1;
+            grid_node_map.lines.push(vec![]);
         }
 
         Ok(())
@@ -177,10 +191,15 @@ impl<'a> EdModel<'a> {
             for child_id in node.get_children_ids() {
                 EdModel::build_markup_string(child_id, all_code_string, markup_node_pool)?;
             }
+
         } else {
             let node_content_str = node.get_content();
 
             all_code_string.push_str(&node_content_str);
+        }
+
+        if node.has_newline_at_end() {
+            all_code_string.push('\n');
         }
 
         Ok(())
@@ -421,12 +440,14 @@ impl<'a> EdModel<'a> {
     fn replace_selected_expr_with_blank(&mut self) -> EdResult<()> {
         let expr_mark_node_id_opt = if let Some(sel_expr) = &self.selected_expr_opt {
             let expr2_level_mark_node = self.markup_node_pool.get(sel_expr.mark_node_id);
+            let newline_at_end = expr2_level_mark_node.has_newline_at_end();
 
             let blank_replacement = MarkupNode::Blank {
                 ast_node_id: sel_expr.ast_node_id,
                 attributes: Attributes::new(),
                 syn_high_style: HighlightStyle::Blank,
                 parent_id_opt: expr2_level_mark_node.get_parent_id_opt(),
+                newline_at_end
             };
 
             self.markup_node_pool
@@ -884,29 +905,40 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                 let carets = ed_model.get_carets();
                                 
                                 for caret_pos in carets.iter() {
+
                                     let caret_line_nr = caret_pos.line;
-                                    // one blank line between top level definitions
-                                    ed_model.insert_empty_line(caret_line_nr + 1)?;
-                                    ed_model.insert_empty_line(caret_line_nr + 1)?;
 
-                                    // create Blank node at new line
-                                    let new_line_blank = Expr2::Blank;
-                                    let new_line_blank_id = ed_model.module.env.pool.add(new_line_blank);
+                                    // don't allow adding new lines on empty line
+                                    if caret_pos.column > 0 && ed_model.grid_node_map.node_exists_at_pos (
+                                            TextPos {
+                                                line: caret_line_nr,
+                                                column: caret_pos.column - 1
+                                            }
+                                        ) {
 
-                                    // TODO this should insert at caret line_nr, not push at end
-                                    ed_model.module.ast.expression_ids.push(new_line_blank_id);
+                                            // one blank line between top level definitions
+                                            ed_model.insert_empty_line(caret_line_nr + 1)?;
+                                            ed_model.insert_empty_line(caret_line_nr + 1)?;
 
-                                    let blank_mn_id = ed_model
-                                        .add_mark_node(new_blank_mn(new_line_blank_id, None));
+                                            // create Blank node at new line
+                                            let new_line_blank = Expr2::Blank;
+                                            let new_line_blank_id = ed_model.module.env.pool.add(new_line_blank);
 
-                                    // TODO this should insert at caret line_nr, not push at end
-                                    ed_model.markup_ids.push(blank_mn_id);
+                                            // TODO this should insert at caret line_nr, not push at end
+                                            ed_model.module.ast.expression_ids.push(new_line_blank_id);
 
-                                    ed_model.insert_all_between_line(
-                                        caret_pos.line + 2, // one blank line between top level definitions
-                                        0,
-                                        &[blank_mn_id],
-                                    )?;
+                                            let blank_mn_id = ed_model
+                                                .add_mark_node(new_blank_mn(new_line_blank_id, None));
+
+                                            // TODO this should insert at caret line_nr, not push at end
+                                            ed_model.markup_ids.push(blank_mn_id);
+
+                                            ed_model.insert_all_between_line(
+                                                caret_pos.line + 2, // one blank line between top level definitions
+                                                0,
+                                                &[blank_mn_id],
+                                            )?;
+                                        }
                                 }
 
                                 ed_model.simple_move_carets_down(2); // one blank line between top level definitions
@@ -930,7 +962,54 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                         }
                                     }
                                 } else {
-                                    InputOutcome::Ignored
+                                    match ch {
+                                        'a'..='z' => {
+                                            for caret_pos in ed_model.get_carets() {
+
+                                                if caret_pos.line > 0 {
+                                                    // TODO avoid code replication with '\r'
+                                                    // insert blank first, this simplifies flow
+                                                    let new_blank = Expr2::Blank;
+                                                    let new_blank_id = ed_model.module.env.pool.add(new_blank);
+
+                                                    // TODO this should insert at caret line_nr, not push at end
+                                                    ed_model.module.ast.expression_ids.push(new_blank_id);
+
+                                                    let blank_mn_id = ed_model
+                                                        .add_mark_node(new_blank_mn(new_blank_id, None));
+
+                                                    // TODO this should insert at caret line_nr, not push at end
+                                                    ed_model.markup_ids.push(blank_mn_id);
+
+                                                    if ed_model.code_lines.line_is_only_newline(caret_pos.line - 1)? {
+
+                                                        ed_model.insert_all_between_line(
+                                                            caret_pos.line,
+                                                            0,
+                                                            &[blank_mn_id],
+                                                        )?;
+                                                    } else {
+
+                                                        ed_model.simple_move_caret_down(caret_pos, 1);
+
+                                                        ed_model.insert_all_between_line(
+                                                            caret_pos.line + 1,
+                                                            0,
+                                                            &[blank_mn_id],
+                                                        )?;
+                                                    }
+
+                                                    
+                                                }
+                                                
+                                            }
+
+                                            handle_new_char(received_char, ed_model)?
+                                        }
+                                        _ => {
+                                            InputOutcome::Ignored
+                                        }
+                                    }
                                 }
                             }
                         };

@@ -25,6 +25,7 @@ pub fn start_new_list(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
     } = get_node_context(ed_model)?;
 
     let is_blank_node = curr_mark_node.is_blank();
+    let curr_mark_node_has_nl = curr_mark_node.has_newline_at_end();
 
     let expr2_node = Expr2::List {
         elem_var: ed_model.module.env.var_store.fresh(),
@@ -43,6 +44,7 @@ pub fn start_new_list(ed_model: &mut EdModel) -> EdResult<InputOutcome> {
         ast_node_id,
         children_ids: vec![left_bracket_node_id, right_bracket_node_id],
         parent_id_opt,
+        newline_at_end: curr_mark_node_has_nl,
     };
 
     if is_blank_node {

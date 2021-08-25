@@ -35,7 +35,7 @@ pub fn build_debug_graphics(
 
     let mut mark_node_trees_string = "\nmark node trees:".to_owned();
 
-    for mark_id in ed_model.markup_ids.iter() {
+    for mark_id in ed_model.markup_ids[1..].iter() { // 1.. -> skip header
         mark_node_trees_string.push_str(&tree_as_string(*mark_id, &ed_model.markup_node_pool));
 
         mark_node_trees_string.push('\n');

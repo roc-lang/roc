@@ -16,11 +16,17 @@ pub struct CodeLines {
 
 impl CodeLines {
     pub fn from_str(code_str: &str) -> CodeLines {
+        let mut lines: Vec<String> = code_str
+            .split_inclusive('\n')
+            .map(|s| s.to_owned())
+            .collect();
+
+        if code_str.ends_with('\n') {
+            lines.push(String::new());
+        }
+
         CodeLines {
-            lines: code_str
-                .split_inclusive('\n')
-                .map(|s| s.to_owned())
-                .collect(),
+            lines,
             nr_of_chars: code_str.len(),
         }
     }
@@ -87,6 +93,14 @@ impl CodeLines {
             line: last_line,
             column: self.line_len(last_line).unwrap() // safe because we just calculated last_line
         }
+    }
+
+    pub fn line_is_only_newline(&self, line_nr: usize) -> UIResult<bool> {
+        let line = self.get_line(line_nr)?;
+
+        Ok(
+            (*line).eq("\n")
+        )
     }
 }
 

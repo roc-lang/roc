@@ -41,10 +41,6 @@ pub fn build_code_graphics<'a>(
             markup_node_pool,
         )?;
 
-        // next line + leave line between top level definitions
-        txt_row_col.0 += 2;
-        txt_row_col.1 = 0;
-
         all_glyph_text_vec.append(&mut glyph_text_vec);
         all_rects.append(&mut rects)
     }
@@ -90,7 +86,6 @@ fn markup_to_wgpu<'a>(
     Ok((wgpu_texts, rects))
 }
 
-// TODO use text_row
 fn markup_to_wgpu_helper<'a>(
     markup_node: &'a MarkupNode,
     wgpu_texts: &mut Vec<glyph_brush::OwnedText>,
@@ -105,6 +100,7 @@ fn markup_to_wgpu_helper<'a>(
             ast_node_id: _,
             children_ids,
             parent_id_opt: _,
+            newline_at_end,
         } => {
             for child_id in children_ids.iter() {
                 let child = markup_node_pool.get(*child_id);
@@ -117,6 +113,13 @@ fn markup_to_wgpu_helper<'a>(
                     markup_node_pool,
                 )?;
             }
+
+            if *newline_at_end {
+                wgpu_texts.push(newline(code_style.font_size));
+
+                txt_row_col.0 += 1;
+                txt_row_col.1 = 0;
+            }
         }
         MarkupNode::Text {
             content,
@@ -124,19 +127,27 @@ fn markup_to_wgpu_helper<'a>(
             syn_high_style,
             attributes: _,
             parent_id_opt: _,
+            newline_at_end,
         } => {
             let highlight_color = map_get(&code_style.ed_theme.syntax_high_map, syn_high_style)?;
 
-            let glyph_text = glyph_brush::OwnedText::new(content)
+            let mut full_content = content.to_owned();
+
+            if *newline_at_end {
+                full_content.push('\n');
+            }
+
+            let glyph_text = glyph_brush::OwnedText::new(full_content)
                 .with_color(colors::to_slice(*highlight_color))
                 .with_scale(code_style.font_size);
 
-            if content.contains('\n') {
+            txt_row_col.1 += content.len();
+
+            if *newline_at_end {
                 txt_row_col.0 += 1;
                 txt_row_col.1 = 0;
             }
 
-            txt_row_col.1 += content.len();
             wgpu_texts.push(glyph_text);
         }
         MarkupNode::Blank {
@@ -144,6 +155,7 @@ fn markup_to_wgpu_helper<'a>(
             attributes: _,
             syn_high_style,
             parent_id_opt: _,
+            newline_at_end,
         } => {
             let glyph_text = glyph_brush::OwnedText::new(BLANK_PLACEHOLDER)
                 .with_color(colors::to_slice(colors::WHITE))
@@ -158,7 +170,7 @@ fn markup_to_wgpu_helper<'a>(
                 top_left_coords: (
                     code_style.txt_coords.x + (txt_row_col.1 as f32) * char_width,
                     code_style.txt_coords.y
-                        + ((txt_row_col.0 - 2) as f32) * char_height
+                        + (txt_row_col.0 as f32) * char_height
                         + 0.1 * char_height,
                 )
                     .into(),
@@ -170,8 +182,20 @@ fn markup_to_wgpu_helper<'a>(
 
             txt_row_col.1 += BLANK_PLACEHOLDER.len();
             wgpu_texts.push(glyph_text);
+
+            if *newline_at_end {
+                wgpu_texts.push(newline(code_style.font_size));
+
+                txt_row_col.0 += 1;
+                txt_row_col.1 = 0;
+            }
         }
     };
 
     Ok(())
+}
+
+fn newline(font_size: f32) -> glyph_brush::OwnedText {
+    glyph_brush::OwnedText::new("\n")
+        .with_scale(font_size)
 }
