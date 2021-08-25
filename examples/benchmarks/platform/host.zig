@@ -68,17 +68,16 @@ pub fn main() u8 {
 
     roc__mainForHost_1_exposed(output);
 
-    const elements = @ptrCast([*]u64, @alignCast(8, output));
-
-    var flag = elements[0];
+    const flag = @ptrCast(*u64, @alignCast(@alignOf(u64), output)).*;
 
     if (flag == 0) {
         // all is well
-        const closure_data_pointer = @ptrCast([*]u8, output[8..size]);
+        const closure_data_pointer = @ptrCast([*]u8, output[@sizeOf(u64)..size]);
 
         call_the_closure(closure_data_pointer);
     } else {
-        const msg = @intToPtr([*:0]const u8, elements[1]);
+        const ptr = @ptrCast(*u32, output + @sizeOf(u64));
+        const msg = @intToPtr([*:0]const u8, ptr.*);
         const stderr = std.io.getStdErr().writer();
         stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
 
