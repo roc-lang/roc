@@ -2792,9 +2792,9 @@ fn num_div_int(symbol: Symbol, var_store: &mut VarStore) -> Def {
 fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let list_var = var_store.fresh();
-    let len_var = var_store.fresh();
-    let zero_var = var_store.fresh();
-    let zero_precision_var = var_store.fresh();
+    let len_var = Variable::NAT;
+    let zero_var = len_var;
+    let zero_precision_var = Variable::NATURAL;
     let list_elem_var = var_store.fresh();
     let ret_var = var_store.fresh();
 

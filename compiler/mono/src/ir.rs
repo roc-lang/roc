@@ -7494,7 +7494,9 @@ fn from_can_record_destruct<'a>(
     })
 }
 
+#[derive(Debug)]
 pub enum IntPrecision {
+    Usize,
     I128,
     I64,
     I32,
@@ -7530,6 +7532,7 @@ fn int_precision_to_builtin(precision: IntPrecision) -> Builtin<'static> {
         I32 => Builtin::Int32,
         I16 => Builtin::Int16,
         I8 => Builtin::Int8,
+        Usize => Builtin::Usize,
     }
 }
 
@@ -7628,16 +7631,8 @@ pub fn num_argument_to_int_or_float(
         Content::Alias(Symbol::NUM_NAT, _, _)
         | Content::Alias(Symbol::NUM_NATURAL, _, _)
         | Content::Alias(Symbol::NUM_AT_NATURAL, _, _) => {
-            match ptr_bytes {
-                1 => IntOrFloat::UnsignedIntType(IntPrecision::I8),
-                2 => IntOrFloat::UnsignedIntType(IntPrecision::I16),
-                4 => IntOrFloat::UnsignedIntType(IntPrecision::I32),
-                8 => IntOrFloat::UnsignedIntType(IntPrecision::I64),
-                _ => panic!(
-                    "Invalid target for Num type argument: Roc does't support compiling to {}-bit systems.",
-                    ptr_bytes * 8
-                ),
-            }
+            IntOrFloat::UnsignedIntType(IntPrecision::Usize)
+
         }
         other => {
             panic!(
