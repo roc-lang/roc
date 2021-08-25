@@ -78,7 +78,7 @@ where
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
     fn build_proc(&mut self, proc: Proc<'a>) -> Result<(&'a [u8], &[Relocation]), String> {
         self.reset();
-        self.load_args(&proc.args, &proc.ret_layout)?;
+        self.load_args(proc.args, &proc.ret_layout)?;
         // let start = std::time::Instant::now();
         self.scan_ast(&proc.body);
         self.create_free_map();
