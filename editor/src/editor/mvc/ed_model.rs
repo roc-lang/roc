@@ -194,6 +194,7 @@ pub mod test_ed_model {
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_selection_to_dsl;
     use crate::ui::text::caret_w_select::CaretPos;
     use crate::ui::text::lines::SelectableLines;
+    use crate::ui::text::text_pos::TextPos;
     use crate::ui::ui_error::UIResult;
     use bumpalo::Bump;
     use ed_model::EdModel;
@@ -262,7 +263,6 @@ pub mod test_ed_model {
         code_arena: &'a Bump,
     ) -> Result<EdModel<'a>, String> {
         let code_lines_vec: Vec<String> = (*code_lines).iter().map(|s| s.to_string()).collect();
-        let caret_w_select = convert_dsl_to_selection(&code_lines_vec)?;
 
         *clean_code_str = [HELLO_WORLD, clean_code_str.as_str()].join("\n");
 
@@ -290,7 +290,15 @@ pub mod test_ed_model {
             code_arena,
         )?;
 
-        ed_model.set_caret(caret_w_select.caret_pos);
+        // adjust for header and main function
+        let nr_hello_world_lines = HELLO_WORLD.matches('\n').count() - 1;
+        let caret_w_select = convert_dsl_to_selection(&code_lines_vec)?;
+        let adjusted_caret_pos = TextPos {
+            line: caret_w_select.caret_pos.line + nr_hello_world_lines,
+            column: caret_w_select.caret_pos.column,
+        };
+
+        ed_model.set_caret(adjusted_caret_pos);
 
         Ok(ed_model)
     }

@@ -1117,11 +1117,9 @@ pub mod test_ed_update {
 
     #[test]
     fn test_ignore_basic() -> Result<(), String> {
-        // space is added because Blank is inserted
-        assert_insert(&["┃"], &["┃ "], 'a')?;
-        assert_insert(&["┃"], &["┃ "], ';')?;
-        assert_insert(&["┃"], &["┃ "], '-')?;
-        assert_insert(&["┃"], &["┃ "], '_')?;
+        assert_insert(&["┃"], &["┃"], ';')?;
+        assert_insert(&["┃"], &["┃"], '-')?;
+        assert_insert(&["┃"], &["┃"], '_')?;
 
         Ok(())
     }
@@ -1153,30 +1151,60 @@ pub mod test_ed_update {
         Ok(())
     }
 
+    fn merge_strings(strings: Vec<&str>) -> String {
+        strings
+            .iter()
+            .map(|&some_str| some_str.to_owned())
+            .collect::<Vec<String>>()
+            .join("")
+    }
+
     #[test]
     fn test_ignore_int() -> Result<(), String> {
-        assert_insert_seq_ignore(&["┃0"], "{}()[]-><-_\"azAZ:@")?;
-        assert_insert_seq_ignore(&["┃7"], "{}()[]-><-_\"azAZ:@")?;
+        // type val >> this will output "val = ". So we move the caret right three times to able to enter input
+        let prefix = "val🡲🡲🡲";
+        let ignore_these = "{}()[]-><-_\"azAZ:@";
 
-        assert_insert_seq_ignore(&["0┃"], ",{}()[]-><-_\"azAZ:@")?;
-        assert_insert_seq_ignore(&["8┃"], ",{}()[]-><-_\"azAZ:@")?;
-        assert_insert_seq_ignore(&["20┃"], ",{}()[]-><-_\"azAZ:@")?;
-        assert_insert_seq_ignore(&["83┃"], ",{}()[]-><-_\"azAZ:@")?;
+        let wrap_f = |some_str: &str| merge_strings(vec![prefix, some_str, ignore_these]);
 
-        assert_insert_seq_ignore(&["1┃0"], ",{}()[]-><-_\"azAZ:@")?;
-        assert_insert_seq_ignore(&["8┃4"], ",{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq(&["┃"], &["val = ┃0"], &wrap_f("0🡰"))?;
+        assert_insert_seq(&["┃"], &["val = ┃7"], &wrap_f("7🡰"))?;
 
-        assert_insert_seq_ignore(&["┃10"], ",{}()[]-><-_\"azAZ:@")?;
-        assert_insert_seq_ignore(&["┃84"], ",{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq(&["┃"], &["val = 0┃"], &wrap_f("0"))?;
+        assert_insert_seq(&["┃"], &["val = 8┃"], &wrap_f("8"))?;
+        assert_insert_seq(&["┃"], &["val = 20┃"], &wrap_f("20"))?;
+        assert_insert_seq(&["┃"], &["val = 83┃"], &wrap_f("83"))?;
 
-        assert_insert_seq_ignore(&["129┃96"], ",{}()[]-><-_\"azAZ:@")?;
-        assert_insert_seq_ignore(&["97┃684"], ",{}()[]-><-_\"azAZ:@")?;
+        assert_insert_seq(&["┃"], &["val = 1┃0"], &wrap_f("10🡰"))?;
+        assert_insert_seq(&["┃"], &["val = 8┃4"], &wrap_f("84🡰"))?;
 
-        assert_insert_ignore(&["0┃"], '0')?;
-        assert_insert_ignore(&["0┃"], '9')?;
-        assert_insert_ignore(&["┃0"], '0')?;
-        assert_insert_ignore(&["┃1234"], '0')?;
-        assert_insert_ignore(&["┃100"], '0')?;
+        assert_insert_seq(&["┃"], &["val = ┃10"], &wrap_f("10🡰🡰"))?;
+        assert_insert_seq(&["┃"], &["val = ┃84"], &wrap_f("84🡰🡰"))?;
+
+        assert_insert_seq(&["┃"], &["val = 129┃96"], &wrap_f("12996🡰🡰"))?;
+        assert_insert_seq(&["┃"], &["val = 97┃684"], &wrap_f("97684🡰🡰🡰"))?;
+
+        // adding numbers after 0 is invalid
+        assert_insert_seq(
+            &["┃"],
+            &["val = 0┃"],
+            &merge_strings(vec![prefix, "0", "09"]),
+        )?;
+        assert_insert_seq(
+            &["┃"],
+            &["val = ┃0"],
+            &merge_strings(vec![prefix, "0🡰", "0"]),
+        )?;
+        assert_insert_seq(
+            &["┃"],
+            &["val = ┃1234"],
+            &merge_strings(vec![prefix, "1234🡰🡰🡰🡰", "0"]),
+        )?;
+        assert_insert_seq(
+            &["┃"],
+            &["val = ┃100"],
+            &merge_strings(vec![prefix, "100🡰🡰🡰", "0"]),
+        )?;
 
         Ok(())
     }

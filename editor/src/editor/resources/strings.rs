@@ -16,4 +16,5 @@ app "test-app"
     provides [ main ] to base
 
 main = "Hello, world!"
+
 "#;
