@@ -180,6 +180,10 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         ptr_int(self.context, self.ptr_bytes)
     }
 
+    pub fn str_list_c_abi(&self) -> IntType<'ctx> {
+        crate::llvm::convert::str_list_int(self.context, self.ptr_bytes)
+    }
+
     pub fn small_str_bytes(&self) -> u32 {
         self.ptr_bytes * 2
     }
