@@ -63,27 +63,21 @@ fn capacityOfLevel(input: usize) usize {
 // alignment of the key and value. The tag furthermore indicates
 // which has the biggest aligmnent. If both are the same, we put
 // the key first
-const Alignment = enum(u8) {
-    Align16KeyFirst,
-    Align16ValueFirst,
-    Align8KeyFirst,
-    Align8ValueFirst,
+const Alignment = extern struct {
+    bits: u8,
+
+    const VALUE_BEFORE_KEY_FLAG = 0b1000_0000;
 
     fn toU32(self: Alignment) u32 {
-        switch (self) {
-            .Align16KeyFirst => return 16,
-            .Align16ValueFirst => return 16,
-            .Align8KeyFirst => return 8,
-            .Align8ValueFirst => return 8,
-        }
+        // xor to wipe the leftmost bit
+        return self.bits ^ Alignment.VALUE_BEFORE_KEY_FLAG;
     }
 
     fn keyFirst(self: Alignment) bool {
-        switch (self) {
-            .Align16KeyFirst => return true,
-            .Align16ValueFirst => return false,
-            .Align8KeyFirst => return true,
-            .Align8ValueFirst => return false,
+        if (self.bits & Alignment.VALUE_BEFORE_KEY_FLAG > 0) {
+            return false;
+        } else {
+            return true;
         }
     }
 };

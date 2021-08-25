@@ -9,39 +9,36 @@ use crate::llvm::build_list::{layout_width, pass_as_opaque};
 use crate::llvm::convert::{basic_type_from_layout, zig_dict_type, zig_list_type};
 use crate::llvm::refcounting::Mode;
 use inkwell::attributes::{Attribute, AttributeLoc};
+use inkwell::context::Context;
 use inkwell::types::BasicType;
-use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, StructValue};
+use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, IntValue, StructValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
-#[repr(u8)]
-enum Alignment {
-    Align16KeyFirst = 0,
-    Align16ValueFirst = 1,
-    Align8KeyFirst = 2,
-    Align8ValueFirst = 3,
-}
+#[repr(transparent)]
+struct Alignment(u8);
 
 impl Alignment {
     fn from_key_value_layout(key: &Layout, value: &Layout, ptr_bytes: u32) -> Alignment {
         let key_align = key.alignment_bytes(ptr_bytes);
         let value_align = value.alignment_bytes(ptr_bytes);
 
-        if key_align >= value_align {
-            match key_align.max(value_align) {
-                8 => Alignment::Align8KeyFirst,
-                16 => Alignment::Align16KeyFirst,
-                _ => unreachable!(),
-            }
-        } else {
-            match key_align.max(value_align) {
-                8 => Alignment::Align8ValueFirst,
-                16 => Alignment::Align16ValueFirst,
-                _ => unreachable!(),
-            }
+        let mut bits = key_align.max(value_align) as u8;
+        debug_assert!(bits == 4 || bits == 8 || bits == 16);
+
+        let value_before_key_flag = 0b1000_0000;
+
+        if key_align < value_align {
+            bits |= value_before_key_flag;
         }
+
+        Alignment(bits)
+    }
+
+    fn as_int_value<'ctx>(&self, context: &'ctx Context) -> IntValue<'ctx> {
+        context.i8_type().const_int(self.0 as u64, false)
     }
 }
 
@@ -113,7 +110,7 @@ pub fn dict_insert<'a, 'ctx, 'env>(
     let result_ptr = builder.build_alloca(zig_dict_type(env), "result_ptr");
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
@@ -170,7 +167,7 @@ pub fn dict_remove<'a, 'ctx, 'env>(
     let result_ptr = builder.build_alloca(zig_dict_type(env), "result_ptr");
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
@@ -224,7 +221,7 @@ pub fn dict_contains<'a, 'ctx, 'env>(
         .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
@@ -270,7 +267,7 @@ pub fn dict_get<'a, 'ctx, 'env>(
         .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
@@ -372,7 +369,7 @@ pub fn dict_elements_rc<'a, 'ctx, 'env>(
         .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let (key_fn, value_fn) = match rc_operation {
         Mode::Inc => (
@@ -418,7 +415,7 @@ pub fn dict_keys<'a, 'ctx, 'env>(
         .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let inc_key_fn = build_inc_wrapper(env, layout_ids, key_layout);
 
@@ -489,7 +486,7 @@ pub fn dict_union<'a, 'ctx, 'env>(
         .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
@@ -582,7 +579,7 @@ fn dict_intersect_or_difference<'a, 'ctx, 'env>(
         .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
@@ -631,7 +628,7 @@ pub fn dict_walk<'a, 'ctx, 'env>(
     env.builder.build_store(accum_ptr, accum);
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let output_ptr = builder.build_alloca(accum_bt, "output_ptr");
 
@@ -677,7 +674,7 @@ pub fn dict_values<'a, 'ctx, 'env>(
         .const_int(value_layout.stack_size(env.ptr_bytes) as u64, false);
 
     let alignment = Alignment::from_key_value_layout(key_layout, value_layout, env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let inc_value_fn = build_inc_wrapper(env, layout_ids, value_layout);
 
@@ -736,7 +733,7 @@ pub fn set_from_list<'a, 'ctx, 'env>(
 
     let alignment =
         Alignment::from_key_value_layout(key_layout, &Layout::Struct(&[]), env.ptr_bytes);
-    let alignment_iv = env.context.i8_type().const_int(alignment as u64, false);
+    let alignment_iv = alignment.as_int_value(env.context);
 
     let hash_fn = build_hash_wrapper(env, layout_ids, key_layout);
     let eq_fn = build_eq_wrapper(env, layout_ids, key_layout);
