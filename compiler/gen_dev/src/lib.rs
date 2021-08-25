@@ -66,7 +66,11 @@ where
 
     // load_args is used to let the backend know what the args are.
     // The backend should track these args so it can use them as needed.
-    fn load_args(&mut self, args: &'a [(Layout<'a>, Symbol)]) -> Result<(), String>;
+    fn load_args(
+        &mut self,
+        args: &'a [(Layout<'a>, Symbol)],
+        ret_layout: &Layout<'a>,
+    ) -> Result<(), String>;
 
     /// Used for generating wrappers for malloc/realloc/free
     fn build_wrapped_jmp(&mut self) -> Result<(&'a [u8], u64), String>;
@@ -74,29 +78,29 @@ where
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
     fn build_proc(&mut self, proc: Proc<'a>) -> Result<(&'a [u8], &[Relocation]), String> {
         self.reset();
-        self.load_args(proc.args)?;
+        self.load_args(proc.args, &proc.ret_layout)?;
         // let start = std::time::Instant::now();
         self.scan_ast(&proc.body);
         self.create_free_map();
         // let duration = start.elapsed();
         // println!("Time to calculate lifetimes: {:?}", duration);
         // println!("{:?}", self.last_seen_map());
-        self.build_stmt(&proc.body)?;
+        self.build_stmt(&proc.body, &proc.ret_layout)?;
         self.finalize()
     }
 
     /// build_stmt builds a statement and outputs at the end of the buffer.
-    fn build_stmt(&mut self, stmt: &Stmt<'a>) -> Result<(), String> {
+    fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) -> Result<(), String> {
         match stmt {
             Stmt::Let(sym, expr, layout, following) => {
                 self.build_expr(sym, expr, layout)?;
                 self.free_symbols(stmt);
-                self.build_stmt(following)?;
+                self.build_stmt(following, ret_layout)?;
                 Ok(())
             }
             Stmt::Ret(sym) => {
                 self.load_literal_symbols(&[*sym])?;
-                self.return_symbol(sym)?;
+                self.return_symbol(sym, ret_layout)?;
                 self.free_symbols(stmt);
                 Ok(())
             }
@@ -218,6 +222,15 @@ where
                     x => Err(format!("the call type, {:?}, is not yet implemented", x)),
                 }
             }
+            Expr::Struct(fields) => {
+                self.load_literal_symbols(fields)?;
+                self.create_struct(sym, layout, fields)
+            }
+            Expr::StructAtIndex {
+                index,
+                field_layouts,
+                structure,
+            } => self.load_struct_at_index(sym, structure, *index, field_layouts),
             x => Err(format!("the expression, {:?}, is not yet implemented", x)),
         }
     }
@@ -377,11 +390,28 @@ where
         Ok(())
     }
 
+    /// create_struct creates a struct with the elements specified loaded into it as data.
+    fn create_struct(
+        &mut self,
+        sym: &Symbol,
+        layout: &Layout<'a>,
+        fields: &'a [Symbol],
+    ) -> Result<(), String>;
+
+    /// load_struct_at_index loads into `sym` the value at `index` in `structure`.
+    fn load_struct_at_index(
+        &mut self,
+        sym: &Symbol,
+        structure: &Symbol,
+        index: u64,
+        field_layouts: &'a [Layout<'a>],
+    ) -> Result<(), String>;
+
     /// load_literal sets a symbol to be equal to a literal.
     fn load_literal(&mut self, sym: &Symbol, lit: &Literal<'a>) -> Result<(), String>;
 
     /// return_symbol moves a symbol to the correct return location for the backend.
-    fn return_symbol(&mut self, sym: &Symbol) -> Result<(), String>;
+    fn return_symbol(&mut self, sym: &Symbol, layout: &Layout<'a>) -> Result<(), String>;
 
     /// free_symbols will free all symbols for the given statement.
     fn free_symbols(&mut self, stmt: &Stmt<'a>) {
