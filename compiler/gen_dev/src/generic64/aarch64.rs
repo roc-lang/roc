@@ -253,6 +253,10 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg> for AArch64Call {
     ) -> Result<(), String> {
         Err("Returning structs not yet implemented for AArch64".to_string())
     }
+
+    fn returns_via_arg_pointer(_ret_layout: &Layout) -> Result<bool, String> {
+        Err("Returning via arg pointer not yet implemented for AArch64".to_string())
+    }
 }
 
 impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {

@@ -75,6 +75,9 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait> {
         field_layouts: &[Layout<'a>],
         ret_reg: Option<GeneralReg>,
     ) -> Result<(), String>;
+
+    // returns true if the layout should be returned via an argument pointer.
+    fn returns_via_arg_pointer(ret_layout: &Layout) -> Result<bool, String>;
 }
 
 /// Assembler contains calls to the backend assembly generator.

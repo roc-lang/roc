@@ -55,22 +55,6 @@ pub struct X86_64SystemV {}
 
 const STACK_ALIGNMENT: u8 = 16;
 
-impl X86_64SystemV {
-    fn returns_via_arg_pointer<'a>(ret_layout: &Layout<'a>) -> Result<bool, String> {
-        // TODO: This may need to be more complex/extended to fully support the calling convention.
-        // details here: https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-1.0.pdf
-        return Ok(ret_layout.stack_size(PTR_SIZE) > 16);
-    }
-}
-
-impl X86_64WindowsFastcall {
-    fn returns_via_arg_pointer<'a>(ret_layout: &Layout<'a>) -> Result<bool, String> {
-        // TODO: This is not fully correct there are some exceptions for "vector" types.
-        // details here: https://docs.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-160#return-values
-        return Ok(ret_layout.stack_size(PTR_SIZE) > 8);
-    }
-}
-
 impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
     const GENERAL_PARAM_REGS: &'static [X86_64GeneralReg] = &[
         X86_64GeneralReg::RDI,
@@ -393,6 +377,12 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64SystemV {
     ) -> Result<(), String> {
         Err("Returning structs not yet implemented for X86_64".to_string())
     }
+
+    fn returns_via_arg_pointer(ret_layout: &Layout) -> Result<bool, String> {
+        // TODO: This may need to be more complex/extended to fully support the calling convention.
+        // details here: https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-1.0.pdf
+        Ok(ret_layout.stack_size(PTR_SIZE) > 16)
+    }
 }
 
 impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
@@ -706,6 +696,12 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg> for X86_64WindowsFastcall {
         _ret_reg: Option<X86_64GeneralReg>,
     ) -> Result<(), String> {
         Err("Returning structs not yet implemented for X86_64WindowsFastCall".to_string())
+    }
+
+    fn returns_via_arg_pointer(ret_layout: &Layout) -> Result<bool, String> {
+        // TODO: This is not fully correct there are some exceptions for "vector" types.
+        // details here: https://docs.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-160#return-values
+        Ok(ret_layout.stack_size(PTR_SIZE) > 8)
     }
 }
 
