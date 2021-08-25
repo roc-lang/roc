@@ -386,8 +386,8 @@ pub const RocDict = extern struct {
 };
 
 // Dict.empty
-pub fn dictEmpty() callconv(.C) RocDict {
-    return RocDict.empty();
+pub fn dictEmpty(dict: *RocDict) callconv(.C) void {
+    dict.* = RocDict.empty();
 }
 
 pub fn slotSize(key_size: usize, value_size: usize) usize {
