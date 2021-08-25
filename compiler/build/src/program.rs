@@ -265,6 +265,8 @@ pub fn gen_from_mono_module(
                     .expect("Writing .o file failed");
             }
             Architecture::Wasm32 => {
+                // Useful for debugging
+                // module.print_to_file(app_ll_file);
                 module.write_bitcode_to_path(app_o_file);
             }
             _ => panic!(

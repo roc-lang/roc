@@ -194,6 +194,20 @@ pub fn ptr_int(ctx: &Context, ptr_bytes: u32) -> IntType<'_> {
     }
 }
 
+/// The int type that the C ABI turns our RocList/RocStr into
+pub fn str_list_int(ctx: &Context, ptr_bytes: u32) -> IntType<'_> {
+    match ptr_bytes {
+        1 => ctx.i16_type(),
+        2 => ctx.i32_type(),
+        4 => ctx.i64_type(),
+        8 => ctx.i128_type(),
+        _ => panic!(
+            "Invalid target: Roc does't support compiling to {}-bit systems.",
+            ptr_bytes * 8
+        ),
+    }
+}
+
 pub fn zig_dict_type<'a, 'ctx, 'env>(
     env: &crate::llvm::build::Env<'a, 'ctx, 'env>,
 ) -> StructType<'ctx> {

@@ -579,6 +579,8 @@ fn link_wasm32(
                 "str",
                 zig_str_path.to_str().unwrap(),
                 "--pkg-end",
+                // useful for debugging
+                // "-femit-llvm-ir=/home/folkertdev/roc/roc/examples/benchmarks/platform/host.ll",
             ])
             .spawn()?;
 
