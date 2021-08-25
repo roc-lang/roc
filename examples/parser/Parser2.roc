@@ -4,7 +4,7 @@ interface Parser2 exposes [
     andThen, first, second,
     map,mapT2,
 
-    tests, badStuff
+    tests, tests2, badStuff
   ] imports [Pair, Utility]
 
 ## PARSER  
@@ -110,6 +110,8 @@ mapT2 = runU8 "abcd" (map any (\u -> u + 25))
 
 
 tests = [ anyT, satisfyT,  mapT, andThenT, firstT, secondT]
+tests2 = [ anyT, satisfyT, andThenT, firstT, secondT, mapT]
+
 badStuff = [andThenT, firstT, secondT, mapT, andThenT, firstT, secondT]
 
 
