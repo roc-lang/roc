@@ -253,7 +253,7 @@ pub fn str_to_utf8<'a, 'ctx, 'env>(
     let string = complex_bitcast(
         env.builder,
         original_wrapper.into(),
-        env.context.i128_type().into(),
+        env.str_list_int().into(),
         "to_utf8",
     );
 
@@ -279,14 +279,13 @@ pub fn str_from_utf8_range<'a, 'ctx, 'env>(
             complex_bitcast(
                 env.builder,
                 list_wrapper.into(),
-                env.context.i128_type().into(),
+                env.str_list_int().into(),
                 "to_i128",
             ),
-            // TODO: This won't work for 32 bit targets!
             complex_bitcast(
                 env.builder,
                 count_and_start.into(),
-                env.context.i128_type().into(),
+                env.str_list_int().into(),
                 "to_i128",
             ),
             result_ptr.into(),
@@ -334,7 +333,7 @@ pub fn str_from_utf8<'a, 'ctx, 'env>(
             complex_bitcast(
                 env.builder,
                 original_wrapper.into(),
-                env.context.i128_type().into(),
+                env.str_list_int().into(),
                 "to_i128",
             ),
             result_ptr.into(),

@@ -781,7 +781,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
     let is_non_empty = builder.build_int_compare(
         IntPredicate::UGT,
         len,
-        ctx.i64_type().const_zero(),
+        env.ptr_int().const_zero(),
         "len > 0",
     );
 
@@ -810,15 +810,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
             );
         };
 
-        incrementing_elem_loop(
-            env.builder,
-            env.context,
-            parent,
-            ptr,
-            len,
-            "modify_rc_index",
-            loop_fn,
-        );
+        incrementing_elem_loop(env, parent, ptr, len, "modify_rc_index", loop_fn);
     }
 
     let refcount_ptr = PointerToRefcount::from_list_wrapper(env, original_wrapper);

@@ -128,6 +128,20 @@ pub fn decref(
                 (isizes - 1)[0] = refcount - 1;
             }
         },
+        8 => {
+            if (refcount == REFCOUNT_ONE_ISIZE) {
+                dealloc(bytes - 8, alignment);
+            } else if (refcount_isize < 0) {
+                (isizes - 1)[0] = refcount - 1;
+            }
+        },
+        4 => {
+            if (refcount == REFCOUNT_ONE_ISIZE) {
+                dealloc(bytes - 4, alignment);
+            } else if (refcount_isize < 0) {
+                (isizes - 1)[0] = refcount - 1;
+            }
+        },
         else => {
             // NOTE enums can currently have an alignment of < 8
             if (refcount == REFCOUNT_ONE_ISIZE) {

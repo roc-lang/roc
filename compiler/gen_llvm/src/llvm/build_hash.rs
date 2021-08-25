@@ -785,15 +785,7 @@ fn hash_list<'a, 'ctx, 'env>(
         env.builder.build_store(result, answer);
     };
 
-    incrementing_elem_loop(
-        env.builder,
-        env.context,
-        parent,
-        ptr,
-        length,
-        "current_index",
-        loop_fn,
-    );
+    incrementing_elem_loop(env, parent, ptr, length, "current_index", loop_fn);
 
     env.builder.build_unconditional_branch(done_block);
 
