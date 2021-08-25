@@ -114,6 +114,8 @@ pub fn build_app<'a>() -> App<'a> {
         )
 }
 
+// TODO: Most of this file is a mess of giant functions just to check if things work.
+// Clean it all up and refactor nicely.
 pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     let verbose = matches.is_present(FLAG_VERBOSE);
     let time = matches.is_present(FLAG_TIME);
@@ -583,6 +585,9 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     out_file.set_len(md.exec_len)?;
     let mut out_mmap = unsafe { MmapMut::map_mut(&out_file)? };
 
+    // TODO: Look at PIC/PIE binaries and see if moving symbols becomes easier.
+    // If that is the case it may become easier to copy over all data correctly including debug and symbol info.
+
     // Copy header and check if their is a notes segment.
     // If so, copy it instead of dealing with shifting data.
     // Otherwise shift data and hope for no overlaps/conflicts.
@@ -1015,6 +1020,9 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         .collect();
 
     let mut symbol_offset_map: MutMap<usize, usize> = MutMap::default();
+    // TODO: we don't yet deal with relocations for these sections.
+    // We should probably first define where each section will go and resolve all symbol locations.
+    // Then we can support all relocations correctly.
     for sec in rodata_sections {
         let data = match sec.uncompressed_data() {
             Ok(data) => data,
