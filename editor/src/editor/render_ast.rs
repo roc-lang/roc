@@ -94,7 +94,6 @@ fn markup_to_wgpu_helper<'a>(
     txt_row_col: &mut (usize, usize),
     markup_node_pool: &'a SlowPool,
 ) -> EdResult<()> {
-
     match markup_node {
         MarkupNode::Nested {
             ast_node_id: _,
@@ -196,6 +195,5 @@ fn markup_to_wgpu_helper<'a>(
 }
 
 fn newline(font_size: f32) -> glyph_brush::OwnedText {
-    glyph_brush::OwnedText::new("\n")
-        .with_scale(font_size)
+    glyph_brush::OwnedText::new("\n").with_scale(font_size)
 }

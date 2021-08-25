@@ -104,15 +104,13 @@ impl<'a> EdModel<'a> {
 
     // disregards EdModel.code_lines because the caller knows the resulting caret position will be valid.
     // allows us to prevent multiple updates to EdModel.code_lines
-    pub fn simple_move_caret_down(&mut self, old_caret_pos:TextPos, repeat: usize) {
+    pub fn simple_move_caret_down(&mut self, old_caret_pos: TextPos, repeat: usize) {
         for caret_tup in self.caret_w_select_vec.iter_mut() {
-
             if caret_tup.0.caret_pos == old_caret_pos {
                 caret_tup.0.caret_pos.column = 0;
                 caret_tup.0.caret_pos.line += repeat;
                 caret_tup.1 = None;
             }
-            
         }
     }
 
@@ -191,7 +189,6 @@ impl<'a> EdModel<'a> {
             for child_id in node.get_children_ids() {
                 EdModel::build_markup_string(child_id, all_code_string, markup_node_pool)?;
             }
-
         } else {
             let node_content_str = node.get_content();
 
@@ -245,10 +242,7 @@ impl<'a> EdModel<'a> {
         Ok(())
     }
 
-    pub fn insert_empty_line(
-        &mut self,
-        line_nr: usize,
-    ) -> UIResult<()> {
+    pub fn insert_empty_line(&mut self, line_nr: usize) -> UIResult<()> {
         self.code_lines.insert_empty_line(line_nr)?;
         self.grid_node_map.insert_empty_line(line_nr)
     }
@@ -447,7 +441,7 @@ impl<'a> EdModel<'a> {
                 attributes: Attributes::new(),
                 syn_high_style: HighlightStyle::Blank,
                 parent_id_opt: expr2_level_mark_node.get_parent_id_opt(),
-                newline_at_end
+                newline_at_end,
             };
 
             self.markup_node_pool
@@ -903,7 +897,7 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                             if *received_char == '\r' {
                                 // TODO move to separate file
                                 let carets = ed_model.get_carets();
-                                
+
                                 for caret_pos in carets.iter() {
 
                                     let caret_line_nr = caret_pos.line;
@@ -944,15 +938,15 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                 ed_model.simple_move_carets_down(2); // one blank line between top level definitions
 
                                 InputOutcome::Accepted
-                                
+
 
                             } else {
                                 let prev_mark_node_id_opt = ed_model.get_prev_mark_node_id()?;
                                 if let Some(prev_mark_node_id) = prev_mark_node_id_opt {
                                     let prev_mark_node = ed_model.markup_node_pool.get(prev_mark_node_id);
-    
+
                                     let prev_ast_node = ed_model.module.env.pool.get(prev_mark_node.get_ast_node_id());
-    
+
                                     match prev_ast_node {
                                         Expr2::SmallInt{ .. } => {
                                             update_int(ed_model, prev_mark_node_id, ch)?
@@ -999,9 +993,9 @@ pub fn handle_new_char(received_char: &char, ed_model: &mut EdModel) -> EdResult
                                                         )?;
                                                     }
 
-                                                    
+
                                                 }
-                                                
+
                                             }
 
                                             handle_new_char(received_char, ed_model)?

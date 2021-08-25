@@ -76,12 +76,8 @@ pub fn init_model<'a>(
 
     let caret = match caret_pos {
         CaretPos::Start => CaretWSelect::default(),
-        CaretPos::Exact(txt_pos) => {
-            CaretWSelect::new(txt_pos, None)
-        },
-        CaretPos::End => {
-            CaretWSelect::new(code_lines.end_txt_pos(), None)
-        },
+        CaretPos::Exact(txt_pos) => CaretWSelect::new(txt_pos, None),
+        CaretPos::End => CaretWSelect::new(code_lines.end_txt_pos(), None),
     };
 
     Ok(EdModel {
@@ -194,9 +190,9 @@ pub mod test_ed_model {
     use crate::editor::resources::strings::HELLO_WORLD;
     use crate::lang::expr::Env;
     use crate::lang::pool::Pool;
-    use crate::ui::text::caret_w_select::CaretPos;
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_dsl_to_selection;
     use crate::ui::text::caret_w_select::test_caret_w_select::convert_selection_to_dsl;
+    use crate::ui::text::caret_w_select::CaretPos;
     use crate::ui::text::lines::SelectableLines;
     use crate::ui::ui_error::UIResult;
     use bumpalo::Bump;
@@ -234,7 +230,14 @@ pub mod test_ed_model {
             exposed_ident_ids,
         );
 
-        ed_model::init_model(code_str, file_path, env, loaded_module, code_arena, CaretPos::End)
+        ed_model::init_model(
+            code_str,
+            file_path,
+            env,
+            loaded_module,
+            code_arena,
+            CaretPos::End,
+        )
     }
 
     pub struct EdModelRefs {

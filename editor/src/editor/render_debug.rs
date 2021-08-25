@@ -21,9 +21,10 @@ pub fn build_debug_graphics(
 
     let debug_txt_coords: Vector2<f32> = (txt_coords.x, txt_coords.y * 3.0).into();
 
-    let carets_text = glyph_brush::OwnedText::new(format!("carets: {:?}\n\n", ed_model.get_carets()))
-        .with_color(colors::to_slice(from_hsb(0, 0, 100)))
-        .with_scale(config.code_font_size);
+    let carets_text =
+        glyph_brush::OwnedText::new(format!("carets: {:?}\n\n", ed_model.get_carets()))
+            .with_color(colors::to_slice(from_hsb(0, 0, 100)))
+            .with_scale(config.code_font_size);
 
     let grid_node_map_text = glyph_brush::OwnedText::new(format!("{}", ed_model.grid_node_map))
         .with_color(colors::to_slice(from_hsb(20, 41, 100)))
@@ -35,7 +36,8 @@ pub fn build_debug_graphics(
 
     let mut mark_node_trees_string = "\nmark node trees:".to_owned();
 
-    for mark_id in ed_model.markup_ids[1..].iter() { // 1.. -> skip header
+    for mark_id in ed_model.markup_ids[1..].iter() {
+        // 1.. -> skip header
         mark_node_trees_string.push_str(&tree_as_string(*mark_id, &ed_model.markup_node_pool));
 
         mark_node_trees_string.push('\n');

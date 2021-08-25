@@ -15,7 +15,7 @@ pub struct CaretWSelect {
 pub enum CaretPos {
     Start,
     Exact(TextPos),
-    End
+    End,
 }
 
 fn mk_some_sel(start_pos: TextPos, end_pos: TextPos) -> UIResult<Option<Selection>> {

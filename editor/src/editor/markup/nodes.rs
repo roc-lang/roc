@@ -225,17 +225,17 @@ impl MarkupNode {
 
     pub fn has_newline_at_end(&self) -> bool {
         match self {
-            MarkupNode::Nested { newline_at_end,.. } => *newline_at_end,
-            MarkupNode::Text { newline_at_end,.. } => *newline_at_end,
-            MarkupNode::Blank { newline_at_end,.. } => *newline_at_end,
+            MarkupNode::Nested { newline_at_end, .. } => *newline_at_end,
+            MarkupNode::Text { newline_at_end, .. } => *newline_at_end,
+            MarkupNode::Blank { newline_at_end, .. } => *newline_at_end,
         }
     }
 
     pub fn add_newline_at_end(&mut self) {
         match self {
-            MarkupNode::Nested { newline_at_end,.. } => *newline_at_end = true,
-            MarkupNode::Text { newline_at_end,.. } => *newline_at_end = true,
-            MarkupNode::Blank { newline_at_end,.. } => *newline_at_end = true,
+            MarkupNode::Nested { newline_at_end, .. } => *newline_at_end = true,
+            MarkupNode::Text { newline_at_end, .. } => *newline_at_end = true,
+            MarkupNode::Blank { newline_at_end, .. } => *newline_at_end = true,
         }
     }
 }

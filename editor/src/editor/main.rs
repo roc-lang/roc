@@ -157,8 +157,14 @@ fn run_event_loop(file_path_opt: Option<&Path>) -> Result<(), Box<dyn Error>> {
     );
 
     let ed_model_opt = {
-        let ed_model_res =
-            ed_model::init_model(&code_str, file_path, env, loaded_module, &code_arena, CaretPos::End);
+        let ed_model_res = ed_model::init_model(
+            &code_str,
+            file_path,
+            env,
+            loaded_module,
+            &code_arena,
+            CaretPos::End,
+        );
 
         match ed_model_res {
             Ok(mut ed_model) => {
@@ -418,7 +424,7 @@ fn read_file(file_path_opt: Option<&Path>) -> (&Path, String) {
 {:?}
 
 to file {:?}, but it failed."#,
-HELLO_WORLD, untitled_file
+                    HELLO_WORLD, untitled_file
                 )
             });
 

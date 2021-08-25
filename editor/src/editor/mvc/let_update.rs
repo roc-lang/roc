@@ -73,7 +73,8 @@ pub fn start_new_let_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
 
     let equals_mn_id = ed_model.add_mark_node(new_equals_mn(ast_node_id, Some(curr_mark_node_id)));
 
-    let body_mn_id = ed_model.add_mark_node(new_blank_mn_w_nl(val_expr_id, Some(curr_mark_node_id)));
+    let body_mn_id =
+        ed_model.add_mark_node(new_blank_mn_w_nl(val_expr_id, Some(curr_mark_node_id)));
 
     let val_mark_node = MarkupNode::Nested {
         ast_node_id,

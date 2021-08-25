@@ -1,7 +1,7 @@
 use crate::ui::text::lines::Lines;
 use crate::ui::text::selection::Selection;
 use crate::ui::text::text_pos::TextPos;
-use crate::ui::ui_error::{UIResult, OutOfBounds};
+use crate::ui::ui_error::{OutOfBounds, UIResult};
 use crate::ui::util::slice_get;
 use crate::ui::util::slice_get_mut;
 use bumpalo::collections::String as BumpString;
@@ -46,10 +46,7 @@ impl CodeLines {
         Ok(())
     }
 
-    pub fn insert_empty_line(
-        &mut self,
-        line_nr: usize
-    ) -> UIResult<()> {
+    pub fn insert_empty_line(&mut self, line_nr: usize) -> UIResult<()> {
         if line_nr <= self.lines.len() {
             self.lines.insert(line_nr, String::new());
 
@@ -59,8 +56,9 @@ impl CodeLines {
                 index: line_nr,
                 collection_name: "code_lines.lines".to_owned(),
                 len: self.lines.len(),
-            }.fail()
-        }        
+            }
+            .fail()
+        }
     }
 
     pub fn del_at_line(&mut self, line_nr: usize, index: usize) -> UIResult<()> {
@@ -91,16 +89,14 @@ impl CodeLines {
 
         TextPos {
             line: last_line,
-            column: self.line_len(last_line).unwrap() // safe because we just calculated last_line
+            column: self.line_len(last_line).unwrap(), // safe because we just calculated last_line
         }
     }
 
     pub fn line_is_only_newline(&self, line_nr: usize) -> UIResult<bool> {
         let line = self.get_line(line_nr)?;
 
-        Ok(
-            (*line).eq("\n")
-        )
+        Ok((*line).eq("\n"))
     }
 }
 
@@ -140,7 +136,6 @@ impl Lines for CodeLines {
     fn last_char(&self, line_nr: usize) -> UIResult<Option<char>> {
         Ok(self.get_line(line_nr)?.chars().last())
     }
-
 }
 
 impl fmt::Display for CodeLines {
