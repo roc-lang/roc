@@ -2,6 +2,7 @@ use crate::ir::DestructType;
 use roc_collections::all::{Index, MutMap};
 use roc_module::ident::{Lowercase, TagName};
 use roc_region::all::{Located, Region};
+use roc_std::RocDec;
 
 use self::Pattern::*;
 
@@ -55,7 +56,8 @@ pub enum Literal {
     Int(i128),
     Bit(bool),
     Byte(u8),
-    Float(Box<str>, u64),
+    Float(u64),
+    Decimal(RocDec),
     Str(Box<str>),
 }
 
@@ -64,7 +66,8 @@ fn simplify(pattern: &crate::ir::Pattern) -> Pattern {
 
     match pattern {
         IntLiteral(v) => Literal(Literal::Int(*v)),
-        FloatLiteral(s, v) => Literal(Literal::Float(s.clone(), *v)),
+        FloatLiteral(v) => Literal(Literal::Float(*v)),
+        DecimalLiteral(v) => Literal(Literal::Decimal(*v)),
         StrLiteral(v) => Literal(Literal::Str(v.clone())),
 
         // To make sure these are exhaustive, we have to "fake" a union here

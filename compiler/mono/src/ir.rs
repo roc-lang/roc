@@ -14,6 +14,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Located, Region};
+use roc_std::RocDec;
 use roc_types::solved_types::SolvedType;
 use roc_types::subs::{Content, FlatType, Subs, Variable, VariableSubsSlice};
 use std::collections::HashMap;
@@ -1020,7 +1021,8 @@ impl ModifyRc {
 pub enum Literal<'a> {
     // Literals
     Int(i128),
-    Float(&'a str, f64),
+    Float(f64),
+    Decimal(RocDec),
     Str(&'a str),
     /// Closed tag unions containing exactly two (0-arity) tags compile to Expr::Bool,
     /// so they can (at least potentially) be emitted as 1-bit machine bools.
@@ -1201,7 +1203,9 @@ impl<'a> Literal<'a> {
 
         match self {
             Int(lit) => alloc.text(format!("{}i64", lit)),
-            Float(_, lit) => alloc.text(format!("{}f64", lit)),
+            Float(lit) => alloc.text(format!("{}f64", lit)),
+            // TODO: Add proper Dec.to_str
+            Decimal(lit) => alloc.text(format!("{}Dec", lit.0)),
             Bool(lit) => alloc.text(format!("{}", lit)),
             Byte(lit) => alloc.text(format!("{}u8", lit)),
             Str(lit) => alloc.text(format!("{:?}", lit)),
@@ -2747,16 +2751,22 @@ pub fn with_hole<'a>(
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, precision, true) {
                 IntOrFloat::BinaryFloatType(precision) => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Float(arena.alloc(float_str), float)),
+                    Expr::Literal(Literal::Float(float)),
                     Layout::Builtin(float_precision_to_builtin(precision)),
                     hole,
                 ),
-                IntOrFloat::DecimalFloatType => Stmt::Let(
-                    assigned,
-                    Expr::Literal(Literal::Float(arena.alloc(float_str), float)),
-                    Layout::Builtin(Builtin::Decimal),
-                    hole,
-                ),
+                IntOrFloat::DecimalFloatType => {
+                    let dec = match RocDec::from_str(&float_str) {
+                            Some(d) => d,
+                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", float_str),
+                        };
+                    Stmt::Let(
+                        assigned,
+                        Expr::Literal(Literal::Decimal(dec)),
+                        Layout::Builtin(Builtin::Decimal),
+                        hole,
+                    )
+                }
                 _ => unreachable!("unexpected float precision for integer"),
             }
         }
@@ -2784,16 +2794,22 @@ pub fn with_hole<'a>(
                 ),
                 IntOrFloat::BinaryFloatType(precision) => Stmt::Let(
                     assigned,
-                    Expr::Literal(Literal::Float(arena.alloc(num_str), num as f64)),
+                    Expr::Literal(Literal::Float(num as f64)),
                     Layout::Builtin(float_precision_to_builtin(precision)),
                     hole,
                 ),
-                IntOrFloat::DecimalFloatType => Stmt::Let(
-                    assigned,
-                    Expr::Literal(Literal::Float(arena.alloc(num_str), num as f64)),
-                    Layout::Builtin(Builtin::Decimal),
-                    hole,
-                ),
+                IntOrFloat::DecimalFloatType => {
+                    let dec = match RocDec::from_str(&num_str) {
+                            Some(d) => d,
+                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", num_str),
+                        };
+                    Stmt::Let(
+                        assigned,
+                        Expr::Literal(Literal::Decimal(dec)),
+                        Layout::Builtin(Builtin::Decimal),
+                        hole,
+                    )
+                }
             }
         }
         LetNonRec(def, cont, _) => {
@@ -5589,7 +5605,8 @@ fn store_pattern_help<'a>(
             return StorePattern::NotProductive(stmt);
         }
         IntLiteral(_)
-        | FloatLiteral(_, _)
+        | FloatLiteral(_)
+        | DecimalLiteral(_)
         | EnumLiteral { .. }
         | BitLiteral { .. }
         | StrLiteral(_) => {
@@ -5723,7 +5740,8 @@ fn store_tag_pattern<'a>(
                 // ignore
             }
             IntLiteral(_)
-            | FloatLiteral(_, _)
+            | FloatLiteral(_)
+            | DecimalLiteral(_)
             | EnumLiteral { .. }
             | BitLiteral { .. }
             | StrLiteral(_) => {}
@@ -5798,7 +5816,8 @@ fn store_newtype_pattern<'a>(
                 // ignore
             }
             IntLiteral(_)
-            | FloatLiteral(_, _)
+            | FloatLiteral(_)
+            | DecimalLiteral(_)
             | EnumLiteral { .. }
             | BitLiteral { .. }
             | StrLiteral(_) => {}
@@ -5873,7 +5892,8 @@ fn store_record_destruct<'a>(
                 return StorePattern::NotProductive(stmt);
             }
             IntLiteral(_)
-            | FloatLiteral(_, _)
+            | FloatLiteral(_)
+            | DecimalLiteral(_)
             | EnumLiteral { .. }
             | BitLiteral { .. }
             | StrLiteral(_) => {
@@ -6822,7 +6842,8 @@ pub enum Pattern<'a> {
     Identifier(Symbol),
     Underscore,
     IntLiteral(i128),
-    FloatLiteral(Box<str>, u64),
+    FloatLiteral(u64),
+    DecimalLiteral(RocDec),
     BitLiteral {
         value: bool,
         tag_name: TagName,
@@ -6900,10 +6921,25 @@ fn from_can_pattern_help<'a>(
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
         IntLiteral(_, _, int) => Ok(Pattern::IntLiteral(*int as i128)),
-        FloatLiteral(_, float_str, float) => Ok(Pattern::FloatLiteral(
-            float_str.clone(),
-            f64::to_bits(*float),
-        )),
+        FloatLiteral(var, float_str, float) => {
+            // TODO: Can I reuse num_argument_to_int_or_float here if I pass in true?
+            match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, true) {
+                IntOrFloat::SignedIntType(_) => {
+                    panic!("Invalid percision for float literal = {:?}", var)
+                }
+                IntOrFloat::UnsignedIntType(_) => {
+                    panic!("Invalid percision for float literal = {:?}", var)
+                }
+                IntOrFloat::BinaryFloatType(_) => Ok(Pattern::FloatLiteral(f64::to_bits(*float))),
+                IntOrFloat::DecimalFloatType => {
+                    let dec = match RocDec::from_str(float_str) {
+                            Some(d) => d,
+                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", float_str),
+                        };
+                    Ok(Pattern::DecimalLiteral(dec))
+                }
+            }
+        }
         StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
         Shadowed(region, ident) => Err(RuntimeError::Shadowing {
             original_region: *region,
@@ -6918,11 +6954,13 @@ fn from_can_pattern_help<'a>(
             match num_argument_to_int_or_float(env.subs, env.ptr_bytes, *var, false) {
                 IntOrFloat::SignedIntType(_) => Ok(Pattern::IntLiteral(*num as i128)),
                 IntOrFloat::UnsignedIntType(_) => Ok(Pattern::IntLiteral(*num as i128)),
-                IntOrFloat::BinaryFloatType(_) => {
-                    Ok(Pattern::FloatLiteral(num_str.clone(), *num as u64))
-                }
+                IntOrFloat::BinaryFloatType(_) => Ok(Pattern::FloatLiteral(*num as u64)),
                 IntOrFloat::DecimalFloatType => {
-                    Ok(Pattern::FloatLiteral(num_str.clone(), *num as u64))
+                    let dec = match RocDec::from_str(num_str) {
+                            Some(d) => d,
+                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", num_str),
+                        };
+                    Ok(Pattern::DecimalLiteral(dec))
                 }
             }
         }

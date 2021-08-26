@@ -1193,7 +1193,7 @@ fn literal_spec(
 
     match literal {
         Str(_) => new_static_string(builder, block),
-        Int(_) | Float(_, _) | Bool(_) | Byte(_) => builder.add_make_tuple(block, &[]),
+        Int(_) | Float(_) | Decimal(_) | Bool(_) | Byte(_) => builder.add_make_tuple(block, &[]),
     }
 }
 

@@ -52,7 +52,6 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{BranchInfo, CallType, EntryPoint, JoinPointId, ModifyRc, OptLevel, ProcLayout};
 use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, UnionLayout};
-use roc_std::RocDec;
 
 /// This is for Inkwell's FunctionValue::verify - we want to know the verification
 /// output in debug builds, but we don't want it to print to stdout in release builds!
@@ -686,18 +685,10 @@ pub fn int_with_precision<'a, 'ctx, 'env>(
 
 pub fn float_with_precision<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    value_str: &str,
     value: f64,
     precision: &Builtin,
 ) -> BasicValueEnum<'ctx> {
     match precision {
-        Builtin::Decimal => {
-            let dec = match RocDec::from_str(value_str) {
-                Some(d) => d.0,
-                None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", value),
-            };
-            env.context.i128_type().const_int(dec as u64, false).into()
-        }
         Builtin::Float64 => env.context.f64_type().const_float(value).into(),
         Builtin::Float32 => env.context.f32_type().const_float(value).into(),
         _ => panic!("Invalid layout for float literal = {:?}", precision),
@@ -717,11 +708,16 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
             _ => panic!("Invalid layout for int literal = {:?}", layout),
         },
 
-        Float(float_str, float) => match layout {
-            Layout::Builtin(builtin) => float_with_precision(env, *float_str, *float, builtin),
+        Float(float) => match layout {
+            Layout::Builtin(builtin) => float_with_precision(env, *float, builtin),
             _ => panic!("Invalid layout for float literal = {:?}", layout),
         },
 
+        Decimal(int) => env
+            .context
+            .i128_type()
+            .const_int(int.0 as u64, false)
+            .into(),
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Str(str_literal) => {
