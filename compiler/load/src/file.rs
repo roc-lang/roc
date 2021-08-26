@@ -832,6 +832,7 @@ struct State<'a> {
     pub exposed_types: SubsByModule,
     pub output_path: Option<&'a str>,
     pub platform_path: PlatformPath<'a>,
+    pub ptr_bytes: u32,
 
     pub headers_parsed: MutSet<ModuleId>,
 
@@ -1467,6 +1468,7 @@ where
 
             let mut state = State {
                 root_id,
+                ptr_bytes,
                 platform_data: None,
                 goal_phase,
                 stdlib,
@@ -1978,7 +1980,10 @@ fn update<'a>(
                 );
 
                 if state.goal_phase > Phase::SolveTypes {
-                    let layout_cache = state.layout_caches.pop().unwrap_or_default();
+                    let layout_cache = state
+                        .layout_caches
+                        .pop()
+                        .unwrap_or_else(|| LayoutCache::new(state.ptr_bytes));
 
                     let typechecked = TypeCheckedModule {
                         module_id,

@@ -972,8 +972,9 @@ impl<'a> Layout<'a> {
 /// e.g. `identity : a -> a` could be specialized to `Bool -> Bool` or `Str -> Str`.
 /// Therefore in general it's invalid to store a map from variables to layouts
 /// But if we're careful when to invalidate certain keys, we still get some benefit
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct LayoutCache<'a> {
+    ptr_bytes: u32,
     _marker: std::marker::PhantomData<&'a u8>,
 }
 
@@ -985,6 +986,13 @@ pub enum CachedLayout<'a> {
 }
 
 impl<'a> LayoutCache<'a> {
+    pub fn new(ptr_bytes: u32) -> Self {
+        Self {
+            ptr_bytes,
+            _marker: Default::default(),
+        }
+    }
+
     pub fn from_var(
         &mut self,
         arena: &'a Bump,
