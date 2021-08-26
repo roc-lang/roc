@@ -138,7 +138,8 @@ impl<'a> RawFunctionLayout<'a> {
                 let fn_args = fn_args.into_bump_slice();
                 let ret = arena.alloc(ret);
 
-                let lambda_set = LambdaSet::from_var(env.arena, env.subs, closure_var)?;
+                let lambda_set =
+                    LambdaSet::from_var(env.arena, env.subs, closure_var, env.ptr_bytes)?;
 
                 Ok(Self::Function(fn_args, lambda_set, ret))
             }
@@ -516,6 +517,7 @@ impl<'a> LambdaSet<'a> {
         arena: &'a Bump,
         subs: &Subs,
         closure_var: Variable,
+        ptr_bytes: u32,
     ) -> Result<Self, LayoutProblem> {
         let mut tags = std::vec::Vec::new();
         match roc_types::pretty_print::chase_ext_tag_union(subs, closure_var, &mut tags) {
@@ -529,6 +531,7 @@ impl<'a> LambdaSet<'a> {
                     arena,
                     subs,
                     seen: Vec::new_in(arena),
+                    ptr_bytes,
                 };
 
                 for (tag_name, variables) in tags.iter() {
@@ -545,7 +548,8 @@ impl<'a> LambdaSet<'a> {
                     }
                 }
 
-                let representation = arena.alloc(Self::make_representation(arena, subs, tags));
+                let representation =
+                    arena.alloc(Self::make_representation(arena, subs, tags, ptr_bytes));
 
                 Ok(LambdaSet {
                     set: set.into_bump_slice(),
@@ -568,9 +572,10 @@ impl<'a> LambdaSet<'a> {
         arena: &'a Bump,
         subs: &Subs,
         tags: std::vec::Vec<(TagName, std::vec::Vec<Variable>)>,
+        ptr_bytes: u32,
     ) -> Layout<'a> {
         // otherwise, this is a closure with a payload
-        let variant = union_sorted_tags_help(arena, tags, None, subs);
+        let variant = union_sorted_tags_help(arena, tags, None, subs, ptr_bytes);
 
         use UnionVariant::*;
         match variant {
@@ -648,6 +653,7 @@ pub enum Builtin<'a> {
 }
 
 pub struct Env<'a, 'b> {
+    ptr_bytes: u32,
     arena: &'a Bump,
     seen: Vec<'a, Variable>,
     subs: &'b Subs,
@@ -972,8 +978,9 @@ impl<'a> Layout<'a> {
 /// e.g. `identity : a -> a` could be specialized to `Bool -> Bool` or `Str -> Str`.
 /// Therefore in general it's invalid to store a map from variables to layouts
 /// But if we're careful when to invalidate certain keys, we still get some benefit
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct LayoutCache<'a> {
+    ptr_bytes: u32,
     _marker: std::marker::PhantomData<&'a u8>,
 }
 
@@ -985,6 +992,13 @@ pub enum CachedLayout<'a> {
 }
 
 impl<'a> LayoutCache<'a> {
+    pub fn new(ptr_bytes: u32) -> Self {
+        Self {
+            ptr_bytes,
+            _marker: Default::default(),
+        }
+    }
+
     pub fn from_var(
         &mut self,
         arena: &'a Bump,
@@ -998,6 +1012,7 @@ impl<'a> LayoutCache<'a> {
             arena,
             subs,
             seen: Vec::new_in(arena),
+            ptr_bytes: self.ptr_bytes,
         };
 
         Layout::from_var(&mut env, var)
@@ -1016,6 +1031,7 @@ impl<'a> LayoutCache<'a> {
             arena,
             subs,
             seen: Vec::new_in(arena),
+            ptr_bytes: self.ptr_bytes,
         };
 
         RawFunctionLayout::from_var(&mut env, var)
@@ -1182,6 +1198,7 @@ fn layout_from_flat_type<'a>(
 
     let arena = env.arena;
     let subs = env.subs;
+    let ptr_bytes = env.ptr_bytes;
 
     match flat_type {
         Apply(symbol, args) => {
@@ -1273,7 +1290,7 @@ fn layout_from_flat_type<'a>(
             }
         }
         Func(_, closure_var, _) => {
-            let lambda_set = LambdaSet::from_var(env.arena, env.subs, closure_var)?;
+            let lambda_set = LambdaSet::from_var(env.arena, env.subs, closure_var, env.ptr_bytes)?;
 
             Ok(lambda_set.runtime_representation())
         }
@@ -1299,8 +1316,6 @@ fn layout_from_flat_type<'a>(
             let mut pairs = Vec::from_iter_in(pairs_it, arena);
 
             pairs.sort_by(|(label1, layout1), (label2, layout2)| {
-                let ptr_bytes = 8;
-
                 let size1 = layout1.alignment_bytes(ptr_bytes);
                 let size2 = layout2.alignment_bytes(ptr_bytes);
 
@@ -1320,14 +1335,14 @@ fn layout_from_flat_type<'a>(
         TagUnion(tags, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
-            Ok(layout_from_tag_union(arena, tags, subs))
+            Ok(layout_from_tag_union(arena, tags, subs, env.ptr_bytes))
         }
         FunctionOrTagUnion(tag_name, _, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
             let tags = UnionTags::from_tag_name_index(tag_name);
 
-            Ok(layout_from_tag_union(arena, tags, subs))
+            Ok(layout_from_tag_union(arena, tags, subs, env.ptr_bytes))
         }
         RecursiveTagUnion(rec_var, tags, ext_var) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
@@ -1377,8 +1392,6 @@ fn layout_from_flat_type<'a>(
                 }
 
                 tag_layout.sort_by(|layout1, layout2| {
-                    let ptr_bytes = 8;
-
                     let size1 = layout1.alignment_bytes(ptr_bytes);
                     let size2 = layout2.alignment_bytes(ptr_bytes);
 
@@ -1425,11 +1438,13 @@ pub fn sort_record_fields<'a>(
     arena: &'a Bump,
     var: Variable,
     subs: &Subs,
+    ptr_bytes: u32,
 ) -> Vec<'a, (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>)> {
     let mut env = Env {
         arena,
         subs,
         seen: Vec::new_in(arena),
+        ptr_bytes,
     };
 
     let (it, _) = gather_fields_unsorted_iter(subs, RecordFields::empty(), var);
@@ -1445,6 +1460,8 @@ fn sort_record_fields_help<'a>(
     env: &mut Env<'a, '_>,
     fields_map: impl Iterator<Item = (Lowercase, RecordField<Variable>)>,
 ) -> Vec<'a, (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>)> {
+    let ptr_bytes = env.ptr_bytes;
+
     // Sort the fields by label
     let mut sorted_fields = Vec::with_capacity_in(fields_map.size_hint().0, env.arena);
 
@@ -1468,8 +1485,6 @@ fn sort_record_fields_help<'a>(
         |(label1, _, res_layout1), (label2, _, res_layout2)| match res_layout1 {
             Ok(layout1) | Err(layout1) => match res_layout2 {
                 Ok(layout2) | Err(layout2) => {
-                    let ptr_bytes = 8;
-
                     let size1 = layout1.alignment_bytes(ptr_bytes);
                     let size2 = layout2.alignment_bytes(ptr_bytes);
 
@@ -1605,6 +1620,7 @@ pub fn union_sorted_tags<'a>(
     arena: &'a Bump,
     var: Variable,
     subs: &Subs,
+    ptr_bytes: u32,
 ) -> Result<UnionVariant<'a>, LayoutProblem> {
     let var =
         if let Content::RecursionVar { structure, .. } = subs.get_content_without_compacting(var) {
@@ -1617,7 +1633,7 @@ pub fn union_sorted_tags<'a>(
     let result = match roc_types::pretty_print::chase_ext_tag_union(subs, var, &mut tags_vec) {
         Ok(()) | Err((_, Content::FlexVar(_))) | Err((_, Content::RecursionVar { .. })) => {
             let opt_rec_var = get_recursion_var(subs, var);
-            union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs)
+            union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs, ptr_bytes)
         }
         Err((_, Content::Error)) => return Err(LayoutProblem::Erroneous),
         Err(other) => panic!("invalid content in tag union variable: {:?}", other),
@@ -1651,6 +1667,7 @@ fn union_sorted_tags_help_new<'a>(
     mut tags_vec: Vec<(&'_ TagName, VariableSubsSlice)>,
     opt_rec_var: Option<Variable>,
     subs: &Subs,
+    ptr_bytes: u32,
 ) -> UnionVariant<'a> {
     // sort up front; make sure the ordering stays intact!
     tags_vec.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
@@ -1659,6 +1676,7 @@ fn union_sorted_tags_help_new<'a>(
         arena,
         subs,
         seen: Vec::new_in(arena),
+        ptr_bytes,
     };
 
     match tags_vec.len() {
@@ -1708,8 +1726,6 @@ fn union_sorted_tags_help_new<'a>(
             }
 
             layouts.sort_by(|layout1, layout2| {
-                let ptr_bytes = 8;
-
                 let size1 = layout1.alignment_bytes(ptr_bytes);
                 let size2 = layout2.alignment_bytes(ptr_bytes);
 
@@ -1793,8 +1809,6 @@ fn union_sorted_tags_help_new<'a>(
                 }
 
                 arg_layouts.sort_by(|layout1, layout2| {
-                    let ptr_bytes = 8;
-
                     let size1 = layout1.alignment_bytes(ptr_bytes);
                     let size2 = layout2.alignment_bytes(ptr_bytes);
 
@@ -1867,6 +1881,7 @@ pub fn union_sorted_tags_help<'a>(
     mut tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)>,
     opt_rec_var: Option<Variable>,
     subs: &Subs,
+    ptr_bytes: u32,
 ) -> UnionVariant<'a> {
     // sort up front; make sure the ordering stays intact!
     tags_vec.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
@@ -1875,6 +1890,7 @@ pub fn union_sorted_tags_help<'a>(
         arena,
         subs,
         seen: Vec::new_in(arena),
+        ptr_bytes,
     };
 
     match tags_vec.len() {
@@ -1921,8 +1937,6 @@ pub fn union_sorted_tags_help<'a>(
             }
 
             layouts.sort_by(|layout1, layout2| {
-                let ptr_bytes = 8;
-
                 let size1 = layout1.alignment_bytes(ptr_bytes);
                 let size2 = layout2.alignment_bytes(ptr_bytes);
 
@@ -2005,8 +2019,6 @@ pub fn union_sorted_tags_help<'a>(
                 }
 
                 arg_layouts.sort_by(|layout1, layout2| {
-                    let ptr_bytes = 8;
-
                     let size1 = layout1.alignment_bytes(ptr_bytes);
                     let size2 = layout2.alignment_bytes(ptr_bytes);
 
@@ -2091,7 +2103,12 @@ fn cheap_sort_tags<'a, 'b>(
     tags_vec
 }
 
-fn layout_from_newtype<'a>(arena: &'a Bump, tags: UnionTags, subs: &Subs) -> Layout<'a> {
+fn layout_from_newtype<'a>(
+    arena: &'a Bump,
+    tags: UnionTags,
+    subs: &Subs,
+    ptr_bytes: u32,
+) -> Layout<'a> {
     debug_assert!(tags.is_newtype_wrapper(subs));
 
     let slice_index = tags.variables().into_iter().next().unwrap();
@@ -2109,6 +2126,7 @@ fn layout_from_newtype<'a>(arena: &'a Bump, tags: UnionTags, subs: &Subs) -> Lay
             arena,
             subs,
             seen: Vec::new_in(arena),
+            ptr_bytes,
         };
 
         match Layout::from_var(&mut env, var) {
@@ -2128,11 +2146,16 @@ fn layout_from_newtype<'a>(arena: &'a Bump, tags: UnionTags, subs: &Subs) -> Lay
     }
 }
 
-fn layout_from_tag_union<'a>(arena: &'a Bump, tags: UnionTags, subs: &Subs) -> Layout<'a> {
+fn layout_from_tag_union<'a>(
+    arena: &'a Bump,
+    tags: UnionTags,
+    subs: &Subs,
+    ptr_bytes: u32,
+) -> Layout<'a> {
     use UnionVariant::*;
 
     if tags.is_newtype_wrapper(subs) {
-        return layout_from_newtype(arena, tags, subs);
+        return layout_from_newtype(arena, tags, subs, ptr_bytes);
     }
 
     let tags_vec = cheap_sort_tags(arena, tags, subs);
@@ -2148,7 +2171,7 @@ fn layout_from_tag_union<'a>(arena: &'a Bump, tags: UnionTags, subs: &Subs) -> L
         }
         _ => {
             let opt_rec_var = None;
-            let variant = union_sorted_tags_help_new(arena, tags_vec, opt_rec_var, subs);
+            let variant = union_sorted_tags_help_new(arena, tags_vec, opt_rec_var, subs, ptr_bytes);
 
             match variant {
                 Never => Layout::Union(UnionLayout::NonRecursive(&[])),
