@@ -8,6 +8,10 @@ pub struct SurgeryEntry {
     pub size: u8,
 }
 
+// TODO: Reanalyze each piece of data in this struct.
+// I think a number of them can be combined to reduce string duplication.
+// Also I think a few of them aren't need.
+// For example, I think preprocessing can deal with all shifting and remove the need for added_byte_count.
 #[derive(Default, Serialize, Deserialize, PartialEq, Debug)]
 pub struct Metadata {
     pub app_functions: Vec<String>,
@@ -23,10 +27,9 @@ pub struct Metadata {
     pub symbol_table_size: u64,
     pub dynamic_symbol_table_section_offset: u64,
     pub load_align_constraint: u64,
-    pub shift_start: u64,
-    pub shift_end: u64,
-    pub added_data: u64,
-    pub first_load_aligned_size: u64,
+    pub physical_shift_start: u64,
+    pub virtual_shift_start: u64,
+    pub added_byte_count: u64,
     pub exec_len: u64,
     pub last_vaddr: u64,
 }
