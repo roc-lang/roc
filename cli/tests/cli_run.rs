@@ -226,8 +226,8 @@ mod cli_run {
         cli:"cli" => Example {
             filename: "Echo.roc",
             executable_filename: "echo",
-            stdin: &["Ann\n", "Lee\n"],
-            expected_ending: "Hi, Ann Lee!\n",
+            stdin: &["Giovanni\n", "Giorgio\n"],
+            expected_ending: "Hi, Giovanni Giorgio!\n",
             use_valgrind: true,
         },
         // custom_malloc:"custom-malloc" => Example {
