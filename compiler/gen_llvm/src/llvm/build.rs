@@ -3935,6 +3935,8 @@ pub fn get_call_conventions(cc: target_lexicon::CallingConvention) -> u32 {
         SystemV => C_CALL_CONV,
         WasmBasicCAbi => C_CALL_CONV,
         WindowsFastcall => C_CALL_CONV,
+        AppleAarch64 => C_CALL_CONV,
+        _ => C_CALL_CONV,
     }
 }
 
