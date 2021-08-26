@@ -136,5 +136,8 @@ pub fn roc_fx_putLine(line: RocStr) -> () {
     let string = unsafe { std::str::from_utf8_unchecked(bytes) };
     println!("{}", string);
 
+    // don't mess with the refcount!
+    core::mem::forget(line);
+
     ()
 }
