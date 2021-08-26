@@ -4530,7 +4530,7 @@ fn sorted_field_symbols<'a>(
             }
         };
 
-        let alignment = layout.alignment_bytes(8);
+        let alignment = layout.alignment_bytes(env.ptr_bytes);
 
         let symbol = possible_reuse_symbol(env, procs, &arg.value);
         field_symbols_temp.push((alignment, symbol, ((var, arg), &*env.arena.alloc(symbol))));
