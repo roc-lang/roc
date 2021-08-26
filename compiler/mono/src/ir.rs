@@ -3109,7 +3109,8 @@ pub fn with_hole<'a>(
             mut fields,
             ..
         } => {
-            let sorted_fields = crate::layout::sort_record_fields(env.arena, record_var, env.subs);
+            let sorted_fields =
+                crate::layout::sort_record_fields(env.arena, record_var, env.subs, env.ptr_bytes);
 
             let mut field_symbols = Vec::with_capacity_in(fields.len(), env.arena);
             let mut can_fields = Vec::with_capacity_in(fields.len(), env.arena);
@@ -3444,7 +3445,8 @@ pub fn with_hole<'a>(
             loc_expr,
             ..
         } => {
-            let sorted_fields = crate::layout::sort_record_fields(env.arena, record_var, env.subs);
+            let sorted_fields =
+                crate::layout::sort_record_fields(env.arena, record_var, env.subs, env.ptr_bytes);
 
             let mut index = None;
             let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
@@ -3586,7 +3588,8 @@ pub fn with_hole<'a>(
             // This has the benefit that we don't need to do anything special for reference
             // counting
 
-            let sorted_fields = crate::layout::sort_record_fields(env.arena, record_var, env.subs);
+            let sorted_fields =
+                crate::layout::sort_record_fields(env.arena, record_var, env.subs, env.ptr_bytes);
 
             let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
 
@@ -4190,7 +4193,8 @@ fn convert_tag_union<'a>(
     arena: &'a Bump,
 ) -> Stmt<'a> {
     use crate::layout::UnionVariant::*;
-    let res_variant = crate::layout::union_sorted_tags(env.arena, variant_var, env.subs);
+    let res_variant =
+        crate::layout::union_sorted_tags(env.arena, variant_var, env.subs, env.ptr_bytes);
     let variant = match res_variant {
         Ok(cached) => cached,
         Err(LayoutProblem::UnresolvedTypeVar(_)) => {
@@ -6934,7 +6938,8 @@ fn from_can_pattern_help<'a>(
             use crate::exhaustive::Union;
             use crate::layout::UnionVariant::*;
 
-            let res_variant = crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs);
+            let res_variant =
+                crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs, env.ptr_bytes);
 
             let variant = match res_variant {
                 Ok(cached) => cached,
@@ -7353,7 +7358,8 @@ fn from_can_pattern_help<'a>(
             ..
         } => {
             // sorted fields based on the type
-            let sorted_fields = crate::layout::sort_record_fields(env.arena, *whole_var, env.subs);
+            let sorted_fields =
+                crate::layout::sort_record_fields(env.arena, *whole_var, env.subs, env.ptr_bytes);
 
             // sorted fields based on the destruct
             let mut mono_destructs = Vec::with_capacity_in(destructs.len(), env.arena);
