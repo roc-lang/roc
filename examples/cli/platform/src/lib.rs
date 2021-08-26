@@ -112,7 +112,10 @@ unsafe fn call_the_closure(closure_data_ptr: *const u8) -> i64 {
     let output = &*(buffer as *mut RocCallResult<()>);
 
     match output.into() {
-        Ok(_) => 0,
+        Ok(_) => {
+            std::alloc::dealloc(buffer, layout);
+            0
+        }
         Err(e) => panic!("failed with {}", e),
     }
 }
