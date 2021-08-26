@@ -1624,4 +1624,158 @@ mod gen_num {
         // overflow
         assert_evals_to!("Num.isMultipleOf -9223372036854775808 -1", true, bool);
     }
+
+    #[test]
+    fn bytes_to_u16_clearly_out_of_bounds() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                bytes = Str.toUtf8 "hello"
+                when Num.bytesToU16 bytes 234 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            1,
+            u16
+        );
+    }
+
+    #[test]
+    fn bytes_to_u16_subtly_out_of_bounds() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                bytes = Str.toUtf8 "hello"
+                when Num.bytesToU16 bytes 4 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            1,
+            u16
+        );
+    }
+
+    #[test]
+    fn bytes_to_u32_clearly_out_of_bounds() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                bytes = Str.toUtf8 "hello"
+                when Num.bytesToU32 bytes 234 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            1,
+            u32
+        );
+    }
+
+    #[test]
+    fn bytes_to_u32_subtly_out_of_bounds() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                bytes = Str.toUtf8 "hello"
+                when Num.bytesToU32 bytes 2 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            1,
+            u32
+        );
+    }
+
+    #[test]
+    fn bytes_to_u16_max_u8s() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.bytesToU16 [255, 255] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            65535,
+            u16
+        );
+    }
+
+    #[test]
+    fn bytes_to_u16_min_u8s() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.bytesToU16 [0, 0] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            0,
+            u16
+        );
+    }
+
+    #[test]
+    fn bytes_to_u16_random_u8s() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.bytesToU16 [164, 215] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            55_204,
+            u16
+        );
+    }
+
+    #[test]
+    fn bytes_to_u32_min_u8s() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.bytesToU32 [0, 0, 0, 0] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            0,
+            u32
+        );
+    }
+
+    #[test]
+    fn bytes_to_u32_max_u8s() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.bytesToU32 [255, 255, 255, 255] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            4_294_967_295,
+            u32
+        );
+    }
+
+    #[test]
+    fn bytes_to_u32_random_u8s() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                when Num.bytesToU32 [252, 124, 128, 121] 0 is
+                    Ok v -> v
+                    Err OutOfBounds -> 1
+                "#
+            ),
+            2_038_463_740,
+            u32
+        );
+    }
 }

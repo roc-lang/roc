@@ -180,6 +180,10 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         ptr_int(self.context, self.ptr_bytes)
     }
 
+    pub fn str_list_c_abi(&self) -> IntType<'ctx> {
+        crate::llvm::convert::str_list_int(self.context, self.ptr_bytes)
+    }
+
     pub fn small_str_bytes(&self) -> u32 {
         self.ptr_bytes * 2
     }
@@ -2198,7 +2202,6 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     stmt: &roc_mono::ir::Stmt<'a>,
 ) -> BasicValueEnum<'ctx> {
-    use roc_mono::ir::Expr;
     use roc_mono::ir::Stmt::*;
 
     match stmt {
@@ -2257,48 +2260,6 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             }
 
             value
-        }
-
-        Invoke {
-            symbol,
-            call,
-            layout,
-            pass,
-            fail: roc_mono::ir::Stmt::Resume(_),
-            exception_id: _,
-        } => {
-            // when the fail case is just Rethrow, there is no cleanup work to do
-            // so we can just treat this invoke as a normal call
-            let stmt = roc_mono::ir::Stmt::Let(*symbol, Expr::Call(call.clone()), *layout, pass);
-            build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, &stmt)
-        }
-
-        Invoke {
-            call, layout: _, ..
-        } => match call.call_type {
-            CallType::ByName { .. } => {
-                unreachable!("we should not end up here")
-            }
-
-            CallType::Foreign {
-                ref foreign_symbol,
-                ref ret_layout,
-            } => build_foreign_symbol(env, scope, foreign_symbol, call.arguments, ret_layout),
-
-            CallType::LowLevel { .. } => {
-                unreachable!("lowlevel itself never throws exceptions")
-            }
-
-            CallType::HigherOrderLowLevel { .. } => {
-                unreachable!("lowlevel itself never throws exceptions")
-            }
-        },
-
-        Resume(exception_id) => {
-            let exception_object = scope.get(&exception_id.into_inner()).unwrap().1;
-            env.builder.build_resume(exception_object);
-
-            env.ptr_int().const_zero().into()
         }
 
         Switch {
@@ -4746,6 +4707,42 @@ fn run_low_level<'a, 'ctx, 'env>(
                 }
             }
         }
+        NumBytesToU16 => {
+            debug_assert_eq!(args.len(), 2);
+            let list = load_symbol(scope, &args[0]).into_struct_value();
+            let position = load_symbol(scope, &args[1]);
+            call_bitcode_fn(
+                env,
+                &[
+                    complex_bitcast(
+                        env.builder,
+                        list.into(),
+                        env.context.i128_type().into(),
+                        "to_i128",
+                    ),
+                    position,
+                ],
+                bitcode::NUM_BYTES_TO_U16,
+            )
+        }
+        NumBytesToU32 => {
+            debug_assert_eq!(args.len(), 2);
+            let list = load_symbol(scope, &args[0]).into_struct_value();
+            let position = load_symbol(scope, &args[1]);
+            call_bitcode_fn(
+                env,
+                &[
+                    complex_bitcast(
+                        env.builder,
+                        list.into(),
+                        env.context.i128_type().into(),
+                        "to_i128",
+                    ),
+                    position,
+                ],
+                bitcode::NUM_BYTES_TO_U32,
+            )
+        }
         NumCompare => {
             use inkwell::FloatPredicate;
 
@@ -6081,7 +6078,6 @@ fn throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, message: &str) {
         )
         .into_pointer_value();
 
-    // cxa_throw_exception(env, info);
     env.call_panic(cast, PanicTagId::NullTerminatedString);
 
     builder.build_unreachable();

@@ -786,6 +786,9 @@ define_builtins! {
 
         // used to initialize parameters in borrow.rs
         22 EMPTY_PARAM: "#empty_param"
+
+        // used by the dev backend to store the pointer to where to store large return types
+        23 RET_POINTER: "#ret_pointer"
     }
     1 NUM: "Num" => {
         0 NUM_NUM: "Num" imported // the Num.Num type alias
@@ -891,7 +894,9 @@ define_builtins! {
         100 NUM_AT_DECIMAL: "@Decimal"
         101 NUM_DECIMAL: "Decimal" imported
         102 NUM_DEC: "Dec" imported // the Num.Dectype alias
-
+        103 NUM_BYTES_TO_U16: "bytesToU16"
+        104 NUM_BYTES_TO_U32: "bytesToU32"
+        105 NUM_CAST_TO_NAT: "#castToNat"
     }
     2 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" imported // the Bool.Bool type alias

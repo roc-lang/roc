@@ -8,6 +8,8 @@ pub const NUM_ACOS: &str = "roc_builtins.num.acos";
 pub const NUM_ATAN: &str = "roc_builtins.num.atan";
 pub const NUM_IS_FINITE: &str = "roc_builtins.num.is_finite";
 pub const NUM_POW_INT: &str = "roc_builtins.num.pow_int";
+pub const NUM_BYTES_TO_U16: &str = "roc_builtins.num.bytes_to_u16";
+pub const NUM_BYTES_TO_U32: &str = "roc_builtins.num.bytes_to_u32";
 pub const NUM_ROUND: &str = "roc_builtins.num.round";
 
 pub const STR_INIT: &str = "roc_builtins.str.init";
