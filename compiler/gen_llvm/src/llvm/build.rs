@@ -693,11 +693,6 @@ pub fn float_with_precision<'a, 'ctx, 'env>(
     precision: &Builtin,
 ) -> BasicValueEnum<'ctx> {
     match precision {
-        Builtin::Decimal => call_bitcode_fn(
-            env,
-            &[env.context.f64_type().const_float(value).into()],
-            bitcode::DEC_FROM_F64,
-        ),
         Builtin::Float64 => env.context.f64_type().const_float(value).into(),
         Builtin::Float32 => env.context.f32_type().const_float(value).into(),
         _ => panic!("Invalid layout for float literal = {:?}", precision),
@@ -722,6 +717,11 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
             _ => panic!("Invalid layout for float literal = {:?}", layout),
         },
 
+        Decimal(int) => env
+            .context
+            .i128_type()
+            .const_int(int.0 as u64, false)
+            .into(),
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Str(str_literal) => {
