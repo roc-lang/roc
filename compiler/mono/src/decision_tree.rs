@@ -1301,7 +1301,6 @@ fn test_to_equality<'a>(
         }
 
         Test::IsDecimal(test_dec) => {
-            // Is comparing as an i128 here fine?
             let lhs = Expr::Literal(Literal::Int(test_dec.0));
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Int128), lhs));
