@@ -288,9 +288,9 @@ mod cli_run {
                     let benchmark = $benchmark;
                     let file_name = examples_dir("benchmarks").join(benchmark.filename);
 
-                    // TODO fix QuicksortApp and RBTreeCk and then remove this!
+                    // TODO fix QuicksortApp and then remove this!
                     match benchmark.filename {
-                        "QuicksortApp.roc" | "RBTreeCk.roc" => {
+                        "QuicksortApp.roc" => {
                             eprintln!("WARNING: skipping testing benchmark {} because the test is broken right now!", benchmark.filename);
                             return;
                         }
@@ -329,9 +329,9 @@ mod cli_run {
                     let benchmark = $benchmark;
                     let file_name = examples_dir("benchmarks").join(benchmark.filename);
 
-                    // TODO fix QuicksortApp and RBTreeCk and then remove this!
+                    // TODO fix QuicksortApp and then remove this!
                     match benchmark.filename {
-                        "QuicksortApp.roc" | "RBTreeCk.roc" | "TestBase64.roc" => {
+                        "QuicksortApp.roc" | "TestBase64.roc" => {
                             eprintln!("WARNING: skipping testing benchmark {} because the test is broken right now!", benchmark.filename);
                             return;
                         }
@@ -399,8 +399,8 @@ mod cli_run {
         rbtree_ck => Example {
             filename: "RBTreeCk.roc",
             executable_filename: "rbtree-ck",
-            stdin: &[],
-            expected_ending: "Node Black 0 {} Empty Empty\n",
+            stdin: &["100"],
+            expected_ending: "10\n",
             use_valgrind: true,
         },
         rbtree_insert => Example {
