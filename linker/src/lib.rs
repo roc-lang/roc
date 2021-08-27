@@ -1090,7 +1090,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     let new_text_section_offset = offset;
     let mut app_func_size_map: MutMap<String, u64> = MutMap::default();
     let mut app_func_segment_offset_map: MutMap<String, usize> = MutMap::default();
-    let mut got_sections: Vec<(u64, u64)> = vec![];
+    let mut got_sections: Vec<(usize, usize)> = vec![];
     for sec in text_sections {
         let data = match sec.uncompressed_data() {
             Ok(data) => data,
