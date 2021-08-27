@@ -177,18 +177,18 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         let name = sym.name().unwrap().to_string();
         // special exceptions for memcpy and memset.
         if &name == "roc_memcpy" {
-            md.roc_func_addresses
+            md.roc_symbol_vaddresses
                 .insert("memcpy".to_string(), sym.address() as u64);
         } else if name == "roc_memset" {
-            md.roc_func_addresses
+            md.roc_symbol_vaddresses
                 .insert("memset".to_string(), sym.address() as u64);
         }
-        md.roc_func_addresses.insert(name, sym.address() as u64);
+        md.roc_symbol_vaddresses.insert(name, sym.address() as u64);
     }
 
     println!(
-        "Found roc function definitions: {:x?}",
-        md.roc_func_addresses
+        "Found roc symbol definitions: {:x?}",
+        md.roc_symbol_vaddresses
     );
 
     let exec_parsing_duration = exec_parsing_start.elapsed().unwrap();
@@ -749,6 +749,16 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
             let r_offset = rel.r_offset.get(NativeEndian);
             if md.virtual_shift_start <= r_offset {
                 rel.r_offset = endian::U64::new(LittleEndian, r_offset + md.added_byte_count);
+                // Deal with potential adjusts to absolute jumps.
+                match rel.r_type(LittleEndian, false) {
+                    elf::R_X86_64_RELATIVE => {
+                        let r_addend = rel.r_addend.get(LittleEndian);
+                        rel.r_addend
+                            .set(LittleEndian, r_addend + md.added_byte_count as i64);
+                    }
+                    // TODO: Verify other relocation types.
+                    _ => {}
+                }
             }
         }
     }
@@ -988,6 +998,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     let mut sh_tab = vec![];
     sh_tab.extend_from_slice(&exec_mmap[sh_offset as usize..sh_offset as usize + sh_size]);
 
+    // TODO: I think this can move in by sh_size.
     let mut offset = md.exec_len as usize;
     offset = aligned_offset(offset);
     // TODO: Switch to using multiple segments.
@@ -1049,10 +1060,13 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         exec_mmap[offset..offset + data.len()].copy_from_slice(&data);
         for sym in symbols.iter() {
             if sym.section() == SymbolSection::Section(sec.index()) {
-                symbol_offset_map.insert(
-                    sym.index().0,
-                    offset + sym.address() as usize - new_segment_offset,
-                );
+                let name = sym.name().unwrap_or_default().to_string();
+                if !md.roc_symbol_vaddresses.contains_key(&name) {
+                    symbol_offset_map.insert(
+                        sym.index().0,
+                        offset + sym.address() as usize - new_segment_offset,
+                    );
+                }
             }
         }
         offset += size;
@@ -1076,6 +1090,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
     let new_text_section_offset = offset;
     let mut app_func_size_map: MutMap<String, u64> = MutMap::default();
     let mut app_func_segment_offset_map: MutMap<String, usize> = MutMap::default();
+    let mut got_sections: Vec<(u64, u64)> = vec![];
     for sec in text_sections {
         let data = match sec.uncompressed_data() {
             Ok(data) => data,
@@ -1103,11 +1118,13 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
         let current_section_offset = (offset - new_segment_offset) as i64;
         for sym in symbols.iter() {
             if sym.section() == SymbolSection::Section(sec.index()) {
-                symbol_offset_map.insert(
-                    sym.index().0,
-                    offset + sym.address() as usize - new_segment_offset,
-                );
                 let name = sym.name().unwrap_or_default().to_string();
+                if !md.roc_symbol_vaddresses.contains_key(&name) {
+                    symbol_offset_map.insert(
+                        sym.index().0,
+                        offset + sym.address() as usize - new_segment_offset,
+                    );
+                }
                 if md.app_functions.contains(&name) {
                     app_func_segment_offset_map.insert(
                         name.clone(),
@@ -1117,7 +1134,8 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                 }
             }
         }
-        let mut got_offset = aligned_offset(offset + size);
+        offset = aligned_offset(offset + size);
+        let mut got_offset = offset;
         for rel in sec.relocations() {
             if verbose {
                 println!("\tFound Relocation: {:x?}", rel);
@@ -1130,7 +1148,7 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                     } else if let Ok(sym) = app_obj.symbol_by_index(index) {
                         // Not one of the apps symbols, check if it is from the roc host.
                         if let Ok(name) = sym.name() {
-                            if let Some(address) = md.roc_func_addresses.get(name) {
+                            if let Some(address) = md.roc_symbol_vaddresses.get(name) {
                                 Some(
                                     (*address + md.added_byte_count) as i64
                                         - new_segment_vaddr as i64,
@@ -1156,15 +1174,33 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                                 if verbose {
                                     println!("GOT hacking this may not work right");
                                 }
-                                let got_val = target_offset as u64 + new_segment_vaddr;
-                                let target_offset = (got_offset - new_segment_offset) as i64;
-                                let data = got_val.to_le_bytes();
+                                // TODO: This doesn't actually work. We also need to add a relocatoin to the rela section.
+                                // These offsets are not actually global offsets due to aslr.
+                                // We either need to actually put these in the GOT, add a new GOT section, or some other hack.
+                                // Putting them in the real GOT is the most correct solution.
+
+                                // Another solution may be to make the host define all global data.
+                                // The follow code assumes that is the case and will generate invalid code otherwise.
+                                // Also, I wonder if it is possible to avoid true globals somehow.
+                                let target_vaddr = target_offset + new_segment_vaddr as i64;
+                                let data = target_vaddr.to_le_bytes();
                                 exec_mmap[got_offset..got_offset + 8].copy_from_slice(&data);
                                 got_offset = aligned_offset(got_offset + 8);
-                                target_offset - (rel.0 as i64 + current_section_offset)
-                                    + rel.1.addend()
+                                let target_offset = (got_offset - new_segment_offset) as i64;
+                                let base_offset = rel.0 as i64 + current_section_offset;
+                                if verbose {
+                                    println!(
+                                        "\tThe base offset is: 0x{:x}",
+                                        base_offset + current_section_offset
+                                    );
+                                    println!(
+                                        "\tThe got target is: 0x{:x}",
+                                        target_offset + current_section_offset
+                                    );
+                                    println!("\tThe final target is: 0x{:x}", target_vaddr);
+                                }
+                                target_offset - base_offset + rel.1.addend()
                             }
-                            RelocationKind::Absolute => target_offset + new_segment_vaddr as i64,
                             x => {
                                 println!("Relocation Kind not yet support: {:?}", x);
                                 return Ok(-1);
@@ -1202,7 +1238,10 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                 }
             }
         }
-        offset = got_offset;
+        if got_offset != offset {
+            got_sections.push((offset, got_offset - offset));
+            offset = got_offset;
+        }
     }
 
     if verbose {
