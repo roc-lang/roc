@@ -263,8 +263,11 @@ pub mod test_ed_model {
         code_arena: &'a Bump,
     ) -> Result<EdModel<'a>, String> {
         let code_lines_vec: Vec<String> = (*code_lines).iter().map(|s| s.to_string()).collect();
+        
+        let full_code = vec![HELLO_WORLD, clean_code_str.as_str()];
+        *clean_code_str = full_code.join("\n");
 
-        *clean_code_str = [HELLO_WORLD, clean_code_str.as_str()].join("\n");
+        dbg!(&clean_code_str);
 
         let temp_dir = tempdir().expect("Failed to create temporary directory for test.");
         let temp_file_path_buf =

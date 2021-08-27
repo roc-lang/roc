@@ -17,6 +17,7 @@ use crate::editor::util::index_of;
 use crate::lang::ast::ExprId;
 use crate::lang::ast::RecordField;
 use crate::lang::ast::ValueDef;
+use crate::lang::ast::expr2_to_string;
 use crate::lang::parse::{AppHeader, AST};
 use crate::lang::pattern::get_identifier_string;
 use crate::lang::{ast::Expr2, expr::Env, pool::PoolStr};
@@ -281,6 +282,8 @@ pub fn expr2_to_markup<'a, 'b>(
     markup_node_pool: &mut SlowPool,
     interns: &Interns,
 ) -> EdResult<MarkNodeId> {
+    dbg!(expr2_to_string(expr2_node_id, env.pool));
+
     let mark_node_id = match expr2 {
         Expr2::SmallInt { text, .. }
         | Expr2::I128 { text, .. }
@@ -423,13 +426,17 @@ pub fn expr2_to_markup<'a, 'b>(
         Expr2::Blank => markup_node_pool.add(new_blank_mn(expr2_node_id, None)),
         Expr2::LetValue {
             def_id,
-            body_id: _,
-            body_var: _,
+            body_id,
+            body_var,
         } => {
+            /*dbg!(expr2);
+            dbg!(env.pool.get(*body_id));
+            dbg!(env.pool.get(*def_id));
+            dbg!(body_var);*/
             let pattern_id = env.pool.get(*def_id).get_pattern_id();
 
             let pattern2 = env.pool.get(pattern_id);
-
+            //dbg!(pattern2);
             let val_name = get_identifier_string(pattern2, interns)?;
 
             let val_name_mn = MarkupNode::Text {

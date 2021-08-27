@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasherDefault;
 
 use crate::editor::ed_error::{EdResult, UnexpectedASTNode};
+use crate::lang::def;
 use crate::lang::pattern::{Pattern2, PatternId};
 use crate::lang::pool::Pool;
 use crate::lang::pool::{NodeId, PoolStr, PoolVec, ShallowClone};
@@ -281,6 +282,17 @@ impl ValueDef {
             ValueDef::WithAnnotation { pattern_id, .. } => *pattern_id,
             ValueDef::NoAnnotation { pattern_id, .. } => *pattern_id,
         }
+    }
+}
+
+pub fn value_def_to_string(val_def: &ValueDef, pool: &Pool) -> String {
+    match val_def {
+        ValueDef::WithAnnotation { pattern_id, expr_id, type_id, rigids, expr_var } => {
+            format!("WithAnnotation {{ pattern_id: {:?}, expr_id: {:?}, type_id: {:?}, rigids: {:?}, expr_var: {:?}}}", pool.get(*pattern_id), expr2_to_string(*expr_id, pool), pool.get(*type_id), rigids, expr_var)
+        },
+        ValueDef::NoAnnotation { pattern_id, expr_id, expr_var } => {
+            format!("NoAnnotation {{ pattern_id: {:?}, expr_id: {:?}, expr_var: {:?}}}", pool.get(*pattern_id), expr2_to_string(*expr_id, pool), expr_var)
+        },
     }
 }
 
@@ -571,8 +583,8 @@ fn expr2_to_string_helper(
             def_id, body_id, ..
         } => {
             out_string.push_str(&format!(
-                "LetValue(def_id: {}, body_id: {})",
-                def_id.index, body_id.index
+                "LetValue(def_id: >>{:?}), body_id: >>{:?})",
+                value_def_to_string(pool.get(*def_id), pool) , pool.get(*body_id)
             ));
         }
         other => todo!("Implement for {:?}", other),

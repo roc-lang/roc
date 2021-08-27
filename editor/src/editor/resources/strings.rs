@@ -17,4 +17,6 @@ app "test-app"
 
 main = "Hello, world!"
 
+yolo = "Hello, world!"
+
 "#;

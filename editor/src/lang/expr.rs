@@ -1046,6 +1046,7 @@ pub fn to_expr2_from_def<'a>(
                     let value_def_id = env.pool.add(value_def);
 
                     let ident_id = env.ident_ids.add(str_ref.into());
+                    dbg!(ident_id);
                     let var_symbol = Symbol::new(env.home, ident_id);
                     let body = Expr2::Var(var_symbol);
                     let body_id = env.pool.add(body);
