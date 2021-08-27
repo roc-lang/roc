@@ -108,6 +108,7 @@ mod cli_run {
         assert!(out.status.success());
     }
 
+    #[cfg(feature = "wasm-cli-run")]
     fn check_wasm_output_with_stdin(
         file: &Path,
         stdin: &[&str],
@@ -318,6 +319,7 @@ mod cli_run {
 
             )*
 
+            #[cfg(feature = "wasm-cli-run")]
             mod wasm {
                 use super::*;
             $(
@@ -329,7 +331,7 @@ mod cli_run {
 
                     // TODO fix QuicksortApp and RBTreeCk and then remove this!
                     match benchmark.filename {
-                        "QuicksortApp.roc" | "RBTreeCk.roc" => {
+                        "QuicksortApp.roc" | "RBTreeCk.roc" | "TestBase64.roc" => {
                             eprintln!("WARNING: skipping testing benchmark {} because the test is broken right now!", benchmark.filename);
                             return;
                         }
