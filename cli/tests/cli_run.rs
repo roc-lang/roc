@@ -223,13 +223,13 @@ mod cli_run {
         //     expected_ending: "",
         //     use_valgrind: true,
         // },
-        // cli:"cli" => Example {
-        //     filename: "Echo.roc",
-        //     executable_filename: "echo",
-        //     stdin: &["Giovanni\n", "Giorgio\n"],
-        //     expected_ending: "Giovanni Giorgio!\n",
-        //     use_valgrind: true,
-        // },
+        cli:"cli" => Example {
+            filename: "Echo.roc",
+            executable_filename: "echo",
+            stdin: &["Giovanni\n", "Giorgio\n"],
+            expected_ending: "Hi, Giovanni Giorgio!\n",
+            use_valgrind: true,
+        },
         // custom_malloc:"custom-malloc" => Example {
         //     filename: "Main.roc",
         //     executable_filename: "custom-malloc-example",
