@@ -29,8 +29,8 @@ extern fn roc__mainForHost_1_Fx_caller(*const u8, [*]u8, [*]u8) void;
 extern fn roc__mainForHost_1_Fx_size() i64;
 extern fn roc__mainForHost_1_Fx_result_size() i64;
 
-const Align = usize;
-extern fn malloc(size: usize) callconv(.C) ?*c_void;
+const Align = extern struct { a: usize, b: usize };
+extern fn malloc(size: usize) callconv(.C) ?*align(@alignOf(Align)) c_void;
 extern fn realloc(c_ptr: [*]align(@alignOf(Align)) u8, size: usize) callconv(.C) ?*c_void;
 extern fn free(c_ptr: [*]align(@alignOf(Align)) u8) callconv(.C) void;
 

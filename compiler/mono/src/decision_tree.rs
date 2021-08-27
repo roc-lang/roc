@@ -7,6 +7,7 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
+use roc_std::RocDec;
 
 /// COMPILE CASES
 
@@ -85,8 +86,8 @@ enum Test<'a> {
         arguments: Vec<(Pattern<'a>, Layout<'a>)>,
     },
     IsInt(i128),
-    // float patterns are stored as u64 so they are comparable/hashable
     IsFloat(u64),
+    IsDecimal(RocDec),
     IsStr(Box<str>),
     IsBit(bool),
     IsByte {
@@ -125,6 +126,11 @@ impl<'a> Hash for Test<'a> {
                 state.write_u8(5);
                 tag_id.hash(state);
                 num_alts.hash(state);
+            }
+            IsDecimal(v) => {
+                // TODO: Is this okay?
+                state.write_u8(6);
+                v.0.hash(state);
             }
         }
     }
@@ -302,6 +308,7 @@ fn tests_are_complete_help(last_test: &Test, number_of_tests: usize) -> bool {
         Test::IsBit(_) => number_of_tests == 2,
         Test::IsInt(_) => false,
         Test::IsFloat(_) => false,
+        Test::IsDecimal(_) => false,
         Test::IsStr(_) => false,
     }
 }
@@ -556,6 +563,7 @@ fn test_at_path<'a>(
                 },
                 IntLiteral(v) => IsInt(*v),
                 FloatLiteral(v) => IsFloat(*v),
+                DecimalLiteral(v) => IsDecimal(*v),
                 StrLiteral(v) => IsStr(v.clone()),
             };
 
@@ -823,6 +831,18 @@ fn to_relevant_branch_help<'a>(
             _ => None,
         },
 
+        DecimalLiteral(dec) => match test {
+            IsDecimal(test_dec) if dec.0 == test_dec.0 => {
+                start.extend(end);
+                Some(Branch {
+                    goal: branch.goal,
+                    guard: branch.guard.clone(),
+                    patterns: start,
+                })
+            }
+            _ => None,
+        },
+
         BitLiteral { value: bit, .. } => match test {
             IsBit(test_bit) if bit == *test_bit => {
                 start.extend(end);
@@ -910,6 +930,7 @@ fn needs_tests(pattern: &Pattern) -> bool {
         | EnumLiteral { .. }
         | IntLiteral(_)
         | FloatLiteral(_)
+        | DecimalLiteral(_)
         | StrLiteral(_) => true,
     }
 }
@@ -1275,6 +1296,14 @@ fn test_to_equality<'a>(
             let lhs = Expr::Literal(Literal::Float(test_float));
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::Builtin(Builtin::Float64), lhs));
+
+            (stores, lhs_symbol, rhs_symbol, None)
+        }
+
+        Test::IsDecimal(test_dec) => {
+            let lhs = Expr::Literal(Literal::Int(test_dec.0));
+            let lhs_symbol = env.unique_symbol();
+            stores.push((lhs_symbol, Layout::Builtin(Builtin::Int128), lhs));
 
             (stores, lhs_symbol, rhs_symbol, None)
         }

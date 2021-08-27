@@ -19,9 +19,10 @@ comptime {
     }
 }
 
-extern fn malloc(size: usize) callconv(.C) ?*c_void;
-extern fn realloc(c_ptr: [*]align(@alignOf(usize)) u8, size: usize) callconv(.C) ?*c_void;
-extern fn free(c_ptr: [*]align(@alignOf(usize)) u8) callconv(.C) void;
+const Align = extern struct { a: usize, b: usize };
+extern fn malloc(size: usize) callconv(.C) ?*align(@alignOf(Align)) c_void;
+extern fn realloc(c_ptr: [*]align(@alignOf(Align)) u8, size: usize) callconv(.C) ?*c_void;
+extern fn free(c_ptr: [*]align(@alignOf(Align)) u8) callconv(.C) void;
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
     _ = alignment;
@@ -33,14 +34,13 @@ export fn roc_realloc(c_ptr: *c_void, old_size: usize, new_size: usize, alignmen
     _ = old_size;
     _ = alignment;
 
-    return realloc(@alignCast(@alignOf(usize), @ptrCast([*]u8, c_ptr)), new_size);
+    return realloc(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)), new_size);
 }
 
 export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
     _ = alignment;
 
-    const ptr = @alignCast(@alignOf(usize), @ptrCast([*]u8, c_ptr));
-    free(ptr);
+    free(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)));
 }
 
 export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
