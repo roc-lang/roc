@@ -1,7 +1,8 @@
 use crate::debug_info_init;
 use crate::llvm::build::{
     add_func, cast_basic_basic, cast_block_of_memory_to_tag, get_tag_id, get_tag_id_non_recursive,
-    tag_pointer_clear_tag_id, Env, FAST_CALL_CONV, LLVM_SADD_WITH_OVERFLOW_I64, TAG_DATA_INDEX,
+    tag_pointer_clear_tag_id, Env, FAST_CALL_CONV, LLVM_SADD_WITH_OVERFLOW_I32,
+    LLVM_SADD_WITH_OVERFLOW_I64, TAG_DATA_INDEX,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
 use crate::llvm::convert::{basic_type_from_layout, ptr_int};
@@ -170,7 +171,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
             None => {
                 // inc and dec return void
                 let fn_type = context.void_type().fn_type(
-                    &[context.i64_type().ptr_type(AddressSpace::Generic).into()],
+                    &[env.ptr_int().ptr_type(AddressSpace::Generic).into()],
                     false,
                 );
 
@@ -243,6 +244,12 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
         builder.build_conditional_branch(is_static_allocation, return_block, branch_block);
 
+        let add_intrinsic = match env.ptr_bytes {
+            8 => LLVM_SADD_WITH_OVERFLOW_I64,
+            4 => LLVM_SADD_WITH_OVERFLOW_I32,
+            _ => unreachable!(),
+        };
+
         let add_with_overflow;
 
         {
@@ -250,7 +257,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
             add_with_overflow = env
                 .call_intrinsic(
-                    LLVM_SADD_WITH_OVERFLOW_I64,
+                    add_intrinsic,
                     &[
                         refcount.into(),
                         refcount_type.const_int(-1_i64 as u64, true).into(),
@@ -774,7 +781,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
     let is_non_empty = builder.build_int_compare(
         IntPredicate::UGT,
         len,
-        ctx.i64_type().const_zero(),
+        env.ptr_int().const_zero(),
         "len > 0",
     );
 
@@ -803,15 +810,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
             );
         };
 
-        incrementing_elem_loop(
-            env.builder,
-            env.context,
-            parent,
-            ptr,
-            len,
-            "modify_rc_index",
-            loop_fn,
-        );
+        incrementing_elem_loop(env, parent, ptr, len, "modify_rc_index", loop_fn);
     }
 
     let refcount_ptr = PointerToRefcount::from_list_wrapper(env, original_wrapper);

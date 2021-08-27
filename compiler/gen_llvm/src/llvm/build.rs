@@ -176,10 +176,18 @@ impl std::convert::TryFrom<u32> for PanicTagId {
 }
 
 impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
+    /// The integer type representing a pointer
+    ///
+    /// on 64-bit systems, this is i64
+    /// on 32-bit systems, this is i32
     pub fn ptr_int(&self) -> IntType<'ctx> {
         ptr_int(self.context, self.ptr_bytes)
     }
 
+    /// The integer type representing a RocList or RocStr when following the C ABI
+    ///
+    /// on 64-bit systems, this is i128
+    /// on 32-bit systems, this is i64
     pub fn str_list_c_abi(&self) -> IntType<'ctx> {
         crate::llvm::convert::str_list_int(self.context, self.ptr_bytes)
     }
@@ -374,10 +382,18 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     }
 }
 
-pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Module<'ctx> {
+pub fn module_from_builtins<'ctx>(
+    ctx: &'ctx Context,
+    module_name: &str,
+    ptr_bytes: u32,
+) -> Module<'ctx> {
     // In the build script for the builtins module,
     // we compile the builtins into LLVM bitcode
-    let bitcode_bytes: &[u8] = include_bytes!("../../../builtins/bitcode/builtins.bc");
+    let bitcode_bytes: &[u8] = match ptr_bytes {
+        8 => include_bytes!("../../../builtins/bitcode/builtins-64bit.bc"),
+        4 => include_bytes!("../../../builtins/bitcode/builtins-32bit.bc"),
+        _ => unreachable!(),
+    };
 
     let memory_buffer = MemoryBuffer::create_from_memory_range(bitcode_bytes, module_name);
 
@@ -931,11 +947,7 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
         CallType::Foreign {
             foreign_symbol,
             ret_layout,
-        } => {
-            // we always initially invoke foreign symbols, but if there is nothing to clean up,
-            // we emit a normal call
-            build_foreign_symbol(env, scope, foreign_symbol, arguments, ret_layout)
-        }
+        } => build_foreign_symbol(env, scope, foreign_symbol, arguments, ret_layout),
     }
 }
 

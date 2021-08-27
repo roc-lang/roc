@@ -465,8 +465,8 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
         let end = len1;
 
         // allocate a stack slot for the current index
-        let index_alloca = builder.build_alloca(ctx.i64_type(), "index");
-        builder.build_store(index_alloca, ctx.i64_type().const_zero());
+        let index_alloca = builder.build_alloca(env.ptr_int(), "index");
+        builder.build_store(index_alloca, env.ptr_int().const_zero());
 
         let loop_bb = ctx.append_basic_block(parent, "loop");
         let body_bb = ctx.append_basic_block(parent, "body");
@@ -521,8 +521,8 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
         {
             env.builder.position_at_end(increment_bb);
 
-            // constant 1i64
-            let one = ctx.i64_type().const_int(1, false);
+            // constant 1isize
+            let one = env.ptr_int().const_int(1, false);
 
             let next_index = builder.build_int_add(curr_index, one, "nextindex");
 
