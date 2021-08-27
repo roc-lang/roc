@@ -584,6 +584,10 @@ impl RocStr {
 
                 let raw_ptr = Self::get_element_ptr(raw_ptr as *mut u8);
 
+                // write the refcount
+                let refcount_ptr = raw_ptr as *mut isize;
+                *(refcount_ptr.offset(-1)) = isize::MIN;
+
                 {
                     // NOTE: using a memcpy here causes weird issues
                     let target_ptr = raw_ptr as *mut u8;

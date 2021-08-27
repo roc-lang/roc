@@ -92,14 +92,15 @@ mod test_reporting {
             let mut ident_ids = interns.all_ident_ids.remove(&home).unwrap();
 
             // Populate Procs and Subs, and get the low-level Expr from the canonical Expr
-            let mut layout_cache = LayoutCache::default();
+            let ptr_bytes = 8;
+            let mut layout_cache = LayoutCache::new(ptr_bytes);
             let mut mono_env = roc_mono::ir::Env {
                 arena: &arena,
                 subs: &mut subs,
                 problems: &mut mono_problems,
                 home,
                 ident_ids: &mut ident_ids,
-                ptr_bytes: 8,
+                ptr_bytes,
                 update_mode_counter: 0,
                 // call_specialization_counter=0 is reserved
                 call_specialization_counter: 1,

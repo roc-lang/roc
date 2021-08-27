@@ -67,7 +67,7 @@ libc = "0.2"
 libloading = "0.6"
 
 inkwell = { path = "../vendor/inkwell", optional = true }
-target-lexicon = "0.10"
+target-lexicon = "0.12.2"
 tempfile = "3.1.0"
 
 [dev-dependencies]
