@@ -121,13 +121,6 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     let time = matches.is_present(FLAG_TIME);
 
     let total_start = SystemTime::now();
-    let shared_lib_processing_start = SystemTime::now();
-    let app_functions = roc_application_functions(&matches.value_of(SHARED_LIB).unwrap())?;
-    if verbose {
-        println!("Found roc app functions: {:?}", app_functions);
-    }
-    let shared_lib_processing_duration = shared_lib_processing_start.elapsed().unwrap();
-
     let exec_parsing_start = SystemTime::now();
     let exec_file = fs::File::open(&matches.value_of(EXEC).unwrap())?;
     let exec_mmap = unsafe { Mmap::map(&exec_file)? };
@@ -238,11 +231,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     let app_syms: Vec<Symbol> = exec_obj
         .dynamic_symbols()
         .filter(|sym| {
-            let name = sym.name();
-            // Note: We are scrapping version information like '@GLIBC_2.2.5'
-            // We probably never need to remedy this due to the focus on Roc only.
-            name.is_ok()
-                && app_functions.contains(&name.unwrap().split('@').next().unwrap().to_string())
+            sym.is_undefined() && sym.name().is_ok() && sym.name().unwrap().starts_with("roc_")
         })
         .collect();
     for sym in app_syms.iter() {
@@ -476,7 +465,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         .unwrap();
 
     let mut dyn_lib_index = 0;
-    let mut shared_lib_found = false;
+    let mut shared_lib_index = None;
     loop {
         let dyn_tag = u64::from_le_bytes(
             <[u8; 8]>::try_from(
@@ -497,8 +486,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
             let c_buf: *const c_char = dynstr_data[dynstr_off..].as_ptr() as *const i8;
             let c_str = unsafe { CStr::from_ptr(c_buf) }.to_str().unwrap();
             if c_str == shared_lib_name {
-                shared_lib_found = true;
-                md.shared_lib_index = dyn_lib_index as u64;
+                shared_lib_index = Some(dyn_lib_index);
                 if verbose {
                     println!(
                         "Found shared lib in dynamic table at index: {}",
@@ -510,12 +498,13 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
 
         dyn_lib_index += 1;
     }
-    md.dynamic_lib_count = dyn_lib_index as u64;
+    let dynamic_lib_count = dyn_lib_index as usize;
 
-    if !shared_lib_found {
+    if shared_lib_index.is_none() {
         println!("Shared lib not found as a dependency of the executable");
         return Ok(-1);
     }
+    let shared_lib_index = shared_lib_index.unwrap();
 
     let scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed().unwrap();
 
@@ -596,7 +585,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     md.added_byte_count = md.added_byte_count
         + (MIN_FUNC_ALIGNMENT as u64 - md.added_byte_count % MIN_FUNC_ALIGNMENT as u64);
     let ph_end = ph_offset as usize + ph_num as usize * ph_ent_size as usize;
-    md.physical_shift_start = ph_end as u64;
+    let physical_shift_start = ph_end as u64;
 
     md.exec_len = exec_data.len() as u64 + md.added_byte_count;
     let out_file = fs::OpenOptions::new()
@@ -616,12 +605,13 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         ph_num as usize,
     );
     let mut first_load_found = false;
+    let mut virtual_shift_start = 0;
     for ph in program_headers.iter() {
         let p_type = ph.p_type.get(NativeEndian);
         if p_type == elf::PT_LOAD && ph.p_offset.get(NativeEndian) == 0 {
             first_load_found = true;
             md.load_align_constraint = ph.p_align.get(NativeEndian);
-            md.virtual_shift_start = md.physical_shift_start + ph.p_vaddr.get(NativeEndian);
+            virtual_shift_start = physical_shift_start + ph.p_vaddr.get(NativeEndian);
         }
     }
     if !first_load_found {
@@ -632,7 +622,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     if verbose {
         println!(
             "Shifting all data after: 0x{:x}(0x{:x})",
-            md.physical_shift_start, md.virtual_shift_start
+            physical_shift_start, virtual_shift_start
         );
     }
 
@@ -662,11 +652,11 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
             );
         } else {
             // Shift if needed.
-            if md.physical_shift_start <= p_offset {
+            if physical_shift_start <= p_offset {
                 ph.p_offset = endian::U64::new(LittleEndian, p_offset + md.added_byte_count);
             }
             let p_vaddr = ph.p_vaddr.get(NativeEndian);
-            if md.virtual_shift_start <= p_vaddr {
+            if virtual_shift_start <= p_vaddr {
                 ph.p_vaddr = endian::U64::new(LittleEndian, p_vaddr + md.added_byte_count);
                 ph.p_paddr = endian::U64::new(LittleEndian, p_vaddr + md.added_byte_count);
             }
@@ -682,8 +672,8 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         .unwrap();
 
     // Copy the rest of the file shifted as needed.
-    out_mmap[md.physical_shift_start as usize + md.added_byte_count as usize..]
-        .copy_from_slice(&exec_data[md.physical_shift_start as usize..]);
+    out_mmap[physical_shift_start as usize + md.added_byte_count as usize..]
+        .copy_from_slice(&exec_data[physical_shift_start as usize..]);
 
     // Update all sections for shift for extra program headers.
     let section_headers = load_structs_inplace_mut::<elf::SectionHeader64<LittleEndian>>(
@@ -697,10 +687,10 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     for sh in section_headers.iter_mut() {
         let sh_offset = sh.sh_offset.get(NativeEndian);
         let sh_addr = sh.sh_addr.get(NativeEndian);
-        if md.physical_shift_start <= sh_offset {
+        if physical_shift_start <= sh_offset {
             sh.sh_offset = endian::U64::new(LittleEndian, sh_offset + md.added_byte_count);
         }
-        if md.virtual_shift_start <= sh_addr {
+        if virtual_shift_start <= sh_addr {
             sh.sh_addr = endian::U64::new(LittleEndian, sh_addr + md.added_byte_count);
         }
 
@@ -734,7 +724,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         );
         for rel in relocations.iter_mut() {
             let r_offset = rel.r_offset.get(NativeEndian);
-            if md.virtual_shift_start <= r_offset {
+            if virtual_shift_start <= r_offset {
                 rel.r_offset = endian::U64::new(LittleEndian, r_offset + md.added_byte_count);
             }
         }
@@ -747,7 +737,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         );
         for rel in relocations.iter_mut() {
             let r_offset = rel.r_offset.get(NativeEndian);
-            if md.virtual_shift_start <= r_offset {
+            if virtual_shift_start <= r_offset {
                 rel.r_offset = endian::U64::new(LittleEndian, r_offset + md.added_byte_count);
                 // Deal with potential adjusts to absolute jumps.
                 match rel.r_type(LittleEndian, false) {
@@ -765,13 +755,11 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
 
     // Update dynamic table entries for shift for extra program headers.
     let dyn_offset = md.dynamic_section_offset + md.added_byte_count;
-    let dyn_lib_count = md.dynamic_lib_count as usize;
-    let shared_index = md.shared_lib_index as usize;
 
     let dyns = load_structs_inplace_mut::<elf::Dyn64<LittleEndian>>(
         &mut out_mmap,
         dyn_offset as usize,
-        dyn_lib_count,
+        dynamic_lib_count,
     );
     for mut d in dyns {
         match d.d_tag.get(NativeEndian) as u32 {
@@ -806,7 +794,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
             | elf::DT_VERDEF
             | elf::DT_VERNEED => {
                 let d_addr = d.d_val.get(NativeEndian);
-                if md.virtual_shift_start <= d_addr {
+                if virtual_shift_start <= d_addr {
                     d.d_val = endian::U64::new(LittleEndian, d_addr + md.added_byte_count);
                 }
             }
@@ -826,7 +814,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
 
     for sym in symbols {
         let addr = sym.st_value.get(NativeEndian);
-        if md.virtual_shift_start <= addr {
+        if virtual_shift_start <= addr {
             sym.st_value = endian::U64::new(LittleEndian, addr + md.added_byte_count);
         }
     }
@@ -840,7 +828,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         );
         for go in global_offsets.iter_mut() {
             let go_addr = go.get(NativeEndian);
-            if md.physical_shift_start <= go_addr {
+            if physical_shift_start <= go_addr {
                 go.set(LittleEndian, go_addr + md.added_byte_count);
             }
         }
@@ -852,9 +840,9 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     let out_ptr = out_mmap.as_mut_ptr();
     unsafe {
         std::ptr::copy(
-            out_ptr.offset((dyn_offset as usize + 16 * (shared_index + 1)) as isize),
-            out_ptr.offset((dyn_offset as usize + 16 * shared_index) as isize),
-            16 * (dyn_lib_count - shared_index),
+            out_ptr.offset((dyn_offset as usize + 16 * (shared_lib_index + 1)) as isize),
+            out_ptr.offset((dyn_offset as usize + 16 * shared_lib_index) as isize),
+            16 * (dynamic_lib_count - shared_lib_index),
         );
     }
 
@@ -866,7 +854,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         file_header.e_shoff.get(NativeEndian) + md.added_byte_count,
     );
     let e_entry = file_header.e_entry.get(NativeEndian);
-    if md.virtual_shift_start <= e_entry {
+    if virtual_shift_start <= e_entry {
         file_header.e_entry = endian::U64::new(LittleEndian, e_entry + md.added_byte_count);
     }
     file_header.e_phnum = endian::U16::new(LittleEndian, ph_num + added_header_count as u16);
@@ -896,7 +884,6 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
     if verbose || time {
         println!();
         println!("Timings");
-        report_timing("Shared Library Processing", shared_lib_processing_duration);
         report_timing("Executable Parsing", exec_parsing_duration);
         report_timing(
             "Symbol and PLT Processing",
@@ -910,7 +897,6 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         report_timing(
             "Other",
             total_duration
-                - shared_lib_processing_duration
                 - exec_parsing_duration
                 - symbol_and_plt_processing_duration
                 - text_disassembly_duration
@@ -1472,30 +1458,4 @@ fn load_structs_inplace_mut<'a, T>(
     assert_eq!(count, body.len(), "Failed to load all structs");
     assert!(tail.is_empty(), "End of data was not aligned");
     body
-}
-
-fn roc_application_functions(shared_lib_name: &str) -> io::Result<Vec<String>> {
-    let shared_file = fs::File::open(&shared_lib_name)?;
-    let shared_mmap = unsafe { Mmap::map(&shared_file)? };
-    let shared_obj = object::File::parse(&*shared_mmap).map_err(|err| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("Failed to parse shared library file: {}", err),
-        )
-    })?;
-    Ok(shared_obj
-        .exports()
-        .unwrap()
-        .into_iter()
-        .map(|export| String::from_utf8(export.name().to_vec()))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Failed to load function names from shared library: {}", err),
-            )
-        })?
-        .into_iter()
-        .filter(|name| name.starts_with("roc_"))
-        .collect::<Vec<_>>())
 }
