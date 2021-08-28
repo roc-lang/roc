@@ -133,7 +133,7 @@ fn hash_builtin<'a, 'ctx, 'env>(
             // let zig deal with big vs small string
             call_bitcode_fn(
                 env,
-                &[seed.into(), build_str::str_to_i128(env, val).into()],
+                &[seed.into(), build_str::str_to_c_abi(env, val).into()],
                 bitcode::DICT_HASH_STR,
             )
             .into_int_value()
@@ -785,15 +785,7 @@ fn hash_list<'a, 'ctx, 'env>(
         env.builder.build_store(result, answer);
     };
 
-    incrementing_elem_loop(
-        env.builder,
-        env.context,
-        parent,
-        ptr,
-        length,
-        "current_index",
-        loop_fn,
-    );
+    incrementing_elem_loop(env, parent, ptr, length, "current_index", loop_fn);
 
     env.builder.build_unconditional_branch(done_block);
 
@@ -886,7 +878,7 @@ fn hash_bitcode_fn<'a, 'ctx, 'env>(
     buffer: PointerValue<'ctx>,
     width: u32,
 ) -> IntValue<'ctx> {
-    let num_bytes = env.context.i64_type().const_int(width as u64, false);
+    let num_bytes = env.ptr_int().const_int(width as u64, false);
 
     call_bitcode_fn(
         env,

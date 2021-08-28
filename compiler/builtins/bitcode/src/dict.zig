@@ -9,12 +9,12 @@ const RocList = @import("list.zig").RocList;
 
 const INITIAL_SEED = 0xc70f6907;
 
-const InPlace = packed enum(u8) {
+const InPlace = enum(u8) {
     InPlace,
     Clone,
 };
 
-const Slot = packed enum(u8) {
+const Slot = enum(u8) {
     Empty,
     Filled,
     PreviouslyFilled,
@@ -63,27 +63,21 @@ fn capacityOfLevel(input: usize) usize {
 // alignment of the key and value. The tag furthermore indicates
 // which has the biggest aligmnent. If both are the same, we put
 // the key first
-const Alignment = packed enum(u8) {
-    Align16KeyFirst,
-    Align16ValueFirst,
-    Align8KeyFirst,
-    Align8ValueFirst,
+const Alignment = extern struct {
+    bits: u8,
+
+    const VALUE_BEFORE_KEY_FLAG = 0b1000_0000;
 
     fn toU32(self: Alignment) u32 {
-        switch (self) {
-            .Align16KeyFirst => return 16,
-            .Align16ValueFirst => return 16,
-            .Align8KeyFirst => return 8,
-            .Align8ValueFirst => return 8,
-        }
+        // xor to wipe the leftmost bit
+        return self.bits ^ Alignment.VALUE_BEFORE_KEY_FLAG;
     }
 
     fn keyFirst(self: Alignment) bool {
-        switch (self) {
-            .Align16KeyFirst => return true,
-            .Align16ValueFirst => return false,
-            .Align8KeyFirst => return true,
-            .Align8ValueFirst => return false,
+        if (self.bits & Alignment.VALUE_BEFORE_KEY_FLAG > 0) {
+            return false;
+        } else {
+            return true;
         }
     }
 };
@@ -359,7 +353,7 @@ pub const RocDict = extern struct {
             // hash the key, and modulo by the maximum size
             // (so we get an in-bounds index)
             const hash = hash_fn(seed, key);
-            const index = capacityOfLevel(current_level - 1) + (hash % current_level_size);
+            const index = capacityOfLevel(current_level - 1) + @intCast(usize, (hash % current_level_size));
 
             switch (self.getSlot(index, key_width, value_width)) {
                 Slot.Empty, Slot.PreviouslyFilled => {
@@ -386,8 +380,8 @@ pub const RocDict = extern struct {
 };
 
 // Dict.empty
-pub fn dictEmpty() callconv(.C) RocDict {
-    return RocDict.empty();
+pub fn dictEmpty(dict: *RocDict) callconv(.C) void {
+    dict.* = RocDict.empty();
 }
 
 pub fn slotSize(key_size: usize, value_size: usize) usize {
@@ -426,7 +420,7 @@ pub fn dictInsert(input: RocDict, alignment: Alignment, key: Opaque, key_width: 
         }
 
         const hash = hash_fn(seed, key);
-        const index = capacityOfLevel(current_level - 1) + (hash % current_level_size);
+        const index = capacityOfLevel(current_level - 1) + @intCast(usize, (hash % current_level_size));
         assert(index < result.capacity());
 
         switch (result.getSlot(index, key_width, value_width)) {

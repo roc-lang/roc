@@ -4,4 +4,3 @@ app
 libhost.a
 roc_app.ll
 roc_app.bc
-effect-example

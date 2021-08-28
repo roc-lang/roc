@@ -108,6 +108,39 @@ mod cli_run {
         assert!(out.status.success());
     }
 
+    #[cfg(feature = "wasm-cli-run")]
+    fn check_wasm_output_with_stdin(
+        file: &Path,
+        stdin: &[&str],
+        executable_filename: &str,
+        flags: &[&str],
+        expected_ending: &str,
+    ) {
+        let mut flags = flags.to_vec();
+        flags.push("--backend=wasm");
+
+        let compile_out = run_roc(&[&["build", file.to_str().unwrap()], flags.as_slice()].concat());
+        if !compile_out.stderr.is_empty() {
+            panic!("{}", compile_out.stderr);
+        }
+
+        assert!(compile_out.status.success(), "bad status {:?}", compile_out);
+
+        let out = run_cmd(
+            "wasmtime",
+            stdin,
+            &[file.with_file_name(executable_filename).to_str().unwrap()],
+        );
+
+        if !&out.stdout.ends_with(expected_ending) {
+            panic!(
+                "expected output to end with {:?} but instead got {:#?}",
+                expected_ending, out
+            );
+        }
+        assert!(out.status.success());
+    }
+
     /// This macro does two things.
     ///
     /// First, it generates and runs a separate test for each of the given
@@ -223,13 +256,13 @@ mod cli_run {
         //     expected_ending: "",
         //     use_valgrind: true,
         // },
-        // cli:"cli" => Example {
-        //     filename: "Echo.roc",
-        //     executable_filename: "echo",
-        //     stdin: &["Giovanni\n", "Giorgio\n"],
-        //     expected_ending: "Giovanni Giorgio!\n",
-        //     use_valgrind: true,
-        // },
+        cli:"cli" => Example {
+            filename: "Echo.roc",
+            executable_filename: "echo",
+            stdin: &["Giovanni\n", "Giorgio\n"],
+            expected_ending: "Hi, Giovanni Giorgio!\n",
+            use_valgrind: true,
+        },
         // custom_malloc:"custom-malloc" => Example {
         //     filename: "Main.roc",
         //     executable_filename: "custom-malloc-example",
@@ -255,9 +288,9 @@ mod cli_run {
                     let benchmark = $benchmark;
                     let file_name = examples_dir("benchmarks").join(benchmark.filename);
 
-                    // TODO fix QuicksortApp and RBTreeCk and then remove this!
+                    // TODO fix QuicksortApp and then remove this!
                     match benchmark.filename {
-                        "QuicksortApp.roc" | "RBTreeCk.roc" => {
+                        "QuicksortApp.roc" => {
                             eprintln!("WARNING: skipping testing benchmark {} because the test is broken right now!", benchmark.filename);
                             return;
                         }
@@ -283,7 +316,47 @@ mod cli_run {
                         benchmark.use_valgrind,
                     );
                 }
+
             )*
+
+            #[cfg(feature = "wasm-cli-run")]
+            mod wasm {
+                use super::*;
+            $(
+                #[test]
+                #[cfg_attr(not(debug_assertions), serial(benchmark))]
+                fn $test_name() {
+                    let benchmark = $benchmark;
+                    let file_name = examples_dir("benchmarks").join(benchmark.filename);
+
+                    // TODO fix QuicksortApp and then remove this!
+                    match benchmark.filename {
+                        "QuicksortApp.roc" | "TestBase64.roc" => {
+                            eprintln!("WARNING: skipping testing benchmark {} because the test is broken right now!", benchmark.filename);
+                            return;
+                        }
+                        _ => {}
+                    }
+
+                    // Check with and without optimizations
+                    check_wasm_output_with_stdin(
+                        &file_name,
+                        benchmark.stdin,
+                        benchmark.executable_filename,
+                        &[],
+                        benchmark.expected_ending,
+                    );
+
+                    check_wasm_output_with_stdin(
+                        &file_name,
+                        benchmark.stdin,
+                        benchmark.executable_filename,
+                        &["--optimize"],
+                        benchmark.expected_ending,
+                    );
+                }
+            )*
+            }
 
             #[test]
             #[cfg(not(debug_assertions))]
@@ -326,8 +399,8 @@ mod cli_run {
         rbtree_ck => Example {
             filename: "RBTreeCk.roc",
             executable_filename: "rbtree-ck",
-            stdin: &[],
-            expected_ending: "Node Black 0 {} Empty Empty\n",
+            stdin: &["100"],
+            expected_ending: "10\n",
             use_valgrind: true,
         },
         rbtree_insert => Example {

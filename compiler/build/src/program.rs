@@ -29,7 +29,7 @@ pub fn gen_from_mono_module(
     arena: &bumpalo::Bump,
     mut loaded: MonomorphizedModule,
     roc_file_path: &Path,
-    target: target_lexicon::Triple,
+    target: &target_lexicon::Triple,
     app_o_file: &Path,
     opt_level: OptLevel,
     emit_debug_info: bool,
@@ -93,8 +93,9 @@ pub fn gen_from_mono_module(
     }
 
     // Generate the binary
+    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
     let context = Context::create();
-    let module = arena.alloc(module_from_builtins(&context, "app"));
+    let module = arena.alloc(module_from_builtins(&context, "app", ptr_bytes));
 
     // strip Zig debug stuff
     // module.strip_debug_info();
@@ -134,7 +135,6 @@ pub fn gen_from_mono_module(
     let (mpm, _fpm) = roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
 
     // Compile and add all the Procs before adding main
-    let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
     let env = roc_gen_llvm::llvm::build::Env {
         arena,
         builder: &builder,
@@ -219,48 +219,80 @@ pub fn gen_from_mono_module(
             }
         }
 
-        // assemble the .ll into a .bc
-        let _ = Command::new("llvm-as")
-            .args(&[
-                app_ll_dbg_file.to_str().unwrap(),
-                "-o",
-                app_bc_file.to_str().unwrap(),
-            ])
-            .output()
-            .unwrap();
+        use target_lexicon::Architecture;
+        match target.architecture {
+            Architecture::X86_64 | Architecture::Aarch64(_) => {
+                // assemble the .ll into a .bc
+                let _ = Command::new("llvm-as")
+                    .args(&[
+                        app_ll_dbg_file.to_str().unwrap(),
+                        "-o",
+                        app_bc_file.to_str().unwrap(),
+                    ])
+                    .output()
+                    .unwrap();
 
-        let llc_args = &[
-            "-relocation-model=pic",
-            "-filetype=obj",
-            app_bc_file.to_str().unwrap(),
-            "-o",
-            app_o_file.to_str().unwrap(),
-        ];
+                let llc_args = &[
+                    "-relocation-model=pic",
+                    "-filetype=obj",
+                    app_bc_file.to_str().unwrap(),
+                    "-o",
+                    app_o_file.to_str().unwrap(),
+                ];
 
-        // write the .o file. Note that this builds the .o for the local machine,
-        // and ignores the `target_machine` entirely.
-        //
-        // different systems name this executable differently, so we shotgun for
-        // the most common ones and then give up.
-        let _: Result<std::process::Output, std::io::Error> =
-            Command::new(format!("llc-{}", LLVM_VERSION))
-                .args(llc_args)
-                .output()
-                .or_else(|_| Command::new("llc").args(llc_args).output())
-                .map_err(|_| {
-                    panic!("We couldn't find llc-{} on your machine!", LLVM_VERSION);
-                });
+                // write the .o file. Note that this builds the .o for the local machine,
+                // and ignores the `target_machine` entirely.
+                //
+                // different systems name this executable differently, so we shotgun for
+                // the most common ones and then give up.
+                let _: Result<std::process::Output, std::io::Error> =
+                    Command::new(format!("llc-{}", LLVM_VERSION))
+                        .args(llc_args)
+                        .output()
+                        .or_else(|_| Command::new("llc").args(llc_args).output())
+                        .map_err(|_| {
+                            panic!("We couldn't find llc-{} on your machine!", LLVM_VERSION);
+                        });
+            }
+
+            Architecture::Wasm32 => {
+                // assemble the .ll into a .bc
+                let _ = Command::new("llvm-as")
+                    .args(&[
+                        app_ll_dbg_file.to_str().unwrap(),
+                        "-o",
+                        app_o_file.to_str().unwrap(),
+                    ])
+                    .output()
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
     } else {
         // Emit the .o file
+        use target_lexicon::Architecture;
+        match target.architecture {
+            Architecture::X86_64 | Architecture::Aarch64(_) => {
+                let reloc = RelocMode::Default;
+                let model = CodeModel::Default;
+                let target_machine =
+                    target::target_machine(target, convert_opt_level(opt_level), reloc, model)
+                        .unwrap();
 
-        let reloc = RelocMode::PIC;
-        let model = CodeModel::Default;
-        let target_machine =
-            target::target_machine(&target, convert_opt_level(opt_level), reloc, model).unwrap();
-
-        target_machine
-            .write_to_file(env.module, FileType::Object, app_o_file)
-            .expect("Writing .o file failed");
+                target_machine
+                    .write_to_file(env.module, FileType::Object, app_o_file)
+                    .expect("Writing .o file failed");
+            }
+            Architecture::Wasm32 => {
+                // Useful for debugging
+                // module.print_to_file(app_ll_file);
+                module.write_bitcode_to_path(app_o_file);
+            }
+            _ => panic!(
+                "TODO gracefully handle unsupported architecture: {:?}",
+                target.architecture
+            ),
+        }
     }
 
     let emit_o_file = emit_o_file_start.elapsed().unwrap();

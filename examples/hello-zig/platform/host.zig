@@ -19,23 +19,32 @@ comptime {
     }
 }
 
-extern fn malloc(size: usize) callconv(.C) ?*c_void;
-extern fn realloc(c_ptr: [*]align(@alignOf(u128)) u8, size: usize) callconv(.C) ?*c_void;
-extern fn free(c_ptr: [*]align(@alignOf(u128)) u8) callconv(.C) void;
+const Align = extern struct { a: usize, b: usize };
+extern fn malloc(size: usize) callconv(.C) ?*align(@alignOf(Align)) c_void;
+extern fn realloc(c_ptr: [*]align(@alignOf(Align)) u8, size: usize) callconv(.C) ?*c_void;
+extern fn free(c_ptr: [*]align(@alignOf(Align)) u8) callconv(.C) void;
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*c_void {
+    _ = alignment;
+
     return malloc(size);
 }
 
 export fn roc_realloc(c_ptr: *c_void, old_size: usize, new_size: usize, alignment: u32) callconv(.C) ?*c_void {
-    return realloc(@alignCast(16, @ptrCast([*]u8, c_ptr)), new_size);
+    _ = old_size;
+    _ = alignment;
+
+    return realloc(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)), new_size);
 }
 
 export fn roc_dealloc(c_ptr: *c_void, alignment: u32) callconv(.C) void {
-    free(@alignCast(16, @ptrCast([*]u8, c_ptr)));
+    _ = alignment;
+
+    free(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)));
 }
 
 export fn roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
+    _ = tag_id;
     const stderr = std.io.getStdErr().writer();
     const msg = @ptrCast([*:0]const u8, c_ptr);
     stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
@@ -47,11 +56,11 @@ const Allocator = mem.Allocator;
 
 extern fn roc__mainForHost_1_exposed(*RocCallResult) void;
 
-const RocCallResult = extern struct { flag: usize, content: RocStr };
+const RocCallResult = extern struct { flag: u64, content: RocStr };
 
 const Unit = extern struct {};
 
-pub export fn main() i32 {
+pub fn main() u8 {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
 

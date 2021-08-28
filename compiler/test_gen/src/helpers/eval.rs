@@ -169,7 +169,7 @@ pub fn helper<'a>(
     }
 
     let builder = context.create_builder();
-    let module = roc_gen_llvm::llvm::build::module_from_builtins(context, "app");
+    let module = roc_gen_llvm::llvm::build::module_from_builtins(context, "app", ptr_bytes);
 
     let opt_level = if cfg!(debug_assertions) {
         OptLevel::Normal

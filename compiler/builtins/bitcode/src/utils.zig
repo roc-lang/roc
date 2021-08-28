@@ -45,7 +45,10 @@ fn testing_roc_dealloc(c_ptr: *c_void, _: u32) callconv(.C) void {
     std.testing.allocator.destroy(ptr);
 }
 
-fn testing_roc_panic(c_ptr: *c_void, _: u32) callconv(.C) void {
+fn testing_roc_panic(c_ptr: *c_void, tag_id: u32) callconv(.C) void {
+    _ = c_ptr;
+    _ = tag_id;
+
     @panic("Roc paniced");
 }
 
@@ -69,7 +72,9 @@ pub fn panic(c_ptr: *c_void, alignment: u32) callconv(.C) void {
 // indirection because otherwise zig creats an alias to the panic function which our LLVM code
 // does not know how to deal with
 pub fn test_panic(c_ptr: *c_void, alignment: u32) callconv(.C) void {
-    const cstr = @ptrCast([*:0]u8, c_ptr);
+    _ = c_ptr;
+    _ = alignment;
+    // const cstr = @ptrCast([*:0]u8, c_ptr);
 
     // const stderr = std.io.getStdErr().writer();
     // stderr.print("Roc panicked: {s}!\n", .{cstr}) catch unreachable;
@@ -110,7 +115,7 @@ pub fn decref(
 
     var bytes = bytes_or_null orelse return;
 
-    const isizes: [*]isize = @ptrCast([*]isize, @alignCast(8, bytes));
+    const isizes: [*]isize = @ptrCast([*]isize, @alignCast(@sizeOf(isize), bytes));
 
     const refcount = (isizes - 1)[0];
     const refcount_isize = @bitCast(isize, refcount);
@@ -119,6 +124,20 @@ pub fn decref(
         16 => {
             if (refcount == REFCOUNT_ONE_ISIZE) {
                 dealloc(bytes - 16, alignment);
+            } else if (refcount_isize < 0) {
+                (isizes - 1)[0] = refcount - 1;
+            }
+        },
+        8 => {
+            if (refcount == REFCOUNT_ONE_ISIZE) {
+                dealloc(bytes - 8, alignment);
+            } else if (refcount_isize < 0) {
+                (isizes - 1)[0] = refcount - 1;
+            }
+        },
+        4 => {
+            if (refcount == REFCOUNT_ONE_ISIZE) {
+                dealloc(bytes - 4, alignment);
             } else if (refcount_isize < 0) {
                 (isizes - 1)[0] = refcount - 1;
             }
@@ -226,7 +245,7 @@ pub const RocResult = extern struct {
     }
 };
 
-pub const Ordering = packed enum(u8) {
+pub const Ordering = enum(u8) {
     EQ = 0,
     GT = 1,
     LT = 2,

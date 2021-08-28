@@ -176,8 +176,20 @@ impl std::convert::TryFrom<u32> for PanicTagId {
 }
 
 impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
+    /// The integer type representing a pointer
+    ///
+    /// on 64-bit systems, this is i64
+    /// on 32-bit systems, this is i32
     pub fn ptr_int(&self) -> IntType<'ctx> {
         ptr_int(self.context, self.ptr_bytes)
+    }
+
+    /// The integer type representing a RocList or RocStr when following the C ABI
+    ///
+    /// on 64-bit systems, this is i128
+    /// on 32-bit systems, this is i64
+    pub fn str_list_c_abi(&self) -> IntType<'ctx> {
+        crate::llvm::convert::str_list_int(self.context, self.ptr_bytes)
     }
 
     pub fn small_str_bytes(&self) -> u32 {
@@ -370,10 +382,18 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     }
 }
 
-pub fn module_from_builtins<'ctx>(ctx: &'ctx Context, module_name: &str) -> Module<'ctx> {
+pub fn module_from_builtins<'ctx>(
+    ctx: &'ctx Context,
+    module_name: &str,
+    ptr_bytes: u32,
+) -> Module<'ctx> {
     // In the build script for the builtins module,
     // we compile the builtins into LLVM bitcode
-    let bitcode_bytes: &[u8] = include_bytes!("../../../builtins/bitcode/builtins.bc");
+    let bitcode_bytes: &[u8] = match ptr_bytes {
+        8 => include_bytes!("../../../builtins/bitcode/builtins-64bit.bc"),
+        4 => include_bytes!("../../../builtins/bitcode/builtins-32bit.bc"),
+        _ => unreachable!(),
+    };
 
     let memory_buffer = MemoryBuffer::create_from_memory_range(bitcode_bytes, module_name);
 
@@ -689,11 +709,6 @@ pub fn float_with_precision<'a, 'ctx, 'env>(
     precision: &Builtin,
 ) -> BasicValueEnum<'ctx> {
     match precision {
-        Builtin::Decimal => call_bitcode_fn(
-            env,
-            &[env.context.f64_type().const_float(value).into()],
-            bitcode::DEC_FROM_F64,
-        ),
         Builtin::Float64 => env.context.f64_type().const_float(value).into(),
         Builtin::Float32 => env.context.f32_type().const_float(value).into(),
         _ => panic!("Invalid layout for float literal = {:?}", precision),
@@ -718,6 +733,11 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
             _ => panic!("Invalid layout for float literal = {:?}", layout),
         },
 
+        Decimal(int) => env
+            .context
+            .i128_type()
+            .const_int(int.0 as u64, false)
+            .into(),
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
         Str(str_literal) => {
@@ -927,11 +947,7 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
         CallType::Foreign {
             foreign_symbol,
             ret_layout,
-        } => {
-            // we always initially invoke foreign symbols, but if there is nothing to clean up,
-            // we emit a normal call
-            build_foreign_symbol(env, scope, foreign_symbol, arguments, ret_layout)
-        }
+        } => build_foreign_symbol(env, scope, foreign_symbol, arguments, ret_layout),
     }
 }
 
@@ -3931,6 +3947,8 @@ pub fn get_call_conventions(cc: target_lexicon::CallingConvention) -> u32 {
         SystemV => C_CALL_CONV,
         WasmBasicCAbi => C_CALL_CONV,
         WindowsFastcall => C_CALL_CONV,
+        AppleAarch64 => C_CALL_CONV,
+        _ => C_CALL_CONV,
     }
 }
 
@@ -5170,89 +5188,171 @@ fn run_low_level<'a, 'ctx, 'env>(
     }
 }
 
-fn build_foreign_symbol_return_result<'a, 'ctx, 'env>(
+/// A type that is valid according to the C ABI
+///
+/// As an example, structs that fit inside an integer type should
+/// (this does not currently happen here) be coerced to that integer type.
+fn to_cc_type<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    scope: &mut Scope<'a, 'ctx>,
-    foreign: &roc_module::ident::ForeignSymbol,
-    arguments: &[Symbol],
-    return_type: BasicTypeEnum<'ctx>,
-) -> (FunctionValue<'ctx>, &'a [BasicValueEnum<'ctx>]) {
-    let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(arguments.len(), env.arena);
-    let mut arg_types = Vec::with_capacity_in(arguments.len() + 1, env.arena);
-
-    for arg in arguments.iter() {
-        let (value, layout) = load_symbol_and_layout(scope, arg);
-        arg_vals.push(value);
-        let arg_type = basic_type_from_layout(env, layout);
-        debug_assert_eq!(arg_type, value.get_type());
-        arg_types.push(arg_type);
+    layout: &Layout<'a>,
+) -> BasicTypeEnum<'ctx> {
+    match layout {
+        Layout::Builtin(builtin) => to_cc_type_builtin(env, builtin),
+        _ => {
+            // TODO this is almost certainly incorrect for bigger structs
+            basic_type_from_layout(env, layout)
+        }
     }
-
-    let function_type = return_type.fn_type(&arg_types, false);
-    let function = get_foreign_symbol(env, foreign.clone(), function_type);
-
-    (function, arg_vals.into_bump_slice())
 }
 
-fn build_foreign_symbol_write_result_into_ptr<'a, 'ctx, 'env>(
+fn to_cc_type_builtin<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    scope: &mut Scope<'a, 'ctx>,
-    foreign: &roc_module::ident::ForeignSymbol,
-    arguments: &[Symbol],
-    return_pointer: PointerValue<'ctx>,
-) -> (FunctionValue<'ctx>, &'a [BasicValueEnum<'ctx>]) {
-    let mut arg_vals: Vec<BasicValueEnum> = Vec::with_capacity_in(arguments.len(), env.arena);
-    let mut arg_types = Vec::with_capacity_in(arguments.len() + 1, env.arena);
-
-    arg_vals.push(return_pointer.into());
-    arg_types.push(return_pointer.get_type().into());
-
-    for arg in arguments.iter() {
-        let (value, layout) = load_symbol_and_layout(scope, arg);
-        arg_vals.push(value);
-        let arg_type = basic_type_from_layout(env, layout);
-        debug_assert_eq!(arg_type, value.get_type());
-        arg_types.push(arg_type);
+    builtin: &Builtin<'a>,
+) -> BasicTypeEnum<'ctx> {
+    match builtin {
+        Builtin::Int128
+        | Builtin::Int64
+        | Builtin::Int32
+        | Builtin::Int16
+        | Builtin::Int8
+        | Builtin::Int1
+        | Builtin::Usize
+        | Builtin::Decimal
+        | Builtin::Float128
+        | Builtin::Float64
+        | Builtin::Float32
+        | Builtin::Float16 => basic_type_from_builtin(env, builtin),
+        Builtin::Str | Builtin::EmptyStr | Builtin::List(_) | Builtin::EmptyList => {
+            env.str_list_c_abi().into()
+        }
+        Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::EmptyDict | Builtin::EmptySet => {
+            // TODO verify this is what actually happens
+            basic_type_from_builtin(env, builtin)
+        }
     }
-
-    let function_type = env.context.void_type().fn_type(&arg_types, false);
-    let function = get_foreign_symbol(env, foreign.clone(), function_type);
-
-    (function, arg_vals.into_bump_slice())
 }
 
-#[allow(clippy::too_many_arguments)]
+enum CCReturn {
+    /// Return as normal
+    Return,
+    /// require an extra argument, a pointer
+    /// where the result is written into
+    /// returns void
+    ByPointer,
+    /// The return type is zero-sized
+    Void,
+}
+
+/// According to the C ABI, how should we return a value with the given layout?
+fn to_cc_return<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) -> CCReturn {
+    let return_size = layout.stack_size(env.ptr_bytes);
+    let pass_result_by_pointer = return_size > 2 * env.ptr_bytes;
+
+    if return_size == 0 {
+        CCReturn::Void
+    } else if pass_result_by_pointer {
+        CCReturn::ByPointer
+    } else {
+        CCReturn::Return
+    }
+}
+
 fn build_foreign_symbol<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &mut Scope<'a, 'ctx>,
     foreign: &roc_module::ident::ForeignSymbol,
-    arguments: &[Symbol],
+    argument_symbols: &[Symbol],
     ret_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let ret_type = basic_type_from_layout(env, ret_layout);
-    let return_pointer = env.builder.build_alloca(ret_type, "return_value");
+    let builder = env.builder;
+    let context = env.context;
 
-    // crude approximation of the C calling convention
-    let pass_result_by_pointer = ret_layout.stack_size(env.ptr_bytes) > 2 * env.ptr_bytes;
+    // Here we build two functions:
+    //
+    // - an C_CALL_CONV extern that will be provided by the host, e.g. `roc_fx_putLine`
+    //      This is just a type signature that we make available to the linker,
+    //      and can use in the wrapper
+    // - a FAST_CALL_CONV wrapper that we make here, e.g. `roc_fx_putLine_fastcc_wrapper`
 
-    let (function, arguments) = if pass_result_by_pointer {
-        build_foreign_symbol_write_result_into_ptr(env, scope, foreign, arguments, return_pointer)
-    } else {
-        build_foreign_symbol_return_result(env, scope, foreign, arguments, ret_type)
+    let return_type = basic_type_from_layout(env, ret_layout);
+    let cc_return = to_cc_return(env, ret_layout);
+
+    let mut cc_argument_types = Vec::with_capacity_in(argument_symbols.len() + 1, env.arena);
+    let mut fastcc_argument_types = Vec::with_capacity_in(argument_symbols.len(), env.arena);
+    let mut arguments = Vec::with_capacity_in(argument_symbols.len(), env.arena);
+
+    for symbol in argument_symbols {
+        let (value, layout) = load_symbol_and_layout(scope, symbol);
+
+        cc_argument_types.push(to_cc_type(env, layout));
+
+        let basic_type = basic_type_from_layout(env, layout);
+        fastcc_argument_types.push(basic_type);
+
+        arguments.push(value);
+    }
+
+    let cc_type = match cc_return {
+        CCReturn::Void => env.context.void_type().fn_type(&cc_argument_types, false),
+        CCReturn::ByPointer => {
+            cc_argument_types.push(return_type.ptr_type(AddressSpace::Generic).into());
+            env.context.void_type().fn_type(&cc_argument_types, false)
+        }
+        CCReturn::Return => return_type.fn_type(&cc_argument_types, false),
     };
 
-    let call = env.builder.build_call(function, arguments, "tmp");
+    let cc_function = get_foreign_symbol(env, foreign.clone(), cc_type);
 
-    // this is a foreign function, use c calling convention
-    call.set_call_convention(C_CALL_CONV);
+    let fastcc_type = return_type.fn_type(&fastcc_argument_types, false);
 
-    call.try_as_basic_value();
+    let fastcc_function = add_func(
+        env.module,
+        &format!("{}_fastcc_wrapper", foreign.as_str()),
+        fastcc_type,
+        Linkage::Private,
+        FAST_CALL_CONV,
+    );
 
-    if pass_result_by_pointer {
-        env.builder.build_load(return_pointer, "read_result")
-    } else {
-        call.try_as_basic_value().left().unwrap()
+    let old = builder.get_insert_block().unwrap();
+
+    let entry = context.append_basic_block(fastcc_function, "entry");
+    {
+        builder.position_at_end(entry);
+        let return_pointer = env.builder.build_alloca(return_type, "return_value");
+
+        let fastcc_parameters = fastcc_function.get_params();
+        let mut cc_arguments = Vec::with_capacity_in(fastcc_parameters.len() + 1, env.arena);
+
+        for (param, cc_type) in fastcc_parameters.into_iter().zip(cc_argument_types.iter()) {
+            if param.get_type() == *cc_type {
+                cc_arguments.push(param);
+            } else {
+                let as_cc_type = complex_bitcast(env.builder, param, *cc_type, "to_cc_type");
+                cc_arguments.push(as_cc_type);
+            }
+        }
+
+        if let CCReturn::ByPointer = cc_return {
+            cc_arguments.push(return_pointer.into());
+        }
+
+        let call = env.builder.build_call(cc_function, &cc_arguments, "tmp");
+        call.set_call_convention(C_CALL_CONV);
+
+        let return_value = match cc_return {
+            CCReturn::Return => call.try_as_basic_value().left().unwrap(),
+
+            CCReturn::ByPointer => env.builder.build_load(return_pointer, "read_result"),
+            CCReturn::Void => return_type.const_zero(),
+        };
+
+        builder.build_return(Some(&return_value));
     }
+
+    builder.position_at_end(old);
+    let call = env.builder.build_call(fastcc_function, &arguments, "tmp");
+    call.set_call_convention(FAST_CALL_CONV);
+    return call.try_as_basic_value().left().unwrap();
 }
 
 fn throw_on_overflow<'a, 'ctx, 'env>(
