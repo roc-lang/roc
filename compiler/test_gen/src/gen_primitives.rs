@@ -2795,16 +2795,10 @@ fn wasm_test() {
         r#"
                 app "test" provides [ main ] to "./platform"
 
-                main : I32
-                main = 32
+                main : Str
+                main = "hellow"
             "#
     );
-
-    //    src: &str,
-    //    stdlib: &'a roc_builtins::std::StdLib,
-    //    is_gen_test: bool,
-    //    ignore_problems: bool,
-    //    context: &'a inkwell::context::Context,
 
     let arena = bumpalo::Bump::new();
     eval::helper_wasm(&arena, source, stdlib, true, false, &context);

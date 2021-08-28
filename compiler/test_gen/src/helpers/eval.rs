@@ -8,6 +8,7 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::OptLevel;
+use roc_std::RocStr;
 use roc_types::subs::VarStore;
 use target_lexicon::Triple;
 
@@ -335,7 +336,7 @@ pub fn helper_wasm<'a>(
     // let target = Target::from_name("wasm32-unknown-unknown").unwrap();
 
     // let triple = TargetTriple::create("wasm32-wasi");
-    let triple = TargetTriple::create("wasm32-wasi");
+    let triple = TargetTriple::create("wasm32-unknown-unknown-wasi");
     let target_machine = Target::from_triple(&triple)
         .unwrap()
         .create_target_machine(
@@ -348,40 +349,39 @@ pub fn helper_wasm<'a>(
         )
         .unwrap();
 
-    //    let file_type = inkwell::targets::FileType::Object;
-    //    let bytes = target_machine
-    //        .write_to_file(
-    //            llvm_module,
-    //            file_type,
-    //            std::path::Path::new("/home/folkertdev/roc/roc/test.wasm"),
-    //        )
-    //        .unwrap();
+    let file_type = inkwell::targets::FileType::Object;
 
-    //    let file_type = inkwell::targets::FileType::Object;
-    //    let bytes = target_machine
-    //        .write_to_memory_buffer(llvm_module, file_type)
-    //        .unwrap();
+    target_machine
+        .write_to_file(
+            llvm_module,
+            file_type,
+            std::path::Path::new("/home/folkertdev/roc/wasm/test.a"),
+        )
+        .unwrap();
+
+    use std::process::Command;
+    Command::new("/home/folkertdev/Downloads/zig-linux-x86_64-0.9.0-dev.848+d5ef5da59/zig")
+        // .env_clear()
+        // .env("PATH", env_path)
+        // .env("HOME", env_home)
+        .current_dir("/home/folkertdev/roc/wasm")
+        .args(&[
+            "build-lib",
+            "main.zig",
+            "test.a",
+            "-target",
+            "wasm32-wasi",
+            "-dynamic",
+            "-lc",
+        ])
+        .status()
+        .unwrap();
 
     {
-        use wasmer::{imports, Function, Instance, Module, Store, Value};
+        use wasmer::{Function, Instance, Module, Store, Value};
 
         let store = Store::default();
-        // let module = Module::new(&store, &module_wat).unwrap();
         let module = Module::from_file(&store, "/home/folkertdev/roc/wasm/main.wasm").unwrap();
-        // The module doesn't import anything, so we create an empty import object.
-        //        let import_object = imports! {
-        //            "wasi_snapshot_preview1" => {
-        //                "proc_exit" => Function::new_native(&store, foo),
-        //                "args_get" => Function::new_native(&store, bar),
-        //                "args_sizes_get" => Function::new_native(&store, bar),
-        //                "environ_get" => Function::new_native(&store, bar),
-        //                "environ_sizes_get" => Function::new_native(&store, bar),
-        //                "clock_res_get" => Function::new_native(&store, bar),
-        //            },
-        //            "env" => {
-        //                "main" => Function::new_native(&store, bar)
-        //            },
-        //        };
 
         // First, we create the `WasiEnv`
         use wasmer_wasi::WasiState;
@@ -413,26 +413,85 @@ pub fn helper_wasm<'a>(
             _ => panic!(),
         };
 
-        let ptr: wasmer::WasmPtr<i32, wasmer::Item> = wasmer::WasmPtr::new(address as u32 + 8);
-        dbg!(ptr.deref(&memory));
-        assert_eq!(result[0], Value::I32(32));
+        let output = <u64 as FromWasmMemory>::decode(&memory, address as u32 + 8);
+
+        dbg!(output);
+
+        // assert_eq!(output, 222);
     }
 
     todo!()
 }
 
+#[cfg(test)]
+trait FromWasmMemory {
+    fn decode(memory: &wasmer::Memory, offset: u32) -> Self;
+}
+
+#[cfg(test)]
+impl FromWasmMemory for u32 {
+    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
+        let mut output: Self = 0;
+        let width = std::mem::size_of::<Self>();
+
+        let ptr = (&mut output) as *mut Self;
+        let raw_ptr = ptr as *mut u8;
+        let slice = unsafe { std::slice::from_raw_parts_mut(raw_ptr, width) };
+
+        let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(offset as u32);
+        let foobar = (ptr.deref(memory, 0, width as u32)).unwrap();
+        let wasm_slice = unsafe { std::mem::transmute(foobar) };
+
+        slice.copy_from_slice(wasm_slice);
+
+        output
+    }
+}
+
+#[cfg(test)]
+impl FromWasmMemory for u64 {
+    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
+        let mut output: Self = 0;
+        let width = std::mem::size_of::<Self>();
+
+        let ptr = (&mut output) as *mut Self;
+        let raw_ptr = ptr as *mut u8;
+        let slice = unsafe { std::slice::from_raw_parts_mut(raw_ptr, width) };
+
+        let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(offset as u32);
+        let foobar = (ptr.deref(memory, 0, width as u32)).unwrap();
+        let wasm_slice = unsafe { std::mem::transmute(foobar) };
+
+        slice.copy_from_slice(wasm_slice);
+
+        output
+    }
+}
+
+#[cfg(test)]
+impl FromWasmMemory for RocStr {
+    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
+        use core::mem::MaybeUninit;
+
+        let mut output = MaybeUninit::uninit();
+        let width = std::mem::size_of::<Self>();
+
+        let raw_ptr = (&mut output) as *mut _ as *mut u8;
+        let slice = unsafe { std::slice::from_raw_parts_mut(raw_ptr, width) };
+
+        let ptr: wasmer::WasmPtr<u8, wasmer::Array> = wasmer::WasmPtr::new(offset as u32);
+        let foobar = (ptr.deref(memory, 0, width as u32)).unwrap();
+        let wasm_slice = unsafe { std::mem::transmute(foobar) };
+
+        slice.copy_from_slice(wasm_slice);
+
+        unsafe { output.assume_init() }
+    }
+}
+
 fn bar(_: u32, _: u32) -> u32 {
     println!("we are in main!");
     return 0;
-}
-
-fn foo(value: u32) {
-    println!("value: {}", value);
-    panic!();
-}
-
-fn roc__verify(_: u32) {
-    panic!("verify went wrong");
 }
 
 #[macro_export]
