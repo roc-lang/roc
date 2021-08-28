@@ -1050,6 +1050,9 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
             }
         }
         offset += size;
+        // TODO: we need to deal with relocatoins in these sections.
+        // They may point to the text section, which means we need to know where it is.
+        // This currently breaks some roc apps with closures.
     }
 
     if verbose {
