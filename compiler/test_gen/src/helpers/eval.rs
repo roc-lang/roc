@@ -1,3 +1,4 @@
+use inkwell::module::Module;
 use libloading::Library;
 use roc_build::link::module_to_dylib;
 use roc_build::program::FunctionIterator;
@@ -8,6 +9,7 @@ use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::OptLevel;
 use roc_types::subs::VarStore;
+use target_lexicon::Triple;
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
@@ -27,16 +29,17 @@ pub fn test_builtin_defs(symbol: Symbol, var_store: &mut VarStore) -> Option<Def
 
 // this is not actually dead code, but only used by cfg_test modules
 // so "normally" it is dead, only at testing time is it used
-#[allow(dead_code)]
-#[inline(never)]
-pub fn helper<'a>(
+#[allow(clippy::too_many_arguments)]
+fn create_llvm_module<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
     stdlib: &'a roc_builtins::std::StdLib,
     is_gen_test: bool,
     ignore_problems: bool,
     context: &'a inkwell::context::Context,
-) -> (&'static str, String, Library) {
+    target: &Triple,
+    opt_level: OptLevel,
+) -> (&'static str, String, &'a Module<'a>) {
     use std::path::{Path, PathBuf};
 
     let filename = PathBuf::from("Test.roc");
@@ -53,7 +56,6 @@ pub fn helper<'a>(
         module_src = &temp;
     }
 
-    let target = target_lexicon::Triple::host();
     let ptr_bytes = target.pointer_width().unwrap().bytes() as u32;
 
     let exposed_types = MutMap::default();
@@ -171,12 +173,6 @@ pub fn helper<'a>(
     let builder = context.create_builder();
     let module = roc_gen_llvm::llvm::build::module_from_builtins(context, "app", ptr_bytes);
 
-    let opt_level = if cfg!(debug_assertions) {
-        OptLevel::Normal
-    } else {
-        OptLevel::Optimize
-    };
-
     let module = arena.alloc(module);
     let (module_pass, function_pass) =
         roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
@@ -255,10 +251,188 @@ pub fn helper<'a>(
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
-    let lib = module_to_dylib(env.module, &target, opt_level)
-        .expect("Error loading compiled dylib for test");
+    (main_fn_name, delayed_errors.join("\n"), env.module)
+}
 
-    (main_fn_name, delayed_errors.join("\n"), lib)
+#[allow(dead_code)]
+#[inline(never)]
+pub fn helper<'a>(
+    arena: &'a bumpalo::Bump,
+    src: &str,
+    stdlib: &'a roc_builtins::std::StdLib,
+    is_gen_test: bool,
+    ignore_problems: bool,
+    context: &'a inkwell::context::Context,
+) -> (&'static str, String, Library) {
+    let target = target_lexicon::Triple::host();
+
+    let opt_level = if cfg!(debug_assertions) {
+        OptLevel::Normal
+    } else {
+        OptLevel::Optimize
+    };
+
+    let (main_fn_name, delayed_errors, module) = create_llvm_module(
+        arena,
+        src,
+        stdlib,
+        is_gen_test,
+        ignore_problems,
+        context,
+        &target,
+        opt_level,
+    );
+
+    let lib =
+        module_to_dylib(module, &target, opt_level).expect("Error loading compiled dylib for test");
+
+    (main_fn_name, delayed_errors, lib)
+}
+
+#[cfg(test)]
+fn wasm32_target_tripple() -> Triple {
+    use target_lexicon::{Architecture, BinaryFormat};
+
+    let mut triple = Triple::unknown();
+
+    triple.architecture = Architecture::Wasm32;
+    triple.binary_format = BinaryFormat::Wasm;
+
+    triple
+}
+
+#[cfg(test)]
+pub fn helper_wasm<'a>(
+    arena: &'a bumpalo::Bump,
+    src: &str,
+    stdlib: &'a roc_builtins::std::StdLib,
+    is_gen_test: bool,
+    ignore_problems: bool,
+    context: &'a inkwell::context::Context,
+) -> (&'static str, String, Library) {
+    let target = wasm32_target_tripple();
+
+    let opt_level = if cfg!(debug_assertions) {
+        OptLevel::Normal
+    } else {
+        OptLevel::Optimize
+    };
+
+    let (main_fn_name, delayed_errors, llvm_module) = create_llvm_module(
+        arena,
+        src,
+        stdlib,
+        is_gen_test,
+        ignore_problems,
+        context,
+        &target,
+        opt_level,
+    );
+
+    use inkwell::targets::{InitializationConfig, Target, TargetTriple};
+
+    Target::initialize_webassembly(&InitializationConfig::default());
+    // let target = Target::from_name("wasm32-unknown-unknown").unwrap();
+
+    // let triple = TargetTriple::create("wasm32-wasi");
+    let triple = TargetTriple::create("wasm32-wasi");
+    let target_machine = Target::from_triple(&triple)
+        .unwrap()
+        .create_target_machine(
+            &triple,
+            "generic",
+            "", // TODO: this probably should be TargetMachine::get_host_cpu_features() to enable all features.
+            inkwell::OptimizationLevel::None,
+            inkwell::targets::RelocMode::PIC,
+            inkwell::targets::CodeModel::Default,
+        )
+        .unwrap();
+
+    //    let file_type = inkwell::targets::FileType::Object;
+    //    let bytes = target_machine
+    //        .write_to_file(
+    //            llvm_module,
+    //            file_type,
+    //            std::path::Path::new("/home/folkertdev/roc/roc/test.wasm"),
+    //        )
+    //        .unwrap();
+
+    //    let file_type = inkwell::targets::FileType::Object;
+    //    let bytes = target_machine
+    //        .write_to_memory_buffer(llvm_module, file_type)
+    //        .unwrap();
+
+    {
+        use wasmer::{imports, Function, Instance, Module, Store, Value};
+
+        let store = Store::default();
+        // let module = Module::new(&store, &module_wat).unwrap();
+        let module = Module::from_file(&store, "/home/folkertdev/roc/wasm/main.wasm").unwrap();
+        // The module doesn't import anything, so we create an empty import object.
+        //        let import_object = imports! {
+        //            "wasi_snapshot_preview1" => {
+        //                "proc_exit" => Function::new_native(&store, foo),
+        //                "args_get" => Function::new_native(&store, bar),
+        //                "args_sizes_get" => Function::new_native(&store, bar),
+        //                "environ_get" => Function::new_native(&store, bar),
+        //                "environ_sizes_get" => Function::new_native(&store, bar),
+        //                "clock_res_get" => Function::new_native(&store, bar),
+        //            },
+        //            "env" => {
+        //                "main" => Function::new_native(&store, bar)
+        //            },
+        //        };
+
+        // First, we create the `WasiEnv`
+        use wasmer_wasi::WasiState;
+        let mut wasi_env = WasiState::new("hello")
+            // .args(&["world"])
+            // .env("KEY", "Value")
+            .finalize()
+            .unwrap();
+
+        println!("Instantiating module with WASI imports...");
+        // Then, we get the import object related to our WASI
+        // and attach it to the Wasm instance.
+        let mut import_object = wasi_env.import_object(&module).unwrap();
+
+        let main_function = Function::new_native(&store, bar);
+        let ext = wasmer::Extern::Function(main_function);
+        let mut exts = wasmer::Exports::new();
+        exts.insert("main", ext);
+        import_object.register("env", exts);
+
+        let instance = Instance::new(&module, &import_object).unwrap();
+
+        let memory = instance.exports.get_memory("memory").unwrap();
+
+        let add_one = instance.exports.get_function("test_wrapper").unwrap();
+        let result = add_one.call(&[]).unwrap();
+        let address = match result[0] {
+            Value::I32(a) => a,
+            _ => panic!(),
+        };
+
+        let ptr: wasmer::WasmPtr<i32, wasmer::Item> = wasmer::WasmPtr::new(address as u32 + 8);
+        dbg!(ptr.deref(&memory));
+        assert_eq!(result[0], Value::I32(32));
+    }
+
+    todo!()
+}
+
+fn bar(_: u32, _: u32) -> u32 {
+    println!("we are in main!");
+    return 0;
+}
+
+fn foo(value: u32) {
+    println!("value: {}", value);
+    panic!();
+}
+
+fn roc__verify(_: u32) {
+    panic!("verify went wrong");
 }
 
 #[macro_export]

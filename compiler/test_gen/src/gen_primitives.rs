@@ -3,6 +3,7 @@
 use crate::assert_evals_to;
 use crate::assert_llvm_evals_to;
 use crate::assert_non_opt_evals_to;
+use crate::helpers::eval;
 use indoc::indoc;
 use roc_std::RocStr;
 
@@ -2777,4 +2778,34 @@ fn value_not_exposed_hits_panic() {
         32,
         i64
     );
+}
+
+#[test]
+fn wasm_test() {
+    use bumpalo::Bump;
+    use inkwell::context::Context;
+
+    let arena = Bump::new();
+    let context = Context::create();
+
+    // NOTE the stdlib must be in the arena; just taking a reference will segfault
+    let stdlib = arena.alloc(roc_builtins::std::standard_stdlib());
+
+    let source = indoc!(
+        r#"
+                app "test" provides [ main ] to "./platform"
+
+                main : I32
+                main = 32
+            "#
+    );
+
+    //    src: &str,
+    //    stdlib: &'a roc_builtins::std::StdLib,
+    //    is_gen_test: bool,
+    //    ignore_problems: bool,
+    //    context: &'a inkwell::context::Context,
+
+    let arena = bumpalo::Bump::new();
+    eval::helper_wasm(&arena, source, stdlib, true, false, &context);
 }
