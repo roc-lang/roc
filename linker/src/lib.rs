@@ -55,11 +55,6 @@ pub fn build_app<'a>() -> App<'a> {
                         .required(true),
                 )
                 .arg(
-                    Arg::with_name(SHARED_LIB)
-                        .help("The dummy shared library representing the Roc application")
-                        .required(true),
-                )
-                .arg(
                     Arg::with_name(METADATA)
                         .help("Where to save the metadata from preprocessing")
                         .required(true),
@@ -68,6 +63,11 @@ pub fn build_app<'a>() -> App<'a> {
                     Arg::with_name(OUT)
                         .help("The modified version of the dynamically linked platform executable")
                         .required(true),
+                )
+                .arg(
+                    Arg::with_name(SHARED_LIB)
+                        .help("The name of the shared library used in building the platform")
+                        .default_value("libapp.so"),
                 )
                 .arg(
                     Arg::with_name(FLAG_VERBOSE)
@@ -88,16 +88,23 @@ pub fn build_app<'a>() -> App<'a> {
             App::new(CMD_SURGERY)
                 .about("Links a preprocessed platform with a Roc application.")
                 .arg(
+                    Arg::with_name(APP)
+                        .help("The Roc application object file waiting to be linked")
+                        .required(true),
+                )
+                .arg(
                     Arg::with_name(METADATA)
                         .help("The metadata created by preprocessing the platform")
                         .required(true),
                 )
                 .arg(
-                    Arg::with_name(APP)
-                        .help("The Roc application object file waiting to be linked")
+                    Arg::with_name(OUT)
+                        .help(
+                            "The modified version of the dynamically linked platform. \
+                                It will be consumed to make linking faster.",
+                        )
                         .required(true),
                 )
-                .arg(Arg::with_name(OUT).help("The modified version of the dynamically linked platform. It will be consumed to make linking faster.").required(true))
                 .arg(
                     Arg::with_name(FLAG_VERBOSE)
                         .long(FLAG_VERBOSE)
@@ -821,7 +828,7 @@ pub fn preprocess(matches: &ArgMatches) -> io::Result<i32> {
         }
     }
 
-    // TODO: look into shifting all of the debug info.
+    // TODO: look into shifting all of the debug info and eh_frames.
 
     // Delete shared library from the dynamic table.
     let out_ptr = out_mmap.as_mut_ptr();
@@ -1000,14 +1007,16 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
             let name = sec.name();
             // TODO: we should really split these out and use finer permission controls.
             name.is_ok()
+                // TODO: Does Roc ever create a data section? I think no cause it would mess up fully functional guarantees.
                 && (name.unwrap().starts_with(".data")
                     || name.unwrap().starts_with(".rodata")
+                    // TODO: bss sections we generate should not have a real file size.
                     || name.unwrap().starts_with(".bss"))
         })
         .collect();
 
     let mut symbol_offset_map: MutMap<usize, usize> = MutMap::default();
-    // TODO: we don't yet deal with relocations for these sections.
+    // TODO: we don't yet deal with relocations for these sections (Do we need to?).
     // We should probably first define where each section will go and resolve all symbol locations.
     // Then we can support all relocations correctly.
     for sec in rodata_sections {
@@ -1174,6 +1183,11 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                                 }
                                 target_offset - base_offset + rel.1.addend()
                             }
+                            RelocationKind::Absolute => {
+                                let target_vaddr = target_offset + new_segment_vaddr as i64;
+                                println!("Target: 0x{:x}", target_vaddr);
+                                target_vaddr
+                            }
                             x => {
                                 println!("Relocation Kind not yet support: {:?}", x);
                                 return Ok(-1);
@@ -1235,6 +1249,8 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
 
     // Flush app only data to speed up write to disk.
     exec_mmap.flush_async_range(new_segment_offset, offset - new_segment_offset)?;
+
+    // TODO: look into merging symbol tables, debug info, and eh frames to enable better debugger experience.
 
     // Add 2 new sections.
     let new_section_count = 2;
