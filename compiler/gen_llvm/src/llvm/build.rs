@@ -5175,7 +5175,11 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             bd.position_at_end(throw_block);
 
-            call_void_bitcode_fn(env, &[], bitcode::EXPECT_FAILED);
+            call_void_bitcode_fn(
+                env,
+                &[env.ptr_int().const_int(0 as u64, false).into()],
+                bitcode::EXPECT_FAILED,
+            );
 
             bd.build_unconditional_branch(then_block);
             bd.position_at_end(then_block);
