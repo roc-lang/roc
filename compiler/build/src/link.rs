@@ -403,6 +403,7 @@ fn link_linux(
                 "--eh-frame-hdr",
                 "-arch",
                 arch_str(target),
+                "-pie",
                 libcrt_path.join("crti.o").to_str().unwrap(),
                 libcrt_path.join("crtn.o").to_str().unwrap(),
             ])

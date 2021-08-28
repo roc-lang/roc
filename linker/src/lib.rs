@@ -1183,11 +1183,6 @@ pub fn surgery(matches: &ArgMatches) -> io::Result<i32> {
                                 }
                                 target_offset - base_offset + rel.1.addend()
                             }
-                            RelocationKind::Absolute => {
-                                let target_vaddr = target_offset + new_segment_vaddr as i64;
-                                println!("Target: 0x{:x}", target_vaddr);
-                                target_vaddr
-                            }
                             x => {
                                 println!("Relocation Kind not yet support: {:?}", x);
                                 return Ok(-1);

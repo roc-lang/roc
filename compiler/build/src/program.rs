@@ -230,6 +230,7 @@ pub fn gen_from_mono_module(
             .unwrap();
 
         let llc_args = &[
+            "-relocation-model=pic",
             "-filetype=obj",
             app_bc_file.to_str().unwrap(),
             "-o",
