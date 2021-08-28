@@ -4731,7 +4731,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     complex_bitcast(
                         env.builder,
                         list.into(),
-                        env.context.i128_type().into(),
+                        env.str_list_c_abi().into(),
                         "to_i128",
                     ),
                     position,
@@ -4749,7 +4749,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                     complex_bitcast(
                         env.builder,
                         list.into(),
-                        env.context.i128_type().into(),
+                        env.str_list_c_abi().into(),
                         "to_i128",
                     ),
                     position,
