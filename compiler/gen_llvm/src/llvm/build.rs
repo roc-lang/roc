@@ -4447,6 +4447,11 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
     }
 }
 
+// TODO: Fix me! I should be different in tests vs. user code!
+fn expect_failed() {
+    panic!("An expectation failed!");
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -4457,6 +4462,7 @@ fn run_low_level<'a, 'ctx, 'env>(
     op: LowLevel,
     args: &[Symbol],
     update_mode: Option<UpdateMode>,
+    // expect_failed: *const (),
 ) -> BasicValueEnum<'ctx> {
     use LowLevel::*;
 
@@ -5177,7 +5183,10 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             call_void_bitcode_fn(
                 env,
-                &[env.ptr_int().const_int(0 as u64, false).into()],
+                &[env
+                    .ptr_int()
+                    .const_int(expect_failed as *const () as u64, false)
+                    .into()],
                 bitcode::EXPECT_FAILED,
             );
 
